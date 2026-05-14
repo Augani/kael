@@ -1,0 +1,63 @@
+[package]
+edition = "2024"
+name = "kael_media"
+version = "0.5.1"
+build = "build.rs"
+publish = true
+description = "Bindings to macOS media handling APIs (originally from Zed - github.com/zed-industries/zed)"
+authors = ["Adabraka Team"]
+repository = "https://github.com/Augani/kael"
+readme = false
+license = "Apache-2.0"
+
+[lib]
+name = "kael_media"
+path = "src/media.rs"
+doctest = false
+
+[dependencies.anyhow]
+version = "1.0.86"
+
+
+[build-dependencies.bindgen]
+version = "0.71"
+
+[target.'cfg(target_os = "macos")'.dependencies.core-foundation]
+version = "0.10.0"
+
+[target.'cfg(target_os = "macos")'.dependencies.core-video]
+version = "0.4.3"
+features = ["metal"]
+
+[target.'cfg(target_os = "macos")'.dependencies.ctor]
+version = "0.4.0"
+
+[target.'cfg(target_os = "macos")'.dependencies.foreign-types]
+version = "0.5"
+
+[target.'cfg(target_os = "macos")'.dependencies.metal]
+version = "0.29"
+
+[target.'cfg(target_os = "macos")'.dependencies.objc]
+version = "0.2"
+
+[lints.clippy]
+dbg_macro = "deny"
+declare_interior_mutable_const = "deny"
+disallowed_methods = "deny"
+large_enum_variant = "allow"
+let_underscore_future = "allow"
+nonminimal_bool = "allow"
+redundant_clone = "deny"
+single_range_in_vec_init = "allow"
+todo = "deny"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[lints.clippy.style]
+level = "allow"
+priority = -1
+
+[lints.rust.unexpected_cfgs]
+level = "allow"
+priority = 0

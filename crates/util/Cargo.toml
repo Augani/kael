@@ -1,0 +1,187 @@
+[package]
+edition = "2024"
+name = "kael_util"
+version = "0.5.1"
+publish = true
+description = "A collection of utility structs and functions for Adabraka GPUI (originally from Zed - github.com/zed-industries/zed)"
+authors = ["Adabraka Team"]
+repository = "https://github.com/Augani/kael"
+readme = false
+license = "Apache-2.0"
+
+[features]
+test-support = [
+    "git2",
+    "rand",
+    "util_macros",
+]
+
+[lib]
+name = "kael_util"
+path = "src/util.rs"
+doctest = true
+
+[dependencies.anyhow]
+version = "1.0.86"
+
+[dependencies.async-fs]
+version = "2.1"
+
+[dependencies.async_zip]
+version = "0.0.17"
+features = [
+    "deflate",
+    "deflate64",
+]
+
+[dependencies.collections]
+path = "../collections"
+package = "kael_collections"
+version = "0.5.1"
+
+[dependencies.dirs]
+version = "4.0"
+
+[dependencies.dunce]
+version = "1.0"
+
+[dependencies.futures]
+version = "0.3"
+
+[dependencies.futures-lite]
+version = "1.13"
+
+[dependencies.git2]
+version = "0.20.1"
+optional = true
+default-features = false
+
+[dependencies.globset]
+version = "0.4"
+
+[dependencies.itertools]
+version = "0.14.0"
+
+[dependencies.log]
+version = "0.4.16"
+features = [
+    "kv_unstable_serde",
+    "serde",
+]
+
+[dependencies.rand]
+version = "0.9"
+optional = true
+
+[dependencies.regex]
+version = "1.5"
+
+[dependencies.rust-embed]
+version = "8.4"
+features = ["include-exclude"]
+
+[dependencies.schemars]
+version = "1.0"
+features = ["indexmap2"]
+
+[dependencies.serde]
+version = "1.0.221"
+features = [
+    "derive",
+    "rc",
+]
+
+[dependencies.serde_json]
+version = "1.0.144"
+features = [
+    "preserve_order",
+    "raw_value",
+]
+
+[dependencies.serde_json_lenient]
+version = "0.2"
+features = [
+    "preserve_order",
+    "raw_value",
+]
+
+[dependencies.shlex]
+version = "1.3.0"
+
+[dependencies.smol]
+version = "2.0"
+
+[dependencies.take-until]
+version = "0.2.0"
+
+[dependencies.tempfile]
+version = "3.20.0"
+
+[dependencies.unicase]
+version = "2.6"
+
+[dependencies.util_macros]
+path = "../util_macros"
+optional = true
+package = "kael_util_macros"
+version = "0.5.1"
+
+[dependencies.walkdir]
+version = "2.5"
+
+[dependencies.which]
+version = "6.0.0"
+
+
+[dev-dependencies.git2]
+version = "0.20.1"
+default-features = false
+
+[dev-dependencies.indoc]
+version = "2"
+
+[dev-dependencies.pretty_assertions]
+version = "1.3.0"
+features = ["unstable"]
+
+[dev-dependencies.rand]
+version = "0.9"
+
+[dev-dependencies.util_macros]
+path = "../util_macros"
+package = "kael_util_macros"
+version = "0.5.1"
+
+[target."cfg(unix)".dependencies.command-fds]
+version = "0.3.1"
+
+[target."cfg(unix)".dependencies.libc]
+version = "0.2"
+
+[target."cfg(unix)".dependencies.nix]
+version = "0.29"
+features = ["user"]
+
+[target."cfg(windows)".dependencies.tendril]
+version = "0.4.3"
+
+[lints.clippy]
+dbg_macro = "deny"
+declare_interior_mutable_const = "deny"
+disallowed_methods = "deny"
+large_enum_variant = "allow"
+let_underscore_future = "allow"
+nonminimal_bool = "allow"
+redundant_clone = "deny"
+single_range_in_vec_init = "allow"
+todo = "deny"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[lints.clippy.style]
+level = "allow"
+priority = -1
+
+[lints.rust.unexpected_cfgs]
+level = "allow"
+priority = 0

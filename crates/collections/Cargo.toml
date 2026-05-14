@@ -1,0 +1,47 @@
+[package]
+edition = "2024"
+name = "kael_collections"
+version = "0.5.1"
+publish = true
+description = "Standard collection type re-exports for Adabraka GPUI (originally from Zed - github.com/zed-industries/zed)"
+authors = ["Adabraka Team"]
+repository = "https://github.com/Augani/kael"
+readme = false
+license = "Apache-2.0"
+
+[features]
+test-support = []
+
+[lib]
+name = "kael_collections"
+path = "src/collections.rs"
+doctest = false
+
+[dependencies.indexmap]
+version = "2.7.0"
+features = ["serde"]
+
+[dependencies.rustc-hash]
+version = "2.1.0"
+
+
+[lints.clippy]
+dbg_macro = "deny"
+declare_interior_mutable_const = "deny"
+disallowed_methods = "deny"
+large_enum_variant = "allow"
+let_underscore_future = "allow"
+nonminimal_bool = "allow"
+redundant_clone = "deny"
+single_range_in_vec_init = "allow"
+todo = "deny"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[lints.clippy.style]
+level = "allow"
+priority = -1
+
+[lints.rust.unexpected_cfgs]
+level = "allow"
+priority = 0

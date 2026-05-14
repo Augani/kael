@@ -1,0 +1,123 @@
+[package]
+edition = "2024"
+name = "kael_http_client"
+version = "0.5.1"
+publish = true
+description = "A HTTP client library for Adabraka GPUI (originally from Zed - github.com/zed-industries/zed)"
+authors = ["Adabraka Team"]
+repository = "https://github.com/Augani/kael"
+readme = false
+license = "Apache-2.0"
+
+[features]
+test-support = []
+
+[lib]
+name = "kael_http_client"
+path = "src/http_client.rs"
+doctest = true
+
+[dependencies.anyhow]
+version = "1.0.86"
+
+[dependencies.async-compression]
+version = "0.4"
+features = [
+    "gzip",
+    "futures-io",
+]
+
+[dependencies.async-fs]
+version = "2.1"
+
+[dependencies.async-tar]
+version = "0.5.1"
+
+[dependencies.bytes]
+version = "1.0"
+
+[dependencies.derive_more]
+version = "0.99.17"
+
+[dependencies.futures]
+version = "0.3"
+
+[dependencies.http]
+version = "1.1"
+
+[dependencies.http-body]
+version = "1.0"
+
+[dependencies.log]
+version = "0.4.16"
+features = [
+    "kv_unstable_serde",
+    "serde",
+]
+
+[dependencies.parking_lot]
+version = "0.12.1"
+
+[dependencies.reqwest]
+version = "0.12.15-zed"
+features = [
+    "charset",
+    "http2",
+    "macos-system-configuration",
+    "multipart",
+    "rustls-tls-native-roots",
+    "socks",
+    "stream",
+]
+default-features = false
+package = "zed-reqwest"
+
+[dependencies.serde]
+version = "1.0.221"
+features = [
+    "derive",
+    "rc",
+]
+
+[dependencies.serde_json]
+version = "1.0.144"
+features = [
+    "preserve_order",
+    "raw_value",
+]
+
+[dependencies.sha2]
+version = "0.10"
+
+[dependencies.tempfile]
+version = "3.20.0"
+
+[dependencies.url]
+version = "2.2"
+
+[dependencies.util]
+path = "../util"
+package = "kael_util"
+version = "0.5.1"
+
+
+[lints.clippy]
+dbg_macro = "deny"
+declare_interior_mutable_const = "deny"
+disallowed_methods = "deny"
+large_enum_variant = "allow"
+let_underscore_future = "allow"
+nonminimal_bool = "allow"
+redundant_clone = "deny"
+single_range_in_vec_init = "allow"
+todo = "deny"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[lints.clippy.style]
+level = "allow"
+priority = -1
+
+[lints.rust.unexpected_cfgs]
+level = "allow"
+priority = 0

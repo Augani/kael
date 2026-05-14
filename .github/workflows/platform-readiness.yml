@@ -1,0 +1,188 @@
+name: Platform Readiness
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  ZED_HEADLESS: 1
+
+jobs:
+  rustfmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+  verify:
+    name: Verify (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macOS
+          - os: windows-latest
+            label: Windows
+          - os: ubuntu-latest
+            label: Linux
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/ci/install-linux-deps.sh
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify on macOS/Linux
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash scripts/ci/verify-gpui.sh default
+
+      - name: Verify macOS Blade Renderer
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/ci/verify-gpui.sh macos-blade
+
+      - name: Verify on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -File scripts/ci/verify-gpui.ps1
+
+      - name: Upload release dry-run feed
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dry-run-${{ matrix.label }}
+          path: dist/update-feed.json
+          if-no-files-found: ignore
+
+  linux-backends:
+    name: Linux Backend Check (${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        mode:
+          - linux-x11
+          - linux-wayland
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        shell: bash
+        run: bash scripts/ci/install-linux-deps.sh
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check Linux backend feature set
+        shell: bash
+        run: bash scripts/ci/verify-gpui.sh ${{ matrix.mode }}
+
+  benchmark:
+    name: Benchmark (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/ci/install-linux-deps.sh
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Download main branch baseline
+        id: download-baseline
+        shell: bash
+        run: |
+          mkdir -p benchmarks/baselines
+          if gh api repos/${{ github.repository }}/contents/benchmarks/baselines/gpui-messaging-baseline.json?ref=main > baseline_info.json 2>/dev/null; then
+            download_url=$(jq -r '.download_url // empty' baseline_info.json)
+            if [ -n "$download_url" ]; then
+              curl -sL "$download_url" -o benchmarks/baselines/gpui-messaging-baseline.json
+              echo "baseline_found=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "baseline_found=false" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Run benchmarks
+        shell: bash
+        run: |
+          if [ "${{ steps.download-baseline.outputs.baseline_found }}" == "true" ]; then
+            cargo run --example perf_bench -- --output benchmark-results.json --compare
+          else
+            cargo run --example perf_bench -- --output benchmark-results.json
+          fi
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-${{ matrix.os }}
+          path: benchmark-results.json
+
+      - name: Check regressions
+        if: steps.download-baseline.outputs.baseline_found == 'true'
+        shell: bash
+        run: |
+          echo "Checking for regressions..."
+          cargo run --example perf_bench -- --output benchmark-results.json --compare || {
+            echo "::error::Benchmark regression detected"
+            exit 1
+          }

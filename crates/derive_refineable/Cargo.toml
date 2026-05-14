@@ -1,0 +1,52 @@
+[package]
+edition = "2024"
+name = "kael_derive_refineable"
+version = "0.5.1"
+publish = true
+description = "A derive macro for creating refinement types in Rust (originally from Zed - github.com/zed-industries/zed)"
+authors = ["Adabraka Team"]
+repository = "https://github.com/Augani/kael"
+readme = false
+license = "Apache-2.0"
+
+[lib]
+name = "kael_derive_refineable"
+path = "src/derive_refineable.rs"
+doctest = false
+proc-macro = true
+
+[dependencies.proc-macro2]
+version = "1.0.93"
+
+[dependencies.quote]
+version = "1.0.9"
+
+[dependencies.syn]
+version = "2.0.101"
+features = [
+    "full",
+    "extra-traits",
+    "visit-mut",
+]
+
+
+[lints.clippy]
+dbg_macro = "deny"
+declare_interior_mutable_const = "deny"
+disallowed_methods = "deny"
+large_enum_variant = "allow"
+let_underscore_future = "allow"
+nonminimal_bool = "allow"
+redundant_clone = "deny"
+single_range_in_vec_init = "allow"
+todo = "deny"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[lints.clippy.style]
+level = "allow"
+priority = -1
+
+[lints.rust.unexpected_cfgs]
+level = "allow"
+priority = 0

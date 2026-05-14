@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/kael",
+    "crates/kael-media",
+    "crates/kael-macros",
+    "crates/collections",
+    "crates/derive_refineable",
+    "crates/http_client",
+    "crates/media",
+    "crates/perf",
+    "crates/refineable",
+    "crates/sum_tree",
+    "crates/util",
+    "crates/util_macros",
+    "crates/semantic_version",
+    "xtask",
+    "examples/reference_messaging",
+    "examples/reference_workspace",
+    "examples/reference_control_room",
+]
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"

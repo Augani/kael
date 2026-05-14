@@ -1,0 +1,58 @@
+[package]
+edition = "2024"
+name = "kael_perf"
+version = "0.5.1"
+publish = true
+description = "A tool for measuring test performance (originally from Zed - github.com/zed-industries/zed)"
+authors = ["Adabraka Team"]
+repository = "https://github.com/Augani/kael"
+readme = false
+license = "Apache-2.0"
+
+[lib]
+name = "kael_perf"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kael_perf"
+path = "src/main.rs"
+
+[dependencies.collections]
+path = "../collections"
+package = "kael_collections"
+version = "0.5.1"
+
+[dependencies.serde]
+version = "1.0.221"
+features = [
+    "derive",
+    "rc",
+]
+
+[dependencies.serde_json]
+version = "1.0.144"
+features = [
+    "preserve_order",
+    "raw_value",
+]
+
+
+[lints.clippy]
+all = "warn"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+as_underscore = "deny"
+let_underscore_must_use = "forbid"
+missing_docs_in_private_items = "warn"
+missing_safety_doc = "forbid"
+needless_continue = "allow"
+pedantic = "warn"
+style = "warn"
+undocumented_unsafe_blocks = "forbid"
+
+[lints.clippy.disallowed_methods]
+level = "allow"
+priority = 1
+
+[lints.rust]
+missing_docs = "warn"

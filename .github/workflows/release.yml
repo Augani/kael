@@ -1,0 +1,125 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-and-release:
+    name: Build and Release (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macOS
+          - os: windows-latest
+            label: Windows
+          - os: ubuntu-latest
+            label: Linux
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/ci/install-linux-deps.sh
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        shell: bash
+        run: cargo build --release -p xtask
+
+      - name: Run xtask bundle
+        shell: bash
+        run: cargo run -p xtask -- bundle --output dist --binary target/release/xtask
+
+      - name: Run xtask sign
+        if: env.SKIP_SIGN != 'true'
+        shell: bash
+        run: |
+          for artifact in dist/*; do
+            if [ -e "$artifact" ]; then
+              cargo run -p xtask -- sign --artifact "$artifact" || true
+            fi
+          done
+
+      - name: Run xtask notarize
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          for artifact in dist/*; do
+            if [ -e "$artifact" ]; then
+              cargo run -p xtask -- notarize --artifact "$artifact" || true
+            fi
+          done
+
+      - name: Run xtask generate-update-metadata
+        shell: bash
+        run: |
+          artifact_args=()
+          while IFS= read -r -d '' artifact; do
+            artifact_args+=(--artifact "$artifact")
+          done < <(find dist -mindepth 1 -maxdepth 1 ! -name update-feed.json -print0)
+          if [ "${#artifact_args[@]}" -gt 0 ]; then
+            cargo run -p xtask -- generate-update-metadata --output dist/update-feed.json "${artifact_args[@]}"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.label }}
+          path: dist/**/*
+
+  publish:
+    name: Publish Release
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish with xtask
+        shell: bash
+        run: |
+          find artifacts -type f -print0 | while IFS= read -r -d '' file; do
+            cargo run -p xtask -- publish --artifact "$file" --tag ${{ github.ref_name }} --dry-run || true
+          done
