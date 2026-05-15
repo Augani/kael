@@ -128,10 +128,12 @@ impl PrintStroke {
         self
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) fn width(&self) -> Pixels {
         self.width
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) fn color_ref(&self) -> Rgba {
         self.color
     }
@@ -167,14 +169,17 @@ impl PrintTextStyle {
         self
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) fn font_family_ref(&self) -> Option<&SharedString> {
         self.font_family.as_ref()
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) fn font_size(&self) -> Pixels {
         self.font_size
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) fn color_ref(&self) -> Rgba {
         self.color
     }
@@ -241,6 +246,7 @@ impl PrintImageStyle {
         self
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) fn object_fit_ref(&self) -> PrintImageFit {
         self.object_fit
     }
