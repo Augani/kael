@@ -71,17 +71,17 @@ jobs:
       - name: Verify on macOS/Linux
         if: runner.os != 'Windows'
         shell: bash
-        run: bash scripts/ci/verify-gpui.sh default
+        run: bash scripts/ci/verify-kael.sh default
 
       - name: Verify macOS Blade Renderer
         if: runner.os == 'macOS'
         shell: bash
-        run: bash scripts/ci/verify-gpui.sh macos-blade
+        run: bash scripts/ci/verify-kael.sh macos-blade
 
       - name: Verify on Windows
         if: runner.os == 'Windows'
         shell: pwsh
-        run: pwsh -File scripts/ci/verify-gpui.ps1
+        run: pwsh -File scripts/ci/verify-kael.ps1
 
       - name: Upload release dry-run feed
         if: always()
@@ -118,7 +118,7 @@ jobs:
 
       - name: Check Linux backend feature set
         shell: bash
-        run: bash scripts/ci/verify-gpui.sh ${{ matrix.mode }}
+        run: bash scripts/ci/verify-kael.sh ${{ matrix.mode }}
 
   benchmark:
     name: Benchmark (${{ matrix.os }})
@@ -150,10 +150,10 @@ jobs:
         shell: bash
         run: |
           mkdir -p benchmarks/baselines
-          if gh api repos/${{ github.repository }}/contents/benchmarks/baselines/gpui-messaging-baseline.json?ref=main > baseline_info.json 2>/dev/null; then
+          if gh api repos/${{ github.repository }}/contents/benchmarks/baselines/kael-messaging-baseline.json?ref=main > baseline_info.json 2>/dev/null; then
             download_url=$(jq -r '.download_url // empty' baseline_info.json)
             if [ -n "$download_url" ]; then
-              curl -sL "$download_url" -o benchmarks/baselines/gpui-messaging-baseline.json
+              curl -sL "$download_url" -o benchmarks/baselines/kael-messaging-baseline.json
               echo "baseline_found=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi

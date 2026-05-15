@@ -45,6 +45,9 @@ packages=(
   libxcb-xkb-dev
   libxkbcommon-dev
   libxkbcommon-x11-dev
+  libgtk-3-dev
+  libwebkit2gtk-4.1-dev
+  libnotify-dev
   pkg-config
   wayland-protocols
 )
