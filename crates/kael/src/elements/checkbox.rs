@@ -558,13 +558,13 @@ mod tests {
             assert!(view.read(cx).checked);
         });
 
-        window.simulate_keystrokes("cmd-z");
+        window.simulate_keystrokes("secondary-z");
         window.update(|window, cx| {
             window.draw(cx).clear();
             assert!(!view.read(cx).checked);
         });
 
-        window.simulate_keystrokes("cmd-shift-z");
+        window.simulate_keystrokes("secondary-shift-z");
         window.update(|window, cx| {
             window.draw(cx).clear();
             assert!(view.read(cx).checked);
@@ -604,7 +604,7 @@ mod tests {
             assert!(window.is_action_available(&Undo, cx));
         });
 
-        window.simulate_keystrokes("cmd-z");
+        window.simulate_keystrokes("secondary-z");
         window.update(|window, cx| {
             window.draw(cx).clear();
             let view = view.read(cx);
@@ -620,7 +620,7 @@ mod tests {
             assert!(window.is_action_available(&Undo, cx));
         });
 
-        window.simulate_keystrokes("cmd-z");
+        window.simulate_keystrokes("secondary-z");
         window.update(|window, cx| {
             window.draw(cx).clear();
             let view = view.read(cx);

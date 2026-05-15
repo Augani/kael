@@ -107,8 +107,6 @@ pub struct TextInputRenderState {
     pub hovered: bool,
     /// Whether the field is configured for multiline editing.
     pub multi_line: bool,
-    /// Whether the field is disabled.
-    pub disabled: bool,
     /// Outer field bounds including the border.
     pub outer_bounds: Bounds<Pixels>,
     /// Inner field bounds inside the border.
@@ -372,7 +370,6 @@ pub struct TextInput {
     multi_line: bool,
     max_lines: Option<usize>,
     password: bool,
-    disabled: bool,
     mask: Option<Mask>,
     on_change: Option<ChangeListener>,
     on_submit: Option<SubmitListener>,
@@ -390,7 +387,6 @@ impl TextInput {
             multi_line: false,
             max_lines: None,
             password: false,
-            disabled: false,
             mask: None,
             on_change: None,
             on_submit: None,
@@ -420,12 +416,6 @@ impl TextInput {
     /// Mask the rendered content while keeping the underlying value unchanged.
     pub fn password(mut self) -> Self {
         self.password = true;
-        self
-    }
-
-    /// Disable the text input, preventing user interaction.
-    pub fn disabled(mut self) -> Self {
-        self.disabled = true;
         self
     }
 
@@ -943,175 +933,169 @@ impl Element for TextInput {
         window.set_key_context(
             KeyContext::parse(TEXT_INPUT_CONTEXT).expect("valid text input context"),
         );
-        if !self.disabled {
-            register_action_handler::<Backspace>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::backspace,
-            );
-            register_action_handler::<Delete>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::delete,
-            );
-            register_action_handler::<DeleteWordBackward>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::delete_word_backward,
-            );
-            register_action_handler::<DeleteWordForward>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::delete_word_forward,
-            );
-            register_action_handler::<MoveLeft>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::move_left,
-            );
-            register_action_handler::<MoveRight>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::move_right,
-            );
-            register_action_handler::<MoveWordLeft>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::move_word_left,
-            );
-            register_action_handler::<MoveWordRight>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::move_word_right,
-            );
-            register_action_handler::<SelectLeft>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::select_left,
-            );
-            register_action_handler::<SelectRight>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::select_right,
-            );
-            register_action_handler::<SelectWordLeft>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::select_word_left,
-            );
-            register_action_handler::<SelectWordRight>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::select_word_right,
-            );
-            register_action_handler::<MoveToStart>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::move_to_start,
-            );
-            register_action_handler::<MoveToEnd>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::move_to_end,
-            );
-            register_action_handler::<SelectToStart>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::select_to_start,
-            );
-            register_action_handler::<SelectToEnd>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::select_to_end,
-            );
-            register_action_handler::<SelectAll>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::select_all,
-            );
-            register_action_handler::<Paste>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::paste,
-            );
-            register_action_handler::<Copy>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::copy,
-            );
-            register_action_handler::<Cut>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::cut,
-            );
-            register_action_handler_when::<Undo>(
-                window,
-                can_undo,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::undo,
-            );
-            register_action_handler_when::<Redo>(
-                window,
-                can_redo,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::redo,
-            );
-            register_action_handler::<InsertNewline>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::insert_newline,
-            );
-            register_action_handler::<Submit>(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                TextInputState::submit,
-            );
-        }
+        register_action_handler::<Backspace>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::backspace,
+        );
+        register_action_handler::<Delete>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::delete,
+        );
+        register_action_handler::<DeleteWordBackward>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::delete_word_backward,
+        );
+        register_action_handler::<DeleteWordForward>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::delete_word_forward,
+        );
+        register_action_handler::<MoveLeft>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::move_left,
+        );
+        register_action_handler::<MoveRight>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::move_right,
+        );
+        register_action_handler::<MoveWordLeft>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::move_word_left,
+        );
+        register_action_handler::<MoveWordRight>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::move_word_right,
+        );
+        register_action_handler::<SelectLeft>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::select_left,
+        );
+        register_action_handler::<SelectRight>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::select_right,
+        );
+        register_action_handler::<SelectWordLeft>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::select_word_left,
+        );
+        register_action_handler::<SelectWordRight>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::select_word_right,
+        );
+        register_action_handler::<MoveToStart>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::move_to_start,
+        );
+        register_action_handler::<MoveToEnd>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::move_to_end,
+        );
+        register_action_handler::<SelectToStart>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::select_to_start,
+        );
+        register_action_handler::<SelectToEnd>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::select_to_end,
+        );
+        register_action_handler::<SelectAll>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::select_all,
+        );
+        register_action_handler::<Paste>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::paste,
+        );
+        register_action_handler::<Copy>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::copy,
+        );
+        register_action_handler::<Cut>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::cut,
+        );
+        register_action_handler_when::<Undo>(
+            window,
+            can_undo,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::undo,
+        );
+        register_action_handler_when::<Redo>(
+            window,
+            can_redo,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::redo,
+        );
+        register_action_handler::<InsertNewline>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::insert_newline,
+        );
+        register_action_handler::<Submit>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::submit,
+        );
 
-        if !self.disabled {
-            register_mouse_handlers(
-                window,
-                state.clone(),
-                focus_handle.clone(),
-                prepaint.hitbox.clone(),
-            );
-        }
+        register_mouse_handlers(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            prepaint.hitbox.clone(),
+        );
 
-        if prepaint.hitbox.is_hovered(window) && !self.disabled {
+        if prepaint.hitbox.is_hovered(window) {
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.hitbox);
         }
 
-        if !self.disabled {
-            window.handle_input(
-                &focus_handle,
-                ElementInputHandler::new(prepaint.text_bounds, state.clone()),
-                cx,
-            );
-        }
+        window.handle_input(
+            &focus_handle,
+            ElementInputHandler::new(prepaint.text_bounds, state.clone()),
+            cx,
+        );
 
         let is_focused = focus_handle.is_focused(window);
         let (render_state, accessibility_value, accessibility_placeholder) = {
@@ -1127,7 +1111,6 @@ impl Element for TextInput {
                     focused: is_focused,
                     hovered: prepaint.hitbox.is_hovered(window),
                     multi_line: input.multi_line,
-                    disabled: self.disabled,
                     outer_bounds: bounds,
                     field_bounds: inset_bounds(bounds, px(1.0)),
                     text_bounds: prepaint.text_bounds,
@@ -2633,7 +2616,7 @@ mod tests {
             Some(SharedString::from("Text edit"))
         );
 
-        window.simulate_keystrokes("cmd-z");
+        window.simulate_keystrokes("secondary-z");
         window.update(|window, cx| {
             window.draw(cx).clear();
             let view = view.read(cx);
@@ -2661,7 +2644,7 @@ mod tests {
         );
         assert_eq!(window.cx.update(|app| app.redo_label()), None);
 
-        window.simulate_keystrokes("cmd-z");
+        window.simulate_keystrokes("secondary-z");
         window.update(|window, cx| {
             window.draw(cx).clear();
             let view = view.read(cx);
@@ -2723,7 +2706,7 @@ mod tests {
         assert!(typed.focused);
         assert!(typed.has_cursor);
 
-        window.simulate_keystrokes("cmd-a");
+        window.simulate_keystrokes("secondary-a");
         window.update(|window, cx| {
             window.draw(cx).clear();
         });

@@ -767,13 +767,13 @@ mod tests {
             assert_eq!(view.read(cx).value, px(100.0));
         });
 
-        window.simulate_keystrokes("cmd-z");
+        window.simulate_keystrokes("secondary-z");
         window.update(|window, cx| {
             window.draw(cx).clear();
             assert_eq!(view.read(cx).value, px(40.0));
         });
 
-        window.simulate_keystrokes("cmd-shift-z");
+        window.simulate_keystrokes("secondary-shift-z");
         window.update(|window, cx| {
             window.draw(cx).clear();
             assert_eq!(view.read(cx).value, px(100.0));
