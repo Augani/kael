@@ -3,9 +3,10 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+use crate::util::ResultExt;
 use anyhow::{Context, Result};
-use util::ResultExt;
 use windows::{
+    core::Interface,
     Win32::{
         Foundation::HWND,
         Graphics::{
@@ -16,7 +17,6 @@ use windows::{
             Dxgi::{Common::*, *},
         },
     },
-    core::Interface,
 };
 
 use crate::{
@@ -697,7 +697,7 @@ impl DirectXRenderer {
     }
 
     fn draw_blur_rects(&mut self, blur_rects: &[BlurRect]) -> Result<()> {
-        let target_texture = unsafe { (&*self.resources.render_target).clone() };
+        let target_texture = (&*self.resources.render_target).clone();
         let target_view = [Some(
             self.resources.render_target_view[0]
                 .as_ref()
@@ -1830,11 +1830,11 @@ pub(crate) mod shader_resources {
 
     #[cfg(debug_assertions)]
     use windows::{
+        core::{HSTRING, PCSTR},
         Win32::Graphics::Direct3D::{
-            Fxc::{D3DCOMPILE_DEBUG, D3DCOMPILE_SKIP_OPTIMIZATION, D3DCompileFromFile},
+            Fxc::{D3DCompileFromFile, D3DCOMPILE_DEBUG, D3DCOMPILE_SKIP_OPTIMIZATION},
             ID3DBlob,
         },
-        core::{HSTRING, PCSTR},
     };
 
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -2030,7 +2030,7 @@ mod nvidia {
     };
 
     use anyhow::Result;
-    use windows::{Win32::System::LibraryLoader::GetProcAddress, core::s};
+    use windows::{core::s, Win32::System::LibraryLoader::GetProcAddress};
 
     use crate::with_dll_library;
 
@@ -2097,7 +2097,7 @@ mod amd {
     use std::os::raw::{c_char, c_int, c_void};
 
     use anyhow::Result;
-    use windows::{Win32::System::LibraryLoader::GetProcAddress, core::s};
+    use windows::{core::s, Win32::System::LibraryLoader::GetProcAddress};
 
     use crate::with_dll_library;
 
@@ -2190,8 +2190,8 @@ mod amd {
 
 mod dxgi {
     use windows::{
-        Win32::Graphics::Dxgi::{IDXGIAdapter1, IDXGIDevice},
         core::Interface,
+        Win32::Graphics::Dxgi::{IDXGIAdapter1, IDXGIDevice},
     };
 
     pub(super) fn get_driver_version(adapter: &IDXGIAdapter1) -> anyhow::Result<String> {

@@ -28,7 +28,7 @@ mod text_system;
 mod tray;
 #[cfg(feature = "wayland")]
 mod wayland;
-#[cfg(feature = "x11")]
+#[cfg(any(feature = "wayland", feature = "x11"))]
 mod webview;
 #[cfg(feature = "x11")]
 mod x11;

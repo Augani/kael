@@ -1,16 +1,16 @@
 use super::{WindowsWindow, WindowsWindowInner};
 use crate::{
-    AsyncWindowContext, Bounds, Pixels, SharedString,
     webview::{
         NavigationPolicy, PlatformWebView, PlatformWebViewCommand, WebViewNavigationHandler,
     },
+    AsyncWindowContext, Bounds, Pixels, SharedString,
 };
 use anyhow::{Context as _, Result};
 use std::{collections::HashSet, env, fs, path::PathBuf, rc::Rc};
 use util::ResultExt;
 use wry::{
-    NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder,
     dpi::{LogicalPosition, LogicalSize},
+    NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder,
 };
 
 pub(crate) struct WindowsWebViewHost {
@@ -44,10 +44,11 @@ pub(crate) fn sync_webviews(window: &Rc<WindowsWindowInner>, webviews: &[Platfor
             state.webviews.remove(&webview_id);
         }
 
+        let scale_factor = state.scale_factor;
         if let Some(host) = state.webviews.get_mut(&webview_id) {
-            host.update_desired(webview.clone(), state.scale_factor);
+            host.update_desired(webview.clone(), scale_factor);
         } else {
-            match WindowsWebViewHost::new(window, webview.clone(), state.scale_factor) {
+            match WindowsWebViewHost::new(window, webview.clone(), scale_factor) {
                 Ok(host) => {
                     state.webviews.insert(webview_id, host);
                 }

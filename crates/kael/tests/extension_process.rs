@@ -6,13 +6,13 @@ use std::{
 use kael::{ExecutionModel, ExtensionHostRuntime, PluginManifestBuilder, SupervisorEvent};
 
 fn extension_child_path() -> &'static str {
-    env!("CARGO_BIN_EXE_gpui-extension-child")
+    env!("CARGO_BIN_EXE_kael-extension-child")
 }
 
 #[test]
 fn external_process_extension_activates_and_deactivates() {
     let tmp = std::env::temp_dir().join(format!(
-        "gpui-extension-process-test-{}",
+        "kael-extension-process-test-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&tmp);
@@ -58,7 +58,7 @@ fn external_process_extension_activates_and_deactivates() {
 
 #[test]
 fn external_process_extension_handles_commands_and_contributions() {
-    let tmp = std::env::temp_dir().join(format!("gpui-extension-rpc-test-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("kael-extension-rpc-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).unwrap();
 
@@ -94,7 +94,7 @@ fn external_process_extension_handles_commands_and_contributions() {
 #[test]
 fn external_process_extension_crash_is_reported() {
     let tmp =
-        std::env::temp_dir().join(format!("gpui-extension-crash-test-{}", std::process::id()));
+        std::env::temp_dir().join(format!("kael-extension-crash-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).unwrap();
 

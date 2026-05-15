@@ -6,7 +6,7 @@ use std::{
 use kael::{ProcessClass, ProcessId, ProcessInfo, SupervisorEvent, WorkerHost};
 
 fn worker_child_path() -> &'static str {
-    env!("CARGO_BIN_EXE_gpui-worker-child")
+    env!("CARGO_BIN_EXE_kael-worker-child")
 }
 
 #[test]
