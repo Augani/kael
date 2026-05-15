@@ -1,4 +1,4 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, mem::ManuallyDrop, sync::Arc};
 
 use ::util::ResultExt;
 use anyhow::{Context, Result};
@@ -70,6 +70,10 @@ struct FontIdentifier {
     style: i32,
 }
 
+fn glyph_run_font_face(font_face: &IDWriteFontFace3) -> ManuallyDrop<Option<IDWriteFontFace>> {
+    ManuallyDrop::new(Some(unsafe { std::ptr::read(&****font_face) }))
+}
+
 impl DirectWriteComponent {
     pub fn new(directx_devices: &DirectXDevices) -> Result<Self> {
         // todo: ideally this would not be a large unsafe block but smaller isolated ones for easier auditing
@@ -131,7 +135,7 @@ impl GPUState {
                 ],
             };
             unsafe { device.CreateBlendState(&desc, Some(&mut blend_state)) }?;
-            blend_state.unwrap()
+            blend_state.context("CreateBlendState returned no blend state")?
         };
 
         let sampler = {
@@ -159,7 +163,7 @@ impl GPUState {
             )?;
             let mut shader = None;
             unsafe { device.CreateVertexShader(source.as_bytes(), None, Some(&mut shader)) }?;
-            shader.unwrap()
+            shader.context("CreateVertexShader returned no vertex shader")?
         };
 
         let pixel_shader = {
@@ -169,7 +173,7 @@ impl GPUState {
             )?;
             let mut shader = None;
             unsafe { device.CreatePixelShader(source.as_bytes(), None, Some(&mut shader)) }?;
-            shader.unwrap()
+            shader.context("CreatePixelShader returned no pixel shader")?
         };
 
         Ok(Self {
@@ -191,7 +195,7 @@ impl DirectWriteTextSystem {
             components
                 .factory
                 .GetSystemFontCollection(false, &mut result, true)?;
-            result.unwrap()
+            result.context("GetSystemFontCollection returned no font collection")?
         };
         let custom_font_set = unsafe { components.builder.CreateFontSet()? };
         let custom_font_collection = unsafe {
@@ -233,7 +237,7 @@ impl PlatformTextSystem for DirectWriteTextSystem {
             Ok(*font_id)
         } else {
             let mut lock = RwLockUpgradableReadGuard::upgrade(lock);
-            let font_id = lock.select_font(font);
+            let font_id = lock.select_font(font)?;
             lock.font_selections.insert(font.clone(), font_id);
             Ok(font_id)
         }
@@ -472,11 +476,15 @@ impl DirectWriteState {
                 .log_err()
                 .is_some()
         } {
-            self.system_font_collection = collection.unwrap();
+            if let Some(collection) = collection {
+                self.system_font_collection = collection;
+            } else {
+                log::error!("GetSystemFontCollection returned no font collection");
+            }
         }
     }
 
-    fn select_font(&mut self, target_font: &Font) -> FontId {
+    fn select_font(&mut self, target_font: &Font) -> Result<FontId> {
         unsafe {
             if target_font.family == ".SystemUIFont" {
                 let family = self.system_ui_font_name.clone();
@@ -487,7 +495,7 @@ impl DirectWriteState {
                     &target_font.features,
                     target_font.fallbacks.as_ref(),
                 )
-                .unwrap()
+                .with_context(|| format!("system UI font {} not found", family.as_ref()))
             } else {
                 let family = self.system_ui_font_name.clone();
                 self.find_font_id(
@@ -497,24 +505,27 @@ impl DirectWriteState {
                     &target_font.features,
                     target_font.fallbacks.as_ref(),
                 )
-                .unwrap_or_else(|| {
-                    #[cfg(any(test, feature = "test-support"))]
-                    {
-                        panic!("ERROR: {} font not found!", target_font.family);
-                    }
-                    #[cfg(not(any(test, feature = "test-support")))]
-                    {
-                        log::error!("{} not found, use {} instead.", target_font.family, family);
-                        self.get_font_id_from_font_collection(
-                            family.as_ref(),
-                            target_font.weight,
-                            target_font.style,
-                            &target_font.features,
-                            target_font.fallbacks.as_ref(),
-                            true,
-                        )
-                        .unwrap()
-                    }
+                .or_else(|| {
+                    log::error!(
+                        "{} not found, use {} instead.",
+                        target_font.family.as_ref(),
+                        family.as_ref()
+                    );
+                    self.get_font_id_from_font_collection(
+                        family.as_ref(),
+                        target_font.weight,
+                        target_font.style,
+                        &target_font.features,
+                        target_font.fallbacks.as_ref(),
+                        true,
+                    )
+                })
+                .with_context(|| {
+                    format!(
+                        "failed to select font {} or fallback {}",
+                        target_font.family.as_ref(),
+                        family.as_ref()
+                    )
                 })
             }
         }
@@ -897,7 +908,7 @@ impl DirectWriteState {
         let advance = [0.0];
         let offset = [DWRITE_GLYPH_OFFSET::default()];
         let glyph_run = DWRITE_GLYPH_RUN {
-            fontFace: unsafe { std::mem::transmute_copy(&font.font_face) },
+            fontFace: glyph_run_font_face(&font.font_face),
             fontEmSize: params.font_size.0,
             glyphCount: 1,
             glyphIndices: glyph_id.as_ptr(),
@@ -1070,7 +1081,7 @@ impl DirectWriteState {
             ascenderOffset: glyph_bounds.origin.y.0 as f32 / params.scale_factor,
         }];
         let glyph_run = DWRITE_GLYPH_RUN {
-            fontFace: unsafe { std::mem::transmute_copy(&font.font_face) },
+            fontFace: glyph_run_font_face(&font.font_face),
             fontEmSize: params.font_size.0,
             glyphCount: 1,
             glyphIndices: glyph_id.as_ptr(),
@@ -1173,8 +1184,9 @@ impl DirectWriteState {
                     .device
                     .CreateBuffer(&desc, None, Some(&mut buffer))
             }?;
-            [buffer]
+            buffer.context("CreateBuffer returned no constant buffer")?
         };
+        let constant_buffers = [Some(params_buffer.clone())];
 
         let render_target_texture = {
             let mut texture = None;
@@ -1198,7 +1210,7 @@ impl DirectWriteState {
                     .device
                     .CreateTexture2D(&desc, None, Some(&mut texture))
             }?;
-            texture.unwrap()
+            texture.context("CreateTexture2D returned no render target texture")?
         };
 
         let render_target_view = {
@@ -1217,8 +1229,9 @@ impl DirectWriteState {
                     Some(&mut rtv),
                 )
             }?;
-            [rtv]
+            rtv.context("CreateRenderTargetView returned no render target view")?
         };
+        let render_target_views = [Some(render_target_view)];
 
         let staging_texture = {
             let mut texture = None;
@@ -1242,16 +1255,16 @@ impl DirectWriteState {
                     .device
                     .CreateTexture2D(&desc, None, Some(&mut texture))
             }?;
-            texture.unwrap()
+            texture.context("CreateTexture2D returned no staging texture")?
         };
 
         let device_context = &gpu_state.device_context;
         unsafe { device_context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP) };
         unsafe { device_context.VSSetShader(&gpu_state.vertex_shader, None) };
         unsafe { device_context.PSSetShader(&gpu_state.pixel_shader, None) };
-        unsafe { device_context.VSSetConstantBuffers(0, Some(&params_buffer)) };
-        unsafe { device_context.PSSetConstantBuffers(0, Some(&params_buffer)) };
-        unsafe { device_context.OMSetRenderTargets(Some(&render_target_view), None) };
+        unsafe { device_context.VSSetConstantBuffers(0, Some(&constant_buffers)) };
+        unsafe { device_context.PSSetConstantBuffers(0, Some(&constant_buffers)) };
+        unsafe { device_context.OMSetRenderTargets(Some(&render_target_views), None) };
         unsafe { device_context.PSSetSamplers(0, Some(&gpu_state.sampler)) };
         unsafe { device_context.OMSetBlendState(&gpu_state.blend_state, None, 0xffffffff) };
 
@@ -1271,16 +1284,14 @@ impl DirectWriteState {
             unsafe {
                 let mut dest = std::mem::zeroed();
                 gpu_state.device_context.Map(
-                    params_buffer[0].as_ref().unwrap(),
+                    &params_buffer,
                     0,
                     D3D11_MAP_WRITE_DISCARD,
                     0,
                     Some(&mut dest),
                 )?;
                 std::ptr::copy_nonoverlapping(&params as *const _, dest.pData as *mut _, 1);
-                gpu_state
-                    .device_context
-                    .Unmap(params_buffer[0].as_ref().unwrap(), 0);
+                gpu_state.device_context.Unmap(&params_buffer, 0);
             };
 
             let texture = [Some(layer.texture_view)];
@@ -1472,7 +1483,7 @@ impl GlyphLayerTexture {
                     .device
                     .CreateTexture2D(&desc, None, Some(&mut texture))?
             };
-            texture.unwrap()
+            texture.context("CreateTexture2D returned no glyph layer texture")?
         };
         let texture_view = {
             let mut view: Option<ID3D11ShaderResourceView> = None;
@@ -1481,7 +1492,7 @@ impl GlyphLayerTexture {
                     .device
                     .CreateShaderResourceView(&texture, None, Some(&mut view))?
             };
-            view.unwrap()
+            view.context("CreateShaderResourceView returned no glyph layer view")?
         };
 
         unsafe {
@@ -1654,12 +1665,17 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
         let context = unsafe {
             &mut *(clientdrawingcontext as *const RendererContext as *mut RendererContext)
         };
-        let font_face = glyphrun.fontFace.as_ref().unwrap();
-        // This `cast()` action here should never fail since we are running on Win10+, and
-        // `IDWriteFontFace3` requires Win10
-        let font_face = &font_face.cast::<IDWriteFontFace3>().unwrap();
+        let Some(font_face) = glyphrun.fontFace.as_ref() else {
+            return Ok(());
+        };
+        let font_face = font_face.cast::<IDWriteFontFace3>().map_err(|_| {
+            windows::core::Error::new(
+                DWRITE_E_UNSUPPORTEDOPERATION,
+                "Failed to cast font face",
+            )
+        })?;
         let Some((font_identifier, font_struct, color_font)) =
-            get_font_identifier_and_font_struct(font_face, &self.locale)
+            get_font_identifier_and_font_struct(&font_face, &self.locale)
         else {
             return Ok(());
         };
@@ -1671,7 +1687,10 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
         {
             *id
         } else {
-            context.text_system.select_font(&font_struct)
+            context.text_system.select_font(&font_struct).map_err(|error| {
+                log::error!("Failed to select font: {error:#}");
+                windows::core::Error::new(DWRITE_E_NOFONT, "Failed to select font")
+            })?
         };
 
         let glyph_ids = unsafe { std::slice::from_raw_parts(glyphrun.glyphIndices, glyph_count) };
@@ -1911,7 +1930,10 @@ fn get_postscript_name(font_face: &IDWriteFontFace3, locale: &str) -> Result<Str
         anyhow::bail!("No postscript name found for font face");
     }
 
-    get_name(info.unwrap(), locale)
+    get_name(
+        info.context("No postscript name found for font face")?,
+        locale,
+    )
 }
 
 // https://learn.microsoft.com/en-us/windows/win32/api/dwrite/ne-dwrite-dwrite_font_feature_tag
@@ -2041,7 +2063,7 @@ fn is_color_glyph(
     factory: &IDWriteFactory5,
 ) -> bool {
     let glyph_run = DWRITE_GLYPH_RUN {
-        fontFace: unsafe { std::mem::transmute_copy(font_face) },
+        fontFace: glyph_run_font_face(font_face),
         fontEmSize: 14.0,
         glyphCount: 1,
         glyphIndices: &(glyph_id.0 as u16),

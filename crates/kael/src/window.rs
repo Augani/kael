@@ -381,7 +381,8 @@ impl FocusHandle {
 
 impl Clone for FocusHandle {
     fn clone(&self) -> Self {
-        Self::for_id(self.id, &self.handles).unwrap()
+        Self::for_id(self.id, &self.handles)
+            .unwrap_or_else(|| panic!("focus handle {:?} missing during clone", self.id))
     }
 }
 
@@ -395,12 +396,11 @@ impl Eq for FocusHandle {}
 
 impl Drop for FocusHandle {
     fn drop(&mut self) {
-        self.handles
-            .read()
+        let handles = self.handles.read();
+        let focus = handles
             .get(self.id)
-            .unwrap()
-            .ref_count
-            .fetch_sub(1, SeqCst);
+            .unwrap_or_else(|| panic!("focus handle {:?} missing during drop", self.id));
+        focus.ref_count.fetch_sub(1, SeqCst);
     }
 }
 
@@ -1248,7 +1248,9 @@ impl Window {
             platform_window.set_app_id(&app_id);
         }
 
-        platform_window.map_window().unwrap();
+        platform_window
+            .map_window()
+            .context("failed to map platform window")?;
 
         Ok(Window {
             handle,
@@ -1875,7 +1877,9 @@ impl Window {
                     window_handle
                         .update(cx, |_, window, cx| {
                             if let Some(entity) = handle.upgrade() {
-                                let event = event.downcast_ref().expect("invalid event type");
+                                let Some(event) = event.downcast_ref() else {
+                                    return false;
+                                };
                                 on_event(entity, event, window, cx);
                                 true
                             } else {
@@ -1903,7 +1907,9 @@ impl Window {
         let (subscription, activate) = cx.release_listeners.insert(
             entity_id,
             Box::new(move |entity, cx| {
-                let entity = entity.downcast_mut().expect("invalid entity type");
+                let Some(entity) = entity.downcast_mut() else {
+                    return;
+                };
                 let _ = window_handle.update(cx, |_, window, cx| on_release(entity, window, cx));
             }),
         );
@@ -2217,12 +2223,12 @@ impl Window {
         self.next_frame.window_active = self.active.get();
 
         // Register requested input handler with the platform window.
-        if let Some(input_handler) = self.next_frame.input_handlers.pop() {
+        if let Some(Some(input_handler)) = self.next_frame.input_handlers.pop() {
             self.platform_window
-                .set_input_handler(input_handler.unwrap());
+            .set_input_handler(input_handler);
         }
 
-        self.layout_engine.as_mut().unwrap().clear();
+        self.layout_engine_mut().clear();
         self.text_system().finish_frame();
         self.next_frame.finish(&mut self.rendered_frame);
 
@@ -2330,7 +2336,10 @@ impl Window {
         };
 
         // Layout all root elements.
-        let mut root_element = self.root.as_ref().unwrap().clone().into_any();
+        let Some(root) = self.root.as_ref().cloned() else {
+            return;
+        };
+        let mut root_element = root.into_any();
         root_element.prepaint_as_root(Point::default(), root_size.into(), self, cx);
 
         #[cfg(any(feature = "inspector", debug_assertions))]
@@ -2988,31 +2997,27 @@ impl Window {
                 type_name,
             } = any;
             // Using the extra inner option to avoid needing to reallocate a new box.
-            let mut state_box = inner
-                .downcast::<Option<S>>()
-                .map_err(|_| {
+            let mut state_box = match inner.downcast::<Option<S>>() {
+                Ok(state_box) => state_box,
+                Err(_) => {
                     #[cfg(debug_assertions)]
-                    {
-                        anyhow::anyhow!(
-                            "invalid element state type for id, requested {:?}, actual: {:?}",
-                            std::any::type_name::<S>(),
-                            type_name
-                        )
-                    }
+                    panic!(
+                        "invalid element state type for id, requested {:?}, actual: {:?}",
+                        std::any::type_name::<S>(),
+                        type_name
+                    );
 
                     #[cfg(not(debug_assertions))]
-                    {
-                        anyhow::anyhow!(
-                            "invalid element state type for id, requested {:?}",
-                            std::any::type_name::<S>(),
-                        )
-                    }
-                })
-                .unwrap();
+                    panic!(
+                        "invalid element state type for id, requested {:?}",
+                        std::any::type_name::<S>(),
+                    );
+                }
+            };
 
-            let state = state_box.take().expect(
-                "reentrant call to with_element_state for the same state type and element id",
-            );
+            let state = state_box.take().unwrap_or_else(|| {
+                panic!("reentrant call to with_element_state for the same state type and element id")
+            });
             let (result, state) = f(Some(state), self);
             state_box.replace(state);
             self.next_frame.element_states.insert(
@@ -3057,8 +3062,9 @@ impl Window {
         if let Some(global_id) = global_id {
             self.with_element_state(global_id, |state, cx| {
                 let (result, state) = f(Some(state), cx);
-                let state =
-                    state.expect("you must return some state when you pass some element id");
+                let state = state.unwrap_or_else(|| {
+                    panic!("you must return some state when you pass some element id")
+                });
                 (result, state)
             })
         } else {
@@ -3096,7 +3102,11 @@ impl Window {
         priority: usize,
     ) {
         self.invalidator.debug_assert_prepaint();
-        let parent_node = self.next_frame.dispatch_tree.active_node_id().unwrap();
+        let parent_node = self
+            .next_frame
+            .dispatch_tree
+            .active_node_id()
+            .unwrap_or_else(|| panic!("deferred draw requested without an active dispatch node"));
         self.next_frame.deferred_draws.push(DeferredDraw {
             current_view: self.current_view(),
             parent_node,
@@ -3390,13 +3400,15 @@ impl Window {
 
         let raster_bounds = self.text_system().raster_bounds(&params)?;
         if !raster_bounds.is_zero() {
-            let tile = self
+            let Some(tile) = self
                 .sprite_atlas
                 .get_or_insert_with(&params.clone().into(), &mut || {
                     let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
                     Ok(Some((size, Cow::Owned(bytes))))
                 })?
-                .expect("Callback above only errors or returns Some");
+            else {
+                return Ok(());
+            };
             let bounds = Bounds {
                 origin: glyph_origin.map(|px| px.floor()) + raster_bounds.origin.map(Into::into),
                 size: tile.bounds.size.map(Into::into),
@@ -3446,13 +3458,15 @@ impl Window {
 
         let raster_bounds = self.text_system().raster_bounds(&params)?;
         if !raster_bounds.is_zero() {
-            let tile = self
+            let Some(tile) = self
                 .sprite_atlas
                 .get_or_insert_with(&params.clone().into(), &mut || {
                     let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
                     Ok(Some((size, Cow::Owned(bytes))))
                 })?
-                .expect("Callback above only errors or returns Some");
+            else {
+                return Ok(());
+            };
 
             let bounds = Bounds {
                 origin: glyph_origin.map(|px| px.floor()) + raster_bounds.origin.map(Into::into),
@@ -3588,7 +3602,7 @@ impl Window {
     }
 
     /// Paint an image into the scene for the next frame at the current z-index.
-    /// This method will panic if the frame_index is not valid
+    /// This method returns an error if the frame index is not valid.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
     pub fn paint_image(
@@ -3608,18 +3622,20 @@ impl Window {
             frame_index,
         };
 
-        let tile = self
+        let Some(tile) = self
             .sprite_atlas
             .get_or_insert_with(&params.into(), &mut || {
+                let bytes = data
+                    .as_bytes(frame_index)
+                    .with_context(|| format!("invalid image frame index {frame_index}"))?;
                 Ok(Some((
                     data.size(frame_index),
-                    Cow::Borrowed(
-                        data.as_bytes(frame_index)
-                            .expect("It's the caller's job to pass a valid frame index"),
-                    ),
+                    Cow::Borrowed(bytes),
                 )))
             })?
-            .expect("Callback above only returns Some");
+        else {
+            return Ok(());
+        };
         let content_mask = self.content_mask().scale(scale_factor);
         let corner_radii = corner_radii.scale(scale_factor);
         let opacity = self.element_opacity();
@@ -3749,11 +3765,24 @@ impl Window {
         Ok(())
     }
 
+    fn layout_engine_mut(&mut self) -> &mut TaffyLayoutEngine {
+        self.layout_engine
+            .as_mut()
+            .unwrap_or_else(|| panic!("window layout engine missing"))
+    }
+
+    fn take_layout_engine(&mut self) -> TaffyLayoutEngine {
+        self.layout_engine
+            .take()
+            .unwrap_or_else(|| panic!("window layout engine missing"))
+    }
+
     /// Add a node to the layout tree for the current frame. Takes the `Style` of the element for which
     /// layout is being requested, along with the layout ids of any children. This method is called during
     /// calls to the [`Element::request_layout`] trait method and enables any element to participate in layout.
     ///
     /// This method should only be called as part of the request_layout or prepaint phase of element drawing.
+
     #[must_use]
     pub fn request_layout(
         &mut self,
@@ -3768,12 +3797,8 @@ impl Window {
         let rem_size = self.rem_size();
         let scale_factor = self.scale_factor();
 
-        self.layout_engine.as_mut().unwrap().request_layout(
-            style,
-            rem_size,
-            scale_factor,
-            &cx.layout_id_buffer,
-        )
+        self.layout_engine_mut()
+            .request_layout(style, rem_size, scale_factor, &cx.layout_id_buffer)
     }
 
     /// Add a node to the layout tree for the current frame. Instead of taking a `Style` and children,
@@ -3796,9 +3821,7 @@ impl Window {
 
         let rem_size = self.rem_size();
         let scale_factor = self.scale_factor();
-        self.layout_engine
-            .as_mut()
-            .unwrap()
+        self.layout_engine_mut()
             .request_measured_layout(style, rem_size, scale_factor, measure)
     }
 
@@ -3815,7 +3838,7 @@ impl Window {
     ) {
         self.invalidator.debug_assert_prepaint();
 
-        let mut layout_engine = self.layout_engine.take().unwrap();
+        let mut layout_engine = self.take_layout_engine();
         layout_engine.compute_layout(layout_id, available_space, self, cx);
         self.layout_engine = Some(layout_engine);
     }
@@ -3829,9 +3852,7 @@ impl Window {
 
         let scale_factor = self.scale_factor();
         let mut bounds = self
-            .layout_engine
-            .as_mut()
-            .unwrap()
+            .layout_engine_mut()
             .layout_bounds(layout_id, scale_factor)
             .map(Into::into);
         bounds.origin += self.element_offset();
@@ -3901,7 +3922,10 @@ impl Window {
     /// Get the entity ID for the currently rendering view
     pub fn current_view(&self) -> EntityId {
         self.invalidator.debug_assert_paint_or_prepaint();
-        self.rendered_entity_stack.last().copied().unwrap()
+        self.rendered_entity_stack
+            .last()
+            .copied()
+            .unwrap_or_else(|| panic!("current_view called without a rendered entity"))
     }
 
     pub(crate) fn with_rendered_view<R>(
@@ -4246,7 +4270,9 @@ impl Window {
         // Capture phase, events bubble from back to front. Handlers for this phase are used for
         // special purposes, such as detecting events outside of a given Bounds.
         for listener in &mut mouse_listeners {
-            let listener = listener.as_mut().unwrap();
+            let Some(listener) = listener.as_mut() else {
+                continue;
+            };
             listener(event, DispatchPhase::Capture, self, cx);
             if !cx.propagate_event {
                 break;
@@ -4256,7 +4282,9 @@ impl Window {
         // Bubble phase, where most normal handlers do their work.
         if cx.propagate_event {
             for listener in mouse_listeners.iter_mut().rev() {
-                let listener = listener.as_mut().unwrap();
+                let Some(listener) = listener.as_mut() else {
+                    continue;
+                };
                 listener(event, DispatchPhase::Bubble, self, cx);
                 if !cx.propagate_event {
                     break;
@@ -5294,7 +5322,7 @@ pub struct WindowHandle<V> {
     #[deref]
     #[deref_mut]
     pub(crate) any_handle: AnyWindowHandle,
-    state_type: PhantomData<V>,
+    state_type: PhantomData<fn(V) -> V>,
 }
 
 impl<V> Debug for WindowHandle<V> {
@@ -5429,9 +5457,6 @@ impl<V: 'static> From<WindowHandle<V>> for AnyWindowHandle {
         val.any_handle
     }
 }
-
-unsafe impl<V> Send for WindowHandle<V> {}
-unsafe impl<V> Sync for WindowHandle<V> {}
 
 /// A handle to a window with any root view type, which can be downcast to a window with a specific root view type.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]

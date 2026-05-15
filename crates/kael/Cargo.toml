@@ -292,6 +292,9 @@ version = "0.2"
 [dependencies.futures]
 version = "0.3"
 
+[dependencies.pin-project-lite]
+version = "0.2"
+
 [dependencies.kael_macros]
 path = "../kael-macros"
 package = "kael-macros"

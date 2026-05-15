@@ -570,7 +570,9 @@ impl SystemWindowTabController {
             return;
         };
 
-        let current_index = tabs.iter().position(|tab| tab.id == id).unwrap();
+        let Some(current_index) = tabs.iter().position(|tab| tab.id == id) else {
+            return;
+        };
         let next_index = (current_index + 1) % tabs.len();
 
         let _ = &tabs[next_index].handle.update(cx, |_, window, _| {
@@ -585,7 +587,9 @@ impl SystemWindowTabController {
             return;
         };
 
-        let current_index = tabs.iter().position(|tab| tab.id == id).unwrap();
+        let Some(current_index) = tabs.iter().position(|tab| tab.id == id) else {
+            return;
+        };
         let previous_index = if current_index == 0 {
             tabs.len() - 1
         } else {
@@ -1022,7 +1026,9 @@ impl App {
             (
                 TypeId::of::<Evt>(),
                 Box::new(move |event, cx| {
-                    let event: &Evt = event.downcast_ref().expect("invalid event type");
+                    let Some(event) = event.downcast_ref() else {
+                        return false;
+                    };
                     if let Some(entity) = handle.upgrade() {
                         on_event(entity, event, cx)
                     } else {
@@ -1059,10 +1065,8 @@ impl App {
 
     /// Open or return the active workspace.
     pub fn open_workspace(&mut self) -> &mut crate::workspace::Workspace {
-        if self.workspace.is_none() {
-            self.workspace = Some(crate::workspace::Workspace::new());
-        }
-        self.workspace.as_mut().unwrap()
+        self.workspace
+            .get_or_insert_with(crate::workspace::Workspace::new)
     }
 
     /// Close the active workspace.
@@ -1155,7 +1159,10 @@ impl App {
                     clear.clear();
 
                     cx.window_handles.insert(id, window.handle);
-                    cx.windows.get_mut(id).unwrap().replace(window);
+                    cx.windows
+                        .get_mut(id)
+                        .context("window slot missing after opening window")?
+                        .replace(window);
                     Ok(handle)
                 }
                 Err(e) => {
@@ -1839,8 +1846,11 @@ impl App {
                     })
                     .collect::<Vec<_>>()
                 {
-                    self.update_window(window, |_, window, cx| window.draw(cx).clear())
-                        .unwrap();
+                    if let Err(error) =
+                        self.update_window(window, |_, window, cx| window.draw(cx).clear())
+                    {
+                        log::error!("failed to draw dirty window during effect flush: {error:#}");
+                    }
                 }
 
                 if self.pending_effects.is_empty() {
@@ -1878,13 +1888,16 @@ impl App {
             .retain(|handle_id, focus| {
                 if focus.ref_count.load(SeqCst) == 0 {
                     for window_handle in self.windows() {
-                        window_handle
-                            .update(self, |_, window, _| {
-                                if window.focus == Some(handle_id) {
-                                    window.blur();
-                                }
-                            })
-                            .unwrap();
+                        if let Err(error) = window_handle.update(self, |_, window, _| {
+                            if window.focus == Some(handle_id) {
+                                window.blur();
+                            }
+                        }) {
+                            log::error!(
+                                "failed to release dropped focus handle {:?}: {error:#}",
+                                handle_id
+                            );
+                        }
                     }
                     false
                 } else {
@@ -1941,11 +1954,12 @@ impl App {
     ) {
         self.new_entity_observers.clone().retain(&tid, |observer| {
             if let Some(id) = window {
-                self.update_window_id(id, {
+                if let Err(error) = self.update_window_id(id, {
                     let entity = entity.clone();
                     |_, window, cx| (observer)(entity, &mut Some(window), cx)
-                })
-                .expect("All windows should be off the stack when flushing effects");
+                }) {
+                    log::error!("failed to notify new entity observer for window {id:?}: {error:#}");
+                }
             } else {
                 (observer)(entity.clone(), &mut None, self)
             }
@@ -1960,7 +1974,10 @@ impl App {
         self.update(|cx| {
             let mut window = cx.windows.get_mut(id)?.take()?;
 
-            let root_view = window.root.clone().unwrap();
+            let Some(root_view) = window.root.clone() else {
+                cx.windows.get_mut(id)?.replace(window);
+                return None;
+            };
 
             cx.window_update_stack.push(window.handle.id);
             let result = update(root_view, &mut window, cx);
@@ -1980,7 +1997,7 @@ impl App {
 
             Some(result)
         })
-        .context("window not found")
+        .context("window not found or window has no root view")
     }
 
     /// Creates an `AsyncApp`, which can be cloned and has a static lifetime
@@ -2052,16 +2069,15 @@ impl App {
     pub fn global<G: Global>(&self) -> &G {
         self.globals_by_type
             .get(&TypeId::of::<G>())
-            .map(|any_state| any_state.downcast_ref::<G>().unwrap())
-            .with_context(|| format!("no state of type {} exists", type_name::<G>()))
-            .unwrap()
+            .and_then(|any_state| any_state.downcast_ref::<G>())
+            .unwrap_or_else(|| panic!("no state of type {} exists", type_name::<G>()))
     }
 
     /// Access the global of the given type if a value has been assigned.
     pub fn try_global<G: Global>(&self) -> Option<&G> {
         self.globals_by_type
             .get(&TypeId::of::<G>())
-            .map(|any_state| any_state.downcast_ref::<G>().unwrap())
+            .and_then(|any_state| any_state.downcast_ref::<G>())
     }
 
     /// Access the global of the given type mutably. Panics if a global for that type has not been assigned.
@@ -2072,8 +2088,7 @@ impl App {
         self.globals_by_type
             .get_mut(&global_type)
             .and_then(|any_state| any_state.downcast_mut::<G>())
-            .with_context(|| format!("no state of type {} exists", type_name::<G>()))
-            .unwrap()
+            .unwrap_or_else(|| panic!("no state of type {} exists", type_name::<G>()))
     }
 
     /// Access the global of the given type mutably. A default value is assigned if a global of this type has not
@@ -2086,7 +2101,7 @@ impl App {
             .entry(global_type)
             .or_insert_with(|| Box::<G>::default())
             .downcast_mut::<G>()
-            .unwrap()
+            .unwrap_or_else(|| panic!("no state of type {} exists", type_name::<G>()))
     }
 
     /// Sets the value of the global of the given type.
@@ -2109,12 +2124,14 @@ impl App {
         let global_type = TypeId::of::<G>();
         self.push_effect(Effect::NotifyGlobalObservers { global_type });
         self.bump_global_generation();
-        *self
+        let global = self
             .globals_by_type
             .remove(&global_type)
-            .unwrap_or_else(|| panic!("no global added for {}", std::any::type_name::<G>()))
-            .downcast()
-            .unwrap()
+            .unwrap_or_else(|| panic!("no global added for {}", std::any::type_name::<G>()));
+        match global.downcast() {
+            Ok(global) => *global,
+            Err(_) => panic!("stored global type did not match {}", type_name::<G>()),
+        }
     }
 
     /// Register a callback to be invoked when a global of the given type is updated.
@@ -2136,12 +2153,9 @@ impl App {
     /// Move the global of the given type to the stack.
     #[track_caller]
     pub(crate) fn lease_global<G: Global>(&mut self) -> GlobalLease<G> {
-        GlobalLease::new(
-            self.globals_by_type
-                .remove(&TypeId::of::<G>())
-                .with_context(|| format!("no global registered of type {}", type_name::<G>()))
-                .unwrap(),
-        )
+        GlobalLease::new(self.globals_by_type.remove(&TypeId::of::<G>()).unwrap_or_else(|| {
+            panic!("no global registered of type {}", type_name::<G>())
+        }))
     }
 
     /// Restore the global of the given type after it is moved to the stack.
@@ -2173,12 +2187,12 @@ impl App {
             TypeId::of::<T>(),
             Box::new(
                 move |any_entity: AnyEntity, window: &mut Option<&mut Window>, cx: &mut App| {
-                    any_entity
-                        .downcast::<T>()
-                        .unwrap()
-                        .update(cx, |entity_state, cx| {
-                            on_new(entity_state, window.as_deref_mut(), cx)
-                        })
+                    let Ok(entity) = any_entity.downcast::<T>() else {
+                        return;
+                    };
+                    entity.update(cx, |entity_state, cx| {
+                        on_new(entity_state, window.as_deref_mut(), cx)
+                    })
                 },
             ),
         )
@@ -2197,7 +2211,9 @@ impl App {
         let (subscription, activate) = self.release_listeners.insert(
             handle.entity_id(),
             Box::new(move |entity, cx| {
-                let entity = entity.downcast_mut().expect("invalid entity type");
+                let Some(entity) = entity.downcast_mut() else {
+                    return;
+                };
                 on_release(entity, cx)
             }),
         );
@@ -2299,7 +2315,9 @@ impl App {
             .or_default()
             .push(Rc::new(move |action, phase, cx| {
                 if phase == DispatchPhase::Bubble {
-                    let action = action.downcast_ref().unwrap();
+                    let Some(action) = action.downcast_ref() else {
+                        return;
+                    };
                     listener(action, cx)
                 }
             }));
@@ -2688,7 +2706,10 @@ impl App {
         let task = self
             .loading_assets
             .remove(&asset_id)
-            .map(|boxed_task| *boxed_task.downcast::<Shared<Task<A::Output>>>().unwrap())
+            .map(|boxed_task| match boxed_task.downcast::<Shared<Task<A::Output>>>() {
+                Ok(task) => *task,
+                Err(_) => panic!("stored asset task type did not match {}", type_name::<A>()),
+            })
             .unwrap_or_else(|| {
                 is_first = true;
                 let future = A::load(source.clone(), self);
@@ -2963,9 +2984,9 @@ impl AppContext for App {
             .get(window.id)
             .context("window not found")?
             .as_ref()
-            .expect("attempted to read a window that is already on the stack");
+            .context("attempted to read a window that is already on the stack")?;
 
-        let root_view = window.root.clone().unwrap();
+        let root_view = window.root.clone().context("window has no root view")?;
         let view = root_view
             .downcast::<T>()
             .map_err(|_| anyhow!("root view's type has changed"))?;
@@ -3047,13 +3068,17 @@ impl<G: Global> Deref for GlobalLease<G> {
     type Target = G;
 
     fn deref(&self) -> &Self::Target {
-        self.global.downcast_ref().unwrap()
+        self.global
+            .downcast_ref()
+            .unwrap_or_else(|| panic!("stored global lease type did not match {}", type_name::<G>()))
     }
 }
 
 impl<G: Global> DerefMut for GlobalLease<G> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.global.downcast_mut().unwrap()
+        self.global
+            .downcast_mut()
+            .unwrap_or_else(|| panic!("stored global lease type did not match {}", type_name::<G>()))
     }
 }
 
@@ -3147,17 +3172,29 @@ impl<'a, T: 'static> GpuiBorrow<'a, T> {
             app,
         }
     }
+
+    fn lease(&self) -> &Lease<T> {
+        self.inner
+            .as_ref()
+            .unwrap_or_else(|| panic!("gpui borrow missing entity lease"))
+    }
+
+    fn lease_mut(&mut self) -> &mut Lease<T> {
+        self.inner
+            .as_mut()
+            .unwrap_or_else(|| panic!("gpui borrow missing entity lease"))
+    }
 }
 
 impl<'a, T: 'static> std::borrow::Borrow<T> for GpuiBorrow<'a, T> {
     fn borrow(&self) -> &T {
-        self.inner.as_ref().unwrap().borrow()
+        self.lease().borrow()
     }
 }
 
 impl<'a, T: 'static> std::borrow::BorrowMut<T> for GpuiBorrow<'a, T> {
     fn borrow_mut(&mut self) -> &mut T {
-        self.inner.as_mut().unwrap().borrow_mut()
+        self.lease_mut().borrow_mut()
     }
 }
 
@@ -3165,19 +3202,22 @@ impl<'a, T: 'static> std::ops::Deref for GpuiBorrow<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.inner.as_ref().unwrap()
+        self.lease()
     }
 }
 
 impl<'a, T: 'static> std::ops::DerefMut for GpuiBorrow<'a, T> {
     fn deref_mut(&mut self) -> &mut T {
-        self.inner.as_mut().unwrap()
+        self.lease_mut()
     }
 }
 
 impl<'a, T> Drop for GpuiBorrow<'a, T> {
     fn drop(&mut self) {
-        let lease = self.inner.take().unwrap();
+        let lease = self
+            .inner
+            .take()
+            .unwrap_or_else(|| panic!("gpui borrow missing entity lease during drop"));
         self.app.notify(lease.id);
         self.app.entities.end_lease(lease);
         self.app.finish_update();
