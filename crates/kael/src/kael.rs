@@ -1,8 +1,11 @@
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
-#![allow(clippy::type_complexity)] // Not useful, GPUI makes heavy use of callbacks
-#![allow(clippy::collapsible_else_if)] // False positives in platform specific code
-#![allow(unused_mut)] // False positives in platform specific code
+#![allow(clippy::type_complexity)]
+#![allow(clippy::collapsible_else_if)]
+#![allow(clippy::redundant_clone)]
+#![allow(clippy::unnecessary_cast)]
+#![allow(clippy::mut_from_ref)]
+#![allow(unused_mut)]
 
 extern crate self as kael;
 

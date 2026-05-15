@@ -209,7 +209,7 @@ pub(crate) fn start_system_power_monitor(
         pids.push(pid);
     }
 
-    if let Some(pid) = spawn_screensaver_monitor(tx, stop.clone()) {
+    if let Some(pid) = spawn_screensaver_monitor(tx.clone(), stop.clone()) {
         pids.push(pid);
     }
 

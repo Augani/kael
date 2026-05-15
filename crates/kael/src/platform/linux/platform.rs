@@ -30,7 +30,7 @@ use crate::{
     Keymap, Keystroke, LinuxDispatcher, MediaKeyEvent, Menu, MenuItem, NetworkStatus, OsInfo,
     OwnedMenu, PathPromptOptions, PermissionStatus, Pixels, Platform, PlatformDisplay,
     PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, Point,
-    PowerSaveBlockerKind, Result, SharedString, SystemPowerEvent, Task, TrayIconEvent,
+    PowerMode, PowerSaveBlockerKind, Result, SharedString, SystemPowerEvent, Task, TrayIconEvent,
     TrayMenuItem, WindowAppearance, WindowParams, px,
 };
 

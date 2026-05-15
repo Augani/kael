@@ -29,7 +29,7 @@ struct WindowsWebViewSignature {
 }
 
 pub(crate) fn sync_webviews(window: &Rc<WindowsWindowInner>, webviews: &[PlatformWebView]) {
-    let mut active_ids = HashSet::default();
+    let mut active_ids: HashSet<SharedString> = HashSet::default();
     let mut state = window.state.borrow_mut();
 
     for webview in webviews {

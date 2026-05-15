@@ -15,6 +15,7 @@
 //! and Tailwind-like styling that you can use to build your own custom elements. Div is
 //! constructed by combining these two systems into an all-in-one element.
 
+#[allow(unused_imports)]
 use crate::{
     AbsoluteLength, Action, AnyDrag, AnyElement, AnyTooltip, AnyView, App, AppContext, Background,
     Bounds, ClickEvent, Context, DispatchPhase, Element, ElementId, Entity, Fill, FocusHandle,

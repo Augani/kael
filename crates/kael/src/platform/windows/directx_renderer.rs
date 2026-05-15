@@ -3,8 +3,8 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use ::util::ResultExt;
 use anyhow::{Context, Result};
+use util::ResultExt;
 use windows::{
     Win32::{
         Foundation::HWND,
@@ -303,7 +303,8 @@ impl DirectXRenderer {
                 PrimitiveBatch::BlurRects(blur_rects) => self.draw_blur_rects(blur_rects),
                 PrimitiveBatch::Quads(quads) => self.draw_quads(quads),
                 PrimitiveBatch::Paths(paths) => {
-                    self.draw_paths_to_intermediate(paths, &self.resources.render_target_view)?;
+                    let target_view = self.resources.render_target_view.clone();
+                    self.draw_paths_to_intermediate(paths, &target_view)?;
                     self.draw_paths_from_intermediate(paths)
                 }
                 PrimitiveBatch::Underlines(underlines) => self.draw_underlines(underlines),
@@ -332,7 +333,8 @@ impl DirectXRenderer {
 
     fn draw_cached_surface_snapshots(&mut self, scene: &Scene) -> Result<()> {
         for snapshot in &scene.cached_surface_snapshots {
-            self.bind_render_target(&self.resources.cached_surface_view, true)?;
+            let cached_view = self.resources.cached_surface_view.clone();
+            self.bind_render_target(&cached_view, true)?;
 
             let snapshot_scene = scene.snapshot_subscene(snapshot.paint_operations.clone());
             for batch in snapshot_scene.batches() {
@@ -343,10 +345,7 @@ impl DirectXRenderer {
                     }
                     PrimitiveBatch::Quads(quads) => self.draw_quads(quads),
                     PrimitiveBatch::Paths(paths) => {
-                        self.draw_paths_to_intermediate(
-                            paths,
-                            &self.resources.cached_surface_view,
-                        )?;
+                        self.draw_paths_to_intermediate(paths, &cached_view)?;
                         self.draw_paths_from_intermediate(paths)
                     }
                     PrimitiveBatch::Underlines(underlines) => self.draw_underlines(underlines),
@@ -763,7 +762,8 @@ impl DirectXRenderer {
                 );
             }
 
-            self.bind_render_target(&self.resources.blur_horizontal_view, true)?;
+            let blur_h_view = self.resources.blur_horizontal_view.clone();
+            self.bind_render_target(&blur_h_view, true)?;
             self.pipelines.blur_horizontal_pipeline.update_buffer(
                 &self.devices.device,
                 &self.devices.device_context,

@@ -57,7 +57,7 @@ pub(crate) fn pump_gtk_webview_events() {
 }
 
 pub(crate) fn sync_x11_webviews(window: &X11WindowStatePtr, webviews: &[PlatformWebView]) {
-    let mut active_ids = HashSet::default();
+    let mut active_ids: HashSet<SharedString> = HashSet::default();
     let mut state = window.state.borrow_mut();
     let scale_factor = state.scale_factor;
     let x_window = window.x_window;
@@ -107,7 +107,7 @@ pub(crate) fn sync_x11_webviews(window: &X11WindowStatePtr, webviews: &[Platform
 
 #[cfg(feature = "wayland")]
 pub(crate) fn sync_wayland_webviews(window: &WaylandWindowStatePtr, webviews: &[PlatformWebView]) {
-    let mut active_ids = HashSet::default();
+    let mut active_ids: HashSet<SharedString> = HashSet::default();
     let (scale_factor, parent_origin) = {
         let state = window.state.borrow();
         (state.scale, state.bounds.origin)

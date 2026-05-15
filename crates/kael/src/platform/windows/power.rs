@@ -14,7 +14,7 @@ use crate::PowerSaveBlockerKind;
 
 pub(crate) fn power_mode() -> crate::PowerMode {
     let mut status = SYSTEM_POWER_STATUS::default();
-    if !unsafe { GetSystemPowerStatus(&mut status) }.as_bool() {
+    if unsafe { GetSystemPowerStatus(&mut status) }.is_err() {
         return crate::PowerMode::Performance;
     }
 
