@@ -3,11 +3,11 @@ use super::wayland::WaylandWindowStatePtr;
 #[cfg(feature = "x11")]
 use super::x11::X11WindowStatePtr;
 use crate::{
+    Bounds, Pixels, Point, SharedString,
     webview::{
         NavigationPolicy, PlatformWebView, PlatformWebViewCommand, WebViewMessageHandler,
         WebViewNavigationHandler,
     },
-    Bounds, Pixels, Point, SharedString,
 };
 use anyhow::{Context as _, Result};
 use gtk::prelude::*;
@@ -17,8 +17,8 @@ use util::ResultExt;
 #[cfg(feature = "wayland")]
 use wry::WebViewBuilderExtUnix;
 use wry::{
-    dpi::{LogicalPosition, LogicalSize},
     NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder,
+    dpi::{LogicalPosition, LogicalSize},
 };
 
 pub(crate) struct LinuxWebViewHost {
@@ -57,6 +57,7 @@ pub(crate) fn pump_gtk_webview_events() {
     }
 }
 
+#[cfg(feature = "x11")]
 pub(crate) fn sync_x11_webviews(window: &X11WindowStatePtr, webviews: &[PlatformWebView]) {
     let mut active_ids: HashSet<SharedString> = HashSet::default();
     let mut state = window.state.borrow_mut();
@@ -171,6 +172,7 @@ pub(crate) fn sync_wayland_webviews(window: &WaylandWindowStatePtr, webviews: &[
     }
 }
 
+#[cfg(feature = "x11")]
 pub(crate) fn dispatch_x11_webview_command(
     window: &X11WindowStatePtr,
     command: PlatformWebViewCommand,
@@ -199,6 +201,7 @@ pub(crate) fn dispatch_wayland_webview_command(
 }
 
 impl LinuxWebViewHost {
+    #[cfg(feature = "x11")]
     fn new(
         parent: &X11WebViewParentHandle,
         desired: PlatformWebView,
@@ -577,10 +580,12 @@ fn same_optional_navigation_handler(
     }
 }
 
+#[cfg(feature = "x11")]
 struct X11WebViewParentHandle {
     window_id: u32,
 }
 
+#[cfg(feature = "x11")]
 impl rwh::HasWindowHandle for X11WebViewParentHandle {
     fn window_handle(&self) -> std::result::Result<rwh::WindowHandle<'_>, rwh::HandleError> {
         let handle = rwh::XlibWindowHandle::new(self.window_id as std::ffi::c_ulong);

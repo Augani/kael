@@ -1,16 +1,16 @@
 use super::{WindowsWindow, WindowsWindowInner};
 use crate::{
+    AsyncWindowContext, Bounds, Pixels, SharedString,
     webview::{
         NavigationPolicy, PlatformWebView, PlatformWebViewCommand, WebViewNavigationHandler,
     },
-    AsyncWindowContext, Bounds, Pixels, SharedString,
 };
 use anyhow::{Context as _, Result};
 use std::{collections::HashSet, env, fs, path::PathBuf, rc::Rc};
 use util::ResultExt;
 use wry::{
-    dpi::{LogicalPosition, LogicalSize},
     NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder,
+    dpi::{LogicalPosition, LogicalSize},
 };
 
 pub(crate) struct WindowsWebViewHost {

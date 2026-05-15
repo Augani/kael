@@ -435,6 +435,7 @@ pub(crate) enum PrintCommand {
     },
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) struct PlatformPrintJob {
     pub(crate) title: SharedString,
     pub(crate) orientation: PrintOrientation,
@@ -443,6 +444,7 @@ pub(crate) struct PlatformPrintJob {
     pub(crate) pages: Vec<PlatformPrintPage>,
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) struct PlatformPrintPage {
     pub(crate) commands: Vec<PrintCommand>,
 }
