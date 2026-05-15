@@ -1,13 +1,14 @@
 use super::local_history::{
-    WindowValueHistory, ensure_local_undo_redo_bindings, local_undo_redo_key_context,
-    register_focused_action_handler_when,
+    ensure_local_undo_redo_bindings, local_undo_redo_key_context,
+    register_focused_action_handler_when, WindowValueHistory,
 };
 use crate::{
-    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
-    AccessibilityValue, App, BorderStyle, Bounds, CursorStyle, DispatchPhase, Element, ElementId,
-    GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, InteractiveElement, Interactivity,
-    IntoElement, KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Pixels, Point, Redo, Styled, Undo, Window, fill, outline, point, px, relative, size,
+    fill, outline, point, px, relative, size, AccessibilityAction, AccessibilityAttributes,
+    AccessibilityRole, AccessibilityState, AccessibilityValue, App, BorderStyle, Bounds,
+    CursorStyle, DispatchPhase, Element, ElementId, GlobalElementId, Hitbox, HitboxBehavior,
+    InspectorElementId, InteractiveElement, Interactivity, IntoElement, KeyDownEvent, LayoutId,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Redo, Styled, Undo,
+    Window,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -144,6 +145,27 @@ impl SliderPersistentState {
     }
 }
 
+#[non_exhaustive]
+/// Snapshot of slider state passed to a custom renderer.
+pub struct SliderRenderState {
+    /// The current slider value.
+    pub value: f64,
+    /// The normalized minimum bound.
+    pub min: f64,
+    /// The normalized maximum bound.
+    pub max: f64,
+    /// Current position expressed as a value between 0.0 and 1.0.
+    pub percentage: f64,
+    /// Whether the slider is currently being dragged.
+    pub dragging: bool,
+    /// Whether the slider currently owns keyboard focus.
+    pub focused: bool,
+    /// Whether the slider is disabled.
+    pub disabled: bool,
+}
+
+type SliderCustomRenderer = Rc<dyn Fn(SliderRenderState, Bounds<Pixels>, &mut Window, &mut App)>;
+
 /// Construct a controlled slider form control.
 #[track_caller]
 pub fn slider(id: impl Into<ElementId>, value: f64) -> Slider {
@@ -160,7 +182,9 @@ pub struct Slider {
     step: Option<f64>,
     discrete: bool,
     vertical: bool,
+    disabled: bool,
     on_change: Option<ChangeListener>,
+    custom_renderer: Option<SliderCustomRenderer>,
 }
 
 #[doc(hidden)]
@@ -188,7 +212,9 @@ impl Slider {
             step: Some(1.0),
             discrete: false,
             vertical: false,
+            disabled: false,
             on_change: None,
+            custom_renderer: None,
         }
     }
 
@@ -228,9 +254,24 @@ impl Slider {
         self
     }
 
+    /// Disable the slider, preventing user interaction.
+    pub fn disabled(mut self) -> Self {
+        self.disabled = true;
+        self
+    }
+
     /// Register a callback invoked with the next slider value after user interaction.
     pub fn on_change(mut self, listener: impl Fn(&f64, &mut Window, &mut App) + 'static) -> Self {
         self.on_change = Some(std::rc::Rc::new(listener));
+        self
+    }
+
+    /// Render the slider track and thumb with caller-owned visuals.
+    pub fn render_with(
+        mut self,
+        renderer: impl Fn(SliderRenderState, Bounds<Pixels>, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.custom_renderer = Some(Rc::new(renderer));
         self
     }
 
@@ -339,37 +380,56 @@ impl Element for Slider {
             .borrow_mut()
             .sync_from_props(self.clamped_value());
 
-        if prepaint.hitbox.is_hovered(window) {
+        if prepaint.hitbox.is_hovered(window) && !self.disabled {
             window.set_cursor_style(CursorStyle::PointingHand, &prepaint.hitbox);
         }
 
         let value = drag_state.borrow().value;
         let is_focused = focus_handle.is_focused(window);
+        let is_dragging = drag_state.borrow().is_dragging();
         let (range_min, range_max) = self.clamped_range();
 
-        let track_bounds = slider_track_bounds(bounds, self.vertical);
-        let thumb_bounds =
-            slider_thumb_bounds(bounds, self.vertical, value, (range_min, range_max));
-
-        window.paint_quad(fill(track_bounds, crate::rgb(0xe2e8f0)).corner_radii(px(999.0)));
-        let active_bounds = slider_active_bounds(track_bounds, thumb_bounds, self.vertical);
-        window.paint_quad(fill(active_bounds, crate::rgb(0x1d4ed8)).corner_radii(px(999.0)));
-        window.paint_quad(
-            fill(thumb_bounds, crate::rgb(0xffffff))
-                .corner_radii(px(999.0))
-                .border_widths(px(1.0))
-                .border_color(if is_focused {
-                    crate::rgb(0x1d4ed8)
-                } else {
-                    crate::rgb(0x94a3b8)
-                }),
-        );
-
-        if is_focused {
-            window.paint_quad(
-                outline(bounds, crate::rgb(0x93c5fd), BorderStyle::default())
-                    .corner_radii(px(999.0)),
+        if let Some(renderer) = &self.custom_renderer {
+            let percentage = slider_fraction(value, (range_min, range_max));
+            renderer(
+                SliderRenderState {
+                    value,
+                    min: range_min,
+                    max: range_max,
+                    percentage,
+                    dragging: is_dragging,
+                    focused: is_focused,
+                    disabled: self.disabled,
+                },
+                bounds,
+                window,
+                cx,
             );
+        } else {
+            let track_bounds = slider_track_bounds(bounds, self.vertical);
+            let thumb_bounds =
+                slider_thumb_bounds(bounds, self.vertical, value, (range_min, range_max));
+
+            window.paint_quad(fill(track_bounds, crate::rgb(0xe2e8f0)).corner_radii(px(999.0)));
+            let active_bounds = slider_active_bounds(track_bounds, thumb_bounds, self.vertical);
+            window.paint_quad(fill(active_bounds, crate::rgb(0x1d4ed8)).corner_radii(px(999.0)));
+            window.paint_quad(
+                fill(thumb_bounds, crate::rgb(0xffffff))
+                    .corner_radii(px(999.0))
+                    .border_widths(px(1.0))
+                    .border_color(if is_focused {
+                        crate::rgb(0x1d4ed8)
+                    } else {
+                        crate::rgb(0x94a3b8)
+                    }),
+            );
+
+            if is_focused {
+                window.paint_quad(
+                    outline(bounds, crate::rgb(0x93c5fd), BorderStyle::default())
+                        .corner_radii(px(999.0)),
+                );
+            }
         }
 
         let on_change_mouse_down = self.on_change.clone();
@@ -386,6 +446,7 @@ impl Element for Slider {
         let can_undo = drag_state.borrow().history.can_undo();
         let can_redo = drag_state.borrow().history.can_redo();
 
+        let slider_disabled = self.disabled;
         let hitbox = prepaint.hitbox.clone();
         let mouse_focus_handle = focus_handle.clone();
         let mouse_drag_state = drag_state.clone();
@@ -404,6 +465,9 @@ impl Element for Slider {
             }
         });
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+            if slider_disabled {
+                return;
+            }
             if phase != DispatchPhase::Bubble
                 || event.button != MouseButton::Left
                 || !hitbox.is_hovered(window)
@@ -481,6 +545,9 @@ impl Element for Slider {
         let key_focus_handle = focus_handle;
         let key_state = drag_state;
         window.on_key_event(move |event: &KeyDownEvent, phase, window, cx| {
+            if slider_disabled {
+                return;
+            }
             if phase != DispatchPhase::Bubble
                 || !key_focus_handle.is_focused(window)
                 || event.keystroke.modifiers.modified()
@@ -668,10 +735,16 @@ fn slider_value_for_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Context, Modifiers, MouseButton, ParentElement, Render, TestAppContext, div};
+    use crate::{div, Context, Modifiers, MouseButton, ParentElement, Render, TestAppContext};
+    use std::cell::Cell;
 
     struct SliderView {
         value: f64,
+    }
+
+    struct CustomSliderView {
+        value: f64,
+        snapshot: Rc<Cell<Option<(f64, f64, bool)>>>,
     }
 
     impl Render for SliderView {
@@ -690,6 +763,20 @@ mod tests {
                             cx.notify();
                         })),
                 )
+        }
+    }
+
+    impl Render for CustomSliderView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let snapshot = self.snapshot.clone();
+            div().w(px(240.0)).h(px(24.0)).child(
+                slider("volume_custom", self.value)
+                    .min(0.0)
+                    .max(100.0)
+                    .render_with(move |state, _, _, _| {
+                        snapshot.set(Some((state.value, state.percentage, state.focused)));
+                    }),
+            )
         }
     }
 
@@ -774,5 +861,21 @@ mod tests {
             window.draw(cx).clear();
             assert_eq!(view.read(cx).value, 100.0);
         });
+    }
+
+    #[crate::test]
+    fn slider_render_with_receives_value_and_percentage(cx: &mut TestAppContext) {
+        let snapshot = Rc::new(Cell::new(None));
+        let snapshot_ref = snapshot.clone();
+        let (_view, mut window) = cx.add_window_view(|_, _| CustomSliderView {
+            value: 25.0,
+            snapshot: snapshot_ref,
+        });
+
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        assert_eq!(snapshot.get(), Some((25.0, 0.25, false)));
     }
 }

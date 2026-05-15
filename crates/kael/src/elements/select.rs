@@ -1,17 +1,86 @@
 use super::local_history::{
-    WindowValueHistory, ensure_local_undo_redo_bindings, local_undo_redo_key_context,
+    ensure_local_undo_redo_bindings, local_undo_redo_key_context, WindowValueHistory,
 };
 use crate::{
-    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
-    AccessibilityValue, AnyElement, App, AppContext, Bounds, Context, DismissEvent, Element,
-    ElementId, Entity, EventEmitter, FocusHandle, Focusable, GlobalElementId, InspectorElementId,
-    InteractiveElement, IntoElement, KeyDownEvent, LayerAnchor, LayerOptions, LayerStack, LayoutId,
-    ParentElement, Pixels, Point, Redo, Render, SharedString, StatefulInteractiveElement, Styled,
-    Undo, Window, div, point, px, text_input,
+    div, point, px, text_input, AccessibilityAction, AccessibilityAttributes, AccessibilityRole,
+    AccessibilityState, AccessibilityValue, AnyElement, App, AppContext, Bounds, Context,
+    DismissEvent, Element, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
+    GlobalElementId, InspectorElementId, InteractiveElement, IntoElement, KeyDownEvent,
+    LayerAnchor, LayerOptions, LayerStack, LayoutId, ParentElement, Pixels, Point, Redo, Render,
+    SharedString, StatefulInteractiveElement, Styled, Undo, Window,
 };
 use std::rc::Rc;
 
 type ChangeListener<T> = Rc<dyn Fn(&T, &mut Window, &mut App)>;
+
+#[non_exhaustive]
+/// Snapshot of select trigger state passed to a custom renderer.
+pub struct SelectRenderState {
+    /// Whether the popup is currently open.
+    pub open: bool,
+    /// The text currently shown in the trigger.
+    pub display_text: SharedString,
+    /// The label of the selected option, if one matches the current value.
+    pub selected_label: Option<SharedString>,
+    /// The configured placeholder text, if any.
+    pub placeholder: Option<SharedString>,
+    /// Whether the trigger is currently showing placeholder text.
+    pub showing_placeholder: bool,
+    /// Whether the select trigger currently owns keyboard focus.
+    pub focused: bool,
+}
+
+type SelectCustomRenderer = Rc<dyn Fn(SelectRenderState, &Window, &App) -> AnyElement>;
+
+#[non_exhaustive]
+/// Snapshot of a popup option row passed to a custom renderer.
+pub struct SelectOptionRenderState<T> {
+    /// The option value associated with the row.
+    pub value: T,
+    /// The visible label for the option.
+    pub label: SharedString,
+    /// Zero-based index of the option in the original option list.
+    pub index: usize,
+    /// Whether this option is currently selected.
+    pub selected: bool,
+    /// Whether this option is currently highlighted for keyboard navigation.
+    pub highlighted: bool,
+}
+
+type SelectOptionCustomRenderer<T> =
+    Rc<dyn Fn(SelectOptionRenderState<T>, &Window, &App) -> AnyElement>;
+
+#[non_exhaustive]
+/// Snapshot of select popup state passed to a custom popup renderer.
+pub struct SelectPopupRenderState {
+    /// The resolved popup width.
+    pub width: Pixels,
+    /// Whether in-popup search is enabled.
+    pub searchable: bool,
+    /// The current search query.
+    pub search_query: SharedString,
+    /// The currently highlighted option index, if any.
+    pub highlighted_index: Option<usize>,
+    /// The currently selected option index, if any.
+    pub selected_index: Option<usize>,
+    /// The number of options currently visible after filtering.
+    pub filtered_len: usize,
+}
+
+type SelectPopupCustomRenderer =
+    Rc<dyn Fn(SelectPopupRenderState, Vec<AnyElement>, &Window, &App) -> AnyElement>;
+
+#[non_exhaustive]
+/// Snapshot of the in-popup search field passed to a custom renderer.
+pub struct SelectSearchRenderState {
+    /// The current search query.
+    pub query: SharedString,
+    /// Whether the search field currently owns keyboard focus.
+    pub focused: bool,
+}
+
+type SelectSearchCustomRenderer =
+    Rc<dyn Fn(SelectSearchRenderState, AnyElement, &Window, &App) -> AnyElement>;
 
 /// Construct a controlled combo box from the current value and labeled options.
 #[track_caller]
@@ -64,6 +133,10 @@ pub struct Select<T> {
     placeholder: SharedString,
     searchable: bool,
     on_change: Option<ChangeListener<T>>,
+    custom_renderer: Option<SelectCustomRenderer>,
+    custom_option_renderer: Option<SelectOptionCustomRenderer<T>>,
+    custom_popup_renderer: Option<SelectPopupCustomRenderer>,
+    custom_search_renderer: Option<SelectSearchCustomRenderer>,
     source_location: &'static core::panic::Location<'static>,
 }
 
@@ -85,6 +158,9 @@ struct SelectState<T> {
     highlighted_index: Option<usize>,
     trigger_bounds: Option<Bounds<Pixels>>,
     on_change: Option<ChangeListener<T>>,
+    option_renderer: Option<SelectOptionCustomRenderer<T>>,
+    popup_renderer: Option<SelectPopupCustomRenderer>,
+    search_renderer: Option<SelectSearchCustomRenderer>,
 }
 
 struct SelectPopup<T> {
@@ -108,6 +184,10 @@ where
             placeholder: SharedString::default(),
             searchable: false,
             on_change: None,
+            custom_renderer: None,
+            custom_option_renderer: None,
+            custom_popup_renderer: None,
+            custom_search_renderer: None,
             source_location: core::panic::Location::caller(),
         }
     }
@@ -127,6 +207,44 @@ where
     /// Register a callback invoked with the newly selected option value.
     pub fn on_change(mut self, listener: impl Fn(&T, &mut Window, &mut App) + 'static) -> Self {
         self.on_change = Some(Rc::new(listener));
+        self
+    }
+
+    /// Render the select trigger with caller-owned visuals.
+    pub fn render_with(
+        mut self,
+        renderer: impl Fn(SelectRenderState, &Window, &App) -> AnyElement + 'static,
+    ) -> Self {
+        self.custom_renderer = Some(Rc::new(renderer));
+        self
+    }
+
+    /// Render each popup option row with caller-owned visuals.
+    pub fn render_options_with(
+        mut self,
+        renderer: impl Fn(SelectOptionRenderState<T>, &Window, &App) -> AnyElement + 'static,
+    ) -> Self {
+        self.custom_option_renderer = Some(Rc::new(renderer));
+        self
+    }
+
+    /// Render the popup shell with caller-owned visuals around the generated popup children.
+    pub fn render_popup_with(
+        mut self,
+        renderer: impl Fn(SelectPopupRenderState, Vec<AnyElement>, &Window, &App) -> AnyElement
+            + 'static,
+    ) -> Self {
+        self.custom_popup_renderer = Some(Rc::new(renderer));
+        self
+    }
+
+    /// Render the in-popup search field with caller-owned visuals around the generated input.
+    pub fn render_search_with(
+        mut self,
+        renderer: impl Fn(SelectSearchRenderState, AnyElement, &Window, &App) -> AnyElement
+            + 'static,
+    ) -> Self {
+        self.custom_search_renderer = Some(Rc::new(renderer));
         self
     }
 
@@ -281,21 +399,40 @@ where
                     }
                     _ => {}
                 }
-            })
-            .child(
-                div()
-                    .text_color(if snapshot.showing_placeholder {
-                        crate::rgb(0x64748b)
-                    } else {
-                        crate::rgb(0x0f172a)
-                    })
-                    .child(snapshot.display_text),
-            )
-            .child(
-                div()
-                    .text_color(crate::rgb(0x64748b))
-                    .child(if snapshot.is_open { "^" } else { "v" }),
-            );
+            });
+
+        if let Some(renderer) = &self.custom_renderer {
+            let selected_label = if snapshot.showing_placeholder {
+                None
+            } else {
+                Some(snapshot.display_text.clone())
+            };
+            let render_state = SelectRenderState {
+                open: snapshot.is_open,
+                display_text: snapshot.display_text.clone(),
+                selected_label,
+                placeholder: (!self.placeholder.is_empty()).then_some(self.placeholder.clone()),
+                showing_placeholder: snapshot.showing_placeholder,
+                focused: focus_handle.is_focused(window),
+            };
+            trigger = trigger.child(renderer(render_state, window, cx));
+        } else {
+            trigger = trigger
+                .child(
+                    div()
+                        .text_color(if snapshot.showing_placeholder {
+                            crate::rgb(0x64748b)
+                        } else {
+                            crate::rgb(0x0f172a)
+                        })
+                        .child(snapshot.display_text),
+                )
+                .child(
+                    div()
+                        .text_color(crate::rgb(0x64748b))
+                        .child(if snapshot.is_open { "^" } else { "v" }),
+                );
+        }
 
         #[cfg(any(test, feature = "test-support"))]
         {
@@ -348,6 +485,9 @@ where
         let placeholder = self.placeholder.clone();
         let searchable = self.searchable;
         let on_change = self.on_change.clone();
+        let custom_option_renderer = self.custom_option_renderer.clone();
+        let custom_popup_renderer = self.custom_popup_renderer.clone();
+        let custom_search_renderer = self.custom_search_renderer.clone();
         let undo_manager = window.undo_manager();
 
         ensure_local_undo_redo_bindings(cx);
@@ -374,6 +514,9 @@ where
                             placeholder.clone(),
                             searchable,
                             on_change.clone(),
+                            custom_option_renderer.clone(),
+                            custom_popup_renderer.clone(),
+                            custom_search_renderer.clone(),
                         )
                     });
 
@@ -392,7 +535,17 @@ where
             });
 
         state.update(cx, |state, cx| {
-            state.sync_from_props(value, options, placeholder, searchable, on_change, cx);
+            state.sync_from_props(
+                value,
+                options,
+                placeholder,
+                searchable,
+                on_change,
+                custom_option_renderer,
+                custom_popup_renderer,
+                custom_search_renderer,
+                cx,
+            );
         });
 
         let trigger = self.build_trigger(&selector_id, state.clone(), window, cx);
@@ -454,6 +607,9 @@ where
         placeholder: SharedString,
         searchable: bool,
         on_change: Option<ChangeListener<T>>,
+        option_renderer: Option<SelectOptionCustomRenderer<T>>,
+        popup_renderer: Option<SelectPopupCustomRenderer>,
+        search_renderer: Option<SelectSearchCustomRenderer>,
     ) -> Self {
         let mut state = Self {
             focus_handle,
@@ -467,6 +623,9 @@ where
             highlighted_index: None,
             trigger_bounds: None,
             on_change,
+            option_renderer,
+            popup_renderer,
+            search_renderer,
         };
         state.reset_highlight();
         state
@@ -479,20 +638,26 @@ where
         placeholder: SharedString,
         searchable: bool,
         on_change: Option<ChangeListener<T>>,
+        option_renderer: Option<SelectOptionCustomRenderer<T>>,
+        popup_renderer: Option<SelectPopupCustomRenderer>,
+        search_renderer: Option<SelectSearchCustomRenderer>,
         cx: &mut Context<Self>,
     ) {
         let mut changed = false;
         let mut reset_history = false;
+        let mut reset_highlight = false;
 
         if self.value != value {
             self.value = value;
             changed = true;
             reset_history = true;
+            reset_highlight = true;
         }
         if self.options != options {
             self.options = options;
             changed = true;
             reset_history = true;
+            reset_highlight = true;
         }
         if self.placeholder != placeholder {
             self.placeholder = placeholder;
@@ -501,13 +666,33 @@ where
         if self.searchable != searchable {
             self.searchable = searchable;
             changed = true;
+            reset_highlight = true;
         }
         if !self.searchable && !self.search_query.is_empty() {
             self.search_query = SharedString::default();
             changed = true;
+            reset_highlight = true;
         }
         if self.on_change.as_ref().map(Rc::as_ptr) != on_change.as_ref().map(Rc::as_ptr) {
             self.on_change = on_change;
+            changed = true;
+        }
+        if self.option_renderer.as_ref().map(Rc::as_ptr)
+            != option_renderer.as_ref().map(Rc::as_ptr)
+        {
+            self.option_renderer = option_renderer;
+            changed = true;
+        }
+        if self.popup_renderer.as_ref().map(Rc::as_ptr)
+            != popup_renderer.as_ref().map(Rc::as_ptr)
+        {
+            self.popup_renderer = popup_renderer;
+            changed = true;
+        }
+        if self.search_renderer.as_ref().map(Rc::as_ptr)
+            != search_renderer.as_ref().map(Rc::as_ptr)
+        {
+            self.search_renderer = search_renderer;
             changed = true;
         }
 
@@ -516,7 +701,9 @@ where
         }
 
         if changed {
-            self.reset_highlight();
+            if reset_highlight {
+                self.reset_highlight();
+            }
             cx.notify();
         }
     }
@@ -752,8 +939,8 @@ impl<T> Render for SelectPopup<T>
 where
     T: Clone + PartialEq + 'static,
 {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (snapshot, can_undo, can_redo) = {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (snapshot, can_undo, can_redo, option_renderer, popup_renderer, search_renderer) = {
             let state = self.state.read(cx);
             (
                 PopupSnapshot {
@@ -767,6 +954,9 @@ where
                 },
                 state.history.can_undo(),
                 state.history.can_redo(),
+                state.option_renderer.clone(),
+                state.popup_renderer.clone(),
+                state.search_renderer.clone(),
             )
         };
 
@@ -775,22 +965,20 @@ where
         let close_state = self.state.clone();
         let search_state = self.state.clone();
         let selector_id = self.selector_id.clone();
+        let popup_render_state = SelectPopupRenderState {
+            width: snapshot.width,
+            searchable: snapshot.searchable,
+            search_query: snapshot.search_query.clone(),
+            highlighted_index: snapshot.highlighted_index,
+            selected_index: snapshot.selected_index,
+            filtered_len: snapshot.filtered_indices.len(),
+        };
 
         let mut panel = div()
             .id(ElementId::named_usize(
                 format!("{}-popup", self.selector_id),
                 0,
             ))
-            .min_w(snapshot.width)
-            .flex()
-            .flex_col()
-            .gap_1()
-            .p_2()
-            .rounded(px(10.0))
-            .border_1()
-            .border_color(crate::rgb(0xcbd5e1))
-            .bg(crate::rgb(0xffffff))
-            .shadow_lg()
             .capture_key_down(move |event: &KeyDownEvent, window, cx| {
                 if event.keystroke.modifiers.modified() {
                     return;
@@ -834,22 +1022,7 @@ where
             panel = panel.debug_selector(move || popup_selector);
         }
 
-        if snapshot.searchable {
-            panel = panel.child(
-                div().track_focus(&self.search_focus).child(
-                    text_input(
-                        ElementId::named_usize(format!("{}-search", self.selector_id), 0),
-                        snapshot.search_query,
-                    )
-                    .placeholder("Search")
-                    .on_change(move |query, _, cx| {
-                        search_state.update(cx, |state, cx| {
-                            state.set_search_query(query, cx);
-                        });
-                    }),
-                ),
-            );
-        } else {
+        if !snapshot.searchable {
             panel = panel
                 .track_focus(&self.root_focus)
                 .focusable()
@@ -878,88 +1051,179 @@ where
             }
         }
 
-        if snapshot.filtered_indices.is_empty() {
-            return panel
+        let mut popup_children = Vec::new();
+
+        if snapshot.searchable {
+            let query = snapshot.search_query.clone();
+            let search_update_state = search_state.clone();
+            let default_search = div()
+                .track_focus(&self.search_focus)
                 .child(
-                    div()
-                        .px(px(10.0))
-                        .py(px(8.0))
-                        .text_color(crate::rgb(0x64748b))
-                        .child("No options"),
+                    text_input(
+                        ElementId::named_usize(format!("{}-search", self.selector_id), 0),
+                        query.clone(),
+                    )
+                    .placeholder("Search")
+                    .on_change(move |query, _, cx| {
+                        search_update_state.update(cx, |state, cx| {
+                            state.set_search_query(query, cx);
+                        });
+                    }),
                 )
                 .into_any_element();
-        }
-
-        let mut list = div()
-            .flex()
-            .flex_col()
-            .accessibility(AccessibilityAttributes::new(AccessibilityRole::List));
-
-        for option_index in snapshot.filtered_indices {
-            let option = snapshot.options[option_index].clone();
-            let is_highlighted = snapshot.highlighted_index == Some(option_index);
-            let is_selected = snapshot.selected_index == Some(option_index);
-            let commit_state = self.state.clone();
-            let selector_id = self.selector_id.clone();
-
-            let mut row = div()
-                .id(ElementId::named_usize(
-                    format!("{}-option", selector_id),
-                    option_index,
-                ))
-                .accessibility(
-                    AccessibilityAttributes::new(AccessibilityRole::ListItem)
-                        .label(option.label.to_string())
-                        .states(if is_selected {
-                            AccessibilityState::SELECTED
-                        } else {
-                            AccessibilityState::NONE
-                        })
-                        .actions(vec![AccessibilityAction::Click]),
+            let search_child = if let Some(renderer) = &search_renderer {
+                renderer(
+                    SelectSearchRenderState {
+                        query,
+                        focused: self.search_focus.is_focused(window),
+                    },
+                    default_search,
+                    window,
+                    cx,
                 )
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap_3()
-                .px(px(10.0))
-                .py(px(8.0))
-                .rounded(px(8.0))
-                .cursor_pointer()
-                .bg(if is_highlighted {
-                    crate::rgb(0xe0f2fe)
-                } else if is_selected {
-                    crate::rgb(0xf8fafc)
-                } else {
-                    crate::rgba(0x00000000)
-                })
-                .hover(|style| style.bg(crate::rgb(0xf1f5f9)))
-                .on_click(move |event, window, cx| {
-                    if !event.standard_click() {
-                        return;
-                    }
-
-                    commit_state.update(cx, |state, cx| {
-                        state.commit_index(option_index, window, cx);
-                    });
-                })
-                .child(div().child(option.label));
-
-            if is_selected {
-                row = row.child(div().text_color(crate::rgb(0x1d4ed8)).child("*"));
-            }
-
-            #[cfg(any(test, feature = "test-support"))]
-            {
-                let option_selector =
-                    format!("select-option-{}-{}", self.selector_id, option_index);
-                row = row.debug_selector(move || option_selector);
-            }
-
-            list = list.child(row);
+            } else {
+                default_search
+            };
+            popup_children.push(search_child);
         }
 
-        panel.child(list).into_any_element()
+        if snapshot.filtered_indices.is_empty() {
+            popup_children.push(default_select_empty_state().into_any_element());
+        } else {
+            let mut list = div()
+                .flex()
+                .flex_col()
+                .accessibility(AccessibilityAttributes::new(AccessibilityRole::List));
+
+            for option_index in snapshot.filtered_indices {
+                let option = snapshot.options[option_index].clone();
+                let is_highlighted = snapshot.highlighted_index == Some(option_index);
+                let is_selected = snapshot.selected_index == Some(option_index);
+                let commit_state = self.state.clone();
+                let selector_id = self.selector_id.clone();
+
+                let mut row = div()
+                    .id(ElementId::named_usize(
+                        format!("{}-option", selector_id),
+                        option_index,
+                    ))
+                    .accessibility(
+                        AccessibilityAttributes::new(AccessibilityRole::ListItem)
+                            .label(option.label.to_string())
+                            .states(if is_selected {
+                                AccessibilityState::SELECTED
+                            } else {
+                                AccessibilityState::NONE
+                            })
+                            .actions(vec![AccessibilityAction::Click]),
+                    )
+                    .cursor_pointer()
+                    .on_click(move |event, window, cx| {
+                        if !event.standard_click() {
+                            return;
+                        }
+
+                        commit_state.update(cx, |state, cx| {
+                            state.commit_index(option_index, window, cx);
+                        });
+                    });
+
+                let row_content = if let Some(renderer) = &option_renderer {
+                    renderer(
+                        SelectOptionRenderState {
+                            value: option.value.clone(),
+                            label: option.label.clone(),
+                            index: option_index,
+                            selected: is_selected,
+                            highlighted: is_highlighted,
+                        },
+                        window,
+                        cx,
+                    )
+                } else {
+                    default_select_option_row(option.label.clone(), is_selected, is_highlighted)
+                };
+
+                row = row.child(row_content);
+
+                #[cfg(any(test, feature = "test-support"))]
+                {
+                    let option_selector =
+                        format!("select-option-{}-{}", self.selector_id, option_index);
+                    row = row.debug_selector(move || option_selector);
+                }
+
+                list = list.child(row);
+            }
+
+            popup_children.push(list.into_any_element());
+        }
+
+        let popup_body = if let Some(renderer) = &popup_renderer {
+            renderer(popup_render_state, popup_children, window, cx)
+        } else {
+            default_select_popup_body(popup_render_state, popup_children)
+        };
+
+        panel.child(popup_body).into_any_element()
     }
+}
+
+fn default_select_popup_body(
+    state: SelectPopupRenderState,
+    children: Vec<AnyElement>,
+) -> AnyElement {
+    div()
+        .min_w(state.width)
+        .flex()
+        .flex_col()
+        .gap_1()
+        .p_2()
+        .rounded(px(10.0))
+        .border_1()
+        .border_color(crate::rgb(0xcbd5e1))
+        .bg(crate::rgb(0xffffff))
+        .shadow_lg()
+        .children(children)
+        .into_any_element()
+}
+
+fn default_select_empty_state() -> impl IntoElement {
+    div()
+        .px(px(10.0))
+        .py(px(8.0))
+        .text_color(crate::rgb(0x64748b))
+        .child("No options")
+}
+
+fn default_select_option_row(
+    label: SharedString,
+    selected: bool,
+    highlighted: bool,
+) -> AnyElement {
+    let mut row = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_3()
+        .px(px(10.0))
+        .py(px(8.0))
+        .rounded(px(8.0))
+        .bg(if highlighted {
+            crate::rgb(0xe0f2fe)
+        } else if selected {
+            crate::rgb(0xf8fafc)
+        } else {
+            crate::rgba(0x00000000)
+        })
+        .hover(|style| style.bg(crate::rgb(0xf1f5f9)))
+        .child(div().child(label));
+
+    if selected {
+        row = row.child(div().text_color(crate::rgb(0x1d4ed8)).child("*"));
+    }
+
+    row.into_any_element()
 }
 
 struct SelectSnapshot {
@@ -1037,7 +1301,7 @@ fn next_highlighted_index(
 mod tests {
     use super::*;
     use crate::{
-        AccessibilityRole, AccessibilityState, AccessibilityValue, Context, Modifiers, Render,
+        div, AccessibilityRole, AccessibilityState, AccessibilityValue, Context, Modifiers, Render,
         TestAppContext, Undo,
     };
 
@@ -1046,6 +1310,10 @@ mod tests {
     }
 
     struct PlainSelectView {
+        value: &'static str,
+    }
+
+    struct CustomSelectView {
         value: &'static str,
     }
 
@@ -1073,6 +1341,68 @@ mod tests {
                 [("cat", "Cat"), ("dog", "Dog"), ("eel", "Eel")],
             )
             .placeholder("Choose a pet")
+            .on_change(cx.listener(|this, value, _, cx| {
+                this.value = *value;
+                cx.notify();
+            }))
+        }
+    }
+
+    impl Render for CustomSelectView {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            select(
+                "pet_custom",
+                self.value,
+                [("cat", "Cat"), ("dog", "Dog"), ("eel", "Eel")],
+            )
+            .placeholder("Choose a pet")
+            .searchable()
+            .render_with(|state, _, _| {
+                let selector = format!(
+                    "select-trigger-{}-{}-{}",
+                    state.display_text,
+                    if state.open { "open" } else { "closed" },
+                    if state.showing_placeholder { "placeholder" } else { "value" },
+                );
+                div()
+                    .debug_selector(move || selector)
+                    .child(state.display_text)
+                    .into_any_element()
+            })
+            .render_popup_with(|state, children, _, _| {
+                let selector = format!(
+                    "select-popup-shell-{}-{}",
+                    state.filtered_len,
+                    if state.searchable { "searchable" } else { "plain" },
+                );
+                div()
+                    .debug_selector(move || selector)
+                    .children(children)
+                    .into_any_element()
+            })
+            .render_search_with(|state, input, _, _| {
+                let selector = format!(
+                    "select-search-{}-{}",
+                    if state.query.is_empty() { "empty" } else { "query" },
+                    if state.focused { "focused" } else { "idle" },
+                );
+                div()
+                    .debug_selector(move || selector)
+                    .child(input)
+                    .into_any_element()
+            })
+            .render_options_with(|state, _, _| {
+                let selector = format!(
+                    "select-custom-option-{}-{}-{}",
+                    state.index,
+                    if state.selected { "selected" } else { "idle" },
+                    if state.highlighted { "highlighted" } else { "plain" },
+                );
+                div()
+                    .debug_selector(move || selector)
+                    .child(state.label)
+                    .into_any_element()
+            })
             .on_change(cx.listener(|this, value, _, cx| {
                 this.value = *value;
                 cx.notify();
@@ -1192,5 +1522,44 @@ mod tests {
             window.draw(cx).clear();
             assert_eq!(view.read(cx).value, "dog");
         });
+    }
+
+    #[crate::test]
+    fn select_render_hooks_receive_trigger_and_option_state(cx: &mut TestAppContext) {
+        let (_view, mut window) = cx.add_window_view(|_, _| CustomSelectView { value: "cat" });
+
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        assert!(window
+            .debug_bounds("select-trigger-Cat-closed-value")
+            .is_some());
+
+        let trigger_bounds = window.debug_bounds("select-pet_custom").unwrap();
+        window.simulate_click(trigger_bounds.center(), Modifiers::default());
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        assert!(window
+            .debug_bounds("select-popup-shell-3-searchable")
+            .is_some());
+        assert!(window
+            .debug_bounds("select-search-empty-focused")
+            .is_some());
+        assert!(window
+            .debug_bounds("select-custom-option-0-selected-highlighted")
+            .is_some());
+
+        let option_bounds = window.debug_bounds("select-option-pet_custom-1").unwrap();
+        window.simulate_click(option_bounds.center(), Modifiers::default());
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        assert!(window
+            .debug_bounds("select-trigger-Dog-closed-value")
+            .is_some());
     }
 }

@@ -14,6 +14,109 @@ use time::{Date, Duration, Month};
 
 type ChangeListener = Rc<dyn Fn(&Date, &mut Window, &mut App)>;
 
+#[non_exhaustive]
+/// Snapshot of date picker trigger state passed to a custom renderer.
+pub struct DatePickerRenderState {
+    /// Whether the popup is currently open.
+    pub open: bool,
+    /// The currently selected date.
+    pub date: Date,
+    /// The formatted label currently shown in the trigger.
+    pub display_label: SharedString,
+    /// Whether the trigger currently owns keyboard focus.
+    pub focused: bool,
+}
+
+#[non_exhaustive]
+/// Snapshot of a calendar day cell passed to a custom renderer.
+pub struct DatePickerDayRenderState {
+    /// The date represented by the day cell.
+    pub date: Date,
+    /// The day-of-month number shown in the cell.
+    pub day: u8,
+    /// Whether the day is disabled by the current min or max bounds.
+    pub disabled: bool,
+    /// Whether this day is currently selected.
+    pub selected: bool,
+    /// Whether this day is currently highlighted for keyboard navigation.
+    pub highlighted: bool,
+}
+
+#[non_exhaustive]
+/// Snapshot of date picker popup state passed to a custom renderer.
+pub struct DatePickerPopupRenderState {
+    /// The resolved popup width.
+    pub width: Pixels,
+    /// The formatted month title currently shown in the popup header.
+    pub month_label: SharedString,
+    /// The currently selected date.
+    pub selected_date: Date,
+    /// The currently highlighted date.
+    pub highlighted_date: Date,
+    /// Whether navigating to the previous month is currently allowed.
+    pub can_navigate_previous: bool,
+    /// Whether navigating to the next month is currently allowed.
+    pub can_navigate_next: bool,
+}
+
+type DatePickerPopupCustomRenderer =
+    Rc<dyn Fn(DatePickerPopupRenderState, Vec<AnyElement>, &Window, &App) -> AnyElement>;
+
+#[non_exhaustive]
+/// Snapshot of the calendar header passed to a custom renderer.
+pub struct DatePickerHeaderRenderState {
+    /// The formatted month title currently shown in the popup header.
+    pub month_label: SharedString,
+    /// Whether navigating to the previous month is currently allowed.
+    pub can_navigate_previous: bool,
+    /// Whether navigating to the next month is currently allowed.
+    pub can_navigate_next: bool,
+}
+
+type DatePickerHeaderCustomRenderer = Rc<
+    dyn Fn(DatePickerHeaderRenderState, AnyElement, AnyElement, &Window, &App) -> AnyElement,
+>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Direction of a date picker navigation button.
+pub enum DatePickerNavigationDirection {
+    /// Navigate to the previous month.
+    PreviousMonth,
+    /// Navigate to the next month.
+    NextMonth,
+}
+
+#[non_exhaustive]
+/// Snapshot of a month navigation button passed to a custom renderer.
+pub struct DatePickerNavButtonRenderState {
+    /// Which direction this button navigates.
+    pub direction: DatePickerNavigationDirection,
+    /// The visible label currently assigned to the button.
+    pub label: SharedString,
+    /// Whether this button is enabled.
+    pub enabled: bool,
+}
+
+type DatePickerNavButtonCustomRenderer = Rc<
+    dyn Fn(DatePickerNavButtonRenderState, AnyElement, &Window, &App) -> AnyElement,
+>;
+
+#[non_exhaustive]
+/// Snapshot of a weekday label passed to a custom renderer.
+pub struct DatePickerWeekdayRenderState {
+    /// Zero-based weekday index in the rendered row.
+    pub index: usize,
+    /// The visible weekday label.
+    pub label: SharedString,
+}
+
+type DatePickerWeekdayCustomRenderer =
+    Rc<dyn Fn(DatePickerWeekdayRenderState, &Window, &App) -> AnyElement>;
+
+type DatePickerCustomRenderer = Rc<dyn Fn(DatePickerRenderState, &Window, &App) -> AnyElement>;
+type DatePickerDayCustomRenderer =
+    Rc<dyn Fn(DatePickerDayRenderState, &Window, &App) -> AnyElement>;
+
 /// Construct a controlled popup-backed date picker.
 #[track_caller]
 pub fn date_picker(id: impl Into<ElementId>, date: Date) -> DatePicker {
@@ -27,6 +130,12 @@ pub struct DatePicker {
     min: Option<Date>,
     max: Option<Date>,
     on_change: Option<ChangeListener>,
+    custom_renderer: Option<DatePickerCustomRenderer>,
+    custom_day_renderer: Option<DatePickerDayCustomRenderer>,
+    custom_popup_renderer: Option<DatePickerPopupCustomRenderer>,
+    custom_header_renderer: Option<DatePickerHeaderCustomRenderer>,
+    custom_nav_button_renderer: Option<DatePickerNavButtonCustomRenderer>,
+    custom_weekday_renderer: Option<DatePickerWeekdayCustomRenderer>,
     source_location: &'static core::panic::Location<'static>,
 }
 
@@ -47,6 +156,11 @@ struct DatePickerState {
     highlighted_date: Option<Date>,
     trigger_bounds: Option<Bounds<Pixels>>,
     on_change: Option<ChangeListener>,
+    day_renderer: Option<DatePickerDayCustomRenderer>,
+    popup_renderer: Option<DatePickerPopupCustomRenderer>,
+    header_renderer: Option<DatePickerHeaderCustomRenderer>,
+    nav_button_renderer: Option<DatePickerNavButtonCustomRenderer>,
+    weekday_renderer: Option<DatePickerWeekdayCustomRenderer>,
 }
 
 struct DatePickerPopup {
@@ -93,6 +207,12 @@ impl DatePicker {
             min: None,
             max: None,
             on_change: None,
+            custom_renderer: None,
+            custom_day_renderer: None,
+            custom_popup_renderer: None,
+            custom_header_renderer: None,
+            custom_nav_button_renderer: None,
+            custom_weekday_renderer: None,
             source_location: core::panic::Location::caller(),
         }
     }
@@ -112,6 +232,69 @@ impl DatePicker {
     /// Register a callback invoked with the newly selected date.
     pub fn on_change(mut self, listener: impl Fn(&Date, &mut Window, &mut App) + 'static) -> Self {
         self.on_change = Some(Rc::new(listener));
+        self
+    }
+
+    /// Render the date picker trigger with caller-owned visuals.
+    pub fn render_with(
+        mut self,
+        renderer: impl Fn(DatePickerRenderState, &Window, &App) -> AnyElement + 'static,
+    ) -> Self {
+        self.custom_renderer = Some(Rc::new(renderer));
+        self
+    }
+
+    /// Render each calendar day cell with caller-owned visuals.
+    pub fn render_days_with(
+        mut self,
+        renderer: impl Fn(DatePickerDayRenderState, &Window, &App) -> AnyElement + 'static,
+    ) -> Self {
+        self.custom_day_renderer = Some(Rc::new(renderer));
+        self
+    }
+
+    /// Render the popup shell with caller-owned visuals around the generated calendar sections.
+    pub fn render_popup_with(
+        mut self,
+        renderer: impl Fn(DatePickerPopupRenderState, Vec<AnyElement>, &Window, &App) -> AnyElement
+            + 'static,
+    ) -> Self {
+        self.custom_popup_renderer = Some(Rc::new(renderer));
+        self
+    }
+
+    /// Render the popup header with caller-owned layout around the generated navigation buttons.
+    pub fn render_header_with(
+        mut self,
+        renderer: impl Fn(
+                DatePickerHeaderRenderState,
+                AnyElement,
+                AnyElement,
+                &Window,
+                &App,
+            ) -> AnyElement
+            + 'static,
+    ) -> Self {
+        self.custom_header_renderer = Some(Rc::new(renderer));
+        self
+    }
+
+    /// Render the month navigation buttons with caller-owned visuals around the generated button.
+    pub fn render_nav_buttons_with(
+        mut self,
+        renderer: impl Fn(DatePickerNavButtonRenderState, AnyElement, &Window, &App) -> AnyElement
+            + 'static,
+    ) -> Self {
+        self.custom_nav_button_renderer = Some(Rc::new(renderer));
+        self
+    }
+
+    /// Render the weekday labels with caller-owned visuals.
+    pub fn render_weekdays_with(
+        mut self,
+        renderer: impl Fn(DatePickerWeekdayRenderState, &Window, &App) -> AnyElement + 'static,
+    ) -> Self {
+        self.custom_weekday_renderer = Some(Rc::new(renderer));
         self
     }
 
@@ -236,17 +419,29 @@ impl DatePicker {
                     });
                     window.prevent_default();
                 }
-            })
-            .child(
-                div()
-                    .text_color(crate::rgb(0x0f172a))
-                    .child(accessibility_value),
-            )
-            .child(
-                div()
-                    .text_color(crate::rgb(0x64748b))
-                    .child(if snapshot.is_open { "^" } else { "v" }),
-            );
+            });
+
+        if let Some(renderer) = &self.custom_renderer {
+            let render_state = DatePickerRenderState {
+                open: snapshot.is_open,
+                date: snapshot.display_date,
+                display_label: accessibility_value.clone(),
+                focused: focus_handle.is_focused(window),
+            };
+            trigger = trigger.child(renderer(render_state, window, cx));
+        } else {
+            trigger = trigger
+                .child(
+                    div()
+                        .text_color(crate::rgb(0x0f172a))
+                        .child(accessibility_value),
+                )
+                .child(
+                    div()
+                        .text_color(crate::rgb(0x64748b))
+                        .child(if snapshot.is_open { "^" } else { "v" }),
+                );
+        }
 
         #[cfg(any(test, feature = "test-support"))]
         {
@@ -292,6 +487,11 @@ impl Element for DatePicker {
         let min = self.min;
         let max = self.max;
         let on_change = self.on_change.clone();
+        let custom_day_renderer = self.custom_day_renderer.clone();
+        let custom_popup_renderer = self.custom_popup_renderer.clone();
+        let custom_header_renderer = self.custom_header_renderer.clone();
+        let custom_nav_button_renderer = self.custom_nav_button_renderer.clone();
+        let custom_weekday_renderer = self.custom_weekday_renderer.clone();
         let undo_manager = window.undo_manager();
 
         ensure_local_undo_redo_bindings(cx);
@@ -317,6 +517,11 @@ impl Element for DatePicker {
                             min,
                             max,
                             on_change.clone(),
+                            custom_day_renderer.clone(),
+                            custom_popup_renderer.clone(),
+                            custom_header_renderer.clone(),
+                            custom_nav_button_renderer.clone(),
+                            custom_weekday_renderer.clone(),
                         )
                     });
 
@@ -335,7 +540,18 @@ impl Element for DatePicker {
             });
 
         state.update(cx, |state, cx| {
-            state.sync_from_props(date, min, max, on_change, cx);
+            state.sync_from_props(
+                date,
+                min,
+                max,
+                on_change,
+                custom_day_renderer,
+                custom_popup_renderer,
+                custom_header_renderer,
+                custom_nav_button_renderer,
+                custom_weekday_renderer,
+                cx,
+            );
         });
 
         let trigger = self.build_trigger(&selector_id, state.clone(), window, cx);
@@ -393,6 +609,11 @@ impl DatePickerState {
         min: Option<Date>,
         max: Option<Date>,
         on_change: Option<ChangeListener>,
+        day_renderer: Option<DatePickerDayCustomRenderer>,
+        popup_renderer: Option<DatePickerPopupCustomRenderer>,
+        header_renderer: Option<DatePickerHeaderCustomRenderer>,
+        nav_button_renderer: Option<DatePickerNavButtonCustomRenderer>,
+        weekday_renderer: Option<DatePickerWeekdayCustomRenderer>,
     ) -> Self {
         let date = clamp_date(date, min, max);
         let visible_month = month_for_date(date);
@@ -407,6 +628,11 @@ impl DatePickerState {
             highlighted_date: Some(date),
             trigger_bounds: None,
             on_change,
+            day_renderer,
+            popup_renderer,
+            header_renderer,
+            nav_button_renderer,
+            weekday_renderer,
         }
     }
 
@@ -416,29 +642,65 @@ impl DatePickerState {
         min: Option<Date>,
         max: Option<Date>,
         on_change: Option<ChangeListener>,
+        day_renderer: Option<DatePickerDayCustomRenderer>,
+        popup_renderer: Option<DatePickerPopupCustomRenderer>,
+        header_renderer: Option<DatePickerHeaderCustomRenderer>,
+        nav_button_renderer: Option<DatePickerNavButtonCustomRenderer>,
+        weekday_renderer: Option<DatePickerWeekdayCustomRenderer>,
         cx: &mut Context<Self>,
     ) {
         let clamped_date = clamp_date(date, min, max);
         let mut changed = false;
         let mut reset_history = false;
+        let mut reset_navigation = false;
 
         if self.date != clamped_date {
             self.date = clamped_date;
             changed = true;
             reset_history = true;
+            reset_navigation = true;
         }
         if self.min != min {
             self.min = min;
             changed = true;
             reset_history = true;
+            reset_navigation = true;
         }
         if self.max != max {
             self.max = max;
             changed = true;
             reset_history = true;
+            reset_navigation = true;
         }
         if self.on_change.as_ref().map(Rc::as_ptr) != on_change.as_ref().map(Rc::as_ptr) {
             self.on_change = on_change;
+            changed = true;
+        }
+        if self.day_renderer.as_ref().map(Rc::as_ptr) != day_renderer.as_ref().map(Rc::as_ptr) {
+            self.day_renderer = day_renderer;
+            changed = true;
+        }
+        if self.popup_renderer.as_ref().map(Rc::as_ptr) != popup_renderer.as_ref().map(Rc::as_ptr)
+        {
+            self.popup_renderer = popup_renderer;
+            changed = true;
+        }
+        if self.header_renderer.as_ref().map(Rc::as_ptr)
+            != header_renderer.as_ref().map(Rc::as_ptr)
+        {
+            self.header_renderer = header_renderer;
+            changed = true;
+        }
+        if self.nav_button_renderer.as_ref().map(Rc::as_ptr)
+            != nav_button_renderer.as_ref().map(Rc::as_ptr)
+        {
+            self.nav_button_renderer = nav_button_renderer;
+            changed = true;
+        }
+        if self.weekday_renderer.as_ref().map(Rc::as_ptr)
+            != weekday_renderer.as_ref().map(Rc::as_ptr)
+        {
+            self.weekday_renderer = weekday_renderer;
             changed = true;
         }
 
@@ -447,8 +709,10 @@ impl DatePickerState {
         }
 
         if changed {
-            self.visible_month = month_for_date(self.date);
-            self.highlighted_date = Some(self.date);
+            if reset_navigation {
+                self.visible_month = month_for_date(self.date);
+                self.highlighted_date = Some(self.date);
+            }
             cx.notify();
         }
     }
@@ -624,7 +888,11 @@ impl DatePickerState {
 }
 
 impl DatePickerPopup {
-    fn new(selector_id: String, state: Entity<DatePickerState>, cx: &mut Context<Self>) -> Self {
+    fn new(
+        selector_id: String,
+        state: Entity<DatePickerState>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         cx.observe(&state, |_, _, cx| {
             cx.notify();
         })
@@ -647,13 +915,27 @@ impl Focusable for DatePickerPopup {
 }
 
 impl Render for DatePickerPopup {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (snapshot, can_undo, can_redo) = {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (
+            snapshot,
+            can_undo,
+            can_redo,
+            day_renderer,
+            popup_renderer,
+            header_renderer,
+            nav_button_renderer,
+            weekday_renderer,
+        ) = {
             let state = self.state.read(cx);
             (
                 state.popup_snapshot(),
                 state.history.can_undo(),
                 state.history.can_redo(),
+                state.day_renderer.clone(),
+                state.popup_renderer.clone(),
+                state.header_renderer.clone(),
+                state.nav_button_renderer.clone(),
+                state.weekday_renderer.clone(),
             )
         };
         let move_state = self.state.clone();
@@ -670,6 +952,20 @@ impl Render for DatePickerPopup {
             snapshot.min,
             snapshot.max,
         );
+        let month_label: SharedString = format!(
+            "{} {}",
+            month_name(snapshot.visible_month.month),
+            snapshot.visible_month.year
+        )
+        .into();
+        let popup_render_state = DatePickerPopupRenderState {
+            width: snapshot.width,
+            month_label: month_label.clone(),
+            selected_date: snapshot.selected_date,
+            highlighted_date: snapshot.highlighted_date,
+            can_navigate_previous: can_prev,
+            can_navigate_next: can_next,
+        };
 
         let mut panel = div()
             .id(ElementId::named_usize(
@@ -680,16 +976,6 @@ impl Render for DatePickerPopup {
             .focusable()
             .tab_stop(true)
             .key_context(local_undo_redo_key_context())
-            .min_w(snapshot.width)
-            .flex()
-            .flex_col()
-            .gap_2()
-            .p_2()
-            .rounded(px(10.0))
-            .border_1()
-            .border_color(crate::rgb(0xcbd5e1))
-            .bg(crate::rgb(0xffffff))
-            .shadow_lg()
             .capture_key_down(move |event: &KeyDownEvent, window, cx| {
                 if event.keystroke.modifiers.modified() {
                     return;
@@ -814,35 +1100,83 @@ impl Render for DatePickerPopup {
             let next_selector = format!("date-picker-next-{}", self.selector_id);
             next_button = next_button.debug_selector(move || next_selector);
         }
+        let prev_button = if let Some(renderer) = &nav_button_renderer {
+            renderer(
+                DatePickerNavButtonRenderState {
+                    direction: DatePickerNavigationDirection::PreviousMonth,
+                    label: SharedString::from("<"),
+                    enabled: can_prev,
+                },
+                prev_button.into_any_element(),
+                window,
+                cx,
+            )
+        } else {
+            prev_button.into_any_element()
+        };
 
-        panel = panel.child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap_2()
-                .child(prev_button)
-                .child(
-                    div()
-                        .font_weight(crate::FontWeight::SEMIBOLD)
-                        .child(format!(
-                            "{} {}",
-                            month_name(snapshot.visible_month.month),
-                            snapshot.visible_month.year
-                        )),
-                )
-                .child(next_button),
-        );
+        let next_button = if let Some(renderer) = &nav_button_renderer {
+            renderer(
+                DatePickerNavButtonRenderState {
+                    direction: DatePickerNavigationDirection::NextMonth,
+                    label: SharedString::from(">"),
+                    enabled: can_next,
+                },
+                next_button.into_any_element(),
+                window,
+                cx,
+            )
+        } else {
+            next_button.into_any_element()
+        };
 
-        panel = panel.child(div().flex().gap_1().children([
-            weekday_label("Mon"),
-            weekday_label("Tue"),
-            weekday_label("Wed"),
-            weekday_label("Thu"),
-            weekday_label("Fri"),
-            weekday_label("Sat"),
-            weekday_label("Sun"),
-        ]));
+        let header = if let Some(renderer) = &header_renderer {
+            renderer(
+                DatePickerHeaderRenderState {
+                    month_label: month_label.clone(),
+                    can_navigate_previous: can_prev,
+                    can_navigate_next: can_next,
+                },
+                prev_button,
+                next_button,
+                window,
+                cx,
+            )
+        } else {
+            default_date_picker_header(
+                DatePickerHeaderRenderState {
+                    month_label: month_label.clone(),
+                    can_navigate_previous: can_prev,
+                    can_navigate_next: can_next,
+                },
+                prev_button,
+                next_button,
+            )
+        };
+
+        let weekday_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, label)| {
+                if let Some(renderer) = &weekday_renderer {
+                    renderer(
+                        DatePickerWeekdayRenderState {
+                            index,
+                            label: SharedString::from(label),
+                        },
+                        window,
+                        cx,
+                    )
+                } else {
+                    weekday_label(label)
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let mut popup_children = vec![
+            header,
+            default_date_picker_weekday_row(weekday_labels),
+        ];
 
         for week in build_month_grid(snapshot.visible_month, snapshot.min, snapshot.max).chunks(7) {
             let mut row = div().flex().gap_1();
@@ -853,13 +1187,65 @@ impl Render for DatePickerPopup {
                     snapshot.selected_date,
                     snapshot.highlighted_date,
                     self.state.clone(),
+                    day_renderer.as_ref(),
+                    window,
+                    cx,
                 ));
             }
-            panel = panel.child(row);
+            popup_children.push(row.into_any_element());
         }
 
-        panel.into_any_element()
+        let popup_body = if let Some(renderer) = &popup_renderer {
+            renderer(popup_render_state, popup_children, window, cx)
+        } else {
+            default_date_picker_popup_body(popup_render_state, popup_children)
+        };
+
+        panel.child(popup_body).into_any_element()
     }
+}
+
+fn default_date_picker_popup_body(
+    state: DatePickerPopupRenderState,
+    children: Vec<AnyElement>,
+) -> AnyElement {
+    div()
+        .min_w(state.width)
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_2()
+        .rounded(px(10.0))
+        .border_1()
+        .border_color(crate::rgb(0xcbd5e1))
+        .bg(crate::rgb(0xffffff))
+        .shadow_lg()
+        .children(children)
+        .into_any_element()
+}
+
+fn default_date_picker_header(
+    state: DatePickerHeaderRenderState,
+    prev_button: AnyElement,
+    next_button: AnyElement,
+) -> AnyElement {
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .child(prev_button)
+        .child(
+            div()
+                .font_weight(crate::FontWeight::SEMIBOLD)
+                .child(state.month_label),
+        )
+        .child(next_button)
+        .into_any_element()
+}
+
+fn default_date_picker_weekday_row(children: Vec<AnyElement>) -> AnyElement {
+    div().flex().gap_1().children(children).into_any_element()
 }
 
 fn build_layer_overlay(
@@ -885,6 +1271,9 @@ fn render_day_cell(
     selected_date: Date,
     highlighted_date: Date,
     state: Entity<DatePickerState>,
+    day_renderer: Option<&DatePickerDayCustomRenderer>,
+    window: &Window,
+    cx: &App,
 ) -> AnyElement {
     let Some(cell) = cell else {
         return div().w(px(36.0)).h(px(36.0)).into_any_element();
@@ -895,35 +1284,21 @@ fn render_day_cell(
     let day_id: SharedString = format!("{}-day-{}", selector_id, format_date(cell.date)).into();
     let mut day = div()
         .id(day_id)
-        .w(px(36.0))
-        .h(px(36.0))
-        .rounded(px(8.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(if cell.disabled {
-            crate::rgb(0x94a3b8)
-        } else if is_selected {
-            crate::rgb(0xffffff)
+        .child(if let Some(renderer) = day_renderer {
+            renderer(
+                DatePickerDayRenderState {
+                    date: cell.date,
+                    day: cell.day,
+                    disabled: cell.disabled,
+                    selected: is_selected,
+                    highlighted: is_highlighted,
+                },
+                window,
+                cx,
+            )
         } else {
-            crate::rgb(0x0f172a)
-        })
-        .bg(if cell.disabled {
-            crate::rgba(0x00000000)
-        } else if is_selected {
-            crate::rgb(0x1d4ed8)
-        } else if is_highlighted {
-            crate::rgb(0xe0f2fe)
-        } else {
-            crate::rgba(0x00000000)
-        })
-        .border_1()
-        .border_color(if is_highlighted && !is_selected {
-            crate::rgb(0x1d4ed8)
-        } else {
-            crate::rgba(0x00000000)
-        })
-        .child(cell.day.to_string());
+            default_day_cell_body(cell, is_selected, is_highlighted)
+        });
 
     if !cell.disabled {
         day = day
@@ -947,6 +1322,44 @@ fn render_day_cell(
     }
 
     day.into_any_element()
+}
+
+fn default_day_cell_body(
+    cell: CalendarDayCell,
+    selected: bool,
+    highlighted: bool,
+) -> AnyElement {
+    div()
+        .w(px(36.0))
+        .h(px(36.0))
+        .rounded(px(8.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_color(if cell.disabled {
+            crate::rgb(0x94a3b8)
+        } else if selected {
+            crate::rgb(0xffffff)
+        } else {
+            crate::rgb(0x0f172a)
+        })
+        .bg(if cell.disabled {
+            crate::rgba(0x00000000)
+        } else if selected {
+            crate::rgb(0x1d4ed8)
+        } else if highlighted {
+            crate::rgb(0xe0f2fe)
+        } else {
+            crate::rgba(0x00000000)
+        })
+        .border_1()
+        .border_color(if highlighted && !selected {
+            crate::rgb(0x1d4ed8)
+        } else {
+            crate::rgba(0x00000000)
+        })
+        .child(cell.day.to_string())
+        .into_any_element()
 }
 
 fn calendar_nav_button(label: &'static str, enabled: bool) -> crate::elements::div::Div {
@@ -1168,10 +1581,15 @@ fn format_date(date: Date) -> SharedString {
 mod tests {
     use super::*;
     use crate::{
-        AccessibilityRole, AccessibilityValue, Context, Modifiers, Render, TestAppContext, Undo,
+        div, AccessibilityRole, AccessibilityValue, Context, Modifiers, Render,
+        TestAppContext, Undo,
     };
 
     struct DatePickerView {
+        date: Date,
+    }
+
+    struct CustomDatePickerView {
         date: Date,
     }
 
@@ -1180,6 +1598,88 @@ mod tests {
             date_picker("schedule", self.date)
                 .min(Date::from_calendar_date(2026, Month::May, 10).unwrap())
                 .max(Date::from_calendar_date(2026, Month::May, 25).unwrap())
+                .on_change(cx.listener(|this, date, _, cx| {
+                    this.date = *date;
+                    cx.notify();
+                }))
+        }
+    }
+
+    impl Render for CustomDatePickerView {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            date_picker("schedule_custom", self.date)
+                .render_with(|state, _, _| {
+                    let selector = format!(
+                        "date-picker-trigger-{}-{}",
+                        state.display_label,
+                        if state.open { "open" } else { "closed" },
+                    );
+                    div()
+                        .debug_selector(move || selector)
+                        .child(state.display_label)
+                        .into_any_element()
+                })
+                .render_popup_with(|state, children, _, _| {
+                    let selector = format!(
+                        "date-picker-popup-shell-{}",
+                        state.month_label.to_string().replace(' ', "-"),
+                    );
+                    div()
+                        .debug_selector(move || selector)
+                        .children(children)
+                        .into_any_element()
+                })
+                .render_header_with(|state, prev, next, _, _| {
+                    let selector = format!(
+                        "date-picker-header-{}",
+                        state.month_label.to_string().replace(' ', "-"),
+                    );
+                    div()
+                        .debug_selector(move || selector)
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(prev)
+                        .child(state.month_label)
+                        .child(next)
+                        .into_any_element()
+                })
+                .render_nav_buttons_with(|state, button, _, _| {
+                    let selector = format!(
+                        "date-picker-nav-{}-{}",
+                        match state.direction {
+                            DatePickerNavigationDirection::PreviousMonth => "prev",
+                            DatePickerNavigationDirection::NextMonth => "next",
+                        },
+                        if state.enabled { "enabled" } else { "disabled" },
+                    );
+                    div()
+                        .debug_selector(move || selector)
+                        .child(button)
+                        .into_any_element()
+                })
+                .render_weekdays_with(|state, _, _| {
+                    let selector = format!("date-picker-weekday-{}-{}", state.index, state.label);
+                    div()
+                        .debug_selector(move || selector)
+                        .child(state.label)
+                        .into_any_element()
+                })
+                .render_days_with(|state, _, _| {
+                    let selector = format!(
+                        "date-picker-custom-day-{}-{}-{}",
+                        format_date(state.date),
+                        if state.selected { "selected" } else { "idle" },
+                        if state.highlighted { "highlighted" } else { "plain" },
+                    );
+                    div()
+                        .debug_selector(move || selector)
+                        .w(px(36.0))
+                        .h(px(36.0))
+                        .rounded(px(8.0))
+                        .child(state.day.to_string())
+                        .into_any_element()
+                })
                 .on_change(cx.listener(|this, date, _, cx| {
                     this.date = *date;
                     cx.notify();
@@ -1326,5 +1826,56 @@ mod tests {
             window.draw(cx).clear();
             assert_eq!(view.read(cx).date, selected);
         });
+    }
+
+    #[crate::test]
+    fn date_picker_render_hooks_receive_trigger_and_day_state(cx: &mut TestAppContext) {
+        let initial = Date::from_calendar_date(2026, Month::May, 13).unwrap();
+        let selected = Date::from_calendar_date(2026, Month::May, 20).unwrap();
+        let (_view, mut window) =
+            cx.add_window_view(|_, _| CustomDatePickerView { date: initial });
+
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        assert!(window
+            .debug_bounds("date-picker-trigger-2026-05-13-closed")
+            .is_some());
+
+        let trigger_bounds = window.debug_bounds("date-picker-schedule_custom").unwrap();
+        window.simulate_click(trigger_bounds.center(), Modifiers::default());
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        assert!(window
+            .debug_bounds("date-picker-popup-shell-May-2026")
+            .is_some());
+        assert!(window
+            .debug_bounds("date-picker-header-May-2026")
+            .is_some());
+        assert!(window
+            .debug_bounds("date-picker-nav-prev-enabled")
+            .is_some());
+        assert!(window
+            .debug_bounds("date-picker-weekday-0-Mon")
+            .is_some());
+        assert!(window
+            .debug_bounds("date-picker-custom-day-2026-05-13-selected-highlighted")
+            .is_some());
+
+        let selected_bounds = window
+            .debug_bounds("date-picker-day-schedule_custom-2026-05-20")
+            .unwrap();
+        window.simulate_click(selected_bounds.center(), Modifiers::default());
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        assert!(window
+            .debug_bounds("date-picker-trigger-2026-05-20-closed")
+            .is_some());
+        assert_eq!(selected, Date::from_calendar_date(2026, Month::May, 20).unwrap());
     }
 }

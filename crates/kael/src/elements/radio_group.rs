@@ -1,10 +1,11 @@
 use super::local_history::{
-    WindowValueHistory, ensure_local_undo_redo_bindings, local_undo_redo_key_context,
+    ensure_local_undo_redo_bindings, local_undo_redo_key_context, WindowValueHistory,
 };
 use crate::{
-    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState, App,
-    Component, Context, ElementId, FocusHandle, InteractiveElement, IntoElement, ParentElement,
-    Redo, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Undo, Window, div, px,
+    div, px, AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
+    AnyElement, App, Component, Context, ElementId, FocusHandle, InteractiveElement, IntoElement,
+    ParentElement, Redo, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Undo,
+    Window,
 };
 use std::rc::Rc;
 
@@ -88,6 +89,27 @@ where
     }
 }
 
+#[non_exhaustive]
+/// Snapshot of a single radio option passed to a custom renderer.
+pub struct RadioItemRenderState<T> {
+    /// The option value associated with the rendered item.
+    pub value: T,
+    /// The visible label for the rendered item.
+    pub label: SharedString,
+    /// Zero-based index of the option inside the group.
+    pub index: usize,
+    /// Total number of options in the group.
+    pub option_count: usize,
+    /// Whether this option is currently selected.
+    pub selected: bool,
+    /// Whether this option currently owns keyboard focus.
+    pub focused: bool,
+    /// Whether the radio group is disabled.
+    pub disabled: bool,
+}
+
+type RadioItemCustomRenderer<T> = Rc<dyn Fn(RadioItemRenderState<T>, &Window, &App) -> AnyElement>;
+
 /// Construct a controlled radio group from a current value and labeled options.
 #[track_caller]
 pub fn radio_group<T, I, O>(id: impl Into<ElementId>, value: T, options: I) -> RadioGroup<T>
@@ -136,7 +158,9 @@ pub struct RadioGroup<T> {
     element_id: ElementId,
     value: T,
     options: Vec<RadioOption<T>>,
+    disabled: bool,
     on_change: Option<ChangeListener<T>>,
+    custom_renderer: Option<RadioItemCustomRenderer<T>>,
 }
 
 impl<T> RadioGroup<T>
@@ -149,13 +173,30 @@ where
             element_id,
             value,
             options,
+            disabled: false,
             on_change: None,
+            custom_renderer: None,
         }
+    }
+
+    /// Disable the radio group, preventing user interaction.
+    pub fn disabled(mut self) -> Self {
+        self.disabled = true;
+        self
     }
 
     /// Register a callback invoked with the newly selected option value.
     pub fn on_change(mut self, listener: impl Fn(&T, &mut Window, &mut App) + 'static) -> Self {
         self.on_change = Some(Rc::new(listener));
+        self
+    }
+
+    /// Render each option with caller-owned visuals while the framework keeps behavior and accessibility.
+    pub fn render_with(
+        mut self,
+        renderer: impl Fn(RadioItemRenderState<T>, &Window, &App) -> AnyElement + 'static,
+    ) -> Self {
+        self.custom_renderer = Some(Rc::new(renderer));
         self
     }
 }
@@ -169,7 +210,9 @@ where
             element_id,
             value,
             options,
+            disabled,
             on_change,
+            custom_renderer,
         } = self;
 
         ensure_local_undo_redo_bindings(cx);
@@ -220,9 +263,6 @@ where
 
         let mut root = div()
             .tab_group()
-            .flex()
-            .flex_col()
-            .gap_1()
             .accessibility(AccessibilityAttributes::new(AccessibilityRole::Group));
 
         #[cfg(any(test, feature = "test-support"))]
@@ -233,6 +273,15 @@ where
 
         for (index, option) in options.into_iter().enumerate() {
             let is_selected = index == selected_index;
+            let option_id = ElementId::named_usize(format!("{}-option", group_id), index);
+            let option_focus = window
+                .use_keyed_state(
+                    ElementId::named_usize(format!("{}-option-focus", group_id), index),
+                    cx,
+                    |_, cx| cx.focus_handle(),
+                )
+                .read(cx)
+                .clone();
             let previous = if option_count <= 1 {
                 index
             } else if index == 0 {
@@ -245,25 +294,17 @@ where
             } else {
                 index + 1
             };
-            let previous_value = option_values[previous].clone();
-            let next_value = option_values[next].clone();
             let click_value = option.value.clone();
-            let key_value_prev = previous_value;
-            let key_value_next = next_value;
-            let label = option.label.clone();
+            let key_value_prev = option_values[previous].clone();
+            let key_value_next = option_values[next].clone();
+            let accessibility_label = option.label.clone();
             let key_state = state.clone();
 
             let mut option_element = div()
-                .id(ElementId::named_usize(
-                    format!("{}-option", group_id),
-                    index,
-                ))
+                .id(option_id)
+                .track_focus(&option_focus)
                 .tab_index(index as isize)
                 .key_context(local_undo_redo_key_context())
-                .flex()
-                .items_center()
-                .gap_2()
-                .cursor_pointer()
                 .accessibility(
                     AccessibilityAttributes::new(AccessibilityRole::RadioButton)
                         .states(if is_selected {
@@ -275,9 +316,15 @@ where
                             AccessibilityAction::Focus,
                             AccessibilityAction::Toggle,
                         ])
-                        .label(label.to_string()),
+                        .label(accessibility_label.to_string()),
                 )
                 .focus_visible(|style: crate::StyleRefinement| style.bg(crate::rgba(0x1d4ed810)));
+
+            if disabled {
+                option_element = option_element.cursor_default();
+            } else {
+                option_element = option_element.cursor_pointer();
+            }
 
             if can_undo {
                 option_element = option_element.on_action({
@@ -300,16 +347,40 @@ where
                 });
             }
 
+            let option_content = if let Some(renderer) = &custom_renderer {
+                renderer(
+                    RadioItemRenderState {
+                        value: option.value.clone(),
+                        label: option.label.clone(),
+                        index,
+                        option_count,
+                        selected: is_selected,
+                        focused: option_focus.is_focused(window),
+                        disabled,
+                    },
+                    window,
+                    cx,
+                )
+            } else {
+                default_radio_item(is_selected, option.label.clone())
+            };
+
             option_element = option_element
                 .on_click({
                     let state = state.clone();
                     move |_, window, cx| {
+                        if disabled {
+                            return;
+                        }
                         state.update(cx, |state, cx| {
                             state.set_value(click_value.clone(), window, cx);
                         });
                     }
                 })
                 .on_key_down(move |event, window, cx| {
+                    if disabled {
+                        return;
+                    }
                     if event.keystroke.modifiers.modified() {
                         return;
                     }
@@ -333,12 +404,25 @@ where
                 option_element = option_element.debug_selector(move || selector);
             }
 
-            let indicator = div()
+            root = root.child(option_element.child(option_content));
+        }
+
+        root
+    }
+}
+
+fn default_radio_item(selected: bool, label: SharedString) -> AnyElement {
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(
+            div()
                 .w(px(18.0))
                 .h(px(18.0))
                 .rounded(px(999.0))
                 .border_1()
-                .border_color(if is_selected {
+                .border_color(if selected {
                     crate::rgb(0x1d4ed8)
                 } else {
                     crate::rgb(0x94a3b8)
@@ -351,18 +435,15 @@ where
                         .w(px(8.0))
                         .h(px(8.0))
                         .rounded(px(999.0))
-                        .bg(if is_selected {
+                        .bg(if selected {
                             crate::rgb(0x1d4ed8)
                         } else {
                             crate::rgba(0x00000000)
                         }),
-                );
-
-            root = root.child(option_element.child(indicator).child(div().child(label)));
-        }
-
-        root
-    }
+                ),
+        )
+        .child(div().child(label))
+        .into_any_element()
 }
 
 impl<T> IntoElement for RadioGroup<T>
@@ -379,9 +460,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Context, Render, TestAppContext, Undo};
+    use crate::{div, Context, Render, TestAppContext, Undo};
 
     struct RadioView {
+        value: &'static str,
+    }
+
+    struct CustomRadioView {
         value: &'static str,
     }
 
@@ -392,6 +477,32 @@ mod tests {
                 self.value,
                 [("sm", "Small"), ("md", "Medium"), ("lg", "Large")],
             )
+            .on_change(cx.listener(|this, value, _, cx| {
+                this.value = *value;
+                cx.notify();
+            }))
+        }
+    }
+
+    impl Render for CustomRadioView {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            radio_group(
+                "size",
+                self.value,
+                [("sm", "Small"), ("md", "Medium"), ("lg", "Large")],
+            )
+            .render_with(|state, _, _| {
+                let selector = format!(
+                    "radio-custom-{}-{}-{}",
+                    state.index,
+                    if state.selected { "selected" } else { "idle" },
+                    if state.focused { "focused" } else { "blurred" },
+                );
+                div()
+                    .debug_selector(move || selector)
+                    .child(state.label)
+                    .into_any_element()
+            })
             .on_change(cx.listener(|this, value, _, cx| {
                 this.value = *value;
                 cx.notify();
@@ -469,5 +580,29 @@ mod tests {
             window.draw(cx).clear();
             assert_eq!(view.read(cx).value, "md");
         });
+    }
+
+    #[crate::test]
+    fn radio_group_render_with_receives_option_metadata_and_focus(cx: &mut TestAppContext) {
+        let (_view, mut window) = cx.add_window_view(|_, _| CustomRadioView { value: "sm" });
+
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        let selected = window
+            .debug_bounds("radio-custom-0-selected-blurred")
+            .unwrap();
+        assert!(selected.size.width > px(0.0));
+
+        let medium = window.debug_bounds("radio-option-size-1").unwrap();
+        window.simulate_click(medium.center(), crate::Modifiers::default());
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        assert!(window
+            .debug_bounds("radio-custom-1-selected-focused")
+            .is_some());
     }
 }

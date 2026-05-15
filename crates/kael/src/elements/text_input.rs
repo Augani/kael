@@ -5,7 +5,7 @@ use crate::{
     CursorStyle, DispatchPhase, Element, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Global, GlobalElementId, Hitbox, HitboxBehavior,
     InspectorElementId, IntoElement, KeyBinding, KeyContext, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, SharedString, Style, TextRun,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Style, TextRun,
     UTF16Selection, UnderlineStyle, Window, WrappedLine, WrappedLineLayout, fill, point, px,
     relative, rgb, rgba, size, white,
 };
@@ -78,6 +78,121 @@ actions!(
 type ChangeListener = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
 type SubmitListener = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
 type Mask = Rc<dyn InputMask>;
+
+#[derive(Clone)]
+#[non_exhaustive]
+/// A single shaped line and its paint origin for a custom text input renderer.
+pub struct TextInputRenderLine {
+    /// The shaped line to paint.
+    pub line: WrappedLine,
+    /// Top-left paint origin for the shaped line.
+    pub origin: Point<Pixels>,
+}
+
+#[derive(Clone)]
+#[non_exhaustive]
+/// Snapshot of text input paint state passed to a custom renderer.
+pub struct TextInputRenderState {
+    /// The underlying field value.
+    pub value: SharedString,
+    /// The text currently displayed, including masking or placeholder text.
+    pub display_text: SharedString,
+    /// The configured placeholder text, if any.
+    pub placeholder: Option<SharedString>,
+    /// Whether the displayed text is currently the placeholder.
+    pub showing_placeholder: bool,
+    /// Whether the field currently owns keyboard focus.
+    pub focused: bool,
+    /// Whether the pointer is currently hovering the field hitbox.
+    pub hovered: bool,
+    /// Whether the field is configured for multiline editing.
+    pub multi_line: bool,
+    /// Whether the field is disabled.
+    pub disabled: bool,
+    /// Outer field bounds including the border.
+    pub outer_bounds: Bounds<Pixels>,
+    /// Inner field bounds inside the border.
+    pub field_bounds: Bounds<Pixels>,
+    /// Clipped text viewport bounds.
+    pub text_bounds: Bounds<Pixels>,
+    /// Line height used to paint the shaped text.
+    pub line_height: Pixels,
+    /// Shaped lines and their paint origins.
+    pub lines: Vec<TextInputRenderLine>,
+    /// Selection rectangles in render space.
+    pub selection_bounds: Vec<Bounds<Pixels>>,
+    /// Caret rectangle in render space, if visible.
+    pub cursor_bounds: Option<Bounds<Pixels>>,
+}
+
+impl TextInputRenderState {
+    /// Paint the shaped text lines using the current window text style.
+    pub fn paint_text(&self, window: &mut Window, cx: &mut App) {
+        let text_align = window.text_style().text_align;
+        window.with_content_mask(
+            Some(ContentMask {
+                bounds: self.text_bounds,
+            }),
+            |window| {
+                for line in &self.lines {
+                    line.line
+                        .paint(
+                            line.origin,
+                            self.line_height,
+                            text_align,
+                            Some(self.text_bounds),
+                            window,
+                            cx,
+                        )
+                        .unwrap();
+                }
+            },
+        );
+    }
+
+    /// Paint the current text selection using the provided fill color.
+    pub fn paint_selection(&self, color: crate::Hsla, window: &mut Window) {
+        if self.selection_bounds.is_empty() {
+            return;
+        }
+
+        window.with_content_mask(
+            Some(ContentMask {
+                bounds: self.text_bounds,
+            }),
+            |window| {
+                for selection in &self.selection_bounds {
+                    window.paint_quad(fill(*selection, color));
+                }
+            },
+        );
+    }
+
+    /// Paint the caret using the provided fill color.
+    pub fn paint_cursor(&self, color: crate::Hsla, window: &mut Window) {
+        let Some(cursor_bounds) = self.cursor_bounds else {
+            return;
+        };
+
+        window.with_content_mask(
+            Some(ContentMask {
+                bounds: self.text_bounds,
+            }),
+            |window| {
+                window.paint_quad(fill(cursor_bounds, color));
+            },
+        );
+    }
+
+    /// Paint the default text, selection, and caret layers.
+    pub fn paint_default_contents(&self, window: &mut Window, cx: &mut App) {
+        self.paint_selection(rgba(0x3311ff30).into(), window);
+        self.paint_text(window, cx);
+        self.paint_cursor(crate::blue(), window);
+    }
+}
+
+type TextInputCustomRenderer = Rc<dyn Fn(TextInputRenderState, &mut Window, &mut App)>;
 
 /// A hook that can normalize a text edit before it is committed.
 pub trait InputMask: 'static {
@@ -257,9 +372,11 @@ pub struct TextInput {
     multi_line: bool,
     max_lines: Option<usize>,
     password: bool,
+    disabled: bool,
     mask: Option<Mask>,
     on_change: Option<ChangeListener>,
     on_submit: Option<SubmitListener>,
+    custom_renderer: Option<TextInputCustomRenderer>,
     source_location: &'static core::panic::Location<'static>,
 }
 
@@ -273,9 +390,11 @@ impl TextInput {
             multi_line: false,
             max_lines: None,
             password: false,
+            disabled: false,
             mask: None,
             on_change: None,
             on_submit: None,
+            custom_renderer: None,
             source_location: core::panic::Location::caller(),
         }
     }
@@ -304,6 +423,12 @@ impl TextInput {
         self
     }
 
+    /// Disable the text input, preventing user interaction.
+    pub fn disabled(mut self) -> Self {
+        self.disabled = true;
+        self
+    }
+
     /// Rewrite proposed edits before they are committed.
     pub fn mask(mut self, mask: impl InputMask) -> Self {
         self.mask = Some(Rc::new(mask));
@@ -325,6 +450,15 @@ impl TextInput {
         listener: impl Fn(SharedString, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_submit = Some(Rc::new(listener));
+        self
+    }
+
+    /// Render the full text input surface with caller-owned painting.
+    pub fn render_with(
+        mut self,
+        renderer: impl Fn(TextInputRenderState, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.custom_renderer = Some(Rc::new(renderer));
         self
     }
 
@@ -658,11 +792,9 @@ impl TextInputLayout {
 pub struct TextInputPrepaintState {
     hitbox: Hitbox,
     layout: TextInputLayout,
-    cursor: Option<PaintQuad>,
-    selection: Vec<PaintQuad>,
-    outer_fill: PaintQuad,
-    inner_fill: PaintQuad,
-    inner_bounds: Bounds<Pixels>,
+    cursor_bounds: Option<Bounds<Pixels>>,
+    selection_bounds: Vec<Bounds<Pixels>>,
+    text_bounds: Bounds<Pixels>,
 }
 
 impl Element for TextInput {
@@ -764,43 +896,26 @@ impl Element for TextInput {
 
         let cursor = input.display_offset(input.cursor_offset());
         let selected_range = input.display_range(&input.selected_range);
-        let selection = if input.selected_range.is_empty() {
+        let selection_bounds = if input.selected_range.is_empty() {
             Vec::new()
         } else {
-            layout
-                .selection_rects(selected_range)
-                .into_iter()
-                .map(|rect| fill(rect, rgba(0x3311ff30)))
-                .collect()
+            layout.selection_rects(selected_range)
         };
-        let cursor = if input.selected_range.is_empty() && focus_handle.is_focused(window) {
-            layout.position_for_index(cursor).map(|origin| {
-                fill(
-                    Bounds::new(origin, size(px(2.0), line_height)),
-                    crate::blue(),
-                )
-            })
+        let cursor_bounds = if input.selected_range.is_empty() && focus_handle.is_focused(window) {
+            layout
+                .position_for_index(cursor)
+                .map(|origin| Bounds::new(origin, size(px(2.0), line_height)))
         } else {
             None
         };
-
-        let border_color: crate::Hsla = if focus_handle.is_focused(window) {
-            crate::blue()
-        } else {
-            rgb(0xd0d7de).into()
-        };
-        let outer_fill = fill(bounds, border_color);
-        let inner_fill = fill(inner_bounds, white());
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
 
         TextInputPrepaintState {
             hitbox,
             layout,
-            cursor,
-            selection,
-            outer_fill,
-            inner_fill,
-            inner_bounds: text_bounds,
+            cursor_bounds,
+            selection_bounds,
+            text_bounds,
         }
     }
 
@@ -808,7 +923,7 @@ impl Element for TextInput {
         &mut self,
         id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
+        bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
         prepaint: &mut Self::PrepaintState,
         window: &mut Window,
@@ -828,221 +943,220 @@ impl Element for TextInput {
         window.set_key_context(
             KeyContext::parse(TEXT_INPUT_CONTEXT).expect("valid text input context"),
         );
-        register_action_handler::<Backspace>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::backspace,
-        );
-        register_action_handler::<Delete>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::delete,
-        );
-        register_action_handler::<DeleteWordBackward>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::delete_word_backward,
-        );
-        register_action_handler::<DeleteWordForward>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::delete_word_forward,
-        );
-        register_action_handler::<MoveLeft>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::move_left,
-        );
-        register_action_handler::<MoveRight>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::move_right,
-        );
-        register_action_handler::<MoveWordLeft>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::move_word_left,
-        );
-        register_action_handler::<MoveWordRight>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::move_word_right,
-        );
-        register_action_handler::<SelectLeft>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::select_left,
-        );
-        register_action_handler::<SelectRight>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::select_right,
-        );
-        register_action_handler::<SelectWordLeft>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::select_word_left,
-        );
-        register_action_handler::<SelectWordRight>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::select_word_right,
-        );
-        register_action_handler::<MoveToStart>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::move_to_start,
-        );
-        register_action_handler::<MoveToEnd>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::move_to_end,
-        );
-        register_action_handler::<SelectToStart>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::select_to_start,
-        );
-        register_action_handler::<SelectToEnd>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::select_to_end,
-        );
-        register_action_handler::<SelectAll>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::select_all,
-        );
-        register_action_handler::<Paste>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::paste,
-        );
-        register_action_handler::<Copy>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::copy,
-        );
-        register_action_handler::<Cut>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::cut,
-        );
-        register_action_handler_when::<Undo>(
-            window,
-            can_undo,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::undo,
-        );
-        register_action_handler_when::<Redo>(
-            window,
-            can_redo,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::redo,
-        );
-        register_action_handler::<InsertNewline>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::insert_newline,
-        );
-        register_action_handler::<Submit>(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            TextInputState::submit,
-        );
+        if !self.disabled {
+            register_action_handler::<Backspace>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::backspace,
+            );
+            register_action_handler::<Delete>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::delete,
+            );
+            register_action_handler::<DeleteWordBackward>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::delete_word_backward,
+            );
+            register_action_handler::<DeleteWordForward>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::delete_word_forward,
+            );
+            register_action_handler::<MoveLeft>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::move_left,
+            );
+            register_action_handler::<MoveRight>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::move_right,
+            );
+            register_action_handler::<MoveWordLeft>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::move_word_left,
+            );
+            register_action_handler::<MoveWordRight>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::move_word_right,
+            );
+            register_action_handler::<SelectLeft>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::select_left,
+            );
+            register_action_handler::<SelectRight>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::select_right,
+            );
+            register_action_handler::<SelectWordLeft>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::select_word_left,
+            );
+            register_action_handler::<SelectWordRight>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::select_word_right,
+            );
+            register_action_handler::<MoveToStart>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::move_to_start,
+            );
+            register_action_handler::<MoveToEnd>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::move_to_end,
+            );
+            register_action_handler::<SelectToStart>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::select_to_start,
+            );
+            register_action_handler::<SelectToEnd>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::select_to_end,
+            );
+            register_action_handler::<SelectAll>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::select_all,
+            );
+            register_action_handler::<Paste>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::paste,
+            );
+            register_action_handler::<Copy>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::copy,
+            );
+            register_action_handler::<Cut>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::cut,
+            );
+            register_action_handler_when::<Undo>(
+                window,
+                can_undo,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::undo,
+            );
+            register_action_handler_when::<Redo>(
+                window,
+                can_redo,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::redo,
+            );
+            register_action_handler::<InsertNewline>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::insert_newline,
+            );
+            register_action_handler::<Submit>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::submit,
+            );
+        }
 
-        register_mouse_handlers(
-            window,
-            state.clone(),
-            focus_handle.clone(),
-            prepaint.hitbox.clone(),
-        );
+        if !self.disabled {
+            register_mouse_handlers(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                prepaint.hitbox.clone(),
+            );
+        }
 
-        if prepaint.hitbox.is_hovered(window) {
+        if prepaint.hitbox.is_hovered(window) && !self.disabled {
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.hitbox);
         }
 
-        window.handle_input(
-            &focus_handle,
-            ElementInputHandler::new(prepaint.inner_bounds, state.clone()),
-            cx,
-        );
-
-        window.paint_quad(prepaint.outer_fill.clone());
-        window.paint_quad(prepaint.inner_fill.clone());
-        window.with_content_mask(
-            Some(ContentMask {
-                bounds: prepaint.inner_bounds,
-            }),
-            |window| {
-                for selection in prepaint.selection.drain(..) {
-                    window.paint_quad(selection);
-                }
-
-                let text_align = window.text_style().text_align;
-                let mut paragraph_origin = prepaint.layout.content_origin;
-                for paragraph in &prepaint.layout.paragraphs {
-                    paragraph
-                        .line
-                        .paint(
-                            paragraph_origin,
-                            prepaint.layout.line_height,
-                            text_align,
-                            Some(prepaint.inner_bounds),
-                            window,
-                            cx,
-                        )
-                        .unwrap();
-                    paragraph_origin.y += paragraph
-                        .line
-                        .layout
-                        .size(prepaint.layout.line_height)
-                        .height;
-                }
-
-                if let Some(cursor) = prepaint.cursor.take() {
-                    window.paint_quad(cursor);
-                }
-            },
-        );
+        if !self.disabled {
+            window.handle_input(
+                &focus_handle,
+                ElementInputHandler::new(prepaint.text_bounds, state.clone()),
+                cx,
+            );
+        }
 
         let is_focused = focus_handle.is_focused(window);
-        let node = {
+        let (render_state, accessibility_value, accessibility_placeholder) = {
             let input = state.read(cx);
+            let showing_placeholder = input.content.is_empty() && !input.placeholder.is_empty();
+            (
+                TextInputRenderState {
+                    value: input.content.clone(),
+                    display_text: display_text_for_input(&input, showing_placeholder),
+                    placeholder: (!input.placeholder.is_empty()).then_some(input.placeholder.clone()),
+                    showing_placeholder,
+                    focused: is_focused,
+                    hovered: prepaint.hitbox.is_hovered(window),
+                    multi_line: input.multi_line,
+                    disabled: self.disabled,
+                    outer_bounds: bounds,
+                    field_bounds: inset_bounds(bounds, px(1.0)),
+                    text_bounds: prepaint.text_bounds,
+                    line_height: prepaint.layout.line_height,
+                    lines: text_input_render_lines(&prepaint.layout),
+                    selection_bounds: prepaint.selection_bounds.clone(),
+                    cursor_bounds: prepaint.cursor_bounds,
+                },
+                input.accessibility_value(),
+                (!input.placeholder.is_empty()).then_some(input.placeholder.to_string()),
+            )
+        };
+
+        if let Some(renderer) = &self.custom_renderer {
+            renderer(render_state, window, cx);
+        } else {
+            paint_default_text_input(&render_state, window, cx);
+        }
+
+        let node = {
             let mut accessibility_state = AccessibilityState::NONE;
             if is_focused {
                 accessibility_state |= AccessibilityState::FOCUSED;
             }
             let mut node = AccessibilityNode::new(AccessibilityRole::TextInput)
                 .with_states(accessibility_state)
-                .with_value(AccessibilityValue::Text(input.accessibility_value()))
+                .with_value(AccessibilityValue::Text(accessibility_value))
                 .with_actions(vec![AccessibilityAction::Focus]);
-            if !input.placeholder.is_empty() {
-                node.placeholder = Some(input.placeholder.to_string());
+            if let Some(placeholder) = accessibility_placeholder {
+                node.placeholder = Some(placeholder);
             }
             node
         };
@@ -1851,6 +1965,37 @@ fn display_text_for_input(input: &TextInputState, show_placeholder: bool) -> Sha
     }
 }
 
+fn text_input_render_lines(layout: &TextInputLayout) -> Vec<TextInputRenderLine> {
+    let mut origin = layout.content_origin;
+    let mut lines = Vec::with_capacity(layout.paragraphs.len());
+
+    for paragraph in &layout.paragraphs {
+        lines.push(TextInputRenderLine {
+            line: paragraph.line.clone(),
+            origin,
+        });
+        origin.y += paragraph.line.layout.size(layout.line_height).height;
+    }
+
+    lines
+}
+
+fn paint_default_text_input(
+    render_state: &TextInputRenderState,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let border_color: crate::Hsla = if render_state.focused {
+        crate::blue()
+    } else {
+        rgb(0xd0d7de).into()
+    };
+
+    window.paint_quad(fill(render_state.outer_bounds, border_color));
+    window.paint_quad(fill(render_state.field_bounds, white()));
+    render_state.paint_default_contents(window, cx);
+}
+
 fn shape_text_input_lines(
     input: &TextInputState,
     wrap_width: Option<Pixels>,
@@ -2156,6 +2301,21 @@ mod tests {
         second: SharedString,
     }
 
+    struct CustomTextInputView {
+        value: SharedString,
+        captured: Rc<RefCell<Vec<CapturedTextInputRenderState>>>,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct CapturedTextInputRenderState {
+        value: SharedString,
+        display_text: SharedString,
+        showing_placeholder: bool,
+        focused: bool,
+        has_cursor: bool,
+        selection_count: usize,
+    }
+
     impl InputMask for DigitsMask {
         fn correct(&self, _was: &str, _cursor: usize, now: &mut String, new_cursor: &mut usize) {
             let digits_before_cursor = now[..(*new_cursor).min(now.len())]
@@ -2210,6 +2370,50 @@ mod tests {
                     )),
                 )
         }
+    }
+
+    impl Render for CustomTextInputView {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let captured = self.captured.clone();
+
+            text_input("custom", self.value.clone())
+                .placeholder("Type here")
+                .render_with(move |state, window, cx| {
+                    captured.borrow_mut().push(CapturedTextInputRenderState {
+                        value: state.value.clone(),
+                        display_text: state.display_text.clone(),
+                        showing_placeholder: state.showing_placeholder,
+                        focused: state.focused,
+                        has_cursor: state.cursor_bounds.is_some(),
+                        selection_count: state.selection_bounds.len(),
+                    });
+
+                    window.paint_quad(fill(
+                        state.outer_bounds,
+                        if state.focused {
+                            crate::blue()
+                        } else {
+                            rgb(0xd0d7de).into()
+                        },
+                    ));
+                    window.paint_quad(fill(state.field_bounds, white()));
+                    state.paint_default_contents(window, cx);
+                })
+                .on_change(cx.processor(|this, value, _, cx| {
+                    this.value = value;
+                    cx.notify();
+                }))
+        }
+    }
+
+    fn latest_render_state(
+        captured: &Rc<RefCell<Vec<CapturedTextInputRenderState>>>,
+    ) -> CapturedTextInputRenderState {
+        captured
+            .borrow()
+            .last()
+            .cloned()
+            .expect("expected captured render state")
     }
 
     #[test]
@@ -2470,6 +2674,65 @@ mod tests {
             window.cx.update(|app| app.redo_label()),
             Some(SharedString::from("Text edit"))
         );
+    }
+
+    #[crate::test]
+    fn text_input_render_hook_receives_placeholder_focus_and_selection_state(
+        cx: &mut TestAppContext,
+    ) {
+        let captured = Rc::new(RefCell::new(Vec::new()));
+        let captured_for_view = captured.clone();
+        let (view, mut window) = cx.add_window_view(|_, _| CustomTextInputView {
+            value: SharedString::default(),
+            captured: captured_for_view,
+        });
+
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        let initial = latest_render_state(&captured);
+        assert_eq!(initial.value, SharedString::default());
+        assert_eq!(initial.display_text, SharedString::from("Type here"));
+        assert!(initial.showing_placeholder);
+        assert!(!initial.focused);
+        assert!(!initial.has_cursor);
+        assert_eq!(initial.selection_count, 0);
+
+        window.simulate_keystrokes("tab");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        let focused = latest_render_state(&captured);
+        assert!(focused.focused);
+        assert!(focused.showing_placeholder);
+        assert!(focused.has_cursor);
+
+        window.simulate_input("hi");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(view.read(cx).value, SharedString::from("hi"));
+        });
+
+        let typed = latest_render_state(&captured);
+        assert_eq!(typed.value, SharedString::from("hi"));
+        assert_eq!(typed.display_text, SharedString::from("hi"));
+        assert!(!typed.showing_placeholder);
+        assert!(typed.focused);
+        assert!(typed.has_cursor);
+
+        window.simulate_keystrokes("cmd-a");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        let selected = latest_render_state(&captured);
+        assert_eq!(selected.value, SharedString::from("hi"));
+        assert!(!selected.showing_placeholder);
+        assert!(selected.focused);
+        assert!(!selected.has_cursor);
+        assert!(selected.selection_count > 0);
     }
 
     #[test]

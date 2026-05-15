@@ -1,11 +1,11 @@
 use super::local_history::{
-    WindowValueHistory, ensure_local_undo_redo_bindings, local_undo_redo_key_context,
+    ensure_local_undo_redo_bindings, local_undo_redo_key_context, WindowValueHistory,
 };
 use crate::{
-    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
-    AccessibilityValue, App, Component, Context, ElementId, FocusHandle, InteractiveElement,
-    IntoElement, ParentElement, Redo, RenderOnce, SharedString, StatefulInteractiveElement, Styled,
-    Undo, Window, div, px,
+    div, px, AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
+    AccessibilityValue, AnyElement, App, Component, Context, Div, ElementId, FocusHandle,
+    InteractiveElement, IntoElement, ParentElement, Redo, RenderOnce, SharedString,
+    StatefulInteractiveElement, Styled, Undo, Window,
 };
 use std::rc::Rc;
 
@@ -103,6 +103,23 @@ impl CheckboxState {
     }
 }
 
+#[non_exhaustive]
+/// Snapshot of checkbox state passed to a custom renderer.
+pub struct CheckboxRenderState {
+    /// Whether the checkbox is currently checked.
+    pub checked: bool,
+    /// Whether the checkbox is currently indeterminate.
+    pub indeterminate: bool,
+    /// The visible label configured for the checkbox, if any.
+    pub label: Option<SharedString>,
+    /// Whether the checkbox currently owns keyboard focus.
+    pub focused: bool,
+    /// Whether the checkbox is disabled.
+    pub disabled: bool,
+}
+
+type CheckboxCustomRenderer = Rc<dyn Fn(CheckboxRenderState, &Window, &App) -> AnyElement>;
+
 /// Construct a controlled checkbox form control.
 #[track_caller]
 pub fn checkbox(id: impl Into<ElementId>, checked: bool) -> Checkbox {
@@ -115,7 +132,9 @@ pub struct Checkbox {
     checked: bool,
     label: Option<SharedString>,
     indeterminate: bool,
+    disabled: bool,
     on_change: Option<ChangeListener>,
+    custom_renderer: Option<CheckboxCustomRenderer>,
 }
 
 impl Checkbox {
@@ -126,7 +145,9 @@ impl Checkbox {
             checked,
             label: None,
             indeterminate: false,
+            disabled: false,
             on_change: None,
+            custom_renderer: None,
         }
     }
 
@@ -147,6 +168,21 @@ impl Checkbox {
         self.on_change = Some(Rc::new(listener));
         self
     }
+
+    /// Disable the checkbox, preventing user interaction.
+    pub fn disabled(mut self) -> Self {
+        self.disabled = true;
+        self
+    }
+
+    /// Render the checkbox indicator and content with caller-owned visuals.
+    pub fn render_with(
+        mut self,
+        renderer: impl Fn(CheckboxRenderState, &Window, &App) -> AnyElement + 'static,
+    ) -> Self {
+        self.custom_renderer = Some(Rc::new(renderer));
+        self
+    }
 }
 
 impl RenderOnce for Checkbox {
@@ -156,7 +192,9 @@ impl RenderOnce for Checkbox {
             checked,
             label,
             indeterminate,
+            disabled,
             on_change,
+            custom_renderer,
         } = self;
 
         ensure_local_undo_redo_bindings(cx);
@@ -220,12 +258,14 @@ impl RenderOnce for Checkbox {
             .focusable()
             .tab_stop(true)
             .key_context(local_undo_redo_key_context())
-            .flex()
-            .items_center()
-            .gap_2()
-            .cursor_pointer()
             .accessibility(accessibility)
             .focus_visible(|style: crate::StyleRefinement| style.bg(crate::rgba(0x1d4ed810)));
+
+        if disabled {
+            root = root.cursor_default();
+        } else {
+            root = root.cursor_pointer();
+        }
 
         if can_undo {
             root = root.on_action({
@@ -252,6 +292,9 @@ impl RenderOnce for Checkbox {
             .on_click({
                 let state = state.clone();
                 move |event, window, cx| {
+                    if disabled {
+                        return;
+                    }
                     if !event.standard_click() {
                         return;
                     }
@@ -264,6 +307,9 @@ impl RenderOnce for Checkbox {
             .on_key_down({
                 let state = state.clone();
                 move |event, window, cx| {
+                    if disabled {
+                        return;
+                    }
                     if event.keystroke.modifiers.modified() {
                         return;
                     }
@@ -283,54 +329,87 @@ impl RenderOnce for Checkbox {
             root = root.debug_selector(move || selector);
         }
 
-        let box_fill = if checked || indeterminate {
-            crate::rgb(0x1d4ed8)
+        let focused = focus_handle.is_focused(window);
+        let body = if let Some(renderer) = &custom_renderer {
+            renderer(
+                CheckboxRenderState {
+                    checked,
+                    indeterminate,
+                    label: label.clone(),
+                    focused,
+                    disabled,
+                },
+                window,
+                cx,
+            )
         } else {
-            crate::rgb(0xffffff)
-        };
-        let border_color = if checked || indeterminate {
-            crate::rgb(0x1d4ed8)
-        } else {
-            crate::rgb(0x94a3b8)
+            default_checkbox_body(checked, indeterminate, label.clone())
         };
 
-        let mut indicator = div()
-            .w(px(18.0))
-            .h(px(18.0))
-            .rounded(px(4.0))
-            .border_1()
-            .border_color(border_color)
-            .bg(box_fill)
-            .flex()
-            .items_center()
-            .justify_center();
-
-        if indeterminate {
-            indicator = indicator.child(
-                div()
-                    .w(px(10.0))
-                    .h(px(2.0))
-                    .rounded(px(1.0))
-                    .bg(crate::rgb(0xffffff)),
-            );
-        } else if checked {
-            indicator = indicator.child(
-                div()
-                    .w(px(8.0))
-                    .h(px(8.0))
-                    .rounded(px(2.0))
-                    .bg(crate::rgb(0xffffff)),
-            );
-        }
-
-        root = root.child(indicator);
-
-        if let Some(label) = label {
-            root = root.child(div().child(label));
-        }
-
-        root
+        root.child(body)
     }
+}
+
+fn default_checkbox_body(
+    checked: bool,
+    indeterminate: bool,
+    label: Option<SharedString>,
+) -> AnyElement {
+    let mut body = div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(default_checkbox_indicator(checked, indeterminate));
+
+    if let Some(label) = label {
+        body = body.child(div().child(label));
+    }
+
+    body.into_any_element()
+}
+
+fn default_checkbox_indicator(checked: bool, indeterminate: bool) -> Div {
+    let box_fill = if checked || indeterminate {
+        crate::rgb(0x1d4ed8)
+    } else {
+        crate::rgb(0xffffff)
+    };
+    let border_color = if checked || indeterminate {
+        crate::rgb(0x1d4ed8)
+    } else {
+        crate::rgb(0x94a3b8)
+    };
+
+    let mut indicator = div()
+        .w(px(18.0))
+        .h(px(18.0))
+        .rounded(px(4.0))
+        .border_1()
+        .border_color(border_color)
+        .bg(box_fill)
+        .flex()
+        .items_center()
+        .justify_center();
+
+    if indeterminate {
+        indicator = indicator.child(
+            div()
+                .w(px(10.0))
+                .h(px(2.0))
+                .rounded(px(1.0))
+                .bg(crate::rgb(0xffffff)),
+        );
+    } else if checked {
+        indicator = indicator.child(
+            div()
+                .w(px(8.0))
+                .h(px(8.0))
+                .rounded(px(2.0))
+                .bg(crate::rgb(0xffffff)),
+        );
+    }
+
+    indicator
 }
 
 impl IntoElement for Checkbox {
@@ -344,9 +423,13 @@ impl IntoElement for Checkbox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Context, Modifiers, Render, TestAppContext, Undo, div};
+    use crate::{div, Context, Modifiers, Render, TestAppContext, Undo};
 
     struct CheckboxView {
+        checked: bool,
+    }
+
+    struct CustomCheckboxView {
         checked: bool,
     }
 
@@ -359,6 +442,42 @@ mod tests {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             checkbox("agree", self.checked)
                 .label("Agree")
+                .on_change(cx.listener(|this, checked, _, cx| {
+                    this.checked = *checked;
+                    cx.notify();
+                }))
+        }
+    }
+
+    impl Render for CustomCheckboxView {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            checkbox("agree_custom", self.checked)
+                .label("Agree")
+                .render_with(|state, _, _| {
+                    let selector = format!(
+                        "checkbox-custom-{}-{}-{}-{}",
+                        if state.checked {
+                            "checked"
+                        } else {
+                            "unchecked"
+                        },
+                        if state.indeterminate {
+                            "indeterminate"
+                        } else {
+                            "determinate"
+                        },
+                        if state.focused { "focused" } else { "blurred" },
+                        if state.label.is_some() {
+                            "with-label"
+                        } else {
+                            "no-label"
+                        },
+                    );
+                    div()
+                        .debug_selector(move || selector)
+                        .child(state.label.unwrap_or_else(|| "missing".into()))
+                        .into_any_element()
+                })
                 .on_change(cx.listener(|this, checked, _, cx| {
                     this.checked = *checked;
                     cx.notify();
@@ -509,5 +628,28 @@ mod tests {
             assert!(!view.second);
             assert!(!window.is_action_available(&Undo, cx));
         });
+    }
+
+    #[crate::test]
+    fn checkbox_render_with_receives_label_and_focus(cx: &mut TestAppContext) {
+        let (_view, mut window) = cx.add_window_view(|_, _| CustomCheckboxView { checked: false });
+
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        assert!(window
+            .debug_bounds("checkbox-custom-unchecked-determinate-blurred-with-label")
+            .is_some());
+
+        let bounds = window.debug_bounds("checkbox-agree_custom").unwrap();
+        window.simulate_click(bounds.center(), Modifiers::default());
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        assert!(window
+            .debug_bounds("checkbox-custom-checked-determinate-focused-with-label")
+            .is_some());
     }
 }

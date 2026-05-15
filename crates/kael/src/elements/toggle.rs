@@ -1,11 +1,11 @@
 use super::local_history::{
-    WindowValueHistory, ensure_local_undo_redo_bindings, local_undo_redo_key_context,
+    ensure_local_undo_redo_bindings, local_undo_redo_key_context, WindowValueHistory,
 };
 use crate::{
-    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
-    AccessibilityValue, App, Component, Context, ElementId, FocusHandle, InteractiveElement,
-    IntoElement, ParentElement, Redo, RenderOnce, SharedString, StatefulInteractiveElement, Styled,
-    Undo, Window, div, px,
+    div, px, AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
+    AccessibilityValue, AnyElement, App, Component, Context, Div, ElementId, FocusHandle,
+    InteractiveElement, IntoElement, ParentElement, Redo, RenderOnce, SharedString,
+    StatefulInteractiveElement, Styled, Undo, Window,
 };
 use std::rc::Rc;
 
@@ -81,6 +81,21 @@ impl ToggleState {
     }
 }
 
+#[non_exhaustive]
+/// Snapshot of toggle state passed to a custom renderer.
+pub struct ToggleRenderState {
+    /// Whether the toggle is currently on.
+    pub on: bool,
+    /// The visible label configured for the toggle, if any.
+    pub label: Option<SharedString>,
+    /// Whether the toggle currently owns keyboard focus.
+    pub focused: bool,
+    /// Whether the toggle is disabled.
+    pub disabled: bool,
+}
+
+type ToggleCustomRenderer = Rc<dyn Fn(ToggleRenderState, &Window, &App) -> AnyElement>;
+
 /// Construct a controlled toggle switch form control.
 #[track_caller]
 pub fn toggle(id: impl Into<ElementId>, on: bool) -> Toggle {
@@ -92,7 +107,9 @@ pub struct Toggle {
     element_id: ElementId,
     on: bool,
     label: Option<SharedString>,
+    disabled: bool,
     on_change: Option<ChangeListener>,
+    custom_renderer: Option<ToggleCustomRenderer>,
 }
 
 impl Toggle {
@@ -102,7 +119,9 @@ impl Toggle {
             element_id,
             on,
             label: None,
+            disabled: false,
             on_change: None,
+            custom_renderer: None,
         }
     }
 
@@ -112,9 +131,24 @@ impl Toggle {
         self
     }
 
+    /// Disable the toggle, preventing user interaction.
+    pub fn disabled(mut self) -> Self {
+        self.disabled = true;
+        self
+    }
+
     /// Register a callback invoked with the next on/off state after user interaction.
     pub fn on_change(mut self, listener: impl Fn(&bool, &mut Window, &mut App) + 'static) -> Self {
         self.on_change = Some(Rc::new(listener));
+        self
+    }
+
+    /// Render the toggle with caller-owned visuals.
+    pub fn render_with(
+        mut self,
+        renderer: impl Fn(ToggleRenderState, &Window, &App) -> AnyElement + 'static,
+    ) -> Self {
+        self.custom_renderer = Some(Rc::new(renderer));
         self
     }
 }
@@ -125,7 +159,9 @@ impl RenderOnce for Toggle {
             element_id,
             on,
             label,
+            disabled,
             on_change,
+            custom_renderer,
         } = self;
 
         ensure_local_undo_redo_bindings(cx);
@@ -179,12 +215,14 @@ impl RenderOnce for Toggle {
             .focusable()
             .tab_stop(true)
             .key_context(local_undo_redo_key_context())
-            .flex()
-            .items_center()
-            .gap_2()
-            .cursor_pointer()
             .accessibility(accessibility)
             .focus_visible(|style: crate::StyleRefinement| style.bg(crate::rgba(0x1d4ed810)));
+
+        if disabled {
+            root = root.cursor_default();
+        } else {
+            root = root.cursor_pointer();
+        }
 
         if can_undo {
             root = root.on_action({
@@ -211,6 +249,9 @@ impl RenderOnce for Toggle {
             .on_click({
                 let state = state.clone();
                 move |event, window, cx| {
+                    if disabled {
+                        return;
+                    }
                     if !event.standard_click() {
                         return;
                     }
@@ -223,6 +264,9 @@ impl RenderOnce for Toggle {
             .on_key_down({
                 let state = state.clone();
                 move |event, window, cx| {
+                    if disabled {
+                        return;
+                    }
                     if event.keystroke.modifiers.modified() {
                         return;
                     }
@@ -242,39 +286,66 @@ impl RenderOnce for Toggle {
             root = root.debug_selector(move || selector);
         }
 
-        let knob = div()
-            .w(px(14.0))
-            .h(px(14.0))
-            .rounded(px(999.0))
-            .bg(crate::rgb(0xffffff));
-
-        let mut track = div()
-            .w(px(34.0))
-            .h(px(20.0))
-            .rounded(px(999.0))
-            .px(px(3.0))
-            .flex()
-            .items_center()
-            .bg(if on {
-                crate::rgb(0x1d4ed8)
-            } else {
-                crate::rgb(0xcbd5e1)
-            });
-
-        track = if on {
-            track.justify_end().child(knob)
+        let focused = focus_handle.is_focused(window);
+        let body = if let Some(renderer) = &custom_renderer {
+            renderer(
+                ToggleRenderState {
+                    on,
+                    label: label.clone(),
+                    focused,
+                    disabled,
+                },
+                window,
+                cx,
+            )
         } else {
-            track.justify_start().child(knob)
+            default_toggle_body(on, label.clone())
         };
 
-        root = root.child(track);
-
-        if let Some(label) = label {
-            root = root.child(div().child(label));
-        }
-
-        root
+        root.child(body)
     }
+}
+
+fn default_toggle_body(on: bool, label: Option<SharedString>) -> AnyElement {
+    let mut body = div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(default_toggle_track(on));
+    if let Some(label) = label {
+        body = body.child(div().child(label));
+    }
+
+    body.into_any_element()
+}
+
+fn default_toggle_track(on: bool) -> Div {
+    let knob = div()
+        .w(px(14.0))
+        .h(px(14.0))
+        .rounded(px(999.0))
+        .bg(crate::rgb(0xffffff));
+
+    let mut track = div()
+        .w(px(34.0))
+        .h(px(20.0))
+        .rounded(px(999.0))
+        .px(px(3.0))
+        .flex()
+        .items_center()
+        .bg(if on {
+            crate::rgb(0x1d4ed8)
+        } else {
+            crate::rgb(0xcbd5e1)
+        });
+
+    track = if on {
+        track.justify_end().child(knob)
+    } else {
+        track.justify_start().child(knob)
+    };
+
+    track
 }
 
 impl IntoElement for Toggle {
@@ -288,9 +359,13 @@ impl IntoElement for Toggle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Context, Render, TestAppContext};
+    use crate::{div, Context, Render, TestAppContext};
 
     struct ToggleView {
+        on: bool,
+    }
+
+    struct CustomToggleView {
         on: bool,
     }
 
@@ -298,6 +373,33 @@ mod tests {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             toggle("wifi", self.on)
                 .label("Wi-Fi")
+                .on_change(cx.listener(|this, on, _, cx| {
+                    this.on = *on;
+                    cx.notify();
+                }))
+        }
+    }
+
+    impl Render for CustomToggleView {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            toggle("wifi_custom", self.on)
+                .label("Wi-Fi")
+                .render_with(|state, _, _| {
+                    let selector = format!(
+                        "toggle-custom-{}-{}-{}",
+                        if state.on { "on" } else { "off" },
+                        if state.focused { "focused" } else { "blurred" },
+                        if state.label.is_some() {
+                            "with-label"
+                        } else {
+                            "no-label"
+                        },
+                    );
+                    div()
+                        .debug_selector(move || selector)
+                        .child(state.label.unwrap_or_else(|| "missing".into()))
+                        .into_any_element()
+                })
                 .on_change(cx.listener(|this, on, _, cx| {
                     this.on = *on;
                     cx.notify();
@@ -327,5 +429,28 @@ mod tests {
             assert!(node.states.contains(AccessibilityState::CHECKED));
             assert_eq!(node.value, Some(AccessibilityValue::Toggle(true)));
         });
+    }
+
+    #[crate::test]
+    fn toggle_render_with_receives_label_and_focus(cx: &mut TestAppContext) {
+        let (_view, mut window) = cx.add_window_view(|_, _| CustomToggleView { on: false });
+
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        assert!(window
+            .debug_bounds("toggle-custom-off-blurred-with-label")
+            .is_some());
+
+        let bounds = window.debug_bounds("toggle-wifi_custom").unwrap();
+        window.simulate_click(bounds.center(), crate::Modifiers::default());
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        assert!(window
+            .debug_bounds("toggle-custom-on-focused-with-label")
+            .is_some());
     }
 }
