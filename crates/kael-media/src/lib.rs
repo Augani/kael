@@ -79,7 +79,8 @@ impl MediaSource {
     where
         R: Read + Seek + Send + Sync + 'static,
     {
-        let open = Arc::new(move || open().map(|reader| -> Box<dyn MediaReadSeek> { Box::new(reader) }));
+        let open =
+            Arc::new(move || open().map(|reader| -> Box<dyn MediaReadSeek> { Box::new(reader) }));
         Self::Reader(Arc::new(ReaderMediaSource {
             key: key.into(),
             open,
@@ -346,7 +347,9 @@ impl VideoFrameStream {
             }
 
             if let Some(packet) = self.next_video_packet() {
-                self.decoder.send_packet(&packet).map_err(ffmpeg_decode_error)?;
+                self.decoder
+                    .send_packet(&packet)
+                    .map_err(ffmpeg_decode_error)?;
             } else {
                 self.decoder.send_eof().map_err(ffmpeg_decode_error)?;
                 self.sent_eof = true;
@@ -487,14 +490,19 @@ impl AudioHandle {
             return Ok(());
         }
 
-        if state.state == PlaybackState::Paused && let Some(engine) = state.engine.as_ref() {
+        if state.state == PlaybackState::Paused
+            && let Some(engine) = state.engine.as_ref()
+        {
             engine.sink.play();
             state.started_at = Some(Instant::now());
             state.state = PlaybackState::Playing;
             return Ok(());
         }
 
-        if state.duration.is_some_and(|duration| state.position >= duration) {
+        if state
+            .duration
+            .is_some_and(|duration| state.position >= duration)
+        {
             state.position = Duration::ZERO;
         }
 
@@ -675,14 +683,16 @@ fn create_engine(
     position: Duration,
     decoded_audio: &mut Option<Arc<DecodedAudio>>,
 ) -> Result<(AudioEngine, Option<Duration>, Duration), AudioPlaybackError> {
-    let (stream, stream_handle) =
-        OutputStream::try_default().map_err(|error| AudioPlaybackError::Output(error.to_string()))?;
+    let (stream, stream_handle) = OutputStream::try_default()
+        .map_err(|error| AudioPlaybackError::Output(error.to_string()))?;
     let sink = Sink::try_new(&stream_handle)
         .map_err(|error| AudioPlaybackError::Output(error.to_string()))?;
     let (duration, clamped_position) = match try_create_decoder(source)? {
         Some(decoder) => {
             let duration = decoder.total_duration();
-            let clamped_position = duration.map(|duration| position.min(duration)).unwrap_or(position);
+            let clamped_position = duration
+                .map(|duration| position.min(duration))
+                .unwrap_or(position);
             sink.append(decoder.skip_duration(clamped_position));
             (duration, clamped_position)
         }
@@ -702,7 +712,14 @@ fn create_engine(
         }
     };
     sink.set_volume(volume.max(0.0));
-    Ok((AudioEngine { _stream: stream, sink }, duration, clamped_position))
+    Ok((
+        AudioEngine {
+            _stream: stream,
+            sink,
+        },
+        duration,
+        clamped_position,
+    ))
 }
 
 fn ensure_decoded_audio(
@@ -721,17 +738,19 @@ fn ensure_decoded_audio(
 fn decode_audio(source: &MediaSource) -> Result<DecodedAudio, MediaDecodeError> {
     ffmpeg::init().map_err(ffmpeg_decode_error)?;
 
-    let mut input_context = source.resolve_ffmpeg_input()?.open_input().map_err(ffmpeg_decode_error)?;
+    let mut input_context = source
+        .resolve_ffmpeg_input()?
+        .open_input()
+        .map_err(ffmpeg_decode_error)?;
     let input_stream = input_context
         .streams()
         .best(ffmpeg::media::Type::Audio)
         .ok_or_else(|| MediaDecodeError::Decode("no audio stream found".into()))?;
     let audio_stream_index = input_stream.index();
 
-    let context_decoder = ffmpeg::codec::context::Context::from_parameters(
-        input_stream.parameters(),
-    )
-    .map_err(ffmpeg_decode_error)?;
+    let context_decoder =
+        ffmpeg::codec::context::Context::from_parameters(input_stream.parameters())
+            .map_err(ffmpeg_decode_error)?;
     let mut decoder = context_decoder
         .decoder()
         .audio()
@@ -755,19 +774,20 @@ fn decode_audio(source: &MediaSource) -> Result<DecodedAudio, MediaDecodeError> 
 
     let mut samples = Vec::new();
 
-    let mut receive_and_process_decoded_frames =
-        |decoder: &mut ffmpeg::decoder::Audio, samples: &mut Vec<f32>| -> Result<(), MediaDecodeError> {
-            let mut decoded = ffmpeg::util::frame::Audio::empty();
-            while decoder.receive_frame(&mut decoded).is_ok() {
-                let mut output = ffmpeg::util::frame::Audio::empty();
-                resampler
-                    .run(&decoded, &mut output)
-                    .map_err(ffmpeg_decode_error)?;
-                samples.extend_from_slice(output.plane::<f32>(0));
-            }
+    let mut receive_and_process_decoded_frames = |decoder: &mut ffmpeg::decoder::Audio,
+                                                  samples: &mut Vec<f32>|
+     -> Result<(), MediaDecodeError> {
+        let mut decoded = ffmpeg::util::frame::Audio::empty();
+        while decoder.receive_frame(&mut decoded).is_ok() {
+            let mut output = ffmpeg::util::frame::Audio::empty();
+            resampler
+                .run(&decoded, &mut output)
+                .map_err(ffmpeg_decode_error)?;
+            samples.extend_from_slice(output.plane::<f32>(0));
+        }
 
-            Ok(())
-        };
+        Ok(())
+    };
 
     for (stream, packet) in input_context.packets() {
         if stream.index() == audio_stream_index {
@@ -808,7 +828,10 @@ fn decode_audio(source: &MediaSource) -> Result<DecodedAudio, MediaDecodeError> 
 fn open_video_stream(source: &MediaSource) -> Result<OpenedVideoStream, MediaDecodeError> {
     ffmpeg::init().map_err(ffmpeg_decode_error)?;
 
-    let input_context = source.resolve_ffmpeg_input()?.open_input().map_err(ffmpeg_decode_error)?;
+    let input_context = source
+        .resolve_ffmpeg_input()?
+        .open_input()
+        .map_err(ffmpeg_decode_error)?;
     let input_stream = input_context
         .streams()
         .best(ffmpeg::media::Type::Video)
@@ -816,10 +839,7 @@ fn open_video_stream(source: &MediaSource) -> Result<OpenedVideoStream, MediaDec
     let video_stream_index = input_stream.index();
     let time_base = input_stream.time_base();
     let duration = if input_stream.duration() > 0 {
-        Some(duration_from_time_base(
-            input_stream.duration(),
-            time_base,
-        ))
+        Some(duration_from_time_base(input_stream.duration(), time_base))
     } else if input_context.duration() > 0 {
         Some(duration_from_time_base(
             input_context.duration(),
@@ -829,8 +849,9 @@ fn open_video_stream(source: &MediaSource) -> Result<OpenedVideoStream, MediaDec
         None
     };
 
-    let context_decoder = ffmpeg::codec::context::Context::from_parameters(input_stream.parameters())
-        .map_err(ffmpeg_decode_error)?;
+    let context_decoder =
+        ffmpeg::codec::context::Context::from_parameters(input_stream.parameters())
+            .map_err(ffmpeg_decode_error)?;
     let decoder = context_decoder
         .decoder()
         .video()
@@ -868,7 +889,9 @@ fn decode_video_frame(
     time_base: ffmpeg::Rational,
 ) -> Result<VideoFrame, MediaDecodeError> {
     let mut bgra_frame = ffmpeg::util::frame::video::Video::empty();
-    scaler.run(decoded, &mut bgra_frame).map_err(ffmpeg_decode_error)?;
+    scaler
+        .run(decoded, &mut bgra_frame)
+        .map_err(ffmpeg_decode_error)?;
 
     Ok(VideoFrame {
         data: Arc::<[u8]>::from(copy_bgra_frame(&bgra_frame)),
@@ -878,7 +901,9 @@ fn decode_video_frame(
     })
 }
 
-fn try_create_decoder(source: &MediaSource) -> Result<Option<Decoder<MediaReader>>, AudioPlaybackError> {
+fn try_create_decoder(
+    source: &MediaSource,
+) -> Result<Option<Decoder<MediaReader>>, AudioPlaybackError> {
     if !source.direct_reader_supported() {
         return Ok(None);
     }
@@ -1020,9 +1045,7 @@ fn copy_bgra_frame(frame: &ffmpeg::util::frame::video::Video) -> Box<[u8]> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        AudioHandle, MediaDecodeError, MediaDecoder, MediaSource, PlaybackState,
-    };
+    use super::{AudioHandle, MediaDecodeError, MediaDecoder, MediaSource, PlaybackState};
     use std::{io::Cursor, sync::Arc, time::Duration};
 
     #[test]

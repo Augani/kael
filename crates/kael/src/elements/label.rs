@@ -1,7 +1,7 @@
 use crate::{
-    div, AccessibilityAttributes, AccessibilityRole, AnyElement, App, Component, ElementId,
-    FocusHandle, InteractiveElement, IntoElement, ParentElement, RenderOnce, SharedString,
-    StatefulInteractiveElement, Styled, Window,
+    AccessibilityAttributes, AccessibilityRole, AnyElement, App, Component, ElementId, FocusHandle,
+    InteractiveElement, IntoElement, ParentElement, RenderOnce, SharedString,
+    StatefulInteractiveElement, Styled, Window, div,
 };
 
 /// Construct a label primitive.
@@ -73,12 +73,11 @@ impl RenderOnce for Label {
         );
 
         if let Some(target_focus) = target_focus {
-            root = root
-                .track_focus(&target_focus)
-                .cursor_pointer()
-                .on_click(move |_: &crate::ClickEvent, window: &mut Window, _: &mut App| {
+            root = root.track_focus(&target_focus).cursor_pointer().on_click(
+                move |_: &crate::ClickEvent, window: &mut Window, _: &mut App| {
                     window.focus(&target_focus);
-                });
+                },
+            );
         }
 
         #[cfg(any(test, feature = "test-support"))]
@@ -123,7 +122,11 @@ mod tests {
                         .text("Project name")
                         .for_focus_handle(self.focus_handle.clone()),
                 )
-                .child(div().track_focus(&self.focus_handle).debug_selector(|| "label-target".to_string()))
+                .child(
+                    div()
+                        .track_focus(&self.focus_handle)
+                        .debug_selector(|| "label-target".to_string()),
+                )
         }
     }
 
@@ -131,7 +134,11 @@ mod tests {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             label("custom_label")
                 .for_focus_handle(self.focus_handle.clone())
-                .child(div().debug_selector(|| "custom-label-body".to_string()).child("Body"))
+                .child(
+                    div()
+                        .debug_selector(|| "custom-label-body".to_string())
+                        .child("Body"),
+                )
         }
     }
 

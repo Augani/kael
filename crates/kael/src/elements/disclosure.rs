@@ -1,7 +1,7 @@
 use crate::{
-    div, px, AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
+    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
     AnyElement, App, Component, ElementId, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window,
+    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use std::rc::Rc;
 
@@ -159,14 +159,19 @@ impl RenderOnce for Disclosure {
             trigger = trigger.debug_selector(move || selector);
         }
 
-        let mut root = div().flex().flex_col().gap_2().child(trigger.child(trigger_body));
+        let mut root = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(trigger.child(trigger_body));
 
         if open {
             if let Some(panel) = panel {
                 let mut panel_element = div()
-                    .accessibility(AccessibilityAttributes::new(AccessibilityRole::Group).states(
-                        AccessibilityState::EXPANDED,
-                    ))
+                    .accessibility(
+                        AccessibilityAttributes::new(AccessibilityRole::Group)
+                            .states(AccessibilityState::EXPANDED),
+                    )
                     .child(panel);
                 #[cfg(any(test, feature = "test-support"))]
                 {
@@ -224,7 +229,11 @@ mod tests {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             disclosure("filters", self.open)
                 .label("Filters")
-                .panel(div().debug_selector(|| "filters-panel".to_string()).child("Options"))
+                .panel(
+                    div()
+                        .debug_selector(|| "filters-panel".to_string())
+                        .child("Options"),
+                )
                 .on_change(cx.listener(|this, open, _, cx| {
                     this.open = *open;
                     cx.notify();
@@ -244,7 +253,10 @@ mod tests {
                         if state.open { "open" } else { "closed" },
                         if state.focused { "focused" } else { "blurred" },
                     );
-                    div().debug_selector(move || selector).child("Advanced").into_any_element()
+                    div()
+                        .debug_selector(move || selector)
+                        .child("Advanced")
+                        .into_any_element()
                 })
                 .on_change(cx.listener(|this, open, _, cx| {
                     this.open = *open;
@@ -303,9 +315,11 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        assert!(window
-            .debug_bounds("disclosure-custom-Advanced-closed-blurred")
-            .is_some());
+        assert!(
+            window
+                .debug_bounds("disclosure-custom-Advanced-closed-blurred")
+                .is_some()
+        );
 
         let bounds = window.debug_bounds("disclosure-advanced").unwrap();
         window.simulate_click(bounds.center(), Modifiers::default());
@@ -313,8 +327,10 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        assert!(window
-            .debug_bounds("disclosure-custom-Advanced-open-focused")
-            .is_some());
+        assert!(
+            window
+                .debug_bounds("disclosure-custom-Advanced-open-focused")
+                .is_some()
+        );
     }
 }

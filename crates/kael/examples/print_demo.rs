@@ -1,9 +1,9 @@
+use image::{Frame, Rgba, RgbaImage};
 use kael::{
     App, Application, Bounds, Context, ObjectFit, PrintImageStyle, PrintJob, PrintOrientation,
     PrintPage, PrintStroke, PrintTextStyle, RenderImage, SharedString, Window, WindowBounds,
     WindowOptions, div, img, point, prelude::*, px, rgb, size, white,
 };
-use image::{Frame, Rgba, RgbaImage};
 use smallvec::SmallVec;
 use std::sync::Arc;
 

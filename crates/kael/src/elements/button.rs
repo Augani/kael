@@ -1,7 +1,7 @@
 use crate::{
-    div, px, AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
+    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
     AnyElement, App, Component, ElementId, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window,
+    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use std::rc::Rc;
 
@@ -97,20 +97,20 @@ impl RenderOnce for Button {
             .read(cx)
             .clone();
 
-        let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::Button).states(
-            if disabled {
+        let mut accessibility =
+            AccessibilityAttributes::new(AccessibilityRole::Button).states(if disabled {
                 AccessibilityState::DISABLED
             } else if focus_handle.is_focused(window) {
                 AccessibilityState::FOCUSED
             } else {
                 AccessibilityState::NONE
-            },
-        );
+            });
         if let Some(label) = label.as_ref() {
             accessibility = accessibility.label(label.to_string());
         }
         if !disabled {
-            accessibility = accessibility.actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]);
+            accessibility =
+                accessibility.actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]);
         }
 
         let mut root = div()
@@ -290,6 +290,9 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        assert_eq!(snapshot.take(), Some((false, true, SharedString::from("Save"))));
+        assert_eq!(
+            snapshot.take(),
+            Some((false, true, SharedString::from("Save")))
+        );
     }
 }

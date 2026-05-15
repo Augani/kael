@@ -1,13 +1,13 @@
 use super::local_history::{
-    ensure_local_undo_redo_bindings, local_undo_redo_key_context,
-    register_focused_action_handler_when, WindowValueHistory,
+    WindowValueHistory, ensure_local_undo_redo_bindings, local_undo_redo_key_context,
+    register_focused_action_handler_when,
 };
 use crate::{
-    fill, outline, point, px, relative, size, AccessibilityAction, AccessibilityAttributes,
-    AccessibilityRole, AccessibilityState, AccessibilityValue, App, BorderStyle, Bounds,
-    CursorStyle, DispatchPhase, Element, ElementId, GlobalElementId, Hitbox, HitboxBehavior,
-    InspectorElementId, Interactivity, IntoElement, KeyDownEvent, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Redo, Undo, Window,
+    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
+    AccessibilityValue, App, BorderStyle, Bounds, CursorStyle, DispatchPhase, Element, ElementId,
+    GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, Interactivity, IntoElement,
+    KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, Redo, Undo, Window, fill, outline, point, px, relative, size,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -165,7 +165,8 @@ pub struct SplitterRenderState {
     pub focused: bool,
 }
 
-type SplitterCustomRenderer = Rc<dyn Fn(SplitterRenderState, Bounds<Pixels>, &mut Window, &mut App)>;
+type SplitterCustomRenderer =
+    Rc<dyn Fn(SplitterRenderState, Bounds<Pixels>, &mut Window, &mut App)>;
 
 /// Construct a controlled splitter primitive for resizable panes.
 #[track_caller]
@@ -583,7 +584,7 @@ fn splitter_fraction(value: Pixels, range: (Pixels, Pixels)) -> f64 {
     if span <= Pixels::ZERO {
         0.0
     } else {
-        ((value.0 - range.0 .0) / span.0).clamp(0.0, 1.0) as f64
+        ((value.0 - range.0.0) / span.0).clamp(0.0, 1.0) as f64
     }
 }
 
@@ -675,7 +676,9 @@ fn paint_default_splitter(state: SplitterRenderState, bounds: Bounds<Pixels>, wi
 mod tests {
     use super::*;
     use crate::elements::div::InteractiveElement;
-    use crate::{div, Context, Modifiers, MouseButton, ParentElement, Render, Styled, TestAppContext};
+    use crate::{
+        Context, Modifiers, MouseButton, ParentElement, Render, Styled, TestAppContext, div,
+    };
     use std::{cell::Cell, rc::Rc};
 
     struct SplitterView {
@@ -718,7 +721,11 @@ mod tests {
                         .min(px(0.0))
                         .max(px(240.0))
                         .render_with(move |state, _, _, _| {
-                            snapshot.set(Some((state.value.0 as f64, state.vertical, state.focused)));
+                            snapshot.set(Some((
+                                state.value.0 as f64,
+                                state.vertical,
+                                state.focused,
+                            )));
                         }),
                 )
         }

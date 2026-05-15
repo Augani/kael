@@ -5,9 +5,9 @@ use crate::{
     CursorStyle, DispatchPhase, Element, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Global, GlobalElementId, Hitbox, HitboxBehavior,
     InspectorElementId, IntoElement, KeyBinding, KeyContext, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Style, TextRun,
-    UTF16Selection, UnderlineStyle, Window, WrappedLine, WrappedLineLayout, fill, point, px,
-    relative, rgb, rgba, size, white,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Style, TextRun, UTF16Selection,
+    UnderlineStyle, Window, WrappedLine, WrappedLineLayout, fill, point, px, relative, rgb, rgba,
+    size, white,
 };
 use std::{
     any::TypeId,
@@ -1121,7 +1121,8 @@ impl Element for TextInput {
                 TextInputRenderState {
                     value: input.content.clone(),
                     display_text: display_text_for_input(&input, showing_placeholder),
-                    placeholder: (!input.placeholder.is_empty()).then_some(input.placeholder.clone()),
+                    placeholder: (!input.placeholder.is_empty())
+                        .then_some(input.placeholder.clone()),
                     showing_placeholder,
                     focused: is_focused,
                     hovered: prepaint.hitbox.is_hovered(window),

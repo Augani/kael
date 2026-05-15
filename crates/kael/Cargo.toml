@@ -37,6 +37,7 @@ macos-blade = [
     "objc2-metal",
 ]
 runtime_shaders = []
+media = ["kael_media"]
 screen-capture = ["scap"]
 test-support = [
     "leak-detection",
@@ -300,6 +301,7 @@ version = "0.5.1"
 path = "../kael-media"
 package = "kael-media"
 version = "0.5.1"
+optional = true
 
 [dependencies.http_client]
 path = "../http_client"

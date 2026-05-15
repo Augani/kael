@@ -1,13 +1,13 @@
 use super::local_history::{
-    ensure_local_undo_redo_bindings, local_undo_redo_key_context, WindowValueHistory,
+    WindowValueHistory, ensure_local_undo_redo_bindings, local_undo_redo_key_context,
 };
 use crate::{
-    div, point, px, text_input, AccessibilityAction, AccessibilityAttributes, AccessibilityRole,
-    AccessibilityState, AccessibilityValue, AnyElement, App, AppContext, Bounds, Context,
-    DismissEvent, Element, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
-    GlobalElementId, InspectorElementId, InteractiveElement, IntoElement, KeyDownEvent,
-    LayerAnchor, LayerOptions, LayerStack, LayoutId, ParentElement, Pixels, Point, Redo, Render,
-    SharedString, StatefulInteractiveElement, Styled, Undo, Window,
+    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
+    AccessibilityValue, AnyElement, App, AppContext, Bounds, Context, DismissEvent, Element,
+    ElementId, Entity, EventEmitter, FocusHandle, Focusable, GlobalElementId, InspectorElementId,
+    InteractiveElement, IntoElement, KeyDownEvent, LayerAnchor, LayerOptions, LayerStack, LayoutId,
+    ParentElement, Pixels, Point, Redo, Render, SharedString, StatefulInteractiveElement, Styled,
+    Undo, Window, div, point, px, text_input,
 };
 use std::rc::Rc;
 
@@ -232,7 +232,7 @@ where
     pub fn render_popup_with(
         mut self,
         renderer: impl Fn(SelectPopupRenderState, Vec<AnyElement>, &Window, &App) -> AnyElement
-            + 'static,
+        + 'static,
     ) -> Self {
         self.custom_popup_renderer = Some(Rc::new(renderer));
         self
@@ -241,8 +241,7 @@ where
     /// Render the in-popup search field with caller-owned visuals around the generated input.
     pub fn render_search_with(
         mut self,
-        renderer: impl Fn(SelectSearchRenderState, AnyElement, &Window, &App) -> AnyElement
-            + 'static,
+        renderer: impl Fn(SelectSearchRenderState, AnyElement, &Window, &App) -> AnyElement + 'static,
     ) -> Self {
         self.custom_search_renderer = Some(Rc::new(renderer));
         self
@@ -677,20 +676,16 @@ where
             self.on_change = on_change;
             changed = true;
         }
-        if self.option_renderer.as_ref().map(Rc::as_ptr)
-            != option_renderer.as_ref().map(Rc::as_ptr)
+        if self.option_renderer.as_ref().map(Rc::as_ptr) != option_renderer.as_ref().map(Rc::as_ptr)
         {
             self.option_renderer = option_renderer;
             changed = true;
         }
-        if self.popup_renderer.as_ref().map(Rc::as_ptr)
-            != popup_renderer.as_ref().map(Rc::as_ptr)
-        {
+        if self.popup_renderer.as_ref().map(Rc::as_ptr) != popup_renderer.as_ref().map(Rc::as_ptr) {
             self.popup_renderer = popup_renderer;
             changed = true;
         }
-        if self.search_renderer.as_ref().map(Rc::as_ptr)
-            != search_renderer.as_ref().map(Rc::as_ptr)
+        if self.search_renderer.as_ref().map(Rc::as_ptr) != search_renderer.as_ref().map(Rc::as_ptr)
         {
             self.search_renderer = search_renderer;
             changed = true;
@@ -1196,11 +1191,7 @@ fn default_select_empty_state() -> impl IntoElement {
         .child("No options")
 }
 
-fn default_select_option_row(
-    label: SharedString,
-    selected: bool,
-    highlighted: bool,
-) -> AnyElement {
+fn default_select_option_row(label: SharedString, selected: bool, highlighted: bool) -> AnyElement {
     let mut row = div()
         .flex()
         .items_center()
@@ -1301,8 +1292,8 @@ fn next_highlighted_index(
 mod tests {
     use super::*;
     use crate::{
-        div, AccessibilityRole, AccessibilityState, AccessibilityValue, Context, Modifiers, Render,
-        TestAppContext, Undo,
+        AccessibilityRole, AccessibilityState, AccessibilityValue, Context, Modifiers, Render,
+        TestAppContext, Undo, div,
     };
 
     struct SelectView {
@@ -1362,7 +1353,11 @@ mod tests {
                     "select-trigger-{}-{}-{}",
                     state.display_text,
                     if state.open { "open" } else { "closed" },
-                    if state.showing_placeholder { "placeholder" } else { "value" },
+                    if state.showing_placeholder {
+                        "placeholder"
+                    } else {
+                        "value"
+                    },
                 );
                 div()
                     .debug_selector(move || selector)
@@ -1373,7 +1368,11 @@ mod tests {
                 let selector = format!(
                     "select-popup-shell-{}-{}",
                     state.filtered_len,
-                    if state.searchable { "searchable" } else { "plain" },
+                    if state.searchable {
+                        "searchable"
+                    } else {
+                        "plain"
+                    },
                 );
                 div()
                     .debug_selector(move || selector)
@@ -1383,7 +1382,11 @@ mod tests {
             .render_search_with(|state, input, _, _| {
                 let selector = format!(
                     "select-search-{}-{}",
-                    if state.query.is_empty() { "empty" } else { "query" },
+                    if state.query.is_empty() {
+                        "empty"
+                    } else {
+                        "query"
+                    },
                     if state.focused { "focused" } else { "idle" },
                 );
                 div()
@@ -1396,7 +1399,11 @@ mod tests {
                     "select-custom-option-{}-{}-{}",
                     state.index,
                     if state.selected { "selected" } else { "idle" },
-                    if state.highlighted { "highlighted" } else { "plain" },
+                    if state.highlighted {
+                        "highlighted"
+                    } else {
+                        "plain"
+                    },
                 );
                 div()
                     .debug_selector(move || selector)
@@ -1532,9 +1539,11 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        assert!(window
-            .debug_bounds("select-trigger-Cat-closed-value")
-            .is_some());
+        assert!(
+            window
+                .debug_bounds("select-trigger-Cat-closed-value")
+                .is_some()
+        );
 
         let trigger_bounds = window.debug_bounds("select-pet_custom").unwrap();
         window.simulate_click(trigger_bounds.center(), Modifiers::default());
@@ -1542,15 +1551,17 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        assert!(window
-            .debug_bounds("select-popup-shell-3-searchable")
-            .is_some());
-        assert!(window
-            .debug_bounds("select-search-empty-focused")
-            .is_some());
-        assert!(window
-            .debug_bounds("select-custom-option-0-selected-highlighted")
-            .is_some());
+        assert!(
+            window
+                .debug_bounds("select-popup-shell-3-searchable")
+                .is_some()
+        );
+        assert!(window.debug_bounds("select-search-empty-focused").is_some());
+        assert!(
+            window
+                .debug_bounds("select-custom-option-0-selected-highlighted")
+                .is_some()
+        );
 
         let option_bounds = window.debug_bounds("select-option-pet_custom-1").unwrap();
         window.simulate_click(option_bounds.center(), Modifiers::default());
@@ -1558,8 +1569,10 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        assert!(window
-            .debug_bounds("select-trigger-Dog-closed-value")
-            .is_some());
+        assert!(
+            window
+                .debug_bounds("select-trigger-Dog-closed-value")
+                .is_some()
+        );
     }
 }

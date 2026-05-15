@@ -1,11 +1,11 @@
 use super::local_history::{
-    ensure_local_undo_redo_bindings, local_undo_redo_key_context, WindowValueHistory,
+    WindowValueHistory, ensure_local_undo_redo_bindings, local_undo_redo_key_context,
 };
 use crate::{
-    div, px, AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
+    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
     AccessibilityValue, AnyElement, App, Component, Context, Div, ElementId, FocusHandle,
     InteractiveElement, IntoElement, ParentElement, Redo, RenderOnce, SharedString,
-    StatefulInteractiveElement, Styled, Undo, Window,
+    StatefulInteractiveElement, Styled, Undo, Window, div, px,
 };
 use std::rc::Rc;
 
@@ -359,7 +359,7 @@ impl IntoElement for Toggle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{div, Context, Render, TestAppContext};
+    use crate::{Context, Render, TestAppContext, div};
 
     struct ToggleView {
         on: bool,
@@ -439,9 +439,11 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        assert!(window
-            .debug_bounds("toggle-custom-off-blurred-with-label")
-            .is_some());
+        assert!(
+            window
+                .debug_bounds("toggle-custom-off-blurred-with-label")
+                .is_some()
+        );
 
         let bounds = window.debug_bounds("toggle-wifi_custom").unwrap();
         window.simulate_click(bounds.center(), crate::Modifiers::default());
@@ -449,8 +451,10 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        assert!(window
-            .debug_bounds("toggle-custom-on-focused-with-label")
-            .is_some());
+        assert!(
+            window
+                .debug_bounds("toggle-custom-on-focused-with-label")
+                .is_some()
+        );
     }
 }

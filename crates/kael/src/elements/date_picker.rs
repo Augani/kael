@@ -73,9 +73,8 @@ pub struct DatePickerHeaderRenderState {
     pub can_navigate_next: bool,
 }
 
-type DatePickerHeaderCustomRenderer = Rc<
-    dyn Fn(DatePickerHeaderRenderState, AnyElement, AnyElement, &Window, &App) -> AnyElement,
->;
+type DatePickerHeaderCustomRenderer =
+    Rc<dyn Fn(DatePickerHeaderRenderState, AnyElement, AnyElement, &Window, &App) -> AnyElement>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Direction of a date picker navigation button.
@@ -97,9 +96,8 @@ pub struct DatePickerNavButtonRenderState {
     pub enabled: bool,
 }
 
-type DatePickerNavButtonCustomRenderer = Rc<
-    dyn Fn(DatePickerNavButtonRenderState, AnyElement, &Window, &App) -> AnyElement,
->;
+type DatePickerNavButtonCustomRenderer =
+    Rc<dyn Fn(DatePickerNavButtonRenderState, AnyElement, &Window, &App) -> AnyElement>;
 
 #[non_exhaustive]
 /// Snapshot of a weekday label passed to a custom renderer.
@@ -257,7 +255,7 @@ impl DatePicker {
     pub fn render_popup_with(
         mut self,
         renderer: impl Fn(DatePickerPopupRenderState, Vec<AnyElement>, &Window, &App) -> AnyElement
-            + 'static,
+        + 'static,
     ) -> Self {
         self.custom_popup_renderer = Some(Rc::new(renderer));
         self
@@ -267,13 +265,13 @@ impl DatePicker {
     pub fn render_header_with(
         mut self,
         renderer: impl Fn(
-                DatePickerHeaderRenderState,
-                AnyElement,
-                AnyElement,
-                &Window,
-                &App,
-            ) -> AnyElement
-            + 'static,
+            DatePickerHeaderRenderState,
+            AnyElement,
+            AnyElement,
+            &Window,
+            &App,
+        ) -> AnyElement
+        + 'static,
     ) -> Self {
         self.custom_header_renderer = Some(Rc::new(renderer));
         self
@@ -283,7 +281,7 @@ impl DatePicker {
     pub fn render_nav_buttons_with(
         mut self,
         renderer: impl Fn(DatePickerNavButtonRenderState, AnyElement, &Window, &App) -> AnyElement
-            + 'static,
+        + 'static,
     ) -> Self {
         self.custom_nav_button_renderer = Some(Rc::new(renderer));
         self
@@ -680,13 +678,11 @@ impl DatePickerState {
             self.day_renderer = day_renderer;
             changed = true;
         }
-        if self.popup_renderer.as_ref().map(Rc::as_ptr) != popup_renderer.as_ref().map(Rc::as_ptr)
-        {
+        if self.popup_renderer.as_ref().map(Rc::as_ptr) != popup_renderer.as_ref().map(Rc::as_ptr) {
             self.popup_renderer = popup_renderer;
             changed = true;
         }
-        if self.header_renderer.as_ref().map(Rc::as_ptr)
-            != header_renderer.as_ref().map(Rc::as_ptr)
+        if self.header_renderer.as_ref().map(Rc::as_ptr) != header_renderer.as_ref().map(Rc::as_ptr)
         {
             self.header_renderer = header_renderer;
             changed = true;
@@ -888,11 +884,7 @@ impl DatePickerState {
 }
 
 impl DatePickerPopup {
-    fn new(
-        selector_id: String,
-        state: Entity<DatePickerState>,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    fn new(selector_id: String, state: Entity<DatePickerState>, cx: &mut Context<Self>) -> Self {
         cx.observe(&state, |_, _, cx| {
             cx.notify();
         })
@@ -1173,10 +1165,7 @@ impl Render for DatePickerPopup {
             })
             .collect::<Vec<_>>();
 
-        let mut popup_children = vec![
-            header,
-            default_date_picker_weekday_row(weekday_labels),
-        ];
+        let mut popup_children = vec![header, default_date_picker_weekday_row(weekday_labels)];
 
         for week in build_month_grid(snapshot.visible_month, snapshot.min, snapshot.max).chunks(7) {
             let mut row = div().flex().gap_1();
@@ -1324,11 +1313,7 @@ fn render_day_cell(
     day.into_any_element()
 }
 
-fn default_day_cell_body(
-    cell: CalendarDayCell,
-    selected: bool,
-    highlighted: bool,
-) -> AnyElement {
+fn default_day_cell_body(cell: CalendarDayCell, selected: bool, highlighted: bool) -> AnyElement {
     div()
         .w(px(36.0))
         .h(px(36.0))
@@ -1581,8 +1566,8 @@ fn format_date(date: Date) -> SharedString {
 mod tests {
     use super::*;
     use crate::{
-        div, AccessibilityRole, AccessibilityValue, Context, Modifiers, Render,
-        TestAppContext, Undo,
+        AccessibilityRole, AccessibilityValue, Context, Modifiers, Render, TestAppContext, Undo,
+        div,
     };
 
     struct DatePickerView {
@@ -1670,7 +1655,11 @@ mod tests {
                         "date-picker-custom-day-{}-{}-{}",
                         format_date(state.date),
                         if state.selected { "selected" } else { "idle" },
-                        if state.highlighted { "highlighted" } else { "plain" },
+                        if state.highlighted {
+                            "highlighted"
+                        } else {
+                            "plain"
+                        },
                     );
                     div()
                         .debug_selector(move || selector)
@@ -1832,16 +1821,17 @@ mod tests {
     fn date_picker_render_hooks_receive_trigger_and_day_state(cx: &mut TestAppContext) {
         let initial = Date::from_calendar_date(2026, Month::May, 13).unwrap();
         let selected = Date::from_calendar_date(2026, Month::May, 20).unwrap();
-        let (_view, mut window) =
-            cx.add_window_view(|_, _| CustomDatePickerView { date: initial });
+        let (_view, mut window) = cx.add_window_view(|_, _| CustomDatePickerView { date: initial });
 
         window.update(|window, cx| {
             window.draw(cx).clear();
         });
 
-        assert!(window
-            .debug_bounds("date-picker-trigger-2026-05-13-closed")
-            .is_some());
+        assert!(
+            window
+                .debug_bounds("date-picker-trigger-2026-05-13-closed")
+                .is_some()
+        );
 
         let trigger_bounds = window.debug_bounds("date-picker-schedule_custom").unwrap();
         window.simulate_click(trigger_bounds.center(), Modifiers::default());
@@ -1849,21 +1839,23 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        assert!(window
-            .debug_bounds("date-picker-popup-shell-May-2026")
-            .is_some());
-        assert!(window
-            .debug_bounds("date-picker-header-May-2026")
-            .is_some());
-        assert!(window
-            .debug_bounds("date-picker-nav-prev-enabled")
-            .is_some());
-        assert!(window
-            .debug_bounds("date-picker-weekday-0-Mon")
-            .is_some());
-        assert!(window
-            .debug_bounds("date-picker-custom-day-2026-05-13-selected-highlighted")
-            .is_some());
+        assert!(
+            window
+                .debug_bounds("date-picker-popup-shell-May-2026")
+                .is_some()
+        );
+        assert!(window.debug_bounds("date-picker-header-May-2026").is_some());
+        assert!(
+            window
+                .debug_bounds("date-picker-nav-prev-enabled")
+                .is_some()
+        );
+        assert!(window.debug_bounds("date-picker-weekday-0-Mon").is_some());
+        assert!(
+            window
+                .debug_bounds("date-picker-custom-day-2026-05-13-selected-highlighted")
+                .is_some()
+        );
 
         let selected_bounds = window
             .debug_bounds("date-picker-day-schedule_custom-2026-05-20")
@@ -1873,9 +1865,14 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        assert!(window
-            .debug_bounds("date-picker-trigger-2026-05-20-closed")
-            .is_some());
-        assert_eq!(selected, Date::from_calendar_date(2026, Month::May, 20).unwrap());
+        assert!(
+            window
+                .debug_bounds("date-picker-trigger-2026-05-20-closed")
+                .is_some()
+        );
+        assert_eq!(
+            selected,
+            Date::from_calendar_date(2026, Month::May, 20).unwrap()
+        );
     }
 }

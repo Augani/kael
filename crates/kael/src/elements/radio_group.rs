@@ -1,11 +1,11 @@
 use super::local_history::{
-    ensure_local_undo_redo_bindings, local_undo_redo_key_context, WindowValueHistory,
+    WindowValueHistory, ensure_local_undo_redo_bindings, local_undo_redo_key_context,
 };
 use crate::{
-    div, px, AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
+    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
     AnyElement, App, Component, Context, ElementId, FocusHandle, InteractiveElement, IntoElement,
     ParentElement, Redo, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Undo,
-    Window,
+    Window, div, px,
 };
 use std::rc::Rc;
 
@@ -460,7 +460,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{div, Context, Render, TestAppContext, Undo};
+    use crate::{Context, Render, TestAppContext, Undo, div};
 
     struct RadioView {
         value: &'static str,
@@ -601,8 +601,10 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        assert!(window
-            .debug_bounds("radio-custom-1-selected-focused")
-            .is_some());
+        assert!(
+            window
+                .debug_bounds("radio-custom-1-selected-focused")
+                .is_some()
+        );
     }
 }

@@ -1,14 +1,13 @@
 use super::local_history::{
-    ensure_local_undo_redo_bindings, local_undo_redo_key_context,
-    register_focused_action_handler_when, WindowValueHistory,
+    WindowValueHistory, ensure_local_undo_redo_bindings, local_undo_redo_key_context,
+    register_focused_action_handler_when,
 };
 use crate::{
-    fill, outline, point, px, relative, size, AccessibilityAction, AccessibilityAttributes,
-    AccessibilityRole, AccessibilityState, AccessibilityValue, App, BorderStyle, Bounds,
-    CursorStyle, DispatchPhase, Element, ElementId, GlobalElementId, Hitbox, HitboxBehavior,
-    InspectorElementId, InteractiveElement, Interactivity, IntoElement, KeyDownEvent, LayoutId,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Redo, Styled, Undo,
-    Window,
+    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
+    AccessibilityValue, App, BorderStyle, Bounds, CursorStyle, DispatchPhase, Element, ElementId,
+    GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, InteractiveElement, Interactivity,
+    IntoElement, KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    Pixels, Point, Redo, Styled, Undo, Window, fill, outline, point, px, relative, size,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -735,7 +734,7 @@ fn slider_value_for_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{div, Context, Modifiers, MouseButton, ParentElement, Render, TestAppContext};
+    use crate::{Context, Modifiers, MouseButton, ParentElement, Render, TestAppContext, div};
     use std::cell::Cell;
 
     struct SliderView {

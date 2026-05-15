@@ -50,6 +50,7 @@ mod key_dispatch;
 mod keymap;
 mod lottie;
 pub mod media_capture;
+#[cfg(feature = "media")]
 pub mod media_playback;
 mod path_builder;
 mod platform;
@@ -126,16 +127,17 @@ pub use file_watcher::*;
 pub use geometry::*;
 pub use gesture::*;
 pub use global::*;
-pub use kael_macros::{AppContext, IntoElement, Render, VisualContext, register_action, test};
 pub use http_client;
 pub use input::*;
 pub use inspector::*;
 pub use interactive::*;
 pub use ipc_transport::*;
+pub use kael_macros::{AppContext, IntoElement, Render, VisualContext, register_action, test};
 use key_dispatch::*;
 pub use keymap::*;
 pub use lottie::*;
 pub use media_capture::*;
+#[cfg(feature = "media")]
 pub use media_playback::*;
 pub use panels::*;
 pub use path_builder::*;

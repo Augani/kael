@@ -1,7 +1,7 @@
 use crate::{
-    div, px, AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
+    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
     AnyElement, App, Component, Div, ElementId, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window,
+    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use std::rc::Rc;
 use util::ResultExt;
@@ -150,14 +150,14 @@ impl RenderOnce for MenuEntry {
         let focus_handle = semantic_focus_handle("menu-item", &item_id, window, cx);
         let content = semantic_children(children, label.clone(), SharedString::from("Menu item"));
 
-        let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::MenuItem).states(
-            semantic_focus_state(&focus_handle, disabled, window),
-        );
+        let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::MenuItem)
+            .states(semantic_focus_state(&focus_handle, disabled, window));
         if let Some(label) = label.as_ref() {
             accessibility = accessibility.label(label.to_string());
         }
         if !disabled {
-            accessibility = accessibility.actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]);
+            accessibility =
+                accessibility.actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]);
         }
 
         let mut root = div()
@@ -265,14 +265,14 @@ impl RenderOnce for Link {
         let fallback = label.clone().or_else(|| url.clone());
         let content = semantic_children(children, fallback, SharedString::from("Link"));
 
-        let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::Link).states(
-            semantic_focus_state(&focus_handle, disabled, window),
-        );
+        let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::Link)
+            .states(semantic_focus_state(&focus_handle, disabled, window));
         if let Some(label) = label.as_ref().or(url.as_ref()) {
             accessibility = accessibility.label(label.to_string());
         }
         if !disabled {
-            accessibility = accessibility.actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]);
+            accessibility =
+                accessibility.actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]);
         }
 
         let mut root = div()
@@ -406,12 +406,14 @@ impl RenderOnce for TreeItem {
             };
         }
 
-        let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::TreeItem).states(states);
+        let mut accessibility =
+            AccessibilityAttributes::new(AccessibilityRole::TreeItem).states(states);
         if let Some(label) = label.as_ref() {
             accessibility = accessibility.label(label.to_string());
         }
         if !disabled {
-            accessibility = accessibility.actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]);
+            accessibility =
+                accessibility.actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]);
         }
 
         let mut root = div()
@@ -483,11 +485,7 @@ fn semantic_children(
     fallback: SharedString,
 ) -> Vec<AnyElement> {
     if children.is_empty() {
-        children.push(
-            div()
-                .child(label.unwrap_or(fallback))
-                .into_any_element(),
-        );
+        children.push(div().child(label.unwrap_or(fallback)).into_any_element());
     }
 
     children
@@ -525,11 +523,9 @@ fn semantic_clickable(
 }
 
 fn semantic_open_url_listener(url: SharedString) -> ClickListener {
-    Rc::new(
-        move |_: &crate::ClickEvent, _: &mut Window, cx: &mut App| {
-            cx.open_url(&url).log_err();
-        },
-    )
+    Rc::new(move |_: &crate::ClickEvent, _: &mut Window, cx: &mut App| {
+        cx.open_url(&url).log_err();
+    })
 }
 
 #[cfg(test)]
@@ -553,7 +549,11 @@ mod tests {
     struct SemanticPrimitivesView;
 
     impl Render for SemanticPrimitivesView {
-        fn render(&mut self, _: &mut crate::Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+        fn render(
+            &mut self,
+            _: &mut crate::Window,
+            _: &mut Context<Self>,
+        ) -> impl crate::IntoElement {
             div()
                 .flex()
                 .flex_col()
@@ -574,28 +574,36 @@ mod tests {
     }
 
     impl Render for LinkView {
-        fn render(&mut self, _: &mut crate::Window, _: &mut Context<Self>) -> impl crate::IntoElement {
-            link("docs")
-                .label("Docs")
-                .url("https://example.com/docs")
+        fn render(
+            &mut self,
+            _: &mut crate::Window,
+            _: &mut Context<Self>,
+        ) -> impl crate::IntoElement {
+            link("docs").label("Docs").url("https://example.com/docs")
         }
     }
 
     impl Render for MenuItemView {
-        fn render(&mut self, _: &mut crate::Window, cx: &mut Context<Self>) -> impl crate::IntoElement {
-            menu("file_menu").child(
-                menu_item("copy")
-                    .label("Copy")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.activations += 1;
-                        cx.notify();
-                    })),
-            )
+        fn render(
+            &mut self,
+            _: &mut crate::Window,
+            cx: &mut Context<Self>,
+        ) -> impl crate::IntoElement {
+            menu("file_menu").child(menu_item("copy").label("Copy").on_click(cx.listener(
+                |this, _, _, cx| {
+                    this.activations += 1;
+                    cx.notify();
+                },
+            )))
         }
     }
 
     impl Render for TreeItemView {
-        fn render(&mut self, _: &mut crate::Window, cx: &mut Context<Self>) -> impl crate::IntoElement {
+        fn render(
+            &mut self,
+            _: &mut crate::Window,
+            cx: &mut Context<Self>,
+        ) -> impl crate::IntoElement {
             tree("project_tree").child(
                 tree_item("src")
                     .label("src")
@@ -617,16 +625,56 @@ mod tests {
             window.draw(cx).clear();
 
             let nodes = window.accessibility_tree.nodes.values().collect::<Vec<_>>();
-            assert!(nodes.iter().any(|node| node.role == AccessibilityRole::Toolbar));
-            assert!(nodes.iter().any(|node| node.role == AccessibilityRole::Pane));
-            assert!(nodes.iter().any(|node| node.role == AccessibilityRole::Dialog));
-            assert!(nodes.iter().any(|node| node.role == AccessibilityRole::Alert));
-            assert!(nodes.iter().any(|node| node.role == AccessibilityRole::Separator));
-            assert!(nodes.iter().any(|node| node.role == AccessibilityRole::Menu));
-            assert!(nodes.iter().any(|node| node.role == AccessibilityRole::MenuItem));
-            assert!(nodes.iter().any(|node| node.role == AccessibilityRole::Link));
-            assert!(nodes.iter().any(|node| node.role == AccessibilityRole::Tree));
-            assert!(nodes.iter().any(|node| node.role == AccessibilityRole::TreeItem));
+            assert!(
+                nodes
+                    .iter()
+                    .any(|node| node.role == AccessibilityRole::Toolbar)
+            );
+            assert!(
+                nodes
+                    .iter()
+                    .any(|node| node.role == AccessibilityRole::Pane)
+            );
+            assert!(
+                nodes
+                    .iter()
+                    .any(|node| node.role == AccessibilityRole::Dialog)
+            );
+            assert!(
+                nodes
+                    .iter()
+                    .any(|node| node.role == AccessibilityRole::Alert)
+            );
+            assert!(
+                nodes
+                    .iter()
+                    .any(|node| node.role == AccessibilityRole::Separator)
+            );
+            assert!(
+                nodes
+                    .iter()
+                    .any(|node| node.role == AccessibilityRole::Menu)
+            );
+            assert!(
+                nodes
+                    .iter()
+                    .any(|node| node.role == AccessibilityRole::MenuItem)
+            );
+            assert!(
+                nodes
+                    .iter()
+                    .any(|node| node.role == AccessibilityRole::Link)
+            );
+            assert!(
+                nodes
+                    .iter()
+                    .any(|node| node.role == AccessibilityRole::Tree)
+            );
+            assert!(
+                nodes
+                    .iter()
+                    .any(|node| node.role == AccessibilityRole::TreeItem)
+            );
         });
     }
 
@@ -686,14 +734,20 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        assert_eq!(test_cx.opened_url().as_deref(), Some("https://example.com/docs"));
+        assert_eq!(
+            test_cx.opened_url().as_deref(),
+            Some("https://example.com/docs")
+        );
 
         window.simulate_keystrokes("enter");
         window.update(|window, cx| {
             window.draw(cx).clear();
         });
 
-        assert_eq!(test_cx.opened_url().as_deref(), Some("https://example.com/docs"));
+        assert_eq!(
+            test_cx.opened_url().as_deref(),
+            Some("https://example.com/docs")
+        );
     }
 
     #[crate::test]

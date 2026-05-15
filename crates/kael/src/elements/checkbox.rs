@@ -1,11 +1,11 @@
 use super::local_history::{
-    ensure_local_undo_redo_bindings, local_undo_redo_key_context, WindowValueHistory,
+    WindowValueHistory, ensure_local_undo_redo_bindings, local_undo_redo_key_context,
 };
 use crate::{
-    div, px, AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
+    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
     AccessibilityValue, AnyElement, App, Component, Context, Div, ElementId, FocusHandle,
     InteractiveElement, IntoElement, ParentElement, Redo, RenderOnce, SharedString,
-    StatefulInteractiveElement, Styled, Undo, Window,
+    StatefulInteractiveElement, Styled, Undo, Window, div, px,
 };
 use std::rc::Rc;
 
@@ -423,7 +423,7 @@ impl IntoElement for Checkbox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{div, Context, Modifiers, Render, TestAppContext, Undo};
+    use crate::{Context, Modifiers, Render, TestAppContext, Undo, div};
 
     struct CheckboxView {
         checked: bool,
@@ -638,9 +638,11 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        assert!(window
-            .debug_bounds("checkbox-custom-unchecked-determinate-blurred-with-label")
-            .is_some());
+        assert!(
+            window
+                .debug_bounds("checkbox-custom-unchecked-determinate-blurred-with-label")
+                .is_some()
+        );
 
         let bounds = window.debug_bounds("checkbox-agree_custom").unwrap();
         window.simulate_click(bounds.center(), Modifiers::default());
@@ -648,8 +650,10 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        assert!(window
-            .debug_bounds("checkbox-custom-checked-determinate-focused-with-label")
-            .is_some());
+        assert!(
+            window
+                .debug_bounds("checkbox-custom-checked-determinate-focused-with-label")
+                .is_some()
+        );
     }
 }

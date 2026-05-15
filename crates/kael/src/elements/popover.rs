@@ -1,10 +1,9 @@
 use crate::{
-    div, point, px, AccessibilityAction, AccessibilityAttributes, AccessibilityRole,
-    AccessibilityState, AnyElement, App, AppContext, Bounds, Context, DismissEvent, Element,
-    ElementId, Entity, EventEmitter, FocusHandle, Focusable, GlobalElementId,
-    InspectorElementId, InteractiveElement, IntoElement, KeyDownEvent, LayerAnchor,
-    LayerOptions, LayerStack, LayoutId, ParentElement, Pixels, Point, Render,
-    StatefulInteractiveElement, Styled, Window,
+    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
+    AnyElement, App, AppContext, Bounds, Context, DismissEvent, Element, ElementId, Entity,
+    EventEmitter, FocusHandle, Focusable, GlobalElementId, InspectorElementId, InteractiveElement,
+    IntoElement, KeyDownEvent, LayerAnchor, LayerOptions, LayerStack, LayoutId, ParentElement,
+    Pixels, Point, Render, StatefulInteractiveElement, Styled, Window, div, point, px,
 };
 use std::rc::Rc;
 
@@ -135,7 +134,12 @@ impl Popover {
         self
     }
 
-    fn build_anchor(&self, window: &mut Window, cx: &mut App, state: Entity<PopoverState>) -> AnyElement {
+    fn build_anchor(
+        &self,
+        window: &mut Window,
+        cx: &mut App,
+        state: Entity<PopoverState>,
+    ) -> AnyElement {
         let render_state = PopoverAnchorRenderState {
             open: state.read(cx).open,
         };
@@ -235,7 +239,8 @@ impl Element for Popover {
 
         let anchor = self.build_anchor(window, cx, state.clone());
         let overlay_origin = state.read(cx).trigger_bounds.map(|bounds| bounds.origin);
-        let overlay = build_layer_overlay(state.read(cx).layer_stack.clone(), overlay_origin, window);
+        let overlay =
+            build_layer_overlay(state.read(cx).layer_stack.clone(), overlay_origin, window);
         let mut root = div()
             .relative()
             .child(anchor)
@@ -397,12 +402,7 @@ impl PopoverState {
             if self.dismiss_on_click_outside {
                 options = options.backdrop(crate::hsla(0.0, 0.0, 0.0, 0.0));
             }
-            stack.push(
-                popup,
-                options,
-                window,
-                cx,
-            );
+            stack.push(popup, options, window, cx);
         });
         cx.notify();
     }
@@ -481,7 +481,10 @@ impl Render for PopoverPopup {
         let dismiss_on_escape_state = self.state.clone();
 
         let mut popup = div()
-            .id(ElementId::named_usize(format!("{}-popup", self.selector_id), 0))
+            .id(ElementId::named_usize(
+                format!("{}-popup", self.selector_id),
+                0,
+            ))
             .track_focus(&self.root_focus)
             .focusable()
             .tab_stop(true)
@@ -548,7 +551,11 @@ fn default_popover_anchor(state: PopoverAnchorRenderState) -> AnyElement {
         })
         .bg(crate::rgb(0xffffff))
         .text_color(crate::rgb(0x0f172a))
-        .child(if state.open { "Popover open" } else { "Popover closed" })
+        .child(if state.open {
+            "Popover open"
+        } else {
+            "Popover closed"
+        })
         .into_any_element()
 }
 
@@ -628,11 +635,7 @@ mod tests {
                             move |state, _, _| {
                                 let next_open = !state.open;
                                 button("help-trigger")
-                                    .label(if state.open {
-                                        "Hide help"
-                                    } else {
-                                        "Show help"
-                                    })
+                                    .label(if state.open { "Hide help" } else { "Show help" })
                                     .on_click({
                                         let view = view.clone();
                                         move |_, _, cx| {
@@ -767,9 +770,7 @@ mod tests {
     }
 
     #[crate::test]
-    fn popover_dismisses_on_backdrop_click_without_clicking_background(
-        cx: &mut TestAppContext,
-    ) {
+    fn popover_dismisses_on_backdrop_click_without_clicking_background(cx: &mut TestAppContext) {
         let (view, mut window) = cx.add_window_view(|_, _| PopoverView {
             open: true,
             background_clicks: 0,
@@ -786,25 +787,25 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        let (open, background_clicks) = cx.read_entity(&view, |view, _| {
-            (view.open, view.background_clicks)
-        });
+        let (open, background_clicks) =
+            cx.read_entity(&view, |view, _| (view.open, view.background_clicks));
         assert!(!open);
         assert_eq!(background_clicks, 0);
     }
 
     #[crate::test]
     fn popover_respects_dismiss_configuration(cx: &mut TestAppContext) {
-        let (_view, mut window) =
-            cx.add_window_view(|_, _| PersistentPopoverView { open: true });
+        let (_view, mut window) = cx.add_window_view(|_, _| PersistentPopoverView { open: true });
 
         window.update(|window, cx| {
             window.draw(cx).clear();
         });
 
-        assert!(window
-            .debug_bounds("persistent-popover-panel-open")
-            .is_some());
+        assert!(
+            window
+                .debug_bounds("persistent-popover-panel-open")
+                .is_some()
+        );
 
         window.simulate_keystrokes("escape");
         window.simulate_click(point(px(8.0), px(8.0)), Modifiers::default());
@@ -812,8 +813,10 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        assert!(window
-            .debug_bounds("persistent-popover-panel-open")
-            .is_some());
+        assert!(
+            window
+                .debug_bounds("persistent-popover-panel-open")
+                .is_some()
+        );
     }
 }
