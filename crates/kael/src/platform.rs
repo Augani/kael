@@ -900,6 +900,7 @@ pub(crate) enum AtlasKey {
     IconAtlas(RenderIconAtlasParams),
     Image(RenderImageParams),
     CachedSurface(CachedSurfaceParams),
+    Shadow(crate::shadow_cache::ShadowAtlasParams),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -941,7 +942,7 @@ impl AtlasKey {
     pub(crate) fn texture_kind(&self) -> AtlasTextureKind {
         match self {
             AtlasKey::Glyph(params) => {
-                if params.is_emoji {
+                if params.is_emoji || params.raster_mode == crate::GlyphRasterMode::Subpixel {
                     AtlasTextureKind::Polychrome
                 } else {
                     AtlasTextureKind::Monochrome
@@ -951,6 +952,7 @@ impl AtlasKey {
             AtlasKey::IconAtlas(_) => AtlasTextureKind::Monochrome,
             AtlasKey::Image(_) => AtlasTextureKind::Polychrome,
             AtlasKey::CachedSurface(_) => AtlasTextureKind::Polychrome,
+            AtlasKey::Shadow(_) => AtlasTextureKind::Polychrome,
         }
     }
 
@@ -1007,6 +1009,12 @@ impl From<RenderImageParams> for AtlasKey {
 impl From<CachedSurfaceParams> for AtlasKey {
     fn from(params: CachedSurfaceParams) -> Self {
         Self::CachedSurface(params)
+    }
+}
+
+impl From<crate::shadow_cache::ShadowAtlasParams> for AtlasKey {
+    fn from(params: crate::shadow_cache::ShadowAtlasParams) -> Self {
+        Self::Shadow(params)
     }
 }
 

@@ -68,6 +68,7 @@ pub mod security;
 mod session_store;
 mod shared_string;
 mod shared_uri;
+mod shadow_cache;
 mod style;
 mod styled;
 mod subscription;

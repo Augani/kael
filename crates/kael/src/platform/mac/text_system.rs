@@ -1,8 +1,8 @@
 use crate::{
     Bounds, DevicePixels, Font, FontFallbacks, FontFeatures, FontId, FontMetrics, FontRun,
-    FontStyle, FontWeight, GlyphId, LineLayout, Pixels, PlatformTextSystem, Point,
-    RenderGlyphParams, Result, SUBPIXEL_VARIANTS_X, ShapedGlyph, ShapedRun, SharedString, Size,
-    point, px, size, swap_rgba_pa_to_bgra,
+    FontStyle, FontWeight, GlyphId, GlyphRasterMode, LineLayout, Pixels, PlatformTextSystem,
+    Point, RenderGlyphParams, Result, SUBPIXEL_VARIANTS_X, ShapedGlyph, ShapedRun, SharedString,
+    Size, point, px, size, swap_rgba_pa_to_bgra,
 };
 use anyhow::anyhow;
 use cocoa::appkit::CGFloat;
@@ -14,7 +14,10 @@ use core_foundation::{
     string::CFString,
 };
 use core_graphics::{
-    base::{CGGlyph, kCGImageAlphaPremultipliedLast},
+    base::{
+        CGGlyph, kCGBitmapByteOrder32Little, kCGImageAlphaPremultipliedFirst,
+        kCGImageAlphaPremultipliedLast,
+    },
     color_space::CGColorSpace,
     context::{CGContext, CGTextDrawingMode},
     display::CGPoint,
@@ -371,6 +374,17 @@ impl MacTextSystemState {
                     &CGColorSpace::create_device_rgb(),
                     kCGImageAlphaPremultipliedLast,
                 );
+            } else if params.raster_mode == GlyphRasterMode::Subpixel {
+                bytes = vec![0; bitmap_size.width.0 as usize * 4 * bitmap_size.height.0 as usize];
+                cx = CGContext::create_bitmap_context(
+                    Some(bytes.as_mut_ptr() as *mut _),
+                    bitmap_size.width.0 as usize,
+                    bitmap_size.height.0 as usize,
+                    8,
+                    bitmap_size.width.0 as usize * 4,
+                    &CGColorSpace::create_device_rgb(),
+                    kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little,
+                );
             } else {
                 bytes = vec![0; bitmap_size.width.0 as usize * bitmap_size.height.0 as usize];
                 cx = CGContext::create_bitmap_context(
@@ -399,7 +413,13 @@ impl MacTextSystemState {
                 .subpixel_variant
                 .map(|v| v as f32 / SUBPIXEL_VARIANTS_X as f32);
             cx.set_text_drawing_mode(CGTextDrawingMode::CGTextFill);
-            cx.set_gray_fill_color(0.0, 1.0);
+            if params.raster_mode == GlyphRasterMode::Subpixel {
+                cx.set_font_smoothing_style(16);
+                cx.set_should_smooth_fonts(true);
+                cx.set_rgb_fill_color(1.0, 1.0, 1.0, 1.0);
+            } else {
+                cx.set_gray_fill_color(0.0, 1.0);
+            }
             cx.set_allows_antialiasing(true);
             cx.set_should_antialias(true);
             cx.set_allows_font_subpixel_positioning(true);

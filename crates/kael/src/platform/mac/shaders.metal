@@ -859,6 +859,29 @@ fragment float4 polychrome_sprite_fragment(
   float distance =
       quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
 
+  if (sprite.sprite_kind == 1u) {
+    float4 tint = hsla_to_rgba(sprite.color);
+    float3 coverage = sample.rgb;
+    float coverage_alpha = max(max(coverage.r, coverage.g), coverage.b);
+    float shape_alpha = sprite.opacity * saturate(0.5 - distance);
+    float alpha = tint.a * coverage_alpha * shape_alpha;
+    if (coverage_alpha <= 0.0 || alpha <= 0.0) {
+      return float4(0.0);
+    }
+    float3 rgb = tint.rgb * (coverage / coverage_alpha);
+    return float4(rgb, alpha);
+  }
+
+  if (sprite.sprite_kind == 2u) {
+    float shape_alpha = sprite.opacity * saturate(0.5 - distance);
+    float alpha = sample.a * shape_alpha;
+    if (sample.a <= 0.0 || alpha <= 0.0) {
+      return float4(0.0);
+    }
+
+    return float4(sample.rgb / sample.a, alpha);
+  }
+
   float4 color = sample;
   if (sprite.grayscale) {
     float grayscale = 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;

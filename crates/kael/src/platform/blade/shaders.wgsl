@@ -1411,6 +1411,8 @@ struct PolychromeSprite {
     content_mask: Bounds,
     corner_radii: Corners,
     tile: AtlasTile,
+    sprite_kind: u32,
+    color: Hsla,
 }
 var<storage, read> b_poly_sprites: array<PolychromeSprite>;
 
@@ -1444,6 +1446,34 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
 
     let sprite = b_poly_sprites[input.sprite_id];
     let distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
+    if (sprite.sprite_kind == 1u) {
+        let tint = hsla_to_rgba(sprite.color);
+        let coverage = sample.rgb;
+        let coverage_alpha = max(max(coverage.r, coverage.g), coverage.b);
+        let shape_alpha = sprite.opacity * saturate(0.5 - distance);
+        let alpha = tint.a * coverage_alpha * shape_alpha;
+        if (coverage_alpha <= 0.0 || alpha <= 0.0) {
+            return vec4<f32>(0.0);
+        }
+        if (globals.premultiplied_alpha != 0u) {
+            return vec4<f32>(tint.rgb * coverage * tint.a * shape_alpha, alpha);
+        }
+
+        return vec4<f32>(tint.rgb * (coverage / coverage_alpha), alpha);
+    }
+
+    if (sprite.sprite_kind == 2u) {
+        let shape_alpha = sprite.opacity * saturate(0.5 - distance);
+        let alpha = sample.a * shape_alpha;
+        if (sample.a <= 0.0 || alpha <= 0.0) {
+            return vec4<f32>(0.0);
+        }
+        if (globals.premultiplied_alpha != 0u) {
+            return sample * shape_alpha;
+        }
+
+        return vec4<f32>(sample.rgb / sample.a, alpha);
+    }
 
     var color = sample;
     if ((sprite.grayscale & 0xFFu) != 0u) {

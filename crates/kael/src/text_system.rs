@@ -822,6 +822,12 @@ impl TextRun {
 #[repr(C)]
 pub struct GlyphId(pub(crate) u32);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum GlyphRasterMode {
+    Grayscale,
+    Subpixel,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RenderGlyphParams {
     pub(crate) font_id: FontId,
@@ -830,6 +836,7 @@ pub(crate) struct RenderGlyphParams {
     pub(crate) subpixel_variant: Point<u8>,
     pub(crate) scale_factor: f32,
     pub(crate) is_emoji: bool,
+    pub(crate) raster_mode: GlyphRasterMode,
 }
 
 impl Eq for RenderGlyphParams {}
@@ -842,6 +849,53 @@ impl Hash for RenderGlyphParams {
         self.subpixel_variant.hash(state);
         self.scale_factor.to_bits().hash(state);
         self.is_emoji.hash(state);
+        self.raster_mode.hash(state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::hash::{Hash, Hasher};
+
+    #[derive(Default)]
+    struct RecordingHasher {
+        bytes: Vec<u8>,
+    }
+
+    impl Hasher for RecordingHasher {
+        fn finish(&self) -> u64 {
+            0
+        }
+
+        fn write(&mut self, bytes: &[u8]) {
+            self.bytes.extend_from_slice(bytes);
+        }
+    }
+
+    #[test]
+    fn render_glyph_hash_distinguishes_raster_mode() {
+        let grayscale = RenderGlyphParams {
+            font_id: FontId(7),
+            glyph_id: GlyphId(11),
+            font_size: px(14.),
+            subpixel_variant: Point { x: 0, y: 0 },
+            scale_factor: 1.0,
+            is_emoji: false,
+            raster_mode: GlyphRasterMode::Grayscale,
+        };
+        let subpixel = RenderGlyphParams {
+            raster_mode: GlyphRasterMode::Subpixel,
+            ..grayscale.clone()
+        };
+
+        let mut grayscale_hasher = RecordingHasher::default();
+        grayscale.hash(&mut grayscale_hasher);
+
+        let mut subpixel_hasher = RecordingHasher::default();
+        subpixel.hash(&mut subpixel_hasher);
+
+        assert_ne!(grayscale_hasher.bytes, subpixel_hasher.bytes);
     }
 }
 

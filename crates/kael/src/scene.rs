@@ -810,6 +810,10 @@ impl From<MonochromeSprite> for Primitive {
     }
 }
 
+pub(crate) const POLYCHROME_SPRITE_KIND_COLOR: u32 = 0;
+pub(crate) const POLYCHROME_SPRITE_KIND_SUBPIXEL_TEXT: u32 = 1;
+pub(crate) const POLYCHROME_SPRITE_KIND_PREMULTIPLIED: u32 = 2;
+
 #[derive(Clone, Debug)]
 #[repr(C)]
 pub(crate) struct PolychromeSprite {
@@ -821,6 +825,8 @@ pub(crate) struct PolychromeSprite {
     pub content_mask: ContentMask<ScaledPixels>,
     pub corner_radii: Corners<ScaledPixels>,
     pub tile: AtlasTile,
+    pub sprite_kind: u32,
+    pub color: Hsla,
 }
 
 impl From<PolychromeSprite> for Primitive {

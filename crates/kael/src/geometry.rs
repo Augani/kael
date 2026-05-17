@@ -1691,6 +1691,30 @@ impl Bounds<Pixels> {
         }
     }
 
+    /// Scale bounds to device coordinates while conservatively covering the logical bounds.
+    pub fn scale_and_snap_conservative(&self, factor: f32) -> Bounds<ScaledPixels> {
+        let scaled_origin_x = self.origin.x.0 * factor;
+        let scaled_origin_y = self.origin.y.0 * factor;
+        let scaled_far_x = (self.origin.x.0 + self.size.width.0) * factor;
+        let scaled_far_y = (self.origin.y.0 + self.size.height.0) * factor;
+
+        let snapped_origin_x = scaled_origin_x.floor();
+        let snapped_origin_y = scaled_origin_y.floor();
+        let snapped_far_x = scaled_far_x.ceil();
+        let snapped_far_y = scaled_far_y.ceil();
+
+        Bounds {
+            origin: point(
+                ScaledPixels(snapped_origin_x),
+                ScaledPixels(snapped_origin_y),
+            ),
+            size: size(
+                ScaledPixels(snapped_far_x - snapped_origin_x),
+                ScaledPixels(snapped_far_y - snapped_origin_y),
+            ),
+        }
+    }
+
     /// Convert the bounds from logical pixels to physical pixels
     pub fn to_device_pixels(self, factor: f32) -> Bounds<DevicePixels> {
         Bounds {
@@ -2133,6 +2157,25 @@ impl Edges<Pixels> {
             right: ScaledPixels((self.right.0 * factor).round()),
             bottom: ScaledPixels((self.bottom.0 * factor).round()),
             left: ScaledPixels((self.left.0 * factor).round()),
+        }
+    }
+
+    /// Scale edge widths and ensure every non-zero edge remains at least one device pixel.
+    pub fn scale_and_snap_widths(&self, factor: f32) -> Edges<ScaledPixels> {
+        let snap = |px: Pixels| {
+            let scaled = px.0 * factor;
+            if scaled <= 0.0 {
+                ScaledPixels(0.0)
+            } else {
+                ScaledPixels(scaled.round().max(1.0))
+            }
+        };
+
+        Edges {
+            top: snap(self.top),
+            right: snap(self.right),
+            bottom: snap(self.bottom),
+            left: snap(self.left),
         }
     }
 
@@ -3958,5 +4001,50 @@ mod tests {
 
         // Test Case 3: Bounds intersecting with themselves
         assert!(bounds1.intersects(&bounds1));
+    }
+
+    #[test]
+    fn conservative_scale_and_snap_covers_fractional_bounds() {
+        let bounds = Bounds {
+            origin: point(px(0.4), px(1.2)),
+            size: size(px(0.3), px(0.6)),
+        };
+
+        let snapped = bounds.scale_and_snap_conservative(1.0);
+
+        assert_eq!(snapped.origin, point(ScaledPixels(0.0), ScaledPixels(1.0)));
+        assert_eq!(snapped.size, size(ScaledPixels(1.0), ScaledPixels(1.0)));
+    }
+
+    #[test]
+    fn conservative_scale_and_snap_does_not_shrink_bounds() {
+        let bounds = Bounds {
+            origin: point(px(1.0), px(0.0)),
+            size: size(px(1.0), px(1.0)),
+        };
+
+        let snapped = bounds.scale_and_snap_conservative(1.5);
+        let scaled_origin_x = bounds.origin.x.0 * 1.5;
+        let scaled_far_x = (bounds.origin.x.0 + bounds.size.width.0) * 1.5;
+
+        assert!(snapped.origin.x.0 <= scaled_origin_x);
+        assert!(snapped.origin.x.0 + snapped.size.width.0 >= scaled_far_x);
+    }
+
+    #[test]
+    fn scale_and_snap_widths_keeps_non_zero_edges_visible() {
+        let edges = Edges {
+            top: px(0.4),
+            right: px(1.0),
+            bottom: px(0.0),
+            left: px(0.6),
+        };
+
+        let snapped = edges.scale_and_snap_widths(1.5);
+
+        assert_eq!(snapped.top, ScaledPixels(1.0));
+        assert_eq!(snapped.right, ScaledPixels(2.0));
+        assert_eq!(snapped.bottom, ScaledPixels(0.0));
+        assert_eq!(snapped.left, ScaledPixels(1.0));
     }
 }

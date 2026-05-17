@@ -12,12 +12,14 @@ use crate::{
     PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, PowerMode, PrintJob,
     ProgressBarState, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage,
     RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
+    POLYCHROME_SPRITE_KIND_COLOR, POLYCHROME_SPRITE_KIND_PREMULTIPLIED,
+    POLYCHROME_SPRITE_KIND_SUBPIXEL_TEXT,
+    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, SharedString, Size,
     StrikethroughStyle, Style, SubscriberSet, Subscription, SystemWindowTab,
     SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextStyle, TextStyleRefinement,
     TransformationMatrix, Underline, UnderlineStyle, UndoRedoManager, WindowAppearance,
     WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations, WindowOptions,
-    WindowParams, WindowState, WindowTextSystem, point,
+    WindowParams, WindowState, WindowTextSystem, GlyphRasterMode, point,
     prelude::*,
     px, rems, size, transparent_black,
     webview::{PlatformWebView, PlatformWebViewCommand},
@@ -2670,6 +2672,8 @@ impl Window {
                 content_mask: self.content_mask().scale(self.scale_factor()),
                 corner_radii: Corners::default(),
                 tile: cached_surface.tile.clone(),
+                sprite_kind: POLYCHROME_SPRITE_KIND_PREMULTIPLIED,
+                color: transparent_black(),
             });
     }
 
@@ -3166,10 +3170,30 @@ impl Window {
             } else {
                 (bounds + shadow.offset).dilate(shadow.spread_radius)
             };
-            self.next_frame.scene.insert_primitive(Shadow {
+            let scaled_bounds = shadow_bounds.scale_and_snap_conservative(scale_factor);
+            let scaled_corner_radii = corner_radii.scale(scale_factor);
+            let scaled_blur_radius = shadow.blur_radius.scale(scale_factor);
+            let scaled_color = shadow.color.opacity(opacity);
+            let atlas_params = crate::shadow_cache::ShadowAtlasParams::new(
+                scaled_bounds.size.map(|value| crate::DevicePixels(value.0 as i32)),
+                scaled_corner_radii,
+                scaled_blur_radius,
+                scaled_color,
+                shadow.inset,
+            );
+            let tile_result = self.sprite_atlas.get_or_insert_with(&atlas_params.clone().into(), &mut || {
+                    let (size, bytes) = crate::shadow_cache::rasterize_shadow(&atlas_params);
+                    Ok(Some((size, Cow::Owned(bytes))))
+                });
+            let Ok(Some(tile)) = tile_result else {
+                continue;
+            };
+            self.next_frame.scene.insert_primitive(PolychromeSprite {
                 order: 0,
-                blur_radius: shadow.blur_radius.scale(scale_factor),
-                bounds: shadow_bounds.scale(scale_factor),
+                pad: 0,
+                grayscale: false,
+                opacity: 1.0,
+                bounds: crate::shadow_cache::expanded_bounds(scaled_bounds, scaled_blur_radius),
                 content_mask: if shadow.inset {
                     ContentMask {
                         bounds: bounds.scale(scale_factor),
@@ -3177,9 +3201,10 @@ impl Window {
                 } else {
                     content_mask.scale(scale_factor)
                 },
-                corner_radii: corner_radii.scale(scale_factor),
-                color: shadow.color.opacity(opacity),
-                inset: if shadow.inset { 1 } else { 0 },
+                corner_radii: Default::default(),
+                tile,
+                sprite_kind: POLYCHROME_SPRITE_KIND_COLOR,
+                color: transparent_black(),
             });
         }
     }
@@ -3221,7 +3246,7 @@ impl Window {
         self.next_frame.scene.insert_primitive(crate::BlurRect {
             order: 0,
             blur_radius: blur_radius.scale(scale_factor),
-            bounds: bounds.scale_and_snap(scale_factor),
+            bounds: bounds.scale_and_snap_conservative(scale_factor),
             content_mask: content_mask.scale(scale_factor),
             corner_radii: corner_radii.scale(scale_factor),
             tint: tint.opacity(opacity),
@@ -3251,7 +3276,7 @@ impl Window {
             background: quad.background.opacity(opacity),
             border_color: quad.border_color.opacity(opacity),
             corner_radii: quad.corner_radii.scale(scale_factor),
-            border_widths: quad.border_widths.scale_and_snap(scale_factor),
+            border_widths: quad.border_widths.scale_and_snap_widths(scale_factor),
             border_style: quad.border_style,
             continuous_corners: if quad.continuous_corners { 1 } else { 0 },
             transform: quad.transform,
@@ -3384,10 +3409,23 @@ impl Window {
         let element_opacity = self.element_opacity();
         let scale_factor = self.scale_factor();
         let glyph_origin = origin.scale(scale_factor);
+        let device_x = glyph_origin.x.0;
+        let device_y = glyph_origin.y.0;
+        let fract_x = device_x - device_x.floor();
+        let fract_y = device_y - device_y.floor();
 
         let subpixel_variant = Point {
-            x: (glyph_origin.x.0.fract() * SUBPIXEL_VARIANTS_X as f32).floor() as u8,
-            y: (glyph_origin.y.0.fract() * SUBPIXEL_VARIANTS_Y as f32).floor() as u8,
+            x: (fract_x * SUBPIXEL_VARIANTS_X as f32).floor() as u8,
+            y: (fract_y * SUBPIXEL_VARIANTS_Y as f32).floor() as u8,
+        };
+        let raster_mode = if cfg!(target_os = "macos")
+            && color.a >= 1.0
+            && element_opacity >= 1.0
+            && transformation == TransformationMatrix::unit()
+        {
+            GlyphRasterMode::Subpixel
+        } else {
+            GlyphRasterMode::Grayscale
         };
         let params = RenderGlyphParams {
             font_id,
@@ -3396,6 +3434,7 @@ impl Window {
             subpixel_variant,
             scale_factor,
             is_emoji: false,
+            raster_mode,
         };
 
         let raster_bounds = self.text_system().raster_bounds(&params)?;
@@ -3409,20 +3448,39 @@ impl Window {
             else {
                 return Ok(());
             };
+            let floored_origin = point(ScaledPixels(device_x.floor()), ScaledPixels(device_y.floor()));
             let bounds = Bounds {
-                origin: glyph_origin.map(|px| px.floor()) + raster_bounds.origin.map(Into::into),
+                origin: floored_origin + raster_bounds.origin.map(Into::into),
                 size: tile.bounds.size.map(Into::into),
             };
             let content_mask = self.content_mask().scale(scale_factor);
-            self.next_frame.scene.insert_primitive(MonochromeSprite {
-                order: 0,
-                pad: 0,
-                bounds,
-                content_mask,
-                color: color.opacity(element_opacity),
-                tile,
-                transformation,
-            });
+            match raster_mode {
+                GlyphRasterMode::Subpixel => {
+                    self.next_frame.scene.insert_primitive(PolychromeSprite {
+                        order: 0,
+                        pad: 0,
+                        grayscale: false,
+                        opacity: 1.0,
+                        bounds,
+                        content_mask,
+                        corner_radii: Default::default(),
+                        tile,
+                        sprite_kind: POLYCHROME_SPRITE_KIND_SUBPIXEL_TEXT,
+                        color: color.opacity(element_opacity),
+                    });
+                }
+                GlyphRasterMode::Grayscale => {
+                    self.next_frame.scene.insert_primitive(MonochromeSprite {
+                        order: 0,
+                        pad: 0,
+                        bounds,
+                        content_mask,
+                        color: color.opacity(element_opacity),
+                        tile,
+                        transformation,
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -3446,6 +3504,8 @@ impl Window {
 
         let scale_factor = self.scale_factor();
         let glyph_origin = origin.scale(scale_factor);
+        let device_x = glyph_origin.x.0;
+        let device_y = glyph_origin.y.0;
         let params = RenderGlyphParams {
             font_id,
             glyph_id,
@@ -3454,6 +3514,7 @@ impl Window {
             subpixel_variant: Default::default(),
             scale_factor,
             is_emoji: true,
+            raster_mode: GlyphRasterMode::Grayscale,
         };
 
         let raster_bounds = self.text_system().raster_bounds(&params)?;
@@ -3469,7 +3530,8 @@ impl Window {
             };
 
             let bounds = Bounds {
-                origin: glyph_origin.map(|px| px.floor()) + raster_bounds.origin.map(Into::into),
+                origin: point(ScaledPixels(device_x.floor()), ScaledPixels(device_y.floor()))
+                    + raster_bounds.origin.map(Into::into),
                 size: tile.bounds.size.map(Into::into),
             };
             let content_mask = self.content_mask().scale(scale_factor);
@@ -3484,6 +3546,8 @@ impl Window {
                 content_mask,
                 tile,
                 opacity,
+                sprite_kind: POLYCHROME_SPRITE_KIND_COLOR,
+                color: transparent_black(),
             });
         }
         Ok(())
@@ -3651,6 +3715,8 @@ impl Window {
             corner_radii,
             tile,
             opacity,
+            sprite_kind: POLYCHROME_SPRITE_KIND_COLOR,
+            color: transparent_black(),
         });
         Ok(())
     }
