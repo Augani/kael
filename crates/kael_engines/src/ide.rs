@@ -225,6 +225,7 @@ impl SearchIndex {
             };
             match RegexBuilder::new(&pattern)
                 .case_insensitive(!query.case_sensitive)
+                .size_limit(1024 * 1024)
                 .build()
             {
                 Ok(regex) => Some(regex),
@@ -265,6 +266,11 @@ impl SearchIndex {
                 }
             })
             .collect()
+    }
+
+    /// Search the index and return at most `max_results` entries.
+    pub fn search_with_limit(&self, query: &SearchQuery, max_results: usize) -> Vec<&SearchEntry> {
+        self.search(query).into_iter().take(max_results).collect()
     }
 
     /// Remove all entries from the index.
@@ -507,5 +513,27 @@ mod tests {
         });
         idx.clear();
         assert_eq!(idx.count(), 0);
+    }
+
+    #[test]
+    fn search_respects_max_results() {
+        let mut idx = SearchIndex::new();
+        for i in 0..10u32 {
+            idx.add(SearchEntry {
+                path: format!("file{i}.rs"),
+                line: i,
+                content: "needle".into(),
+            });
+        }
+        let query = SearchQuery {
+            pattern: "needle".into(),
+            case_sensitive: true,
+            whole_word: false,
+            regex: false,
+            include_paths: None,
+            exclude_paths: None,
+        };
+        let results = idx.search_with_limit(&query, 3);
+        assert_eq!(results.len(), 3);
     }
 }

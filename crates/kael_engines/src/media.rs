@@ -473,6 +473,32 @@ mod tests {
     }
 
     #[test]
+    fn zero_duration_clip_is_valid() {
+        let clip = sample_clip("zero", 10, 10, 0);
+        let track = sample_track("v1", TrackType::Video, vec![clip]);
+        let tl = Timeline {
+            tracks: vec![track],
+            frame_rate: 30.0,
+            duration_frames: 60,
+        };
+        assert!(tl.clips_at_frame(0).is_empty());
+        assert!(tl.clips_at_frame(10).is_empty());
+    }
+
+    #[test]
+    fn max_frame_arithmetic_does_not_overflow() {
+        let clip = sample_clip("big", u64::MAX - 10, u64::MAX, u64::MAX - 10);
+        let track = sample_track("v1", TrackType::Video, vec![clip]);
+        let tl = Timeline {
+            tracks: vec![track],
+            frame_rate: 30.0,
+            duration_frames: u64::MAX,
+        };
+        let _ = tl.clips_at_frame(u64::MAX);
+        let _ = tl.clips_at_frame(0);
+    }
+
+    #[test]
     fn media_probe_serialization() {
         let probe = MediaProbe {
             path: "test.mp4".into(),
