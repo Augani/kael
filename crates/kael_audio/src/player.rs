@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Duration};
 use anyhow::Result;
 use parking_lot::Mutex;
 
-use crate::effects::{clamp_playback_rate, clamp_volume};
+use crate::effects::clamp_volume;
 
 type StateListener = Arc<dyn Fn(PlaybackState) + Send + Sync + 'static>;
 type PositionListener = Arc<dyn Fn(Duration) + Send + Sync + 'static>;
@@ -288,10 +288,9 @@ impl AudioPlayer {
         }
     }
 
-    /// Sets the logical playback rate.
-    pub fn set_rate(&self, rate: f32) {
-        let mut state = self.inner.lock();
-        state.rate = clamp_playback_rate(rate);
+    /// Returns the current playback rate.
+    pub fn rate(&self) -> f32 {
+        self.inner.lock().rate
     }
 
     /// Returns the current playback position.
@@ -437,6 +436,12 @@ mod tests {
     use futures::executor::block_on;
 
     use super::{AudioPlayer, AudioSource, PlaybackState};
+
+    #[test]
+    fn audio_player_rate_defaults_to_one() {
+        let player = AudioPlayer::new();
+        assert_eq!(player.rate(), 1.0);
+    }
 
     #[test]
     fn load_generation_increments_on_load() {
