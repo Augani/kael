@@ -3,11 +3,11 @@ use super::wayland::WaylandWindowStatePtr;
 #[cfg(feature = "x11")]
 use super::x11::X11WindowStatePtr;
 use crate::{
+    Bounds, Pixels, Point, SharedString,
     webview::{
         NavigationPolicy, PlatformWebView, PlatformWebViewCommand, WebViewMessageHandler,
         WebViewNavigationHandler,
     },
-    Bounds, Pixels, Point, SharedString,
 };
 use anyhow::{Context as _, Result};
 use gtk::prelude::*;
@@ -17,8 +17,8 @@ use util::ResultExt;
 #[cfg(feature = "wayland")]
 use wry::WebViewBuilderExtUnix;
 use wry::{
-    dpi::{LogicalPosition, LogicalSize},
     NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder,
+    dpi::{LogicalPosition, LogicalSize},
 };
 
 pub(crate) struct LinuxWebViewHost {

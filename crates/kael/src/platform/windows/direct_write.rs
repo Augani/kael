@@ -4,9 +4,7 @@ use anyhow::{Context, Result};
 use collections::HashMap;
 use itertools::Itertools;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
-use util::ResultExt;
 use windows::{
-    core::*,
     Win32::{
         Foundation::*,
         Globalization::GetUserDefaultLocaleName,
@@ -17,9 +15,11 @@ use windows::{
         System::SystemServices::LOCALE_NAME_MAX_LENGTH,
         UI::WindowsAndMessaging::*,
     },
+    core::*,
 };
 use windows_numerics::Vector2;
 
+use crate::util::ResultExt;
 use crate::*;
 
 #[derive(Debug)]
