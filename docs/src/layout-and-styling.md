@@ -135,11 +135,33 @@ div().font_family(".SystemUIFont")
 
 ## Overflow and scrolling
 
+Control how content behaves when it exceeds the element bounds:
+
 ```rust
 div().overflow_hidden()
+div().overflow_x_scroll()
+div().overflow_y_scroll()
 div().overflow_y_auto()
     .id("scroll-container")
 ```
+
+When using `overflow_y_scroll()` or `overflow_y_auto()` with a `ScrollHandle`,
+Kael automatically renders a macOS-style scrollbar thumb when content overflows.
+No extra widget is needed:
+
+```rust
+let scroll_handle = ScrollHandle::new();
+
+div()
+    .id("my-scrollable")
+    .overflow_y_scroll()
+    .track_scroll(&scroll_handle)
+    .child(long_content)
+```
+
+The auto-scrollbar appears only when content exceeds the viewport and tracks
+the scroll position automatically. For custom scrollbar styling, use the
+explicit `scroll_bar()` widget instead (see [Lists & Data](lists-and-data.md)).
 
 ## Positioning
 

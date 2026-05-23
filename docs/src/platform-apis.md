@@ -192,7 +192,6 @@ Application::new()
 Open multiple windows with independent views:
 
 ```rust
-// Open a second window
 cx.open_window(
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -201,6 +200,14 @@ cx.open_window(
     |_window, cx| cx.new(|_| SettingsView::new()),
 ).unwrap();
 ```
+
+Kael windows follow native platform conventions automatically:
+
+- **Scroll-to-focus** — scrolling over an unfocused Kael window activates it,
+  matching standard macOS/Windows behavior
+- **Smooth zoom** — double-clicking the titlebar animates the window to fill
+  the screen using native Core Animation transitions
+- **Live resize** — content reflows smoothly during window drag-resizing
 
 ---
 

@@ -120,7 +120,12 @@ sortable_list(
 
 ## ScrollBar
 
-Custom scroll bar bound to a scroll handle:
+Kael provides automatic scrollbars for any element with `overflow_y_scroll()`
+or `overflow_y_auto()` and a tracked `ScrollHandle`. The scrollbar appears
+as a native-style dark rounded thumb when content overflows — no extra code
+needed (see [Layout & Styling](layout-and-styling.md#overflow-and-scrolling)).
+
+For **custom** scroll bar rendering, use the explicit `scroll_bar()` widget:
 
 ```rust
 use kael::scroll_bar;
