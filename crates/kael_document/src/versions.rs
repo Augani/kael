@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{anyhow, Context as _, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -35,10 +35,34 @@ impl VersionStore {
         let root = root.as_ref();
         std::fs::create_dir_all(root)
             .with_context(|| format!("failed to create version root {}", root.display()))?;
-        Ok(Self {
+        let store = Self {
             root: root.join("document_versions"),
             max_versions: max_versions.max(1),
-        })
+        };
+        store.cleanup_temp_files();
+        Ok(store)
+    }
+
+    fn cleanup_temp_files(&self) {
+        if !self.root.exists() {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(&self.root) else {
+            return;
+        };
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Ok(sub_entries) = std::fs::read_dir(&path) {
+                    for sub_entry in sub_entries.filter_map(|e| e.ok()) {
+                        let sub_path = sub_entry.path();
+                        if sub_path.extension().is_some_and(|ext| ext == "tmp") {
+                            let _ = std::fs::remove_file(sub_path);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub(crate) fn load(&self, document_key: &str) -> Result<Vec<DocumentVersion>> {
@@ -187,5 +211,36 @@ mod tests {
 
         let error = store.read("doc", &version).unwrap_err();
         assert!(error.to_string().contains("digest mismatch"));
+    }
+
+    #[test]
+    fn recovers_from_interrupted_blob_write() {
+        let tmp = TempDir::new().unwrap();
+        let store = VersionStore::new_in(tmp.path(), 4).unwrap();
+        store.record("doc", b"good data").unwrap();
+
+        let doc_dir = store.document_dir("doc");
+        std::fs::write(doc_dir.join("partial.tmp"), b"corrupt").unwrap();
+
+        let store2 = VersionStore::new_in(tmp.path(), 4).unwrap();
+        let versions = store2.load("doc").unwrap();
+        assert_eq!(versions.len(), 1);
+        let data = store2.read("doc", &versions[0]).unwrap();
+        assert_eq!(data, b"good data");
+        assert!(!doc_dir.join("partial.tmp").exists());
+    }
+
+    #[test]
+    fn retention_policy_limits_stored_versions() {
+        let tmp = TempDir::new().unwrap();
+        let store = VersionStore::new_in(tmp.path(), 3).unwrap();
+
+        for i in 0..5u8 {
+            store.record("doc", format!("v{i}").as_bytes()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        let versions = store.load("doc").unwrap();
+        assert!(versions.len() <= 3);
     }
 }
