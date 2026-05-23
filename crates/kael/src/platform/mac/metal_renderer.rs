@@ -22,7 +22,7 @@ use metal::{CAMetalLayer, CommandQueue, MTLPixelFormat, MTLResourceOptions, NSRa
 use objc::{self, msg_send, sel, sel_impl};
 use parking_lot::Mutex;
 
-use std::{cell::Cell, ffi::c_void, mem, ptr, sync::Arc};
+use std::{cell::Cell, ffi::c_void, mem, ptr, sync::Arc, time::Instant};
 
 // Exported to metal
 pub(crate) type PointF = crate::Point<f32>;
@@ -65,6 +65,20 @@ impl Default for InstanceBufferPool {
 pub(crate) struct InstanceBuffer {
     metal_buffer: metal::Buffer,
     size: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct RendererCounters {
+    resize_events: u64,
+    capacity_growths: u64,
+    path_texture_allocations: u64,
+    cached_surface_texture_allocations: u64,
+    blur_texture_allocations: u64,
+    draw_calls: u64,
+    next_drawable_failures: u64,
+    next_drawable_wait_micros: u64,
+    max_next_drawable_wait_micros: u64,
+    instance_buffer_growths: u64,
 }
 
 impl InstanceBufferPool {
@@ -113,12 +127,15 @@ pub(crate) struct MetalRenderer {
     instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
     sprite_atlas: Arc<MetalAtlas>,
     core_video_texture_cache: core_video::metal_texture_cache::CVMetalTextureCache,
+    drawable_size: Size<DevicePixels>,
+    drawable_capacity: Size<DevicePixels>,
     path_intermediate_texture: Option<metal::Texture>,
     path_intermediate_msaa_texture: Option<metal::Texture>,
     cached_surface_texture: Option<metal::Texture>,
     blur_source_texture: Option<metal::Texture>,
     blur_horizontal_texture: Option<metal::Texture>,
     path_sample_count: u32,
+    counters: RendererCounters,
 }
 
 #[repr(C)]
@@ -291,12 +308,15 @@ impl MetalRenderer {
             instance_buffer_pool,
             sprite_atlas,
             core_video_texture_cache,
+            drawable_size: size(DevicePixels(0), DevicePixels(0)),
+            drawable_capacity: size(DevicePixels(0), DevicePixels(0)),
             path_intermediate_texture: None,
             path_intermediate_msaa_texture: None,
             cached_surface_texture: None,
             blur_source_texture: None,
             blur_horizontal_texture: None,
             path_sample_count: PATH_SAMPLE_COUNT,
+            counters: RendererCounters::default(),
         }
     }
 
@@ -318,35 +338,81 @@ impl MetalRenderer {
             .set_presents_with_transaction(presents_with_transaction);
     }
 
-    pub fn update_drawable_size(&mut self, size: Size<DevicePixels>) {
-        let size = NSSize {
-            width: size.width.0 as f64,
-            height: size.height.0 as f64,
+    pub fn update_drawable_size(&mut self, new_size: Size<DevicePixels>) {
+        if self.drawable_size == new_size {
+            return;
+        }
+
+        self.counters.resize_events += 1;
+        self.drawable_size = new_size;
+        let drawable_size = NSSize {
+            width: new_size.width.0 as f64,
+            height: new_size.height.0 as f64,
         };
         unsafe {
             let _: () = msg_send![
                 self.layer(),
-                setDrawableSize: size
+                setDrawableSize: drawable_size
             ];
         }
         let device_pixels_size = Size {
-            width: DevicePixels(size.width as i32),
-            height: DevicePixels(size.height as i32),
+            width: DevicePixels(drawable_size.width as i32),
+            height: DevicePixels(drawable_size.height as i32),
         };
-        self.update_path_intermediate_textures(device_pixels_size);
-        self.update_cached_surface_texture(device_pixels_size);
-        self.update_blur_textures(device_pixels_size);
+
+        if device_pixels_size.width.0 <= 0 || device_pixels_size.height.0 <= 0 {
+            self.drawable_capacity = size(DevicePixels(0), DevicePixels(0));
+            self.path_intermediate_texture = None;
+            self.path_intermediate_msaa_texture = None;
+            self.cached_surface_texture = None;
+            self.blur_source_texture = None;
+            self.blur_horizontal_texture = None;
+            return;
+        }
+
+        if self.drawable_capacity.width.0 >= device_pixels_size.width.0
+            && self.drawable_capacity.height.0 >= device_pixels_size.height.0
+        {
+            return;
+        }
+
+        self.drawable_capacity = size(
+            DevicePixels(
+                self.drawable_capacity
+                    .width
+                    .0
+                    .max(device_pixels_size.width.0),
+            ),
+            DevicePixels(
+                self.drawable_capacity
+                    .height
+                    .0
+                    .max(device_pixels_size.height.0),
+            ),
+        );
+        self.counters.capacity_growths += 1;
+        self.update_path_intermediate_textures(self.drawable_capacity);
+        self.update_cached_surface_texture(self.drawable_capacity);
+        log::trace!(
+            "metal renderer drawable capacity grew to {:?}; resize_events={} capacity_growths={} path_allocations={} cached_surface_allocations={} blur_allocations={}",
+            self.drawable_capacity,
+            self.counters.resize_events,
+            self.counters.capacity_growths,
+            self.counters.path_texture_allocations,
+            self.counters.cached_surface_texture_allocations,
+            self.counters.blur_texture_allocations,
+        );
     }
 
     fn update_path_intermediate_textures(&mut self, size: Size<DevicePixels>) {
-        // We are uncertain when this happens, but sometimes size can be 0 here. Most likely before
-        // the layout pass on window creation. Zero-sized texture creation causes SIGABRT.
-        // https://github.com/zed-industries/zed/issues/36229
-        if size.width.0 <= 0 || size.height.0 <= 0 {
-            self.path_intermediate_texture = None;
-            self.path_intermediate_msaa_texture = None;
+        if texture_covers(self.path_intermediate_texture.as_ref(), size)
+            && (!self.uses_msaa()
+                || texture_covers(self.path_intermediate_msaa_texture.as_ref(), size))
+        {
             return;
         }
+
+        self.counters.path_texture_allocations += 1;
 
         let texture_descriptor = metal::TextureDescriptor::new();
         texture_descriptor.set_width(size.width.0 as u64);
@@ -368,10 +434,11 @@ impl MetalRenderer {
     }
 
     fn update_cached_surface_texture(&mut self, size: Size<DevicePixels>) {
-        if size.width.0 <= 0 || size.height.0 <= 0 {
-            self.cached_surface_texture = None;
+        if texture_covers(self.cached_surface_texture.as_ref(), size) {
             return;
         }
+
+        self.counters.cached_surface_texture_allocations += 1;
 
         let texture_descriptor = metal::TextureDescriptor::new();
         texture_descriptor.set_width(size.width.0 as u64);
@@ -382,12 +449,20 @@ impl MetalRenderer {
         self.cached_surface_texture = Some(self.device.new_texture(&texture_descriptor));
     }
 
-    fn update_blur_textures(&mut self, size: Size<DevicePixels>) {
+    fn ensure_blur_textures(&mut self, size: Size<DevicePixels>) -> bool {
         if size.width.0 <= 0 || size.height.0 <= 0 {
             self.blur_source_texture = None;
             self.blur_horizontal_texture = None;
-            return;
+            return false;
         }
+
+        if texture_covers(self.blur_source_texture.as_ref(), size)
+            && texture_covers(self.blur_horizontal_texture.as_ref(), size)
+        {
+            return true;
+        }
+
+        self.counters.blur_texture_allocations += 1;
 
         let texture_descriptor = metal::TextureDescriptor::new();
         texture_descriptor.set_width(size.width.0 as u64);
@@ -397,6 +472,11 @@ impl MetalRenderer {
             .set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
         self.blur_source_texture = Some(self.device.new_texture(&texture_descriptor));
         self.blur_horizontal_texture = Some(self.device.new_texture(&texture_descriptor));
+        true
+    }
+
+    fn uses_msaa(&self) -> bool {
+        self.path_sample_count > 1
     }
 
     pub fn update_transparency(&self, _transparent: bool) {
@@ -408,21 +488,33 @@ impl MetalRenderer {
     }
 
     pub fn draw(&mut self, scene: &Scene) {
+        self.counters.draw_calls += 1;
         let layer = self.layer.clone();
         let viewport_size = layer.drawable_size();
         let viewport_size: Size<DevicePixels> = size(
             (viewport_size.width.ceil() as i32).into(),
             (viewport_size.height.ceil() as i32).into(),
         );
+        let drawable_started_at = Instant::now();
         let drawable = if let Some(drawable) = layer.next_drawable() {
             drawable
         } else {
+            self.counters.next_drawable_failures += 1;
             log::error!(
                 "failed to retrieve next drawable, drawable size: {:?}",
                 viewport_size
             );
             return;
         };
+        let next_drawable_wait_micros = drawable_started_at.elapsed().as_micros() as u64;
+        self.counters.next_drawable_wait_micros = self
+            .counters
+            .next_drawable_wait_micros
+            .saturating_add(next_drawable_wait_micros);
+        self.counters.max_next_drawable_wait_micros = self
+            .counters
+            .max_next_drawable_wait_micros
+            .max(next_drawable_wait_micros);
 
         self.ensure_buffer_size(scene);
 
@@ -475,7 +567,7 @@ impl MetalRenderer {
         }
     }
 
-    fn ensure_buffer_size(&self, scene: &Scene) {
+    fn ensure_buffer_size(&mut self, scene: &Scene) {
         const ALIGN: usize = 256;
         let align_up = |size: usize| size.div_ceil(ALIGN) * ALIGN;
 
@@ -500,6 +592,7 @@ impl MetalRenderer {
             }
             new_size = new_size.min(256 * 1024 * 1024);
             pool.reset(new_size);
+            self.counters.instance_buffer_growths += 1;
         }
     }
 
@@ -691,21 +784,29 @@ impl MetalRenderer {
     }
 
     fn draw_blur_rects(
-        &self,
+        &mut self,
         blur_rects: &[BlurRect],
-        _viewport_size: Size<DevicePixels>,
+        viewport_size: Size<DevicePixels>,
         command_buffer: &metal::CommandBufferRef,
         target_texture: &metal::TextureRef,
     ) -> bool {
-        let Some(blur_source_texture) = self.blur_source_texture.as_ref() else {
+        if blur_rects.is_empty() {
             return true;
+        }
+
+        if !self.ensure_blur_textures(viewport_size) {
+            return false;
+        }
+
+        let Some(blur_source_texture) = self.blur_source_texture.as_ref() else {
+            return false;
         };
         let Some(blur_horizontal_texture) = self.blur_horizontal_texture.as_ref() else {
-            return true;
+            return false;
         };
 
         for blur_rect in blur_rects {
-            let capture_bounds = blur_rect.capture_bounds(_viewport_size);
+            let capture_bounds = blur_rect.capture_bounds(viewport_size);
             if capture_bounds.is_empty() {
                 continue;
             }
@@ -742,7 +843,7 @@ impl MetalRenderer {
             let horizontal_encoder = new_texture_command_encoder(
                 command_buffer,
                 blur_horizontal_texture,
-                _viewport_size,
+                viewport_size,
                 metal::MTLLoadAction::Clear,
                 0.0,
             );
@@ -759,8 +860,8 @@ impl MetalRenderer {
             );
             horizontal_encoder.set_vertex_bytes(
                 BlurInputIndex::ViewportSize as u64,
-                mem::size_of_val(&_viewport_size) as u64,
-                &_viewport_size as *const Size<DevicePixels> as *const _,
+                mem::size_of_val(&viewport_size) as u64,
+                &viewport_size as *const Size<DevicePixels> as *const _,
             );
             horizontal_encoder.set_fragment_texture(
                 BlurInputIndex::SourceTexture as u64,
@@ -772,7 +873,7 @@ impl MetalRenderer {
             let composite_encoder = new_texture_command_encoder(
                 command_buffer,
                 target_texture,
-                _viewport_size,
+                viewport_size,
                 metal::MTLLoadAction::Load,
                 0.0,
             );
@@ -789,8 +890,8 @@ impl MetalRenderer {
             );
             composite_encoder.set_vertex_bytes(
                 BlurInputIndex::ViewportSize as u64,
-                mem::size_of_val(&_viewport_size) as u64,
-                &_viewport_size as *const Size<DevicePixels> as *const _,
+                mem::size_of_val(&viewport_size) as u64,
+                &viewport_size as *const Size<DevicePixels> as *const _,
             );
             composite_encoder.set_fragment_texture(
                 BlurInputIndex::SourceTexture as u64,
@@ -1484,6 +1585,14 @@ impl MetalRenderer {
         }
         true
     }
+}
+
+fn texture_covers(texture: Option<&metal::Texture>, size: Size<DevicePixels>) -> bool {
+    let Some(texture) = texture else {
+        return false;
+    };
+
+    texture.width() as i32 >= size.width.0 && texture.height() as i32 >= size.height.0
 }
 
 fn new_drawable_command_encoder<'a>(

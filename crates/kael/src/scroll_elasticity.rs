@@ -1,9 +1,9 @@
-use crate::geometry::IsZero;
-use crate::px;
 use crate::Pixels;
 #[cfg(any(target_os = "macos", test))]
 use crate::ScrollDelta;
 use crate::ScrollWheelEvent;
+use crate::geometry::IsZero;
+use crate::px;
 
 pub(crate) fn rubber_band_scroll_enabled(event: &ScrollWheelEvent) -> bool {
     #[cfg(any(target_os = "macos", test))]

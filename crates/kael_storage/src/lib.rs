@@ -16,7 +16,7 @@ pub mod platform;
 
 pub use database::{Database, FromRow, Transaction};
 pub use error::{Error, Result};
-pub use kv::{JsonKvStore, KvStore, PlatformKvStore};
+pub use kv::{JsonKvStore, KvStore, PlatformKvStore, SqliteKvStore};
 pub use migration::Migration;
 pub use platform::StoragePaths;
 pub use subscription::Subscription;

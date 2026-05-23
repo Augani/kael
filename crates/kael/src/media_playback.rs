@@ -61,7 +61,8 @@ impl Asset for VideoAssetLoader {
         _cx: &mut App,
     ) -> impl Future<Output = Self::Output> + Send + 'static {
         async move {
-            load_video_asset(source)
+            smol::unblock(move || load_video_asset(source))
+                .await
                 .map_err(|error| ImageCacheError::from(anyhow!(error.to_string())))
         }
     }

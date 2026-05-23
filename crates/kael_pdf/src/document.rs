@@ -64,7 +64,10 @@ struct DocumentState {
     pages: Vec<PageDescriptor>,
     metadata: PdfMetadata,
     outline: Vec<OutlineItem>,
-    annotations: BTreeMap<usize, Vec<PageAnnotation>>,
+    page_text_cache: BTreeMap<usize, Arc<str>>,
+    rendered_page_cache: BTreeMap<(usize, u32, u64), RenderedPage>,
+    annotations: BTreeMap<usize, Arc<[PageAnnotation]>>,
+    annotation_generation: u64,
     next_annotation_id: u64,
 }
 
@@ -77,16 +80,23 @@ impl PdfDocument {
     /// Opens a PDF document from disk.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let document = LoDocument::load(&path)
-            .with_context(|| format!("failed to open PDF document {}", path.display()))?;
-        Self::from_loaded(document, Some(path))
+        smol::unblock(move || {
+            let document = LoDocument::load(&path)
+                .with_context(|| format!("failed to open PDF document {}", path.display()))?;
+            Self::from_loaded(document, Some(path))
+        })
+        .await
     }
 
     /// Opens a PDF document from in-memory bytes.
     pub async fn open_from_memory(data: &[u8]) -> Result<Self> {
-        let document =
-            LoDocument::load_mem(data).context("failed to open PDF document from memory")?;
-        Self::from_loaded(document, None)
+        let data = data.to_vec();
+        smol::unblock(move || {
+            let document =
+                LoDocument::load_mem(&data).context("failed to open PDF document from memory")?;
+            Self::from_loaded(document, None)
+        })
+        .await
     }
 
     /// Returns the number of pages in the document.
@@ -119,20 +129,25 @@ impl PdfDocument {
     /// Saves the current document and sidecar annotations to disk.
     pub async fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref().to_path_buf();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("failed to create PDF output directory {}", parent.display())
-            })?;
-        }
+        let inner = self.inner.clone();
 
-        let mut state = self.inner.lock();
-        state
-            .document
-            .save(&path)
-            .with_context(|| format!("failed to save PDF document {}", path.display()))?;
-        persist_annotations(&path, &state.annotations)?;
-        state.source_path = Some(path);
-        Ok(())
+        smol::unblock(move || {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).with_context(|| {
+                    format!("failed to create PDF output directory {}", parent.display())
+                })?;
+            }
+
+            let mut state = inner.lock();
+            state
+                .document
+                .save(&path)
+                .with_context(|| format!("failed to save PDF document {}", path.display()))?;
+            persist_annotations(&path, &state.annotations)?;
+            state.source_path = Some(path);
+            Ok(())
+        })
+        .await
     }
 
     pub(crate) fn page_size(&self, page_index: usize) -> Result<PdfPageSize> {
@@ -140,26 +155,67 @@ impl PdfDocument {
     }
 
     pub(crate) fn page_text(&self, page_index: usize) -> Result<String> {
-        let state = self.inner.lock();
+        Ok(self.page_text_shared(page_index)?.to_string())
+    }
+
+    fn page_text_shared(&self, page_index: usize) -> Result<Arc<str>> {
+        let mut state = self.inner.lock();
+        if let Some(text) = state.page_text_cache.get(&page_index) {
+            return Ok(text.clone());
+        }
+
         let page_number = state
             .pages
             .get(page_index)
             .ok_or_else(|| anyhow!("page index {page_index} out of range"))?
             .page_number;
-        extract_page_text(&state.document, page_number)
+        let text = Arc::<str>::from(extract_page_text(&state.document, page_number)?);
+        state.page_text_cache.insert(page_index, text.clone());
+        Ok(text)
     }
 
     pub(crate) fn search_page_text(&self, page_index: usize, query: &str) -> Vec<TextMatch> {
-        self.page_text(page_index)
-            .map(|text| search_text(page_index, &text, query))
+        self.page_text_shared(page_index)
+            .map(|text| search_text(page_index, text.as_ref(), query))
             .unwrap_or_default()
     }
 
     pub(crate) fn render_page(&self, page_index: usize, scale: f32) -> Result<RenderedPage> {
-        let page_size = self.page_size(page_index)?;
-        let text = self.page_text(page_index).unwrap_or_default();
-        let annotations = self.page_annotations(page_index);
-        render_page_preview(page_size, &text, &annotations, scale)
+        let scale = scale.clamp(0.25, 4.0);
+        let (page_size, annotation_generation, cached_page) = {
+            let state = self.inner.lock();
+            let page_size = state
+                .pages
+                .get(page_index)
+                .ok_or_else(|| anyhow!("page index {page_index} out of range"))?
+                .size;
+            let annotation_generation = state.annotation_generation;
+            let cached_page = state
+                .rendered_page_cache
+                .get(&(page_index, scale.to_bits(), annotation_generation))
+                .cloned();
+            (page_size, annotation_generation, cached_page)
+        };
+
+        if let Some(cached_page) = cached_page {
+            return Ok(cached_page);
+        }
+
+        let text = self
+            .page_text_shared(page_index)
+            .unwrap_or_else(|_| Arc::<str>::from(""));
+        let annotations = self.page_annotations_shared(page_index);
+        let rendered = render_page_preview(page_size, text.as_ref(), &annotations, scale)?;
+
+        let mut state = self.inner.lock();
+        if state.annotation_generation == annotation_generation {
+            state.rendered_page_cache.insert(
+                (page_index, scale.to_bits(), annotation_generation),
+                rendered.clone(),
+            );
+        }
+
+        Ok(rendered)
     }
 
     pub(crate) fn page_links(&self, _page_index: usize) -> Vec<PdfLink> {
@@ -167,12 +223,19 @@ impl PdfDocument {
     }
 
     pub(crate) fn page_annotations(&self, page_index: usize) -> Vec<PageAnnotation> {
+        self.page_annotations_shared(page_index)
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    fn page_annotations_shared(&self, page_index: usize) -> Arc<[PageAnnotation]> {
         self.inner
             .lock()
             .annotations
             .get(&page_index)
             .cloned()
-            .unwrap_or_default()
+            .unwrap_or_else(|| Arc::<[PageAnnotation]>::from([]))
     }
 
     pub(crate) fn add_page_annotation(
@@ -190,7 +253,15 @@ impl PdfDocument {
             kind: annotation,
         };
         state.next_annotation_id += 1;
-        state.annotations.entry(page_index).or_default().push(entry);
+        let annotations = state
+            .annotations
+            .entry(page_index)
+            .or_insert_with(|| Arc::<[PageAnnotation]>::from([]));
+        let mut next_annotations = annotations.as_ref().to_vec();
+        next_annotations.push(entry);
+        *annotations = Arc::from(next_annotations);
+        state.annotation_generation += 1;
+        state.rendered_page_cache.clear();
         Ok(())
     }
 
@@ -200,18 +271,23 @@ impl PdfDocument {
             .annotations
             .get_mut(&page_index)
             .ok_or_else(|| anyhow!("page index {page_index} has no annotations"))?;
-        let previous_len = annotations.len();
-        annotations.retain(|annotation| annotation.id != id);
-        if annotations.len() == previous_len {
+        let mut next_annotations = annotations.as_ref().to_vec();
+        let previous_len = next_annotations.len();
+        next_annotations.retain(|annotation| annotation.id != id);
+        if next_annotations.len() == previous_len {
             return Err(anyhow!(
                 "annotation {} not found on page {}",
                 id.0,
                 page_index
             ));
         }
-        if annotations.is_empty() {
+        if next_annotations.is_empty() {
             state.annotations.remove(&page_index);
+        } else {
+            *annotations = Arc::from(next_annotations);
         }
+        state.annotation_generation += 1;
+        state.rendered_page_cache.clear();
         Ok(())
     }
 
@@ -232,7 +308,10 @@ impl PdfDocument {
                 pages,
                 metadata,
                 outline: Vec::new(),
+                page_text_cache: BTreeMap::new(),
+                rendered_page_cache: BTreeMap::new(),
                 annotations,
+                annotation_generation: 0,
                 next_annotation_id,
             })),
         })
@@ -349,26 +428,30 @@ fn pdf_string(object: &Object) -> String {
     }
 }
 
-fn load_annotations(path: &Path) -> Result<BTreeMap<usize, Vec<PageAnnotation>>> {
+fn load_annotations(path: &Path) -> Result<BTreeMap<usize, Arc<[PageAnnotation]>>> {
     let sidecar_path = annotations_sidecar_path(path);
     if !sidecar_path.exists() {
         return Ok(BTreeMap::new());
     }
 
-    let json = std::fs::read_to_string(&sidecar_path).with_context(|| {
+    let json = std::fs::read(&sidecar_path).with_context(|| {
         format!(
             "failed to read annotation sidecar {}",
             sidecar_path.display()
         )
     })?;
     let sidecar: AnnotationSidecar =
-        serde_json::from_str(&json).context("failed to deserialize annotation sidecar")?;
-    Ok(sidecar.pages)
+        serde_json::from_slice(&json).context("failed to deserialize annotation sidecar")?;
+    Ok(sidecar
+        .pages
+        .into_iter()
+        .map(|(page_index, annotations)| (page_index, Arc::<[PageAnnotation]>::from(annotations)))
+        .collect())
 }
 
 fn persist_annotations(
     path: &Path,
-    annotations: &BTreeMap<usize, Vec<PageAnnotation>>,
+    annotations: &BTreeMap<usize, Arc<[PageAnnotation]>>,
 ) -> Result<()> {
     let sidecar_path = annotations_sidecar_path(path);
     if annotations.is_empty() {
@@ -386,33 +469,14 @@ fn persist_annotations(
         }
     }
 
-    if let Some(parent) = sidecar_path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "failed to create annotation sidecar directory {}",
-                parent.display()
-            )
-        })?;
-    }
-    let json = serde_json::to_vec_pretty(&AnnotationSidecar {
-        pages: annotations.clone(),
+    let json = serde_json::to_vec(&AnnotationSidecar {
+        pages: annotations
+            .iter()
+            .map(|(page_index, annotations)| (*page_index, annotations.as_ref().to_vec()))
+            .collect(),
     })
     .context("failed to serialize annotation sidecar")?;
-    let temp_path = sidecar_path.with_extension("tmp");
-    std::fs::write(&temp_path, json).with_context(|| {
-        format!(
-            "failed to write annotation temp file {}",
-            temp_path.display()
-        )
-    })?;
-    std::fs::rename(&temp_path, &sidecar_path).with_context(|| {
-        format!(
-            "failed to finalize annotation sidecar from {} to {}",
-            temp_path.display(),
-            sidecar_path.display()
-        )
-    })?;
-    Ok(())
+    write_bytes_atomically(&sidecar_path, &json)
 }
 
 fn annotations_sidecar_path(path: &Path) -> PathBuf {
@@ -423,13 +487,57 @@ fn annotations_sidecar_path(path: &Path) -> PathBuf {
     path.with_file_name(format!("{file_name}.annotations.json"))
 }
 
-fn next_annotation_id(annotations: &BTreeMap<usize, Vec<PageAnnotation>>) -> u64 {
+fn next_annotation_id(annotations: &BTreeMap<usize, Arc<[PageAnnotation]>>) -> u64 {
     annotations
         .values()
         .flat_map(|entries| entries.iter().map(|entry| entry.id.0))
         .max()
         .map(|value| value + 1)
         .unwrap_or(1)
+}
+
+fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create annotation sidecar directory {}",
+                parent.display()
+            )
+        })?;
+    }
+
+    let temp_path = temporary_path(path);
+    std::fs::write(&temp_path, bytes).with_context(|| {
+        format!(
+            "failed to write annotation temp file {}",
+            temp_path.display()
+        )
+    })?;
+    std::fs::rename(&temp_path, path).with_context(|| {
+        format!(
+            "failed to finalize annotation sidecar from {} to {}",
+            temp_path.display(),
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn temporary_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("annotations.json");
+    let unique_suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+
+    path.with_file_name(format!(
+        "{file_name}.{}.{}.tmp",
+        std::process::id(),
+        unique_suffix
+    ))
 }
 
 #[cfg(test)]

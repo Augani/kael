@@ -14,7 +14,9 @@ use futures::{
     io::AsyncReadExt as _,
 };
 use http::request::Builder;
+#[cfg(feature = "test-support")]
 use parking_lot::Mutex;
+use parking_lot::RwLock;
 #[cfg(feature = "test-support")]
 use std::fmt;
 use std::{any::type_name, sync::Arc};
@@ -184,7 +186,7 @@ impl HttpClient for HttpClientWithProxy {
 
 /// An [`HttpClient`] that has a base URL.
 pub struct HttpClientWithUrl {
-    base_url: Mutex<String>,
+    base_url: RwLock<Arc<str>>,
     client: HttpClientWithProxy,
 }
 
@@ -206,7 +208,7 @@ impl HttpClientWithUrl {
         let client = HttpClientWithProxy::new(client, proxy_url);
 
         Self {
-            base_url: Mutex::new(base_url.into()),
+            base_url: RwLock::new(Arc::<str>::from(base_url.into())),
             client,
         }
     }
@@ -219,30 +221,30 @@ impl HttpClientWithUrl {
         let client = HttpClientWithProxy::new_url(client, proxy_url);
 
         Self {
-            base_url: Mutex::new(base_url.into()),
+            base_url: RwLock::new(Arc::<str>::from(base_url.into())),
             client,
         }
     }
 
     /// Returns the base URL.
     pub fn base_url(&self) -> String {
-        self.base_url.lock().clone()
+        self.base_url.read().as_ref().to_string()
     }
 
     /// Sets the base URL.
     pub fn set_base_url(&self, base_url: impl Into<String>) {
-        let base_url = base_url.into();
-        *self.base_url.lock() = base_url;
+        *self.base_url.write() = Arc::<str>::from(base_url.into());
     }
 
     /// Builds a URL using the given path.
     pub fn build_url(&self, path: &str) -> String {
-        format!("{}{}", self.base_url(), path)
+        let base_url = self.base_url.read();
+        format!("{}{}", base_url.as_ref(), path)
     }
 
     /// Builds a Zed API URL using the given path.
     pub fn build_zed_api_url(&self, path: &str, query: &[(&str, &str)]) -> Result<Url> {
-        let base_url = self.base_url();
+        let base_url = self.base_url.read().clone();
         let base_api_url = match base_url.as_ref() {
             "https://zed.dev" => "https://api.zed.dev",
             "https://staging.zed.dev" => "https://api-staging.zed.dev",
@@ -258,7 +260,7 @@ impl HttpClientWithUrl {
 
     /// Builds a Zed Cloud URL using the given path.
     pub fn build_zed_cloud_url(&self, path: &str, query: &[(&str, &str)]) -> Result<Url> {
-        let base_url = self.base_url();
+        let base_url = self.base_url.read().clone();
         let base_api_url = match base_url.as_ref() {
             "https://zed.dev" => "https://cloud.zed.dev",
             "https://staging.zed.dev" => "https://cloud.zed.dev",
@@ -274,7 +276,7 @@ impl HttpClientWithUrl {
 
     /// Builds a Zed LLM URL using the given path.
     pub fn build_zed_llm_url(&self, path: &str, query: &[(&str, &str)]) -> Result<Url> {
-        let base_url = self.base_url();
+        let base_url = self.base_url.read().clone();
         let base_api_url = match base_url.as_ref() {
             "https://zed.dev" => "https://cloud.zed.dev",
             "https://staging.zed.dev" => "https://llm-staging.zed.dev",
@@ -531,7 +533,7 @@ impl FakeHttpClient {
         F: Fn(Request<AsyncBody>) -> Fut + Send + Sync + 'static,
     {
         Arc::new(HttpClientWithUrl {
-            base_url: Mutex::new("http://test.example".into()),
+            base_url: RwLock::new(Arc::<str>::from("http://test.example")),
             client: HttpClientWithProxy {
                 client: Arc::new(Self {
                     handler: Mutex::new(Some(Arc::new(move |req| Box::pin(handler(req))))),

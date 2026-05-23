@@ -38,6 +38,8 @@ enum ResolvedMediaInput {
 }
 
 static STAGED_READER_COUNTER: AtomicU64 = AtomicU64::new(0);
+const MAX_DECODED_VIDEO_FRAMES: usize = 256;
+const MAX_DECODED_VIDEO_BYTES: u64 = 128 * 1024 * 1024;
 
 /// A source of media content that can be played back.
 #[derive(Clone)]
@@ -281,16 +283,45 @@ impl MediaDecoder {
         Ok(VideoFrameStream::new(self.source.clone())?.metadata())
     }
 
-    /// Decode all frames from the primary video stream.
+    /// Decode all frames from the primary video stream up to an in-memory safety cap.
+    ///
+    /// Use [`VideoFrameStream`] when decoding larger videos incrementally.
     pub fn decode_video_frames(&self) -> Result<Vec<VideoFrame>, MediaDecodeError> {
         let mut stream = VideoFrameStream::new(self.source.clone())?;
         let mut frames = Vec::new();
+        let mut decoded_bytes = 0u64;
         while let Some(frame) = stream.next_frame()? {
-            frames.push(frame);
+            push_decoded_video_frame(&mut frames, &mut decoded_bytes, frame)?;
         }
 
         Ok(frames)
     }
+}
+
+fn push_decoded_video_frame(
+    frames: &mut Vec<VideoFrame>,
+    decoded_bytes: &mut u64,
+    frame: VideoFrame,
+) -> Result<(), MediaDecodeError> {
+    if frames.len() >= MAX_DECODED_VIDEO_FRAMES {
+        return Err(MediaDecodeError::Decode(format!(
+            "video decode exceeded {} frames; use VideoFrameStream for larger videos",
+            MAX_DECODED_VIDEO_FRAMES
+        )));
+    }
+
+    let frame_bytes = u64::try_from(frame.data.len()).unwrap_or(u64::MAX);
+    let next_total = decoded_bytes.saturating_add(frame_bytes);
+    if next_total > MAX_DECODED_VIDEO_BYTES {
+        return Err(MediaDecodeError::Decode(format!(
+            "video decode exceeded {} bytes; use VideoFrameStream for larger videos",
+            MAX_DECODED_VIDEO_BYTES
+        )));
+    }
+
+    *decoded_bytes = next_total;
+    frames.push(frame);
+    Ok(())
 }
 
 impl VideoFrameStream {
@@ -444,6 +475,23 @@ struct AudioHandleState {
     started_at: Option<Instant>,
     state: PlaybackState,
     engine: Option<AudioEngine>,
+    generation: u64,
+}
+
+struct AudioPlaybackRequest {
+    generation: u64,
+    source: MediaSource,
+    volume: f32,
+    position: Duration,
+    duration: Option<Duration>,
+    decoded_audio: Option<Arc<DecodedAudio>>,
+    playback_state: PlaybackState,
+}
+
+struct AudioProbeRequest {
+    generation: u64,
+    source: MediaSource,
+    decoded_audio: Option<Arc<DecodedAudio>>,
 }
 
 /// A clonable controller for audio playback.
@@ -478,46 +526,73 @@ impl AudioHandle {
                 started_at: None,
                 state: PlaybackState::Stopped,
                 engine: None,
+                generation: 0,
             })),
         }
     }
 
     /// Start or resume playback.
     pub fn play(&self) -> Result<(), AudioPlaybackError> {
+        let request = {
+            let mut state = self.state.lock();
+            state.refresh_finished();
+            if state.state == PlaybackState::Playing {
+                return Ok(());
+            }
+
+            if state.state == PlaybackState::Paused
+                && let Some(engine) = state.engine.as_ref()
+            {
+                engine.sink.play();
+                state.started_at = Some(Instant::now());
+                state.state = PlaybackState::Playing;
+                state.generation += 1;
+                return Ok(());
+            }
+
+            let requested_position = if state
+                .duration
+                .is_some_and(|duration| state.position >= duration)
+            {
+                Duration::ZERO
+            } else {
+                state.position
+            };
+
+            AudioPlaybackRequest {
+                generation: state.generation,
+                source: state.source.clone(),
+                volume: state.volume,
+                position: requested_position,
+                duration: state.duration,
+                decoded_audio: state.decoded_audio.clone(),
+                playback_state: state.state,
+            }
+        };
+
+        let (engine, duration, position, decoded_audio) = create_engine_with_cache(
+            &request.source,
+            request.volume,
+            request.position,
+            request.decoded_audio,
+        )?;
+
         let mut state = self.state.lock();
         state.refresh_finished();
-        if state.state == PlaybackState::Playing {
+        if state.generation != request.generation || state.state == PlaybackState::Playing {
             return Ok(());
         }
 
-        if state.state == PlaybackState::Paused
-            && let Some(engine) = state.engine.as_ref()
-        {
-            engine.sink.play();
-            state.started_at = Some(Instant::now());
-            state.state = PlaybackState::Playing;
-            return Ok(());
+        if let Some(decoded_audio) = decoded_audio {
+            state.decoded_audio = Some(decoded_audio);
         }
-
-        if state
-            .duration
-            .is_some_and(|duration| state.position >= duration)
-        {
-            state.position = Duration::ZERO;
-        }
-
-        let source = state.source.clone();
-        let (engine, duration, position) = create_engine(
-            &source,
-            state.volume,
-            state.position,
-            &mut state.decoded_audio,
-        )?;
         state.duration = duration.or(state.duration);
         state.position = position;
         state.started_at = Some(Instant::now());
         state.state = PlaybackState::Playing;
+        engine.sink.set_volume(state.volume.max(0.0));
         state.engine = Some(engine);
+        state.generation += 1;
         Ok(())
     }
 
@@ -535,6 +610,7 @@ impl AudioHandle {
             engine.sink.pause();
         }
         state.state = PlaybackState::Paused;
+        state.generation += 1;
     }
 
     /// Stop playback and reset the position to the start.
@@ -546,37 +622,74 @@ impl AudioHandle {
         state.position = Duration::ZERO;
         state.started_at = None;
         state.state = PlaybackState::Stopped;
+        state.generation += 1;
     }
 
     /// Seek to the given playback position.
     pub fn seek(&self, position: Duration) -> Result<(), AudioPlaybackError> {
-        let mut state = self.state.lock();
-        let source = state.source.clone();
-        if state.duration.is_none() {
-            state.duration = probe_duration(&source, &mut state.decoded_audio)?;
-        }
-        let clamped_position = state
-            .duration
+        let request = {
+            let mut state = self.state.lock();
+            state.refresh_finished();
+            AudioPlaybackRequest {
+                generation: state.generation,
+                source: state.source.clone(),
+                volume: state.volume,
+                position,
+                duration: state.duration,
+                decoded_audio: state.decoded_audio.clone(),
+                playback_state: state.state,
+            }
+        };
+
+        let (duration, decoded_audio) = match request.duration {
+            Some(duration) => (Some(duration), request.decoded_audio.clone()),
+            None => probe_duration_with_cache(&request.source, request.decoded_audio.clone())?,
+        };
+        let clamped_position = duration
             .map(|duration| position.min(duration))
             .unwrap_or(position);
+        let (engine, duration, actual_position, decoded_audio) =
+            if request.playback_state == PlaybackState::Playing {
+                let (engine, actual_duration, actual_position, decoded_audio) =
+                    create_engine_with_cache(
+                        &request.source,
+                        request.volume,
+                        clamped_position,
+                        decoded_audio,
+                    )?;
+                (
+                    Some(engine),
+                    actual_duration.or(duration),
+                    actual_position,
+                    decoded_audio,
+                )
+            } else {
+                (None, duration, clamped_position, decoded_audio)
+            };
 
-        state.position = clamped_position;
-        state.started_at = None;
+        let mut state = self.state.lock();
+        state.refresh_finished();
+        if state.generation != request.generation {
+            return Ok(());
+        }
 
-        if state.state == PlaybackState::Playing {
-            let (engine, duration, actual_position) = create_engine(
-                &source,
-                state.volume,
-                clamped_position,
-                &mut state.decoded_audio,
-            )?;
-            state.duration = duration.or(state.duration);
-            state.position = actual_position;
-            state.started_at = Some(Instant::now());
+        if let Some(decoded_audio) = decoded_audio {
+            state.decoded_audio = Some(decoded_audio);
+        }
+        state.duration = duration.or(state.duration);
+        state.position = actual_position;
+        state.started_at = if request.playback_state == PlaybackState::Playing {
+            Some(Instant::now())
+        } else {
+            None
+        };
+        if let Some(engine) = engine {
+            engine.sink.set_volume(state.volume.max(0.0));
             state.engine = Some(engine);
         } else {
             state.engine = None;
         }
+        state.generation += 1;
 
         Ok(())
     }
@@ -612,18 +725,44 @@ impl AudioHandle {
 
     /// Return the total duration if it can be determined from the media source.
     pub fn duration(&self) -> Result<Option<Duration>, AudioPlaybackError> {
+        let request = {
+            let state = self.state.lock();
+            if state.duration.is_some() {
+                return Ok(state.duration);
+            }
+
+            AudioProbeRequest {
+                generation: state.generation,
+                source: state.source.clone(),
+                decoded_audio: state.decoded_audio.clone(),
+            }
+        };
+
+        let (duration, decoded_audio) =
+            probe_duration_with_cache(&request.source, request.decoded_audio)?;
+
         let mut state = self.state.lock();
-        let source = state.source.clone();
-        if state.duration.is_none() {
-            state.duration = probe_duration(&source, &mut state.decoded_audio)?;
+        if state.generation == request.generation && state.duration.is_none() {
+            if let Some(decoded_audio) = decoded_audio {
+                state.decoded_audio = Some(decoded_audio);
+            }
+            state.duration = duration;
         }
-        Ok(state.duration)
+        Ok(state.duration.or(duration))
     }
 
     /// Return the source that this audio handle will play.
     pub fn source(&self) -> MediaSource {
         self.state.lock().source.clone()
     }
+}
+
+/// Probe the total duration for an audio source without constructing a playback handle.
+pub fn probe_audio_duration(
+    source: impl Into<MediaSource>,
+) -> Result<Option<Duration>, AudioPlaybackError> {
+    let source = source.into();
+    probe_duration(&source, &mut None)
 }
 
 impl AudioHandleState {
@@ -675,6 +814,35 @@ fn probe_duration(
             Ok(Some(decoded_audio.duration))
         }
     }
+}
+
+fn probe_duration_with_cache(
+    source: &MediaSource,
+    decoded_audio: Option<Arc<DecodedAudio>>,
+) -> Result<(Option<Duration>, Option<Arc<DecodedAudio>>), AudioPlaybackError> {
+    let mut decoded_audio = decoded_audio;
+    let duration = probe_duration(source, &mut decoded_audio)?;
+    Ok((duration, decoded_audio))
+}
+
+fn create_engine_with_cache(
+    source: &MediaSource,
+    volume: f32,
+    position: Duration,
+    decoded_audio: Option<Arc<DecodedAudio>>,
+) -> Result<
+    (
+        AudioEngine,
+        Option<Duration>,
+        Duration,
+        Option<Arc<DecodedAudio>>,
+    ),
+    AudioPlaybackError,
+> {
+    let mut decoded_audio = decoded_audio;
+    let (engine, duration, clamped_position) =
+        create_engine(source, volume, position, &mut decoded_audio)?;
+    Ok((engine, duration, clamped_position, decoded_audio))
 }
 
 fn create_engine(
@@ -1045,7 +1213,10 @@ fn copy_bgra_frame(frame: &ffmpeg::util::frame::video::Video) -> Box<[u8]> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AudioHandle, MediaDecodeError, MediaDecoder, MediaSource, PlaybackState};
+    use super::{
+        AudioHandle, MAX_DECODED_VIDEO_BYTES, MAX_DECODED_VIDEO_FRAMES, MediaDecodeError,
+        MediaDecoder, MediaSource, PlaybackState, VideoFrame, push_decoded_video_frame,
+    };
     use std::{io::Cursor, sync::Arc, time::Duration};
 
     #[test]
@@ -1121,6 +1292,51 @@ mod tests {
             decoder.decode_video_frames().unwrap_err(),
             MediaDecodeError::Decode(_) | MediaDecodeError::NoVideoStream
         ));
+    }
+
+    #[test]
+    fn full_video_decode_rejects_excessive_frame_counts() {
+        let mut frames = Vec::new();
+        let mut decoded_bytes = 0u64;
+
+        for index in 0..MAX_DECODED_VIDEO_FRAMES {
+            push_decoded_video_frame(
+                &mut frames,
+                &mut decoded_bytes,
+                test_video_frame(index as u64, 4),
+            )
+            .unwrap();
+        }
+
+        let error = push_decoded_video_frame(
+            &mut frames,
+            &mut decoded_bytes,
+            test_video_frame(MAX_DECODED_VIDEO_FRAMES as u64, 4),
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, MediaDecodeError::Decode(message) if message.contains("frames")));
+    }
+
+    #[test]
+    fn full_video_decode_rejects_excessive_byte_counts() {
+        let mut frames = Vec::new();
+        let mut decoded_bytes = MAX_DECODED_VIDEO_BYTES - 1;
+
+        let error =
+            push_decoded_video_frame(&mut frames, &mut decoded_bytes, test_video_frame(0, 2))
+                .unwrap_err();
+
+        assert!(matches!(error, MediaDecodeError::Decode(message) if message.contains("bytes")));
+    }
+
+    fn test_video_frame(timestamp_millis: u64, len: usize) -> VideoFrame {
+        VideoFrame {
+            data: Arc::<[u8]>::from(vec![0; len]),
+            width: 1,
+            height: 1,
+            timestamp: Duration::from_millis(timestamp_millis),
+        }
     }
 
     fn silent_wav(sample_rate: u32, samples: u32) -> Vec<u8> {

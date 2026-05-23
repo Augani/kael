@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::disk::DiskCache;
@@ -52,7 +53,7 @@ impl CacheStats {
 /// Values are serialized via `serde_json` for disk storage and kept as raw
 /// bytes in the memory tier (keyed by `namespace:key`).
 pub struct CacheManager {
-    memory: MemoryCache<Vec<u8>>,
+    memory: MemoryCache<Arc<[u8]>>,
     disk: DiskCache,
     disk_hits: AtomicU64,
     disk_misses: AtomicU64,
@@ -78,15 +79,16 @@ impl CacheManager {
         let mem_key = format!("{namespace}:{key}");
 
         if let Some(bytes) = self.memory.get(&mem_key) {
-            let value: V = serde_json::from_slice(&bytes)?;
+            let value: V = serde_json::from_slice(bytes.as_ref())?;
             return Ok(Some(value));
         }
 
         if let Some(bytes) = self.disk.get(namespace, key)? {
             self.disk_hits.fetch_add(1, Ordering::Relaxed);
+            let bytes = Arc::<[u8]>::from(bytes);
             self.memory
                 .insert(mem_key, bytes.clone(), CachePriority::Normal);
-            let value: V = serde_json::from_slice(&bytes)?;
+            let value: V = serde_json::from_slice(bytes.as_ref())?;
             return Ok(Some(value));
         }
 
@@ -102,11 +104,11 @@ impl CacheManager {
         value: &V,
         priority: CachePriority,
     ) -> Result<()> {
-        let bytes = serde_json::to_vec(value)?;
+        let bytes = Arc::<[u8]>::from(serde_json::to_vec(value)?);
         let mem_key = format!("{namespace}:{key}");
 
         self.memory.insert(mem_key, bytes.clone(), priority);
-        self.disk.put(namespace, key, &bytes)?;
+        self.disk.put(namespace, key, bytes.as_ref())?;
         Ok(())
     }
 

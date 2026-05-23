@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 /// Priority level for cached entries, influencing eviction order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -14,8 +14,24 @@ pub enum CachePriority {
 #[derive(Debug, Clone)]
 struct Entry<V: Clone> {
     value: V,
+    eviction: EvictionKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct EvictionKey {
     priority: CachePriority,
     access_order: u64,
+    key: String,
+}
+
+impl EvictionKey {
+    fn new(key: String, priority: CachePriority, access_order: u64) -> Self {
+        Self {
+            priority,
+            access_order,
+            key,
+        }
+    }
 }
 
 /// An in-memory LRU cache with priority-aware eviction.
@@ -24,6 +40,7 @@ struct Entry<V: Clone> {
 #[derive(Debug)]
 pub struct MemoryCache<V: Clone> {
     entries: HashMap<String, Entry<V>>,
+    eviction_order: BTreeSet<EvictionKey>,
     max_entries: usize,
     access_counter: u64,
     hits: u64,
@@ -35,6 +52,7 @@ impl<V: Clone> MemoryCache<V> {
     pub fn new(max_entries: usize) -> Self {
         Self {
             entries: HashMap::with_capacity(max_entries),
+            eviction_order: BTreeSet::new(),
             max_entries,
             access_counter: 0,
             hits: 0,
@@ -45,8 +63,10 @@ impl<V: Clone> MemoryCache<V> {
     /// Retrieves a cached value by key, updating its access recency.
     pub fn get(&mut self, key: &str) -> Option<V> {
         if let Some(entry) = self.entries.get_mut(key) {
+            self.eviction_order.remove(&entry.eviction);
             self.access_counter += 1;
-            entry.access_order = self.access_counter;
+            entry.eviction.access_order = self.access_counter;
+            self.eviction_order.insert(entry.eviction.clone());
             self.hits += 1;
             Some(entry.value.clone())
         } else {
@@ -58,12 +78,18 @@ impl<V: Clone> MemoryCache<V> {
     /// Inserts a value with the given priority, evicting the lowest-priority
     /// least-recently-used entry if the cache is full.
     pub fn insert(&mut self, key: String, value: V, priority: CachePriority) {
+        if self.max_entries == 0 {
+            return;
+        }
+
         if self.entries.contains_key(&key) {
             self.access_counter += 1;
             let entry = self.entries.get_mut(&key).expect("key confirmed present");
+            self.eviction_order.remove(&entry.eviction);
             entry.value = value;
-            entry.priority = priority;
-            entry.access_order = self.access_counter;
+            entry.eviction.priority = priority;
+            entry.eviction.access_order = self.access_counter;
+            self.eviction_order.insert(entry.eviction.clone());
             return;
         }
 
@@ -72,24 +98,29 @@ impl<V: Clone> MemoryCache<V> {
         }
 
         self.access_counter += 1;
+        let eviction = EvictionKey::new(key.clone(), priority, self.access_counter);
         self.entries.insert(
             key,
             Entry {
                 value,
-                priority,
-                access_order: self.access_counter,
+                eviction: eviction.clone(),
             },
         );
+        self.eviction_order.insert(eviction);
     }
 
     /// Removes and returns the value for `key`, if present.
     pub fn remove(&mut self, key: &str) -> Option<V> {
-        self.entries.remove(key).map(|e| e.value)
+        self.entries.remove(key).map(|entry| {
+            self.eviction_order.remove(&entry.eviction);
+            entry.value
+        })
     }
 
     /// Removes all entries from the cache.
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.eviction_order.clear();
     }
 
     /// Returns the number of entries currently cached.
@@ -113,18 +144,8 @@ impl<V: Clone> MemoryCache<V> {
     }
 
     fn evict_one(&mut self) {
-        let victim = self
-            .entries
-            .iter()
-            .min_by(|a, b| {
-                a.1.priority
-                    .cmp(&b.1.priority)
-                    .then(a.1.access_order.cmp(&b.1.access_order))
-            })
-            .map(|(k, _)| k.clone());
-
-        if let Some(key) = victim {
-            self.entries.remove(&key);
+        if let Some(victim) = self.eviction_order.pop_first() {
+            self.entries.remove(victim.key.as_str());
         }
     }
 }
@@ -227,5 +248,14 @@ mod tests {
         assert_eq!(cache.get("b"), None);
         assert_eq!(cache.get("a"), Some(1));
         assert_eq!(cache.get("c"), Some(3));
+    }
+
+    #[test]
+    fn zero_capacity_never_stores_entries() {
+        let mut cache = MemoryCache::new(0);
+        cache.insert("a".into(), 1, CachePriority::High);
+
+        assert!(cache.is_empty());
+        assert_eq!(cache.get("a"), None);
     }
 }

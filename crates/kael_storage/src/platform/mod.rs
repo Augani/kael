@@ -25,7 +25,7 @@ pub struct StoragePaths {
     pub config_dir: PathBuf,
     /// The directory used for data files.
     pub data_dir: PathBuf,
-    /// The JSON file used by the default key-value store.
+    /// The legacy JSON preferences file used by `JsonKvStore` and as a migration source for the platform store.
     pub preferences_path: PathBuf,
     /// The directory that stores SQLite database files.
     pub databases_dir: PathBuf,

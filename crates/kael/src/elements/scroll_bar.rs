@@ -1,9 +1,9 @@
 use crate::{
-    fill, outline, point, px, size, AccessibilityAction, AccessibilityAttributes,
-    AccessibilityRole, AccessibilityState, AccessibilityValue, App, BorderStyle, Bounds,
-    CursorStyle, DispatchPhase, Element, ElementId, GlobalElementId, Hitbox, HitboxBehavior,
-    InspectorElementId, Interactivity, IntoElement, KeyDownEvent, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, Window,
+    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
+    AccessibilityValue, App, BorderStyle, Bounds, CursorStyle, DispatchPhase, Element, ElementId,
+    GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, Interactivity, IntoElement,
+    KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, ScrollHandle, Window, fill, outline, point, px, size,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -646,19 +646,11 @@ fn logical_scroll_offset(offset: Point<Pixels>, vertical: bool) -> Pixels {
 }
 
 fn axis_pixels(size: crate::Size<Pixels>, vertical: bool) -> Pixels {
-    if vertical {
-        size.height
-    } else {
-        size.width
-    }
+    if vertical { size.height } else { size.width }
 }
 
 fn logical_axis_size(size: crate::Size<Pixels>, vertical: bool) -> Pixels {
-    if vertical {
-        size.height
-    } else {
-        size.width
-    }
+    if vertical { size.height } else { size.width }
 }
 
 fn clamp_pixels(value: Pixels, min: Pixels, max: Pixels) -> Pixels {
@@ -670,7 +662,7 @@ mod tests {
     use super::*;
     use crate::elements::div::{InteractiveElement, StatefulInteractiveElement};
     use crate::{
-        div, Context, Modifiers, MouseButton, ParentElement, Render, Styled, TestAppContext,
+        Context, Modifiers, MouseButton, ParentElement, Render, Styled, TestAppContext, div,
     };
     use std::{cell::Cell, rc::Rc};
 

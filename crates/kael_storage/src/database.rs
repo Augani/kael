@@ -7,7 +7,10 @@ use std::{
 };
 
 use parking_lot::Mutex;
-use rusqlite::{Connection, OptionalExtension, Row, ToSql};
+use rusqlite::{
+    Connection, OptionalExtension, Params, Row, ToSql, params_from_iter,
+    types::{ToSqlOutput, Value},
+};
 
 use crate::{
     Error, Result,
@@ -91,18 +94,21 @@ impl Database {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
 
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|source| Error::io(parent.to_path_buf(), source))?;
-        }
+        smol::unblock(move || {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|source| Error::io(parent.to_path_buf(), source))?;
+            }
 
-        let connection = Connection::open(&path)?;
-        configure_connection(&connection)?;
+            let connection = Connection::open(&path)?;
+            configure_connection(&connection)?;
 
-        Ok(Self {
-            connection: Arc::new(Mutex::new(connection)),
-            path: Some(path),
+            Ok(Self {
+                connection: Arc::new(Mutex::new(connection)),
+                path: Some(path),
+            })
         })
+        .await
     }
 
     /// Opens or creates a SQLite database using the platform storage layout for an app.
@@ -113,13 +119,16 @@ impl Database {
 
     /// Opens an in-memory SQLite database.
     pub async fn open_in_memory() -> Result<Self> {
-        let connection = Connection::open_in_memory()?;
-        configure_connection(&connection)?;
+        smol::unblock(|| {
+            let connection = Connection::open_in_memory()?;
+            configure_connection(&connection)?;
 
-        Ok(Self {
-            connection: Arc::new(Mutex::new(connection)),
-            path: None,
+            Ok(Self {
+                connection: Arc::new(Mutex::new(connection)),
+                path: None,
+            })
         })
+        .await
     }
 
     /// Returns the file path for this database, if it is persisted on disk.
@@ -129,47 +138,93 @@ impl Database {
 
     /// Applies all pending migrations.
     pub async fn migrate(&self, migrations: &[Migration]) -> Result<()> {
-        let mut connection = self.connection.lock();
-        apply_migrations(&mut connection, migrations)
+        let connection = self.connection.clone();
+        let migrations = migrations.to_vec();
+
+        smol::unblock(move || {
+            let mut connection = connection.lock();
+            apply_migrations(&mut connection, &migrations)
+        })
+        .await
     }
 
     /// Executes a SQL statement.
     pub async fn execute(&self, sql: &str, params: &[&dyn ToSql]) -> Result<usize> {
-        let connection = self.connection.lock();
-        Ok(connection.execute(sql, params)?)
+        let connection = self.connection.clone();
+        let sql = sql.to_string();
+        let params = clone_params(params)?;
+
+        smol::unblock(move || {
+            let connection = connection.lock();
+            Ok(connection.execute(&sql, params_from_iter(params.iter()))?)
+        })
+        .await
     }
 
     /// Executes a batch of SQL statements.
     pub async fn execute_batch(&self, sql: &str) -> Result<()> {
-        let connection = self.connection.lock();
-        Ok(connection.execute_batch(sql)?)
+        let connection = self.connection.clone();
+        let sql = sql.to_string();
+
+        smol::unblock(move || {
+            let connection = connection.lock();
+            Ok(connection.execute_batch(&sql)?)
+        })
+        .await
     }
 
     /// Runs a query and maps every row into `T`.
-    pub async fn query<T: FromRow>(&self, sql: &str, params: &[&dyn ToSql]) -> Result<Vec<T>> {
-        let connection = self.connection.lock();
-        query_with_connection(&connection, sql, params)
+    pub async fn query<T: FromRow + Send + 'static>(
+        &self,
+        sql: &str,
+        params: &[&dyn ToSql],
+    ) -> Result<Vec<T>> {
+        let connection = self.connection.clone();
+        let sql = sql.to_string();
+        let params = clone_params(params)?;
+
+        smol::unblock(move || {
+            let connection = connection.lock();
+            query_with_connection(&connection, &sql, params_from_iter(params.iter()))
+        })
+        .await
     }
 
     /// Runs a query and expects exactly one row.
-    pub async fn query_one<T: FromRow>(&self, sql: &str, params: &[&dyn ToSql]) -> Result<T> {
-        let connection = self.connection.lock();
-        query_one_with_connection(&connection, sql, params)
+    pub async fn query_one<T: FromRow + Send + 'static>(
+        &self,
+        sql: &str,
+        params: &[&dyn ToSql],
+    ) -> Result<T> {
+        let connection = self.connection.clone();
+        let sql = sql.to_string();
+        let params = clone_params(params)?;
+
+        smol::unblock(move || {
+            let connection = connection.lock();
+            query_one_with_connection(&connection, &sql, params_from_iter(params.iter()))
+        })
+        .await
     }
 
     /// Runs the closure inside a SQLite transaction.
     pub async fn transaction<F, R>(&self, f: F) -> Result<R>
     where
-        F: FnOnce(&Transaction<'_>) -> Result<R> + Send,
-        R: Send,
+        F: FnOnce(&Transaction<'_>) -> Result<R> + Send + 'static,
+        R: Send + 'static,
     {
-        let mut connection = self.connection.lock();
-        let transaction = Transaction {
-            inner: connection.transaction()?,
-        };
-        let output = f(&transaction)?;
-        transaction.commit()?;
-        Ok(output)
+        let connection = self.connection.clone();
+
+        smol::unblock(move || {
+            let mut connection = connection.lock();
+            let transaction = Transaction {
+                inner: connection.transaction()?,
+            };
+            let output = f(&transaction)?;
+            transaction.commit()?;
+            Ok(output)
+        })
+        .await
     }
 }
 
@@ -181,10 +236,10 @@ fn configure_connection(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn query_with_connection<T: FromRow>(
+fn query_with_connection<T: FromRow, P: Params>(
     connection: &Connection,
     sql: &str,
-    params: &[&dyn ToSql],
+    params: P,
 ) -> Result<Vec<T>> {
     let mut statement = connection.prepare(sql)?;
     let rows = statement.query_map(params, T::from_row)?;
@@ -197,17 +252,46 @@ fn query_with_connection<T: FromRow>(
     Ok(results)
 }
 
-fn query_one_with_connection<T: FromRow>(
+fn query_one_with_connection<T: FromRow, P: Params>(
     connection: &Connection,
     sql: &str,
-    params: &[&dyn ToSql],
+    params: P,
 ) -> Result<T> {
-    let mut results = query_with_connection(connection, sql, params)?;
+    let mut statement = connection.prepare(sql)?;
+    let mut rows = statement.query(params)?;
 
-    match results.len() {
-        0 => Err(Error::RowNotFound),
-        1 => Ok(results.swap_remove(0)),
-        count => Err(Error::UnexpectedRowCount(count)),
+    let Some(row) = rows.next()? else {
+        return Err(Error::RowNotFound);
+    };
+    let result = T::from_row(row)?;
+
+    let mut row_count = 1usize;
+    while rows.next()?.is_some() {
+        row_count += 1;
+    }
+
+    if row_count == 1 {
+        Ok(result)
+    } else {
+        Err(Error::UnexpectedRowCount(row_count))
+    }
+}
+
+fn clone_params(params: &[&dyn ToSql]) -> Result<Vec<Value>> {
+    params.iter().map(|param| clone_param(*param)).collect()
+}
+
+fn clone_param(param: &dyn ToSql) -> Result<Value> {
+    #[allow(unreachable_patterns)]
+    match param.to_sql()? {
+        ToSqlOutput::Borrowed(value) => Ok(value.into()),
+        ToSqlOutput::Owned(value) => Ok(value),
+        _ => Err(
+            rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(
+                "unsupported SQLite parameter type",
+            )))
+            .into(),
+        ),
     }
 }
 
@@ -392,5 +476,26 @@ mod tests {
             futures::executor::block_on(database.query_one::<i64>("SELECT id FROM items", &[]))
                 .unwrap_err();
         assert!(matches!(error, Error::RowNotFound));
+    }
+
+    #[test]
+    fn query_one_reports_multiple_rows_without_materializing_values() {
+        let database = futures::executor::block_on(Database::open_in_memory()).unwrap();
+        futures::executor::block_on(
+            database
+                .execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL);"),
+        )
+        .unwrap();
+        futures::executor::block_on(database.execute(
+            "INSERT INTO items (name) VALUES (?1), (?2)",
+            &[&"first", &"second"],
+        ))
+        .unwrap();
+
+        let error = futures::executor::block_on(
+            database.query_one::<i64>("SELECT id FROM items ORDER BY id", &[]),
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::UnexpectedRowCount(2)));
     }
 }

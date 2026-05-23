@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
 
 /// A content-addressed disk cache organized by namespace.
@@ -11,6 +13,19 @@ use std::time::{Duration, SystemTime};
 pub struct DiskCache {
     root: PathBuf,
     max_bytes: u64,
+    index: Mutex<DiskIndex>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DiskEntry {
+    size: u64,
+    modified: SystemTime,
+}
+
+#[derive(Debug, Default)]
+struct DiskIndex {
+    total_bytes: u64,
+    entries: HashMap<PathBuf, DiskEntry>,
 }
 
 impl DiskCache {
@@ -18,18 +33,25 @@ impl DiskCache {
     pub fn new(root: PathBuf, max_bytes: u64) -> Result<Self> {
         fs::create_dir_all(&root)
             .with_context(|| format!("failed to create cache root: {}", root.display()))?;
-        Ok(Self { root, max_bytes })
+        Ok(Self {
+            index: Mutex::new(build_index(&root)?),
+            root,
+            max_bytes,
+        })
     }
 
     /// Retrieves cached data for the given namespace and key.
     pub fn get(&self, namespace: &str, key: &str) -> Result<Option<Vec<u8>>> {
         let path = self.entry_path(namespace, key);
-        if !path.exists() {
-            return Ok(None);
+        match fs::read(&path) {
+            Ok(data) => Ok(Some(data)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.remove_index_entry(&path);
+                Ok(None)
+            }
+            Err(error) => Err(error)
+                .with_context(|| format!("failed to read cache entry: {}", path.display())),
         }
-        let data = fs::read(&path)
-            .with_context(|| format!("failed to read cache entry: {}", path.display()))?;
-        Ok(Some(data))
     }
 
     /// Stores data under the given namespace and key, evicting old entries if
@@ -43,12 +65,6 @@ impl DiskCache {
             );
         }
 
-        let current = self.total_size()?;
-        if current + data_len > self.max_bytes {
-            let need_to_free = (current + data_len).saturating_sub(self.max_bytes);
-            self.evict_by_size(current.saturating_sub(need_to_free))?;
-        }
-
         let path = self.entry_path(namespace, key);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
@@ -56,15 +72,40 @@ impl DiskCache {
         }
         fs::write(&path, data)
             .with_context(|| format!("failed to write cache entry: {}", path.display()))?;
+
+        let metadata = fs::metadata(&path)
+            .with_context(|| format!("failed to stat cache entry: {}", path.display()))?;
+        self.record_index_entry(
+            path.clone(),
+            metadata.len(),
+            metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+        );
+
+        let candidates = {
+            let index = self.lock_index();
+            eviction_candidates(&index, self.max_bytes)
+        };
+        if !candidates.is_empty() {
+            self.remove_paths(&candidates)?;
+            self.cleanup_empty_dirs()?;
+        }
         Ok(())
     }
 
     /// Removes a single cached entry.
     pub fn remove(&self, namespace: &str, key: &str) -> Result<()> {
         let path = self.entry_path(namespace, key);
-        if path.exists() {
-            fs::remove_file(&path)
-                .with_context(|| format!("failed to remove cache entry: {}", path.display()))?;
+        match fs::remove_file(&path) {
+            Ok(()) => {
+                self.remove_index_entry(&path);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.remove_index_entry(&path);
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to remove cache entry: {}", path.display()));
+            }
         }
         Ok(())
     }
@@ -76,15 +117,23 @@ impl DiskCache {
             fs::remove_dir_all(&ns_path)
                 .with_context(|| format!("failed to clear namespace: {}", ns_path.display()))?;
         }
+
+        let mut index = self.lock_index();
+        let removed_paths = index
+            .entries
+            .keys()
+            .filter(|path| path.starts_with(&ns_path))
+            .cloned()
+            .collect::<Vec<_>>();
+        for path in removed_paths {
+            remove_index_entry_from(&mut index, &path);
+        }
         Ok(())
     }
 
     /// Returns the total size in bytes of all cached files.
     pub fn total_size(&self) -> Result<u64> {
-        if !self.root.exists() {
-            return Ok(0);
-        }
-        dir_size(&self.root)
+        Ok(self.lock_index().total_bytes)
     }
 
     /// Returns the configured maximum size in bytes.
@@ -97,16 +146,16 @@ impl DiskCache {
         let cutoff = SystemTime::now()
             .checked_sub(max_age)
             .unwrap_or(SystemTime::UNIX_EPOCH);
-        let mut freed = 0u64;
-
-        for entry in walk_files(&self.root)? {
-            let metadata = fs::metadata(&entry)?;
-            let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-            if modified < cutoff {
-                freed += metadata.len();
-                fs::remove_file(&entry)?;
-            }
-        }
+        let candidates = {
+            let index = self.lock_index();
+            index
+                .entries
+                .iter()
+                .filter(|(_, entry)| entry.modified < cutoff)
+                .map(|(path, _)| path.clone())
+                .collect::<Vec<_>>()
+        };
+        let freed = self.remove_paths(&candidates)?;
         self.cleanup_empty_dirs()?;
         Ok(freed)
     }
@@ -114,25 +163,11 @@ impl DiskCache {
     /// Evicts oldest entries until total size is at or below `target_bytes`,
     /// returning bytes freed.
     pub fn evict_by_size(&self, target_bytes: u64) -> Result<u64> {
-        let mut files = Vec::new();
-        for path in walk_files(&self.root)? {
-            let metadata = fs::metadata(&path)?;
-            let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-            files.push((path, metadata.len(), modified));
-        }
-        files.sort_by(|a, b| a.2.cmp(&b.2));
-
-        let mut current_size = self.total_size()?;
-        let mut freed = 0u64;
-
-        for (path, size, _) in &files {
-            if current_size <= target_bytes {
-                break;
-            }
-            fs::remove_file(path)?;
-            current_size = current_size.saturating_sub(*size);
-            freed += size;
-        }
+        let candidates = {
+            let index = self.lock_index();
+            eviction_candidates(&index, target_bytes)
+        };
+        let freed = self.remove_paths(&candidates)?;
         self.cleanup_empty_dirs()?;
         Ok(freed)
     }
@@ -147,6 +182,48 @@ impl DiskCache {
         remove_empty_dirs(&self.root)?;
         Ok(())
     }
+
+    fn lock_index(&self) -> MutexGuard<'_, DiskIndex> {
+        self.index
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn record_index_entry(&self, path: PathBuf, size: u64, modified: SystemTime) {
+        let mut index = self.lock_index();
+        if let Some(previous) = index.entries.insert(path, DiskEntry { size, modified }) {
+            index.total_bytes = index.total_bytes.saturating_sub(previous.size);
+        }
+        index.total_bytes += size;
+    }
+
+    fn remove_index_entry(&self, path: &Path) {
+        let mut index = self.lock_index();
+        remove_index_entry_from(&mut index, path);
+    }
+
+    fn remove_paths(&self, paths: &[PathBuf]) -> Result<u64> {
+        let mut freed = 0u64;
+
+        for path in paths {
+            match fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("failed to remove cache entry: {}", path.display())
+                    });
+                }
+            }
+
+            let mut index = self.lock_index();
+            if let Some(entry) = remove_index_entry_from(&mut index, path) {
+                freed += entry.size;
+            }
+        }
+
+        Ok(freed)
+    }
 }
 
 fn hash_key(key: &str) -> String {
@@ -155,12 +232,18 @@ fn hash_key(key: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn dir_size(path: &std::path::Path) -> Result<u64> {
-    let mut total = 0u64;
-    for entry in walk_files(path)? {
-        total += fs::metadata(&entry)?.len();
+fn build_index(root: &Path) -> Result<DiskIndex> {
+    let mut index = DiskIndex::default();
+
+    for entry in walk_files(root)? {
+        let metadata = fs::metadata(&entry)?;
+        let size = metadata.len();
+        let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        index.total_bytes += size;
+        index.entries.insert(entry, DiskEntry { size, modified });
     }
-    Ok(total)
+
+    Ok(index)
 }
 
 fn walk_files(root: &std::path::Path) -> Result<Vec<PathBuf>> {
@@ -183,6 +266,37 @@ fn walk_files(root: &std::path::Path) -> Result<Vec<PathBuf>> {
         }
     }
     Ok(files)
+}
+
+fn eviction_candidates(index: &DiskIndex, target_bytes: u64) -> Vec<PathBuf> {
+    let mut entries = index
+        .entries
+        .iter()
+        .map(|(path, entry)| (path.clone(), entry.modified, entry.size))
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|(_, modified, _)| *modified);
+
+    let mut current_size = index.total_bytes;
+    let mut candidates = Vec::new();
+    for (path, _, size) in entries {
+        if current_size <= target_bytes {
+            break;
+        }
+        current_size = current_size.saturating_sub(size);
+        candidates.push(path);
+    }
+
+    candidates
+}
+
+fn remove_index_entry_from(index: &mut DiskIndex, path: &Path) -> Option<DiskEntry> {
+    let removed = index.entries.remove(path);
+    if let Some(entry) = removed {
+        index.total_bytes = index.total_bytes.saturating_sub(entry.size);
+        Some(entry)
+    } else {
+        None
+    }
 }
 
 fn remove_empty_dirs(root: &std::path::Path) -> Result<()> {

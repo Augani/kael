@@ -3659,6 +3659,7 @@ dependencies = [
  "futures",
  "kael-media",
  "parking_lot",
+ "smol",
 ]
 
 [[package]]
@@ -3711,6 +3712,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "smol",
  "tempfile",
 ]
 
@@ -3779,6 +3781,7 @@ name = "kael_net"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "fastrand 2.3.0",
  "serde",
  "serde_json",
 ]
@@ -3805,6 +3808,7 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
+ "smol",
  "tempfile",
 ]
 
@@ -3863,6 +3867,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "smol",
  "tempfile",
  "thiserror 2.0.12",
 ]

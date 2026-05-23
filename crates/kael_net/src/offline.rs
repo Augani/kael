@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::client::ApiRequest;
 
@@ -42,10 +43,14 @@ impl OfflineQueue {
         let id = format!("req_{}", self.next_id);
         self.next_id += 1;
 
+        if self.max_size == 0 {
+            return id;
+        }
+
         let queued = QueuedRequest {
             id: id.clone(),
             request,
-            created_at: 0,
+            created_at: now_unix_millis(),
             attempts: 0,
             priority,
         };
@@ -110,6 +115,13 @@ impl OfflineQueue {
     }
 }
 
+fn now_unix_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,6 +148,7 @@ mod tests {
         let item = queue.dequeue().unwrap();
         assert_eq!(item.id, id);
         assert_eq!(item.request.path, "/a");
+        assert!(item.created_at > 0);
         assert!(queue.is_empty());
     }
 
@@ -221,5 +234,15 @@ mod tests {
         assert_ne!(id1, id2);
         assert_ne!(id2, id3);
         assert_ne!(id1, id3);
+    }
+
+    #[test]
+    fn test_zero_capacity_queue_drops_everything() {
+        let mut queue = OfflineQueue::new(0);
+        let id = queue.enqueue(make_request("/a"), 1);
+
+        assert!(!id.is_empty());
+        assert!(queue.is_empty());
+        assert!(queue.dequeue().is_none());
     }
 }

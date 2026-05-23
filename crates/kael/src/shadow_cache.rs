@@ -1,4 +1,4 @@
-use crate::{point, size, Bounds, Corners, DevicePixels, Hsla, ScaledPixels, Size};
+use crate::{Bounds, Corners, DevicePixels, Hsla, ScaledPixels, Size, point, size};
 use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Debug, PartialEq, Eq)]

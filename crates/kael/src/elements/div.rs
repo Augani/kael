@@ -54,6 +54,7 @@ const DRAG_THRESHOLD: f64 = 2.;
 const TOOLTIP_SHOW_DELAY: Duration = Duration::from_millis(500);
 const HOVERABLE_TOOLTIP_HIDE_DELAY: Duration = Duration::from_millis(500);
 const IMPLICIT_STYLE_TRANSITION_DURATION: Duration = Duration::from_millis(150);
+const AUTO_SCROLLBAR_IDLE_SECONDS: f64 = 1.2;
 const CONTEXT_MENU_PANEL_WIDTH: f32 = 192.0;
 const CONTEXT_MENU_PANEL_PADDING: f32 = 6.0;
 const CONTEXT_MENU_ITEM_HEIGHT: f32 = 32.0;
@@ -3510,12 +3511,23 @@ impl Interactivity {
         }
     }
 
-    fn paint_auto_scrollbars(
-        &self,
-        bounds: Bounds<Pixels>,
-        style: &Style,
-        window: &mut Window,
-    ) {
+    fn paint_auto_scrollbars(&self, bounds: Bounds<Pixels>, style: &Style, window: &mut Window) {
+        let should_show_scrollbars = self.scroll_elastic_state.as_ref().is_none_or(|state| {
+            let state = state.borrow();
+            state.animating || state.seconds_since_last_scroll() <= AUTO_SCROLLBAR_IDLE_SECONDS
+        });
+        if !should_show_scrollbars {
+            return;
+        }
+
+        let should_keep_fading = self.scroll_elastic_state.as_ref().is_some_and(|state| {
+            let state = state.borrow();
+            !state.animating && state.seconds_since_last_scroll() <= AUTO_SCROLLBAR_IDLE_SECONDS
+        });
+        if should_keep_fading {
+            window.request_animation_frame();
+        }
+
         let scroll_handle = match self.tracked_scroll_handle.as_ref() {
             Some(h) => h,
             None => return,
@@ -3538,29 +3550,29 @@ impl Interactivity {
             let viewport_h = bounds.size.height;
             let content_h = viewport_h + max_offset.height;
             let thumb_ratio = (viewport_h.0 / content_h.0).clamp(0.05, 1.0);
-            let track_h = viewport_h - end_margin * 2.0
-                - if show_x { thumb_width + edge_margin } else { px(0.0) };
+            let track_h = viewport_h
+                - end_margin * 2.0
+                - if show_x {
+                    thumb_width + edge_margin
+                } else {
+                    px(0.0)
+                };
             let thumb_h = (track_h.0 * thumb_ratio).max(20.0);
             let scroll_fraction = if max_offset.height > Pixels::ZERO {
                 (offset.y.0.abs() / max_offset.height.0).clamp(0.0, 1.0)
             } else {
                 0.0
             };
-            let thumb_y = bounds.top() + end_margin
-                + px((track_h.0 - thumb_h) * scroll_fraction);
+            let thumb_y = bounds.top() + end_margin + px((track_h.0 - thumb_h) * scroll_fraction);
 
             let thumb_bounds = Bounds::new(
-                point(
-                    bounds.right() - thumb_width - edge_margin,
-                    thumb_y,
-                ),
+                point(bounds.right() - thumb_width - edge_margin, thumb_y),
                 size(thumb_width, px(thumb_h)),
             );
 
             let thumb_color = crate::hsla(0., 0., 0.0, 0.5);
-            window.paint_quad(
-                crate::fill(thumb_bounds, thumb_color).corner_radii(thumb_width / 2.0),
-            );
+            window
+                .paint_quad(crate::fill(thumb_bounds, thumb_color).corner_radii(thumb_width / 2.0));
         }
 
         if show_x {
@@ -3568,29 +3580,29 @@ impl Interactivity {
             let viewport_w = bounds.size.width;
             let content_w = viewport_w + max_offset.width;
             let thumb_ratio = (viewport_w.0 / content_w.0).clamp(0.05, 1.0);
-            let track_w = viewport_w - end_margin * 2.0
-                - if show_y { thumb_width + edge_margin } else { px(0.0) };
+            let track_w = viewport_w
+                - end_margin * 2.0
+                - if show_y {
+                    thumb_width + edge_margin
+                } else {
+                    px(0.0)
+                };
             let thumb_w = (track_w.0 * thumb_ratio).max(20.0);
             let scroll_fraction = if max_offset.width > Pixels::ZERO {
                 (offset.x.0.abs() / max_offset.width.0).clamp(0.0, 1.0)
             } else {
                 0.0
             };
-            let thumb_x = bounds.left() + end_margin
-                + px((track_w.0 - thumb_w) * scroll_fraction);
+            let thumb_x = bounds.left() + end_margin + px((track_w.0 - thumb_w) * scroll_fraction);
 
             let thumb_bounds = Bounds::new(
-                point(
-                    thumb_x,
-                    bounds.bottom() - thumb_width - edge_margin,
-                ),
+                point(thumb_x, bounds.bottom() - thumb_width - edge_margin),
                 size(px(thumb_w), thumb_width),
             );
 
             let thumb_color = crate::hsla(0., 0., 0.0, 0.5);
-            window.paint_quad(
-                crate::fill(thumb_bounds, thumb_color).corner_radii(thumb_width / 2.0),
-            );
+            window
+                .paint_quad(crate::fill(thumb_bounds, thumb_color).corner_radii(thumb_width / 2.0));
         }
     }
 

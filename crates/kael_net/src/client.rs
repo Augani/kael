@@ -129,16 +129,26 @@ impl ApiResponse {
         (200..300).contains(&self.status)
     }
 
+    /// Returns the raw response body bytes without cloning.
+    pub fn body_bytes(&self) -> &[u8] {
+        &self.body
+    }
+
     /// Deserialize the response body as JSON.
     pub fn json<T: DeserializeOwned>(&self) -> Result<T> {
         serde_json::from_slice(&self.body)
             .map_err(|err| anyhow!("failed to deserialize response body: {err}"))
     }
 
+    /// Interpret the response body as a borrowed UTF-8 string slice.
+    pub fn text_ref(&self) -> Result<&str> {
+        std::str::from_utf8(&self.body)
+            .map_err(|err| anyhow!("response body is not valid UTF-8: {err}"))
+    }
+
     /// Interpret the response body as UTF-8 text.
     pub fn text(&self) -> Result<String> {
-        String::from_utf8(self.body.clone())
-            .map_err(|err| anyhow!("response body is not valid UTF-8: {err}"))
+        self.text_ref().map(ToOwned::to_owned)
     }
 }
 
@@ -271,6 +281,8 @@ mod tests {
             headers: HashMap::new(),
             body: b"hello world".to_vec(),
         };
+        assert_eq!(resp.body_bytes(), b"hello world");
+        assert_eq!(resp.text_ref().unwrap(), "hello world");
         assert_eq!(resp.text().unwrap(), "hello world");
     }
 

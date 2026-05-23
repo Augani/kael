@@ -2,7 +2,7 @@
 
 use std::{
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context as _, Result};
@@ -95,7 +95,12 @@ pub(crate) fn clear_autosave(path: &Path) -> Result<()> {
 }
 
 pub(crate) fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
-    let temp_path = path.with_extension("tmp");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create parent directory {}", parent.display()))?;
+    }
+
+    let temp_path = temporary_path(path);
     std::fs::write(&temp_path, bytes)
         .with_context(|| format!("failed to write temporary file {}", temp_path.display()))?;
     std::fs::rename(&temp_path, path).with_context(|| {
@@ -106,6 +111,23 @@ pub(crate) fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
         )
     })?;
     Ok(())
+}
+
+fn temporary_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("autosave");
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+
+    path.with_file_name(format!(
+        "{file_name}.{}.{}.tmp",
+        std::process::id(),
+        unique_suffix
+    ))
 }
 
 fn system_temp_root(app_id: &str) -> PathBuf {

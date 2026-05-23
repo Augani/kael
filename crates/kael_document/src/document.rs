@@ -1,7 +1,7 @@
 //! Document controller and handle types.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     marker::PhantomData,
     path::{Path, PathBuf},
     sync::{
@@ -23,6 +23,7 @@ use crate::{
 
 type ChangeListener<T> = Arc<dyn Fn(&T) + Send + Sync + 'static>;
 type DirtyListener = Arc<dyn Fn(bool) + Send + Sync + 'static>;
+type Snapshot<T> = Arc<T>;
 
 /// A document format supported by the controller.
 pub trait Document: Send + Sync + 'static {
@@ -67,14 +68,15 @@ struct ControllerState<D: Document> {
 
 struct DocumentState<D: Document> {
     name: String,
-    content: D::Content,
-    last_saved_snapshot: Option<D::Content>,
+    content: Snapshot<D::Content>,
+    last_saved_snapshot: Option<Snapshot<D::Content>>,
     file_path: Option<PathBuf>,
     file_type_index: usize,
     dirty: bool,
     autosave_path: PathBuf,
-    undo_stack: Vec<D::Content>,
-    redo_stack: Vec<D::Content>,
+    undo_stack: VecDeque<Snapshot<D::Content>>,
+    redo_stack: VecDeque<Snapshot<D::Content>>,
+    generation: u64,
     next_listener_id: usize,
     change_listeners: BTreeMap<usize, ChangeListener<D::Content>>,
     dirty_listeners: BTreeMap<usize, DirtyListener>,
@@ -146,14 +148,15 @@ impl<D: Document> DocumentController<D> {
             controller: self.inner.clone(),
             state: Arc::new(Mutex::new(DocumentState {
                 name,
-                content: D::new_untitled(),
+                content: Arc::new(D::new_untitled()),
                 last_saved_snapshot: None,
                 file_path: None,
                 file_type_index,
                 dirty: false,
                 autosave_path,
-                undo_stack: Vec::new(),
-                redo_stack: Vec::new(),
+                undo_stack: VecDeque::new(),
+                redo_stack: VecDeque::new(),
+                generation: 0,
                 next_listener_id: 0,
                 change_listeners: BTreeMap::new(),
                 dirty_listeners: BTreeMap::new(),
@@ -164,42 +167,57 @@ impl<D: Document> DocumentController<D> {
     /// Opens an existing document.
     pub async fn open(&self, path: impl AsRef<Path>) -> Result<DocumentHandle<D>> {
         let path = normalize_path(path.as_ref())?;
-        let file_types = D::file_types();
-        let file_type_index = file_type_index_for_path(&path, file_types)
-            .or_else(|| default_file_type_index(file_types))
-            .ok_or_else(|| {
-                anyhow!(
-                    "document type {} does not define any file types",
-                    std::any::type_name::<D>()
-                )
-            })?;
-        let file_type = &file_types[file_type_index];
-        let saved_bytes = std::fs::read(&path)
-            .with_context(|| format!("failed to read document from {}", path.display()))?;
-        let saved_content = D::read(&saved_bytes, file_type)?;
-        let name = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or("document")
-            .to_string();
-        let autosave_path = autosave::autosave_path(
-            &self.inner.app_id,
-            &self.inner.autosave_config.location,
-            Some(&path),
-            &name,
-        );
+        let controller = self.inner.clone();
+        let (path, name, content, saved_content, file_type_index, dirty, autosave_path) =
+            smol::unblock(move || -> Result<_> {
+                let file_types = D::file_types();
+                let file_type_index = file_type_index_for_path(&path, file_types)
+                    .or_else(|| default_file_type_index(file_types))
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "document type {} does not define any file types",
+                            std::any::type_name::<D>()
+                        )
+                    })?;
+                let file_type = &file_types[file_type_index];
+                let saved_bytes = std::fs::read(&path)
+                    .with_context(|| format!("failed to read document from {}", path.display()))?;
+                let saved_content = Arc::new(D::read(&saved_bytes, file_type)?);
+                let name = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("document")
+                    .to_string();
+                let autosave_path = autosave::autosave_path(
+                    &controller.app_id,
+                    &controller.autosave_config.location,
+                    Some(&path),
+                    &name,
+                );
 
-        let (content, dirty) = match autosave::load_autosave(&autosave_path)? {
-            Some(autosave_bytes) => match D::read(&autosave_bytes, file_type) {
-                Ok(autosave_content) if autosave_content != saved_content => {
-                    (autosave_content, true)
-                }
-                _ => (saved_content.clone(), false),
-            },
-            None => (saved_content.clone(), false),
-        };
+                let (content, dirty) = match autosave::load_autosave(&autosave_path)? {
+                    Some(autosave_bytes) => match D::read(&autosave_bytes, file_type) {
+                        Ok(autosave_content) if autosave_content != *saved_content => {
+                            (Arc::new(autosave_content), true)
+                        }
+                        _ => (saved_content.clone(), false),
+                    },
+                    None => (saved_content.clone(), false),
+                };
 
-        self.inner.recent_store.record(&path)?;
+                controller.recent_store.record(&path)?;
+
+                Ok((
+                    path,
+                    name,
+                    content,
+                    saved_content,
+                    file_type_index,
+                    dirty,
+                    autosave_path,
+                ))
+            })
+            .await?;
 
         Ok(DocumentHandle {
             controller: self.inner.clone(),
@@ -211,8 +229,9 @@ impl<D: Document> DocumentController<D> {
                 file_type_index,
                 dirty,
                 autosave_path,
-                undo_stack: Vec::new(),
-                redo_stack: Vec::new(),
+                undo_stack: VecDeque::new(),
+                redo_stack: VecDeque::new(),
+                generation: 0,
                 next_listener_id: 0,
                 change_listeners: BTreeMap::new(),
                 dirty_listeners: BTreeMap::new(),
@@ -234,44 +253,47 @@ impl<D: Document> DocumentController<D> {
 impl<D: Document> DocumentHandle<D> {
     /// Returns a clone of the current document content.
     pub fn content(&self) -> D::Content {
-        self.state.lock().content.clone()
+        self.state.lock().content.as_ref().clone()
     }
 
     /// Applies an in-memory change to the document content.
     pub fn modify(&self, f: impl FnOnce(&mut D::Content)) -> Result<()> {
         let (
             content,
+            file_type,
             autosave_path,
-            autosave_bytes,
             change_listeners,
             dirty_listeners,
             dirty_changed,
             dirty,
         ) = {
             let mut state = self.state.lock();
-            let previous = state.content.clone();
-            f(&mut state.content);
+            let mut next_content = state.content.as_ref().clone();
+            f(&mut next_content);
 
-            if state.content == previous {
+            if next_content == *state.content {
                 return Ok(());
             }
 
-            state.undo_stack.push(previous);
-            if state.undo_stack.len() > self.controller.max_history_depth {
-                state.undo_stack.remove(0);
-            }
+            let previous_content = state.content.clone();
+            push_history_entry(
+                &mut state.undo_stack,
+                previous_content,
+                self.controller.max_history_depth,
+            );
             state.redo_stack.clear();
+            state.content = Arc::new(next_content);
 
-            let file_type = selected_file_type::<D>(&state)?;
+            let file_type = *selected_file_type::<D>(&state)?;
             let content = state.content.clone();
-            let autosave_bytes = D::write(&content, file_type)?;
             let previous_dirty = state.dirty;
             state.dirty = compute_dirty(&state);
+            state.generation += 1;
 
             (
                 content,
+                file_type,
                 state.autosave_path.clone(),
-                autosave_bytes,
                 state.change_listeners.values().cloned().collect::<Vec<_>>(),
                 state.dirty_listeners.values().cloned().collect::<Vec<_>>(),
                 previous_dirty != state.dirty,
@@ -279,8 +301,9 @@ impl<D: Document> DocumentHandle<D> {
             )
         };
 
+        let autosave_bytes = D::write(content.as_ref(), &file_type)?;
         autosave::write_autosave(&autosave_path, &autosave_bytes)?;
-        notify_change_listeners(&change_listeners, &content);
+        notify_change_listeners(&change_listeners, content.as_ref());
         if dirty_changed {
             notify_dirty_listeners(&dirty_listeners, dirty);
         }
@@ -331,9 +354,15 @@ impl<D: Document> DocumentHandle<D> {
         let file_type = D::file_types()
             .get(file_type_index)
             .ok_or_else(|| anyhow!("invalid file type index {file_type_index}"))?;
-        let bytes = std::fs::read(&path)
-            .with_context(|| format!("failed to read document from {}", path.display()))?;
-        let content = D::read(&bytes, file_type)?;
+        let controller = self.controller.clone();
+        let path_for_read = path.clone();
+        let content = smol::unblock(move || {
+            let bytes = std::fs::read(&path_for_read).with_context(|| {
+                format!("failed to read document from {}", path_for_read.display())
+            })?;
+            Ok::<_, anyhow::Error>(Arc::new(D::read(&bytes, file_type)?))
+        })
+        .await?;
 
         let (change_listeners, dirty_listeners) = {
             let mut state = self.state.lock();
@@ -342,21 +371,23 @@ impl<D: Document> DocumentHandle<D> {
             state.dirty = false;
             state.undo_stack.clear();
             state.redo_stack.clear();
+            state.generation += 1;
             (
                 state.change_listeners.values().cloned().collect::<Vec<_>>(),
                 state.dirty_listeners.values().cloned().collect::<Vec<_>>(),
             )
         };
 
-        autosave::clear_autosave(&autosave::autosave_path(
-            &self.controller.app_id,
-            &self.controller.autosave_config.location,
+        let autosave_path = autosave::autosave_path(
+            &controller.app_id,
+            &controller.autosave_config.location,
             Some(&path),
             path.file_stem()
                 .and_then(|stem| stem.to_str())
                 .unwrap_or("document"),
-        ))?;
-        notify_change_listeners(&change_listeners, &content);
+        );
+        smol::unblock(move || autosave::clear_autosave(&autosave_path)).await?;
+        notify_change_listeners(&change_listeners, content.as_ref());
         if previous_dirty {
             notify_dirty_listeners(&dirty_listeners, false);
         }
@@ -393,27 +424,38 @@ impl<D: Document> DocumentHandle<D> {
     pub async fn restore_version(&self, version: &DocumentVersion) -> Result<()> {
         let document_key = self.document_key()?;
         let bytes = self.controller.version_store.read(&document_key, version)?;
-        let (content, autosave_path, change_listeners, dirty_listeners, dirty_changed, dirty) = {
+        let (
+            content,
+            file_type,
+            autosave_path,
+            change_listeners,
+            dirty_listeners,
+            dirty_changed,
+            dirty,
+        ) = {
             let mut state = self.state.lock();
-            let file_type = selected_file_type::<D>(&state)?;
-            let content = D::read(&bytes, file_type)?;
+            let file_type = *selected_file_type::<D>(&state)?;
+            let content = Arc::new(D::read(&bytes, &file_type)?);
 
-            if content == state.content {
+            if content.as_ref() == state.content.as_ref() {
                 return Ok(());
             }
 
-            let current_content = state.content.clone();
-            state.undo_stack.push(current_content);
-            if state.undo_stack.len() > self.controller.max_history_depth {
-                state.undo_stack.remove(0);
-            }
+            let previous_content = state.content.clone();
+            push_history_entry(
+                &mut state.undo_stack,
+                previous_content,
+                self.controller.max_history_depth,
+            );
             state.redo_stack.clear();
             state.content = content.clone();
             let previous_dirty = state.dirty;
             state.dirty = compute_dirty(&state);
+            state.generation += 1;
 
             (
                 content,
+                file_type,
                 state.autosave_path.clone(),
                 state.change_listeners.values().cloned().collect::<Vec<_>>(),
                 state.dirty_listeners.values().cloned().collect::<Vec<_>>(),
@@ -423,17 +465,13 @@ impl<D: Document> DocumentHandle<D> {
         };
 
         if dirty {
-            let file_type = {
-                let state = self.state.lock();
-                selected_file_type::<D>(&state)?.to_owned()
-            };
-            let autosave_bytes = D::write(&content, &file_type)?;
+            let autosave_bytes = D::write(content.as_ref(), &file_type)?;
             autosave::write_autosave(&autosave_path, &autosave_bytes)?;
         } else {
             autosave::clear_autosave(&autosave_path)?;
         }
 
-        notify_change_listeners(&change_listeners, &content);
+        notify_change_listeners(&change_listeners, content.as_ref());
         if dirty_changed {
             notify_dirty_listeners(&dirty_listeners, dirty);
         }
@@ -500,58 +538,82 @@ impl<D: Document> DocumentHandle<D> {
             .get(file_type_index)
             .ok_or_else(|| anyhow!("invalid file type index {file_type_index}"))?;
 
-        let (bytes, old_autosave_path, new_autosave_path, content, previous_dirty, dirty_listeners) = {
-            let mut state = self.state.lock();
-            let bytes = D::write(&state.content, file_type)?;
-            let old_autosave_path = state.autosave_path.clone();
-            let new_autosave_path = autosave::autosave_path(
-                &self.controller.app_id,
-                &self.controller.autosave_config.location,
-                Some(&normalized_path),
-                normalized_path
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .unwrap_or(&state.name),
-            );
-            let previous_dirty = state.dirty;
-            state.file_path = Some(normalized_path.clone());
-            state.file_type_index = file_type_index;
-            state.last_saved_snapshot = Some(state.content.clone());
-            state.dirty = false;
-            state.autosave_path = new_autosave_path.clone();
+        let (content, current_name, old_autosave_path) = {
+            let state = self.state.lock();
             (
-                bytes,
-                old_autosave_path,
-                new_autosave_path,
                 state.content.clone(),
-                previous_dirty,
-                state.dirty_listeners.values().cloned().collect::<Vec<_>>(),
+                state.name.clone(),
+                state.autosave_path.clone(),
             )
         };
 
-        autosave::write_bytes_atomically(&normalized_path, &bytes)?;
-        if old_autosave_path != new_autosave_path {
-            autosave::clear_autosave(&old_autosave_path)?;
-        }
-        autosave::clear_autosave(&new_autosave_path)?;
-        self.controller.recent_store.record(&normalized_path)?;
-        self.controller
-            .version_store
-            .record(&document_key(&normalized_path), &bytes)?;
+        let new_autosave_path = autosave::autosave_path(
+            &self.controller.app_id,
+            &self.controller.autosave_config.location,
+            Some(&normalized_path),
+            normalized_path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or(&current_name),
+        );
 
-        if previous_dirty {
-            notify_dirty_listeners(&dirty_listeners, false);
+        let controller = self.controller.clone();
+        let save_path = normalized_path.clone();
+        let save_content = content.clone();
+        smol::unblock(move || -> Result<()> {
+            let bytes = D::write(save_content.as_ref(), file_type)?;
+            autosave::write_bytes_atomically(&save_path, &bytes)?;
+            controller.recent_store.record(&save_path)?;
+            controller
+                .version_store
+                .record(&document_key(&save_path), &bytes)?;
+            Ok(())
+        })
+        .await?;
+
+        let (dirty, dirty_changed, dirty_listeners, autosave_content) = {
+            let mut state = self.state.lock();
+            let dirty_before = state.dirty;
+            state.file_path = Some(normalized_path.clone());
+            state.file_type_index = file_type_index;
+            state.last_saved_snapshot = Some(content);
+            state.autosave_path = new_autosave_path.clone();
+            state.dirty = compute_dirty(&state);
+            (
+                state.dirty,
+                dirty_before != state.dirty,
+                state.dirty_listeners.values().cloned().collect::<Vec<_>>(),
+                state.dirty.then(|| state.content.clone()),
+            )
+        };
+
+        let autosave_target = new_autosave_path.clone();
+        smol::unblock(move || -> Result<()> {
+            if old_autosave_path != autosave_target {
+                autosave::clear_autosave(&old_autosave_path)?;
+            }
+            if let Some(autosave_content) = autosave_content {
+                let autosave_bytes = D::write(autosave_content.as_ref(), file_type)?;
+                autosave::write_autosave(&autosave_target, &autosave_bytes)?;
+            } else {
+                autosave::clear_autosave(&autosave_target)?;
+            }
+            Ok(())
+        })
+        .await?;
+
+        if dirty_changed {
+            notify_dirty_listeners(&dirty_listeners, dirty);
         }
 
-        let _ = content;
         Ok(())
     }
 
     fn restore_history_entry(&self, undo: bool) -> Result<()> {
         let (
             content,
+            file_type,
             autosave_path,
-            autosave_bytes,
             dirty,
             dirty_changed,
             change_listeners,
@@ -559,35 +621,35 @@ impl<D: Document> DocumentHandle<D> {
         ) = {
             let mut state = self.state.lock();
             let next_content = if undo {
-                let Some(previous) = state.undo_stack.pop() else {
+                let Some(previous) = state.undo_stack.pop_back() else {
                     return Ok(());
                 };
                 let current_content = state.content.clone();
-                state.redo_stack.push(current_content);
+                state.redo_stack.push_back(current_content);
                 previous
             } else {
-                let Some(next) = state.redo_stack.pop() else {
+                let Some(next) = state.redo_stack.pop_back() else {
                     return Ok(());
                 };
                 let current_content = state.content.clone();
-                state.undo_stack.push(current_content);
+                state.undo_stack.push_back(current_content);
                 next
             };
 
-            state.content = next_content.clone();
+            state.content = next_content;
             let previous_dirty = state.dirty;
             state.dirty = compute_dirty(&state);
-            let autosave_bytes = if state.dirty {
-                let file_type = selected_file_type::<D>(&state)?;
-                Some(D::write(&state.content, file_type)?)
+            state.generation += 1;
+            let file_type = if state.dirty {
+                Some(*selected_file_type::<D>(&state)?)
             } else {
                 None
             };
 
             (
                 state.content.clone(),
+                file_type,
                 state.autosave_path.clone(),
-                autosave_bytes,
                 state.dirty,
                 previous_dirty != state.dirty,
                 state.change_listeners.values().cloned().collect::<Vec<_>>(),
@@ -595,13 +657,14 @@ impl<D: Document> DocumentHandle<D> {
             )
         };
 
-        if let Some(autosave_bytes) = autosave_bytes {
+        if let Some(file_type) = file_type {
+            let autosave_bytes = D::write(content.as_ref(), &file_type)?;
             autosave::write_autosave(&autosave_path, &autosave_bytes)?;
         } else {
             autosave::clear_autosave(&autosave_path)?;
         }
 
-        notify_change_listeners(&change_listeners, &content);
+        notify_change_listeners(&change_listeners, content.as_ref());
         if dirty_changed {
             notify_dirty_listeners(&dirty_listeners, dirty);
         }
@@ -635,8 +698,15 @@ fn compute_dirty<D: Document>(state: &DocumentState<D>) -> bool {
     state
         .last_saved_snapshot
         .as_ref()
-        .map(|saved| saved != &state.content)
+        .map(|saved| saved.as_ref() != state.content.as_ref())
         .unwrap_or(true)
+}
+
+fn push_history_entry<T>(history: &mut VecDeque<T>, entry: T, max_depth: usize) {
+    history.push_back(entry);
+    while history.len() > max_depth {
+        history.pop_front();
+    }
 }
 
 fn notify_change_listeners<T>(listeners: &[ChangeListener<T>], content: &T) {
@@ -669,17 +739,37 @@ fn document_key(path: &Path) -> String {
 mod tests {
     use std::{
         path::PathBuf,
+        sync::atomic::{AtomicUsize, Ordering},
         sync::{Arc, Mutex},
     };
 
     use futures::executor::block_on;
+    use serde::{Deserialize, Serialize};
     use tempfile::tempdir;
 
     use crate::{AutosaveConfig, AutosaveLocation, FileType};
 
     use super::{Document, DocumentController};
 
+    static CONTENT_CLONE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
     struct TextDocument;
+
+    #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+    struct CountedContent {
+        text: String,
+    }
+
+    impl Clone for CountedContent {
+        fn clone(&self) -> Self {
+            CONTENT_CLONE_COUNT.fetch_add(1, Ordering::SeqCst);
+            Self {
+                text: self.text.clone(),
+            }
+        }
+    }
+
+    struct CountedDocument;
 
     const TEXT_FILE_TYPES: [FileType; 1] = [FileType {
         name: "Plain Text",
@@ -708,11 +798,35 @@ mod tests {
         }
     }
 
+    impl Document for CountedDocument {
+        type Content = CountedContent;
+
+        fn file_types() -> &'static [FileType] {
+            &TEXT_FILE_TYPES
+        }
+
+        fn new_untitled() -> Self::Content {
+            CountedContent {
+                text: String::new(),
+            }
+        }
+
+        fn read(data: &[u8], _file_type: &FileType) -> crate::Result<Self::Content> {
+            Ok(CountedContent {
+                text: String::from_utf8(data.to_vec())?,
+            })
+        }
+
+        fn write(content: &Self::Content, _file_type: &FileType) -> crate::Result<Vec<u8>> {
+            Ok(content.text.as_bytes().to_vec())
+        }
+    }
+
     #[test]
     fn tracks_dirty_state_and_undo_redo() {
         let directory = tempdir().unwrap();
         let controller =
-            DocumentController::<TextDocument>::new_in("dev.kael.doc.tests", directory.path())
+            DocumentController::<TextDocument>::new_in("dev.kael.doc.tests.undo", directory.path())
                 .unwrap();
         let handle = controller.new_document();
         let dirty_states = Arc::new(Mutex::new(Vec::new()));
@@ -739,9 +853,11 @@ mod tests {
     #[test]
     fn saves_versions_and_tracks_recent_documents() {
         let directory = tempdir().unwrap();
-        let controller =
-            DocumentController::<TextDocument>::new_in("dev.kael.doc.tests", directory.path())
-                .unwrap();
+        let controller = DocumentController::<TextDocument>::new_in(
+            "dev.kael.doc.tests.versions",
+            directory.path(),
+        )
+        .unwrap();
         let handle = controller.new_document();
         let path = directory.path().join("notes.txt");
 
@@ -770,13 +886,15 @@ mod tests {
     fn restores_autosave_snapshots_when_reopening_documents() {
         let directory = tempdir().unwrap();
         let autosave_root = directory.path().join("autosave");
-        let controller =
-            DocumentController::<TextDocument>::new_in("dev.kael.doc.tests", directory.path())
-                .unwrap()
-                .with_autosave_config(AutosaveConfig {
-                    interval: std::time::Duration::from_secs(30),
-                    location: AutosaveLocation::Custom(autosave_root),
-                });
+        let controller = DocumentController::<TextDocument>::new_in(
+            "dev.kael.doc.tests.reopen",
+            directory.path(),
+        )
+        .unwrap()
+        .with_autosave_config(AutosaveConfig {
+            interval: std::time::Duration::from_secs(30),
+            location: AutosaveLocation::Custom(autosave_root),
+        });
         let handle = controller.new_document();
         let path = PathBuf::from(directory.path().join("draft.txt"));
 
@@ -793,5 +911,24 @@ mod tests {
         let reopened = block_on(controller.open(&path)).unwrap();
         assert_eq!(reopened.content(), "autosaved");
         assert!(reopened.is_dirty());
+    }
+
+    #[test]
+    fn modify_creates_one_new_content_snapshot() {
+        CONTENT_CLONE_COUNT.store(0, Ordering::SeqCst);
+
+        let directory = tempdir().unwrap();
+        let controller = DocumentController::<CountedDocument>::new_in(
+            "dev.kael.doc.tests.clone-count",
+            directory.path(),
+        )
+        .unwrap();
+        let handle = controller.new_document();
+
+        handle
+            .modify(|content| content.text.push_str("hello"))
+            .unwrap();
+
+        assert_eq!(CONTENT_CLONE_COUNT.load(Ordering::SeqCst), 1);
     }
 }

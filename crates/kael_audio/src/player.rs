@@ -152,9 +152,15 @@ impl AudioPlayer {
         let loading_listeners = self.set_state(PlaybackState::Loading);
         notify_state_listeners(&loading_listeners, PlaybackState::Loading);
 
-        let handle = kael_media::AudioHandle::new(source.to_media_source());
-        match handle.duration() {
+        let duration = smol::unblock({
+            let media_source = source.to_media_source();
+            move || kael_media::probe_audio_duration(media_source)
+        })
+        .await;
+
+        match duration {
             Ok(duration) => {
+                let handle = kael_media::AudioHandle::new(source.to_media_source());
                 let (track, listeners) = {
                     let mut state = self.inner.lock();
                     let track = Track {
@@ -230,15 +236,20 @@ impl AudioPlayer {
 
     /// Seeks the current track.
     pub fn seek(&self, position: Duration) -> Result<()> {
-        let handle = {
+        let (handle, source) = {
             let state = self.inner.lock();
-            state.handle.clone().or_else(|| {
+            (
+                state.handle.clone(),
                 state
                     .current_track
                     .as_ref()
-                    .map(|track| kael_media::AudioHandle::new(track.source.to_media_source()))
-            })
+                    .map(|track| track.source.clone()),
+            )
         };
+
+        let handle = handle.or_else(|| {
+            source.map(|source| kael_media::AudioHandle::new(source.to_media_source()))
+        });
 
         if let Some(handle) = handle {
             handle.seek(position)?;

@@ -11,6 +11,8 @@ pub struct RetryPolicy {
     pub max_delay_ms: u64,
     /// Multiplicative factor applied per attempt for exponential backoff.
     pub backoff_factor: f64,
+    /// Fractional randomization applied to each delay to reduce retry herding.
+    pub jitter_ratio: f64,
 }
 
 impl RetryPolicy {
@@ -21,6 +23,7 @@ impl RetryPolicy {
             base_delay_ms: 100,
             max_delay_ms: 30_000,
             backoff_factor: 2.0,
+            jitter_ratio: 0.1,
         }
     }
 
@@ -42,11 +45,23 @@ impl RetryPolicy {
         self
     }
 
+    /// Set the symmetric jitter ratio applied to the computed delay.
+    pub fn with_jitter(mut self, ratio: f64) -> Self {
+        self.jitter_ratio = ratio.clamp(0.0, 1.0);
+        self
+    }
+
     /// Calculate the delay duration for a given attempt number (0-indexed).
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
         let delay_ms = self.base_delay_ms as f64 * self.backoff_factor.powi(attempt as i32);
-        let capped_ms = delay_ms.min(self.max_delay_ms as f64) as u64;
-        Duration::from_millis(capped_ms)
+        let capped_ms = delay_ms.min(self.max_delay_ms as f64);
+        let jittered_ms = if self.jitter_ratio > 0.0 {
+            let jitter = fastrand::f64() * (self.jitter_ratio * 2.0) - self.jitter_ratio;
+            (capped_ms * (1.0 + jitter)).clamp(0.0, self.max_delay_ms as f64)
+        } else {
+            capped_ms
+        };
+        Duration::from_millis(jittered_ms.round() as u64)
     }
 
     /// Determine whether a retry should be attempted given the attempt number and status code.
@@ -71,6 +86,7 @@ mod tests {
         assert_eq!(policy.base_delay_ms, 100);
         assert_eq!(policy.max_delay_ms, 30_000);
         assert!((policy.backoff_factor - 2.0).abs() < f64::EPSILON);
+        assert!((policy.jitter_ratio - 0.1).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -93,7 +109,10 @@ mod tests {
 
     #[test]
     fn test_delay_for_attempt_exponential() {
-        let policy = RetryPolicy::new(5).with_base_delay(100).with_backoff(2.0);
+        let policy = RetryPolicy::new(5)
+            .with_base_delay(100)
+            .with_backoff(2.0)
+            .with_jitter(0.0);
         assert_eq!(policy.delay_for_attempt(0), Duration::from_millis(100));
         assert_eq!(policy.delay_for_attempt(1), Duration::from_millis(200));
         assert_eq!(policy.delay_for_attempt(2), Duration::from_millis(400));
@@ -105,9 +124,21 @@ mod tests {
         let policy = RetryPolicy::new(10)
             .with_base_delay(1000)
             .with_max_delay(5000)
-            .with_backoff(3.0);
+            .with_backoff(3.0)
+            .with_jitter(0.0);
         let delay = policy.delay_for_attempt(5);
         assert_eq!(delay, Duration::from_millis(5000));
+    }
+
+    #[test]
+    fn test_jitter_stays_within_expected_range() {
+        let policy = RetryPolicy::new(1)
+            .with_base_delay(1000)
+            .with_jitter(0.25)
+            .with_backoff(1.0);
+        let delay = policy.delay_for_attempt(0);
+        assert!(delay >= Duration::from_millis(750));
+        assert!(delay <= Duration::from_millis(1250));
     }
 
     #[test]

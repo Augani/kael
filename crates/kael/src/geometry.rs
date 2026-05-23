@@ -2,12 +2,12 @@
 //! can be used to describe common units, concepts, and the relationships
 //! between them.
 
-use anyhow::{anyhow, Context as _};
+use anyhow::{Context as _, anyhow};
 use core::fmt::Debug;
 use derive_more::{Add, AddAssign, Div, DivAssign, Mul, Neg, Sub, SubAssign};
 use refineable::Refineable;
-use schemars::{json_schema, JsonSchema};
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use schemars::{JsonSchema, json_schema};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::borrow::Cow;
 use std::ops::Range;
 use std::{
@@ -1087,9 +1087,8 @@ where
     }
 }
 
-impl<
-        T: PartialOrd + Add<T, Output = T> + Sub<Output = T> + Clone + Debug + Default + PartialEq,
-    > Bounds<T>
+impl<T: PartialOrd + Add<T, Output = T> + Sub<Output = T> + Clone + Debug + Default + PartialEq>
+    Bounds<T>
 {
     /// Calculates the intersection of two `Bounds` objects.
     ///

@@ -65,7 +65,9 @@ impl PdfPage {
 
     /// Renders a raster preview of the page at the requested scale.
     pub async fn render(&self, scale: f32) -> Result<RenderedPage> {
-        self.document.render_page(self.page_index, scale)
+        let document = self.document.clone();
+        let page_index = self.page_index;
+        smol::unblock(move || document.render_page(page_index, scale)).await
     }
 
     /// Returns the extracted text for the page.

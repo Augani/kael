@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::autosave;
+
 /// A recently opened document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecentDocument {
@@ -36,13 +38,13 @@ impl RecentDocumentStore {
             return Ok(Vec::new());
         }
 
-        let json = std::fs::read_to_string(&self.path).with_context(|| {
+        let json = std::fs::read(&self.path).with_context(|| {
             format!(
                 "failed to read recent documents from {}",
                 self.path.display()
             )
         })?;
-        serde_json::from_str(&json).context("failed to deserialize recent documents")
+        serde_json::from_slice(&json).context("failed to deserialize recent documents")
     }
 
     pub(crate) fn record(&self, path: &Path) -> Result<()> {
@@ -76,23 +78,8 @@ impl RecentDocumentStore {
 }
 
 fn persist_recent_documents(path: &Path, documents: &[RecentDocument]) -> Result<()> {
-    let temp_path = path.with_extension("tmp");
-    let json =
-        serde_json::to_vec_pretty(documents).context("failed to serialize recent documents")?;
-    std::fs::write(&temp_path, json).with_context(|| {
-        format!(
-            "failed to write recent documents to {}",
-            temp_path.display()
-        )
-    })?;
-    std::fs::rename(&temp_path, path).with_context(|| {
-        format!(
-            "failed to finalize recent documents file from {} to {}",
-            temp_path.display(),
-            path.display()
-        )
-    })?;
-    Ok(())
+    let json = serde_json::to_vec(documents).context("failed to serialize recent documents")?;
+    autosave::write_bytes_atomically(path, &json)
 }
 
 fn now_unix_millis() -> u64 {

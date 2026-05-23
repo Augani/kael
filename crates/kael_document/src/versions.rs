@@ -1,10 +1,15 @@
 //! Persistent version storage for documents.
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::VecDeque,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context as _, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+use crate::autosave;
 
 /// A stored document version.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,13 +47,13 @@ impl VersionStore {
             return Ok(Vec::new());
         }
 
-        let json = std::fs::read_to_string(&metadata_path).with_context(|| {
+        let json = std::fs::read(&metadata_path).with_context(|| {
             format!(
                 "failed to read document version metadata from {}",
                 metadata_path.display()
             )
         })?;
-        serde_json::from_str(&json).context("failed to deserialize document version metadata")
+        serde_json::from_slice(&json).context("failed to deserialize document version metadata")
     }
 
     pub(crate) fn record(&self, document_key: &str, bytes: &[u8]) -> Result<DocumentVersion> {
@@ -71,7 +76,7 @@ impl VersionStore {
             })?;
         }
 
-        let mut versions = self.load(document_key)?;
+        let mut versions = VecDeque::from(self.load(document_key)?);
         let timestamp = now_unix_millis();
         let version = DocumentVersion {
             id: format!("{}-{}", timestamp, short_hash(&digest)),
@@ -79,11 +84,10 @@ impl VersionStore {
             digest,
             size_bytes: bytes.len(),
         };
-        versions.push(version.clone());
+        versions.push_back(version.clone());
 
         while versions.len() > self.max_versions {
-            if let Some(removed) = versions.first().cloned() {
-                versions.remove(0);
+            if let Some(removed) = versions.pop_front() {
                 if versions
                     .iter()
                     .all(|candidate| candidate.digest != removed.digest)
@@ -94,6 +98,7 @@ impl VersionStore {
             }
         }
 
+        let versions = versions.into_iter().collect::<Vec<_>>();
         self.persist_versions(document_key, &versions)?;
         Ok(version)
     }
@@ -123,19 +128,9 @@ impl VersionStore {
             })?;
         }
 
-        let temp_path = metadata_path.with_extension("tmp");
-        let json = serde_json::to_vec_pretty(versions)
+        let json = serde_json::to_vec(versions)
             .context("failed to serialize document version metadata")?;
-        std::fs::write(&temp_path, json)
-            .with_context(|| format!("failed to write metadata file {}", temp_path.display()))?;
-        std::fs::rename(&temp_path, &metadata_path).with_context(|| {
-            format!(
-                "failed to finalize metadata file from {} to {}",
-                temp_path.display(),
-                metadata_path.display()
-            )
-        })?;
-        Ok(())
+        autosave::write_bytes_atomically(&metadata_path, &json)
     }
 
     fn document_dir(&self, document_key: &str) -> PathBuf {
