@@ -5,7 +5,8 @@ use std::{
 };
 
 use crate::{
-    ReceiverCallback, ShareFileType, ShareResult, ShareSheet, ShareType, platform::PlatformShareReceiver,
+    ReceiverCallback, ShareFileType, ShareResult, ShareSheet, ShareType,
+    platform::PlatformShareReceiver,
 };
 
 pub(crate) async fn show(sheet: &ShareSheet) -> Result<ShareResult> {

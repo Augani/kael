@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 /// How a selection model handles user interaction.

@@ -452,15 +452,15 @@ dependencies = [
 
 [[package]]
 name = "async-tar"
-version = "0.5.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1937db2d56578aa3919b9bdb0e5100693fd7d1c0f145c53eb81fbb03e217550"
+checksum = "c39a12c501213b9d535ab52f28211c2fbe7d5a57479b0cc445d0d29eb2b64907"
 dependencies = [
  "async-std",
  "filetime",
  "libc",
- "pin-project",
- "redox_syscall 0.2.16",
+ "pin-project 0.4.30",
+ "redox_syscall 0.1.57",
  "xattr",
 ]
 
@@ -490,7 +490,7 @@ dependencies = [
  "async-compression",
  "crc32fast",
  "futures-lite 2.6.0",
- "pin-project",
+ "pin-project 1.1.10",
  "thiserror 1.0.69",
 ]
 
@@ -3513,7 +3513,7 @@ dependencies = [
 
 [[package]]
 name = "kael"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "as-raw-xcb-connection",
@@ -3558,7 +3558,7 @@ dependencies = [
  "kael_document",
  "kael_http_client",
  "kael_icons",
- "kael_media",
+ "kael_media_sys",
  "kael_notifications",
  "kael_pdf",
  "kael_refineable",
@@ -3632,7 +3632,7 @@ dependencies = [
 
 [[package]]
 name = "kael-macros"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "heck 0.5.0",
  "kael",
@@ -3643,7 +3643,7 @@ dependencies = [
 
 [[package]]
 name = "kael-media"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "ffmpeg-next",
  "parking_lot",
@@ -3653,7 +3653,7 @@ dependencies = [
 
 [[package]]
 name = "kael_audio"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures",
@@ -3663,7 +3663,7 @@ dependencies = [
 
 [[package]]
 name = "kael_cache"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -3674,7 +3674,7 @@ dependencies = [
 
 [[package]]
 name = "kael_collections"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "indexmap",
  "rustc-hash 2.1.1",
@@ -3682,7 +3682,7 @@ dependencies = [
 
 [[package]]
 name = "kael_derive_refineable"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3691,7 +3691,7 @@ dependencies = [
 
 [[package]]
 name = "kael_diagnostics"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "kael_http_client",
@@ -3702,7 +3702,7 @@ dependencies = [
 
 [[package]]
 name = "kael_document"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures",
@@ -3716,7 +3716,7 @@ dependencies = [
 
 [[package]]
 name = "kael_engines"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -3725,7 +3725,7 @@ dependencies = [
 
 [[package]]
 name = "kael_http_client"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -3749,7 +3749,7 @@ dependencies = [
 
 [[package]]
 name = "kael_i18n"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -3758,11 +3758,11 @@ dependencies = [
 
 [[package]]
 name = "kael_icons"
-version = "0.5.1"
+version = "0.1.0"
 
 [[package]]
-name = "kael_media"
-version = "0.5.1"
+name = "kael_media_sys"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "bindgen 0.71.1",
@@ -3776,7 +3776,7 @@ dependencies = [
 
 [[package]]
 name = "kael_net"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -3785,7 +3785,7 @@ dependencies = [
 
 [[package]]
 name = "kael_notifications"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures",
@@ -3796,7 +3796,7 @@ dependencies = [
 
 [[package]]
 name = "kael_pdf"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures",
@@ -3810,7 +3810,7 @@ dependencies = [
 
 [[package]]
 name = "kael_perf"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "kael_collections",
  "serde",
@@ -3819,14 +3819,14 @@ dependencies = [
 
 [[package]]
 name = "kael_refineable"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "kael_derive_refineable",
 ]
 
 [[package]]
 name = "kael_release"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -3835,7 +3835,7 @@ dependencies = [
 
 [[package]]
 name = "kael_semantic_version"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -3843,7 +3843,7 @@ dependencies = [
 
 [[package]]
 name = "kael_share"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "block",
@@ -3856,7 +3856,7 @@ dependencies = [
 
 [[package]]
 name = "kael_storage"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "futures",
  "parking_lot",
@@ -3869,7 +3869,7 @@ dependencies = [
 
 [[package]]
 name = "kael_sum_tree"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "arrayvec",
  "log",
@@ -3879,7 +3879,7 @@ dependencies = [
 
 [[package]]
 name = "kael_util"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-fs",
@@ -3918,7 +3918,7 @@ dependencies = [
 
 [[package]]
 name = "kael_util_macros"
-version = "0.5.1"
+version = "0.1.0"
 dependencies = [
  "kael_perf",
  "quote",
@@ -5188,11 +5188,31 @@ checksum = "5be167a7af36ee22fe3115051bc51f6e6c7054c9348e28deb4f49bd6f705a315"
 
 [[package]]
 name = "pin-project"
+version = "0.4.30"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ef0f924a5ee7ea9cbcea77529dba45f8a9ba9f622419fe3386ca581a3ae9d5a"
+dependencies = [
+ "pin-project-internal 0.4.30",
+]
+
+[[package]]
+name = "pin-project"
 version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "677f1add503faace112b9f1373e43e9e054bfdd22ff1a63c1bc485eaec6a6a8a"
 dependencies = [
- "pin-project-internal",
+ "pin-project-internal 1.1.10",
+]
+
+[[package]]
+name = "pin-project-internal"
+version = "0.4.30"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "851c8d0ce9bebe43790dedfc86614c23494ac9f423dd618d3a61fc693eafe61e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -5307,7 +5327,7 @@ dependencies = [
  "futures",
  "log",
  "parking_lot",
- "pin-project",
+ "pin-project 1.1.10",
  "pollster",
  "static_assertions",
  "thiserror 1.0.69",
@@ -5783,12 +5803,9 @@ dependencies = [
 
 [[package]]
 name = "redox_syscall"
-version = "0.2.16"
+version = "0.1.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb5a58c1855b4b6819d59012155603f0b22ad30cad752600aadfcb695265519a"
-dependencies = [
- "bitflags 1.3.2",
-]
+checksum = "41cc0f7e4d5d4544e8861606a285bb08d3e70712ccc7d2b84d7c0ccfaf4b05ce"
 
 [[package]]
 name = "redox_syscall"

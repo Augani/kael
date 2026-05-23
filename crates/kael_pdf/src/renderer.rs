@@ -138,7 +138,15 @@ fn draw_annotation(
             for path in paths {
                 for segment in path.windows(2) {
                     if let [from, to] = segment {
-                        draw_line(image, page_size, *from, *to, scale, rgba(*color), stroke_width);
+                        draw_line(
+                            image,
+                            page_size,
+                            *from,
+                            *to,
+                            scale,
+                            rgba(*color),
+                            stroke_width,
+                        );
                     }
                 }
             }

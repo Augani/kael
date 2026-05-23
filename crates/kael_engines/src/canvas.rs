@@ -326,13 +326,15 @@ mod tests {
         };
         cache.insert(coord, vec![42]);
         assert_eq!(cache.get(&coord).unwrap(), &vec![42]);
-        assert!(cache
-            .get(&TileCoord {
-                x: 0,
-                y: 0,
-                zoom: 0
-            })
-            .is_none());
+        assert!(
+            cache
+                .get(&TileCoord {
+                    x: 0,
+                    y: 0,
+                    zoom: 0
+                })
+                .is_none()
+        );
     }
 
     #[test]
@@ -368,13 +370,15 @@ mod tests {
             vec![],
         );
         cache.clear();
-        assert!(cache
-            .get(&TileCoord {
-                x: 0,
-                y: 0,
-                zoom: 0
-            })
-            .is_none());
+        assert!(
+            cache
+                .get(&TileCoord {
+                    x: 0,
+                    y: 0,
+                    zoom: 0
+                })
+                .is_none()
+        );
     }
 
     #[test]

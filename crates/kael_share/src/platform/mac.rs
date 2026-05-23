@@ -7,7 +7,8 @@ use cocoa::{
 use objc::{class, msg_send, sel, sel_impl};
 
 use crate::{
-    ReceiverCallback, ShareFileType, ShareResult, ShareSheet, ShareType, platform::PlatformShareReceiver,
+    ReceiverCallback, ShareFileType, ShareResult, ShareSheet, ShareType,
+    platform::PlatformShareReceiver,
 };
 
 pub(crate) async fn show(sheet: &ShareSheet) -> Result<ShareResult> {
@@ -115,10 +116,16 @@ fn preferred_services(sheet: &ShareSheet) -> Vec<(ShareType, &'static [&'static 
         services.push((ShareType::Mail, &["NSSharingServiceNameComposeEmail"][..]));
     }
     if !sheet.is_excluded(ShareType::Messages) {
-        services.push((ShareType::Messages, &["NSSharingServiceNameComposeMessage"][..]));
+        services.push((
+            ShareType::Messages,
+            &["NSSharingServiceNameComposeMessage"][..],
+        ));
     }
     if !sheet.is_excluded(ShareType::AirDrop) {
-        services.push((ShareType::AirDrop, &["NSSharingServiceNameSendViaAirDrop"][..]));
+        services.push((
+            ShareType::AirDrop,
+            &["NSSharingServiceNameSendViaAirDrop"][..],
+        ));
     }
     if !sheet.is_excluded(ShareType::Social) {
         services.push((

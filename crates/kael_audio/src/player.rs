@@ -1,11 +1,6 @@
 //! Audio player and track types.
 
-use std::{
-    collections::BTreeMap,
-    path::PathBuf,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use parking_lot::Mutex;
@@ -283,7 +278,9 @@ impl AudioPlayer {
             let state = self.inner.lock();
             state.handle.clone()
         };
-        handle.map(|handle| handle.position()).unwrap_or(Duration::ZERO)
+        handle
+            .map(|handle| handle.position())
+            .unwrap_or(Duration::ZERO)
     }
 
     /// Returns the current track duration when available.
@@ -311,13 +308,18 @@ impl AudioPlayer {
     }
 
     /// Registers a listener for state changes.
-    pub fn on_state_change(&self, callback: impl Fn(PlaybackState) + Send + Sync + 'static) -> Subscription {
+    pub fn on_state_change(
+        &self,
+        callback: impl Fn(PlaybackState) + Send + Sync + 'static,
+    ) -> Subscription {
         let state = self.inner.clone();
         let listener_id = {
             let mut state = state.lock();
             let listener_id = state.next_listener_id;
             state.next_listener_id += 1;
-            state.state_listeners.insert(listener_id, Arc::new(callback));
+            state
+                .state_listeners
+                .insert(listener_id, Arc::new(callback));
             listener_id
         };
 
@@ -327,13 +329,18 @@ impl AudioPlayer {
     }
 
     /// Registers a listener for position changes.
-    pub fn on_position_change(&self, callback: impl Fn(Duration) + Send + Sync + 'static) -> Subscription {
+    pub fn on_position_change(
+        &self,
+        callback: impl Fn(Duration) + Send + Sync + 'static,
+    ) -> Subscription {
         let state = self.inner.clone();
         let listener_id = {
             let mut state = state.lock();
             let listener_id = state.next_listener_id;
             state.next_listener_id += 1;
-            state.position_listeners.insert(listener_id, Arc::new(callback));
+            state
+                .position_listeners
+                .insert(listener_id, Arc::new(callback));
             listener_id
         };
 
@@ -345,7 +352,11 @@ impl AudioPlayer {
     fn ensure_track_handle(&self, track: &Track) -> Result<kael_media::AudioHandle> {
         let (current_track, existing_handle, volume) = {
             let state = self.inner.lock();
-            (state.current_track.clone(), state.handle.clone(), state.volume)
+            (
+                state.current_track.clone(),
+                state.handle.clone(),
+                state.volume,
+            )
         };
 
         if current_track.as_ref().map(|current| current.id) == Some(track.id) {

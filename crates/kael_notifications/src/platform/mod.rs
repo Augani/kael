@@ -54,7 +54,9 @@ pub(crate) trait NotificationBackend: Send + Sync + 'static {
     ) -> Result<()>;
 
     fn register_for_push(&self) -> Result<PushToken> {
-        Err(anyhow!("push registration is not implemented on this platform"))
+        Err(anyhow!(
+            "push registration is not implemented on this platform"
+        ))
     }
 
     fn set_badge_count(&self, _count: u32) -> Result<()> {

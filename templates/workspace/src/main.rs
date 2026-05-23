@@ -9,7 +9,8 @@ fn main() {
 
         cx.open_window(WindowOptions::default(), |_window, cx| {
             cx.new(|_cx| EditorView)
-        }).unwrap();
+        })
+        .unwrap();
 
         cx.activate(true);
     });

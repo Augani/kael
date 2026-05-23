@@ -1,6 +1,9 @@
 #![allow(clippy::disallowed_methods, reason = "build scripts are exempt")]
 
-use std::{env, fs, path::{Path, PathBuf}};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -83,7 +86,10 @@ fn generate_catalog(icons: &[IconAsset]) -> String {
     source.push_str("    pub const fn slug(self) -> &'static str {\n");
     source.push_str("        match self {\n");
     for icon in icons {
-        source.push_str(&format!("            Self::{} => \"{}\",\n", icon.variant_name, icon.slug));
+        source.push_str(&format!(
+            "            Self::{} => \"{}\",\n",
+            icon.variant_name, icon.slug
+        ));
     }
     source.push_str("        }\n");
     source.push_str("    }\n\n");
@@ -105,7 +111,10 @@ fn generate_catalog(icons: &[IconAsset]) -> String {
     source.push_str("    pub fn from_slug(slug: &str) -> Option<Self> {\n");
     source.push_str("        match slug {\n");
     for icon in icons {
-        source.push_str(&format!("            \"{}\" => Some(Self::{}),\n", icon.slug, icon.variant_name));
+        source.push_str(&format!(
+            "            \"{}\" => Some(Self::{}),\n",
+            icon.slug, icon.variant_name
+        ));
     }
     source.push_str("            _ => None,\n");
     source.push_str("        }\n");

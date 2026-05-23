@@ -11,7 +11,7 @@ use std::{
     ffi::OsString,
     fs::File,
     io::Read as _,
-    os::fd::{AsFd, AsRawFd, FromRawFd, IntoRawFd},
+    os::fd::{AsFd, FromRawFd, IntoRawFd},
     time::Duration,
 };
 

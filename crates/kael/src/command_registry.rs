@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 /// A unique identifier for a palette command.
@@ -52,17 +52,9 @@ pub struct CommandDescriptor {
 /// Commands are indexed by their [`PaletteCommandId`] and can be searched by
 /// label or filtered by category. This complements the existing
 /// `CommandRegistry` in `app_runtime` which handles command execution.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CommandPalette {
     commands: HashMap<PaletteCommandId, CommandDescriptor>,
-}
-
-impl Default for CommandPalette {
-    fn default() -> Self {
-        Self {
-            commands: HashMap::new(),
-        }
-    }
 }
 
 impl CommandPalette {
@@ -162,9 +154,11 @@ mod tests {
         palette
             .register(make_descriptor("file.save", "Save File", "File"))
             .unwrap();
-        assert!(palette
-            .register(make_descriptor("file.save", "Save Again", "File"))
-            .is_err());
+        assert!(
+            palette
+                .register(make_descriptor("file.save", "Save Again", "File"))
+                .is_err()
+        );
     }
 
     #[test]

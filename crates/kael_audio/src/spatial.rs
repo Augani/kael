@@ -46,7 +46,10 @@ impl SpatialAudioPlayer {
 
     /// Sets the position for a track source.
     pub fn set_source_position(&self, track: &Track, position: [f32; 3]) {
-        self.inner.lock().source_positions.insert(track.id, position);
+        self.inner
+            .lock()
+            .source_positions
+            .insert(track.id, position);
     }
 
     /// Returns the current listener position.

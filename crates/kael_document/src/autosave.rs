@@ -117,7 +117,11 @@ fn system_autosave_name(file_path: Option<&Path>, document_name: &str) -> String
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(|| document_name.to_string());
     let digest = digest_hex(basis.as_bytes());
-    format!("{}-{}.autosave", sanitize_name(document_name), &digest[..12])
+    format!(
+        "{}-{}.autosave",
+        sanitize_name(document_name),
+        &digest[..12]
+    )
 }
 
 fn sanitize_name(name: &str) -> String {

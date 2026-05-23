@@ -1,7 +1,7 @@
 use crate::{
-    div, px, AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
+    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
     AnyElement, App, Component, ElementId, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window,
+    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use std::rc::Rc;
 
@@ -109,7 +109,10 @@ where
         } = self;
 
         let tabs_id = element_id.to_string();
-        let item_values = items.iter().map(|item| item.value.clone()).collect::<Vec<_>>();
+        let item_values = items
+            .iter()
+            .map(|item| item.value.clone())
+            .collect::<Vec<_>>();
         let tab_count = item_values.len();
         let selected_index = items
             .iter()
@@ -183,7 +186,10 @@ where
                 .clone();
             let last_focus = window
                 .use_keyed_state(
-                    ElementId::named_usize(format!("{}-tab-focus", tabs_id), tab_count.saturating_sub(1)),
+                    ElementId::named_usize(
+                        format!("{}-tab-focus", tabs_id),
+                        tab_count.saturating_sub(1),
+                    ),
                     cx,
                     |_, cx| cx.focus_handle(),
                 )
@@ -241,11 +247,11 @@ where
                 let target = match event.keystroke.key.as_str() {
                     "left" | "up" => Some((previous_value.clone(), previous_focus.clone())),
                     "right" | "down" => Some((next_value.clone(), next_focus.clone())),
-                    "home" => first_value.clone().map(|value| (value, first_focus.clone())),
+                    "home" => first_value
+                        .clone()
+                        .map(|value| (value, first_focus.clone())),
                     "end" => last_value.clone().map(|value| (value, last_focus.clone())),
-                    "space" | "enter" => {
-                        Some((current_value.clone(), tab_focus_for_key.clone()))
-                    }
+                    "space" | "enter" => Some((current_value.clone(), tab_focus_for_key.clone())),
                     _ => None,
                 };
 
@@ -428,10 +434,17 @@ mod tests {
                 let selector = format!(
                     "tabs-custom-{}-{}-{}",
                     state.label,
-                    if state.selected { "selected" } else { "unselected" },
+                    if state.selected {
+                        "selected"
+                    } else {
+                        "unselected"
+                    },
                     if state.focused { "focused" } else { "blurred" },
                 );
-                div().debug_selector(move || selector).child(state.label).into_any_element()
+                div()
+                    .debug_selector(move || selector)
+                    .child(state.label)
+                    .into_any_element()
             })
             .on_change(cx.listener(|this, next, _, cx| {
                 this.selected = *next;
@@ -496,9 +509,11 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        assert!(window
-            .debug_bounds("tabs-custom-Overview-selected-blurred")
-            .is_some());
+        assert!(
+            window
+                .debug_bounds("tabs-custom-Overview-selected-blurred")
+                .is_some()
+        );
 
         let activity_tab = window.debug_bounds("tabs-tab-custom_tabs-1").unwrap();
         window.simulate_click(activity_tab.center(), Modifiers::default());
@@ -506,8 +521,10 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        assert!(window
-            .debug_bounds("tabs-custom-Activity-selected-focused")
-            .is_some());
+        assert!(
+            window
+                .debug_bounds("tabs-custom-Activity-selected-focused")
+                .is_some()
+        );
     }
 }

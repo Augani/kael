@@ -312,7 +312,7 @@ impl LinuxWebViewHost {
         self.apply(scale_factor, parent_origin);
     }
 
-    fn apply(&mut self, _scale_factor: f32, parent_origin: Option<Point<Pixels>>) {
+    fn apply(&mut self, _scale_factor: f32, _parent_origin: Option<Point<Pixels>>) {
         match &self.backend {
             LinuxWebViewBackend::X11 => {
                 if self.bounds != self.desired.bounds {

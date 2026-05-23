@@ -90,7 +90,8 @@ impl PdfPage {
 
     /// Adds an annotation to the page.
     pub fn add_annotation(&self, annotation: Annotation) -> Result<()> {
-        self.document.add_page_annotation(self.page_index, annotation)
+        self.document
+            .add_page_annotation(self.page_index, annotation)
     }
 
     /// Removes an annotation from the page by identifier.

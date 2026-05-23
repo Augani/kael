@@ -43,7 +43,10 @@ impl VersionStore {
         }
 
         let json = std::fs::read_to_string(&metadata_path).with_context(|| {
-            format!("failed to read document version metadata from {}", metadata_path.display())
+            format!(
+                "failed to read document version metadata from {}",
+                metadata_path.display()
+            )
         })?;
         serde_json::from_str(&json).context("failed to deserialize document version metadata")
     }
@@ -51,14 +54,21 @@ impl VersionStore {
     pub(crate) fn record(&self, document_key: &str, bytes: &[u8]) -> Result<DocumentVersion> {
         let document_dir = self.document_dir(document_key);
         std::fs::create_dir_all(&document_dir).with_context(|| {
-            format!("failed to create document version directory {}", document_dir.display())
+            format!(
+                "failed to create document version directory {}",
+                document_dir.display()
+            )
         })?;
 
         let digest = digest_hex(bytes);
         let blob_path = document_dir.join(format!("{digest}.bin"));
         if !blob_path.exists() {
-            std::fs::write(&blob_path, bytes)
-                .with_context(|| format!("failed to write document version blob {}", blob_path.display()))?;
+            std::fs::write(&blob_path, bytes).with_context(|| {
+                format!(
+                    "failed to write document version blob {}",
+                    blob_path.display()
+                )
+            })?;
         }
 
         let mut versions = self.load(document_key)?;
@@ -74,7 +84,10 @@ impl VersionStore {
         while versions.len() > self.max_versions {
             if let Some(removed) = versions.first().cloned() {
                 versions.remove(0);
-                if versions.iter().all(|candidate| candidate.digest != removed.digest) {
+                if versions
+                    .iter()
+                    .all(|candidate| candidate.digest != removed.digest)
+                {
                     let removed_blob = document_dir.join(format!("{}.bin", removed.digest));
                     let _ = std::fs::remove_file(removed_blob);
                 }
@@ -94,8 +107,12 @@ impl VersionStore {
         let blob_path = self
             .document_dir(document_key)
             .join(format!("{}.bin", version.digest));
-        std::fs::read(&blob_path)
-            .with_context(|| format!("failed to read document version blob {}", blob_path.display()))
+        std::fs::read(&blob_path).with_context(|| {
+            format!(
+                "failed to read document version blob {}",
+                blob_path.display()
+            )
+        })
     }
 
     fn persist_versions(&self, document_key: &str, versions: &[DocumentVersion]) -> Result<()> {
@@ -122,7 +139,8 @@ impl VersionStore {
     }
 
     fn document_dir(&self, document_key: &str) -> PathBuf {
-        self.root.join(short_hash(&digest_hex(document_key.as_bytes())))
+        self.root
+            .join(short_hash(&digest_hex(document_key.as_bytes())))
     }
 
     fn metadata_path(&self, document_key: &str) -> PathBuf {

@@ -7,7 +7,10 @@ use std::{
     io::Write,
     mem,
     path::PathBuf,
-    sync::{Arc, Mutex, OnceLock, atomic::{AtomicU64, Ordering}},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Instant,
 };
 
@@ -105,31 +108,46 @@ impl Tracer {
 
     /// Returns whether tracing is enabled.
     pub fn is_enabled(&self) -> bool {
-        let inner = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         inner.enabled
     }
 
     /// Enables tracing.
     pub fn enable(&self) {
-        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         inner.enabled = true;
     }
 
     /// Disables tracing.
     pub fn disable(&self) {
-        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         inner.enabled = false;
     }
 
     /// Clears all retained events.
     pub fn clear(&self) {
-        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         inner.events.clear();
     }
 
     /// Records a trace event.
     pub fn record(&self, name: impl Into<String>, category: impl Into<String>, phase: TracePhase) {
-        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if !inner.enabled {
             return;
         }
@@ -169,13 +187,18 @@ impl Tracer {
 
     /// Returns a snapshot of retained events.
     pub fn events(&self) -> Vec<TraceEvent> {
-        let inner = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         inner.events.iter().cloned().collect()
     }
 
     /// Installs this tracer as the process-global tracer.
     pub fn install_global(&self) -> Option<Tracer> {
-        let mut slot = global_tracer_slot().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut slot = global_tracer_slot()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         mem::replace(&mut *slot, Some(self.clone()))
     }
 
@@ -197,7 +220,10 @@ impl Tracer {
 
     /// Exports retained events as Chrome Trace JSON.
     pub fn export_to_chrome_json(&self) -> Result<String> {
-        let inner = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let events: Vec<&TraceEvent> = inner.events.iter().collect();
         serde_json::to_string_pretty(&events).context("failed to export trace events")
     }
@@ -240,25 +266,41 @@ pub struct MetricsRegistry {
 impl MetricsRegistry {
     /// Records a gauge value.
     pub fn record_gauge(&self, name: &str, value: f64) {
-        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         inner.gauges.insert(name.to_string(), value);
     }
 
     /// Increments a counter by `delta`.
     pub fn record_counter(&self, name: &str, delta: i64) {
-        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *inner.counters.entry(name.to_string()).or_default() += delta;
     }
 
     /// Appends a histogram sample.
     pub fn record_histogram(&self, name: &str, value: f64) {
-        let mut inner = self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        inner.histograms.entry(name.to_string()).or_default().push(value);
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        inner
+            .histograms
+            .entry(name.to_string())
+            .or_default()
+            .push(value);
     }
 
     /// Returns a clone of the current metrics snapshot.
     pub fn snapshot(&self) -> MetricsSnapshot {
-        self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 }
 

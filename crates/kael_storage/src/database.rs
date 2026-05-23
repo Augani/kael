@@ -1,11 +1,19 @@
 //! SQLite-backed database support.
 
-use std::{path::{Path, PathBuf}, sync::Arc, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use parking_lot::Mutex;
 use rusqlite::{Connection, OptionalExtension, Row, ToSql};
 
-use crate::{Error, Result, migration::{Migration, pending_migrations}, platform};
+use crate::{
+    Error, Result,
+    migration::{Migration, pending_migrations},
+    platform,
+};
 
 #[cfg(test)]
 use crate::migration::rollback_migrations;
@@ -84,7 +92,8 @@ impl Database {
         let path = path.as_ref().to_path_buf();
 
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|source| Error::io(parent.to_path_buf(), source))?;
+            std::fs::create_dir_all(parent)
+                .map_err(|source| Error::io(parent.to_path_buf(), source))?;
         }
 
         let connection = Connection::open(&path)?;
@@ -216,9 +225,7 @@ fn apply_migrations(connection: &mut Connection, migrations: &[Migration]) -> Re
     for migration in pending {
         transaction.execute_batch(migration.up)?;
         transaction.execute(
-            &format!(
-                "INSERT INTO {MIGRATIONS_TABLE} (version, description) VALUES (?1, ?2)"
-            ),
+            &format!("INSERT INTO {MIGRATIONS_TABLE} (version, description) VALUES (?1, ?2)"),
             [&migration.version as &dyn ToSql, &migration.description],
         )?;
     }
@@ -245,7 +252,11 @@ fn current_version(connection: &Connection) -> Result<u32> {
 }
 
 #[cfg(test)]
-fn rollback_to(connection: &mut Connection, target_version: u32, migrations: &[Migration]) -> Result<()> {
+fn rollback_to(
+    connection: &mut Connection,
+    target_version: u32,
+    migrations: &[Migration],
+) -> Result<()> {
     ensure_migrations_table(connection)?;
     let current = current_version(connection)?;
     let rollback_plan = rollback_migrations(current, target_version, migrations)?;
@@ -315,10 +326,9 @@ mod tests {
         ))
         .unwrap();
 
-        let rows = futures::executor::block_on(database.query::<Item>(
-            "SELECT id, name FROM items ORDER BY id",
-            &[],
-        ))
+        let rows = futures::executor::block_on(
+            database.query::<Item>("SELECT id, name FROM items ORDER BY id", &[]),
+        )
         .unwrap();
 
         assert_eq!(rows.len(), 1);
@@ -328,9 +338,10 @@ mod tests {
     #[test]
     fn rolls_transactions_back_on_error() {
         let database = futures::executor::block_on(Database::open_in_memory()).unwrap();
-        futures::executor::block_on(database.execute_batch(
-            "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL);",
-        ))
+        futures::executor::block_on(
+            database
+                .execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL);"),
+        )
         .unwrap();
 
         let error = futures::executor::block_on(database.transaction(
@@ -343,10 +354,9 @@ mod tests {
 
         assert!(matches!(error, Error::UnexpectedRowCount(0)));
 
-        let count = futures::executor::block_on(database.query_one::<i64>(
-            "SELECT COUNT(*) FROM items",
-            &[],
-        ))
+        let count = futures::executor::block_on(
+            database.query_one::<i64>("SELECT COUNT(*) FROM items", &[]),
+        )
         .unwrap();
         assert_eq!(count, 0);
     }
@@ -361,7 +371,9 @@ mod tests {
         rollback_to(&mut connection, 1, &MIGRATIONS).unwrap();
 
         let pragma = connection
-            .query_row("PRAGMA table_info(items)", [], |row| row.get::<_, String>(1))
+            .query_row("PRAGMA table_info(items)", [], |row| {
+                row.get::<_, String>(1)
+            })
             .unwrap();
         assert_eq!(pragma, "id");
         assert_eq!(current_version(&connection).unwrap(), 1);
@@ -370,16 +382,15 @@ mod tests {
     #[test]
     fn query_one_requires_exactly_one_row() {
         let database = futures::executor::block_on(Database::open_in_memory()).unwrap();
-        futures::executor::block_on(database.execute_batch(
-            "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL);",
-        ))
+        futures::executor::block_on(
+            database
+                .execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL);"),
+        )
         .unwrap();
 
-        let error = futures::executor::block_on(database.query_one::<i64>(
-            "SELECT id FROM items",
-            &[],
-        ))
-        .unwrap_err();
+        let error =
+            futures::executor::block_on(database.query_one::<i64>("SELECT id FROM items", &[]))
+                .unwrap_err();
         assert!(matches!(error, Error::RowNotFound));
     }
 }

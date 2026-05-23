@@ -5,8 +5,8 @@ use std::sync::{Arc, OnceLock};
 use anyhow::Result;
 
 use crate::{
-    Breadcrumb, BreadcrumbBuffer, CrashReport, CrashReporter, Level, MetricsRegistry, Span,
-    Transaction, Tracer,
+    Breadcrumb, BreadcrumbBuffer, CrashReport, CrashReporter, Level, MetricsRegistry, Span, Tracer,
+    Transaction,
 };
 
 type BeforeSend = dyn Fn(&mut CrashReport) -> bool + Send + Sync + 'static;
@@ -221,7 +221,11 @@ pub fn record_histogram(name: &str, value: f64) {
 }
 
 /// Creates a breadcrumb with a default timestamp.
-pub fn breadcrumb(category: impl Into<String>, message: impl Into<String>, level: Level) -> Breadcrumb {
+pub fn breadcrumb(
+    category: impl Into<String>,
+    message: impl Into<String>,
+    level: Level,
+) -> Breadcrumb {
     Breadcrumb {
         category: category.into(),
         message: message.into(),

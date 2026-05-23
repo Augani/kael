@@ -5,11 +5,7 @@
 mod platform;
 
 use anyhow::{Result, bail};
-use std::{
-    collections::BTreeSet,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
 
 pub use platform::PlatformShareSupport;
 
@@ -277,11 +273,7 @@ impl ShareSheet {
 
     #[cfg(any(target_os = "linux", target_os = "windows", test))]
     pub(crate) fn body_text(&self) -> Option<String> {
-        let parts: Vec<String> = self
-            .items
-            .iter()
-            .filter_map(ShareItem::body_text)
-            .collect();
+        let parts: Vec<String> = self.items.iter().filter_map(ShareItem::body_text).collect();
         (!parts.is_empty()).then(|| parts.join("\n\n"))
     }
 
@@ -484,7 +476,10 @@ mod tests {
             ShareItem::new()
                 .with_url("https://example.com")
                 .with_file(&attachment)
-                .with_image(ShareImage::new("image/png", vec![9, 8, 7]).with_suggested_name("helper-preview")),
+                .with_image(
+                    ShareImage::new("image/png", vec![9, 8, 7])
+                        .with_suggested_name("helper-preview"),
+                ),
         ]);
 
         let urls = sheet.all_urls();
@@ -500,7 +495,10 @@ mod tests {
             .find(|path| *path != &attachment)
             .expect("materialized image path should exist")
             .clone();
-        assert_eq!(image_path.extension().and_then(|ext| ext.to_str()), Some("png"));
+        assert_eq!(
+            image_path.extension().and_then(|ext| ext.to_str()),
+            Some("png")
+        );
 
         fs::remove_file(&attachment).ok();
         fs::remove_file(image_path).ok();

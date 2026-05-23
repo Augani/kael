@@ -4,7 +4,10 @@ use std::{
     collections::BTreeMap,
     marker::PhantomData,
     path::{Path, PathBuf},
-    sync::{Arc, atomic::{AtomicU64, Ordering}},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use anyhow::{Context as _, Result, anyhow};
@@ -81,7 +84,9 @@ impl<D: Document> DocumentController<D> {
     /// Creates a controller rooted in the platform-standard data directory.
     pub fn new(app_id: impl Into<String>) -> Result<Self> {
         let app_id = app_id.into();
-        let root = kael_storage::platform::ensure_storage_paths(&app_id)?.data_dir.join("documents");
+        let root = kael_storage::platform::ensure_storage_paths(&app_id)?
+            .data_dir
+            .join("documents");
         Self::new_in(app_id, root)
     }
 
@@ -90,7 +95,10 @@ impl<D: Document> DocumentController<D> {
         let app_id = app_id.into();
         let storage_root = storage_root.as_ref();
         std::fs::create_dir_all(storage_root).with_context(|| {
-            format!("failed to create document storage root {}", storage_root.display())
+            format!(
+                "failed to create document storage root {}",
+                storage_root.display()
+            )
         })?;
 
         Ok(Self {
@@ -159,7 +167,12 @@ impl<D: Document> DocumentController<D> {
         let file_types = D::file_types();
         let file_type_index = file_type_index_for_path(&path, file_types)
             .or_else(|| default_file_type_index(file_types))
-            .ok_or_else(|| anyhow!("document type {} does not define any file types", std::any::type_name::<D>()))?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "document type {} does not define any file types",
+                    std::any::type_name::<D>()
+                )
+            })?;
         let file_type = &file_types[file_type_index];
         let saved_bytes = std::fs::read(&path)
             .with_context(|| format!("failed to read document from {}", path.display()))?;
@@ -178,7 +191,9 @@ impl<D: Document> DocumentController<D> {
 
         let (content, dirty) = match autosave::load_autosave(&autosave_path)? {
             Some(autosave_bytes) => match D::read(&autosave_bytes, file_type) {
-                Ok(autosave_content) if autosave_content != saved_content => (autosave_content, true),
+                Ok(autosave_content) if autosave_content != saved_content => {
+                    (autosave_content, true)
+                }
                 _ => (saved_content.clone(), false),
             },
             None => (saved_content.clone(), false),
@@ -224,7 +239,15 @@ impl<D: Document> DocumentHandle<D> {
 
     /// Applies an in-memory change to the document content.
     pub fn modify(&self, f: impl FnOnce(&mut D::Content)) -> Result<()> {
-        let (content, autosave_path, autosave_bytes, change_listeners, dirty_listeners, dirty_changed, dirty) = {
+        let (
+            content,
+            autosave_path,
+            autosave_bytes,
+            change_listeners,
+            dirty_listeners,
+            dirty_changed,
+            dirty,
+        ) = {
             let mut state = self.state.lock();
             let previous = state.content.clone();
             f(&mut state.content);
@@ -287,7 +310,8 @@ impl<D: Document> DocumentHandle<D> {
 
     /// Saves the document to a new path.
     pub async fn save_as(&self, path: impl AsRef<Path>) -> Result<()> {
-        self.save_to_path(normalize_path(path.as_ref())?, true).await
+        self.save_to_path(normalize_path(path.as_ref())?, true)
+            .await
     }
 
     /// Reverts the document to the most recently saved on-disk version.
@@ -328,7 +352,9 @@ impl<D: Document> DocumentHandle<D> {
             &self.controller.app_id,
             &self.controller.autosave_config.location,
             Some(&path),
-            path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("document"),
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("document"),
         ))?;
         notify_change_listeners(&change_listeners, &content);
         if previous_dirty {
@@ -415,13 +441,18 @@ impl<D: Document> DocumentHandle<D> {
     }
 
     /// Registers a listener that fires when the document content changes.
-    pub fn on_change(&self, callback: impl Fn(&D::Content) + Send + Sync + 'static) -> kael_storage::Subscription {
+    pub fn on_change(
+        &self,
+        callback: impl Fn(&D::Content) + Send + Sync + 'static,
+    ) -> kael_storage::Subscription {
         let state = self.state.clone();
         let listener_id = {
             let mut state = state.lock();
             let listener_id = state.next_listener_id;
             state.next_listener_id += 1;
-            state.change_listeners.insert(listener_id, Arc::new(callback));
+            state
+                .change_listeners
+                .insert(listener_id, Arc::new(callback));
             listener_id
         };
 
@@ -431,13 +462,18 @@ impl<D: Document> DocumentHandle<D> {
     }
 
     /// Registers a listener that fires when the dirty state changes.
-    pub fn on_dirty_change(&self, callback: impl Fn(bool) + Send + Sync + 'static) -> kael_storage::Subscription {
+    pub fn on_dirty_change(
+        &self,
+        callback: impl Fn(bool) + Send + Sync + 'static,
+    ) -> kael_storage::Subscription {
         let state = self.state.clone();
         let listener_id = {
             let mut state = state.lock();
             let listener_id = state.next_listener_id;
             state.next_listener_id += 1;
-            state.dirty_listeners.insert(listener_id, Arc::new(callback));
+            state
+                .dirty_listeners
+                .insert(listener_id, Arc::new(callback));
             listener_id
         };
 
@@ -451,7 +487,12 @@ impl<D: Document> DocumentHandle<D> {
         let file_type_index = if update_file_type {
             file_type_index_for_path(&normalized_path, D::file_types())
                 .or_else(|| default_file_type_index(D::file_types()))
-                .ok_or_else(|| anyhow!("document type {} does not define any file types", std::any::type_name::<D>()))?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "document type {} does not define any file types",
+                        std::any::type_name::<D>()
+                    )
+                })?
         } else {
             self.state.lock().file_type_index
         };
@@ -467,7 +508,10 @@ impl<D: Document> DocumentHandle<D> {
                 &self.controller.app_id,
                 &self.controller.autosave_config.location,
                 Some(&normalized_path),
-                normalized_path.file_stem().and_then(|stem| stem.to_str()).unwrap_or(&state.name),
+                normalized_path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or(&state.name),
             );
             let previous_dirty = state.dirty;
             state.file_path = Some(normalized_path.clone());
@@ -504,7 +548,15 @@ impl<D: Document> DocumentHandle<D> {
     }
 
     fn restore_history_entry(&self, undo: bool) -> Result<()> {
-        let (content, autosave_path, autosave_bytes, dirty, dirty_changed, change_listeners, dirty_listeners) = {
+        let (
+            content,
+            autosave_path,
+            autosave_bytes,
+            dirty,
+            dirty_changed,
+            change_listeners,
+            dirty_listeners,
+        ) = {
             let mut state = self.state.lock();
             let next_content = if undo {
                 let Some(previous) = state.undo_stack.pop() else {
@@ -571,7 +623,12 @@ fn selected_file_type<D: Document>(state: &DocumentState<D>) -> Result<&'static 
     D::file_types()
         .get(state.file_type_index)
         .or_else(|| D::file_types().first())
-        .ok_or_else(|| anyhow!("document type {} does not define any file types", std::any::type_name::<D>()))
+        .ok_or_else(|| {
+            anyhow!(
+                "document type {} does not define any file types",
+                std::any::type_name::<D>()
+            )
+        })
 }
 
 fn compute_dirty<D: Document>(state: &DocumentState<D>) -> bool {
@@ -610,7 +667,10 @@ fn document_key(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{path::PathBuf, sync::{Arc, Mutex}};
+    use std::{
+        path::PathBuf,
+        sync::{Arc, Mutex},
+    };
 
     use futures::executor::block_on;
     use tempfile::tempdir;
@@ -651,8 +711,9 @@ mod tests {
     #[test]
     fn tracks_dirty_state_and_undo_redo() {
         let directory = tempdir().unwrap();
-        let controller = DocumentController::<TextDocument>::new_in("dev.kael.doc.tests", directory.path())
-            .unwrap();
+        let controller =
+            DocumentController::<TextDocument>::new_in("dev.kael.doc.tests", directory.path())
+                .unwrap();
         let handle = controller.new_document();
         let dirty_states = Arc::new(Mutex::new(Vec::new()));
         let dirty_states_listener = dirty_states.clone();
@@ -678,17 +739,20 @@ mod tests {
     #[test]
     fn saves_versions_and_tracks_recent_documents() {
         let directory = tempdir().unwrap();
-        let controller = DocumentController::<TextDocument>::new_in("dev.kael.doc.tests", directory.path())
-            .unwrap();
+        let controller =
+            DocumentController::<TextDocument>::new_in("dev.kael.doc.tests", directory.path())
+                .unwrap();
         let handle = controller.new_document();
         let path = directory.path().join("notes.txt");
 
         handle.modify(|content| content.push_str("one")).unwrap();
         block_on(handle.save_as(&path)).unwrap();
-        handle.modify(|content| {
-            content.clear();
-            content.push_str("two");
-        }).unwrap();
+        handle
+            .modify(|content| {
+                content.clear();
+                content.push_str("two");
+            })
+            .unwrap();
         block_on(handle.save()).unwrap();
 
         let versions = handle.versions().unwrap();
@@ -706,21 +770,24 @@ mod tests {
     fn restores_autosave_snapshots_when_reopening_documents() {
         let directory = tempdir().unwrap();
         let autosave_root = directory.path().join("autosave");
-        let controller = DocumentController::<TextDocument>::new_in("dev.kael.doc.tests", directory.path())
-            .unwrap()
-            .with_autosave_config(AutosaveConfig {
-                interval: std::time::Duration::from_secs(30),
-                location: AutosaveLocation::Custom(autosave_root),
-            });
+        let controller =
+            DocumentController::<TextDocument>::new_in("dev.kael.doc.tests", directory.path())
+                .unwrap()
+                .with_autosave_config(AutosaveConfig {
+                    interval: std::time::Duration::from_secs(30),
+                    location: AutosaveLocation::Custom(autosave_root),
+                });
         let handle = controller.new_document();
         let path = PathBuf::from(directory.path().join("draft.txt"));
 
         handle.modify(|content| content.push_str("saved")).unwrap();
         block_on(handle.save_as(&path)).unwrap();
-        handle.modify(|content| {
-            content.clear();
-            content.push_str("autosaved");
-        }).unwrap();
+        handle
+            .modify(|content| {
+                content.clear();
+                content.push_str("autosaved");
+            })
+            .unwrap();
         drop(handle);
 
         let reopened = block_on(controller.open(&path)).unwrap();

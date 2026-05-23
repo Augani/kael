@@ -8,7 +8,8 @@ fn main() {
 
         cx.open_window(WindowOptions::default(), |_window, cx| {
             cx.new(|_cx| DashboardView)
-        }).unwrap();
+        })
+        .unwrap();
 
         cx.activate(true);
     });
@@ -18,10 +19,6 @@ struct DashboardView;
 
 impl Render for DashboardView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .flex()
-            .flex_col()
-            .size_full()
-            .child("Dashboard")
+        div().flex().flex_col().size_full().child("Dashboard")
     }
 }

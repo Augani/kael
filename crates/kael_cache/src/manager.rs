@@ -1,6 +1,6 @@
 use anyhow::Result;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 

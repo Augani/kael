@@ -144,7 +144,7 @@ pub fn request_microphone_permission(callback: Box<dyn FnOnce(bool) + Send>) {
     let status = microphone_status();
     match status {
         PermissionStatus::Granted => callback(true),
-        PermissionStatus::Denied => callback(false),
+        PermissionStatus::Denied | PermissionStatus::Restricted => callback(false),
         PermissionStatus::NotDetermined => callback(true),
     }
 }

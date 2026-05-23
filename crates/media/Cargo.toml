@@ -1,7 +1,7 @@
 [package]
 edition = "2024"
-name = "kael_media"
-version = "0.5.1"
+name = "kael_media_sys"
+version = "0.1.0"
 build = "build.rs"
 publish = true
 description = "Bindings to macOS media handling APIs (originally from Zed - github.com/zed-industries/zed)"
@@ -11,7 +11,7 @@ readme = false
 license = "Apache-2.0"
 
 [lib]
-name = "kael_media"
+name = "kael_media_sys"
 path = "src/media.rs"
 doctest = false
 

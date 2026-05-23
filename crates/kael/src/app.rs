@@ -1958,7 +1958,9 @@ impl App {
                     let entity = entity.clone();
                     |_, window, cx| (observer)(entity, &mut Some(window), cx)
                 }) {
-                    log::error!("failed to notify new entity observer for window {id:?}: {error:#}");
+                    log::error!(
+                        "failed to notify new entity observer for window {id:?}: {error:#}"
+                    );
                 }
             } else {
                 (observer)(entity.clone(), &mut None, self)
@@ -2153,9 +2155,11 @@ impl App {
     /// Move the global of the given type to the stack.
     #[track_caller]
     pub(crate) fn lease_global<G: Global>(&mut self) -> GlobalLease<G> {
-        GlobalLease::new(self.globals_by_type.remove(&TypeId::of::<G>()).unwrap_or_else(|| {
-            panic!("no global registered of type {}", type_name::<G>())
-        }))
+        GlobalLease::new(
+            self.globals_by_type
+                .remove(&TypeId::of::<G>())
+                .unwrap_or_else(|| panic!("no global registered of type {}", type_name::<G>())),
+        )
     }
 
     /// Restore the global of the given type after it is moved to the stack.
@@ -2706,10 +2710,12 @@ impl App {
         let task = self
             .loading_assets
             .remove(&asset_id)
-            .map(|boxed_task| match boxed_task.downcast::<Shared<Task<A::Output>>>() {
-                Ok(task) => *task,
-                Err(_) => panic!("stored asset task type did not match {}", type_name::<A>()),
-            })
+            .map(
+                |boxed_task| match boxed_task.downcast::<Shared<Task<A::Output>>>() {
+                    Ok(task) => *task,
+                    Err(_) => panic!("stored asset task type did not match {}", type_name::<A>()),
+                },
+            )
             .unwrap_or_else(|| {
                 is_first = true;
                 let future = A::load(source.clone(), self);
@@ -3068,17 +3074,23 @@ impl<G: Global> Deref for GlobalLease<G> {
     type Target = G;
 
     fn deref(&self) -> &Self::Target {
-        self.global
-            .downcast_ref()
-            .unwrap_or_else(|| panic!("stored global lease type did not match {}", type_name::<G>()))
+        self.global.downcast_ref().unwrap_or_else(|| {
+            panic!(
+                "stored global lease type did not match {}",
+                type_name::<G>()
+            )
+        })
     }
 }
 
 impl<G: Global> DerefMut for GlobalLease<G> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.global
-            .downcast_mut()
-            .unwrap_or_else(|| panic!("stored global lease type did not match {}", type_name::<G>()))
+        self.global.downcast_mut().unwrap_or_else(|| {
+            panic!(
+                "stored global lease type did not match {}",
+                type_name::<G>()
+            )
+        })
     }
 }
 

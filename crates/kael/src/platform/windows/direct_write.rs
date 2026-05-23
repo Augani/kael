@@ -1,10 +1,10 @@
 use std::{borrow::Cow, mem::ManuallyDrop, sync::Arc};
 
-use ::util::ResultExt;
 use anyhow::{Context, Result};
 use collections::HashMap;
 use itertools::Itertools;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
+use util::ResultExt;
 use windows::{
     Win32::{
         Foundation::*,
@@ -1669,10 +1669,7 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
             return Ok(());
         };
         let font_face = font_face.cast::<IDWriteFontFace3>().map_err(|_| {
-            windows::core::Error::new(
-                DWRITE_E_UNSUPPORTEDOPERATION,
-                "Failed to cast font face",
-            )
+            windows::core::Error::new(DWRITE_E_UNSUPPORTEDOPERATION, "Failed to cast font face")
         })?;
         let Some((font_identifier, font_struct, color_font)) =
             get_font_identifier_and_font_struct(&font_face, &self.locale)
@@ -1687,10 +1684,13 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
         {
             *id
         } else {
-            context.text_system.select_font(&font_struct).map_err(|error| {
-                log::error!("Failed to select font: {error:#}");
-                windows::core::Error::new(DWRITE_E_NOFONT, "Failed to select font")
-            })?
+            context
+                .text_system
+                .select_font(&font_struct)
+                .map_err(|error| {
+                    log::error!("Failed to select font: {error:#}");
+                    windows::core::Error::new(DWRITE_E_NOFONT, "Failed to select font")
+                })?
         };
 
         let glyph_ids = unsafe { std::slice::from_raw_parts(glyphrun.glyphIndices, glyph_count) };
@@ -1715,7 +1715,7 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
             {
                 let id = GlyphId(*glyph_id as u32);
                 let is_emoji = color_font
-                    && is_color_glyph(font_face, id, &context.text_system.components.factory);
+                    && is_color_glyph(&font_face, id, &context.text_system.components.factory);
                 let this_glyph_idx = glyph_idx + cluster_glyph_idx;
                 glyphs.push(ShapedGlyph {
                     id,

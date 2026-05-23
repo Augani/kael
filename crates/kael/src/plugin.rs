@@ -1345,9 +1345,10 @@ mod tests {
     #[test]
     fn test_registry_update_diagnostics_missing() {
         let mut reg = ExtensionRegistry::new();
-        assert!(reg
-            .update_diagnostics("missing", ExtensionState::Active)
-            .is_err());
+        assert!(
+            reg.update_diagnostics("missing", ExtensionState::Active)
+                .is_err()
+        );
     }
 
     #[test]

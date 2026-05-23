@@ -1,7 +1,8 @@
 use anyhow::{Result, anyhow};
 
 use crate::{
-    ReceiverCallback, ShareFileType, ShareResult, ShareSheet, ShareType, platform::PlatformShareReceiver,
+    ReceiverCallback, ShareFileType, ShareResult, ShareSheet, ShareType,
+    platform::PlatformShareReceiver,
 };
 
 pub(crate) async fn show(sheet: &ShareSheet) -> Result<ShareResult> {
@@ -68,7 +69,9 @@ fn copy_to_clipboard(text: &str) -> Result<bool> {
     use windows::Win32::{
         Foundation::HWND,
         System::{
-            DataExchange::{CF_UNICODETEXT, CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
+            DataExchange::{
+                CF_UNICODETEXT, CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+            },
             Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock},
         },
     };
@@ -104,7 +107,9 @@ fn copy_to_clipboard(text: &str) -> Result<bool> {
 
 fn open_with_shell(target: &str) -> Result<bool> {
     use windows::{
-        Win32::{Foundation::HWND, UI::Shell::ShellExecuteW, UI::WindowsAndMessaging::SW_SHOWNORMAL},
+        Win32::{
+            Foundation::HWND, UI::Shell::ShellExecuteW, UI::WindowsAndMessaging::SW_SHOWNORMAL,
+        },
         core::PCWSTR,
     };
 

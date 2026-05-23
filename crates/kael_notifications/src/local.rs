@@ -267,19 +267,32 @@ impl NotificationCenter {
             }
             NotificationTrigger::TimeInterval { seconds, repeats } => {
                 if !seconds.is_finite() || seconds.is_sign_negative() {
-                    return Err(anyhow!("notification time interval must be a finite positive value"));
+                    return Err(anyhow!(
+                        "notification time interval must be a finite positive value"
+                    ));
                 }
                 if repeats && seconds == 0.0 {
-                    return Err(anyhow!("repeating notification intervals must be greater than zero"));
+                    return Err(anyhow!(
+                        "repeating notification intervals must be greater than zero"
+                    ));
                 }
 
                 let delay = Duration::from_secs_f64(seconds.max(0.0));
                 let cancelled = Arc::new(AtomicBool::new(false));
-                self.inner
-                    .scheduled
-                    .lock()
-                    .insert(notification_id, ScheduledNotification { cancelled: cancelled.clone() });
-                self.spawn_delivery_loop(notification_id, notification, actions, cancelled, delay, repeats);
+                self.inner.scheduled.lock().insert(
+                    notification_id,
+                    ScheduledNotification {
+                        cancelled: cancelled.clone(),
+                    },
+                );
+                self.spawn_delivery_loop(
+                    notification_id,
+                    notification,
+                    actions,
+                    cancelled,
+                    delay,
+                    repeats,
+                );
                 Ok(notification_id)
             }
             NotificationTrigger::Calendar { .. } => Err(anyhow!(
@@ -331,11 +344,11 @@ impl NotificationCenter {
         callback: impl Fn(NotificationEvent) + Send + Sync + 'static,
     ) -> Subscription {
         let state = self.inner.clone();
-        let listener_id = self
-            .inner
-            .next_listener_id
-            .fetch_add(1, Ordering::Relaxed);
-        state.listeners.lock().insert(listener_id, Arc::new(callback));
+        let listener_id = self.inner.next_listener_id.fetch_add(1, Ordering::Relaxed);
+        state
+            .listeners
+            .lock()
+            .insert(listener_id, Arc::new(callback));
 
         Subscription::new(move || {
             state.listeners.lock().remove(&listener_id);
@@ -424,7 +437,8 @@ impl NotificationCenter {
                     action_id,
                     text_input: None,
                 });
-            }) as Arc<dyn Fn(String) + Send + Sync + 'static>)
+            })
+                as Arc<dyn Fn(String) + Send + Sync + 'static>)
         };
         self.inner
             .backend
@@ -470,7 +484,10 @@ impl NotificationPayload {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::{Duration, Instant}};
+    use std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    };
 
     use parking_lot::Mutex;
 
@@ -541,10 +558,12 @@ mod tests {
         center.schedule_local(notification).unwrap();
 
         assert_eq!(backend.delivered.lock().len(), 1);
-        assert!(events
-            .lock()
-            .iter()
-            .any(|event| matches!(event, NotificationEvent::Received(_))));
+        assert!(
+            events
+                .lock()
+                .iter()
+                .any(|event| matches!(event, NotificationEvent::Received(_)))
+        );
     }
 
     #[test]
@@ -611,10 +630,12 @@ mod tests {
             .unwrap();
 
         wait_until(Duration::from_millis(100), || {
-            events.lock().iter().any(|event| matches!(
-                event,
-                NotificationEvent::ActionPerformed { action_id, .. } if action_id == "open"
-            ))
+            events.lock().iter().any(|event| {
+                matches!(
+                    event,
+                    NotificationEvent::ActionPerformed { action_id, .. } if action_id == "open"
+                )
+            })
         });
         assert!(events.lock().iter().any(|event| matches!(
             event,

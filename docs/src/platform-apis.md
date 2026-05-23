@@ -10,18 +10,18 @@ Native open/save file pickers:
 
 ```rust
 // Open file dialog
-let paths = cx.file_open_dialog(FileOpenOptions {
+let paths = cx.prompt_for_paths(PathPromptOptions {
+    files: true,
+    directories: false,
     multiple: true,
-    directory: false,
-    button_label: Some("Open".into()),
-    ..Default::default()
-}).await?;
+    prompt: Some("Open".into()),
+}).await;
 
 // Save file dialog
-let path = cx.file_save_dialog(FileSaveOptions {
-    suggested_name: Some("document.txt".into()),
-    ..Default::default()
-}).await?;
+let path = cx.prompt_for_new_path(
+    &std::env::current_dir()?,
+    Some("document.txt"),
+).await;
 ```
 
 ---
@@ -67,19 +67,25 @@ Tray icon with menu and click handling:
 ```rust
 // Set tray menu
 cx.set_tray_menu(vec![
-    TrayMenuItem::new("Show Window", "show"),
-    TrayMenuItem::separator(),
-    TrayMenuItem::new("Quit", "quit"),
+    TrayMenuItem::Action {
+        label: "Show Window".into(),
+        id: "show".into(),
+    },
+    TrayMenuItem::Separator,
+    TrayMenuItem::Action {
+        label: "Quit".into(),
+        id: "quit".into(),
+    },
 ]);
 
 cx.set_tray_tooltip("My App — Running");
 
 // Handle tray menu actions
 cx.on_tray_menu_action(|action_id, cx| {
-    match action_id {
-        "show" => { /* bring window to front */ },
-        "quit" => cx.quit(),
-        _ => {}
+    if action_id.as_ref() == "show" {
+        // bring window to front
+    } else if action_id.as_ref() == "quit" {
+        cx.quit();
     }
 });
 
@@ -101,19 +107,18 @@ Read and write text and images:
 
 ```rust
 // Write text
-cx.write_to_clipboard(ClipboardItem::text("Hello, clipboard!"));
+cx.write_to_clipboard(ClipboardItem::new_string("Hello, clipboard!".into()));
 
 // Write text with metadata
-cx.write_to_clipboard(ClipboardItem::text_with_metadata(
-    "formatted text",
+cx.write_to_clipboard(ClipboardItem::new_string_with_metadata(
+    "formatted text".into(),
     json!({"source": "my_app"}).to_string(),
 ));
 
 // Read
 if let Some(item) = cx.read_from_clipboard() {
-    match item {
-        ClipboardItem::Text(text) => println!("Got: {}", text),
-        ClipboardItem::Image(data) => println!("Got image: {} bytes", data.len()),
+    if let Some(text) = item.text() {
+        println!("Got: {}", text);
     }
 }
 ```
@@ -127,7 +132,7 @@ System-wide keyboard shortcuts (work even when app is unfocused):
 ```rust
 cx.register_global_hotkey(1, &Keystroke::parse("cmd-shift-k")?)?;
 
-cx.on_global_hotkey(|id, cx| {
+cx.on_global_hotkey(|id| {
     match id {
         1 => { /* Cmd+Shift+K pressed anywhere */ },
         _ => {}
@@ -142,36 +147,42 @@ cx.on_global_hotkey(|id, cx| {
 OS-level notifications (not in-app toasts):
 
 ```rust
-cx.show_notification("Build Complete", "All tests passed");
+cx.show_notification("Build Complete", "All tests passed")?;
 
 cx.show_notification_with_actions(
     "Update Available",
     "Version 2.0 is ready to install",
-    vec![
-        NotificationAction::new("install", "Install Now"),
-        NotificationAction::new("later", "Remind Later"),
+    &[
+        NotificationAction { id: "install".into(), label: "Install Now".into() },
+        NotificationAction { id: "later".into(), label: "Remind Later".into() },
     ],
-);
+    |action_id| {
+        println!("User clicked: {}", action_id);
+    },
+)?;
 ```
 
 ---
 
 ## Deep Linking
 
-Register and handle custom URL schemes:
+Register and handle custom URL schemes. These methods are called on `Application` before `.run()`:
 
 ```rust
-// Handle kael:// URLs
-cx.on_open_urls(|urls, cx| {
-    for url in urls {
-        println!("Opened: {}", url);
-    }
-});
-
-// Register scheme-specific handler
-cx.on_deep_link("myapp", |url, cx| {
-    // Handle myapp://path/to/resource
-});
+Application::new()
+    // Handle all opened URLs
+    .on_open_urls(|urls| {
+        for url in urls {
+            println!("Opened: {}", url);
+        }
+    })
+    // Handle specific scheme with app context
+    .on_deep_link("myapp", |url, cx| {
+        // Handle myapp://path/to/resource
+    })
+    .run(|cx| {
+        // ...
+    });
 ```
 
 ---
@@ -198,16 +209,18 @@ cx.open_window(
 Built-in application update pipeline:
 
 ```rust
-let updater = AutoUpdater::new("https://releases.myapp.com/appcast.xml");
+let config = AutoUpdaterConfig {
+    feed_url: "https://releases.myapp.com/appcast.xml".into(),
+    ..Default::default()
+};
+
+let updater = AutoUpdater::new(config, current_version, http_client);
 
 // Check for updates
 let status = updater.check_for_updates().await;
 match status {
     UpdateStatus::UpdateAvailable(info) => {
         println!("New version: {}", info.version);
-        updater.download_update(|progress| {
-            println!("Download: {:.0}%", progress.fraction() * 100.0);
-        }).await?;
     }
     UpdateStatus::UpToDate => println!("Already up to date"),
     _ => {}
@@ -269,12 +282,14 @@ cx.on_system_power_event(|event, cx| {
 Save and restore window positions across launches:
 
 ```rust
-// Save current window layout
-cx.session_store().save_window_states(cx);
+let store = SessionStore::new("my-app")?;
 
-// Restore on next launch (in Application::new().run())
-if let Some(states) = cx.session_store().load_window_states() {
-    for state in states {
+// Save current window layout
+store.save_window_states(&window_states)?;
+
+// Restore on next launch
+if let Ok(states) = store.load_window_states() {
+    for (id, state) in &states {
         cx.open_window(WindowOptions {
             window_bounds: Some(state.bounds),
             ..Default::default()
@@ -305,15 +320,13 @@ for display in &displays {
 Automatic crash capture with remote submission:
 
 ```rust
-use kael_diagnostics::CrashReporter;
+use kael::CrashReporter;
 
-CrashReporter::install_hook(|report| {
-    // Optionally filter or modify before saving
-    Some(report)
-});
+let mut reporter = CrashReporter {
+    app_id: "my-app".into(),
+    crash_dir: std::env::temp_dir().join("crashes"),
+    ..Default::default()
+};
 
-// Later, submit pending reports
-for report in CrashReporter::pending_reports()? {
-    report.submit("https://crashes.myapp.com/api/report").await?;
-}
+reporter.install_hook();
 ```

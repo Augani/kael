@@ -60,7 +60,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-kael = { git = "https://github.com/Augani/kael" }
+kael = "0.1"
 ```
 
 ```rust

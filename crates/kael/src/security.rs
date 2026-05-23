@@ -897,10 +897,12 @@ mod tests {
     fn test_capability_high_risk() {
         assert!(Capability::ShellExecute.is_high_risk());
         assert!(Capability::ClipboardRead.is_high_risk());
-        assert!(Capability::Network {
-            hosts: vec!["example.com".to_string()]
-        }
-        .is_high_risk());
+        assert!(
+            Capability::Network {
+                hosts: vec!["example.com".to_string()]
+            }
+            .is_high_risk()
+        );
         assert!(!Capability::Notification.is_high_risk());
         assert!(!Capability::OpenExternalUrl.is_high_risk());
     }

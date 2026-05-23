@@ -32,15 +32,15 @@ mod auto_updater;
 pub mod benchmark;
 mod bounds_tree;
 mod cache;
-/// Command registry for registering named commands invokable from menus,
-/// keybindings, and a command palette.
-pub mod command_registry;
 mod color;
 /// The default colors used by GPUI.
 pub mod colors;
+/// Command registry for registering named commands invokable from menus,
+/// keybindings, and a command palette.
+pub mod command_registry;
+mod crash_reporter;
 /// Developer tools for observability, diagnostics, and runtime inspection.
 pub mod dev_tools;
-mod crash_reporter;
 mod element;
 mod elements;
 mod executor;
@@ -74,14 +74,14 @@ mod scene;
 /// Scene graph primitives for canvas and creative applications.
 pub mod scene_graph;
 pub mod security;
-/// Split-pane and tab model for IDE-style workspace layouts.
-pub mod split_pane;
 mod session_store;
-/// Status bar for displaying contextual information in large applications.
-pub mod status_bar;
+mod shadow_cache;
 mod shared_string;
 mod shared_uri;
-mod shadow_cache;
+/// Split-pane and tab model for IDE-style workspace layouts.
+pub mod split_pane;
+/// Status bar for displaying contextual information in large applications.
+pub mod status_bar;
 mod style;
 mod styled;
 mod subscription;
@@ -99,10 +99,10 @@ pub mod theme;
 mod tracer;
 mod util;
 mod view;
-mod webview;
-mod window;
 /// Virtualized data models for lists, tables, and trees.
 pub mod virtual_data;
+mod webview;
+mod window;
 /// Worker API for runtime tasks.
 pub mod worker_api;
 
@@ -139,8 +139,8 @@ pub use benchmark::*;
 pub use color::*;
 pub use command_registry::{CommandDescriptor, CommandPalette, PaletteCommandId};
 pub use crash_reporter::*;
-pub use dev_tools::*;
 pub use ctor::ctor;
+pub use dev_tools::*;
 pub use element::*;
 pub use elements::*;
 pub use executor::*;
@@ -175,11 +175,11 @@ pub use scene::*;
 pub use scene_graph::*;
 pub use security::*;
 pub use session_store::*;
-pub use split_pane::*;
 pub use shared_string::*;
-pub use status_bar::*;
 pub use shared_uri::*;
 pub use smol::Timer;
+pub use split_pane::*;
+pub use status_bar::*;
 pub use style::*;
 pub use styled::*;
 pub use subscription::*;

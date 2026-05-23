@@ -106,7 +106,11 @@ impl AudioSession {
     pub fn emit_interruption(&self, interruption: Interruption) {
         let listeners = {
             let state = self.inner.lock();
-            state.interruption_listeners.values().cloned().collect::<Vec<_>>()
+            state
+                .interruption_listeners
+                .values()
+                .cloned()
+                .collect::<Vec<_>>()
         };
 
         for listener in listeners {
@@ -115,13 +119,18 @@ impl AudioSession {
     }
 
     /// Registers a listener for route changes.
-    pub fn on_route_change(&self, callback: impl Fn(AudioRoute) + Send + Sync + 'static) -> Subscription {
+    pub fn on_route_change(
+        &self,
+        callback: impl Fn(AudioRoute) + Send + Sync + 'static,
+    ) -> Subscription {
         let state = self.inner.clone();
         let listener_id = {
             let mut state = state.lock();
             let listener_id = state.next_listener_id;
             state.next_listener_id += 1;
-            state.route_listeners.insert(listener_id, Arc::new(callback));
+            state
+                .route_listeners
+                .insert(listener_id, Arc::new(callback));
             listener_id
         };
 
@@ -131,13 +140,18 @@ impl AudioSession {
     }
 
     /// Registers a listener for interruptions.
-    pub fn on_interruption(&self, callback: impl Fn(Interruption) + Send + Sync + 'static) -> Subscription {
+    pub fn on_interruption(
+        &self,
+        callback: impl Fn(Interruption) + Send + Sync + 'static,
+    ) -> Subscription {
         let state = self.inner.clone();
         let listener_id = {
             let mut state = state.lock();
             let listener_id = state.next_listener_id;
             state.next_listener_id += 1;
-            state.interruption_listeners.insert(listener_id, Arc::new(callback));
+            state
+                .interruption_listeners
+                .insert(listener_id, Arc::new(callback));
             listener_id
         };
 

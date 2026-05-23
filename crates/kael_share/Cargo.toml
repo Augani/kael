@@ -1,7 +1,7 @@
 [package]
 edition = "2024"
 name = "kael_share"
-version = "0.5.1"
+version = "0.1.0"
 publish = true
 description = "Share services for Kael"
 authors = ["Adabraka Team"]

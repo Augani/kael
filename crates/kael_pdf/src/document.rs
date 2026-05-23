@@ -84,7 +84,8 @@ impl PdfDocument {
 
     /// Opens a PDF document from in-memory bytes.
     pub async fn open_from_memory(data: &[u8]) -> Result<Self> {
-        let document = LoDocument::load_mem(data).context("failed to open PDF document from memory")?;
+        let document =
+            LoDocument::load_mem(data).context("failed to open PDF document from memory")?;
         Self::from_loaded(document, None)
     }
 
@@ -174,7 +175,11 @@ impl PdfDocument {
             .unwrap_or_default()
     }
 
-    pub(crate) fn add_page_annotation(&self, page_index: usize, annotation: Annotation) -> Result<()> {
+    pub(crate) fn add_page_annotation(
+        &self,
+        page_index: usize,
+        annotation: Annotation,
+    ) -> Result<()> {
         let mut state = self.inner.lock();
         let _ = state
             .pages
@@ -198,7 +203,11 @@ impl PdfDocument {
         let previous_len = annotations.len();
         annotations.retain(|annotation| annotation.id != id);
         if annotations.len() == previous_len {
-            return Err(anyhow!("annotation {} not found on page {}", id.0, page_index));
+            return Err(anyhow!(
+                "annotation {} not found on page {}",
+                id.0,
+                page_index
+            ));
         }
         if annotations.is_empty() {
             state.annotations.remove(&page_index);
@@ -347,14 +356,20 @@ fn load_annotations(path: &Path) -> Result<BTreeMap<usize, Vec<PageAnnotation>>>
     }
 
     let json = std::fs::read_to_string(&sidecar_path).with_context(|| {
-        format!("failed to read annotation sidecar {}", sidecar_path.display())
+        format!(
+            "failed to read annotation sidecar {}",
+            sidecar_path.display()
+        )
     })?;
     let sidecar: AnnotationSidecar =
         serde_json::from_str(&json).context("failed to deserialize annotation sidecar")?;
     Ok(sidecar.pages)
 }
 
-fn persist_annotations(path: &Path, annotations: &BTreeMap<usize, Vec<PageAnnotation>>) -> Result<()> {
+fn persist_annotations(
+    path: &Path,
+    annotations: &BTreeMap<usize, Vec<PageAnnotation>>,
+) -> Result<()> {
     let sidecar_path = annotations_sidecar_path(path);
     if annotations.is_empty() {
         match std::fs::remove_file(&sidecar_path) {
@@ -362,7 +377,10 @@ fn persist_annotations(path: &Path, annotations: &BTreeMap<usize, Vec<PageAnnota
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => {
                 return Err(error).with_context(|| {
-                    format!("failed to remove annotation sidecar {}", sidecar_path.display())
+                    format!(
+                        "failed to remove annotation sidecar {}",
+                        sidecar_path.display()
+                    )
                 });
             }
         }
@@ -370,7 +388,10 @@ fn persist_annotations(path: &Path, annotations: &BTreeMap<usize, Vec<PageAnnota
 
     if let Some(parent) = sidecar_path.parent() {
         std::fs::create_dir_all(parent).with_context(|| {
-            format!("failed to create annotation sidecar directory {}", parent.display())
+            format!(
+                "failed to create annotation sidecar directory {}",
+                parent.display()
+            )
         })?;
     }
     let json = serde_json::to_vec_pretty(&AnnotationSidecar {
@@ -378,8 +399,12 @@ fn persist_annotations(path: &Path, annotations: &BTreeMap<usize, Vec<PageAnnota
     })
     .context("failed to serialize annotation sidecar")?;
     let temp_path = sidecar_path.with_extension("tmp");
-    std::fs::write(&temp_path, json)
-        .with_context(|| format!("failed to write annotation temp file {}", temp_path.display()))?;
+    std::fs::write(&temp_path, json).with_context(|| {
+        format!(
+            "failed to write annotation temp file {}",
+            temp_path.display()
+        )
+    })?;
     std::fs::rename(&temp_path, &sidecar_path).with_context(|| {
         format!(
             "failed to finalize annotation sidecar from {} to {}",
@@ -442,7 +467,11 @@ mod tests {
     fn persists_annotations_in_sidecar_files() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("notes.pdf");
-        std::fs::write(&path, make_test_pdf(&[("Annotate me", (240.0, 320.0))], &[])).unwrap();
+        std::fs::write(
+            &path,
+            make_test_pdf(&[("Annotate me", (240.0, 320.0))], &[]),
+        )
+        .unwrap();
 
         let document = block_on(PdfDocument::open(&path)).unwrap();
         let page = document.page(0).unwrap();
@@ -465,7 +494,10 @@ mod tests {
         assert!(sidecar.exists());
     }
 
-    fn make_test_pdf(pages: &[(impl AsRef<str>, (f32, f32))], metadata: &[(&str, &str)]) -> Vec<u8> {
+    fn make_test_pdf(
+        pages: &[(impl AsRef<str>, (f32, f32))],
+        metadata: &[(&str, &str)],
+    ) -> Vec<u8> {
         let font_id = 3u32;
         let mut next_id = 4u32;
         let mut page_ids = Vec::new();
@@ -601,7 +633,9 @@ mod tests {
     fn sidecar_path_for(path: &Path) -> PathBuf {
         path.with_file_name(format!(
             "{}.annotations.json",
-            path.file_name().and_then(|name| name.to_str()).unwrap_or("document.pdf")
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("document.pdf")
         ))
     }
 }

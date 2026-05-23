@@ -16,7 +16,7 @@ Kael renders via Metal (macOS), DirectX 11 (Windows), Vulkan (Linux). Apps are p
 
 ```toml
 [dependencies]
-kael = "0.5"
+kael = "0.1"
 ```
 
 ```rust
@@ -111,20 +111,20 @@ All widgets: `widget_name(id, value, ...)` → `.on_change(|value, window, cx| {
 
 | API | Usage |
 |-----|-------|
-| File dialog | `cx.file_open_dialog(options).await` / `cx.file_save_dialog(options).await` |
+| File dialog | `cx.prompt_for_paths(PathPromptOptions { ... }).await` / `cx.prompt_for_new_path(&dir, Some("name")).await` |
 | Menus | `cx.set_menus(vec![Menu { name, items }])` |
-| System tray | `cx.set_tray_menu(items)`, `cx.on_tray_icon_event()` |
-| Clipboard | `cx.write_to_clipboard(item)`, `cx.read_from_clipboard()` |
-| Global hotkeys | `cx.register_global_hotkey(id, keystroke)`, `cx.on_global_hotkey()` |
-| Notifications | `cx.show_notification(title, body)` |
-| Deep linking | `cx.on_open_urls()`, `cx.on_deep_link(scheme)` |
+| System tray | `cx.set_tray_menu(vec![TrayMenuItem::Action { label, id }, TrayMenuItem::Separator])` |
+| Clipboard | `cx.write_to_clipboard(ClipboardItem::new_string(text))`, `cx.read_from_clipboard()?.text()` |
+| Global hotkeys | `cx.register_global_hotkey(id, keystroke)`, `cx.on_global_hotkey(\|id\| { ... })` |
+| Notifications | `cx.show_notification(title, body)`, `cx.show_notification_with_actions(title, body, &actions, callback)` |
+| Deep linking | `Application::new().on_open_urls(\|urls\| { ... }).on_deep_link("scheme", \|url, cx\| { ... })` |
 | Multi-window | `cx.open_window()` multiple times |
-| Auto-update | `AutoUpdater::new(feed_url).check_for_updates().await` |
+| Auto-update | `AutoUpdater::new(config, version, http_client)` |
 | Printing | `window.show_print_dialog(PrintJob)` |
 | Power | `cx.start_power_save_blocker()`, `cx.power_mode()` |
-| Session | `cx.session_store().save_window_states()` |
+| Session | `SessionStore::new("app-id")?.save_window_states(&states)` |
 | Displays | `cx.displays()`, `cx.primary_display()` |
-| Crash reports | `CrashReporter::install_hook()` |
+| Crash reports | `CrashReporter { ... }.install_hook()` |
 
 ## Theming
 

@@ -1,6 +1,4 @@
-use crate::{
-    Bounds, Corners, DevicePixels, Hsla, ScaledPixels, Size, point, size,
-};
+use crate::{Bounds, Corners, DevicePixels, Hsla, ScaledPixels, Size, point, size};
 use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -194,7 +192,10 @@ fn blur_along_x(
     half_height: f32,
 ) -> f32 {
     let delta = (half_height - corner_radius - y.abs()).min(0.0);
-    let curved = half_width - corner_radius + (corner_radius * corner_radius - delta * delta).max(0.0).sqrt();
+    let curved = half_width - corner_radius
+        + (corner_radius * corner_radius - delta * delta)
+            .max(0.0)
+            .sqrt();
     let scale = (0.5f32).sqrt() / sigma;
     let left = 0.5 + 0.5 * erf((x - curved) * scale);
     let right = 0.5 + 0.5 * erf((x + curved) * scale);
@@ -210,8 +211,7 @@ fn erf(x: f32) -> f32 {
 }
 
 fn gaussian(x: f32, sigma: f32) -> f32 {
-    (-(x * x) / (2.0 * sigma * sigma)).exp()
-        / ((2.0 * std::f32::consts::PI).sqrt() * sigma)
+    (-(x * x) / (2.0 * sigma * sigma)).exp() / ((2.0 * std::f32::consts::PI).sqrt() * sigma)
 }
 
 fn shadow_margin_pixels(blur_radius: ScaledPixels) -> i32 {
@@ -240,7 +240,10 @@ mod tests {
             ScaledPixels(2.0),
         );
 
-        assert_eq!(expanded.origin, point(ScaledPixels(4.0), ScaledPixels(14.0)));
+        assert_eq!(
+            expanded.origin,
+            point(ScaledPixels(4.0), ScaledPixels(14.0))
+        );
         assert_eq!(expanded.size, size(ScaledPixels(42.0), ScaledPixels(52.0)));
     }
 

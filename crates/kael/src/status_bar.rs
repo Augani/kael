@@ -1,6 +1,6 @@
 /// Status bar for displaying contextual information items in a bottom bar,
 /// typically used by large applications such as IDEs and editors.
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -119,7 +119,7 @@ impl StatusBar {
             .iter()
             .filter(|item| item.alignment == alignment)
             .collect();
-        matched.sort_by(|a, b| b.priority.cmp(&a.priority));
+        matched.sort_by_key(|b| std::cmp::Reverse(b.priority));
         matched
     }
 
@@ -258,11 +258,12 @@ mod tests {
 
         bar.update_tooltip(&StatusItemId::new("info"), None)
             .unwrap();
-        assert!(bar
-            .get(&StatusItemId::new("info"))
-            .unwrap()
-            .tooltip
-            .is_none());
+        assert!(
+            bar.get(&StatusItemId::new("info"))
+                .unwrap()
+                .tooltip
+                .is_none()
+        );
     }
 
     #[test]

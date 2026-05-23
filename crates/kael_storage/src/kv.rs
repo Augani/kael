@@ -73,7 +73,8 @@ impl JsonKvStore {
         let path = path.as_ref().to_path_buf();
 
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|source| Error::io(parent.to_path_buf(), source))?;
+            std::fs::create_dir_all(parent)
+                .map_err(|source| Error::io(parent.to_path_buf(), source))?;
         }
 
         let values = load_values(&path)?;
@@ -223,18 +224,21 @@ fn load_values(path: &Path) -> Result<BTreeMap<String, Value>> {
         return Ok(BTreeMap::new());
     }
 
-    let contents = std::fs::read_to_string(path).map_err(|source| Error::io(path.to_path_buf(), source))?;
+    let contents =
+        std::fs::read_to_string(path).map_err(|source| Error::io(path.to_path_buf(), source))?;
     Ok(serde_json::from_str(&contents)?)
 }
 
 fn persist_values(path: &Path, values: &BTreeMap<String, Value>) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| Error::io(parent.to_path_buf(), source))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|source| Error::io(parent.to_path_buf(), source))?;
     }
 
     let temp_path = path.with_extension("json.tmp");
     let contents = serde_json::to_vec_pretty(values)?;
-    let mut file = File::create(&temp_path).map_err(|source| Error::io(temp_path.clone(), source))?;
+    let mut file =
+        File::create(&temp_path).map_err(|source| Error::io(temp_path.clone(), source))?;
     file.write_all(&contents)
         .map_err(|source| Error::io(temp_path.clone(), source))?;
     file.flush()
@@ -291,9 +295,6 @@ mod tests {
         store.remove("theme").unwrap();
 
         let observed = values.lock().unwrap().clone();
-        assert_eq!(
-            observed,
-            vec![None, Some("dark".to_string()), None]
-        );
+        assert_eq!(observed, vec![None, Some("dark".to_string()), None]);
     }
 }

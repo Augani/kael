@@ -30,10 +30,10 @@ pub struct PlatformShareSupport {
 
 pub(crate) struct PlatformShareReceiver;
 
-#[cfg(target_os = "macos")]
-use mac as imp;
 #[cfg(target_os = "linux")]
 use linux as imp;
+#[cfg(target_os = "macos")]
+use mac as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 

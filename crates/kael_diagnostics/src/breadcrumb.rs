@@ -1,6 +1,10 @@
 //! Breadcrumb storage and severity levels.
 
-use std::{collections::{HashMap, VecDeque}, sync::{Arc, Mutex}, time::SystemTime};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{Arc, Mutex},
+    time::SystemTime,
+};
 
 use serde::{Deserialize, Serialize};
 

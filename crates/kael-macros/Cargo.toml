@@ -1,7 +1,7 @@
 [package]
 edition = "2024"
 name = "kael-macros"
-version = "0.5.1"
+version = "0.1.0"
 publish = true
 description = "Macros used by Adabraka GPUI (originally from Zed - github.com/zed-industries/zed)"
 authors = ["Adabraka Team"]

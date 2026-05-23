@@ -45,24 +45,18 @@ impl BenchmarkScenario {
             Self::Messaging => {
                 "Chat interface with conversation list, message bubbles, and composer"
             }
-            Self::Workspace => {
-                "IDE-like workspace with sidebar, editor tabs, and terminal panel"
-            }
+            Self::Workspace => "IDE-like workspace with sidebar, editor tabs, and terminal panel",
             Self::MediaControl => {
                 "OBS-style control surface with scene list, preview, and source properties"
             }
-            Self::Ide => {
-                "Full IDE with file tree, tabs, editor, terminal, and diagnostics panel"
-            }
+            Self::Ide => "Full IDE with file tree, tabs, editor, terminal, and diagnostics panel",
             Self::Chat => {
                 "Chat app with thousands of messages, threads, and live typing indicators"
             }
             Self::Document => {
                 "Notion-style document with nested blocks, embeds, and large undo history"
             }
-            Self::Canvas => {
-                "Figma-style canvas with thousands of nodes, pan/zoom, and selection"
-            }
+            Self::Canvas => "Figma-style canvas with thousands of nodes, pan/zoom, and selection",
             Self::VideoEditor => {
                 "Video editor with live preview, timeline, thumbnails, waveforms, and export"
             }
@@ -800,7 +794,11 @@ impl FrameTimeCollector {
         if self.frame_times.is_empty() {
             return 0.0;
         }
-        let mut sorted: Vec<f64> = self.frame_times.iter().map(|d| d.as_secs_f64() * 1000.0).collect();
+        let mut sorted: Vec<f64> = self
+            .frame_times
+            .iter()
+            .map(|d| d.as_secs_f64() * 1000.0)
+            .collect();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let idx = ((p / 100.0) * (sorted.len() - 1) as f64).round() as usize;
         sorted[idx.min(sorted.len() - 1)]
@@ -975,7 +973,10 @@ impl RegressionThresholds {
 
     /// Get the threshold for a specific metric.
     pub fn threshold_for(&self, metric: BenchmarkMetric) -> f64 {
-        self.overrides.get(&metric).copied().unwrap_or(self.default_percent)
+        self.overrides
+            .get(&metric)
+            .copied()
+            .unwrap_or(self.default_percent)
     }
 }
 
@@ -1065,16 +1066,22 @@ impl CiReport {
     /// Generate a human-readable summary of the report.
     pub fn summary(&self) -> String {
         let mut out = String::new();
-        out.push_str(&format!("Benchmark Report: {}\n", if self.passed { "PASSED" } else { "FAILED" }));
+        out.push_str(&format!(
+            "Benchmark Report: {}\n",
+            if self.passed { "PASSED" } else { "FAILED" }
+        ));
         out.push_str(&format!("Results: {} scenarios\n", self.results.len()));
         if !self.regressions.is_empty() {
             out.push_str(&format!("Regressions: {}\n", self.regressions.len()));
             for reg in &self.regressions {
                 out.push_str(&format!(
                     "  {:?}/{:?}: {:.1}{} -> {:.1}{} ({:+.1}%)\n",
-                    reg.scenario, reg.metric,
-                    reg.baseline, reg.unit,
-                    reg.candidate, reg.unit,
+                    reg.scenario,
+                    reg.metric,
+                    reg.baseline,
+                    reg.unit,
+                    reg.candidate,
+                    reg.unit,
                     reg.percent_change,
                 ));
             }
@@ -1578,8 +1585,14 @@ mod tests {
         }
         let measurements = collector.stop();
         assert_eq!(measurements.len(), 3);
-        let p50 = measurements.iter().find(|m| m.metric == BenchmarkMetric::FrameTimeP50).unwrap();
-        let p99 = measurements.iter().find(|m| m.metric == BenchmarkMetric::FrameTimeP99).unwrap();
+        let p50 = measurements
+            .iter()
+            .find(|m| m.metric == BenchmarkMetric::FrameTimeP50)
+            .unwrap();
+        let p99 = measurements
+            .iter()
+            .find(|m| m.metric == BenchmarkMetric::FrameTimeP99)
+            .unwrap();
         assert!(p50.value > 0.0);
         assert!(p99.value >= p50.value);
     }
@@ -1597,8 +1610,12 @@ mod tests {
     fn test_cache_hit_rate_collector() {
         let mut collector = CacheHitRateCollector::new();
         collector.start();
-        for _ in 0..7 { collector.record_hit(); }
-        for _ in 0..3 { collector.record_miss(); }
+        for _ in 0..7 {
+            collector.record_hit();
+        }
+        for _ in 0..3 {
+            collector.record_miss();
+        }
         let measurements = collector.stop();
         assert_eq!(measurements.len(), 1);
         assert_eq!(measurements[0].metric, BenchmarkMetric::AssetCacheHitRate);
@@ -1607,8 +1624,8 @@ mod tests {
 
     #[test]
     fn test_regression_thresholds() {
-        let thresholds = RegressionThresholds::new(10.0)
-            .with_override(BenchmarkMetric::ColdStart, 5.0);
+        let thresholds =
+            RegressionThresholds::new(10.0).with_override(BenchmarkMetric::ColdStart, 5.0);
         assert_eq!(thresholds.threshold_for(BenchmarkMetric::ColdStart), 5.0);
         assert_eq!(thresholds.threshold_for(BenchmarkMetric::IdleMemory), 10.0);
     }

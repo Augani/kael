@@ -1,9 +1,9 @@
 use crate::{
-    fill, outline, point, px, size, AccessibilityAction, AccessibilityAttributes,
-    AccessibilityRole, AccessibilityState, AccessibilityValue, App, BorderStyle, Bounds,
-    CursorStyle, DispatchPhase, Element, ElementId, GlobalElementId, Hitbox, HitboxBehavior,
-    InspectorElementId, Interactivity, IntoElement, KeyDownEvent, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, Window,
+    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
+    AccessibilityValue, App, BorderStyle, Bounds, CursorStyle, DispatchPhase, Element, ElementId,
+    GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, Interactivity, IntoElement,
+    KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, ScrollHandle, Window, fill, outline, point, px, size,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -209,7 +209,8 @@ impl Element for ScrollBar {
         let persistent_state = window.with_element_state(
             &global_id,
             |state: Option<Rc<RefCell<ScrollBarPersistentState>>>, _| {
-                let state = state.unwrap_or_else(|| Rc::new(RefCell::new(ScrollBarPersistentState::default())));
+                let state = state
+                    .unwrap_or_else(|| Rc::new(RefCell::new(ScrollBarPersistentState::default())));
                 (state.clone(), state)
             },
         );
@@ -261,7 +262,9 @@ impl Element for ScrollBar {
             };
 
             set_scroll_handle_logical_offset(&mouse_scroll_handle, vertical, next_logical);
-            mouse_state.borrow_mut().begin_drag(next_logical, event.position);
+            mouse_state
+                .borrow_mut()
+                .begin_drag(next_logical, event.position);
             window.refresh();
         });
 
@@ -283,7 +286,8 @@ impl Element for ScrollBar {
                 move_focus_handle.is_focused(window),
                 true,
             );
-            let next_logical = logical_offset_for_drag(event.position, bounds, render_state, drag_state);
+            let next_logical =
+                logical_offset_for_drag(event.position, bounds, render_state, drag_state);
             set_scroll_handle_logical_offset(&move_scroll_handle, vertical, next_logical);
             window.refresh();
         });
@@ -313,12 +317,8 @@ impl Element for ScrollBar {
                 return;
             }
 
-            let render_state = build_scroll_bar_render_state(
-                &key_scroll_handle,
-                vertical,
-                true,
-                false,
-            );
+            let render_state =
+                build_scroll_bar_render_state(&key_scroll_handle, vertical, true, false);
             let page = if render_state.viewport_size > Pixels::ZERO {
                 render_state.viewport_size
             } else {
@@ -326,12 +326,36 @@ impl Element for ScrollBar {
             };
             let current = render_state.logical_offset;
             let next = match event.keystroke.key.as_str() {
-                "up" if vertical => Some(clamp_pixels(current - step, Pixels::ZERO, render_state.max_offset)),
-                "down" if vertical => Some(clamp_pixels(current + step, Pixels::ZERO, render_state.max_offset)),
-                "left" if !vertical => Some(clamp_pixels(current - step, Pixels::ZERO, render_state.max_offset)),
-                "right" if !vertical => Some(clamp_pixels(current + step, Pixels::ZERO, render_state.max_offset)),
-                "pageup" => Some(clamp_pixels(current - page, Pixels::ZERO, render_state.max_offset)),
-                "pagedown" => Some(clamp_pixels(current + page, Pixels::ZERO, render_state.max_offset)),
+                "up" if vertical => Some(clamp_pixels(
+                    current - step,
+                    Pixels::ZERO,
+                    render_state.max_offset,
+                )),
+                "down" if vertical => Some(clamp_pixels(
+                    current + step,
+                    Pixels::ZERO,
+                    render_state.max_offset,
+                )),
+                "left" if !vertical => Some(clamp_pixels(
+                    current - step,
+                    Pixels::ZERO,
+                    render_state.max_offset,
+                )),
+                "right" if !vertical => Some(clamp_pixels(
+                    current + step,
+                    Pixels::ZERO,
+                    render_state.max_offset,
+                )),
+                "pageup" => Some(clamp_pixels(
+                    current - page,
+                    Pixels::ZERO,
+                    render_state.max_offset,
+                )),
+                "pagedown" => Some(clamp_pixels(
+                    current + page,
+                    Pixels::ZERO,
+                    render_state.max_offset,
+                )),
                 "home" => Some(Pixels::ZERO),
                 "end" => Some(render_state.max_offset),
                 _ => None,
@@ -413,7 +437,11 @@ fn build_scroll_bar_render_state(
     }
 }
 
-fn paint_default_scroll_bar(state: ScrollBarRenderState, bounds: Bounds<Pixels>, window: &mut Window) {
+fn paint_default_scroll_bar(
+    state: ScrollBarRenderState,
+    bounds: Bounds<Pixels>,
+    window: &mut Window,
+) {
     let track_bounds = scroll_bar_track_bounds(bounds, state.vertical);
     let thumb_bounds = state.thumb_bounds(bounds);
 
@@ -463,10 +491,16 @@ fn scroll_bar_thumb_bounds(bounds: Bounds<Pixels>, state: ScrollBarRenderState) 
 
     if state.vertical {
         let top = track.top() + available * fraction;
-        Bounds::new(point(track.left(), top), size(track.size.width, thumb_length))
+        Bounds::new(
+            point(track.left(), top),
+            size(track.size.width, thumb_length),
+        )
     } else {
         let left = track.left() + available * fraction;
-        Bounds::new(point(left, track.top()), size(thumb_length, track.size.height))
+        Bounds::new(
+            point(left, track.top()),
+            size(thumb_length, track.size.height),
+        )
     }
 }
 
@@ -575,7 +609,7 @@ mod tests {
     use super::*;
     use crate::elements::div::{InteractiveElement, StatefulInteractiveElement};
     use crate::{
-        div, Context, Modifiers, MouseButton, ParentElement, Render, Styled, TestAppContext,
+        Context, Modifiers, MouseButton, ParentElement, Render, Styled, TestAppContext, div,
     };
     use std::{cell::Cell, rc::Rc};
 
@@ -633,15 +667,17 @@ mod tests {
                         .track_scroll(&self.handle)
                         .child(div().w(px(100.0)).h(px(480.0))),
                 )
-                .child(
-                    div()
-                        .h(px(160.0))
-                        .child(scroll_bar("custom_scroll_bar", self.handle.clone()).render_with(
-                            move |state, _, _, _| {
-                                snapshot.set(Some((state.percentage, state.thumb_ratio, state.focused)));
-                            },
-                        )),
-                )
+                .child(div().h(px(160.0)).child(
+                    scroll_bar("custom_scroll_bar", self.handle.clone()).render_with(
+                        move |state, _, _, _| {
+                            snapshot.set(Some((
+                                state.percentage,
+                                state.thumb_ratio,
+                                state.focused,
+                            )));
+                        },
+                    ),
+                ))
         }
     }
 

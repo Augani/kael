@@ -5,21 +5,20 @@ use crate::{
     AsyncWindowContext, AvailableSpace, Background, BlendMode, BorderStyle, Bounds, BoxShadow,
     Capslock, Context, Corners, CursorStyle, Decorations, DevicePixels, DispatchActionListener,
     DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity, EntityId, EventEmitter,
-    FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs, Hsla, InputHandler, IsZero,
-    KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId,
-    LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite, MouseButton, MouseEvent,
-    MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
-    PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, PowerMode, PrintJob,
-    ProgressBarState, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage,
-    RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
-    POLYCHROME_SPRITE_KIND_COLOR, POLYCHROME_SPRITE_KIND_PREMULTIPLIED,
-    POLYCHROME_SPRITE_KIND_SUBPIXEL_TEXT,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, SharedString, Size,
-    StrikethroughStyle, Style, SubscriberSet, Subscription, SystemWindowTab,
+    FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GlyphRasterMode, GpuSpecs, Hsla,
+    InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
+    KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite,
+    MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, POLYCHROME_SPRITE_KIND_COLOR,
+    POLYCHROME_SPRITE_KIND_PREMULTIPLIED, POLYCHROME_SPRITE_KIND_SUBPIXEL_TEXT, Path, Pixels,
+    PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
+    PolychromeSprite, PowerMode, PrintJob, ProgressBarState, PromptButton, PromptLevel, Quad,
+    Render, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge,
+    SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene,
+    SharedString, Size, StrikethroughStyle, Style, SubscriberSet, Subscription, SystemWindowTab,
     SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextStyle, TextStyleRefinement,
     TransformationMatrix, Underline, UnderlineStyle, UndoRedoManager, WindowAppearance,
     WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations, WindowOptions,
-    WindowParams, WindowState, WindowTextSystem, GlyphRasterMode, point,
+    WindowParams, WindowState, WindowTextSystem, point,
     prelude::*,
     px, rems, size, transparent_black,
     webview::{PlatformWebView, PlatformWebViewCommand},
@@ -2205,7 +2204,7 @@ impl Window {
     }
 
     /// Produces a new frame and assigns it to `rendered_frame`. To actually show
-    /// the contents of the new [`Scene`], use [`Self::present`].
+    /// the contents of the new `Scene`, use `present`.
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
         self.power_mode = cx.power_mode();
@@ -2226,8 +2225,7 @@ impl Window {
 
         // Register requested input handler with the platform window.
         if let Some(Some(input_handler)) = self.next_frame.input_handlers.pop() {
-            self.platform_window
-            .set_input_handler(input_handler);
+            self.platform_window.set_input_handler(input_handler);
         }
 
         self.layout_engine_mut().clear();
@@ -3020,7 +3018,9 @@ impl Window {
             };
 
             let state = state_box.take().unwrap_or_else(|| {
-                panic!("reentrant call to with_element_state for the same state type and element id")
+                panic!(
+                    "reentrant call to with_element_state for the same state type and element id"
+                )
             });
             let (result, state) = f(Some(state), self);
             state_box.replace(state);
@@ -3175,16 +3175,20 @@ impl Window {
             let scaled_blur_radius = shadow.blur_radius.scale(scale_factor);
             let scaled_color = shadow.color.opacity(opacity);
             let atlas_params = crate::shadow_cache::ShadowAtlasParams::new(
-                scaled_bounds.size.map(|value| crate::DevicePixels(value.0 as i32)),
+                scaled_bounds
+                    .size
+                    .map(|value| crate::DevicePixels(value.0 as i32)),
                 scaled_corner_radii,
                 scaled_blur_radius,
                 scaled_color,
                 shadow.inset,
             );
-            let tile_result = self.sprite_atlas.get_or_insert_with(&atlas_params.clone().into(), &mut || {
-                    let (size, bytes) = crate::shadow_cache::rasterize_shadow(&atlas_params);
-                    Ok(Some((size, Cow::Owned(bytes))))
-                });
+            let tile_result =
+                self.sprite_atlas
+                    .get_or_insert_with(&atlas_params.clone().into(), &mut || {
+                        let (size, bytes) = crate::shadow_cache::rasterize_shadow(&atlas_params);
+                        Ok(Some((size, Cow::Owned(bytes))))
+                    });
             let Ok(Some(tile)) = tile_result else {
                 continue;
             };
@@ -3439,16 +3443,19 @@ impl Window {
 
         let raster_bounds = self.text_system().raster_bounds(&params)?;
         if !raster_bounds.is_zero() {
-            let Some(tile) = self
-                .sprite_atlas
-                .get_or_insert_with(&params.clone().into(), &mut || {
-                    let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
-                    Ok(Some((size, Cow::Owned(bytes))))
-                })?
+            let Some(tile) =
+                self.sprite_atlas
+                    .get_or_insert_with(&params.clone().into(), &mut || {
+                        let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
+                        Ok(Some((size, Cow::Owned(bytes))))
+                    })?
             else {
                 return Ok(());
             };
-            let floored_origin = point(ScaledPixels(device_x.floor()), ScaledPixels(device_y.floor()));
+            let floored_origin = point(
+                ScaledPixels(device_x.floor()),
+                ScaledPixels(device_y.floor()),
+            );
             let bounds = Bounds {
                 origin: floored_origin + raster_bounds.origin.map(Into::into),
                 size: tile.bounds.size.map(Into::into),
@@ -3519,19 +3526,21 @@ impl Window {
 
         let raster_bounds = self.text_system().raster_bounds(&params)?;
         if !raster_bounds.is_zero() {
-            let Some(tile) = self
-                .sprite_atlas
-                .get_or_insert_with(&params.clone().into(), &mut || {
-                    let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
-                    Ok(Some((size, Cow::Owned(bytes))))
-                })?
+            let Some(tile) =
+                self.sprite_atlas
+                    .get_or_insert_with(&params.clone().into(), &mut || {
+                        let (size, bytes) = self.text_system().rasterize_glyph(&params)?;
+                        Ok(Some((size, Cow::Owned(bytes))))
+                    })?
             else {
                 return Ok(());
             };
 
             let bounds = Bounds {
-                origin: point(ScaledPixels(device_x.floor()), ScaledPixels(device_y.floor()))
-                    + raster_bounds.origin.map(Into::into),
+                origin: point(
+                    ScaledPixels(device_x.floor()),
+                    ScaledPixels(device_y.floor()),
+                ) + raster_bounds.origin.map(Into::into),
                 size: tile.bounds.size.map(Into::into),
             };
             let content_mask = self.content_mask().scale(scale_factor);
@@ -3692,10 +3701,7 @@ impl Window {
                 let bytes = data
                     .as_bytes(frame_index)
                     .with_context(|| format!("invalid image frame index {frame_index}"))?;
-                Ok(Some((
-                    data.size(frame_index),
-                    Cow::Borrowed(bytes),
-                )))
+                Ok(Some((data.size(frame_index), Cow::Borrowed(bytes))))
             })?
         else {
             return Ok(());
@@ -3848,7 +3854,6 @@ impl Window {
     /// calls to the [`Element::request_layout`] trait method and enables any element to participate in layout.
     ///
     /// This method should only be called as part of the request_layout or prepaint phase of element drawing.
-
     #[must_use]
     pub fn request_layout(
         &mut self,

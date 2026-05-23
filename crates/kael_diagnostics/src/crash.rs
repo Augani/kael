@@ -5,7 +5,10 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    sync::{Arc, atomic::{AtomicU64, Ordering}},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use anyhow::{Context as _, Result, anyhow};
@@ -252,7 +255,11 @@ pub fn capture_crash_report(
         .payload()
         .downcast_ref::<String>()
         .cloned()
-        .or_else(|| info.payload().downcast_ref::<&str>().map(|message| message.to_string()))
+        .or_else(|| {
+            info.payload()
+                .downcast_ref::<&str>()
+                .map(|message| message.to_string())
+        })
         .unwrap_or_else(|| "unknown panic".to_string());
 
     CrashReport {
@@ -321,7 +328,8 @@ fn crash_reports_dir(app_id: &str) -> Result<PathBuf> {
 
 #[cfg(target_os = "macos")]
 fn base_data_dir() -> Result<PathBuf> {
-    let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME environment variable not set"))?;
+    let home =
+        std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME environment variable not set"))?;
     Ok(PathBuf::from(home)
         .join("Library")
         .join("Application Support"))
@@ -340,8 +348,7 @@ fn base_data_dir() -> Result<PathBuf> {
     std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .or_else(|| {
-            std::env::var_os("HOME")
-                .map(|home| PathBuf::from(home).join(".local").join("share"))
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("share"))
         })
         .ok_or_else(|| anyhow!("XDG_DATA_HOME or HOME environment variable not set"))
 }

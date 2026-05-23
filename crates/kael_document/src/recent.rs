@@ -36,8 +36,12 @@ impl RecentDocumentStore {
             return Ok(Vec::new());
         }
 
-        let json = std::fs::read_to_string(&self.path)
-            .with_context(|| format!("failed to read recent documents from {}", self.path.display()))?;
+        let json = std::fs::read_to_string(&self.path).with_context(|| {
+            format!(
+                "failed to read recent documents from {}",
+                self.path.display()
+            )
+        })?;
         serde_json::from_str(&json).context("failed to deserialize recent documents")
     }
 
@@ -61,17 +65,26 @@ impl RecentDocumentStore {
         match std::fs::remove_file(&self.path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error)
-                .with_context(|| format!("failed to remove recent documents file {}", self.path.display())),
+            Err(error) => Err(error).with_context(|| {
+                format!(
+                    "failed to remove recent documents file {}",
+                    self.path.display()
+                )
+            }),
         }
     }
 }
 
 fn persist_recent_documents(path: &Path, documents: &[RecentDocument]) -> Result<()> {
     let temp_path = path.with_extension("tmp");
-    let json = serde_json::to_vec_pretty(documents).context("failed to serialize recent documents")?;
-    std::fs::write(&temp_path, json)
-        .with_context(|| format!("failed to write recent documents to {}", temp_path.display()))?;
+    let json =
+        serde_json::to_vec_pretty(documents).context("failed to serialize recent documents")?;
+    std::fs::write(&temp_path, json).with_context(|| {
+        format!(
+            "failed to write recent documents to {}",
+            temp_path.display()
+        )
+    })?;
     std::fs::rename(&temp_path, path).with_context(|| {
         format!(
             "failed to finalize recent documents file from {} to {}",

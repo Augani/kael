@@ -171,7 +171,10 @@ mod tests {
 
         assert_eq!(playlist.current(), Some(&AudioSource::File("a.wav".into())));
         assert_eq!(playlist.next(), Some(&AudioSource::File("b.wav".into())));
-        assert_eq!(playlist.previous(), Some(&AudioSource::File("a.wav".into())));
+        assert_eq!(
+            playlist.previous(),
+            Some(&AudioSource::File("a.wav".into()))
+        );
         playlist.set_repeat(RepeatMode::All);
         playlist.previous();
         assert_eq!(playlist.current(), Some(&AudioSource::File("c.wav".into())));

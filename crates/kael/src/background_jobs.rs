@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 use crate::worker_api::WorkerPool;
@@ -11,11 +11,12 @@ use crate::worker_api::WorkerPool;
 /// Priority level for scheduling background jobs.
 ///
 /// Jobs with higher priority are sorted first when querying all jobs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum JobPriority {
     /// Lowest priority; runs only when no other work is pending.
     Low,
     /// Default priority for most jobs.
+    #[default]
     Normal,
     /// Elevated priority; scheduled before `Normal` and `Low` jobs.
     High,
@@ -43,12 +44,6 @@ impl PartialOrd for JobPriority {
 impl Ord for JobPriority {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.ordinal().cmp(&other.ordinal())
-    }
-}
-
-impl Default for JobPriority {
-    fn default() -> Self {
-        Self::Normal
     }
 }
 
@@ -515,7 +510,7 @@ impl JobScheduler {
             .iter()
             .map(|(id, entry)| entry.to_info(id))
             .collect();
-        infos.sort_by(|a, b| b.priority.cmp(&a.priority));
+        infos.sort_by_key(|b| std::cmp::Reverse(b.priority));
         infos
     }
 

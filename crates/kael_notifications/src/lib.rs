@@ -11,11 +11,11 @@ pub mod platform;
 /// Push-token types.
 pub mod push;
 
-pub use anyhow::Result;
 pub use action::{ActionOptions, NotificationAction, NotificationCategory};
+pub use anyhow::Result;
 pub use local::{
-    AuthorizationOptions, CircularRegion, DateComponents, LocalNotification, NotificationAttachment,
-    NotificationCenter, NotificationEvent, NotificationId, NotificationPayload, NotificationSound,
-    NotificationTrigger, Subscription,
+    AuthorizationOptions, CircularRegion, DateComponents, LocalNotification,
+    NotificationAttachment, NotificationCenter, NotificationEvent, NotificationId,
+    NotificationPayload, NotificationSound, NotificationTrigger, Subscription,
 };
 pub use push::PushToken;

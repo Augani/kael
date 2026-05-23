@@ -4,7 +4,7 @@
 //! for hit testing, viewport pan/zoom transforms, a hierarchical scene graph,
 //! transform handles, and alignment snapping.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
