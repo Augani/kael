@@ -1,5 +1,6 @@
 //! Delta update management, channels, and rollback support.
 
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 /// Distribution channel for updates.
@@ -13,6 +14,18 @@ pub enum UpdateChannel {
     Nightly,
     /// A user-defined custom channel.
     Custom(String),
+}
+
+impl UpdateChannel {
+    /// Returns the string representation of the channel.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Stable => "stable",
+            Self::Beta => "beta",
+            Self::Nightly => "nightly",
+            Self::Custom(name) => name,
+        }
+    }
 }
 
 /// Describes an available update.
@@ -109,6 +122,34 @@ pub struct RollbackInfo {
     pub created_at: u64,
 }
 
+fn manifest_signing_payload(manifest: &UpdateManifest) -> Vec<u8> {
+    format!(
+        "kael-update-v1\n{}\n{}\n{}\n{}\n{}",
+        manifest.version,
+        manifest.channel.as_str(),
+        manifest.url,
+        manifest.sha256,
+        manifest.size_bytes,
+    )
+    .into_bytes()
+}
+
+/// Signs an [`UpdateManifest`] with the given [`SigningKey`].
+pub fn sign_manifest(manifest: &UpdateManifest, key: &SigningKey) -> Signature {
+    let payload = manifest_signing_payload(manifest);
+    key.sign(&payload)
+}
+
+/// Verifies a manifest [`Signature`] against the given [`VerifyingKey`].
+pub fn verify_manifest(
+    manifest: &UpdateManifest,
+    signature: &Signature,
+    key: &VerifyingKey,
+) -> bool {
+    let payload = manifest_signing_payload(manifest);
+    key.verify(&payload, signature).is_ok()
+}
+
 fn parse_semver(version: &str) -> Option<(u64, u64, u64)> {
     let parts: Vec<&str> = version.split('.').collect();
     if parts.len() != 3 {
@@ -124,6 +165,7 @@ fn parse_semver(version: &str) -> Option<(u64, u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::SigningKey;
 
     fn valid_sha256() -> String {
         "a".repeat(64)
@@ -252,5 +294,72 @@ mod tests {
         let restored: UpdateManifest = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.version, "2.0.0");
         assert_eq!(restored.channel, UpdateChannel::Stable);
+    }
+
+    #[test]
+    fn sign_and_verify_manifest() {
+        let signing_key = SigningKey::generate(&mut rand::thread_rng());
+        let verifying_key = signing_key.verifying_key();
+
+        let manifest = UpdateManifest {
+            version: "1.2.0".into(),
+            channel: UpdateChannel::Stable,
+            url: "https://example.com/update.tar.gz".into(),
+            sha256: "abc123".into(),
+            size_bytes: 1024,
+            release_notes: None,
+            min_version: None,
+        };
+
+        let signature = sign_manifest(&manifest, &signing_key);
+        assert!(verify_manifest(&manifest, &signature, &verifying_key));
+    }
+
+    #[test]
+    fn tampered_manifest_fails_verification() {
+        let signing_key = SigningKey::generate(&mut rand::thread_rng());
+        let verifying_key = signing_key.verifying_key();
+
+        let mut manifest = UpdateManifest {
+            version: "1.2.0".into(),
+            channel: UpdateChannel::Stable,
+            url: "https://example.com/update.tar.gz".into(),
+            sha256: "abc123".into(),
+            size_bytes: 1024,
+            release_notes: None,
+            min_version: None,
+        };
+
+        let signature = sign_manifest(&manifest, &signing_key);
+        manifest.url = "https://evil.com/malware.tar.gz".into();
+        assert!(!verify_manifest(&manifest, &signature, &verifying_key));
+    }
+
+    #[test]
+    fn downgrade_rejected() {
+        let manifest = UpdateManifest {
+            version: "1.0.0".into(),
+            channel: UpdateChannel::Stable,
+            url: "https://example.com/update.tar.gz".into(),
+            sha256: "abc".into(),
+            size_bytes: 1024,
+            release_notes: None,
+            min_version: Some("1.5.0".into()),
+        };
+        assert!(!manifest.is_compatible_with("1.2.0"));
+    }
+
+    #[test]
+    fn upgrade_accepted() {
+        let manifest = UpdateManifest {
+            version: "2.0.0".into(),
+            channel: UpdateChannel::Stable,
+            url: "https://example.com/update.tar.gz".into(),
+            sha256: "abc".into(),
+            size_bytes: 1024,
+            release_notes: None,
+            min_version: Some("1.0.0".into()),
+        };
+        assert!(manifest.is_compatible_with("1.5.0"));
     }
 }
