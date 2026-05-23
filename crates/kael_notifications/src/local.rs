@@ -1,17 +1,19 @@
 //! Local notification scheduling and event delivery.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    cmp::Reverse,
+    collections::{BTreeMap, BinaryHeap, HashMap},
     path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
     },
-    time::Duration,
+    thread::JoinHandle,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Result, anyhow};
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -211,6 +213,36 @@ pub enum NotificationEvent {
     Dismissed(NotificationPayload),
 }
 
+struct SchedulerEntry {
+    wake_at: Instant,
+    id: NotificationId,
+    notification: LocalNotification,
+    actions: Vec<NotificationAction>,
+    cancelled: Arc<AtomicBool>,
+    repeats: bool,
+    delay: Duration,
+}
+
+impl PartialEq for SchedulerEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.wake_at == other.wake_at
+    }
+}
+
+impl Eq for SchedulerEntry {}
+
+impl PartialOrd for SchedulerEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SchedulerEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        Reverse(self.wake_at).cmp(&Reverse(other.wake_at))
+    }
+}
+
 /// A notification center that manages local scheduling and event delivery.
 #[derive(Clone)]
 pub struct NotificationCenter {
@@ -225,6 +257,8 @@ struct NotificationCenterState {
     scheduled: Mutex<HashMap<NotificationId, ScheduledNotification>>,
     listeners: Mutex<BTreeMap<usize, EventListener>>,
     categories: Mutex<HashMap<String, NotificationCategory>>,
+    scheduler_queue: Arc<(Mutex<BinaryHeap<SchedulerEntry>>, Condvar)>,
+    _scheduler_thread: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 struct ScheduledNotification {
@@ -285,7 +319,7 @@ impl NotificationCenter {
                         cancelled: cancelled.clone(),
                     },
                 );
-                self.spawn_delivery_loop(
+                self.schedule_delivery(
                     notification_id,
                     notification,
                     actions,
@@ -362,8 +396,76 @@ impl NotificationCenter {
     }
 
     pub(crate) fn with_backend(backend: Arc<dyn NotificationBackend>) -> Self {
-        Self {
-            inner: Arc::new(NotificationCenterState {
+        let scheduler_queue: Arc<(Mutex<BinaryHeap<SchedulerEntry>>, Condvar)> =
+            Arc::new((Mutex::new(BinaryHeap::new()), Condvar::new()));
+
+        let queue_ref = scheduler_queue.clone();
+
+        let state = Arc::new_cyclic(|weak: &std::sync::Weak<NotificationCenterState>| {
+            let weak_inner = weak.clone();
+            let thread_queue = queue_ref.clone();
+
+            let handle = std::thread::spawn(move || {
+                let (lock, cvar) = &*thread_queue;
+                loop {
+                    let mut queue = lock.lock();
+                    loop {
+                        let now = Instant::now();
+                        if queue.is_empty() {
+                            cvar.wait(&mut queue);
+                        } else if queue.peek().map_or(false, |e| e.wake_at > now) {
+                            let delta = queue.peek().unwrap().wake_at - now;
+                            cvar.wait_for(&mut queue, delta);
+                        } else {
+                            break;
+                        }
+                    }
+
+                    let now = Instant::now();
+                    let mut due = Vec::new();
+                    while queue.peek().map_or(false, |e| e.wake_at <= now) {
+                        if let Some(entry) = queue.pop() {
+                            due.push(entry);
+                        }
+                    }
+                    drop(queue);
+
+                    let Some(inner) = weak_inner.upgrade() else {
+                        break;
+                    };
+                    let center = NotificationCenter { inner };
+
+                    for entry in due {
+                        if entry.cancelled.load(Ordering::Relaxed) {
+                            continue;
+                        }
+                        if center
+                            .deliver_once(entry.id, entry.notification.clone(), entry.actions.clone())
+                            .is_err()
+                        {
+                            continue;
+                        }
+                        if entry.repeats {
+                            let next_entry = SchedulerEntry {
+                                wake_at: Instant::now() + entry.delay,
+                                id: entry.id,
+                                notification: entry.notification,
+                                actions: entry.actions,
+                                cancelled: entry.cancelled,
+                                repeats: entry.repeats,
+                                delay: entry.delay,
+                            };
+                            let (lock, cvar) = &*thread_queue;
+                            lock.lock().push(next_entry);
+                            cvar.notify_one();
+                        } else {
+                            center.inner.scheduled.lock().remove(&entry.id);
+                        }
+                    }
+                }
+            });
+
+            NotificationCenterState {
                 backend,
                 next_notification_id: AtomicU64::new(1),
                 next_listener_id: AtomicUsize::new(0),
@@ -371,8 +473,17 @@ impl NotificationCenter {
                 scheduled: Mutex::new(HashMap::new()),
                 listeners: Mutex::new(BTreeMap::new()),
                 categories: Mutex::new(HashMap::new()),
-            }),
-        }
+                scheduler_queue: queue_ref,
+                _scheduler_thread: Arc::new(Mutex::new(Some(handle))),
+            }
+        });
+
+        Self { inner: state }
+    }
+
+    /// Returns the number of background scheduler threads (always 1).
+    pub fn scheduler_thread_count(&self) -> usize {
+        1
     }
 
     fn resolve_actions(&self, category: Option<&str>) -> Result<Vec<NotificationAction>> {
@@ -387,7 +498,7 @@ impl NotificationCenter {
             .ok_or_else(|| anyhow!("notification category {category} is not registered"))
     }
 
-    fn spawn_delivery_loop(
+    fn schedule_delivery(
         &self,
         id: NotificationId,
         notification: LocalNotification,
@@ -396,27 +507,23 @@ impl NotificationCenter {
         delay: Duration,
         repeats: bool,
     ) {
-        let center = self.clone();
-        std::thread::spawn(move || {
-            loop {
-                if delay > Duration::ZERO {
-                    std::thread::sleep(delay);
-                }
-                if cancelled.load(Ordering::Relaxed) {
-                    break;
-                }
-                if center
-                    .deliver_once(id, notification.clone(), actions.clone())
-                    .is_err()
-                {
-                    break;
-                }
-                if !repeats {
-                    center.inner.scheduled.lock().remove(&id);
-                    break;
-                }
-            }
-        });
+        let wake_at = if delay > Duration::ZERO {
+            Instant::now() + delay
+        } else {
+            Instant::now()
+        };
+        let entry = SchedulerEntry {
+            wake_at,
+            id,
+            notification,
+            actions,
+            cancelled,
+            repeats,
+            delay,
+        };
+        let (lock, cvar) = &*self.inner.scheduler_queue;
+        lock.lock().push(entry);
+        cvar.notify_one();
     }
 
     fn deliver_once(
@@ -641,6 +748,29 @@ mod tests {
             event,
             NotificationEvent::Received(payload) if payload.title == "Action"
         )));
+    }
+
+    #[test]
+    fn many_delayed_notifications_use_bounded_threads() {
+        let center = NotificationCenter::with_backend(Arc::new(MockBackend::default()));
+        for i in 0..100 {
+            let notification = LocalNotification {
+                title: format!("bounded-{i}"),
+                body: "test".into(),
+                subtitle: None,
+                sound: None,
+                badge: None,
+                category: None,
+                user_info: Default::default(),
+                trigger: NotificationTrigger::TimeInterval {
+                    seconds: 3600.0,
+                    repeats: false,
+                },
+                attachments: Vec::new(),
+            };
+            center.schedule_local(notification).unwrap();
+        }
+        assert!(center.scheduler_thread_count() <= 2);
     }
 
     fn wait_until(timeout: Duration, predicate: impl Fn() -> bool) {
