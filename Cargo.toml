@@ -4,6 +4,14 @@ members = [
     "crates/kael",
     "crates/kael-media",
     "crates/kael-macros",
+    "crates/kael_storage",
+    "crates/kael_icons",
+    "crates/kael_diagnostics",
+    "crates/kael_document",
+    "crates/kael_audio",
+    "crates/kael_pdf",
+    "crates/kael_notifications",
+    "crates/kael_share",
     "crates/collections",
     "crates/derive_refineable",
     "crates/http_client",
@@ -15,9 +23,9 @@ members = [
     "crates/util_macros",
     "crates/semantic_version",
     "xtask",
-    "examples/reference_messaging",
-    "examples/reference_workspace",
-    "examples/reference_control_room",
+    "templates/messaging",
+    "templates/workspace",
+    "templates/dashboard",
 ]
 
 [workspace.package]

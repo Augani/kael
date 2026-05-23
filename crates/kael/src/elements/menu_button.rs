@@ -1,10 +1,10 @@
 use crate::{
-    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
-    AnyElement, App, AppContext, Bounds, Context, DismissEvent, Element, ElementId, Entity,
-    EventEmitter, FocusHandle, Focusable, GlobalElementId, InspectorElementId, InteractiveElement,
-    IntoElement, KeyDownEvent, LayerAnchor, LayerOptions, LayerStack, LayoutId, ParentElement,
-    Pixels, Point, Render, SharedString, StatefulInteractiveElement, Styled, Window, div, menu,
-    point, px,
+    div, menu, point, px, AccessibilityAction, AccessibilityAttributes, AccessibilityRole,
+    AccessibilityState, AnyElement, App, AppContext, Bounds, Context, DismissEvent, Element,
+    ElementId, Entity, EventEmitter, FocusHandle, Focusable, GlobalElementId,
+    InspectorElementId, InteractiveElement, IntoElement, KeyDownEvent, LayerAnchor,
+    LayerOptions, LayerStack, LayoutId, ParentElement, Pixels, Point, Render, SharedString,
+    StatefulInteractiveElement, Styled, Window,
 };
 use std::rc::Rc;
 
@@ -259,26 +259,14 @@ where
                     "down" => {
                         let popup_state = down_state.clone();
                         popup_state.update(cx, |state, cx| {
-                            state.move_highlight(
-                                1,
-                                popup_state.clone(),
-                                &key_selector_id,
-                                window,
-                                cx,
-                            );
+                            state.move_highlight(1, popup_state.clone(), &key_selector_id, window, cx);
                         });
                         window.prevent_default();
                     }
                     "up" => {
                         let popup_state = up_state.clone();
                         popup_state.update(cx, |state, cx| {
-                            state.move_highlight(
-                                -1,
-                                popup_state.clone(),
-                                &key_selector_id,
-                                window,
-                                cx,
-                            );
+                            state.move_highlight(-1, popup_state.clone(), &key_selector_id, window, cx);
                         });
                         window.prevent_default();
                     }
@@ -398,8 +386,7 @@ where
 
         let trigger = self.build_trigger(&selector_id, state.clone(), window, cx);
         let overlay_origin = state.read(cx).trigger_bounds.map(|bounds| bounds.origin);
-        let overlay =
-            build_layer_overlay(state.read(cx).layer_stack.clone(), overlay_origin, window);
+        let overlay = build_layer_overlay(state.read(cx).layer_stack.clone(), overlay_origin, window);
         let mut root = div()
             .relative()
             .child(trigger)
@@ -492,7 +479,9 @@ where
             self.on_select = on_select;
             changed = true;
         }
-        if self.item_renderer.as_ref().map(Rc::as_ptr) != item_renderer.as_ref().map(Rc::as_ptr) {
+        if self.item_renderer.as_ref().map(Rc::as_ptr)
+            != item_renderer.as_ref().map(Rc::as_ptr)
+        {
             self.item_renderer = item_renderer;
             changed = true;
         }
@@ -708,70 +697,67 @@ where
         let close_state = self.state.clone();
         let selector_id = self.selector_id.clone();
 
-        let mut panel = menu(ElementId::named_usize(
-            format!("{}-popup", self.selector_id),
-            0,
-        ))
-        .track_focus(&self.root_focus)
-        .focusable()
-        .tab_stop(true)
-        .min_w(snapshot.width)
-        .flex()
-        .flex_col()
-        .gap_1()
-        .p_2()
-        .rounded(px(10.0))
-        .border_1()
-        .border_color(crate::rgb(0xcbd5e1))
-        .bg(crate::rgb(0xffffff))
-        .shadow_lg()
-        .capture_key_down(move |event: &KeyDownEvent, window, cx| {
-            if event.keystroke.modifiers.modified() {
-                return;
-            }
+        let mut panel = menu(ElementId::named_usize(format!("{}-popup", self.selector_id), 0))
+            .track_focus(&self.root_focus)
+            .focusable()
+            .tab_stop(true)
+            .min_w(snapshot.width)
+            .flex()
+            .flex_col()
+            .gap_1()
+            .p_2()
+            .rounded(px(10.0))
+            .border_1()
+            .border_color(crate::rgb(0xcbd5e1))
+            .bg(crate::rgb(0xffffff))
+            .shadow_lg()
+            .capture_key_down(move |event: &KeyDownEvent, window, cx| {
+                if event.keystroke.modifiers.modified() {
+                    return;
+                }
 
-            match event.keystroke.key.as_str() {
-                "down" => {
-                    let popup_state = navigation_state.clone();
-                    popup_state.update(cx, |state, cx| {
-                        state.move_highlight(1, popup_state.clone(), &selector_id, window, cx);
-                    });
-                    window.prevent_default();
+                match event.keystroke.key.as_str() {
+                    "down" => {
+                        let popup_state = navigation_state.clone();
+                        popup_state.update(cx, |state, cx| {
+                            state.move_highlight(1, popup_state.clone(), &selector_id, window, cx);
+                        });
+                        window.prevent_default();
+                    }
+                    "up" => {
+                        let popup_state = navigation_state.clone();
+                        popup_state.update(cx, |state, cx| {
+                            state.move_highlight(-1, popup_state.clone(), &selector_id, window, cx);
+                        });
+                        window.prevent_default();
+                    }
+                    "home" => {
+                        navigation_state.update(cx, |state, cx| {
+                            state.highlight_first(cx);
+                        });
+                        window.prevent_default();
+                    }
+                    "end" => {
+                        navigation_state.update(cx, |state, cx| {
+                            state.highlight_last(cx);
+                        });
+                        window.prevent_default();
+                    }
+                    "enter" | "space" => {
+                        commit_state.update(cx, |state, cx| {
+                            state.commit_highlighted(window, cx);
+                        });
+                        window.prevent_default();
+                    }
+                    "escape" => {
+                        close_state.update(cx, |state, cx| {
+                            state.close_popup(cx);
+                        });
+                        window.prevent_default();
+                    }
+                    _ => {}
                 }
-                "up" => {
-                    let popup_state = navigation_state.clone();
-                    popup_state.update(cx, |state, cx| {
-                        state.move_highlight(-1, popup_state.clone(), &selector_id, window, cx);
-                    });
-                    window.prevent_default();
-                }
-                "home" => {
-                    navigation_state.update(cx, |state, cx| {
-                        state.highlight_first(cx);
-                    });
-                    window.prevent_default();
-                }
-                "end" => {
-                    navigation_state.update(cx, |state, cx| {
-                        state.highlight_last(cx);
-                    });
-                    window.prevent_default();
-                }
-                "enter" | "space" => {
-                    commit_state.update(cx, |state, cx| {
-                        state.commit_highlighted(window, cx);
-                    });
-                    window.prevent_default();
-                }
-                "escape" => {
-                    close_state.update(cx, |state, cx| {
-                        state.close_popup(cx);
-                    });
-                    window.prevent_default();
-                }
-                _ => {}
-            }
-        });
+            });
 
         #[cfg(any(test, feature = "test-support"))]
         {
@@ -784,10 +770,7 @@ where
             let commit_state = self.state.clone();
 
             let mut row = div()
-                .id(ElementId::named_usize(
-                    format!("{}-item", self.selector_id),
-                    index,
-                ))
+                .id(ElementId::named_usize(format!("{}-item", self.selector_id), index))
                 .accessibility(
                     AccessibilityAttributes::new(AccessibilityRole::MenuItem)
                         .label(item.label.to_string())
@@ -854,15 +837,15 @@ fn default_menu_button_trigger(label: Option<SharedString>, open: bool) -> AnyEl
         .gap_3()
         .size_full()
         .child(div().child(label))
-        .child(
-            div()
-                .text_color(crate::rgb(0x64748b))
-                .child(if open { "^" } else { "v" }),
-        )
+        .child(div().text_color(crate::rgb(0x64748b)).child(if open { "^" } else { "v" }))
         .into_any_element()
 }
 
-fn default_menu_button_item(label: SharedString, highlighted: bool, disabled: bool) -> AnyElement {
+fn default_menu_button_item(
+    label: SharedString,
+    highlighted: bool,
+    disabled: bool,
+) -> AnyElement {
     div()
         .flex()
         .items_center()
@@ -902,9 +885,7 @@ fn next_enabled_index(enabled: &[usize], current: Option<usize>, delta: isize) -
         return None;
     }
 
-    let Some(current_position) =
-        current.and_then(|current| enabled.iter().position(|index| *index == current))
-    else {
+    let Some(current_position) = current.and_then(|current| enabled.iter().position(|index| *index == current)) else {
         return if delta < 0 {
             enabled.last().copied()
         } else {
@@ -936,9 +917,7 @@ fn build_layer_overlay(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        AccessibilityRole, AccessibilityState, Context, Modifiers, Render, TestAppContext, div,
-    };
+    use crate::{AccessibilityRole, AccessibilityState, Context, Modifiers, Render, TestAppContext, div};
 
     struct MenuButtonView {
         last_action: &'static str,
@@ -979,36 +958,19 @@ mod tests {
             .render_trigger_with(|state, _, _| {
                 let selector = format!(
                     "menu-trigger-{}-{}",
-                    state
-                        .label
-                        .clone()
-                        .unwrap_or_else(|| SharedString::from("Menu")),
+                    state.label.clone().unwrap_or_else(|| SharedString::from("Menu")),
                     if state.open { "open" } else { "closed" },
                 );
-                div()
-                    .debug_selector(move || selector)
-                    .child("trigger")
-                    .into_any_element()
+                div().debug_selector(move || selector).child("trigger").into_any_element()
             })
             .render_items_with(|state, _, _| {
                 let selector = format!(
                     "menu-item-{}-{}-{}",
                     state.index,
-                    if state.highlighted {
-                        "highlighted"
-                    } else {
-                        "idle"
-                    },
-                    if state.disabled {
-                        "disabled"
-                    } else {
-                        "enabled"
-                    },
+                    if state.highlighted { "highlighted" } else { "idle" },
+                    if state.disabled { "disabled" } else { "enabled" },
                 );
-                div()
-                    .debug_selector(move || selector)
-                    .child(state.label)
-                    .into_any_element()
+                div().debug_selector(move || selector).child(state.label).into_any_element()
             })
             .on_select(cx.listener(|this, value, _, cx| {
                 this.last_action = *value;
@@ -1030,9 +992,7 @@ mod tests {
 
     #[crate::test]
     fn menu_button_click_opens_and_commits_item(cx: &mut TestAppContext) {
-        let (view, mut window) = cx.add_window_view(|_, _| MenuButtonView {
-            last_action: "copy",
-        });
+        let (view, mut window) = cx.add_window_view(|_, _| MenuButtonView { last_action: "copy" });
 
         window.update(|window, cx| {
             window.draw(cx).clear();
@@ -1060,15 +1020,9 @@ mod tests {
             assert!(button.states.contains(AccessibilityState::EXPANDED));
         });
 
-        assert!(
-            window
-                .debug_bounds("menu-button-popup-file_menu_button")
-                .is_some()
-        );
+        assert!(window.debug_bounds("menu-button-popup-file_menu_button").is_some());
 
-        let item_bounds = window
-            .debug_bounds("menu-button-item-file_menu_button-2")
-            .unwrap();
+        let item_bounds = window.debug_bounds("menu-button-item-file_menu_button-2").unwrap();
         window.simulate_click(item_bounds.center(), Modifiers::default());
         window.update(|window, cx| {
             window.draw(cx).clear();
@@ -1086,9 +1040,7 @@ mod tests {
 
     #[crate::test]
     fn menu_button_keyboard_opens_and_escape_closes(cx: &mut TestAppContext) {
-        let (_view, mut window) = cx.add_window_view(|_, _| MenuButtonView {
-            last_action: "copy",
-        });
+        let (_view, mut window) = cx.add_window_view(|_, _| MenuButtonView { last_action: "copy" });
 
         window.update(|window, cx| {
             window.draw(cx).clear();
@@ -1134,9 +1086,7 @@ mod tests {
 
     #[crate::test]
     fn menu_button_escape_dismisses_popup(cx: &mut TestAppContext) {
-        let (_view, mut window) = cx.add_window_view(|_, _| MenuButtonView {
-            last_action: "copy",
-        });
+        let (_view, mut window) = cx.add_window_view(|_, _| MenuButtonView { last_action: "copy" });
 
         window.update(|window, cx| {
             window.draw(cx).clear();
@@ -1148,11 +1098,7 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        assert!(
-            window
-                .debug_bounds("menu-button-popup-file_menu_button")
-                .is_some()
-        );
+        assert!(window.debug_bounds("menu-button-popup-file_menu_button").is_some());
         window.simulate_keystrokes("escape");
         window.update(|window, cx| {
             window.draw(cx).clear();
@@ -1179,18 +1125,12 @@ mod tests {
 
         assert!(window.debug_bounds("menu-trigger-Actions-closed").is_some());
 
-        let trigger_bounds = window
-            .debug_bounds("menu-button-custom_menu_button")
-            .unwrap();
+        let trigger_bounds = window.debug_bounds("menu-button-custom_menu_button").unwrap();
         window.simulate_click(trigger_bounds.center(), Modifiers::default());
         window.update(|window, cx| {
             window.draw(cx).clear();
         });
 
-        assert!(
-            window
-                .debug_bounds("menu-item-0-highlighted-enabled")
-                .is_some()
-        );
+        assert!(window.debug_bounds("menu-item-0-highlighted-enabled").is_some());
     }
 }

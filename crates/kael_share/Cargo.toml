@@ -1,0 +1,64 @@
+[package]
+edition = "2024"
+name = "kael_share"
+version = "0.5.1"
+publish = true
+description = "Share services for Kael"
+authors = ["Adabraka Team"]
+repository = "https://github.com/Augani/kael"
+readme = false
+license = "Apache-2.0"
+
+[lib]
+name = "kael_share"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies.anyhow]
+version = "1.0.86"
+
+[dependencies.url]
+version = "2.5.4"
+
+[dev-dependencies.futures]
+version = "0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies.block]
+version = "0.1"
+
+[target.'cfg(target_os = "macos")'.dependencies.cocoa]
+version = "0.26"
+
+[target.'cfg(target_os = "macos")'.dependencies.objc]
+version = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies.windows]
+version = "0.58.0"
+features = [
+    "Win32_Foundation",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[lints.clippy]
+dbg_macro = "deny"
+declare_interior_mutable_const = "deny"
+disallowed_methods = "deny"
+large_enum_variant = "allow"
+let_underscore_future = "allow"
+nonminimal_bool = "allow"
+redundant_clone = "deny"
+single_range_in_vec_init = "allow"
+todo = "deny"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[lints.clippy.style]
+level = "allow"
+priority = -1
+
+[lints.rust.unexpected_cfgs]
+level = "allow"
+priority = 0

@@ -1,7 +1,7 @@
 use crate::{
-    AccessibilityAttributes, AccessibilityRole, AccessibilityState, AccessibilityValue, App,
-    Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, LayoutId, Pixels,
-    Style, StyleRefinement, Styled, Window, fill, px, relative, rgb,
+    fill, px, relative, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
+    AccessibilityValue, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId,
+    IntoElement, LayoutId, Pixels, Style, StyleRefinement, Styled, Window, rgb,
 };
 use refineable::Refineable;
 use std::rc::Rc;
@@ -20,8 +20,7 @@ pub struct ProgressRenderState {
     pub indeterminate: bool,
 }
 
-type ProgressCustomRenderer =
-    Rc<dyn Fn(ProgressRenderState, Bounds<Pixels>, &mut Window, &mut App)>;
+type ProgressCustomRenderer = Rc<dyn Fn(ProgressRenderState, Bounds<Pixels>, &mut Window, &mut App)>;
 
 /// Construct a progress indicator from the current value.
 #[track_caller]
@@ -194,9 +193,7 @@ fn paint_default_progress(state: ProgressRenderState, bounds: Bounds<Pixels>, wi
     window.paint_quad(fill(bounds, rgb(0xe2e8f0)).corner_radii(px(999.0)));
 
     let fill_bounds = if state.indeterminate {
-        let width = (bounds.size.width * 0.35)
-            .max(px(12.0))
-            .min(bounds.size.width);
+        let width = (bounds.size.width * 0.35).max(px(12.0)).min(bounds.size.width);
         Bounds::new(bounds.origin, crate::size(width, bounds.size.height))
     } else {
         Bounds::new(
@@ -217,8 +214,8 @@ fn paint_default_progress(state: ProgressRenderState, bounds: Bounds<Pixels>, wi
 mod tests {
     use super::*;
     use crate::{
-        AccessibilityRole, AccessibilityState, AccessibilityValue, Context, ParentElement, Render,
-        TestAppContext, div,
+        AccessibilityRole, AccessibilityState, AccessibilityValue, Context, ParentElement,
+        Render, TestAppContext, div,
     };
     use std::cell::Cell;
 
@@ -237,13 +234,14 @@ mod tests {
     impl Render for CustomProgressView {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             let snapshot = self.snapshot.clone();
-            div().w(px(240.0)).h(px(12.0)).child(
-                progress("task_custom", 0.5)
-                    .indeterminate()
-                    .render_with(move |state, _, _, _| {
+            div()
+                .w(px(240.0))
+                .h(px(12.0))
+                .child(progress("task_custom", 0.5).indeterminate().render_with(
+                    move |state, _, _, _| {
                         snapshot.set(Some((state.value, state.percentage, state.indeterminate)));
-                    }),
-            )
+                    },
+                ))
         }
     }
 

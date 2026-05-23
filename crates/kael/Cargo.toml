@@ -38,6 +38,19 @@ macos-blade = [
 ]
 runtime_shaders = []
 media = ["kael_media"]
+storage = ["dep:kael_storage"]
+icons = ["dep:kael_icons"]
+diagnostics = ["dep:kael_diagnostics"]
+document = ["dep:kael_document"]
+audio = ["dep:kael_audio"]
+pdf = ["dep:kael_pdf"]
+notifications-full = ["dep:kael_notifications"]
+share = ["dep:kael_share"]
+platform-foundation = [
+    "storage",
+    "icons",
+    "diagnostics",
+]
 screen-capture = ["scap"]
 test-support = [
     "leak-detection",
@@ -303,6 +316,54 @@ version = "0.5.1"
 [dependencies.kael_media]
 path = "../kael-media"
 package = "kael-media"
+version = "0.5.1"
+optional = true
+
+[dependencies.kael_storage]
+path = "../kael_storage"
+package = "kael_storage"
+version = "0.5.1"
+optional = true
+
+[dependencies.kael_icons]
+path = "../kael_icons"
+package = "kael_icons"
+version = "0.5.1"
+optional = true
+
+[dependencies.kael_diagnostics]
+path = "../kael_diagnostics"
+package = "kael_diagnostics"
+version = "0.5.1"
+optional = true
+
+[dependencies.kael_document]
+path = "../kael_document"
+package = "kael_document"
+version = "0.5.1"
+optional = true
+
+[dependencies.kael_audio]
+path = "../kael_audio"
+package = "kael_audio"
+version = "0.5.1"
+optional = true
+
+[dependencies.kael_pdf]
+path = "../kael_pdf"
+package = "kael_pdf"
+version = "0.5.1"
+optional = true
+
+[dependencies.kael_notifications]
+path = "../kael_notifications"
+package = "kael_notifications"
+version = "0.5.1"
+optional = true
+
+[dependencies.kael_share]
+path = "../kael_share"
+package = "kael_share"
 version = "0.5.1"
 optional = true
 

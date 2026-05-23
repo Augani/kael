@@ -1,10 +1,10 @@
 use crate::{
-    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
-    AnyElement, App, AppContext, Bounds, Context, DismissEvent, Element, ElementId, Entity,
-    EventEmitter, FocusHandle, Focusable, GlobalElementId, Hsla, InspectorElementId,
-    InteractiveElement, IntoElement, KeyDownEvent, LayerOptions, LayerStack, LayoutId,
-    ParentElement, Pixels, Point, Render, SharedString, StatefulInteractiveElement, Styled, Window,
-    div, hsla, px,
+    div, hsla, px, AccessibilityAction, AccessibilityAttributes, AccessibilityRole,
+    AccessibilityState, AnyElement, App, AppContext, Bounds, Context, DismissEvent, Element,
+    ElementId, Entity, EventEmitter, FocusHandle, Focusable, GlobalElementId, Hsla,
+    InspectorElementId, InteractiveElement, IntoElement, KeyDownEvent, LayerOptions, LayerStack,
+    LayoutId, ParentElement, Pixels, Point, Render, SharedString,
+    StatefulInteractiveElement, Styled, Window,
 };
 use std::rc::Rc;
 
@@ -200,11 +200,7 @@ impl Element for Modal {
             state.sync_visibility(modal_state.clone(), &modal_id, window, cx);
         });
 
-        let overlay = build_layer_overlay(
-            state.read(cx).layer_stack.clone(),
-            state.read(cx).root_origin,
-            window,
-        );
+        let overlay = build_layer_overlay(state.read(cx).layer_stack.clone(), state.read(cx).root_origin, window);
         let mut root = div()
             .relative()
             .w(px(0.0))
@@ -443,10 +439,7 @@ impl Render for ModalLayer {
         let dismiss_on_click_state = self.state.clone();
         let dismiss_on_escape_state = self.state.clone();
         let mut root = div()
-            .id(ElementId::named_usize(
-                format!("{}-modal", self.selector_id),
-                0,
-            ))
+            .id(ElementId::named_usize(format!("{}-modal", self.selector_id), 0))
             .track_focus(&self.root_focus)
             .focusable()
             .tab_stop(true)
@@ -633,21 +626,17 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        assert!(
-            window
-                .debug_bounds("modal-custom-Confirm-focused")
-                .is_some()
-        );
+        assert!(window
+            .debug_bounds("modal-custom-Confirm-focused")
+            .is_some());
         window.update(|window, cx| {
             window.draw(cx).clear();
-            assert!(
-                window
-                    .accessibility_tree
-                    .nodes
-                    .values()
-                    .any(|node| node.role == AccessibilityRole::Dialog
-                        && node.label.as_deref() == Some("Confirm"))
-            );
+            assert!(window
+                .accessibility_tree
+                .nodes
+                .values()
+                .any(|node| node.role == AccessibilityRole::Dialog
+                    && node.label.as_deref() == Some("Confirm")));
         });
 
         window.simulate_keystrokes("escape");

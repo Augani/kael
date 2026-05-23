@@ -1,7 +1,7 @@
 use kael::{
-    App, Application, Bounds, Context, SharedString, Window, WindowBounds, WindowOptions, black,
-    button, checkbox, date_picker, div, fill, modal, prelude::*, progress, px, radio_group, rgb,
-    select, size, slider, text_input, toggle, white,
+    App, Application, Bounds, Context, Window, WindowBounds, WindowOptions, black, button,
+    checkbox, date_picker, div, fill, modal, prelude::*, progress, px, radio_group, rgb, select,
+    size, slider, text_input, toggle, white, SharedString,
 };
 use time::{Date, Month};
 
