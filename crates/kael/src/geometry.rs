@@ -2,12 +2,12 @@
 //! can be used to describe common units, concepts, and the relationships
 //! between them.
 
-use anyhow::{Context as _, anyhow};
+use anyhow::{anyhow, Context as _};
 use core::fmt::Debug;
 use derive_more::{Add, AddAssign, Div, DivAssign, Mul, Neg, Sub, SubAssign};
 use refineable::Refineable;
-use schemars::{JsonSchema, json_schema};
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use schemars::{json_schema, JsonSchema};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
 use std::ops::Range;
 use std::{
@@ -1087,8 +1087,9 @@ where
     }
 }
 
-impl<T: PartialOrd + Add<T, Output = T> + Sub<Output = T> + Clone + Debug + Default + PartialEq>
-    Bounds<T>
+impl<
+        T: PartialOrd + Add<T, Output = T> + Sub<Output = T> + Clone + Debug + Default + PartialEq,
+    > Bounds<T>
 {
     /// Calculates the intersection of two `Bounds` objects.
     ///
@@ -2425,6 +2426,17 @@ impl Corners<Pixels> {
             top_right: self.top_right.scale(factor),
             bottom_right: self.bottom_right.scale(factor),
             bottom_left: self.bottom_left.scale(factor),
+        }
+    }
+
+    /// Scale corner radii to device pixels, rounding to the nearest whole pixel.
+    #[must_use]
+    pub fn scale_and_snap(&self, factor: f32) -> Corners<ScaledPixels> {
+        Corners {
+            top_left: ScaledPixels((self.top_left.0 * factor).round()),
+            top_right: ScaledPixels((self.top_right.0 * factor).round()),
+            bottom_right: ScaledPixels((self.bottom_right.0 * factor).round()),
+            bottom_left: ScaledPixels((self.bottom_left.0 * factor).round()),
         }
     }
 

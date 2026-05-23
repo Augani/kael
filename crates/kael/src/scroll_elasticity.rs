@@ -1,9 +1,9 @@
+use crate::geometry::IsZero;
+use crate::px;
 use crate::Pixels;
 #[cfg(any(target_os = "macos", test))]
 use crate::ScrollDelta;
 use crate::ScrollWheelEvent;
-use crate::geometry::IsZero;
-use crate::px;
 
 pub(crate) fn rubber_band_scroll_enabled(event: &ScrollWheelEvent) -> bool {
     #[cfg(any(target_os = "macos", test))]
@@ -46,17 +46,29 @@ pub(crate) fn add_scroll_elasticity(overscroll: Pixels, delta: Pixels) -> Pixels
     (overscroll + delta * damping).clamp(-limit, limit)
 }
 
-pub(crate) fn advance_scroll_elasticity(overscroll: &mut Pixels) -> bool {
-    const SPRING_BACK: f32 = 0.18;
+pub(crate) fn advance_scroll_elasticity(
+    overscroll: &mut Pixels,
+    last_advance: &mut Option<std::time::Instant>,
+) -> bool {
+    const DECAY_RATE: f32 = 12.0;
     const STOP_EPSILON: f32 = 0.25;
 
     if overscroll.is_zero() {
+        *last_advance = None;
         return false;
     }
 
-    *overscroll *= 1.0 - SPRING_BACK;
+    let now = std::time::Instant::now();
+    let dt = last_advance
+        .map(|prev| now.duration_since(prev).as_secs_f32().min(0.05))
+        .unwrap_or(1.0 / 60.0);
+    *last_advance = Some(now);
+
+    let factor = (-DECAY_RATE * dt).exp();
+    *overscroll *= factor;
     if overscroll.abs() <= px(STOP_EPSILON) {
         *overscroll = Pixels::ZERO;
+        *last_advance = None;
     }
 
     !overscroll.is_zero()

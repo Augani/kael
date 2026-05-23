@@ -14,7 +14,7 @@ use crate::{
     PolychromeSprite, PowerMode, PrintJob, ProgressBarState, PromptButton, PromptLevel, Quad,
     Render, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge,
     SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene,
-    SharedString, Size, StrikethroughStyle, Style, SubscriberSet, Subscription, SystemWindowTab,
+    Shadow, SharedString, Size, StrikethroughStyle, Style, SubscriberSet, Subscription, SystemWindowTab,
     SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextStyle, TextStyleRefinement,
     TransformationMatrix, Underline, UnderlineStyle, UndoRedoManager, WindowAppearance,
     WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations, WindowOptions,
@@ -1348,10 +1348,11 @@ pub struct ContentMask<P: Clone + Debug + Default + PartialEq> {
 }
 
 impl ContentMask<Pixels> {
-    /// Scale the content mask's pixel units by the given scaling factor.
+    /// Scale the content mask's pixel units by the given scaling factor,
+    /// snapping to the device pixel grid for crisp clipping boundaries.
     pub fn scale(&self, factor: f32) -> ContentMask<ScaledPixels> {
         ContentMask {
-            bounds: self.bounds.scale(factor),
+            bounds: self.bounds.scale_and_snap_conservative(factor),
         }
     }
 
@@ -3170,45 +3171,20 @@ impl Window {
             } else {
                 (bounds + shadow.offset).dilate(shadow.spread_radius)
             };
-            let scaled_bounds = shadow_bounds.scale_and_snap_conservative(scale_factor);
-            let scaled_corner_radii = corner_radii.scale(scale_factor);
-            let scaled_blur_radius = shadow.blur_radius.scale(scale_factor);
-            let scaled_color = shadow.color.opacity(opacity);
-            let atlas_params = crate::shadow_cache::ShadowAtlasParams::new(
-                scaled_bounds
-                    .size
-                    .map(|value| crate::DevicePixels(value.0 as i32)),
-                scaled_corner_radii,
-                scaled_blur_radius,
-                scaled_color,
-                shadow.inset,
-            );
-            let tile_result =
-                self.sprite_atlas
-                    .get_or_insert_with(&atlas_params.clone().into(), &mut || {
-                        let (size, bytes) = crate::shadow_cache::rasterize_shadow(&atlas_params);
-                        Ok(Some((size, Cow::Owned(bytes))))
-                    });
-            let Ok(Some(tile)) = tile_result else {
-                continue;
-            };
-            self.next_frame.scene.insert_primitive(PolychromeSprite {
+            self.next_frame.scene.insert_primitive(Shadow {
                 order: 0,
-                pad: 0,
-                grayscale: false,
-                opacity: 1.0,
-                bounds: crate::shadow_cache::expanded_bounds(scaled_bounds, scaled_blur_radius),
+                blur_radius: shadow.blur_radius.scale(scale_factor),
+                bounds: shadow_bounds.scale_and_snap_conservative(scale_factor),
                 content_mask: if shadow.inset {
                     ContentMask {
-                        bounds: bounds.scale(scale_factor),
+                        bounds: bounds.scale_and_snap(scale_factor),
                     }
                 } else {
                     content_mask.scale(scale_factor)
                 },
-                corner_radii: Default::default(),
-                tile,
-                sprite_kind: POLYCHROME_SPRITE_KIND_COLOR,
-                color: transparent_black(),
+                corner_radii: corner_radii.scale_and_snap(scale_factor),
+                color: shadow.color.opacity(opacity),
+                inset: if shadow.inset { 1 } else { 0 },
             });
         }
     }
@@ -3252,7 +3228,7 @@ impl Window {
             blur_radius: blur_radius.scale(scale_factor),
             bounds: bounds.scale_and_snap_conservative(scale_factor),
             content_mask: content_mask.scale(scale_factor),
-            corner_radii: corner_radii.scale(scale_factor),
+            corner_radii: corner_radii.scale_and_snap(scale_factor),
             tint: tint.opacity(opacity),
             saturation: saturation.max(0.0),
         });
@@ -3279,7 +3255,7 @@ impl Window {
             content_mask: content_mask.scale(scale_factor),
             background: quad.background.opacity(opacity),
             border_color: quad.border_color.opacity(opacity),
-            corner_radii: quad.corner_radii.scale(scale_factor),
+            corner_radii: quad.corner_radii.scale_and_snap(scale_factor),
             border_widths: quad.border_widths.scale_and_snap_widths(scale_factor),
             border_style: quad.border_style,
             continuous_corners: if quad.continuous_corners { 1 } else { 0 },
@@ -3707,7 +3683,7 @@ impl Window {
             return Ok(());
         };
         let content_mask = self.content_mask().scale(scale_factor);
-        let corner_radii = corner_radii.scale(scale_factor);
+        let corner_radii = corner_radii.scale_and_snap(scale_factor);
         let opacity = self.element_opacity();
 
         self.next_frame.scene.insert_primitive(PolychromeSprite {

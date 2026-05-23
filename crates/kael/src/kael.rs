@@ -76,6 +76,7 @@ pub mod scene_graph;
 mod scroll_elasticity;
 pub mod security;
 mod session_store;
+#[allow(dead_code)]
 mod shadow_cache;
 mod shared_string;
 mod shared_uri;

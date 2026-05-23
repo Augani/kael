@@ -5,8 +5,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, DevicePixels, Edges, Hsla,
-    Pixels, Point, Radians, ScaledPixels, Size, bounds_tree::BoundsTree, point,
+    bounds_tree::BoundsTree, point, AtlasTextureId, AtlasTile, Background, Bounds, ContentMask,
+    Corners, DevicePixels, Edges, Hsla, Pixels, Point, Radians, ScaledPixels, Size,
 };
 use std::{
     fmt::Debug,
@@ -900,7 +900,7 @@ impl Path<Pixels> {
         Path {
             id: self.id,
             order: self.order,
-            bounds: self.bounds.scale(factor),
+            bounds: self.bounds.scale_and_snap_conservative(factor),
             content_mask: self.content_mask.scale(factor),
             vertices: self
                 .vertices
@@ -1101,11 +1101,9 @@ mod tests {
         match batches.next() {
             Some(PrimitiveBatch::BlurRects(blur_rects)) => {
                 assert_eq!(blur_rects.len(), 2);
-                assert!(
-                    blur_rects
-                        .iter()
-                        .all(|blur_rect| blur_rect.order == scene.blur_rects[0].order)
-                );
+                assert!(blur_rects
+                    .iter()
+                    .all(|blur_rect| blur_rect.order == scene.blur_rects[0].order));
             }
             other => panic!("expected blur batch, got {other:?}"),
         }

@@ -104,6 +104,7 @@ struct StateInner {
     overdraw: Pixels,
     scroll_elasticity: Pixels,
     scroll_elasticity_animating: bool,
+    scroll_elasticity_last_advance: Option<std::time::Instant>,
     reset: bool,
     #[allow(clippy::type_complexity)]
     scroll_handler: Option<Box<dyn FnMut(&ListScrollEvent, &mut Window, &mut App)>>,
@@ -306,6 +307,7 @@ impl ListState {
             overdraw,
             scroll_elasticity: Pixels::ZERO,
             scroll_elasticity_animating: false,
+            scroll_elasticity_last_advance: None,
             scroll_handler: None,
             reset: false,
             scrollbar_drag_start_height: None,
@@ -1203,8 +1205,10 @@ impl Element for List {
         };
 
         if state.scroll_elasticity_animating {
-            state.scroll_elasticity_animating =
-                advance_scroll_elasticity(&mut state.scroll_elasticity);
+            state.scroll_elasticity_animating = advance_scroll_elasticity(
+                &mut state.scroll_elasticity,
+                &mut state.scroll_elasticity_last_advance,
+            );
             if state.scroll_elasticity_animating {
                 window.request_animation_frame();
             }

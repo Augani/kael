@@ -1,9 +1,9 @@
 use crate::{
-    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
-    AccessibilityValue, App, BorderStyle, Bounds, CursorStyle, DispatchPhase, Element, ElementId,
-    GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, Interactivity, IntoElement,
-    KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, ScrollHandle, Window, fill, outline, point, px, size,
+    fill, outline, point, px, size, AccessibilityAction, AccessibilityAttributes,
+    AccessibilityRole, AccessibilityState, AccessibilityValue, App, BorderStyle, Bounds,
+    CursorStyle, DispatchPhase, Element, ElementId, GlobalElementId, Hitbox, HitboxBehavior,
+    InspectorElementId, Interactivity, IntoElement, KeyDownEvent, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, Window,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -61,6 +61,8 @@ pub struct ScrollBarRenderState {
     pub dragging: bool,
     /// Whether the scroll bar currently owns keyboard focus.
     pub focused: bool,
+    /// Visual opacity of the scroll bar (0.0 = hidden, 1.0 = fully visible).
+    pub opacity: f32,
 }
 
 impl ScrollBarRenderState {
@@ -219,17 +221,23 @@ impl Element for ScrollBar {
             window.set_cursor_style(CursorStyle::PointingHand, &prepaint.hitbox);
         }
 
+        let is_hovered = prepaint.hitbox.is_hovered(window);
         let render_state = build_scroll_bar_render_state(
             &self.scroll_handle,
             self.vertical,
             focus_handle.is_focused(window),
             persistent_state.borrow().is_dragging(),
+            is_hovered,
         );
 
         if let Some(renderer) = &self.custom_renderer {
             renderer(render_state, bounds, window, cx);
         } else {
             paint_default_scroll_bar(render_state, bounds, window);
+        }
+
+        if render_state.opacity > 0.0 && render_state.opacity < 1.0 {
+            window.request_animation_frame();
         }
 
         let hitbox = prepaint.hitbox.clone();
@@ -251,6 +259,7 @@ impl Element for ScrollBar {
                 vertical,
                 true,
                 mouse_state.borrow().is_dragging(),
+                true,
             );
             let thumb_bounds = render_state.thumb_bounds(bounds);
             let current_logical = render_state.logical_offset;
@@ -285,6 +294,7 @@ impl Element for ScrollBar {
                 vertical,
                 move_focus_handle.is_focused(window),
                 true,
+                false,
             );
             let next_logical =
                 logical_offset_for_drag(event.position, bounds, render_state, drag_state);
@@ -318,7 +328,7 @@ impl Element for ScrollBar {
             }
 
             let render_state =
-                build_scroll_bar_render_state(&key_scroll_handle, vertical, true, false);
+                build_scroll_bar_render_state(&key_scroll_handle, vertical, true, false, false);
             let page = if render_state.viewport_size > Pixels::ZERO {
                 render_state.viewport_size
             } else {
@@ -399,11 +409,42 @@ impl IntoElement for ScrollBar {
     }
 }
 
+const SCROLLBAR_SHOW_DELAY: f64 = 1.0;
+const SCROLLBAR_FADE_DURATION: f64 = 0.4;
+
+fn scrollbar_opacity(
+    scroll_handle: &ScrollHandle,
+    dragging: bool,
+    focused: bool,
+    hovered: bool,
+) -> f32 {
+    if dragging || focused || hovered {
+        return 1.0;
+    }
+
+    let elapsed = scroll_handle.seconds_since_last_scroll();
+    if elapsed < SCROLLBAR_SHOW_DELAY {
+        1.0
+    } else {
+        let fade_progress = ((elapsed - SCROLLBAR_SHOW_DELAY) / SCROLLBAR_FADE_DURATION).min(1.0);
+        (1.0 - ease_in_out(fade_progress)) as f32
+    }
+}
+
+fn ease_in_out(t: f64) -> f64 {
+    if t < 0.5 {
+        2.0 * t * t
+    } else {
+        1.0 - (-2.0 * t + 2.0).powi(2) / 2.0
+    }
+}
+
 fn build_scroll_bar_render_state(
     scroll_handle: &ScrollHandle,
     vertical: bool,
     focused: bool,
     dragging: bool,
+    hovered: bool,
 ) -> ScrollBarRenderState {
     let offset = scroll_handle.offset();
     let max_offset = scroll_handle.max_offset();
@@ -424,6 +465,8 @@ fn build_scroll_bar_render_state(
         1.0
     };
 
+    let opacity = scrollbar_opacity(scroll_handle, dragging, focused, hovered);
+
     ScrollBarRenderState {
         vertical,
         logical_offset,
@@ -434,6 +477,7 @@ fn build_scroll_bar_render_state(
         thumb_ratio,
         dragging,
         focused,
+        opacity,
     }
 }
 
@@ -442,24 +486,33 @@ fn paint_default_scroll_bar(
     bounds: Bounds<Pixels>,
     window: &mut Window,
 ) {
+    if state.opacity <= 0.0 {
+        return;
+    }
+
     let track_bounds = scroll_bar_track_bounds(bounds, state.vertical);
     let thumb_bounds = state.thumb_bounds(bounds);
 
-    window.paint_quad(fill(track_bounds, crate::rgb(0xe2e8f0)).corner_radii(px(999.0)));
+    let track_color = crate::hsla(0., 0., 0.89, 0.6 * state.opacity);
+    let thumb_color = crate::hsla(0., 0., 0.58, state.opacity);
+    let border_color = if state.focused {
+        crate::hsla(220. / 360., 0.77, 0.47, state.opacity)
+    } else {
+        crate::hsla(215. / 360., 0.16, 0.47, 0.6 * state.opacity)
+    };
+
+    window.paint_quad(fill(track_bounds, track_color).corner_radii(px(999.0)));
     window.paint_quad(
-        fill(thumb_bounds, crate::rgb(0x94a3b8))
+        fill(thumb_bounds, thumb_color)
             .corner_radii(px(999.0))
             .border_widths(px(1.0))
-            .border_color(if state.focused {
-                crate::rgb(0x1d4ed8)
-            } else {
-                crate::rgb(0x64748b)
-            }),
+            .border_color(border_color),
     );
 
     if state.focused {
+        let focus_color = crate::hsla(213. / 360., 0.94, 0.78, 0.8 * state.opacity);
         window.paint_quad(
-            outline(bounds, crate::rgb(0x93c5fd), BorderStyle::default()).corner_radii(px(999.0)),
+            outline(bounds, focus_color, BorderStyle::default()).corner_radii(px(999.0)),
         );
     }
 }
@@ -593,11 +646,19 @@ fn logical_scroll_offset(offset: Point<Pixels>, vertical: bool) -> Pixels {
 }
 
 fn axis_pixels(size: crate::Size<Pixels>, vertical: bool) -> Pixels {
-    if vertical { size.height } else { size.width }
+    if vertical {
+        size.height
+    } else {
+        size.width
+    }
 }
 
 fn logical_axis_size(size: crate::Size<Pixels>, vertical: bool) -> Pixels {
-    if vertical { size.height } else { size.width }
+    if vertical {
+        size.height
+    } else {
+        size.width
+    }
 }
 
 fn clamp_pixels(value: Pixels, min: Pixels, max: Pixels) -> Pixels {
@@ -609,7 +670,7 @@ mod tests {
     use super::*;
     use crate::elements::div::{InteractiveElement, StatefulInteractiveElement};
     use crate::{
-        Context, Modifiers, MouseButton, ParentElement, Render, Styled, TestAppContext, div,
+        div, Context, Modifiers, MouseButton, ParentElement, Render, Styled, TestAppContext,
     };
     use std::{cell::Cell, rc::Rc};
 
@@ -693,6 +754,7 @@ mod tests {
             thumb_ratio: 160.0 / 480.0,
             dragging: false,
             focused: false,
+            opacity: 1.0,
         };
         let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(12.0), px(160.0)));
         let thumb = state.thumb_bounds(bounds);

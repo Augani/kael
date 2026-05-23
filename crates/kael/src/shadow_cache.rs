@@ -1,4 +1,4 @@
-use crate::{Bounds, Corners, DevicePixels, Hsla, ScaledPixels, Size, point, size};
+use crate::{point, size, Bounds, Corners, DevicePixels, Hsla, ScaledPixels, Size};
 use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,9 +82,9 @@ pub(crate) fn rasterize_shadow(params: &ShadowAtlasParams) -> (Size<DevicePixels
 
             let alpha = (color.a * alpha).clamp(0.0, 1.0);
             let pixel = ((y as usize * texture_size.width.0 as usize) + x as usize) * 4;
-            bytes[pixel] = channel_to_byte(color.b);
-            bytes[pixel + 1] = channel_to_byte(color.g);
-            bytes[pixel + 2] = channel_to_byte(color.r);
+            bytes[pixel] = channel_to_byte(color.b * alpha);
+            bytes[pixel + 1] = channel_to_byte(color.g * alpha);
+            bytes[pixel + 2] = channel_to_byte(color.r * alpha);
             bytes[pixel + 3] = channel_to_byte(alpha);
         }
     }

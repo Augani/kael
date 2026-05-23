@@ -2314,10 +2314,11 @@ impl PlatformWindow for MacWindow {
 
     fn set_frame_polling(&self, active: bool) {
         let mut this = self.0.as_ref().lock();
+        let was_active = this.frame_polling_active;
         this.frame_polling_active = active;
-        if active {
+        if active && !was_active {
             this.start_display_link();
-        } else {
+        } else if !active && was_active {
             this.stop_display_link();
         }
     }
@@ -2553,49 +2554,46 @@ impl PlatformWindow for MacWindow {
     }
 
     fn titlebar_double_click(&self) {
-        let this = self.0.lock();
-        let window = this.native_window;
-        this.executor
-            .spawn(async move {
-                unsafe {
-                    let defaults: id = NSUserDefaults::standardUserDefaults();
-                    let domain = NSString::alloc(nil).init_str("NSGlobalDomain");
-                    let key = NSString::alloc(nil).init_str("AppleActionOnDoubleClick");
+        let lock = self.0.lock();
+        let window = lock.native_window;
+        unsafe {
+            let defaults: id = NSUserDefaults::standardUserDefaults();
+            let domain = NSString::alloc(nil).init_str("NSGlobalDomain");
+            let key = NSString::alloc(nil).init_str("AppleActionOnDoubleClick");
 
-                    let dict: id = msg_send![defaults, persistentDomainForName: domain];
-                    let action: id = if !dict.is_null() {
-                        msg_send![dict, objectForKey: key]
+            let dict: id = msg_send![defaults, persistentDomainForName: domain];
+            let action: id = if !dict.is_null() {
+                msg_send![dict, objectForKey: key]
+            } else {
+                nil
+            };
+
+            let action_str = if !action.is_null() {
+                CStr::from_ptr(NSString::UTF8String(action)).to_string_lossy()
+            } else {
+                "".into()
+            };
+
+            match action_str.as_ref() {
+                "None" => {}
+                "Minimize" => {
+                    window.miniaturize_(nil);
+                }
+                _ => {
+                    let is_zoomed: BOOL = msg_send![window, isZoomed];
+                    if is_zoomed == YES {
+                        drop(lock);
+                        window.zoom_(nil);
                     } else {
-                        nil
-                    };
-
-                    let action_str = if !action.is_null() {
-                        CStr::from_ptr(NSString::UTF8String(action)).to_string_lossy()
-                    } else {
-                        "".into()
-                    };
-
-                    match action_str.as_ref() {
-                        "None" => {
-                            // "Do Nothing" selected, so do no action
-                        }
-                        "Minimize" => {
-                            window.miniaturize_(nil);
-                        }
-                        "Maximize" => {
-                            window.zoom_(nil);
-                        }
-                        "Fill" => {
-                            // There is no documented API for "Fill" action, so we'll just zoom the window
-                            window.zoom_(nil);
-                        }
-                        _ => {
-                            window.zoom_(nil);
-                        }
+                        let screen = window.screen();
+                        let target_frame = NSScreen::visibleFrame(screen);
+                        drop(lock);
+                        let _: () =
+                            msg_send![window, setFrame: target_frame display: YES animate: NO];
                     }
                 }
-            })
-            .detach();
+            }
+        }
     }
 
     fn set_progress_bar(&self, state: crate::ProgressBarState) {
@@ -3090,7 +3088,9 @@ extern "C" fn handle_view_event(this: &Object, _: Sel, native_event: id) {
                 let native_window = lock.native_window;
                 drop(lock);
                 unsafe {
-                    let _: () = msg_send![native_window, makeKeyAndOrderFront: nil];
+                    let app = cocoa::appkit::NSApplication::sharedApplication(nil);
+                    let _: () = msg_send![app, activateIgnoringOtherApps: YES];
+                    let _: () = msg_send![native_window, makeKeyWindow];
                 }
                 lock = window_state.as_ref().lock();
             }

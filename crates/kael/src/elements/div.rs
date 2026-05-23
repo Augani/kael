@@ -2522,10 +2522,16 @@ impl Interactivity {
                 display_offset += scroll_elastic_state.overscroll;
 
                 if scroll_elastic_state.animating {
-                    let x_animating =
-                        advance_scroll_elasticity(&mut scroll_elastic_state.overscroll.x);
-                    let y_animating =
-                        advance_scroll_elasticity(&mut scroll_elastic_state.overscroll.y);
+                    let mut last_advance = scroll_elastic_state.last_advance;
+                    let x_animating = advance_scroll_elasticity(
+                        &mut scroll_elastic_state.overscroll.x,
+                        &mut last_advance,
+                    );
+                    let y_animating = advance_scroll_elasticity(
+                        &mut scroll_elastic_state.overscroll.y,
+                        &mut last_advance,
+                    );
+                    scroll_elastic_state.last_advance = last_advance;
                     scroll_elastic_state.animating = x_animating || y_animating;
                     if scroll_elastic_state.animating {
                         window.request_animation_frame();
@@ -2681,6 +2687,7 @@ impl Interactivity {
                                     })
                                 },
                             );
+                            self.paint_auto_scrollbars(bounds, &style, window);
                         });
                     });
                 });
@@ -3492,11 +3499,98 @@ impl Interactivity {
                     let handled_scroll =
                         *scroll_offset != old_scroll_offset || new_overscroll != old_overscroll;
                     if handled_scroll {
+                        if let Some(scroll_elastic_state) = scroll_elastic_state.as_deref_mut() {
+                            scroll_elastic_state.mark_scrolled();
+                        }
                         cx.stop_propagation();
                         cx.notify(current_view);
                     }
                 }
             });
+        }
+    }
+
+    fn paint_auto_scrollbars(
+        &self,
+        bounds: Bounds<Pixels>,
+        style: &Style,
+        window: &mut Window,
+    ) {
+        let scroll_handle = match self.tracked_scroll_handle.as_ref() {
+            Some(h) => h,
+            None => return,
+        };
+
+        let max_offset = scroll_handle.max_offset();
+        let show_y = axis_is_scrollable(style.overflow.y, max_offset.height);
+        let show_x = axis_is_scrollable(style.overflow.x, max_offset.width);
+
+        if !show_y && !show_x {
+            return;
+        }
+
+        let thumb_width = px(7.0);
+        let edge_margin = px(3.0);
+        let end_margin = px(4.0);
+
+        if show_y {
+            let offset = scroll_handle.offset();
+            let viewport_h = bounds.size.height;
+            let content_h = viewport_h + max_offset.height;
+            let thumb_ratio = (viewport_h.0 / content_h.0).clamp(0.05, 1.0);
+            let track_h = viewport_h - end_margin * 2.0
+                - if show_x { thumb_width + edge_margin } else { px(0.0) };
+            let thumb_h = (track_h.0 * thumb_ratio).max(20.0);
+            let scroll_fraction = if max_offset.height > Pixels::ZERO {
+                (offset.y.0.abs() / max_offset.height.0).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let thumb_y = bounds.top() + end_margin
+                + px((track_h.0 - thumb_h) * scroll_fraction);
+
+            let thumb_bounds = Bounds::new(
+                point(
+                    bounds.right() - thumb_width - edge_margin,
+                    thumb_y,
+                ),
+                size(thumb_width, px(thumb_h)),
+            );
+
+            let thumb_color = crate::hsla(0., 0., 0.0, 0.5);
+            window.paint_quad(
+                crate::fill(thumb_bounds, thumb_color).corner_radii(thumb_width / 2.0),
+            );
+        }
+
+        if show_x {
+            let offset = scroll_handle.offset();
+            let viewport_w = bounds.size.width;
+            let content_w = viewport_w + max_offset.width;
+            let thumb_ratio = (viewport_w.0 / content_w.0).clamp(0.05, 1.0);
+            let track_w = viewport_w - end_margin * 2.0
+                - if show_y { thumb_width + edge_margin } else { px(0.0) };
+            let thumb_w = (track_w.0 * thumb_ratio).max(20.0);
+            let scroll_fraction = if max_offset.width > Pixels::ZERO {
+                (offset.x.0.abs() / max_offset.width.0).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let thumb_x = bounds.left() + end_margin
+                + px((track_w.0 - thumb_w) * scroll_fraction);
+
+            let thumb_bounds = Bounds::new(
+                point(
+                    thumb_x,
+                    bounds.bottom() - thumb_width - edge_margin,
+                ),
+                size(px(thumb_w), thumb_width),
+            );
+
+            let thumb_color = crate::hsla(0., 0., 0.0, 0.5);
+            window.paint_quad(
+                crate::fill(thumb_bounds, thumb_color).corner_radii(thumb_width / 2.0),
+            );
         }
     }
 
@@ -4521,12 +4615,24 @@ pub(crate) struct ScrollElasticState {
     max_offset: Size<Pixels>,
     overscroll: Point<Pixels>,
     animating: bool,
+    last_scrolled: Option<std::time::Instant>,
+    last_advance: Option<std::time::Instant>,
 }
 
 impl ScrollElasticState {
     fn reset(&mut self) {
         self.overscroll = Point::default();
         self.animating = false;
+    }
+
+    pub(crate) fn mark_scrolled(&mut self) {
+        self.last_scrolled = Some(std::time::Instant::now());
+    }
+
+    pub(crate) fn seconds_since_last_scroll(&self) -> f64 {
+        self.last_scrolled
+            .map(|t| t.elapsed().as_secs_f64())
+            .unwrap_or(f64::MAX)
     }
 }
 
@@ -4536,8 +4642,7 @@ fn uses_scroll_state(overflow: Overflow) -> bool {
 
 fn axis_is_scrollable(overflow: Overflow, max_offset: Pixels) -> bool {
     match overflow {
-        Overflow::Scroll => true,
-        Overflow::Auto => !max_offset.is_zero(),
+        Overflow::Scroll | Overflow::Auto => max_offset > Pixels::ZERO,
         Overflow::Visible | Overflow::Clip | Overflow::Hidden => false,
     }
 }
@@ -4583,6 +4688,11 @@ impl ScrollHandle {
     /// Construct a new scroll handle.
     pub fn new() -> Self {
         Self(Rc::default())
+    }
+
+    /// Seconds since the last scroll event, or `f64::MAX` if never scrolled.
+    pub fn seconds_since_last_scroll(&self) -> f64 {
+        self.0.borrow().elastic.borrow().seconds_since_last_scroll()
     }
 
     /// Get the current scroll offset.
@@ -4798,18 +4908,17 @@ mod test {
 
     #[test]
     fn scroll_elasticity_animates_back_to_zero() {
+        use std::time::{Duration, Instant};
+
         let mut overscroll = px(40.0);
+        let mut last_advance = None;
+        let frame_interval = Duration::from_millis(16);
 
-        for _ in 0..8 {
-            if !advance_scroll_elasticity(&mut overscroll) {
-                break;
-            }
-        }
-
-        assert!(overscroll > px(5.0));
-
-        for _ in 0..24 {
-            if !advance_scroll_elasticity(&mut overscroll) {
+        for _ in 0..40 {
+            last_advance = last_advance
+                .map(|t: Instant| t - frame_interval)
+                .or(Some(Instant::now() - frame_interval));
+            if !advance_scroll_elasticity(&mut overscroll, &mut last_advance) {
                 break;
             }
         }
