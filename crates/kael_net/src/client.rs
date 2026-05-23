@@ -1,6 +1,6 @@
-use anyhow::{Result, anyhow};
-use serde::Serialize;
+use anyhow::{anyhow, Result};
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -32,6 +32,8 @@ pub struct ApiRequest {
     pub body: Option<Vec<u8>>,
     /// Optional timeout in milliseconds.
     pub timeout_ms: Option<u64>,
+    /// Maximum number of bytes to read from the response body.
+    pub max_response_bytes: Option<u64>,
 }
 
 impl fmt::Debug for ApiRequest {
@@ -54,6 +56,7 @@ impl fmt::Debug for ApiRequest {
             .field("headers", &headers)
             .field("body", &body)
             .field("timeout_ms", &self.timeout_ms)
+            .field("max_response_bytes", &self.max_response_bytes)
             .finish()
     }
 }
@@ -90,6 +93,7 @@ impl ApiRequest {
             headers: HashMap::new(),
             body: None,
             timeout_ms: None,
+            max_response_bytes: Some(10 * 1024 * 1024),
         }
     }
 
@@ -101,6 +105,7 @@ impl ApiRequest {
             headers: HashMap::new(),
             body: None,
             timeout_ms: None,
+            max_response_bytes: Some(10 * 1024 * 1024),
         }
     }
 
@@ -112,6 +117,7 @@ impl ApiRequest {
             headers: HashMap::new(),
             body: None,
             timeout_ms: None,
+            max_response_bytes: Some(10 * 1024 * 1024),
         }
     }
 
@@ -123,6 +129,7 @@ impl ApiRequest {
             headers: HashMap::new(),
             body: None,
             timeout_ms: None,
+            max_response_bytes: Some(10 * 1024 * 1024),
         }
     }
 
@@ -134,6 +141,7 @@ impl ApiRequest {
             headers: HashMap::new(),
             body: None,
             timeout_ms: None,
+            max_response_bytes: Some(10 * 1024 * 1024),
         }
     }
 
@@ -156,6 +164,18 @@ impl ApiRequest {
     /// Set the request timeout in milliseconds.
     pub fn with_timeout(mut self, ms: u64) -> Self {
         self.timeout_ms = Some(ms);
+        self
+    }
+
+    /// Set the maximum number of bytes to read from the response body.
+    pub fn with_max_response_bytes(mut self, limit: u64) -> Self {
+        self.max_response_bytes = Some(limit);
+        self
+    }
+
+    /// Remove the response body size limit, allowing unlimited bytes.
+    pub fn without_response_limit(mut self) -> Self {
+        self.max_response_bytes = None;
         self
     }
 }
@@ -346,6 +366,24 @@ mod tests {
             body: vec![0xff, 0xfe],
         };
         assert!(resp.text().is_err());
+    }
+
+    #[test]
+    fn request_has_default_body_limit() {
+        let req = ApiRequest::get("/api/data");
+        assert_eq!(req.max_response_bytes, Some(10 * 1024 * 1024));
+    }
+
+    #[test]
+    fn request_body_limit_is_configurable() {
+        let req = ApiRequest::get("/api/data").with_max_response_bytes(1024);
+        assert_eq!(req.max_response_bytes, Some(1024));
+    }
+
+    #[test]
+    fn request_can_disable_body_limit() {
+        let req = ApiRequest::get("/api/data").without_response_limit();
+        assert_eq!(req.max_response_bytes, None);
     }
 
     #[test]
