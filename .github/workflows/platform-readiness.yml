@@ -186,3 +186,42 @@ jobs:
             echo "::error::Benchmark regression detected"
             exit 1
           }
+
+  template-check:
+    name: Template Compile Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        run: bash scripts/ci/install-linux-deps.sh
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check templates compile
+        run: cargo check -p template-dashboard -p template-messaging -p template-workspace
+
+  dry-run-release:
+    name: Dry-Run Release Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        run: bash scripts/ci/install-linux-deps.sh
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Validate dist config
+        run: cargo xtask validate kael.dist.toml
+
+      - name: Dry-run release pipeline
+        run: cargo xtask dry-run kael.dist.toml
