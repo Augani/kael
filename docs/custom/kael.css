@@ -1,0 +1,26 @@
+:root {
+    --content-max-width: 900px;
+}
+
+.copy-llm-btn {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    padding: 8px 16px;
+    background: #2563eb;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    z-index: 1000;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+.copy-llm-btn:hover {
+    background: #1d4ed8;
+}
+
+.copy-llm-btn.copied {
+    background: #16a34a;
+}
