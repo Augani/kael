@@ -181,6 +181,53 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_locale_falls_back_gracefully() {
+        let fmt = LocaleFormatter::for_locale("xx-YY");
+        let output = fmt.format_number(1234.56, 2);
+        assert!(!output.is_empty());
+    }
+
+    #[test]
+    fn empty_locale_falls_back_gracefully() {
+        let fmt = LocaleFormatter::for_locale("");
+        let output = fmt.format_number(1234.56, 2);
+        assert!(!output.is_empty());
+    }
+
+    #[test]
+    fn snapshot_en_us() {
+        let fmt = LocaleFormatter::for_locale("en-US");
+        assert_eq!(fmt.format_number(1_000_000.0, 2), "1,000,000.00");
+        assert_eq!(fmt.format_integer(9_999), "9,999");
+        assert!(!fmt.is_rtl());
+    }
+
+    #[test]
+    fn snapshot_de_de() {
+        let fmt = LocaleFormatter::for_locale("de-DE");
+        assert_eq!(fmt.format_number(1_000_000.0, 2), "1.000.000,00");
+        assert_eq!(fmt.format_integer(9_999), "9.999");
+        assert!(!fmt.is_rtl());
+    }
+
+    #[test]
+    fn snapshot_ja_jp() {
+        let fmt = LocaleFormatter::for_locale("ja-JP");
+        assert_eq!(fmt.format_number(1_000_000.0, 2), "1,000,000.00");
+        assert!(!fmt.is_rtl());
+    }
+
+    #[test]
+    fn snapshot_ar_sa() {
+        let fmt = LocaleFormatter::for_locale("ar-SA");
+        assert_eq!(
+            fmt.format_number(1_000_000.0, 2),
+            "1\u{066c}000\u{066c}000\u{066b}00"
+        );
+        assert!(fmt.is_rtl());
+    }
+
+    #[test]
     fn test_format_small_numbers() {
         let fmt = LocaleFormatter::for_locale("en-US");
         assert_eq!(fmt.format_integer(1), "1");
