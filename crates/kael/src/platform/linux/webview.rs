@@ -1,3 +1,6 @@
+use super::super::webview_common::{
+    bridge_script, create_web_context, css_script, to_wry_rect, webview_command_id,
+};
 #[cfg(feature = "wayland")]
 use super::wayland::WaylandWindowStatePtr;
 #[cfg(feature = "x11")]
@@ -12,14 +15,11 @@ use crate::{
 use anyhow::{Context as _, Result};
 use gtk::prelude::*;
 use raw_window_handle as rwh;
-use std::{collections::HashSet, env, fs, path::PathBuf, rc::Rc};
+use std::{collections::HashSet, rc::Rc};
 use util::ResultExt;
 #[cfg(feature = "wayland")]
 use wry::WebViewBuilderExtUnix;
-use wry::{
-    NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder,
-    dpi::{LogicalPosition, LogicalSize},
-};
+use wry::{NewWindowResponse, WebContext, WebView, WebViewBuilder};
 
 pub(crate) struct LinuxWebViewHost {
     desired: PlatformWebView,
@@ -394,15 +394,6 @@ fn ensure_gtk_webview_runtime() -> Result<()> {
     gtk::init().context("initializing GTK for Linux X11 webviews")
 }
 
-fn create_web_context(desired: &PlatformWebView) -> Result<Option<WebContext>> {
-    desired
-        .storage_key
-        .as_ref()
-        .map(webview_storage_dir)
-        .transpose()
-        .map(|directory| directory.map(|data_directory| WebContext::new(Some(data_directory))))
-}
-
 fn configure_webview_builder<'a>(
     mut builder: WebViewBuilder<'a>,
     desired: &PlatformWebView,
@@ -479,46 +470,6 @@ fn configure_webview_builder<'a>(
     builder
 }
 
-fn webview_storage_dir(storage_key: &SharedString) -> Result<PathBuf> {
-    let base = env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))
-        .context("XDG_DATA_HOME or HOME environment variable not set for webview storage")?;
-
-    let directory = base
-        .join(env!("CARGO_PKG_NAME"))
-        .join("webview")
-        .join(format!(
-            "{:016x}",
-            seahash::hash(storage_key.as_ref().as_bytes())
-        ));
-    fs::create_dir_all(&directory).with_context(|| {
-        format!(
-            "creating Linux webview storage directory {}",
-            directory.display()
-        )
-    })?;
-    Ok(directory)
-}
-
-fn webview_command_id(command: &PlatformWebViewCommand) -> SharedString {
-    match command {
-        PlatformWebViewCommand::Navigate { id, .. }
-        | PlatformWebViewCommand::EvaluateJavaScript { id, .. }
-        | PlatformWebViewCommand::PostMessage { id, .. }
-        | PlatformWebViewCommand::Reload { id }
-        | PlatformWebViewCommand::GoBack { id }
-        | PlatformWebViewCommand::GoForward { id } => id.clone(),
-    }
-}
-
-fn to_wry_rect(bounds: Bounds<Pixels>) -> Rect {
-    Rect {
-        position: LogicalPosition::new(bounds.origin.x.0 as f64, bounds.origin.y.0 as f64).into(),
-        size: LogicalSize::new(bounds.size.width.0 as f64, bounds.size.height.0 as f64).into(),
-    }
-}
-
 #[cfg(feature = "wayland")]
 fn zero_origin_bounds(bounds: Bounds<Pixels>) -> Bounds<Pixels> {
     Bounds::new(Point::default(), bounds.size)
@@ -530,32 +481,6 @@ fn overlay_bounds(parent_origin: Point<Pixels>, child_bounds: Bounds<Pixels>) ->
     origin.x += child_bounds.origin.x;
     origin.y += child_bounds.origin.y;
     Bounds::new(origin, child_bounds.size)
-}
-
-fn json_string_literal(value: &str) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into())
-}
-
-fn bridge_script(storage_key: Option<&SharedString>) -> String {
-    let storage_key = storage_key
-        .map(|storage_key| {
-            format!(
-                "window.GPUI_WEBVIEW_STORAGE_ID = {};",
-                json_string_literal(storage_key.as_ref())
-            )
-        })
-        .unwrap_or_default();
-
-    format!(
-        "(() => {{ {storage_key} if (!window.external) {{ window.external = {{}}; }} window.external.invoke = function(message) {{ const payload = typeof message === 'string' ? message : JSON.stringify(message); window.ipc.postMessage(payload); }}; if (!window.gpui) {{ window.gpui = {{}}; }} window.gpui.postMessage = function(message) {{ window.external.invoke(message); }}; }})();"
-    )
-}
-
-fn css_script(css: &str) -> String {
-    format!(
-        "(() => {{ const mount = () => {{ if (!document.head) {{ return; }} const style = document.createElement('style'); style.setAttribute('data-gpui-webview-style', 'true'); style.textContent = {}; document.head.appendChild(style); }}; if (document.head) {{ mount(); }} else {{ document.addEventListener('DOMContentLoaded', mount, {{ once: true }}); }} }})();",
-        json_string_literal(css)
-    )
 }
 
 fn same_optional_message_handler(

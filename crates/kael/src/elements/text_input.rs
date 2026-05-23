@@ -6,8 +6,8 @@ use crate::{
     EntityInputHandler, FocusHandle, Global, GlobalElementId, Hitbox, HitboxBehavior,
     InspectorElementId, IntoElement, KeyBinding, KeyContext, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Style, TextRun, UTF16Selection,
-    UnderlineStyle, Window, WrappedLine, WrappedLineLayout, fill, point, px, relative, rgb, rgba,
-    size, white,
+    UnderlineStyle, Window, WrappedLine, fill, point, px, relative, rgb, rgba, size,
+    util::wrapped_line_end_indices, white,
 };
 use std::{
     any::TypeId,
@@ -2070,15 +2070,6 @@ fn paragraph_start_offsets(line_lengths: &[usize]) -> Vec<usize> {
         }
     }
     offsets
-}
-
-fn wrapped_line_end_indices(layout: &WrappedLineLayout) -> Vec<usize> {
-    let mut indices = Vec::with_capacity(layout.wrap_boundaries().len() + 1);
-    for boundary in layout.wrap_boundaries() {
-        indices.push(layout.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index);
-    }
-    indices.push(layout.len());
-    indices
 }
 
 fn sanitize_single_line(text: &str) -> String {

@@ -5,6 +5,7 @@ mod biometric;
 mod character_palette;
 #[cfg(any(feature = "wayland", feature = "x11"))]
 mod context_menu;
+pub(crate) mod dbus_util;
 pub(crate) mod dialog;
 mod dispatcher;
 mod dock;

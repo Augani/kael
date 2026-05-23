@@ -1,3 +1,6 @@
+use super::super::webview_common::{
+    bridge_script, create_web_context, css_script, to_wry_rect, webview_command_id,
+};
 use super::{WindowsWindow, WindowsWindowInner};
 use crate::{
     AsyncWindowContext, Bounds, Pixels, SharedString,
@@ -6,12 +9,9 @@ use crate::{
     },
 };
 use anyhow::{Context as _, Result};
-use std::{collections::HashSet, env, fs, path::PathBuf, rc::Rc};
+use std::{collections::HashSet, rc::Rc};
 use util::ResultExt;
-use wry::{
-    NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder,
-    dpi::{LogicalPosition, LogicalSize},
-};
+use wry::{NewWindowResponse, WebContext, WebView, WebViewBuilder};
 
 pub(crate) struct WindowsWebViewHost {
     desired: PlatformWebView,
@@ -177,15 +177,6 @@ impl From<&PlatformWebView> for WindowsWebViewSignature {
     }
 }
 
-fn create_web_context(desired: &PlatformWebView) -> Result<Option<WebContext>> {
-    desired
-        .storage_key
-        .as_ref()
-        .map(webview_storage_dir)
-        .transpose()
-        .map(|directory| directory.map(|data_directory| WebContext::new(Some(data_directory))))
-}
-
 fn configure_webview_builder<'a>(
     mut builder: WebViewBuilder<'a>,
     desired: &PlatformWebView,
@@ -290,71 +281,5 @@ fn is_external_scheme(url: &str) -> bool {
     !matches!(
         scheme.to_ascii_lowercase().as_str(),
         "http" | "https" | "file" | "about" | "data" | "javascript" | "blob"
-    )
-}
-
-fn webview_storage_dir(storage_key: &SharedString) -> Result<PathBuf> {
-    let base = env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("APPDATA").map(PathBuf::from))
-        .context("LOCALAPPDATA or APPDATA environment variable not set for webview storage")?;
-
-    let directory = base
-        .join(env!("CARGO_PKG_NAME"))
-        .join("webview")
-        .join(format!(
-            "{:016x}",
-            seahash::hash(storage_key.as_ref().as_bytes())
-        ));
-    fs::create_dir_all(&directory).with_context(|| {
-        format!(
-            "creating Windows webview storage directory {}",
-            directory.display()
-        )
-    })?;
-    Ok(directory)
-}
-
-fn webview_command_id(command: &PlatformWebViewCommand) -> SharedString {
-    match command {
-        PlatformWebViewCommand::Navigate { id, .. }
-        | PlatformWebViewCommand::EvaluateJavaScript { id, .. }
-        | PlatformWebViewCommand::PostMessage { id, .. }
-        | PlatformWebViewCommand::Reload { id }
-        | PlatformWebViewCommand::GoBack { id }
-        | PlatformWebViewCommand::GoForward { id } => id.clone(),
-    }
-}
-
-fn to_wry_rect(bounds: Bounds<Pixels>) -> Rect {
-    Rect {
-        position: LogicalPosition::new(bounds.origin.x.0 as f64, bounds.origin.y.0 as f64).into(),
-        size: LogicalSize::new(bounds.size.width.0 as f64, bounds.size.height.0 as f64).into(),
-    }
-}
-
-fn json_string_literal(value: &str) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".into())
-}
-
-fn bridge_script(storage_key: Option<&SharedString>) -> String {
-    let storage_key = storage_key
-        .map(|storage_key| {
-            format!(
-                "window.GPUI_WEBVIEW_STORAGE_ID = {};",
-                json_string_literal(storage_key.as_ref())
-            )
-        })
-        .unwrap_or_default();
-
-    format!(
-        "(() => {{ {storage_key} if (!window.external) {{ window.external = {{}}; }} window.external.invoke = function(message) {{ const payload = typeof message === 'string' ? message : JSON.stringify(message); window.ipc.postMessage(payload); }}; if (!window.gpui) {{ window.gpui = {{}}; }} window.gpui.postMessage = function(message) {{ window.external.invoke(message); }}; }})();"
-    )
-}
-
-fn css_script(css: &str) -> String {
-    format!(
-        "(() => {{ const mount = () => {{ if (!document.head) {{ return; }} const style = document.createElement('style'); style.setAttribute('data-gpui-webview-style', 'true'); style.textContent = {}; document.head.appendChild(style); }}; if (document.head) {{ mount(); }} else {{ document.addEventListener('DOMContentLoaded', mount, {{ once: true }}); }} }})();",
-        json_string_literal(css)
     )
 }

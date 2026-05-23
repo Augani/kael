@@ -1,12 +1,54 @@
-use crate::{BackgroundExecutor, Task};
+use crate::{BackgroundExecutor, Task, WrappedLineLayout};
 use pin_project_lite::pin_project;
 use std::{
     future::Future,
+    path::PathBuf,
     pin::Pin,
+    str::FromStr,
     sync::atomic::{AtomicUsize, Ordering::SeqCst},
     task,
     time::Duration,
 };
+
+pub(crate) fn is_uri(uri: &str) -> bool {
+    http_client::Uri::from_str(uri).is_ok()
+}
+
+pub(crate) fn wrapped_line_end_indices(layout: &WrappedLineLayout) -> Vec<usize> {
+    let mut indices = Vec::with_capacity(layout.wrap_boundaries().len() + 1);
+    for boundary in layout.wrap_boundaries() {
+        indices.push(layout.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index);
+    }
+    indices.push(layout.len());
+    indices
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn base_data_dir() -> anyhow::Result<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .ok_or_else(|| anyhow::anyhow!("HOME environment variable not set"))?;
+    Ok(PathBuf::from(home)
+        .join("Library")
+        .join("Application Support"))
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn base_data_dir() -> anyhow::Result<PathBuf> {
+    let app_data = std::env::var_os("APPDATA")
+        .or_else(|| std::env::var_os("LOCALAPPDATA"))
+        .ok_or_else(|| anyhow::anyhow!("APPDATA or LOCALAPPDATA environment variable not set"))?;
+    Ok(PathBuf::from(app_data))
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub(crate) fn base_data_dir() -> anyhow::Result<PathBuf> {
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("share"))
+        })
+        .ok_or_else(|| anyhow::anyhow!("XDG_DATA_HOME or HOME environment variable not set"))
+}
 
 pub use util::*;
 

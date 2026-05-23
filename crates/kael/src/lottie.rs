@@ -1,6 +1,6 @@
 use crate::{
     App, Asset, AssetLogger, DevicePixels, Pixels, RenderImage, Resource, SharedString, SharedUri,
-    Size, px, size,
+    Size, px, size, util::is_uri,
 };
 use anyhow::Context as _;
 use futures::AsyncReadExt;
@@ -10,7 +10,7 @@ use smallvec::SmallVec;
 use std::{
     fs, io,
     path::{Path, PathBuf},
-    str::{self, FromStr},
+    str,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -133,10 +133,6 @@ pub enum LottieError {
     /// The rendered frame buffer shape was invalid.
     #[error("invalid lottie frame buffer")]
     InvalidFrameBuffer,
-}
-
-fn is_uri(uri: &str) -> bool {
-    http_client::Uri::from_str(uri).is_ok()
 }
 
 fn is_dotlottie(bytes: &[u8]) -> bool {

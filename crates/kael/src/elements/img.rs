@@ -3,7 +3,7 @@ use crate::{
     Entity, GlobalElementId, Hitbox, Image, ImageCache, InspectorElementId, InteractiveElement,
     Interactivity, IntoElement, LayoutId, Length, ObjectFit, Pixels, RenderImage, Resource,
     SMOOTH_SVG_SCALE_FACTOR, SharedString, SharedUri, StyleRefinement, Styled, SvgSize, Task,
-    Window, px, swap_rgba_pa_to_bgra,
+    Window, px, swap_rgba_pa_to_bgra, util::is_uri,
 };
 use anyhow::{Context as _, Result};
 
@@ -18,7 +18,6 @@ use std::{
     io::{self, Cursor},
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
-    str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -47,10 +46,6 @@ pub enum ImageSource {
     Image(Arc<Image>),
     /// A custom loading function to use
     Custom(Arc<dyn Fn(&mut Window, &mut App) -> Option<Result<Arc<RenderImage>, ImageCacheError>>>),
-}
-
-fn is_uri(uri: &str) -> bool {
-    http_client::Uri::from_str(uri).is_ok()
 }
 
 impl From<SharedUri> for ImageSource {

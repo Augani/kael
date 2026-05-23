@@ -193,35 +193,8 @@ impl SessionStore {
 /// - Windows: `%APPDATA%/{app_id}/sessions`
 /// - Linux/FreeBSD: `$XDG_DATA_HOME/{app_id}/sessions` or `~/.local/share/{app_id}/sessions`
 fn session_storage_dir(app_id: &str) -> Result<PathBuf> {
-    let base = base_data_dir()?;
+    let base = crate::util::base_data_dir()?;
     Ok(base.join(app_id).join("sessions"))
-}
-
-#[cfg(target_os = "macos")]
-fn base_data_dir() -> Result<PathBuf> {
-    let home = std::env::var_os("HOME")
-        .ok_or_else(|| anyhow::anyhow!("HOME environment variable not set"))?;
-    Ok(PathBuf::from(home)
-        .join("Library")
-        .join("Application Support"))
-}
-
-#[cfg(target_os = "windows")]
-fn base_data_dir() -> Result<PathBuf> {
-    let app_data = std::env::var_os("APPDATA")
-        .or_else(|| std::env::var_os("LOCALAPPDATA"))
-        .ok_or_else(|| anyhow::anyhow!("APPDATA or LOCALAPPDATA environment variable not set"))?;
-    Ok(PathBuf::from(app_data))
-}
-
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
-fn base_data_dir() -> Result<PathBuf> {
-    std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("share"))
-        })
-        .ok_or_else(|| anyhow::anyhow!("XDG_DATA_HOME or HOME environment variable not set"))
 }
 
 /// A persisted snapshot of the entire session.

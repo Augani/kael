@@ -12,8 +12,8 @@ use cocoa::{
 use collections::HashMap;
 use core_foundation::base::TCFType;
 use core_graphics::display::{
-    CGDirectDisplayID, CGDisplayCopyDisplayMode, CGDisplayModeGetPixelHeight,
-    CGDisplayModeGetPixelWidth, CGDisplayModeRelease,
+    CGDirectDisplayID, CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayModeGetPixelHeight,
+    CGDisplayModeGetPixelWidth, CGDisplayModeRelease, CGGetActiveDisplayList,
 };
 use ctor::ctor;
 use futures::channel::oneshot;
@@ -334,10 +334,9 @@ extern "C" fn stream_did_output_sample_buffer_of_type(
 }
 
 use crate::media_capture::{
-    CaptureBackend, CaptureConfig, CaptureDeviceInfo, CaptureDeviceKind, CaptureFrame,
-    CaptureSession, CaptureSessionState, DeviceEnumerator, FrameCallback, PixelFormat,
+    CaptureBackend, CaptureConfig, CaptureDeviceInfo, CaptureDeviceKind, CaptureSession,
+    CaptureSessionState, DeviceEnumerator, FrameCallback,
 };
-use core_graphics::display::{CGDirectDisplayID, CGDisplayBounds, CGGetActiveDisplayList};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct MacScreenCaptureBackend;
@@ -367,7 +366,7 @@ impl DeviceEnumerator for MacScreenCaptureBackend {
                 let devices = ids
                     .into_iter()
                     .map(|id| {
-                        let bounds = unsafe { CGDisplayBounds(id) };
+                        let _bounds = unsafe { CGDisplayBounds(id) };
                         let name = labels
                             .get(&id)
                             .map(|m| m.label.to_string())

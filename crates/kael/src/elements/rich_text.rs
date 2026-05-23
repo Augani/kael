@@ -14,7 +14,7 @@ use crate::{
     InputHandler, InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Size, TextAlign, TextRun, TextStyle,
     UTF16Selection, UnderlineStyle, WhiteSpace, Window, WrappedLine, WrappedLineLayout, fill,
-    point, px, size,
+    point, px, size, util::wrapped_line_end_indices,
 };
 
 const INLINE_PLACEHOLDER: &str = "\u{fffc}";
@@ -1347,15 +1347,6 @@ fn glyph_width_for_index(line_layout: &crate::LineLayout, index: usize) -> Optio
     }
 
     None
-}
-
-fn wrapped_line_end_indices(layout: &WrappedLineLayout) -> Vec<usize> {
-    let mut indices = Vec::with_capacity(layout.wrap_boundaries().len() + 1);
-    for boundary in layout.wrap_boundaries() {
-        indices.push(layout.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index);
-    }
-    indices.push(layout.len());
-    indices
 }
 
 fn entity_at(entities: &[TextEntity], index: usize) -> Option<&TextEntity> {

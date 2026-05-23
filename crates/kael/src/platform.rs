@@ -8,6 +8,9 @@ pub mod tab_manager;
 /// Pure Rust utility for computing window bounds from a semantic [`WindowPosition`].
 pub mod window_positioner;
 
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
+mod webview_common;
+
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod linux;
 
