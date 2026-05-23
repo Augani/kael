@@ -71,3 +71,7 @@ fn main() {
 | Windows | DirectX 11 | Stable |
 | Linux (X11) | Vulkan/Blade | Stable |
 | Linux (Wayland) | Vulkan/Blade | Stable |
+
+## Acknowledgements
+
+Kael is built on top of [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), the GPU-accelerated UI framework originally created by [Zed Industries](https://zed.dev) for the Zed code editor. We are grateful for their foundational work which made Kael possible.

@@ -242,44 +242,11 @@ impl HttpClientWithUrl {
         format!("{}{}", base_url.as_ref(), path)
     }
 
-    /// Builds an API URL using the given path.
-    pub fn build_api_url(&self, path: &str, query: &[(&str, &str)]) -> Result<Url> {
-        let base_url = self.base_url.read().clone();
-        let base_api_url = match base_url.as_ref() {
-            "http://localhost:3000" => "http://localhost:8080",
-            other => other,
-        };
-
+    /// Builds a URL with query parameters using the base URL and the given path.
+    pub fn build_url_with_params(&self, path: &str, query: &[(&str, &str)]) -> Result<Url> {
+        let base_url = self.base_url.read();
         Ok(Url::parse_with_params(
-            &format!("{}{}", base_api_url, path),
-            query,
-        )?)
-    }
-
-    /// Builds a cloud URL using the given path.
-    pub fn build_cloud_url(&self, path: &str, query: &[(&str, &str)]) -> Result<Url> {
-        let base_url = self.base_url.read().clone();
-        let base_api_url = match base_url.as_ref() {
-            "http://localhost:3000" => "http://localhost:8787",
-            other => other,
-        };
-
-        Ok(Url::parse_with_params(
-            &format!("{}{}", base_api_url, path),
-            query,
-        )?)
-    }
-
-    /// Builds an LLM URL using the given path.
-    pub fn build_llm_url(&self, path: &str, query: &[(&str, &str)]) -> Result<Url> {
-        let base_url = self.base_url.read().clone();
-        let base_api_url = match base_url.as_ref() {
-            "http://localhost:3000" => "http://localhost:8787",
-            other => other,
-        };
-
-        Ok(Url::parse_with_params(
-            &format!("{}{}", base_api_url, path),
+            &format!("{}{}", base_url.as_ref(), path),
             query,
         )?)
     }

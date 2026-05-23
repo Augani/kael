@@ -73,6 +73,10 @@ fn main() {
 - [Examples](https://augani.github.io/kael/examples.html)
 - [LLM-friendly reference](https://augani.github.io/kael/llms.html)
 
+## Acknowledgements
+
+Kael is built on top of [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), the GPU-accelerated UI framework originally created by [Zed Industries](https://zed.dev) for the Zed code editor. We are grateful for their foundational work. The original GPUI code is copyright 2022-2025 Zed Industries, Inc. and licensed under Apache-2.0.
+
 ## License
 
-Apache-2.0. Inspired by [GPUI](https://crates.io/crates/gpui).
+Apache-2.0 — see [LICENSE](LICENSE-APACHE) for details.
