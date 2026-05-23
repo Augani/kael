@@ -1,0 +1,7 @@
+error: Derive must have an #[app] attribute to detect the &mut App field
+ --> tests/compile_fail/app_context_missing_app_attr.rs:3:10
+  |
+3 | #[derive(AppContext)]
+  |          ^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `AppContext` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -19,6 +19,10 @@ doctest = true
 proc-macro = true
 
 [[test]]
+name = "compile_fail"
+path = "tests/compile_fail.rs"
+
+[[test]]
 name = "derive_context"
 path = "tests/derive_context.rs"
 
@@ -50,6 +54,7 @@ features = [
 
 [dev-dependencies]
 kael = { package = "kael", path = "../kael" }
+trybuild = "1"
 
 [lints.clippy]
 dbg_macro = "deny"
