@@ -34,3 +34,26 @@ use windows as imp;
 pub const fn has_native_bridge() -> bool {
     imp::HAS_NATIVE_BRIDGE
 }
+
+/// Returns whether native icon lookup is available on this platform.
+pub fn is_native_icon_available() -> bool {
+    cfg!(any(
+        target_os = "macos",
+        target_os = "windows",
+        target_os = "linux"
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn platform_icon_availability_compiles() {
+        let available = is_native_icon_available();
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        assert!(available);
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        let _ = available;
+    }
+}
