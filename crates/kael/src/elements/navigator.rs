@@ -545,7 +545,7 @@ fn cached_view(view: AnyView) -> AnyElement {
 #[cfg(test)]
 mod tests {
     use super::{Navigator, Route, Transition, navigator};
-    use crate::{self as gpui, AppContext, EmptyView, TestAppContext};
+    use crate::{AppContext, EmptyView, TestAppContext};
 
     #[kael::test]
     fn navigator_updates_stack_for_push_replace_pop_and_root(cx: &mut TestAppContext) {

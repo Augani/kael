@@ -611,9 +611,7 @@ impl DispatchTree {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        self as gpui, Element, ElementId, GlobalElementId, InspectorElementId, LayoutId, Style,
-    };
+    use crate::{Element, ElementId, GlobalElementId, InspectorElementId, LayoutId, Style};
     use core::panic;
     use std::{cell::RefCell, ops::Range, rc::Rc};
 

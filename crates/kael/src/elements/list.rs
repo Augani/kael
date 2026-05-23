@@ -1370,7 +1370,7 @@ mod test {
 
     use kael::{ScrollDelta, ScrollWheelEvent};
 
-    use crate::{self as gpui, TestAppContext};
+    use crate::TestAppContext;
 
     #[kael::test]
     fn test_reset_after_paint_before_scroll(cx: &mut TestAppContext) {
@@ -1384,7 +1384,7 @@ mod test {
         let state = ListState::new(5, crate::ListAlignment::Top, px(10.));
 
         // Ensure that the list is scrolled to the top
-        state.scroll_to(gpui::ListOffset {
+        state.scroll_to(crate::ListOffset {
             item_ix: 0,
             offset_in_item: px(0.0),
         });

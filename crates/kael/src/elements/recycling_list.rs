@@ -334,8 +334,8 @@ where
 mod tests {
     use super::{ListDelegate, recycling_list};
     use crate::{
-        self as gpui, AppContext, Context, Element, IntoElement, ParentElement, Render,
-        ScrollDelta, ScrollWheelEvent, Styled, TestAppContext, Window, div, point, px, size,
+        AppContext, Context, Element, IntoElement, ParentElement, Render, ScrollDelta,
+        ScrollWheelEvent, Styled, TestAppContext, Window, div, point, px, size,
     };
     use std::{
         any::TypeId,

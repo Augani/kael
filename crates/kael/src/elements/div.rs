@@ -4764,11 +4764,10 @@ mod test {
         add_scroll_elasticity, advance_scroll_elasticity, apply_scroll_delta_axis,
     };
     use crate::{
-        self as gpui, AccessibilityAttributes, AccessibilityRole, AccessibilityState, AppContext,
-        Context, FocusHandle, InteractiveElement, Interactivity, PanState, ParentElement,
-        PinchState, Render, Rgba, ScrollDelta, ScrollHandle, ScrollWheelEvent,
-        StatefulInteractiveElement, StyleRefinement, Styled, SwipeDirection, TestAppContext,
-        Window, div, point, px,
+        AccessibilityAttributes, AccessibilityRole, AccessibilityState, AppContext, Context,
+        FocusHandle, InteractiveElement, Interactivity, PanState, ParentElement, PinchState,
+        Render, Rgba, ScrollDelta, ScrollHandle, ScrollWheelEvent, StatefulInteractiveElement,
+        StyleRefinement, Styled, SwipeDirection, TestAppContext, Window, div, point, px,
     };
     use std::{
         cell::{Cell, RefCell},
@@ -4776,7 +4775,7 @@ mod test {
         time::{Duration, Instant},
     };
 
-    gpui::actions!(context_menu_test, [PrimaryMenuAction, ShareViaLinkAction]);
+    crate::actions!(context_menu_test, [PrimaryMenuAction, ShareViaLinkAction]);
 
     #[test]
     fn scroll_elasticity_consumes_reverse_delta_before_scrolling_content() {

@@ -628,8 +628,8 @@ impl PlatformInput {
 mod test {
 
     use crate::{
-        self as gpui, AppContext as _, Context, FocusHandle, InteractiveElement, IntoElement,
-        KeyBinding, Keystroke, ParentElement, Render, TestAppContext, Window, div,
+        AppContext as _, Context, FocusHandle, InteractiveElement, IntoElement, KeyBinding,
+        Keystroke, ParentElement, Render, TestAppContext, Window, div,
     };
 
     struct TestView {
