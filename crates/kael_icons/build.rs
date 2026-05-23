@@ -9,7 +9,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("missing manifest dir"));
-    let icon_dir = manifest_dir.join("../kael/resources/icons");
+    let icon_dir = manifest_dir.join("icons");
     println!("cargo:rerun-if-changed={}", icon_dir.display());
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));

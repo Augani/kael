@@ -3,6 +3,8 @@ name = "kael_net"
 version = "0.1.0"
 edition = "2024"
 publish = true
+description = "Networking and sync primitives for the Kael UI framework"
+repository = "https://github.com/Augani/kael"
 license.workspace = true
 
 [dependencies]
