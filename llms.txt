@@ -1,0 +1,144 @@
+# Kael
+
+> GPU-accelerated UI framework for native desktop apps in Rust. Replaces Electron.
+
+Kael renders via Metal (macOS), DirectX 11 (Windows), Vulkan (Linux). Apps are pure Rust — no HTML, no CSS, no JavaScript. One binary, native performance, 120fps.
+
+## Docs
+
+- [Getting Started](https://augani.github.io/kael/getting-started.html)
+- [Core Concepts](https://augani.github.io/kael/core-concepts.html)
+- [Form Controls](https://augani.github.io/kael/form-controls.html)
+- [Platform APIs](https://augani.github.io/kael/platform-apis.html)
+- [Examples](https://augani.github.io/kael/examples.html)
+
+## Quick start
+
+```toml
+[dependencies]
+kael = "0.5"
+```
+
+```rust
+use kael::*;
+use kael::prelude::*;
+
+struct MyApp { count: i32 }
+
+impl Render for MyApp {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        div().size_full().flex().items_center().justify_center()
+            .bg(rgb(0x1E1E1E)).text_color(rgb(0xFFFFFF))
+            .child(format!("Count: {}", self.count))
+            .child(button("inc").label("+1").on_click({
+                let entity = entity.clone();
+                move |_, _, cx| {
+                    entity.update(cx, |this, cx| { this.count += 1; cx.notify(); });
+                }
+            }))
+    }
+}
+
+fn main() {
+    Application::new().run(|cx: &mut App| {
+        let bounds = Bounds::centered(None, size(px(400.0), px(300.0)), cx);
+        cx.open_window(
+            WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() },
+            |_, cx| cx.new(|_| MyApp { count: 0 }),
+        ).unwrap();
+        cx.activate(true);
+    });
+}
+```
+
+## Architecture
+
+- **Application::new().run(|cx| { ... })** — boots platform event loop
+- **cx.open_window(options, |window, cx| cx.new(|_| View))** — creates a GPU window
+- **Entity<T>** — reactive state container. Read with `.read(cx)`, mutate with `.update(cx, |this, cx| { ... })`
+- **cx.notify()** — triggers re-render after state change
+- **impl Render for T** — defines how an entity paints itself
+- **div()** — base container element, Tailwind-style builder: `.flex()`, `.bg()`, `.text_color()`, `.child()`
+- **impl Global for T** — app-wide singleton. Set with `cx.set_global()`, read with `cx.global::<T>()`
+
+## Widget primitives
+
+All widgets: `widget_name(id, value, ...)` → `.on_change(|value, window, cx| { ... })` → `.render_with(|state, ...| { ... })`
+
+| Widget | Constructor | Key props |
+|--------|-------------|-----------|
+| button | `button(id)` | `.label()`, `.disabled()`, `.on_click()` |
+| text_input | `text_input(id, value)` | `.placeholder()`, `.multi_line()`, `.password()`, `.on_change()`, `.on_submit()` |
+| checkbox | `checkbox(id, checked)` | `.label()`, `.indeterminate()`, `.on_change()` |
+| toggle | `toggle(id, on)` | `.label()`, `.on_change()` |
+| radio_group | `radio_group(id, value, options)` | `.on_change()` |
+| slider | `slider(id, value)` | `.min()`, `.max()`, `.step()`, `.on_change()` |
+| select | `select(id, value, options)` | `.placeholder()`, `.searchable()`, `.on_change()` |
+| date_picker | `date_picker(id, date)` | `.on_change()` |
+| modal | `modal(id, open)` | `.label()`, `.backdrop()`, `.dismiss_on_escape()`, `.on_change()` |
+| popover | `popover(id)` | `.anchor()`, `.popup()`, `.dismiss_on_escape()` |
+| tabs | `tabs(id, value, items)` | `.on_change()` |
+| disclosure | `disclosure(id, open)` | `.trigger()`, `.panel()`, `.on_change()` |
+| progress | `progress(id, value)` | `.indeterminate()` |
+| toast | `Toast::new(title)` | `.body()`, `.duration()`, `.position()` |
+| splitter | `splitter(id, ratio)` | `.on_change()` |
+| label | `label(text, target_id)` | links to control |
+| uniform_list | `uniform_list(id, count, renderer)` | `.track_scroll()` |
+| recycling_list | `recycling_list(id, count, renderer)` | variable heights |
+| sortable_list | `sortable_list(id, count, renderer)` | `.on_reorder()` |
+| canvas | `canvas(paint_fn)` | custom GPU drawing |
+
+## Layout (Tailwind-style on div)
+
+`.flex()` `.flex_col()` `.flex_row()` `.gap_2()` `.items_center()` `.justify_center()` `.justify_between()`
+`.w(px(N))` `.h(px(N))` `.size_full()` `.flex_1()` `.p_4()` `.px_3()` `.py_2()` `.m_4()`
+`.bg(rgb(HEX))` `.text_color(rgb(HEX))` `.border_1()` `.border_color()` `.rounded_md()` `.shadow_lg()`
+`.text_sm()` `.text_xl()` `.font_weight(FontWeight::BOLD)`
+`.overflow_y_auto()` `.cursor_pointer()` `.opacity(0.5)`
+`.when(condition, |this| this.style())` — conditional styling
+`.children(iter)` — render from iterator
+
+## Interactions on div
+
+`.id("name")` — required for interactive divs
+`.on_click(|event, window, cx| { ... })`
+`.on_mouse_down(button, handler)` `.on_key_down(handler)`
+`.context_menu(|menu| menu.item("Label", handler))`
+`.tooltip("text")` `.tooltip_element(|| element)`
+
+## Platform APIs
+
+| API | Usage |
+|-----|-------|
+| File dialog | `cx.file_open_dialog(options).await` / `cx.file_save_dialog(options).await` |
+| Menus | `cx.set_menus(vec![Menu { name, items }])` |
+| System tray | `cx.set_tray_menu(items)`, `cx.on_tray_icon_event()` |
+| Clipboard | `cx.write_to_clipboard(item)`, `cx.read_from_clipboard()` |
+| Global hotkeys | `cx.register_global_hotkey(id, keystroke)`, `cx.on_global_hotkey()` |
+| Notifications | `cx.show_notification(title, body)` |
+| Deep linking | `cx.on_open_urls()`, `cx.on_deep_link(scheme)` |
+| Multi-window | `cx.open_window()` multiple times |
+| Auto-update | `AutoUpdater::new(feed_url).check_for_updates().await` |
+| Printing | `window.show_print_dialog(PrintJob)` |
+| Power | `cx.start_power_save_blocker()`, `cx.power_mode()` |
+| Session | `cx.session_store().save_window_states()` |
+| Displays | `cx.displays()`, `cx.primary_display()` |
+| Crash reports | `CrashReporter::install_hook()` |
+
+## Theming
+
+```rust
+Theme::init(cx);
+cx.set_global(Theme::dark()); // or Theme::light(), Theme::from_json_str(), Theme::from_path()
+ThemeRuntime::watch("theme.json", cx); // hot-reload
+let theme = cx.global::<Theme>(); // access colors: theme.background, theme.primary, etc.
+```
+
+## Event pattern
+
+All callbacks: `|data, &mut Window, &mut App/Context| { entity.update(cx, |this, cx| { this.mutate(); cx.notify(); }); }`
+
+## Platform support
+
+macOS (Metal), Windows (DirectX 11), Linux X11/Wayland (Vulkan/Blade)
