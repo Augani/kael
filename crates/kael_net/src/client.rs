@@ -2,6 +2,7 @@ use anyhow::{Result, anyhow};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
+use std::fmt;
 
 /// HTTP method for API requests.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -19,7 +20,7 @@ pub enum HttpMethod {
 }
 
 /// A typed, transport-agnostic API request.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ApiRequest {
     /// The HTTP method.
     pub method: HttpMethod,
@@ -31,6 +32,42 @@ pub struct ApiRequest {
     pub body: Option<Vec<u8>>,
     /// Optional timeout in milliseconds.
     pub timeout_ms: Option<u64>,
+}
+
+impl fmt::Debug for ApiRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut headers = self.headers.clone();
+        for (key, value) in &mut headers {
+            if is_sensitive_header(key) {
+                *value = "<redacted>".to_string();
+            }
+        }
+        let body = self
+            .body
+            .as_ref()
+            .map(|body| format!("<{} bytes>", body.len()));
+
+        formatter
+            .debug_struct("ApiRequest")
+            .field("method", &self.method)
+            .field("path", &self.path)
+            .field("headers", &headers)
+            .field("body", &body)
+            .field("timeout_ms", &self.timeout_ms)
+            .finish()
+    }
+}
+
+fn is_sensitive_header(key: &str) -> bool {
+    [
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+        "x-api-key",
+    ]
+    .iter()
+    .any(|header| key.eq_ignore_ascii_case(header))
 }
 
 /// A typed API response.
@@ -197,6 +234,21 @@ mod tests {
             .with_header("Accept", "application/json");
         assert_eq!(req.headers.get("Authorization").unwrap(), "Bearer token123");
         assert_eq!(req.headers.get("Accept").unwrap(), "application/json");
+    }
+
+    #[test]
+    fn debug_redacts_authorization_and_body() {
+        let req = ApiRequest::post("/login")
+            .with_header("Authorization", "Bearer token123")
+            .with_json_body(&serde_json::json!({ "password": "secret" }))
+            .unwrap();
+        let debug = format!("{req:?}");
+
+        assert!(debug.contains("<redacted>"));
+        assert!(debug.contains("bytes"));
+        assert!(!debug.contains("token123"));
+        assert!(!debug.contains("password"));
+        assert!(!debug.contains("secret"));
     }
 
     #[test]

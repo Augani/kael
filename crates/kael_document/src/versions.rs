@@ -112,12 +112,20 @@ impl VersionStore {
         let blob_path = self
             .document_dir(document_key)
             .join(format!("{}.bin", version.digest));
-        std::fs::read(&blob_path).with_context(|| {
+        let bytes = std::fs::read(&blob_path).with_context(|| {
             format!(
                 "failed to read document version blob {}",
                 blob_path.display()
             )
-        })
+        })?;
+        let actual_digest = digest_hex(&bytes);
+        if actual_digest != version.digest {
+            return Err(anyhow!(
+                "document version digest mismatch for {}",
+                version.id
+            ));
+        }
+        Ok(bytes)
     }
 
     fn persist_versions(&self, document_key: &str, versions: &[DocumentVersion]) -> Result<()> {
@@ -160,4 +168,24 @@ fn now_unix_millis() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn read_rejects_digest_mismatch() {
+        let tmp = TempDir::new().unwrap();
+        let store = VersionStore::new_in(tmp.path(), 4).unwrap();
+        let version = store.record("doc", b"original").unwrap();
+        let blob_path = store
+            .document_dir("doc")
+            .join(format!("{}.bin", version.digest));
+        std::fs::write(blob_path, b"tampered").unwrap();
+
+        let error = store.read("doc", &version).unwrap_err();
+        assert!(error.to_string().contains("digest mismatch"));
+    }
 }

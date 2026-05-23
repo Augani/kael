@@ -384,6 +384,7 @@ fn materialize_image(image: &ShareImage) -> Result<PathBuf> {
     use anyhow::Context;
     use std::{
         fs,
+        io::Write,
         path::Path,
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -403,10 +404,36 @@ fn materialize_image(image: &ShareImage) -> Result<PathBuf> {
     } else {
         format!("{file_name}.{}", image.extension())
     };
-    let path = temp_dir.join(final_name);
-    fs::write(&path, image.bytes())
-        .with_context(|| format!("failed to materialize share image at {}", path.display()))?;
-    Ok(path)
+    for attempt in 0..16 {
+        let dir = temp_dir.join(format!(
+            "kael-share-{stamp}-{}-{attempt}",
+            std::process::id()
+        ));
+        match fs::create_dir(&dir) {
+            Ok(()) => {
+                let path = dir.join(&final_name);
+                let mut file = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                    .with_context(|| {
+                        format!("failed to materialize share image at {}", path.display())
+                    })?;
+                file.write_all(image.bytes()).with_context(|| {
+                    format!("failed to write share image at {}", path.display())
+                })?;
+                return Ok(path);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to create share temp dir: {}", dir.display())
+                });
+            }
+        }
+    }
+
+    anyhow::bail!("failed to create a unique share temp directory")
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows", test))]
@@ -426,7 +453,7 @@ fn sanitize_file_name(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use std::{fs, path::Path};
 
     #[test]
     fn share_sheet_rejects_empty_payloads() {
@@ -464,7 +491,30 @@ mod tests {
         let image = ShareImage::new("image/png", vec![1, 2, 3]).with_suggested_name("preview");
         let path = materialize_image(&image).expect("image should materialize");
         assert_eq!(path.extension().and_then(|ext| ext.to_str()), Some("png"));
-        fs::remove_file(path).ok();
+        let parent = path.parent().map(Path::to_path_buf);
+        fs::remove_file(&path).ok();
+        if let Some(parent) = parent {
+            fs::remove_dir(parent).ok();
+        }
+    }
+
+    #[test]
+    fn materialize_image_uses_unique_non_overwriting_paths() {
+        let image = ShareImage::new("image/png", vec![1, 2, 3]).with_suggested_name("preview");
+        let first = materialize_image(&image).expect("first image should materialize");
+        let second = materialize_image(&image).expect("second image should materialize");
+
+        assert_ne!(first, second);
+        assert_eq!(fs::read(&first).unwrap(), vec![1, 2, 3]);
+        assert_eq!(fs::read(&second).unwrap(), vec![1, 2, 3]);
+
+        for path in [first, second] {
+            let parent = path.parent().map(Path::to_path_buf);
+            fs::remove_file(&path).ok();
+            if let Some(parent) = parent {
+                fs::remove_dir(parent).ok();
+            }
+        }
     }
 
     #[test]
@@ -501,7 +551,11 @@ mod tests {
         );
 
         fs::remove_file(&attachment).ok();
-        fs::remove_file(image_path).ok();
+        let image_parent = image_path.parent().map(Path::to_path_buf);
+        fs::remove_file(&image_path).ok();
+        if let Some(image_parent) = image_parent {
+            fs::remove_dir(image_parent).ok();
+        }
     }
 
     #[test]

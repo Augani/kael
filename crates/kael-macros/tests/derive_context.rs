@@ -1,7 +1,7 @@
 #[test]
 fn test_derive_context() {
     use kael::{App, Window};
-    use kael_kael_macros::{AppContext, VisualContext};
+    use kael_macros::{AppContext, VisualContext};
 
     #[derive(AppContext, VisualContext)]
     struct _MyCustomContext<'a, 'b> {

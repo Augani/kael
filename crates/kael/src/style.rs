@@ -1409,8 +1409,9 @@ impl From<Position> for taffy::style::Position {
 #[cfg(test)]
 mod tests {
     use crate::{
-        Context, IntoElement, ParentElement, Render, ScaledPixels, TestAppContext, Window, blue,
-        div, green, px, red, yellow,
+        BoxShadow, Context, IntoElement, POLYCHROME_SPRITE_KIND_PREMULTIPLIED, ParentElement,
+        Render, ScaledPixels, TestAppContext, Window, blue, div, green, hsla, point, px, red,
+        yellow,
     };
 
     use super::*;
@@ -1619,6 +1620,48 @@ mod tests {
             assert_eq!(blur_rect.bounds.size.height, ScaledPixels(60.0));
             assert_eq!(blur_rect.corner_radii.top_left, ScaledPixels(12.0));
             assert_eq!(blur_rect.saturation, 1.4);
+        });
+    }
+
+    struct ShadowTestView;
+
+    impl Render for ShadowTestView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(
+                    div()
+                        .w(px(40.0))
+                        .h(px(30.0))
+                        .rounded(px(6.0))
+                        .shadow(vec![BoxShadow {
+                            color: hsla(0.0, 0.0, 0.0, 0.25),
+                            offset: point(px(0.0), px(4.0)),
+                            blur_radius: px(12.0),
+                            spread_radius: px(0.0),
+                            inset: false,
+                        }]),
+                )
+        }
+    }
+
+    #[kael::test]
+    fn styled_shadow_uses_cached_premultiplied_sprite(cx: &mut TestAppContext) {
+        let (_view, cx) = cx.add_window_view(|_, _| ShadowTestView);
+
+        cx.update(|window, _| {
+            let scene = window.rendered_scene();
+            assert_eq!(scene.shadows.len(), 0);
+            assert_eq!(scene.polychrome_sprites.len(), 1);
+
+            let sprite = &scene.polychrome_sprites[0];
+            assert_eq!(sprite.sprite_kind, POLYCHROME_SPRITE_KIND_PREMULTIPLIED);
+            assert_eq!(sprite.bounds.size.width, ScaledPixels(224.0));
+            assert_eq!(sprite.bounds.size.height, ScaledPixels(204.0));
+            assert_eq!(
+                sprite.tile.texture_id.kind,
+                crate::AtlasTextureKind::Polychrome
+            );
         });
     }
 }

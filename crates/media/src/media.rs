@@ -85,11 +85,14 @@ pub mod core_media {
             }
         }
 
-        pub fn data(&self) -> CMBlockBuffer {
+        pub fn data(&self) -> Option<CMBlockBuffer> {
             unsafe {
-                CMBlockBuffer::wrap_under_get_rule(CMSampleBufferGetDataBuffer(
-                    self.as_concrete_TypeRef(),
-                ))
+                let ptr = CMSampleBufferGetDataBuffer(self.as_concrete_TypeRef());
+                if ptr.is_null() {
+                    None
+                } else {
+                    Some(CMBlockBuffer::wrap_under_get_rule(ptr))
+                }
             }
         }
     }
@@ -124,7 +127,7 @@ pub mod core_media {
     impl_CFTypeDescription!(CMFormatDescription);
 
     impl CMFormatDescription {
-        pub fn h264_parameter_set_count(&self) -> usize {
+        pub fn h264_parameter_set_count(&self) -> Result<usize> {
             unsafe {
                 let mut count = 0;
                 let result = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
@@ -135,8 +138,11 @@ pub mod core_media {
                     &mut count,
                     ptr::null_mut(),
                 );
-                assert_eq!(result, 0);
-                count
+                anyhow::ensure!(
+                    result == 0,
+                    "error getting parameter set count, code: {result}"
+                );
+                Ok(count)
             }
         }
 
@@ -180,7 +186,7 @@ pub mod core_media {
     impl_CFTypeDescription!(CMBlockBuffer);
 
     impl CMBlockBuffer {
-        pub fn bytes(&self) -> &[u8] {
+        pub fn bytes(&self) -> Result<&[u8]> {
             unsafe {
                 let mut bytes = ptr::null();
                 let mut len = 0;
@@ -191,8 +197,15 @@ pub mod core_media {
                     &mut len,
                     &mut bytes,
                 );
-                assert!(result == 0, "could not get block buffer data");
-                std::slice::from_raw_parts(bytes, len)
+                anyhow::ensure!(
+                    result == 0,
+                    "could not get block buffer data, code: {result}"
+                );
+                if len == 0 {
+                    return Ok(&[]);
+                }
+                anyhow::ensure!(!bytes.is_null(), "block buffer returned null data pointer");
+                Ok(std::slice::from_raw_parts(bytes, len))
             }
         }
     }

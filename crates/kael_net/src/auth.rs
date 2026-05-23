@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use std::fmt;
 
 /// An authentication token for a named service.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct AuthToken {
     /// The raw token string.
     pub token: String,
@@ -9,6 +10,17 @@ pub struct AuthToken {
     pub token_type: String,
     /// Optional Unix timestamp (seconds) when the token expires.
     pub expires_at: Option<u64>,
+}
+
+impl fmt::Debug for AuthToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthToken")
+            .field("token", &"<redacted>")
+            .field("token_type", &self.token_type)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 /// In-memory token storage keyed by service name.
@@ -99,6 +111,14 @@ mod tests {
     fn test_default_store() {
         let store = TokenStore::default();
         assert!(store.is_empty());
+    }
+
+    #[test]
+    fn debug_redacts_token() {
+        let token = make_token("secret-token", None);
+        let debug = format!("{token:?}");
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("secret-token"));
     }
 
     #[test]

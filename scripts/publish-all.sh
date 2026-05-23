@@ -2,18 +2,24 @@
 set -euo pipefail
 
 CRATES=(
-  # Tier 0 remaining
+  # Tier 0: independent crates
+  kael_collections
+  kael_derive_refineable
   kael_i18n
   kael_icons
+  kael_semantic_version
+  kael_sum_tree
   kael_net
   kael_notifications
   kael_pdf
   kael_release
   kael_share
   kael_storage
+  kael_cache
+  kael_engines
   kael_media_sys
   kael-media
-  # Tier 1
+  # Tier 1: direct dependencies on tier 0 crates
   kael_refineable
   kael_audio
   kael_perf
@@ -62,12 +68,6 @@ echo "$(date -u +%H:%M:%S) Starting with ${#CRATES[@]} crates"
 echo ""
 
 for crate in "${CRATES[@]}"; do
-  # Check if already published
-  if cargo search "$crate" --limit 1 2>/dev/null | grep -q "^$crate "; then
-    echo "$(date -u +%H:%M:%S) ⊘ $crate already published, skipping"
-    continue
-  fi
-
   publish_crate "$crate"
   echo ""
 done

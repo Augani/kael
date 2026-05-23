@@ -113,7 +113,12 @@ impl Timeline {
             .iter()
             .flat_map(|t| t.clips.iter())
             .filter(|c| {
-                let clip_end = c.track_offset + (c.end_frame - c.start_frame);
+                let Some(duration) = c.end_frame.checked_sub(c.start_frame) else {
+                    return false;
+                };
+                let Some(clip_end) = c.track_offset.checked_add(duration) else {
+                    return false;
+                };
                 frame >= c.track_offset && frame < clip_end
             })
             .collect()
@@ -349,6 +354,19 @@ mod tests {
         assert_eq!(tl.clips_at_frame(39).len(), 1);
         assert!(tl.clips_at_frame(40).is_empty());
         assert!(tl.clips_at_frame(9).is_empty());
+    }
+
+    #[test]
+    fn clips_at_frame_rejects_invalid_clip_ranges() {
+        let invalid = sample_clip("invalid", 30, 10, u64::MAX - 2);
+        let track = sample_track("v1", TrackType::Video, vec![invalid]);
+        let tl = Timeline {
+            tracks: vec![track],
+            frame_rate: 30.0,
+            duration_frames: 60,
+        };
+
+        assert!(tl.clips_at_frame(u64::MAX - 1).is_empty());
     }
 
     #[test]

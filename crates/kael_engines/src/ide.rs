@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 
 /// A single entry in the project index.
@@ -216,6 +217,23 @@ impl SearchIndex {
 
     /// Search the index with the given query.
     pub fn search(&self, query: &SearchQuery) -> Vec<&SearchEntry> {
+        let regex = if query.regex {
+            let pattern = if query.whole_word {
+                format!(r"\b(?:{})\b", query.pattern)
+            } else {
+                query.pattern.clone()
+            };
+            match RegexBuilder::new(&pattern)
+                .case_insensitive(!query.case_sensitive)
+                .build()
+            {
+                Ok(regex) => Some(regex),
+                Err(_) => return Vec::new(),
+            }
+        } else {
+            None
+        };
+
         self.entries
             .iter()
             .filter(|entry| {
@@ -228,6 +246,10 @@ impl SearchIndex {
                     && excludes.iter().any(|p| entry.path.contains(p.as_str()))
                 {
                     return false;
+                }
+
+                if let Some(regex) = &regex {
+                    return regex.is_match(&entry.content);
                 }
 
                 let (haystack, needle) = if query.case_sensitive {
@@ -421,6 +443,30 @@ mod tests {
             case_sensitive: true,
             whole_word: true,
             regex: false,
+            include_paths: None,
+            exclude_paths: None,
+        };
+        assert_eq!(idx.search(&query).len(), 1);
+    }
+
+    #[test]
+    fn search_index_honors_regex() {
+        let mut idx = SearchIndex::new();
+        idx.add(SearchEntry {
+            path: "a.rs".into(),
+            line: 1,
+            content: "let answer = 42;".into(),
+        });
+        idx.add(SearchEntry {
+            path: "b.rs".into(),
+            line: 1,
+            content: "let answer = nope;".into(),
+        });
+        let query = SearchQuery {
+            pattern: r"answer\s*=\s*\d+".into(),
+            case_sensitive: true,
+            whole_word: false,
+            regex: true,
             include_paths: None,
             exclude_paths: None,
         };

@@ -39,12 +39,17 @@ fn resolve_binary(config: &DistConfig, options: &BundleOptions) -> Result<Option
     let default_path = PathBuf::from("target/release").join(&app_name);
     if default_path.exists() {
         Ok(Some(default_path))
-    } else {
+    } else if options.dry_run {
         eprintln!(
             "warning: default binary not found at {}",
             default_path.display()
         );
         Ok(None)
+    } else {
+        bail!(
+            "default binary not found at {}; build release binary first or pass --binary",
+            default_path.display()
+        );
     }
 }
 
@@ -92,9 +97,8 @@ fn bundle_macos(
         let dest = resources_dir.join(icon.file_name().unwrap_or_default());
         if options.dry_run {
             println!("dry-run: would copy icon to {}", dest.display());
-        } else if icon.exists() {
-            fs::copy(icon, &dest)
-                .with_context(|| format!("failed to copy icon to {}", dest.display()))?;
+        } else {
+            copy_required_asset(icon, &dest)?;
         }
     }
 
@@ -186,9 +190,8 @@ fn bundle_windows(
         let dest = bundle_dir.join(icon.file_name().unwrap_or_default());
         if options.dry_run {
             println!("dry-run: would copy icon to {}", dest.display());
-        } else if icon.exists() {
-            fs::copy(icon, &dest)
-                .with_context(|| format!("failed to copy icon to {}", dest.display()))?;
+        } else {
+            copy_required_asset(icon, &dest)?;
         }
     }
 
@@ -223,7 +226,7 @@ fn bundle_linux(
 
     let app_run_path = app_dir.join("AppRun");
     let app_run = format!(
-        "#!/bin/sh\nexec \"${{APPIMAGE}}/usr/bin/{}\" \"$@\"\n",
+        "#!/bin/sh\nexec \"${{APPDIR}}/usr/bin/{}\" \"$@\"\n",
         app_name
     );
     if options.dry_run {
@@ -253,14 +256,22 @@ fn bundle_linux(
         let dest = app_dir.join(icon.file_name().unwrap_or_default());
         if options.dry_run {
             println!("dry-run: would copy icon to {}", dest.display());
-        } else if icon.exists() {
-            fs::copy(icon, &dest)
-                .with_context(|| format!("failed to copy icon to {}", dest.display()))?;
+        } else {
+            copy_required_asset(icon, &dest)?;
         }
     }
 
     println!("Linux AppDir created: {}", app_dir.display());
     Ok(vec![app_dir])
+}
+
+fn copy_required_asset(source: &Path, destination: &Path) -> Result<()> {
+    if !source.exists() {
+        bail!("configured asset does not exist: {}", source.display());
+    }
+    fs::copy(source, destination)
+        .with_context(|| format!("failed to copy asset to {}", destination.display()))?;
+    Ok(())
 }
 
 fn generate_desktop_entry(config: &DistConfig) -> String {

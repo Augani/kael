@@ -68,11 +68,53 @@ impl DistConfig {
         if self.app_id.is_empty() {
             bail!("dist config: app_id must not be empty");
         }
+        if self.app_id.starts_with("com.example") || self.app_id.contains("example") {
+            bail!("dist config: app_id still contains placeholder/example identity");
+        }
         if self.name.is_empty() {
             bail!("dist config: name must not be empty");
         }
+        if self.name.contains("GPUI") || self.name.eq_ignore_ascii_case("example") {
+            bail!("dist config: name still contains placeholder branding");
+        }
         if self.version.is_empty() {
             bail!("dist config: version must not be empty");
+        }
+        for icon in [
+            self.icons.macos.as_ref(),
+            self.icons.windows.as_ref(),
+            self.icons.linux.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !icon.exists() {
+                bail!("dist config: icon file does not exist: {}", icon.display());
+            }
+        }
+        if let Some(signing) = &self.signing {
+            if signing.macos_team_id.as_deref() == Some("TEAM123456") {
+                bail!("dist config: macOS team id is still a placeholder");
+            }
+            if signing
+                .macos_certificate
+                .as_deref()
+                .is_some_and(|certificate| certificate.contains("Example Inc"))
+            {
+                bail!("dist config: macOS certificate is still a placeholder");
+            }
+        }
+        if let Some(updater) = &self.updater {
+            if updater.feed_url.contains("example.com") {
+                bail!("dist config: updater feed URL is still a placeholder");
+            }
+            if updater
+                .public_key
+                .as_deref()
+                .is_some_and(|key| key.contains("REPLACE_WITH"))
+            {
+                bail!("dist config: updater public key is still a placeholder");
+            }
         }
         Ok(())
     }
@@ -84,7 +126,7 @@ impl DistConfig {
 
 #[derive(Parser)]
 #[command(name = "xtask")]
-#[command(about = "GPUI packaging and release toolchain")]
+#[command(about = "Kael packaging and release toolchain")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

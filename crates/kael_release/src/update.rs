@@ -54,6 +54,9 @@ impl UpdateManifest {
         if self.url.is_empty() {
             anyhow::bail!("update URL must not be empty");
         }
+        if !self.url.starts_with("https://") {
+            anyhow::bail!("update URL must use https");
+        }
         if self.sha256.len() != 64 {
             anyhow::bail!("sha256 must be exactly 64 hex characters");
         }
@@ -180,6 +183,16 @@ mod tests {
         let mut m = valid_manifest();
         m.url = String::new();
         assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn manifest_rejects_insecure_update_url() {
+        let mut m = valid_manifest();
+        m.url = "http://example.com/update.zip".to_string();
+        assert!(m.validate().is_err());
+
+        m.url = "https://example.com/update.zip".to_string();
+        assert!(m.validate().is_ok());
     }
 
     #[test]

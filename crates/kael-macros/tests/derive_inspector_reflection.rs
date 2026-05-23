@@ -1,6 +1,4 @@
-//! This code was generated using Claude Opus 4.
-
-use kael_kael_macros::derive_inspector_reflection;
+use kael_macros::derive_inspector_reflection;
 
 #[derive_inspector_reflection]
 trait Transform: Clone {

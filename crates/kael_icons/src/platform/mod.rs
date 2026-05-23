@@ -6,11 +6,27 @@ mod linux;
 mod mac;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "macos",
+    target_os = "windows"
+)))]
+mod unsupported {
+    pub const HAS_NATIVE_BRIDGE: bool = false;
+}
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use linux as imp;
 #[cfg(target_os = "macos")]
 use mac as imp;
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "macos",
+    target_os = "windows"
+)))]
+use unsupported as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 

@@ -42,7 +42,7 @@ impl DiskCache {
 
     /// Retrieves cached data for the given namespace and key.
     pub fn get(&self, namespace: &str, key: &str) -> Result<Option<Vec<u8>>> {
-        let path = self.entry_path(namespace, key);
+        let path = self.entry_path(namespace, key)?;
         match fs::read(&path) {
             Ok(data) => Ok(Some(data)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -65,7 +65,7 @@ impl DiskCache {
             );
         }
 
-        let path = self.entry_path(namespace, key);
+        let path = self.entry_path(namespace, key)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create cache dir: {}", parent.display()))?;
@@ -94,7 +94,7 @@ impl DiskCache {
 
     /// Removes a single cached entry.
     pub fn remove(&self, namespace: &str, key: &str) -> Result<()> {
-        let path = self.entry_path(namespace, key);
+        let path = self.entry_path(namespace, key)?;
         match fs::remove_file(&path) {
             Ok(()) => {
                 self.remove_index_entry(&path);
@@ -112,7 +112,7 @@ impl DiskCache {
 
     /// Removes all entries within a namespace.
     pub fn clear_namespace(&self, namespace: &str) -> Result<()> {
-        let ns_path = self.root.join(namespace);
+        let ns_path = self.namespace_path(namespace)?;
         if ns_path.exists() {
             fs::remove_dir_all(&ns_path)
                 .with_context(|| format!("failed to clear namespace: {}", ns_path.display()))?;
@@ -172,10 +172,16 @@ impl DiskCache {
         Ok(freed)
     }
 
-    fn entry_path(&self, namespace: &str, key: &str) -> PathBuf {
+    fn entry_path(&self, namespace: &str, key: &str) -> Result<PathBuf> {
+        let namespace_path = self.namespace_path(namespace)?;
         let hash = hash_key(key);
         let prefix = &hash[..2];
-        self.root.join(namespace).join(prefix).join(&hash)
+        Ok(namespace_path.join(prefix).join(&hash))
+    }
+
+    fn namespace_path(&self, namespace: &str) -> Result<PathBuf> {
+        validate_namespace(namespace)?;
+        Ok(self.root.join(namespace))
     }
 
     fn cleanup_empty_dirs(&self) -> Result<()> {
@@ -230,6 +236,22 @@ fn hash_key(key: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(key.as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+fn validate_namespace(namespace: &str) -> Result<()> {
+    if namespace.is_empty()
+        || namespace == "."
+        || namespace == ".."
+        || namespace.contains('/')
+        || namespace.contains('\\')
+        || !std::path::Path::new(namespace)
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+    {
+        anyhow::bail!("cache namespace must be a single relative path component");
+    }
+
+    Ok(())
 }
 
 fn build_index(root: &Path) -> Result<DiskIndex> {
@@ -418,5 +440,22 @@ mod tests {
         cache.put("ns", "key", b"v1").unwrap();
         cache.put("ns", "key", b"v2").unwrap();
         assert_eq!(cache.get("ns", "key").unwrap(), Some(b"v2".to_vec()));
+    }
+
+    #[test]
+    fn namespace_cannot_escape_root() {
+        let (tmp, cache) = setup();
+        let sibling = tmp.path().parent().unwrap().join("kael-cache-escape-check");
+        fs::write(&sibling, b"keep").unwrap();
+
+        assert!(
+            cache
+                .put("../kael-cache-escape-check", "key", b"bad")
+                .is_err()
+        );
+        assert!(cache.clear_namespace("../kael-cache-escape-check").is_err());
+        assert_eq!(fs::read(&sibling).unwrap(), b"keep");
+
+        fs::remove_file(sibling).ok();
     }
 }

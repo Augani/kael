@@ -54,16 +54,23 @@ impl LocaleFormatter {
 
     /// Formats a floating-point number with locale-appropriate separators.
     pub fn format_number(&self, value: f64, decimal_places: usize) -> String {
-        let integer_part = value.trunc() as i64;
-        let formatted_integer =
-            self.format_integer_inner(integer_part.unsigned_abs(), integer_part < 0);
+        let factor = 10_u64
+            .checked_pow(decimal_places as u32)
+            .unwrap_or(u64::MAX);
+        let scaled = (value.abs() * factor as f64).round() as u64;
+        let negative = value.is_sign_negative() && scaled != 0;
+        let integer_part = if decimal_places == 0 {
+            scaled
+        } else {
+            scaled / factor
+        };
+        let formatted_integer = self.format_integer_inner(integer_part, negative);
 
         if decimal_places == 0 {
             return formatted_integer;
         }
 
-        let factor = 10_f64.powi(decimal_places as i32);
-        let decimal_part = ((value.abs().fract() * factor).round() as u64).to_string();
+        let decimal_part = scaled % factor;
         let padded = format!("{:0>width$}", decimal_part, width = decimal_places);
 
         format!("{}{}{}", formatted_integer, self.decimal_separator, padded)
@@ -137,6 +144,14 @@ mod tests {
     fn test_format_number_ja_jp() {
         let fmt = LocaleFormatter::for_locale("ja-JP");
         assert_eq!(fmt.format_number(1234.5, 1), "1,234.5");
+    }
+
+    #[test]
+    fn format_number_carries_fraction_rounding() {
+        let fmt = LocaleFormatter::for_locale("en-US");
+        assert_eq!(fmt.format_number(1.999, 2), "2.00");
+        assert_eq!(fmt.format_number(-1.999, 2), "-2.00");
+        assert_eq!(fmt.format_number(1.5, 0), "2");
     }
 
     #[test]

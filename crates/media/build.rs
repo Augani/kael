@@ -1,6 +1,10 @@
 #![allow(clippy::disallowed_methods, reason = "build scripts are exempt")]
-#[cfg(target_os = "macos")]
+
 fn main() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+        return;
+    }
+
     use std::{env, path::PathBuf, process::Command};
 
     let sdk_path = String::from_utf8(
@@ -39,6 +43,3 @@ fn main() {
         .write_to_file(out_path.join("bindings.rs"))
         .expect("couldn't write dispatch bindings");
 }
-
-#[cfg(not(target_os = "macos"))]
-fn main() {}

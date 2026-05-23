@@ -65,16 +65,16 @@ fn build_feed(config: &DistConfig, artifacts: &[PathBuf]) -> Result<UpdateFeed> 
                 updater.feed_url.trim_end_matches('/'),
                 artifact.file_name().unwrap_or_default().to_string_lossy()
             );
-            let checksum = sha256_file(artifact).unwrap_or_default();
+            let checksum = sha256_file(artifact)?;
 
-            PlatformUpdate {
+            Ok(PlatformUpdate {
                 platform,
                 url,
                 signature: None,
                 checksum,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(UpdateFeed {
         version: config.version.clone(),
@@ -91,7 +91,7 @@ fn detect_platform(artifact: &Path) -> String {
         "macos".to_string()
     } else if name.ends_with(".exe") || name.contains("windows") || name.contains("win32") {
         "windows".to_string()
-    } else if name.ends_with(".appimage") || name.contains("linux") {
+    } else if name.ends_with(".appimage") || name.ends_with(".appdir") || name.contains("linux") {
         "linux".to_string()
     } else {
         "unknown".to_string()
