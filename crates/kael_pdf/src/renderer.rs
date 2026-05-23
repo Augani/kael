@@ -1,5 +1,6 @@
 //! Raster page preview generation.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -41,6 +42,49 @@ impl RenderedPage {
     /// Returns the RGBA pixel buffer.
     pub fn pixels(&self) -> &[u8] {
         self.pixels.as_ref()
+    }
+}
+
+/// A bounded LRU cache for rendered PDF pages.
+pub struct PageRenderCache {
+    max_pages: usize,
+    pages: VecDeque<(usize, RenderedPage)>,
+}
+
+impl PageRenderCache {
+    /// Creates a new cache with the given maximum number of retained pages.
+    pub fn new(max_pages: usize) -> Self {
+        Self {
+            max_pages,
+            pages: VecDeque::with_capacity(max_pages),
+        }
+    }
+
+    /// Returns the rendered page at `page_index`, if cached.
+    pub fn get(&self, page_index: usize) -> Option<&RenderedPage> {
+        self.pages
+            .iter()
+            .find(|(idx, _)| *idx == page_index)
+            .map(|(_, page)| page)
+    }
+
+    /// Inserts or replaces the rendered page for `page_index`, evicting the oldest entry when full.
+    pub fn insert(&mut self, page_index: usize, page: RenderedPage) {
+        self.pages.retain(|(idx, _)| *idx != page_index);
+        if self.pages.len() >= self.max_pages {
+            self.pages.pop_front();
+        }
+        self.pages.push_back((page_index, page));
+    }
+
+    /// Returns the number of cached pages.
+    pub fn len(&self) -> usize {
+        self.pages.len()
+    }
+
+    /// Returns true if the cache contains no pages.
+    pub fn is_empty(&self) -> bool {
+        self.pages.is_empty()
     }
 }
 
@@ -245,4 +289,45 @@ fn blend_pixel(image: &mut RgbaImage, x: i32, y: i32, color: Rgba<u8>) {
     pixel[1] = ((color[1] as f32 * alpha) + (pixel[1] as f32 * inverse_alpha)).round() as u8;
     pixel[2] = ((color[2] as f32 * alpha) + (pixel[2] as f32 * inverse_alpha)).round() as u8;
     pixel[3] = 255;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_cache_respects_limit() {
+        let mut cache = PageRenderCache::new(3);
+        for i in 0..4 {
+            cache.insert(
+                i,
+                RenderedPage::new(100, 100, Arc::<[u8]>::from(vec![0u8; 40000])),
+            );
+        }
+        assert!(cache.get(0).is_none());
+        assert!(cache.get(3).is_some());
+        assert_eq!(cache.len(), 3);
+    }
+
+    #[test]
+    fn page_cache_overwrites_existing_entry() {
+        let mut cache = PageRenderCache::new(3);
+        cache.insert(
+            0,
+            RenderedPage::new(100, 100, Arc::<[u8]>::from(vec![1u8; 40000])),
+        );
+        cache.insert(
+            0,
+            RenderedPage::new(200, 200, Arc::<[u8]>::from(vec![2u8; 160000])),
+        );
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.get(0).unwrap().width(), 200);
+    }
+
+    #[test]
+    fn page_cache_is_empty_on_new() {
+        let cache = PageRenderCache::new(5);
+        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
+    }
 }
