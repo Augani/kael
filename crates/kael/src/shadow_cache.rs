@@ -1,4 +1,5 @@
-use crate::{Bounds, Corners, DevicePixels, Hsla, ScaledPixels, Size, point, size};
+use crate::{point, size, Bounds, Corners, DevicePixels, Hsla, ScaledPixels, Size};
+use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -226,6 +227,36 @@ fn channel_to_byte(value: f32) -> u8 {
     (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
+pub(crate) struct ShadowLruTracker {
+    entries: VecDeque<ShadowAtlasParams>,
+    max_entries: usize,
+}
+
+impl ShadowLruTracker {
+    pub(crate) fn new(max_entries: usize) -> Self {
+        Self {
+            entries: VecDeque::new(),
+            max_entries,
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(crate) fn touch(&mut self, params: &ShadowAtlasParams) -> Option<ShadowAtlasParams> {
+        if let Some(pos) = self.entries.iter().position(|p| p == params) {
+            self.entries.remove(pos);
+        }
+        self.entries.push_back(params.clone());
+        if self.entries.len() > self.max_entries {
+            self.entries.pop_front()
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,6 +276,48 @@ mod tests {
             point(ScaledPixels(4.0), ScaledPixels(14.0))
         );
         assert_eq!(expanded.size, size(ScaledPixels(42.0), ScaledPixels(52.0)));
+    }
+
+    fn test_params(w: i32, h: i32) -> ShadowAtlasParams {
+        ShadowAtlasParams::new(
+            size(DevicePixels(w), DevicePixels(h)),
+            Corners::default(),
+            ScaledPixels(0.0),
+            Hsla::black().opacity(0.5),
+            false,
+        )
+    }
+
+    #[test]
+    fn shadow_lru_tracker_evicts_oldest() {
+        let mut tracker = ShadowLruTracker::new(3);
+        let p1 = test_params(10, 10);
+        let p2 = test_params(20, 20);
+        let p3 = test_params(30, 30);
+        let p4 = test_params(40, 40);
+
+        assert!(tracker.touch(&p1).is_none());
+        assert!(tracker.touch(&p2).is_none());
+        assert!(tracker.touch(&p3).is_none());
+        let evicted = tracker.touch(&p4);
+        assert_eq!(evicted, Some(p1));
+        assert_eq!(tracker.len(), 3);
+    }
+
+    #[test]
+    fn shadow_lru_touch_refreshes_entry() {
+        let mut tracker = ShadowLruTracker::new(3);
+        let p1 = test_params(10, 10);
+        let p2 = test_params(20, 20);
+        let p3 = test_params(30, 30);
+        let p4 = test_params(40, 40);
+
+        tracker.touch(&p1);
+        tracker.touch(&p2);
+        tracker.touch(&p3);
+        tracker.touch(&p1);
+        let evicted = tracker.touch(&p4);
+        assert_eq!(evicted, Some(p2));
     }
 
     #[test]
