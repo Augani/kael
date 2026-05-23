@@ -26,6 +26,7 @@ struct DiskEntry {
 struct DiskIndex {
     total_bytes: u64,
     entries: HashMap<PathBuf, DiskEntry>,
+    max_entries_per_namespace: Option<usize>,
 }
 
 impl DiskCache {
@@ -35,6 +36,23 @@ impl DiskCache {
             .with_context(|| format!("failed to create cache root: {}", root.display()))?;
         Ok(Self {
             index: Mutex::new(build_index(&root)?),
+            root,
+            max_bytes,
+        })
+    }
+
+    /// Creates a new disk cache with both a byte budget and a per-namespace entry count limit.
+    pub fn with_namespace_limit(
+        root: PathBuf,
+        max_bytes: u64,
+        max_entries_per_namespace: usize,
+    ) -> Result<Self> {
+        fs::create_dir_all(&root)
+            .with_context(|| format!("failed to create cache root: {}", root.display()))?;
+        let mut index = build_index(&root)?;
+        index.max_entries_per_namespace = Some(max_entries_per_namespace);
+        Ok(Self {
+            index: Mutex::new(index),
             root,
             max_bytes,
         })
@@ -81,14 +99,29 @@ impl DiskCache {
             metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
         );
 
-        let candidates = {
+        let byte_candidates = {
             let index = self.lock_index();
             eviction_candidates(&index, self.max_bytes)
         };
-        if !candidates.is_empty() {
-            self.remove_paths(&candidates)?;
+        if !byte_candidates.is_empty() {
+            self.remove_paths(&byte_candidates)?;
             self.cleanup_empty_dirs()?;
         }
+
+        let ns_candidates = {
+            let index = self.lock_index();
+            if let Some(limit) = index.max_entries_per_namespace {
+                let ns_path = self.namespace_path(namespace)?;
+                namespace_eviction_candidates(&index, &ns_path, limit)
+            } else {
+                vec![]
+            }
+        };
+        if !ns_candidates.is_empty() {
+            self.remove_paths(&ns_candidates)?;
+            self.cleanup_empty_dirs()?;
+        }
+
         Ok(())
     }
 
@@ -311,6 +344,27 @@ fn eviction_candidates(index: &DiskIndex, target_bytes: u64) -> Vec<PathBuf> {
     candidates
 }
 
+fn namespace_eviction_candidates(index: &DiskIndex, ns_path: &Path, limit: usize) -> Vec<PathBuf> {
+    let mut ns_entries: Vec<(PathBuf, SystemTime)> = index
+        .entries
+        .iter()
+        .filter(|(path, _)| path.starts_with(ns_path))
+        .map(|(path, entry)| (path.clone(), entry.modified))
+        .collect();
+
+    if ns_entries.len() <= limit {
+        return vec![];
+    }
+
+    ns_entries.sort_by_key(|(_, modified)| *modified);
+    let excess = ns_entries.len() - limit;
+    ns_entries
+        .into_iter()
+        .take(excess)
+        .map(|(path, _)| path)
+        .collect()
+}
+
 fn remove_index_entry_from(index: &mut DiskIndex, path: &Path) -> Option<DiskEntry> {
     let removed = index.entries.remove(path);
     if let Some(entry) = removed {
@@ -340,6 +394,7 @@ fn remove_empty_dirs(root: &std::path::Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     fn setup() -> (TempDir, DiskCache) {
@@ -443,16 +498,50 @@ mod tests {
     }
 
     #[test]
+    fn namespace_capacity_evicts_oldest() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache =
+            DiskCache::with_namespace_limit(dir.path().to_path_buf(), 1_000_000, 3).unwrap();
+        cache.put("ns", "key1", b"data1").unwrap();
+        cache.put("ns", "key2", b"data2").unwrap();
+        cache.put("ns", "key3", b"data3").unwrap();
+        cache.put("ns", "key4", b"data4").unwrap();
+        assert!(cache.get("ns", "key1").unwrap().is_none());
+        assert!(cache.get("ns", "key4").unwrap().is_some());
+    }
+
+    #[test]
+    fn concurrent_writers_do_not_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Arc::new(DiskCache::new(dir.path().to_path_buf(), 10_000_000).unwrap());
+        let handles: Vec<_> = (0..8)
+            .map(|thread_id| {
+                let cache = cache.clone();
+                std::thread::spawn(move || {
+                    for i in 0..50 {
+                        let key = format!("t{thread_id}-k{i}");
+                        let data = format!("data-{thread_id}-{i}");
+                        cache.put("stress", &key, data.as_bytes()).unwrap();
+                        let read = cache.get("stress", &key).unwrap();
+                        assert!(read.is_some(), "missing key {key}");
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    }
+
+    #[test]
     fn namespace_cannot_escape_root() {
         let (tmp, cache) = setup();
         let sibling = tmp.path().parent().unwrap().join("kael-cache-escape-check");
         fs::write(&sibling, b"keep").unwrap();
 
-        assert!(
-            cache
-                .put("../kael-cache-escape-check", "key", b"bad")
-                .is_err()
-        );
+        assert!(cache
+            .put("../kael-cache-escape-check", "key", b"bad")
+            .is_err());
         assert!(cache.clear_namespace("../kael-cache-escape-check").is_err());
         assert_eq!(fs::read(&sibling).unwrap(), b"keep");
 
