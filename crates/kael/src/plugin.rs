@@ -443,6 +443,412 @@ impl Default for ExtensionHost {
 }
 
 // ---------------------------------------------------------------------------
+// Extension Manifest Format
+// ---------------------------------------------------------------------------
+
+/// A higher-level extension manifest that describes an extension with typed
+/// contribution points, permissions, and activation events.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExtensionManifest {
+    /// Unique extension identifier.
+    pub id: String,
+    /// Human-readable name.
+    pub name: String,
+    /// Extension version (semver).
+    pub version: String,
+    /// A short description of what the extension does.
+    pub description: String,
+    /// The extension author.
+    pub author: Option<String>,
+    /// SPDX license identifier.
+    pub license: Option<String>,
+    /// Typed contribution points the extension provides.
+    pub contribution_points: Vec<ContributionPoint>,
+    /// Permissions required by the extension.
+    pub permissions: Vec<String>,
+    /// Events that trigger extension activation.
+    pub activation_events: Vec<String>,
+}
+
+impl ExtensionManifest {
+    /// Validate the extension manifest for well-formedness.
+    pub fn validate(&self) -> Result<()> {
+        if self.id.is_empty() {
+            anyhow::bail!("extension manifest: id must not be empty");
+        }
+        if self.name.is_empty() {
+            anyhow::bail!("extension manifest: name must not be empty");
+        }
+        if self.version.is_empty() {
+            anyhow::bail!("extension manifest: version must not be empty");
+        }
+        if self.description.is_empty() {
+            anyhow::bail!("extension manifest: description must not be empty");
+        }
+        Ok(())
+    }
+
+    /// Extract all command contribution points.
+    pub fn commands(&self) -> Vec<(&str, &str)> {
+        self.contribution_points
+            .iter()
+            .filter_map(|cp| match cp {
+                ContributionPoint::Command { id, title, .. } => Some((id.as_str(), title.as_str())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Extract all panel contribution points.
+    pub fn panels(&self) -> Vec<(&str, &str)> {
+        self.contribution_points
+            .iter()
+            .filter_map(|cp| match cp {
+                ContributionPoint::Panel { id, title, .. } => Some((id.as_str(), title.as_str())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Extract all theme contribution points.
+    pub fn themes(&self) -> Vec<(&str, &str)> {
+        self.contribution_points
+            .iter()
+            .filter_map(|cp| match cp {
+                ContributionPoint::Theme { id, label } => Some((id.as_str(), label.as_str())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Extract file-type contribution points matching a given file extension.
+    pub fn handles_file_extension(&self, ext: &str) -> bool {
+        self.contribution_points.iter().any(|cp| match cp {
+            ContributionPoint::FileType { extensions, .. } => extensions.iter().any(|e| e == ext),
+            _ => false,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Contribution Points (typed enum)
+// ---------------------------------------------------------------------------
+
+/// A typed contribution point that an extension can declare.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ContributionPoint {
+    /// A command contribution for the command palette.
+    Command {
+        /// Unique command identifier.
+        id: String,
+        /// Display title.
+        title: String,
+        /// Optional keyboard shortcut.
+        keybinding: Option<String>,
+    },
+    /// A menu contribution.
+    Menu {
+        /// Target menu location (e.g. "file", "edit").
+        location: String,
+        /// Menu items to add.
+        items: Vec<PluginMenuItem>,
+    },
+    /// A panel contribution.
+    Panel {
+        /// Unique panel identifier.
+        id: String,
+        /// Display title.
+        title: String,
+        /// Optional icon path or name.
+        icon: Option<String>,
+    },
+    /// A settings contribution.
+    Setting {
+        /// Settings key path.
+        key: String,
+        /// Default value for the setting.
+        default_value: serde_json::Value,
+        /// Human-readable description of the setting.
+        description: String,
+    },
+    /// A file-type handler contribution.
+    FileType {
+        /// File extensions handled (without leading dot).
+        extensions: Vec<String>,
+        /// Language identifier for syntax highlighting.
+        language_id: String,
+    },
+    /// A theme contribution.
+    Theme {
+        /// Unique theme identifier.
+        id: String,
+        /// Display label.
+        label: String,
+    },
+    /// A keybinding contribution.
+    Keybinding {
+        /// Command to invoke.
+        command: String,
+        /// Key combination string.
+        key: String,
+        /// Optional context condition.
+        when: Option<String>,
+    },
+}
+
+/// A single item within a menu contribution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PluginMenuItem {
+    /// Command to invoke when the menu item is activated.
+    pub command: String,
+    /// Display title.
+    pub title: String,
+    /// Optional group within the menu for separators.
+    pub group: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Extension Host Diagnostics
+// ---------------------------------------------------------------------------
+
+/// Lifecycle state of an extension.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ExtensionState {
+    /// The extension is loaded but not yet activated.
+    Inactive,
+    /// The extension is in the process of activating.
+    Activating,
+    /// The extension is fully active.
+    Active,
+    /// The extension is in the process of deactivating.
+    Deactivating,
+    /// The extension encountered an error.
+    Error(String),
+    /// The extension process crashed.
+    Crashed,
+}
+
+/// Diagnostic information for a running extension.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExtensionDiagnostics {
+    /// Extension identifier.
+    pub id: String,
+    /// Current lifecycle state.
+    pub state: ExtensionState,
+    /// Time taken to activate in milliseconds.
+    pub activation_time_ms: Option<u64>,
+    /// Approximate memory usage in bytes.
+    pub memory_usage_bytes: Option<u64>,
+    /// Running count of errors encountered.
+    pub error_count: u32,
+    /// Most recent error message, if any.
+    pub last_error: Option<String>,
+}
+
+impl ExtensionDiagnostics {
+    /// Create a new diagnostics record for the given extension.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            state: ExtensionState::Inactive,
+            activation_time_ms: None,
+            memory_usage_bytes: None,
+            error_count: 0,
+            last_error: None,
+        }
+    }
+
+    /// Record an error, incrementing the counter and storing the message.
+    pub fn record_error(&mut self, message: impl Into<String>) {
+        let msg = message.into();
+        self.error_count += 1;
+        self.last_error = Some(msg);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Extension Registry
+// ---------------------------------------------------------------------------
+
+/// A registry that tracks extension manifests and their diagnostics.
+pub struct ExtensionRegistry {
+    extensions: HashMap<String, ExtensionManifest>,
+    diagnostics: HashMap<String, ExtensionDiagnostics>,
+}
+
+impl ExtensionRegistry {
+    /// Create an empty extension registry.
+    pub fn new() -> Self {
+        Self {
+            extensions: HashMap::new(),
+            diagnostics: HashMap::new(),
+        }
+    }
+
+    /// Register a new extension manifest. Returns an error if the id is
+    /// already registered or if the manifest is invalid.
+    pub fn register(&mut self, manifest: ExtensionManifest) -> Result<()> {
+        manifest.validate()?;
+        if self.extensions.contains_key(&manifest.id) {
+            anyhow::bail!("extension already registered: {}", manifest.id);
+        }
+        let diag = ExtensionDiagnostics::new(&manifest.id);
+        self.diagnostics.insert(manifest.id.clone(), diag);
+        self.extensions.insert(manifest.id.clone(), manifest);
+        Ok(())
+    }
+
+    /// Unregister an extension, returning its manifest.
+    pub fn unregister(&mut self, id: &str) -> Result<ExtensionManifest> {
+        self.diagnostics.remove(id);
+        self.extensions
+            .remove(id)
+            .ok_or_else(|| anyhow::anyhow!("extension not found: {}", id))
+    }
+
+    /// Look up an extension manifest by id.
+    pub fn get(&self, id: &str) -> Option<&ExtensionManifest> {
+        self.extensions.get(id)
+    }
+
+    /// Return all registered extension manifests.
+    pub fn list(&self) -> Vec<&ExtensionManifest> {
+        self.extensions.values().collect()
+    }
+
+    /// Update the lifecycle state for an extension.
+    pub fn update_diagnostics(&mut self, id: &str, state: ExtensionState) -> Result<()> {
+        let diag = self
+            .diagnostics
+            .get_mut(id)
+            .ok_or_else(|| anyhow::anyhow!("extension not found: {}", id))?;
+        if let ExtensionState::Error(ref msg) = state {
+            diag.record_error(msg.clone());
+        }
+        diag.state = state;
+        Ok(())
+    }
+
+    /// Get diagnostic information for an extension.
+    pub fn get_diagnostics(&self, id: &str) -> Option<&ExtensionDiagnostics> {
+        self.diagnostics.get(id)
+    }
+
+    /// Collect all command contribution points across registered extensions.
+    pub fn commands(&self) -> Vec<(&str, &str)> {
+        self.extensions
+            .values()
+            .flat_map(|m| m.commands())
+            .collect()
+    }
+
+    /// Collect all panel contribution points across registered extensions.
+    pub fn panels(&self) -> Vec<(&str, &str)> {
+        self.extensions.values().flat_map(|m| m.panels()).collect()
+    }
+
+    /// Collect all theme contribution points across registered extensions.
+    pub fn themes(&self) -> Vec<(&str, &str)> {
+        self.extensions.values().flat_map(|m| m.themes()).collect()
+    }
+
+    /// Return manifests for extensions that handle a given file extension.
+    pub fn file_type_handlers(&self, extension: &str) -> Vec<&ExtensionManifest> {
+        self.extensions
+            .values()
+            .filter(|m| m.handles_file_extension(extension))
+            .collect()
+    }
+}
+
+impl Default for ExtensionRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Extension Crash / Restart
+// ---------------------------------------------------------------------------
+
+/// Policy governing automatic restarts after extension crashes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CrashPolicy {
+    /// Maximum number of restarts before the extension is disabled.
+    pub max_restarts: u32,
+    /// Base delay before the first restart in milliseconds.
+    pub restart_delay_ms: u64,
+    /// Multiplicative factor applied to the delay after each successive crash.
+    pub backoff_factor: f64,
+}
+
+impl Default for CrashPolicy {
+    fn default() -> Self {
+        Self {
+            max_restarts: 3,
+            restart_delay_ms: 1000,
+            backoff_factor: 2.0,
+        }
+    }
+}
+
+/// Tracks crash history for a single extension.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CrashRecord {
+    /// Extension identifier.
+    pub extension_id: String,
+    /// Number of times the extension has crashed.
+    pub crash_count: u32,
+    /// Timestamp of the last crash (milliseconds since epoch).
+    pub last_crash: Option<u64>,
+    /// Whether the extension has been disabled due to repeated crashes.
+    pub disabled: bool,
+}
+
+impl CrashRecord {
+    /// Create a new crash record for the given extension.
+    pub fn new(extension_id: impl Into<String>) -> Self {
+        Self {
+            extension_id: extension_id.into(),
+            crash_count: 0,
+            last_crash: None,
+            disabled: false,
+        }
+    }
+
+    /// Record a new crash occurrence, disabling the extension if it exceeds
+    /// the maximum restart count.
+    pub fn record_crash(&mut self, policy: &CrashPolicy) {
+        self.crash_count += 1;
+        self.last_crash = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        );
+        if self.crash_count > policy.max_restarts {
+            self.disabled = true;
+        }
+    }
+
+    /// Determine whether the extension should be restarted based on the policy.
+    pub fn should_restart(&self, policy: &CrashPolicy) -> bool {
+        !self.disabled && self.crash_count <= policy.max_restarts
+    }
+
+    /// Calculate the delay before the next restart attempt using exponential
+    /// backoff.
+    pub fn next_restart_delay(&self, policy: &CrashPolicy) -> u64 {
+        if self.crash_count == 0 {
+            return policy.restart_delay_ms;
+        }
+        let exponent = (self.crash_count - 1) as f64;
+        let delay = policy.restart_delay_ms as f64 * policy.backoff_factor.powf(exponent);
+        delay as u64
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Plugin API Version Negotiation
 // ---------------------------------------------------------------------------
 
@@ -618,5 +1024,499 @@ mod tests {
         assert_eq!(host.active_commands().len(), 1);
         assert_eq!(host.active_menu_items().len(), 1);
         assert_eq!(host.active_panels().len(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Extension Manifest tests
+    // -----------------------------------------------------------------------
+
+    fn sample_extension_manifest() -> ExtensionManifest {
+        ExtensionManifest {
+            id: "com.test.ext".to_string(),
+            name: "Test Extension".to_string(),
+            version: "1.0.0".to_string(),
+            description: "A test extension".to_string(),
+            author: Some("Tester".to_string()),
+            license: Some("MIT".to_string()),
+            contribution_points: vec![],
+            permissions: vec!["fs.read".to_string()],
+            activation_events: vec!["onStartup".to_string()],
+        }
+    }
+
+    #[test]
+    fn test_extension_manifest_validate_ok() {
+        assert!(sample_extension_manifest().validate().is_ok());
+    }
+
+    #[test]
+    fn test_extension_manifest_validate_empty_id() {
+        let mut m = sample_extension_manifest();
+        m.id = String::new();
+        assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn test_extension_manifest_validate_empty_name() {
+        let mut m = sample_extension_manifest();
+        m.name = String::new();
+        assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn test_extension_manifest_validate_empty_version() {
+        let mut m = sample_extension_manifest();
+        m.version = String::new();
+        assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn test_extension_manifest_validate_empty_description() {
+        let mut m = sample_extension_manifest();
+        m.description = String::new();
+        assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn test_extension_manifest_commands() {
+        let m = ExtensionManifest {
+            contribution_points: vec![
+                ContributionPoint::Command {
+                    id: "cmd.one".to_string(),
+                    title: "One".to_string(),
+                    keybinding: None,
+                },
+                ContributionPoint::Panel {
+                    id: "panel.x".to_string(),
+                    title: "X".to_string(),
+                    icon: None,
+                },
+                ContributionPoint::Command {
+                    id: "cmd.two".to_string(),
+                    title: "Two".to_string(),
+                    keybinding: Some("ctrl+t".to_string()),
+                },
+            ],
+            ..sample_extension_manifest()
+        };
+        let cmds = m.commands();
+        assert_eq!(cmds.len(), 2);
+        assert!(cmds.contains(&("cmd.one", "One")));
+        assert!(cmds.contains(&("cmd.two", "Two")));
+    }
+
+    #[test]
+    fn test_extension_manifest_panels() {
+        let m = ExtensionManifest {
+            contribution_points: vec![ContributionPoint::Panel {
+                id: "panel.a".to_string(),
+                title: "Panel A".to_string(),
+                icon: Some("icon.svg".to_string()),
+            }],
+            ..sample_extension_manifest()
+        };
+        let panels = m.panels();
+        assert_eq!(panels, vec![("panel.a", "Panel A")]);
+    }
+
+    #[test]
+    fn test_extension_manifest_themes() {
+        let m = ExtensionManifest {
+            contribution_points: vec![
+                ContributionPoint::Theme {
+                    id: "dark".to_string(),
+                    label: "Dark Theme".to_string(),
+                },
+                ContributionPoint::Theme {
+                    id: "light".to_string(),
+                    label: "Light Theme".to_string(),
+                },
+            ],
+            ..sample_extension_manifest()
+        };
+        let themes = m.themes();
+        assert_eq!(themes.len(), 2);
+    }
+
+    #[test]
+    fn test_extension_manifest_handles_file_extension() {
+        let m = ExtensionManifest {
+            contribution_points: vec![ContributionPoint::FileType {
+                extensions: vec!["rs".to_string(), "toml".to_string()],
+                language_id: "rust".to_string(),
+            }],
+            ..sample_extension_manifest()
+        };
+        assert!(m.handles_file_extension("rs"));
+        assert!(m.handles_file_extension("toml"));
+        assert!(!m.handles_file_extension("py"));
+    }
+
+    #[test]
+    fn test_extension_manifest_serialization() {
+        let m = ExtensionManifest {
+            contribution_points: vec![ContributionPoint::Setting {
+                key: "fontSize".to_string(),
+                default_value: serde_json::json!(14),
+                description: "Font size".to_string(),
+            }],
+            ..sample_extension_manifest()
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        let decoded: ExtensionManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(m, decoded);
+    }
+
+    // -----------------------------------------------------------------------
+    // ContributionPoint tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_contribution_point_command_variant() {
+        let cp = ContributionPoint::Command {
+            id: "cmd.test".to_string(),
+            title: "Test".to_string(),
+            keybinding: Some("ctrl+shift+t".to_string()),
+        };
+        let json = serde_json::to_string(&cp).unwrap();
+        let decoded: ContributionPoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(cp, decoded);
+    }
+
+    #[test]
+    fn test_contribution_point_menu_variant() {
+        let cp = ContributionPoint::Menu {
+            location: "file".to_string(),
+            items: vec![
+                PluginMenuItem {
+                    command: "save".to_string(),
+                    title: "Save".to_string(),
+                    group: Some("1_file".to_string()),
+                },
+                PluginMenuItem {
+                    command: "open".to_string(),
+                    title: "Open".to_string(),
+                    group: None,
+                },
+            ],
+        };
+        let json = serde_json::to_string(&cp).unwrap();
+        let decoded: ContributionPoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(cp, decoded);
+    }
+
+    #[test]
+    fn test_contribution_point_keybinding_variant() {
+        let cp = ContributionPoint::Keybinding {
+            command: "editor.format".to_string(),
+            key: "ctrl+shift+f".to_string(),
+            when: Some("editorFocus".to_string()),
+        };
+        let json = serde_json::to_string(&cp).unwrap();
+        let decoded: ContributionPoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(cp, decoded);
+    }
+
+    // -----------------------------------------------------------------------
+    // ExtensionState & ExtensionDiagnostics tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_extension_state_variants() {
+        let states = vec![
+            ExtensionState::Inactive,
+            ExtensionState::Activating,
+            ExtensionState::Active,
+            ExtensionState::Deactivating,
+            ExtensionState::Error("fail".to_string()),
+            ExtensionState::Crashed,
+        ];
+        for state in &states {
+            let json = serde_json::to_string(state).unwrap();
+            let decoded: ExtensionState = serde_json::from_str(&json).unwrap();
+            assert_eq!(*state, decoded);
+        }
+    }
+
+    #[test]
+    fn test_diagnostics_new() {
+        let diag = ExtensionDiagnostics::new("ext-1");
+        assert_eq!(diag.id, "ext-1");
+        assert_eq!(diag.state, ExtensionState::Inactive);
+        assert_eq!(diag.error_count, 0);
+        assert!(diag.last_error.is_none());
+        assert!(diag.activation_time_ms.is_none());
+        assert!(diag.memory_usage_bytes.is_none());
+    }
+
+    #[test]
+    fn test_diagnostics_record_error() {
+        let mut diag = ExtensionDiagnostics::new("ext-1");
+        diag.record_error("first error");
+        assert_eq!(diag.error_count, 1);
+        assert_eq!(diag.last_error.as_deref(), Some("first error"));
+
+        diag.record_error("second error");
+        assert_eq!(diag.error_count, 2);
+        assert_eq!(diag.last_error.as_deref(), Some("second error"));
+    }
+
+    // -----------------------------------------------------------------------
+    // ExtensionRegistry tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_registry_register_and_get() {
+        let mut reg = ExtensionRegistry::new();
+        reg.register(sample_extension_manifest()).unwrap();
+        assert!(reg.get("com.test.ext").is_some());
+        assert_eq!(reg.get("com.test.ext").unwrap().name, "Test Extension");
+    }
+
+    #[test]
+    fn test_registry_duplicate_registration() {
+        let mut reg = ExtensionRegistry::new();
+        reg.register(sample_extension_manifest()).unwrap();
+        assert!(reg.register(sample_extension_manifest()).is_err());
+    }
+
+    #[test]
+    fn test_registry_invalid_manifest() {
+        let mut reg = ExtensionRegistry::new();
+        let mut m = sample_extension_manifest();
+        m.id = String::new();
+        assert!(reg.register(m).is_err());
+    }
+
+    #[test]
+    fn test_registry_unregister() {
+        let mut reg = ExtensionRegistry::new();
+        reg.register(sample_extension_manifest()).unwrap();
+        let removed = reg.unregister("com.test.ext").unwrap();
+        assert_eq!(removed.id, "com.test.ext");
+        assert!(reg.get("com.test.ext").is_none());
+    }
+
+    #[test]
+    fn test_registry_unregister_missing() {
+        let mut reg = ExtensionRegistry::new();
+        assert!(reg.unregister("nonexistent").is_err());
+    }
+
+    #[test]
+    fn test_registry_list() {
+        let mut reg = ExtensionRegistry::new();
+        let m1 = sample_extension_manifest();
+        let mut m2 = sample_extension_manifest();
+        m2.id = "com.test.ext2".to_string();
+        m2.name = "Ext Two".to_string();
+        reg.register(m1).unwrap();
+        reg.register(m2).unwrap();
+        assert_eq!(reg.list().len(), 2);
+    }
+
+    #[test]
+    fn test_registry_update_diagnostics() {
+        let mut reg = ExtensionRegistry::new();
+        reg.register(sample_extension_manifest()).unwrap();
+
+        reg.update_diagnostics("com.test.ext", ExtensionState::Active)
+            .unwrap();
+        let diag = reg.get_diagnostics("com.test.ext").unwrap();
+        assert_eq!(diag.state, ExtensionState::Active);
+        assert_eq!(diag.error_count, 0);
+    }
+
+    #[test]
+    fn test_registry_update_diagnostics_error_state() {
+        let mut reg = ExtensionRegistry::new();
+        reg.register(sample_extension_manifest()).unwrap();
+
+        reg.update_diagnostics(
+            "com.test.ext",
+            ExtensionState::Error("something broke".to_string()),
+        )
+        .unwrap();
+        let diag = reg.get_diagnostics("com.test.ext").unwrap();
+        assert_eq!(diag.error_count, 1);
+        assert_eq!(diag.last_error.as_deref(), Some("something broke"));
+    }
+
+    #[test]
+    fn test_registry_update_diagnostics_missing() {
+        let mut reg = ExtensionRegistry::new();
+        assert!(reg
+            .update_diagnostics("missing", ExtensionState::Active)
+            .is_err());
+    }
+
+    #[test]
+    fn test_registry_commands() {
+        let mut reg = ExtensionRegistry::new();
+        let m = ExtensionManifest {
+            contribution_points: vec![
+                ContributionPoint::Command {
+                    id: "cmd.a".to_string(),
+                    title: "A".to_string(),
+                    keybinding: None,
+                },
+                ContributionPoint::Command {
+                    id: "cmd.b".to_string(),
+                    title: "B".to_string(),
+                    keybinding: None,
+                },
+            ],
+            ..sample_extension_manifest()
+        };
+        reg.register(m).unwrap();
+        let cmds = reg.commands();
+        assert_eq!(cmds.len(), 2);
+    }
+
+    #[test]
+    fn test_registry_panels() {
+        let mut reg = ExtensionRegistry::new();
+        let m = ExtensionManifest {
+            contribution_points: vec![ContributionPoint::Panel {
+                id: "p.1".to_string(),
+                title: "Panel 1".to_string(),
+                icon: None,
+            }],
+            ..sample_extension_manifest()
+        };
+        reg.register(m).unwrap();
+        assert_eq!(reg.panels().len(), 1);
+    }
+
+    #[test]
+    fn test_registry_themes() {
+        let mut reg = ExtensionRegistry::new();
+        let m = ExtensionManifest {
+            contribution_points: vec![ContributionPoint::Theme {
+                id: "monokai".to_string(),
+                label: "Monokai".to_string(),
+            }],
+            ..sample_extension_manifest()
+        };
+        reg.register(m).unwrap();
+        let themes = reg.themes();
+        assert_eq!(themes.len(), 1);
+        assert_eq!(themes[0], ("monokai", "Monokai"));
+    }
+
+    #[test]
+    fn test_registry_file_type_handlers() {
+        let mut reg = ExtensionRegistry::new();
+        let m = ExtensionManifest {
+            contribution_points: vec![ContributionPoint::FileType {
+                extensions: vec!["rs".to_string()],
+                language_id: "rust".to_string(),
+            }],
+            ..sample_extension_manifest()
+        };
+        reg.register(m).unwrap();
+        assert_eq!(reg.file_type_handlers("rs").len(), 1);
+        assert_eq!(reg.file_type_handlers("py").len(), 0);
+    }
+
+    #[test]
+    fn test_registry_default() {
+        let reg = ExtensionRegistry::default();
+        assert!(reg.list().is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // CrashPolicy & CrashRecord tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_crash_policy_default() {
+        let policy = CrashPolicy::default();
+        assert_eq!(policy.max_restarts, 3);
+        assert_eq!(policy.restart_delay_ms, 1000);
+        assert!((policy.backoff_factor - 2.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_crash_record_new() {
+        let record = CrashRecord::new("ext-1");
+        assert_eq!(record.extension_id, "ext-1");
+        assert_eq!(record.crash_count, 0);
+        assert!(record.last_crash.is_none());
+        assert!(!record.disabled);
+    }
+
+    #[test]
+    fn test_crash_record_single_crash() {
+        let policy = CrashPolicy::default();
+        let mut record = CrashRecord::new("ext-1");
+        record.record_crash(&policy);
+        assert_eq!(record.crash_count, 1);
+        assert!(record.last_crash.is_some());
+        assert!(!record.disabled);
+        assert!(record.should_restart(&policy));
+    }
+
+    #[test]
+    fn test_crash_record_max_restarts() {
+        let policy = CrashPolicy {
+            max_restarts: 2,
+            restart_delay_ms: 100,
+            backoff_factor: 1.5,
+        };
+        let mut record = CrashRecord::new("ext-1");
+        record.record_crash(&policy);
+        assert!(record.should_restart(&policy));
+        record.record_crash(&policy);
+        assert!(record.should_restart(&policy));
+        record.record_crash(&policy);
+        assert!(record.disabled);
+        assert!(!record.should_restart(&policy));
+    }
+
+    #[test]
+    fn test_crash_record_next_restart_delay_zero_crashes() {
+        let policy = CrashPolicy::default();
+        let record = CrashRecord::new("ext-1");
+        assert_eq!(record.next_restart_delay(&policy), 1000);
+    }
+
+    #[test]
+    fn test_crash_record_next_restart_delay_backoff() {
+        let policy = CrashPolicy {
+            max_restarts: 5,
+            restart_delay_ms: 1000,
+            backoff_factor: 2.0,
+        };
+        let mut record = CrashRecord::new("ext-1");
+        record.crash_count = 1;
+        assert_eq!(record.next_restart_delay(&policy), 1000);
+        record.crash_count = 2;
+        assert_eq!(record.next_restart_delay(&policy), 2000);
+        record.crash_count = 3;
+        assert_eq!(record.next_restart_delay(&policy), 4000);
+    }
+
+    #[test]
+    fn test_crash_record_serialization() {
+        let policy = CrashPolicy::default();
+        let mut record = CrashRecord::new("ext-1");
+        record.record_crash(&policy);
+
+        let json = serde_json::to_string(&record).unwrap();
+        let decoded: CrashRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(record, decoded);
+    }
+
+    #[test]
+    fn test_crash_policy_serialization() {
+        let policy = CrashPolicy {
+            max_restarts: 5,
+            restart_delay_ms: 500,
+            backoff_factor: 1.5,
+        };
+        let json = serde_json::to_string(&policy).unwrap();
+        let decoded: CrashPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(policy, decoded);
     }
 }

@@ -3662,6 +3662,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kael_cache"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "kael_collections"
 version = "0.5.1"
 dependencies = [
@@ -3704,6 +3715,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kael_engines"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kael_http_client"
 version = "0.5.1"
 dependencies = [
@@ -3728,6 +3748,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kael_i18n"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kael_icons"
 version = "0.5.1"
 
@@ -3743,6 +3772,15 @@ dependencies = [
  "foreign-types",
  "metal",
  "objc",
+]
+
+[[package]]
+name = "kael_net"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3784,6 +3822,15 @@ name = "kael_refineable"
 version = "0.5.1"
 dependencies = [
  "kael_derive_refineable",
+]
+
+[[package]]
+name = "kael_release"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

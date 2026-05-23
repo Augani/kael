@@ -1652,7 +1652,7 @@ pub struct FocusedWindowInfo {
 }
 
 /// The status of a system permission.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PermissionStatus {
     /// Permission has been granted.
     Granted,
@@ -1660,6 +1660,8 @@ pub enum PermissionStatus {
     Denied,
     /// Permission has not yet been requested.
     NotDetermined,
+    /// Permission is restricted by system policy (e.g. parental controls).
+    Restricted,
 }
 
 /// System power state change events.

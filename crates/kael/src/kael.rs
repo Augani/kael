@@ -32,9 +32,14 @@ mod auto_updater;
 pub mod benchmark;
 mod bounds_tree;
 mod cache;
+/// Command registry for registering named commands invokable from menus,
+/// keybindings, and a command palette.
+pub mod command_registry;
 mod color;
 /// The default colors used by GPUI.
 pub mod colors;
+/// Developer tools for observability, diagnostics, and runtime inspection.
+pub mod dev_tools;
 mod crash_reporter;
 mod element;
 mod elements;
@@ -57,6 +62,8 @@ pub mod media_capture;
 pub mod media_playback;
 mod path_builder;
 mod platform;
+/// Platform capability detection and feature-level support reporting.
+pub mod platform_caps;
 pub mod plugin;
 pub mod prelude;
 mod print;
@@ -64,8 +71,14 @@ pub mod process_model;
 /// Runtime worker support.
 pub mod runtime;
 mod scene;
+/// Scene graph primitives for canvas and creative applications.
+pub mod scene_graph;
 pub mod security;
+/// Split-pane and tab model for IDE-style workspace layouts.
+pub mod split_pane;
 mod session_store;
+/// Status bar for displaying contextual information in large applications.
+pub mod status_bar;
 mod shared_string;
 mod shared_uri;
 mod shadow_cache;
@@ -78,6 +91,8 @@ mod tab_stop;
 mod taffy;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test;
+/// Text and document editing engine for IDEs, notes apps, and chat composers.
+pub mod text_engine;
 mod text_system;
 /// Application themes with JSON or TOML loading and file hot-reload support.
 pub mod theme;
@@ -86,6 +101,8 @@ mod util;
 mod view;
 mod webview;
 mod window;
+/// Virtualized data models for lists, tables, and trees.
+pub mod virtual_data;
 /// Worker API for runtime tasks.
 pub mod worker_api;
 
@@ -120,7 +137,9 @@ pub use auto_updater::*;
 pub use background_jobs::*;
 pub use benchmark::*;
 pub use color::*;
+pub use command_registry::{CommandDescriptor, CommandPalette, PaletteCommandId};
 pub use crash_reporter::*;
+pub use dev_tools::*;
 pub use ctor::ctor;
 pub use element::*;
 pub use elements::*;
@@ -146,15 +165,19 @@ pub use media_playback::*;
 pub use panels::*;
 pub use path_builder::*;
 pub use platform::*;
+pub use platform_caps::*;
 pub use plugin::*;
 pub use print::*;
 pub use process_model::*;
 pub use refineable::*;
 pub use runtime::*;
 pub use scene::*;
+pub use scene_graph::*;
 pub use security::*;
 pub use session_store::*;
+pub use split_pane::*;
 pub use shared_string::*;
+pub use status_bar::*;
 pub use shared_uri::*;
 pub use smol::Timer;
 pub use style::*;
@@ -166,6 +189,7 @@ pub(crate) use tab_stop::*;
 pub use taffy::{AvailableSpace, LayoutId};
 #[cfg(any(test, feature = "test-support"))]
 pub use test::*;
+pub use text_engine::*;
 pub use text_system::*;
 pub use theme::*;
 pub use tracer::*;
@@ -173,6 +197,7 @@ pub use tracer::*;
 pub use util::smol_timeout;
 pub use util::{FutureExt, Timeout, arc_cow::ArcCow};
 pub use view::*;
+pub use virtual_data::*;
 pub use webview::*;
 pub use window::*;
 pub use worker_api::*;

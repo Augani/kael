@@ -24,20 +24,50 @@ pub enum BenchmarkScenario {
     Workspace,
     /// A media-control dashboard with previews and device routing.
     MediaControl,
+    /// IDE workspace with file tree, tabs, editor, terminal, diagnostics panel.
+    Ide,
+    /// Chat app with thousands of messages and live typing indicators.
+    Chat,
+    /// Notion-style document with nested blocks, embeds, and large undo history.
+    Document,
+    /// Figma-style canvas with thousands of nodes, pan/zoom, selection.
+    Canvas,
+    /// OBS/video editor with live preview, thumbnails, waveforms, and export.
+    VideoEditor,
+    /// Data dashboard with large tables, charts, filters, and real-time updates.
+    Dashboard,
 }
 
 impl BenchmarkScenario {
     /// Human-readable description of the scenario.
     pub fn description(&self) -> &'static str {
         match self {
-            BenchmarkScenario::Messaging => {
+            Self::Messaging => {
                 "Chat interface with conversation list, message bubbles, and composer"
             }
-            BenchmarkScenario::Workspace => {
+            Self::Workspace => {
                 "IDE-like workspace with sidebar, editor tabs, and terminal panel"
             }
-            BenchmarkScenario::MediaControl => {
+            Self::MediaControl => {
                 "OBS-style control surface with scene list, preview, and source properties"
+            }
+            Self::Ide => {
+                "Full IDE with file tree, tabs, editor, terminal, and diagnostics panel"
+            }
+            Self::Chat => {
+                "Chat app with thousands of messages, threads, and live typing indicators"
+            }
+            Self::Document => {
+                "Notion-style document with nested blocks, embeds, and large undo history"
+            }
+            Self::Canvas => {
+                "Figma-style canvas with thousands of nodes, pan/zoom, and selection"
+            }
+            Self::VideoEditor => {
+                "Video editor with live preview, timeline, thumbnails, waveforms, and export"
+            }
+            Self::Dashboard => {
+                "Data dashboard with large tables, charts, filters, and real-time updates"
             }
         }
     }
@@ -45,10 +75,31 @@ impl BenchmarkScenario {
     /// Approximate complexity score (higher = more elements).
     pub fn complexity_score(&self) -> u32 {
         match self {
-            BenchmarkScenario::Messaging => 500,
-            BenchmarkScenario::Workspace => 1200,
-            BenchmarkScenario::MediaControl => 800,
+            Self::Messaging => 500,
+            Self::Workspace => 1200,
+            Self::MediaControl => 800,
+            Self::Ide => 2000,
+            Self::Chat => 1500,
+            Self::Document => 1000,
+            Self::Canvas => 3000,
+            Self::VideoEditor => 2500,
+            Self::Dashboard => 1800,
         }
+    }
+
+    /// Returns all defined benchmark scenarios.
+    pub fn all() -> &'static [BenchmarkScenario] {
+        &[
+            Self::Messaging,
+            Self::Workspace,
+            Self::MediaControl,
+            Self::Ide,
+            Self::Chat,
+            Self::Document,
+            Self::Canvas,
+            Self::VideoEditor,
+            Self::Dashboard,
+        ]
     }
 }
 
@@ -76,18 +127,38 @@ pub enum BenchmarkMetric {
     ColdStart,
     /// Time from background to foreground with first frame rendered.
     WarmStart,
+    /// Time until the UI is interactive after launch.
+    FirstInteractiveFrame,
     /// Resident memory at idle.
     IdleMemory,
     /// Input event to frame presentation latency.
     InputLatency,
+    /// Median frame time (50th percentile).
+    FrameTimeP50,
+    /// 95th percentile frame time.
+    FrameTimeP95,
+    /// 99th percentile frame time.
+    FrameTimeP99,
+    /// Input-to-present latency during scroll interactions.
+    ScrollLatency,
     /// Time to complete a window resize interaction smoothly.
     ResizeSmoothness,
     /// Time to complete a scroll interaction smoothly.
     ScrollSmoothness,
+    /// Memory growth over a long session in megabytes.
+    MemoryGrowth,
     /// CPU utilization over a long session.
     LongSessionCpu,
+    /// GPU utilization percentage.
+    GpuUsage,
     /// Energy impact score over a long session.
     LongSessionEnergy,
+    /// Idle power consumption score.
+    IdlePower,
+    /// Thread/timer wakeups per second at idle.
+    WakeupsPerSecond,
+    /// Asset cache hit rate as a percentage.
+    AssetCacheHitRate,
 }
 
 /// Units for benchmark measurements.
@@ -95,12 +166,16 @@ pub enum BenchmarkMetric {
 pub enum MetricUnit {
     /// Time in milliseconds.
     Milliseconds,
+    /// Time in microseconds.
+    Microseconds,
     /// Memory in megabytes.
     Megabytes,
     /// A percentage value.
     Percent,
     /// Frame rate in frames per second.
     FramesPerSecond,
+    /// Wakeups per second.
+    WakeupsPerSec,
     /// A dimensionless score.
     Score,
 }
@@ -108,11 +183,23 @@ pub enum MetricUnit {
 impl std::fmt::Display for MetricUnit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MetricUnit::Milliseconds => write!(f, "ms"),
-            MetricUnit::Megabytes => write!(f, "MB"),
-            MetricUnit::Percent => write!(f, "%"),
-            MetricUnit::FramesPerSecond => write!(f, "fps"),
-            MetricUnit::Score => write!(f, "score"),
+            Self::Milliseconds => write!(f, "ms"),
+            Self::Microseconds => write!(f, "µs"),
+            Self::Megabytes => write!(f, "MB"),
+            Self::Percent => write!(f, "%"),
+            Self::FramesPerSecond => write!(f, "fps"),
+            Self::WakeupsPerSec => write!(f, "wakeups/s"),
+            Self::Score => write!(f, "score"),
+        }
+    }
+}
+
+impl BenchmarkMetric {
+    /// Whether lower values are better for this metric.
+    pub fn lower_is_better(&self) -> bool {
+        match self {
+            Self::AssetCacheHitRate => false,
+            _ => true,
         }
     }
 }
@@ -685,6 +772,320 @@ impl MetricCollector for LongSessionCollector {
     }
 }
 
+/// Collects frame times and computes percentiles (P50, P95, P99).
+pub struct FrameTimeCollector {
+    frame_times: Vec<Duration>,
+    last_frame: Option<Instant>,
+}
+
+impl FrameTimeCollector {
+    /// Create a new frame time collector.
+    pub fn new() -> Self {
+        Self {
+            frame_times: Vec::new(),
+            last_frame: None,
+        }
+    }
+
+    /// Record a frame timestamp for percentile computation.
+    pub fn record_frame(&mut self) {
+        let now = Instant::now();
+        if let Some(last) = self.last_frame {
+            self.frame_times.push(now.duration_since(last));
+        }
+        self.last_frame = Some(now);
+    }
+
+    fn percentile_ms(&self, p: f64) -> f64 {
+        if self.frame_times.is_empty() {
+            return 0.0;
+        }
+        let mut sorted: Vec<f64> = self.frame_times.iter().map(|d| d.as_secs_f64() * 1000.0).collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let idx = ((p / 100.0) * (sorted.len() - 1) as f64).round() as usize;
+        sorted[idx.min(sorted.len() - 1)]
+    }
+}
+
+impl Default for FrameTimeCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MetricCollector for FrameTimeCollector {
+    fn start(&mut self) {
+        self.frame_times.clear();
+        self.last_frame = None;
+    }
+
+    fn stop(&mut self) -> Vec<BenchmarkMeasurement> {
+        vec![
+            BenchmarkMeasurement {
+                metric: BenchmarkMetric::FrameTimeP50,
+                value: self.percentile_ms(50.0),
+                unit: MetricUnit::Milliseconds,
+                elapsed: Duration::default(),
+            },
+            BenchmarkMeasurement {
+                metric: BenchmarkMetric::FrameTimeP95,
+                value: self.percentile_ms(95.0),
+                unit: MetricUnit::Milliseconds,
+                elapsed: Duration::default(),
+            },
+            BenchmarkMeasurement {
+                metric: BenchmarkMetric::FrameTimeP99,
+                value: self.percentile_ms(99.0),
+                unit: MetricUnit::Milliseconds,
+                elapsed: Duration::default(),
+            },
+        ]
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+/// Tracks memory growth over the duration of a benchmark.
+pub struct MemoryGrowthCollector {
+    start_memory_mb: f64,
+}
+
+impl MemoryGrowthCollector {
+    /// Create a new memory growth collector.
+    pub fn new() -> Self {
+        Self {
+            start_memory_mb: 0.0,
+        }
+    }
+}
+
+impl Default for MemoryGrowthCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MetricCollector for MemoryGrowthCollector {
+    fn start(&mut self) {
+        self.start_memory_mb = MemoryCollector::resident_mb();
+    }
+
+    fn stop(&mut self) -> Vec<BenchmarkMeasurement> {
+        let end_mb = MemoryCollector::resident_mb();
+        vec![BenchmarkMeasurement {
+            metric: BenchmarkMetric::MemoryGrowth,
+            value: end_mb - self.start_memory_mb,
+            unit: MetricUnit::Megabytes,
+            elapsed: Duration::default(),
+        }]
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+/// Tracks asset cache hit rate during a benchmark.
+pub struct CacheHitRateCollector {
+    hits: u64,
+    misses: u64,
+}
+
+impl CacheHitRateCollector {
+    /// Create a new cache hit rate collector.
+    pub fn new() -> Self {
+        Self { hits: 0, misses: 0 }
+    }
+
+    /// Record a cache hit.
+    pub fn record_hit(&mut self) {
+        self.hits += 1;
+    }
+
+    /// Record a cache miss.
+    pub fn record_miss(&mut self) {
+        self.misses += 1;
+    }
+
+    /// Compute hit rate as a percentage (0-100).
+    pub fn hit_rate(&self) -> f64 {
+        let total = self.hits + self.misses;
+        if total == 0 {
+            return 0.0;
+        }
+        (self.hits as f64 / total as f64) * 100.0
+    }
+}
+
+impl Default for CacheHitRateCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MetricCollector for CacheHitRateCollector {
+    fn start(&mut self) {
+        self.hits = 0;
+        self.misses = 0;
+    }
+
+    fn stop(&mut self) -> Vec<BenchmarkMeasurement> {
+        vec![BenchmarkMeasurement {
+            metric: BenchmarkMetric::AssetCacheHitRate,
+            value: self.hit_rate(),
+            unit: MetricUnit::Percent,
+            elapsed: Duration::default(),
+        }]
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Regression Thresholds
+// ---------------------------------------------------------------------------
+
+/// Configurable regression thresholds per metric.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegressionThresholds {
+    /// Default threshold percentage for all metrics.
+    pub default_percent: f64,
+    /// Per-metric threshold overrides.
+    pub overrides: std::collections::HashMap<BenchmarkMetric, f64>,
+}
+
+impl RegressionThresholds {
+    /// Create thresholds with the given default percentage.
+    pub fn new(default_percent: f64) -> Self {
+        Self {
+            default_percent,
+            overrides: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Add a per-metric threshold override.
+    pub fn with_override(mut self, metric: BenchmarkMetric, percent: f64) -> Self {
+        self.overrides.insert(metric, percent);
+        self
+    }
+
+    /// Get the threshold for a specific metric.
+    pub fn threshold_for(&self, metric: BenchmarkMetric) -> f64 {
+        self.overrides.get(&metric).copied().unwrap_or(self.default_percent)
+    }
+}
+
+impl Default for RegressionThresholds {
+    fn default() -> Self {
+        Self::new(10.0)
+    }
+}
+
+/// Check regressions with per-metric thresholds.
+pub fn check_regressions_with_thresholds(
+    baseline: &[BenchmarkResult],
+    candidate: &[BenchmarkResult],
+    thresholds: &RegressionThresholds,
+) -> Vec<Regression> {
+    let mut regressions = Vec::new();
+
+    for candidate_result in candidate {
+        if let Some(baseline_result) = baseline
+            .iter()
+            .find(|b| b.scenario == candidate_result.scenario)
+        {
+            for comparison in compare_results(baseline_result, candidate_result) {
+                let threshold = thresholds.threshold_for(comparison.metric);
+                let is_regression = if comparison.lower_is_better {
+                    comparison.percent_change > threshold
+                } else {
+                    comparison.percent_change < -threshold
+                };
+
+                if is_regression {
+                    regressions.push(Regression {
+                        scenario: candidate_result.scenario,
+                        metric: comparison.metric,
+                        baseline: comparison.baseline,
+                        candidate: comparison.candidate,
+                        percent_change: comparison.percent_change,
+                        unit: comparison.unit,
+                    });
+                }
+            }
+        }
+    }
+
+    regressions
+}
+
+// ---------------------------------------------------------------------------
+// CI Report
+// ---------------------------------------------------------------------------
+
+/// A CI-friendly benchmark report.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CiReport {
+    /// Benchmark results from the candidate run.
+    pub results: Vec<BenchmarkResult>,
+    /// Detected regressions.
+    pub regressions: Vec<Regression>,
+    /// Whether the run passed all regression checks.
+    pub passed: bool,
+    /// Path to the attached Chrome Trace file, if any.
+    pub trace_file: Option<String>,
+}
+
+impl CiReport {
+    /// Generate a CI report comparing candidate results against a baseline.
+    pub fn generate(
+        baseline: &[BenchmarkResult],
+        candidate: &[BenchmarkResult],
+        thresholds: &RegressionThresholds,
+        trace_file: Option<String>,
+    ) -> Self {
+        let regressions = check_regressions_with_thresholds(baseline, candidate, thresholds);
+        Self {
+            results: candidate.to_vec(),
+            regressions: regressions.clone(),
+            passed: regressions.is_empty(),
+            trace_file,
+        }
+    }
+
+    /// Serialize the report to JSON.
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+
+    /// Generate a human-readable summary of the report.
+    pub fn summary(&self) -> String {
+        let mut out = String::new();
+        out.push_str(&format!("Benchmark Report: {}\n", if self.passed { "PASSED" } else { "FAILED" }));
+        out.push_str(&format!("Results: {} scenarios\n", self.results.len()));
+        if !self.regressions.is_empty() {
+            out.push_str(&format!("Regressions: {}\n", self.regressions.len()));
+            for reg in &self.regressions {
+                out.push_str(&format!(
+                    "  {:?}/{:?}: {:.1}{} -> {:.1}{} ({:+.1}%)\n",
+                    reg.scenario, reg.metric,
+                    reg.baseline, reg.unit,
+                    reg.candidate, reg.unit,
+                    reg.percent_change,
+                ));
+            }
+        }
+        if let Some(trace) = &self.trace_file {
+            out.push_str(&format!("Trace: {}\n", trace));
+        }
+        out
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
@@ -804,6 +1205,24 @@ impl BenchmarkHarness {
     pub fn export_to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(&self.results)
     }
+
+    /// Write the attached tracer's events to a Chrome Trace format file.
+    pub fn write_trace_artifact(&self, path: impl Into<std::path::PathBuf>) -> anyhow::Result<()> {
+        if let Some(tracer) = &self.tracer {
+            tracer.write_to_file(path)?;
+        }
+        Ok(())
+    }
+
+    /// Generate a CI report comparing against a baseline file.
+    pub fn generate_ci_report(
+        &self,
+        baseline: &[BenchmarkResult],
+        thresholds: &RegressionThresholds,
+        trace_file: Option<String>,
+    ) -> CiReport {
+        CiReport::generate(baseline, &self.results, thresholds, trace_file)
+    }
 }
 
 impl Default for BenchmarkHarness {
@@ -843,8 +1262,7 @@ pub fn compare_results(
                 delta,
                 percent_change,
                 unit: baseline_m.unit,
-                lower_is_better: baseline_m.metric != BenchmarkMetric::ResizeSmoothness
-                    && baseline_m.metric != BenchmarkMetric::ScrollSmoothness,
+                lower_is_better: baseline_m.metric.lower_is_better(),
             });
         }
     }
@@ -1140,6 +1558,104 @@ mod tests {
         let regressions = check_regressions(&baseline, &candidate, 10.0);
         assert_eq!(regressions.len(), 1);
         assert_eq!(regressions[0].percent_change, 50.0);
+    }
+
+    #[test]
+    fn test_all_scenarios_have_descriptions() {
+        for scenario in BenchmarkScenario::all() {
+            assert!(!scenario.description().is_empty());
+            assert!(scenario.complexity_score() > 0);
+        }
+    }
+
+    #[test]
+    fn test_frame_time_collector() {
+        let mut collector = FrameTimeCollector::new();
+        collector.start();
+        for _ in 0..20 {
+            std::thread::sleep(Duration::from_millis(8));
+            collector.record_frame();
+        }
+        let measurements = collector.stop();
+        assert_eq!(measurements.len(), 3);
+        let p50 = measurements.iter().find(|m| m.metric == BenchmarkMetric::FrameTimeP50).unwrap();
+        let p99 = measurements.iter().find(|m| m.metric == BenchmarkMetric::FrameTimeP99).unwrap();
+        assert!(p50.value > 0.0);
+        assert!(p99.value >= p50.value);
+    }
+
+    #[test]
+    fn test_memory_growth_collector() {
+        let mut collector = MemoryGrowthCollector::new();
+        collector.start();
+        let measurements = collector.stop();
+        assert_eq!(measurements.len(), 1);
+        assert_eq!(measurements[0].metric, BenchmarkMetric::MemoryGrowth);
+    }
+
+    #[test]
+    fn test_cache_hit_rate_collector() {
+        let mut collector = CacheHitRateCollector::new();
+        collector.start();
+        for _ in 0..7 { collector.record_hit(); }
+        for _ in 0..3 { collector.record_miss(); }
+        let measurements = collector.stop();
+        assert_eq!(measurements.len(), 1);
+        assert_eq!(measurements[0].metric, BenchmarkMetric::AssetCacheHitRate);
+        assert!((measurements[0].value - 70.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_regression_thresholds() {
+        let thresholds = RegressionThresholds::new(10.0)
+            .with_override(BenchmarkMetric::ColdStart, 5.0);
+        assert_eq!(thresholds.threshold_for(BenchmarkMetric::ColdStart), 5.0);
+        assert_eq!(thresholds.threshold_for(BenchmarkMetric::IdleMemory), 10.0);
+    }
+
+    #[test]
+    fn test_ci_report_generation() {
+        let baseline = vec![BenchmarkResult {
+            scenario: BenchmarkScenario::Ide,
+            subject: "baseline".to_string(),
+            measurements: vec![BenchmarkMeasurement {
+                metric: BenchmarkMetric::ColdStart,
+                value: 100.0,
+                unit: MetricUnit::Milliseconds,
+                elapsed: Duration::default(),
+            }],
+            started_at: Instant::now(),
+            duration: Duration::default(),
+            environment: BenchmarkEnvironment::current(),
+        }];
+
+        let candidate = vec![BenchmarkResult {
+            scenario: BenchmarkScenario::Ide,
+            subject: "candidate".to_string(),
+            measurements: vec![BenchmarkMeasurement {
+                metric: BenchmarkMetric::ColdStart,
+                value: 105.0,
+                unit: MetricUnit::Milliseconds,
+                elapsed: Duration::default(),
+            }],
+            started_at: Instant::now(),
+            duration: Duration::default(),
+            environment: BenchmarkEnvironment::current(),
+        }];
+
+        let thresholds = RegressionThresholds::new(10.0);
+        let report = CiReport::generate(&baseline, &candidate, &thresholds, None);
+        assert!(report.passed);
+        assert!(report.regressions.is_empty());
+        assert!(!report.summary().is_empty());
+        assert!(report.to_json().is_ok());
+    }
+
+    #[test]
+    fn test_metric_lower_is_better() {
+        assert!(BenchmarkMetric::ColdStart.lower_is_better());
+        assert!(BenchmarkMetric::IdleMemory.lower_is_better());
+        assert!(!BenchmarkMetric::AssetCacheHitRate.lower_is_better());
     }
 
     #[test]

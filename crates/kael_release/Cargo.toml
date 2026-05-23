@@ -1,0 +1,11 @@
+[package]
+name = "kael_release"
+version = "0.5.1"
+edition = "2024"
+publish = true
+license.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
