@@ -3,11 +3,11 @@ use super::wayland::WaylandWindowStatePtr;
 #[cfg(feature = "x11")]
 use super::x11::X11WindowStatePtr;
 use crate::{
-    Bounds, Pixels, Point, SharedString,
     webview::{
         NavigationPolicy, PlatformWebView, PlatformWebViewCommand, WebViewMessageHandler,
         WebViewNavigationHandler,
     },
+    Bounds, Pixels, Point, SharedString,
 };
 use anyhow::{Context as _, Result};
 use gtk::prelude::*;
@@ -17,8 +17,8 @@ use util::ResultExt;
 #[cfg(feature = "wayland")]
 use wry::WebViewBuilderExtUnix;
 use wry::{
-    NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder,
     dpi::{LogicalPosition, LogicalSize},
+    NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder,
 };
 
 pub(crate) struct LinuxWebViewHost {
@@ -312,7 +312,7 @@ impl LinuxWebViewHost {
         self.apply(scale_factor, parent_origin);
     }
 
-    fn apply(&mut self, _scale_factor: f32, _parent_origin: Option<Point<Pixels>>) {
+    fn apply(&mut self, _scale_factor: f32, parent_origin: Option<Point<Pixels>>) {
         match &self.backend {
             LinuxWebViewBackend::X11 => {
                 if self.bounds != self.desired.bounds {

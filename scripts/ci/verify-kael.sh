@@ -22,30 +22,29 @@ case "$mode" in
     run cargo test -p kael --test extension_process
     run cargo check -p kael --lib --features "platform-foundation"
     run cargo check -p kael --lib --features "document"
-    run cargo check -p kael --lib --features "audio"
     run cargo check -p kael --lib --features "pdf"
     run cargo check -p kael --lib --features "notifications-full"
     run cargo check -p kael --lib --features "share"
-    run cargo check -p kael --lib --features "platform-foundation document audio pdf notifications-full share"
+    run cargo check -p kael --lib --features "platform-foundation document pdf notifications-full share"
     run cargo check -p kael --example platform_features --example daemon_app --example perf_bench --example capture_demo
     run cargo run -p xtask -- dry-run
     ;;
   linux-x11)
     run cargo check -p kael --lib --no-default-features --features "font-kit x11"
     run cargo check -p kael --lib --no-default-features --features "font-kit x11 platform-foundation"
-    run cargo check -p kael --lib --no-default-features --features "font-kit x11 platform-foundation document audio pdf notifications-full share"
+    run cargo check -p kael --lib --no-default-features --features "font-kit x11 platform-foundation document pdf notifications-full share"
     run cargo check -p kael --example platform_features --example daemon_app --example perf_bench --example capture_demo --no-default-features --features "font-kit x11"
     ;;
   linux-wayland)
     run cargo check -p kael --lib --no-default-features --features "font-kit wayland"
     run cargo check -p kael --lib --no-default-features --features "font-kit wayland platform-foundation"
-    run cargo check -p kael --lib --no-default-features --features "font-kit wayland platform-foundation document audio pdf notifications-full share"
+    run cargo check -p kael --lib --no-default-features --features "font-kit wayland platform-foundation document pdf notifications-full share"
     run cargo check -p kael --example platform_features --example daemon_app --example perf_bench --example capture_demo --no-default-features --features "font-kit wayland"
     ;;
   macos-blade)
     run cargo check -p kael --lib --no-default-features --features "font-kit macos-blade"
     run cargo check -p kael --lib --no-default-features --features "font-kit macos-blade platform-foundation"
-    run cargo check -p kael --lib --no-default-features --features "font-kit macos-blade platform-foundation document audio pdf notifications-full share"
+    run cargo check -p kael --lib --no-default-features --features "font-kit macos-blade platform-foundation document pdf notifications-full share"
     ;;
   *)
     usage
