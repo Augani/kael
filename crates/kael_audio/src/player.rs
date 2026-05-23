@@ -123,6 +123,7 @@ struct AudioPlayerState {
     playback_state: PlaybackState,
     volume: f32,
     rate: f32,
+    load_generation: u64,
     next_track_id: u64,
     next_listener_id: usize,
     state_listeners: BTreeMap<usize, StateListener>,
@@ -139,6 +140,7 @@ impl AudioPlayer {
                 playback_state: PlaybackState::Idle,
                 volume: 1.0,
                 rate: 1.0,
+                load_generation: 0,
                 next_track_id: 1,
                 next_listener_id: 0,
                 state_listeners: BTreeMap::new(),
@@ -149,6 +151,12 @@ impl AudioPlayer {
 
     /// Loads a track and makes it the current player target.
     pub async fn load(&self, source: AudioSource) -> Result<Track> {
+        let my_generation = {
+            let mut state = self.inner.lock();
+            state.load_generation += 1;
+            state.load_generation
+        };
+
         let loading_listeners = self.set_state(PlaybackState::Loading);
         notify_state_listeners(&loading_listeners, PlaybackState::Loading);
 
@@ -163,6 +171,9 @@ impl AudioPlayer {
                 let handle = kael_media::AudioHandle::new(source.to_media_source());
                 let (track, listeners) = {
                     let mut state = self.inner.lock();
+                    if state.load_generation != my_generation {
+                        return Err(anyhow::anyhow!("load superseded by newer request"));
+                    }
                     let track = Track {
                         id: state.next_track_id,
                         source,
@@ -426,6 +437,18 @@ mod tests {
     use futures::executor::block_on;
 
     use super::{AudioPlayer, AudioSource, PlaybackState};
+
+    #[test]
+    fn load_generation_increments_on_load() {
+        let player = AudioPlayer::new();
+        let gen_before = player.inner.lock().load_generation;
+        {
+            let mut state = player.inner.lock();
+            state.load_generation += 1;
+        }
+        let gen_after = player.inner.lock().load_generation;
+        assert_eq!(gen_after, gen_before + 1);
+    }
 
     #[test]
     fn load_seek_and_stop_update_state_and_position() {
