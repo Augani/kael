@@ -10,11 +10,11 @@ use std::{
 };
 
 use parking_lot::Mutex;
-use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Serialize, de::DeserializeOwned};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 
-use crate::{Error, Result, Subscription, platform};
+use crate::{platform, Error, Result, Subscription};
 
 type Observer = Arc<dyn Fn(Option<Value>) + Send + Sync + 'static>;
 
@@ -437,11 +437,9 @@ impl KvStore for SqliteKvStore {
         };
 
         let key = key.to_string();
-        let current_value = {
+        let (observer_id, current_value) = {
             let connection = self.connection.lock();
-            load_value_from_connection(&connection, &key).ok().flatten()
-        };
-        let observer_id = {
+            let current_value = load_value_from_connection(&connection, &key).ok().flatten();
             let mut state = self.observers.lock();
             let observer_id = state.next_observer_id;
             state.next_observer_id += 1;
@@ -450,7 +448,7 @@ impl KvStore for SqliteKvStore {
                 .entry(key.clone())
                 .or_default()
                 .insert(observer_id, observer.clone());
-            observer_id
+            (observer_id, current_value)
         };
 
         observer(current_value);
@@ -561,7 +559,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
     use tempfile::tempdir;
 
-    use super::{JsonKvStore, KvStore, SqliteKvStore, persist_values};
+    use super::{persist_values, JsonKvStore, KvStore, SqliteKvStore};
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct Preferences {
@@ -635,6 +633,23 @@ mod tests {
 
         let observed = values.lock().unwrap().clone();
         assert_eq!(observed, vec![None, Some("dark".to_string()), None]);
+    }
+
+    #[test]
+    fn sqlite_observer_sees_initial_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SqliteKvStore::open_at(dir.path().join("test.db")).unwrap();
+        store.set("color", &"blue".to_string()).unwrap();
+
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let recv_clone = received.clone();
+        let _sub = store.observe::<String, _>("color", move |value| {
+            recv_clone.lock().unwrap().push(value);
+        });
+
+        let values = received.lock().unwrap();
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0], Some("blue".to_string()));
     }
 
     #[test]
