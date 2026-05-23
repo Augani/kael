@@ -111,6 +111,8 @@ pub struct Track {
     pub duration: Option<Duration>,
 }
 
+const MAX_DECODED_AUDIO_BYTES: u64 = 256 * 1024 * 1024;
+
 /// A clonable audio player that wraps `kael-media` playback.
 #[derive(Clone)]
 pub struct AudioPlayer {
@@ -147,6 +149,20 @@ impl AudioPlayer {
                 position_listeners: BTreeMap::new(),
             })),
         }
+    }
+
+    /// Returns true when the decoded audio for a given format would exceed the buffer limit.
+    pub fn exceeds_buffer_limit(
+        duration: Duration,
+        sample_rate: u32,
+        channels: u16,
+        bits_per_sample: u16,
+    ) -> bool {
+        let bytes_per_sample = (bits_per_sample as u64 + 7) / 8;
+        let total = (duration.as_secs_f64() * sample_rate as f64) as u64
+            * channels as u64
+            * bytes_per_sample;
+        total > MAX_DECODED_AUDIO_BYTES
     }
 
     /// Loads a track and makes it the current player target.
@@ -436,6 +452,26 @@ mod tests {
     use futures::executor::block_on;
 
     use super::{AudioPlayer, AudioSource, PlaybackState};
+
+    #[test]
+    fn rejects_oversized_audio() {
+        assert!(AudioPlayer::exceeds_buffer_limit(
+            Duration::from_secs(7200),
+            48000,
+            2,
+            16,
+        ));
+    }
+
+    #[test]
+    fn accepts_reasonable_audio() {
+        assert!(!AudioPlayer::exceeds_buffer_limit(
+            Duration::from_secs(60),
+            44100,
+            2,
+            16,
+        ));
+    }
 
     #[test]
     fn audio_player_rate_defaults_to_one() {
