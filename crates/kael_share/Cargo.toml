@@ -23,6 +23,9 @@ version = "2.5.4"
 [dev-dependencies.futures]
 version = "0.3"
 
+[dev-dependencies.tempfile]
+version = "3"
+
 [target.'cfg(target_os = "macos")'.dependencies.block]
 version = "0.1"
 

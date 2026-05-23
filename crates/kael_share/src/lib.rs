@@ -5,7 +5,7 @@
 mod platform;
 
 use anyhow::{Result, bail};
-use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
+use std::{collections::BTreeSet, path::PathBuf, sync::Arc, time::Duration};
 
 pub use platform::PlatformShareSupport;
 
@@ -379,6 +379,42 @@ impl ShareReceiver {
     }
 }
 
+/// Removes stale `kael-share-*` temporary directories older than `max_age`.
+///
+/// Returns the number of directories successfully removed.
+pub fn cleanup_share_temps(temp_dir: &std::path::Path, max_age: Duration) -> usize {
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(max_age)
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+    let mut removed = 0;
+
+    let Ok(entries) = std::fs::read_dir(temp_dir) else {
+        return 0;
+    };
+
+    for entry in entries.filter_map(|e| e.ok()) {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        if !name_str.starts_with("kael-share-") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        if modified <= cutoff {
+            if std::fs::remove_dir_all(entry.path()).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
 #[cfg(any(target_os = "linux", target_os = "windows", test))]
 fn materialize_image(image: &ShareImage) -> Result<PathBuf> {
     use anyhow::Context;
@@ -556,6 +592,36 @@ mod tests {
         if let Some(image_parent) = image_parent {
             fs::remove_dir(image_parent).ok();
         }
+    }
+
+    #[test]
+    fn cleanup_removes_stale_share_dirs() {
+        let temp = tempfile::tempdir().unwrap();
+        let old_dir = temp.path().join("kael-share-old-123-0");
+        std::fs::create_dir(&old_dir).unwrap();
+        std::fs::write(old_dir.join("test.png"), b"fake").unwrap();
+
+        let removed = cleanup_share_temps(temp.path(), Duration::from_secs(0));
+        assert_eq!(removed, 1);
+        assert!(!old_dir.exists());
+    }
+
+    #[test]
+    fn cleanup_ignores_non_kael_dirs() {
+        let temp = tempfile::tempdir().unwrap();
+        let other_dir = temp.path().join("some-other-dir");
+        std::fs::create_dir(&other_dir).unwrap();
+
+        let removed = cleanup_share_temps(temp.path(), Duration::from_secs(0));
+        assert_eq!(removed, 0);
+        assert!(other_dir.exists());
+    }
+
+    #[test]
+    fn cleanup_returns_zero_for_missing_dir() {
+        let missing = std::path::Path::new("/tmp/kael-share-nonexistent-test-dir-xyz");
+        let removed = cleanup_share_temps(missing, Duration::from_secs(0));
+        assert_eq!(removed, 0);
     }
 
     #[test]
