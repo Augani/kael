@@ -65,40 +65,42 @@ pub(crate) fn support() -> crate::PlatformShareSupport {
 }
 
 fn copy_to_clipboard(text: &str) -> Result<bool> {
-    use std::ptr;
     use windows::Win32::{
         Foundation::HWND,
         System::{
-            DataExchange::{
-                CF_UNICODETEXT, CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
-            },
+            DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
             Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock},
         },
     };
 
+    const CF_UNICODETEXT: u32 = 13;
     let wide: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
 
     unsafe {
-        if !OpenClipboard(HWND(ptr::null_mut())).as_bool() {
-            return Ok(false);
+        OpenClipboard(HWND::default())?;
+
+        if let Err(err) = EmptyClipboard() {
+            let _ = CloseClipboard();
+            return Err(err.into());
         }
 
-        EmptyClipboard()?;
-        let allocation = GlobalAlloc(GMEM_MOVEABLE, std::mem::size_of_val(wide.as_slice()));
-        if allocation.is_invalid() {
-            CloseClipboard()?;
-            return Ok(false);
-        }
+        let allocation = match GlobalAlloc(GMEM_MOVEABLE, std::mem::size_of_val(wide.as_slice())) {
+            Ok(alloc) => alloc,
+            Err(_) => {
+                let _ = CloseClipboard();
+                return Ok(false);
+            }
+        };
 
         let target = GlobalLock(allocation) as *mut u16;
         if target.is_null() {
-            CloseClipboard()?;
+            let _ = CloseClipboard();
             return Ok(false);
         }
 
         target.copy_from_nonoverlapping(wide.as_ptr(), wide.len());
-        GlobalUnlock(allocation);
-        SetClipboardData(CF_UNICODETEXT.0 as u32, allocation)?;
+        let _ = GlobalUnlock(allocation);
+        SetClipboardData(CF_UNICODETEXT, allocation)?;
         CloseClipboard()?;
     }
 
@@ -118,7 +120,7 @@ fn open_with_shell(target: &str) -> Result<bool> {
 
     unsafe {
         let instance = ShellExecuteW(
-            HWND(std::ptr::null_mut()),
+            HWND::default(),
             PCWSTR::from_raw(operation.as_ptr()),
             PCWSTR::from_raw(target.as_ptr()),
             PCWSTR::null(),
