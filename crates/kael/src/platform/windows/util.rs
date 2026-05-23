@@ -1,18 +1,18 @@
 use std::sync::OnceLock;
 
-use anyhow::Context;
 use ::util::ResultExt;
+use anyhow::Context;
 use windows::{
-    core::{BOOL, HSTRING, PCSTR},
+    UI::{
+        Color,
+        ViewManagement::{UIColorType, UISettings},
+    },
     Wdk::System::SystemServices::RtlGetVersion,
     Win32::{
         Foundation::*, Graphics::Dwm::*, System::LibraryLoader::LoadLibraryA,
         UI::WindowsAndMessaging::*,
     },
-    UI::{
-        Color,
-        ViewManagement::{UIColorType, UISettings},
-    },
+    core::{BOOL, HSTRING, PCSTR},
 };
 
 use crate::*;
