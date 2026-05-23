@@ -215,89 +215,49 @@ impl KvStore for JsonKvStore {
             source,
         })?;
 
-        loop {
-            let (next_values, observers, generation) = {
-                let state = self.state.lock();
+        let observers = {
+            let mut state = self.state.lock();
 
-                if state.values.get(key) == Some(&serialized) {
-                    return Ok(());
-                }
-
-                let mut next_values = state.values.clone();
-                next_values.insert(key.to_string(), serialized.clone());
-
-                (
-                    next_values,
-                    state
-                        .observers
-                        .get(key)
-                        .map(|observers| observers.values().cloned().collect())
-                        .unwrap_or_default(),
-                    state.generation,
-                )
-            };
-
-            persist_values(&self.path, &next_values)?;
-
-            let committed = {
-                let mut state = self.state.lock();
-                if state.generation != generation {
-                    false
-                } else {
-                    state.values = next_values;
-                    state.generation += 1;
-                    true
-                }
-            };
-
-            if committed {
-                Self::notify(observers, Some(serialized));
+            if state.values.get(key) == Some(&serialized) {
                 return Ok(());
             }
-        }
+
+            state.values.insert(key.to_string(), serialized.clone());
+            state.generation += 1;
+            persist_values(&self.path, &state.values)?;
+
+            state
+                .observers
+                .get(key)
+                .map(|obs| obs.values().cloned().collect::<Vec<_>>())
+                .unwrap_or_default()
+        };
+
+        Self::notify(observers, Some(serialized));
+        Ok(())
     }
 
     fn remove(&self, key: &str) -> Result<bool> {
-        loop {
-            let (next_values, observers, generation) = {
-                let state = self.state.lock();
+        let observers = {
+            let mut state = self.state.lock();
 
-                if !state.values.contains_key(key) {
-                    return Ok(false);
-                }
-
-                let mut next_values = state.values.clone();
-                next_values.remove(key);
-
-                (
-                    next_values,
-                    state
-                        .observers
-                        .get(key)
-                        .map(|observers| observers.values().cloned().collect())
-                        .unwrap_or_default(),
-                    state.generation,
-                )
-            };
-
-            persist_values(&self.path, &next_values)?;
-
-            let committed = {
-                let mut state = self.state.lock();
-                if state.generation != generation {
-                    false
-                } else {
-                    state.values = next_values;
-                    state.generation += 1;
-                    true
-                }
-            };
-
-            if committed {
-                Self::notify(observers, None);
-                return Ok(true);
+            if !state.values.contains_key(key) {
+                return Ok(false);
             }
-        }
+
+            state.values.remove(key);
+            state.generation += 1;
+            persist_values(&self.path, &state.values)?;
+
+            state
+                .observers
+                .get(key)
+                .map(|obs| obs.values().cloned().collect::<Vec<_>>())
+                .unwrap_or_default()
+        };
+
+        Self::notify(observers, None);
+        Ok(true)
     }
 
     fn keys(&self) -> Vec<String> {
@@ -650,6 +610,36 @@ mod tests {
         let values = received.lock().unwrap();
         assert_eq!(values.len(), 1);
         assert_eq!(values[0], Some("blue".to_string()));
+    }
+
+    #[test]
+    fn json_concurrent_sets_do_not_lose_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(JsonKvStore::open_at(dir.path().join("test.json")).unwrap());
+
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let store = store.clone();
+                std::thread::spawn(move || {
+                    for j in 0..20 {
+                        let key = format!("key-{i}-{j}");
+                        store.set(&key, &format!("val-{i}-{j}")).unwrap();
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        for i in 0..8 {
+            for j in 0..20 {
+                let key = format!("key-{i}-{j}");
+                let val: Option<String> = store.get(&key).unwrap();
+                assert!(val.is_some(), "missing {key}");
+            }
+        }
     }
 
     #[test]
