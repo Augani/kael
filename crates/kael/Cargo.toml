@@ -18,6 +18,11 @@ keywords = [
 categories = ["gui", "rendering::graphics-api"]
 license = "Apache-2.0"
 repository = "https://github.com/Augani/kael"
+exclude = [
+    "tests/",
+    "benches/",
+    "examples/",
+]
 
 [features]
 default = [
