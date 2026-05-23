@@ -66,7 +66,7 @@ pub(crate) fn support() -> crate::PlatformShareSupport {
 
 fn copy_to_clipboard(text: &str) -> Result<bool> {
     use windows::Win32::{
-        Foundation::HWND,
+        Foundation::{HANDLE, HWND},
         System::{
             DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
             Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock},
@@ -100,7 +100,7 @@ fn copy_to_clipboard(text: &str) -> Result<bool> {
 
         target.copy_from_nonoverlapping(wide.as_ptr(), wide.len());
         let _ = GlobalUnlock(allocation);
-        SetClipboardData(CF_UNICODETEXT, allocation)?;
+        SetClipboardData(CF_UNICODETEXT, HANDLE(allocation.0))?;
         CloseClipboard()?;
     }
 
