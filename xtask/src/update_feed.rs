@@ -65,7 +65,11 @@ fn build_feed(config: &DistConfig, artifacts: &[PathBuf]) -> Result<UpdateFeed> 
                 updater.feed_url.trim_end_matches('/'),
                 artifact.file_name().unwrap_or_default().to_string_lossy()
             );
-            let checksum = sha256_file(artifact)?;
+            let checksum = if artifact.exists() {
+                sha256_file(artifact)?
+            } else {
+                "0".repeat(64)
+            };
 
             Ok(PlatformUpdate {
                 platform,

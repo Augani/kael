@@ -203,7 +203,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Check templates compile
-        run: cargo check -p template-dashboard -p template-messaging -p template-workspace
+        run: cargo check -p dashboard-app -p messaging-app -p workspace-app
 
   dry-run-release:
     name: Dry-Run Release Validation
@@ -221,7 +221,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Validate dist config
-        run: cargo xtask validate kael.dist.toml
+        run: cargo run -p xtask -- validate kael.dist.toml
 
       - name: Dry-run release pipeline
-        run: cargo xtask dry-run kael.dist.toml
+        run: cargo run -p xtask -- dry-run kael.dist.toml

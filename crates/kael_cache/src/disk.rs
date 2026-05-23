@@ -539,9 +539,11 @@ mod tests {
         let sibling = tmp.path().parent().unwrap().join("kael-cache-escape-check");
         fs::write(&sibling, b"keep").unwrap();
 
-        assert!(cache
-            .put("../kael-cache-escape-check", "key", b"bad")
-            .is_err());
+        assert!(
+            cache
+                .put("../kael-cache-escape-check", "key", b"bad")
+                .is_err()
+        );
         assert!(cache.clear_namespace("../kael-cache-escape-check").is_err());
         assert_eq!(fs::read(&sibling).unwrap(), b"keep");
 

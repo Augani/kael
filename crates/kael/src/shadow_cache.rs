@@ -1,4 +1,4 @@
-use crate::{point, size, Bounds, Corners, DevicePixels, Hsla, ScaledPixels, Size};
+use crate::{Bounds, Corners, DevicePixels, Hsla, ScaledPixels, Size, point, size};
 use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 

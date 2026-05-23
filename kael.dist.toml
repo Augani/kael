@@ -1,23 +1,17 @@
-app_id = "com.example.kael-app"
-name = "GPUI App"
+app_id = "com.adabraka.kael"
+name = "Kael"
 version = "0.1.0"
 
 [icons]
-macos = "assets/icon.icns"
-windows = "assets/icon.ico"
-linux = "assets/icon.png"
 
 [bundle]
-copyright = "© 2026 Example Inc."
-category = "public.app-category.productivity"
+copyright = "© 2026 Adabraka Team"
+category = "public.app-category.developer-tools"
 minimum_system_version = "12.0"
-file_description = "A GPUI-based desktop application"
-linux_categories = ["Office", "Productivity"]
+file_description = "A GPU-accelerated desktop application framework"
+linux_categories = ["Development", "Utility"]
 
 [signing]
-macos_team_id = "TEAM123456"
-macos_certificate = "Developer ID Application: Example Inc"
 
 [updater]
-feed_url = "https://example.com/updates/feed.json"
-public_key = "REPLACE_WITH_ACTUAL_PUBLIC_KEY"
+feed_url = "https://kael.dev/updates/feed.json"

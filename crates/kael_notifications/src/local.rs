@@ -440,7 +440,11 @@ impl NotificationCenter {
                             continue;
                         }
                         if center
-                            .deliver_once(entry.id, entry.notification.clone(), entry.actions.clone())
+                            .deliver_once(
+                                entry.id,
+                                entry.notification.clone(),
+                                entry.actions.clone(),
+                            )
                             .is_err()
                         {
                             continue;
