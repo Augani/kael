@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use kael::{
-    actions, div, http_client::ReqwestClient, img, prelude::*, px, rgb, size, App, AppContext,
-    Application, AssetSource, Bounds, Context, ImageSource, KeyBinding, Menu, MenuItem, Point,
-    SharedString, SharedUri, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    App, AppContext, Application, AssetSource, Bounds, Context, ImageSource, KeyBinding, Menu,
+    MenuItem, Point, SharedString, SharedUri, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    actions, div, http_client::ReqwestClient, img, prelude::*, px, rgb, size,
 };
 
 struct Assets {

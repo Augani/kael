@@ -1,4 +1,4 @@
-use crate::{px, FontId, FontRun, Pixels, PlatformTextSystem, SharedString, TextRun};
+use crate::{FontId, FontRun, Pixels, PlatformTextSystem, SharedString, TextRun, px};
 use collections::HashMap;
 use std::{iter, sync::Arc};
 
@@ -318,7 +318,7 @@ impl Boundary {
 mod tests {
     use super::*;
     use crate::{
-        font, Font, FontFeatures, FontStyle, FontWeight, Hsla, TestAppContext, TestDispatcher,
+        Font, FontFeatures, FontStyle, FontWeight, Hsla, TestAppContext, TestDispatcher, font,
     };
     #[cfg(target_os = "macos")]
     use crate::{TextRun, WindowTextSystem, WrapBoundary};
