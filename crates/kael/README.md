@@ -75,4 +75,4 @@ fn main() {
 
 ## License
 
-Apache-2.0. Built on [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) from Zed Industries.
+Apache-2.0. Inspired by [GPUI](https://crates.io/crates/gpui).

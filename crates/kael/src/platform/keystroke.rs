@@ -45,7 +45,7 @@ pub struct KeybindingKeystroke {
     display_key: String,
 }
 
-/// Error type for `Keystroke::parse`. This is used instead of `anyhow::Error` so that Zed can use
+/// Error type for `Keystroke::parse`. This is used instead of `anyhow::Error` so that Kael can use
 /// markdown to display it.
 #[derive(Debug)]
 pub struct InvalidKeystrokeError {

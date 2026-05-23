@@ -7,7 +7,7 @@
 //! The output of the `gpui::test` macro is understood by other rust test runners, so you can use it with `cargo test`
 //! or `cargo-nextest`, or another runner of your choice.
 //!
-//! To make it possible to test collaborative user interfaces (like Zed) you can ask for as many different contexts
+//! To make it possible to test collaborative user interfaces (like Kael) you can ask for as many different contexts
 //! as you need.
 //!
 //! ## Example

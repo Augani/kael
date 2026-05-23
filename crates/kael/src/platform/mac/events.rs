@@ -1,16 +1,16 @@
 use crate::{
-    Capslock, KeyDownEvent, KeyUpEvent, Keystroke, MagnifyEvent, Modifiers, ModifiersChangedEvent,
-    MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection,
-    Pixels, PlatformInput, ScrollDelta, ScrollWheelEvent, TouchPhase,
     platform::mac::{
-        LMGetKbdType, NSStringExt, TISCopyCurrentKeyboardLayoutInputSource,
-        TISGetInputSourceProperty, UCKeyTranslate, kTISPropertyUnicodeKeyLayoutData,
+        kTISPropertyUnicodeKeyLayoutData, LMGetKbdType, NSStringExt,
+        TISCopyCurrentKeyboardLayoutInputSource, TISGetInputSourceProperty, UCKeyTranslate,
     },
-    point, px,
+    point, px, Capslock, KeyDownEvent, KeyUpEvent, Keystroke, MagnifyEvent, Modifiers,
+    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent,
+    MouseUpEvent, NavigationDirection, Pixels, PlatformInput, ScrollDelta, ScrollWheelEvent,
+    TouchPhase,
 };
 use cocoa::{
     appkit::{NSEvent, NSEventModifierFlags, NSEventPhase, NSEventType},
-    base::{YES, id},
+    base::{id, YES},
 };
 use core_foundation::data::{CFDataGetBytePtr, CFDataRef};
 use core_graphics::event::CGKeyCode;
@@ -411,7 +411,7 @@ unsafe fn parse_keystroke(native_event: id) -> Keystroke {
                 // * Czech            7 | ý    | cmd-ý | cmd-7        (layout has shifted numbers)
                 // * Norwegian        7 | 7    | cmd-7 | cmd-/        (macOS reports cmd-shift-7 instead of cmd-/)
                 // * Russian          7 | 7    | cmd-7 | cmd-&        (shift-7 is . but when cmd is down, should use cmd layout)
-                // * German QWERTZ    ; | ö    | cmd-ö | cmd-Ö        (Zed's shift special case only applies to a-z)
+                // * German QWERTZ    ; | ö    | cmd-ö | cmd-Ö        (Kael's shift special case only applies to a-z)
                 //
                 let mut chars_ignoring_modifiers =
                     chars_for_modified_key(native_event.keyCode(), NO_MOD);

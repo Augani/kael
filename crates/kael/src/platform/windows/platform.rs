@@ -1944,7 +1944,7 @@ unsafe extern "system" fn enum_minimize_foreign_windows(hwnd: HWND, lparam: LPAR
     }
 }
 
-const PLATFORM_WINDOW_CLASS_NAME: PCWSTR = w!("Zed::PlatformWindow");
+const PLATFORM_WINDOW_CLASS_NAME: PCWSTR = w!("Kael::PlatformWindow");
 
 fn register_platform_window_class() {
     let wc = WNDCLASSW {

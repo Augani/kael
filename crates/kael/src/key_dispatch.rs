@@ -26,8 +26,8 @@
 //!```
 //!
 //! The keybindings themselves are managed independently by calling cx.bind_keys().
-//! (Though mostly when developing Zed itself, you just need to add a new line to
-//!  assets/keymaps/default-{platform}.json).
+//! (In practice, you just need to add a new line to
+//!  your keymaps configuration file).
 //!
 //! ```ignore
 //! cx.bind_keys([
@@ -41,7 +41,7 @@
 //!
 //! In real apps, it is a little more complicated than this, because typically you have
 //! several nested views that each register keyboard handlers. In this case action matching
-//! bubbles up from the bottom. For example in Zed, the Workspace is the top-level view, which contains Pane's, which contain Editors. If there are conflicting keybindings defined
+//! bubbles up from the bottom. For example, the Workspace is the top-level view, which contains Pane's, which contain Editors. If there are conflicting keybindings defined
 //! then the Editor's bindings take precedence over the Pane's bindings, which take precedence over the Workspace.
 //!
 //! In GPUI, keybindings are not limited to just single keystrokes, you can define

@@ -1,4 +1,4 @@
-//! This code was generated using Zed Agent with Claude Opus 4.
+//! This code was generated using Claude Opus 4.
 
 use kael_kael_macros::derive_inspector_reflection;
 

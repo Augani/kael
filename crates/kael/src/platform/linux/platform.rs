@@ -42,7 +42,7 @@ pub(crate) const SCROLL_LINES: f32 = 3.0;
 #[cfg(any(feature = "wayland", feature = "x11"))]
 pub(crate) const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(400);
 pub(crate) const DOUBLE_CLICK_DISTANCE: Pixels = px(5.0);
-pub(crate) const KEYRING_LABEL: &str = "zed-github-account";
+pub(crate) const KEYRING_LABEL: &str = "kael-github-account";
 
 pub trait LinuxClient {
     fn compositor_name(&self) -> &'static str;

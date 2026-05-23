@@ -271,8 +271,8 @@ impl MacPlatform {
             foreground_executor: ForegroundExecutor::new(dispatcher),
             renderer_context: renderer::Context::default(),
             pasteboard: unsafe { NSPasteboard::generalPasteboard(nil) },
-            text_hash_pasteboard_type: unsafe { ns_string("zed-text-hash") },
-            metadata_pasteboard_type: unsafe { ns_string("zed-metadata") },
+            text_hash_pasteboard_type: unsafe { ns_string("kael-text-hash") },
+            metadata_pasteboard_type: unsafe { ns_string("kael-metadata") },
             reopen: None,
             quit: None,
             menu_command: None,
@@ -419,7 +419,7 @@ impl MacPlatform {
                 } => {
                     // Note that this is intentionally using earlier bindings, whereas typically
                     // later ones take display precedence. See the discussion on
-                    // https://github.com/zed-industries/zed/issues/23621
+                    // Use earlier bindings for display precedence in menus
                     let keystrokes = keymap
                         .bindings_for_action(action.as_ref())
                         .find_or_first(|binding| {
@@ -928,7 +928,7 @@ impl Platform for MacPlatform {
                                         .split(|&b| b == b'.')
                                         .collect::<Vec<_>>();
 
-                                    // https://github.com/zed-industries/zed/issues/16969
+                                    // Workaround for macOS Sequoia file extension duplication bug
                                     // Workaround a bug in macOS Sequoia that adds an extra file-extension
                                     // sometimes. e.g. `a.sql` becomes `a.sql.s` or `a.txtx` becomes `a.txtx.txt`
                                     //

@@ -230,8 +230,8 @@ pub fn prevent_root_execution() {
     if is_root && !allow_root {
         eprintln!(
             "\
-Error: Running Zed as root or via sudo is unsupported.
-       Doing so (even once) may subtly break things for all subsequent non-root usage of Zed.
+Error: Running Kael as root or via sudo is unsupported.
+       Doing so (even once) may subtly break things for all subsequent non-root usage of Kael.
        It is untested and not recommended, don't complain when things break.
        If you wish to proceed anyways, set `ZED_ALLOW_ROOT=true` in your environment."
         );
@@ -290,37 +290,37 @@ fn load_shell_from_passwd() -> Result<()> {
     Ok(())
 }
 
-/// Returns a shell escaped path for the current zed executable
-pub fn get_shell_safe_zed_path() -> anyhow::Result<String> {
-    let zed_path =
-        std::env::current_exe().context("Failed to determine current zed executable path.")?;
+/// Returns a shell escaped path for the current kael executable
+pub fn get_shell_safe_kael_path() -> anyhow::Result<String> {
+    let kael_path =
+        std::env::current_exe().context("Failed to determine current kael executable path.")?;
 
-    zed_path
+    kael_path
         .try_shell_safe()
-        .context("Failed to shell-escape Zed executable path.")
+        .context("Failed to shell-escape Kael executable path.")
 }
 
-/// Returns a path for the zed cli executable, this function
-/// should be called from the zed executable, not zed-cli.
-pub fn get_zed_cli_path() -> Result<PathBuf> {
-    let zed_path =
-        std::env::current_exe().context("Failed to determine current zed executable path.")?;
-    let parent = zed_path
+/// Returns a path for the kael cli executable, this function
+/// should be called from the kael executable, not kael-cli.
+pub fn get_kael_cli_path() -> Result<PathBuf> {
+    let kael_path =
+        std::env::current_exe().context("Failed to determine current kael executable path.")?;
+    let parent = kael_path
         .parent()
-        .context("Failed to determine parent directory of zed executable path.")?;
+        .context("Failed to determine parent directory of kael executable path.")?;
 
     let possible_locations: &[&str] = if cfg!(target_os = "macos") {
-        // On macOS, the zed executable and zed-cli are inside the app bundle,
+        // On macOS, the kael executable and kael-cli are inside the app bundle,
         // so here ./cli is for both installed and development builds.
         &["./cli"]
     } else if cfg!(target_os = "windows") {
-        // bin/zed.exe is for installed builds, ./cli.exe is for development builds.
-        &["bin/zed.exe", "./cli.exe"]
+        // bin/kael.exe is for installed builds, ./cli.exe is for development builds.
+        &["bin/kael.exe", "./cli.exe"]
     } else if cfg!(target_os = "linux") || cfg!(target_os = "freebsd") {
         // bin is the standard, ./cli is for the target directory in development builds.
-        &["../bin/zed", "./cli"]
+        &["../bin/kael", "./cli"]
     } else {
-        anyhow::bail!("unsupported platform for determining zed-cli path");
+        anyhow::bail!("unsupported platform for determining kael-cli path");
     };
 
     possible_locations
@@ -330,11 +330,11 @@ pub fn get_zed_cli_path() -> Result<PathBuf> {
                 .join(p)
                 .canonicalize()
                 .ok()
-                .filter(|p| p != &zed_path)
+                .filter(|p| p != &kael_path)
         })
         .with_context(|| {
             format!(
-                "could not find zed-cli from any of: {}",
+                "could not find kael-cli from any of: {}",
                 possible_locations.join(", ")
             )
         })

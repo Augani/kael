@@ -552,7 +552,7 @@ impl BladeRenderer {
                     "there's a known bug with amdgpu/radv, try setting ZED_PATH_SAMPLE_COUNT=0 as a workaround"
                 );
                 log::error!(
-                    "if that helps you're running into https://github.com/zed-industries/zed/issues/26143"
+                    "if that helps you're running into a known amdgpu/radv rendering issue"
                 );
             }
             log::error!(
@@ -1584,7 +1584,7 @@ fn create_msaa_texture_if_needed(
 /// A set of parameters that can be set using a corresponding environment variable.
 struct RenderingParameters {
     // Env var: ZED_PATH_SAMPLE_COUNT
-    // workaround for https://github.com/zed-industries/zed/issues/26143
+    // workaround for known amdgpu/radv path rendering issue
     path_sample_count: u32,
 
     // Env var: ZED_FONTS_GAMMA

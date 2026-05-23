@@ -35,7 +35,7 @@ async fn capture_unix(
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
 
-    let zed_path = super::get_shell_safe_zed_path()?;
+    let kael_path = super::get_shell_safe_kael_path()?;
     let shell_kind = ShellKind::new(shell_path, false);
 
     let mut command_string = String::new();
@@ -43,7 +43,7 @@ async fn capture_unix(
     command.args(args);
     // In some shells, file descriptors greater than 2 cannot be used in interactive mode,
     // so file descriptor 0 (stdin) is used instead. This impacts zsh, old bash; perhaps others.
-    // See: https://github.com/zed-industries/zed/pull/32136#issuecomment-2999645482
+    // Some shells cannot use file descriptors > 2 in interactive mode (zsh, old bash, etc.)
     const FD_STDIN: std::os::fd::RawFd = 0;
     const FD_STDOUT: std::os::fd::RawFd = 1;
     const FD_STDERR: std::os::fd::RawFd = 2;
@@ -79,7 +79,7 @@ async fn capture_unix(
     if let Some(prefix) = shell_kind.command_prefix() {
         command_string.push(prefix);
     }
-    command_string.push_str(&format!("{} --printenv {}", zed_path, redir));
+    command_string.push_str(&format!("{} --printenv {}", kael_path, redir));
     command.args(["-i", "-c", &command_string]);
 
     super::set_pre_exec_to_start_new_session(&mut command);
@@ -95,7 +95,7 @@ async fn capture_unix(
         String::from_utf8_lossy(&process_output.stderr),
     );
 
-    // Parse the JSON output from zed --printenv
+    // Parse the JSON output from kael --printenv
     let env_map: collections::HashMap<String, String> = serde_json::from_str(&env_output)
         .with_context(|| "Failed to deserialize environment variables from json")?;
     Ok(env_map)
@@ -132,8 +132,8 @@ async fn capture_windows(
 ) -> Result<collections::HashMap<String, String>> {
     use std::process::Stdio;
 
-    let zed_path =
-        std::env::current_exe().context("Failed to determine current zed executable path.")?;
+    let kael_path =
+        std::env::current_exe().context("Failed to determine current kael executable path.")?;
 
     let shell_kind = ShellKind::new(shell_path, true);
     let env_output = match shell_kind {
@@ -154,7 +154,7 @@ async fn capture_windows(
                     &format!(
                         "Set-Location '{}'; & '{}' --printenv",
                         directory.display(),
-                        zed_path.display()
+                        kael_path.display()
                     ),
                 ])
                 .stdin(Stdio::null())
@@ -179,7 +179,7 @@ async fn capture_windows(
                     &format!(
                         "cd '{}'; {} --printenv",
                         directory.display(),
-                        zed_path.display()
+                        kael_path.display()
                     ),
                 ])
                 .stdin(Stdio::null())
@@ -204,7 +204,7 @@ async fn capture_windows(
                     &format!(
                         "cd '{}'; {} --printenv",
                         directory.display(),
-                        zed_path.display()
+                        kael_path.display()
                     ),
                 ])
                 .stdin(Stdio::null())
@@ -226,7 +226,7 @@ async fn capture_windows(
 
     let env_output = String::from_utf8_lossy(&env_output.stdout);
 
-    // Parse the JSON output from zed --printenv
+    // Parse the JSON output from kael --printenv
     serde_json::from_str(&env_output)
         .with_context(|| "Failed to deserialize environment variables from json")
 }

@@ -1,18 +1,18 @@
 use std::sync::OnceLock;
 
-use ::util::ResultExt;
 use anyhow::Context;
+use util::ResultExt;
 use windows::{
-    UI::{
-        Color,
-        ViewManagement::{UIColorType, UISettings},
-    },
+    core::{BOOL, HSTRING, PCSTR},
     Wdk::System::SystemServices::RtlGetVersion,
     Win32::{
         Foundation::*, Graphics::Dwm::*, System::LibraryLoader::LoadLibraryA,
         UI::WindowsAndMessaging::*,
     },
-    core::{BOOL, HSTRING, PCSTR},
+    UI::{
+        Color,
+        ViewManagement::{UIColorType, UISettings},
+    },
 };
 
 use crate::*;
@@ -107,7 +107,7 @@ pub(crate) unsafe fn set_window_long(
 }
 
 pub(crate) fn windows_credentials_target_name(url: &str) -> String {
-    format!("zed:url={}", url)
+    format!("kael:url={}", url)
 }
 
 pub(crate) fn load_cursor(style: CursorStyle) -> Option<HCURSOR> {

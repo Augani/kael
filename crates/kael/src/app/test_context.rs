@@ -443,7 +443,7 @@ impl TestAppContext {
 
     /// simulate_keystrokes takes a space-separated list of keys to type.
     /// cx.simulate_keystrokes("cmd-shift-p b k s p enter")
-    /// in Zed, this will run backspace on the current editor through the command palette.
+    /// in Kael, this will run backspace on the current editor through the command palette.
     /// This will also run the background executor until it's parked.
     pub fn simulate_keystrokes(&mut self, window: AnyWindowHandle, keystrokes: &str) {
         for keystroke in keystrokes

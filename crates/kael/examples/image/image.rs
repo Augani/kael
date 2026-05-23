@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use kael::{
-    App, AppContext, Application, AssetSource, Bounds, Context, ImageSource, KeyBinding, Menu,
-    MenuItem, Point, SharedString, SharedUri, TitlebarOptions, Window, WindowBounds, WindowOptions,
-    actions, div, http_client::ReqwestClient, img, prelude::*, px, rgb, size,
+    actions, div, http_client::ReqwestClient, img, prelude::*, px, rgb, size, App, AppContext,
+    Application, AssetSource, Bounds, Context, ImageSource, KeyBinding, Menu, MenuItem, Point,
+    SharedString, SharedUri, TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
 
 struct Assets {
@@ -86,7 +86,7 @@ impl Render for ImageShowcase {
                     .items_center()
                     .gap_8()
                     .child(img(
-                        "https://github.com/zed-industries/zed/actions/workflows/ci.yml/badge.svg",
+                        "https://github.com/Augani/kael/actions/workflows/ci.yml/badge.svg",
                     ))
                     .child(
                         div()

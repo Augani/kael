@@ -1,10 +1,10 @@
-//! Renders a div with deep children hierarchy. This example is useful to exemplify that Zed can
+//! Renders a div with deep children hierarchy. This example is useful to exemplify that Kael can
 //! handle deep hierarchies (even though it cannot just yet!).
 use std::sync::LazyLock;
 
 use kael::{
-    App, Application, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px,
-    size,
+    div, prelude::*, px, size, App, Application, Bounds, Context, Window, WindowBounds,
+    WindowOptions,
 };
 
 struct Tree {}
