@@ -22,7 +22,13 @@ use metal::{CAMetalLayer, CommandQueue, MTLPixelFormat, MTLResourceOptions, NSRa
 use objc::{self, msg_send, sel, sel_impl};
 use parking_lot::Mutex;
 
-use std::{cell::Cell, ffi::c_void, mem, ptr, sync::Arc, time::Instant};
+use std::{
+    cell::Cell,
+    ffi::c_void,
+    mem, ptr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 // Exported to metal
 pub(crate) type PointF = crate::Point<f32>;
@@ -34,6 +40,7 @@ const SHADERS_SOURCE_FILE: &str = include_str!(concat!(env!("OUT_DIR"), "/stitch
 // Use 4x MSAA, all devices support it.
 // https://developer.apple.com/documentation/metal/mtldevice/1433355-supportstexturesamplecount
 const PATH_SAMPLE_COUNT: u32 = 4;
+const RENDER_TARGET_PIXEL_FORMAT: MTLPixelFormat = MTLPixelFormat::BGRA8Unorm;
 
 pub type Context = Arc<Mutex<InstanceBufferPool>>;
 pub type Renderer = MetalRenderer;
@@ -68,7 +75,7 @@ pub(crate) struct InstanceBuffer {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-struct RendererCounters {
+pub(crate) struct RendererCounters {
     resize_events: u64,
     capacity_growths: u64,
     path_texture_allocations: u64,
@@ -79,6 +86,12 @@ struct RendererCounters {
     next_drawable_wait_micros: u64,
     max_next_drawable_wait_micros: u64,
     instance_buffer_growths: u64,
+    frames_requested: u64,
+    frames_presented: u64,
+    missed_display_intervals: u64,
+    drawable_stall_count: u64,
+    max_frame_interval_micros: u64,
+    last_present_timestamp_micros: u64,
 }
 
 impl InstanceBufferPool {
@@ -136,6 +149,7 @@ pub(crate) struct MetalRenderer {
     blur_horizontal_texture: Option<metal::Texture>,
     path_sample_count: u32,
     counters: RendererCounters,
+    last_present_instant: Option<Instant>,
 }
 
 #[repr(C)]
@@ -160,10 +174,15 @@ impl MetalRenderer {
 
         let layer = metal::MetalLayer::new();
         layer.set_device(&device);
-        layer.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+        layer.set_pixel_format(RENDER_TARGET_PIXEL_FORMAT);
         layer.set_opaque(false);
         layer.set_maximum_drawable_count(3);
         unsafe {
+            let cg_color_space = core_graphics::color_space::CGColorSpace::create_with_name(
+                core_graphics::color_space::kCGColorSpaceSRGB,
+            )
+            .expect("failed to create sRGB color space");
+            let _: () = msg_send![&*layer, setColorspace: cg_color_space];
             let _: () = msg_send![&*layer, setAllowsNextDrawableTimeout: NO];
             let _: () = msg_send![&*layer, setNeedsDisplayOnBoundsChange: YES];
             let _: () = msg_send![
@@ -208,7 +227,7 @@ impl MetalRenderer {
             "paths_rasterization",
             "path_rasterization_vertex",
             "path_rasterization_fragment",
-            MTLPixelFormat::BGRA8Unorm,
+            RENDER_TARGET_PIXEL_FORMAT,
             PATH_SAMPLE_COUNT,
         );
         let path_sprites_pipeline_state = build_path_sprite_pipeline_state(
@@ -217,7 +236,7 @@ impl MetalRenderer {
             "path_sprites",
             "path_sprite_vertex",
             "path_sprite_fragment",
-            MTLPixelFormat::BGRA8Unorm,
+            RENDER_TARGET_PIXEL_FORMAT,
         );
         let shadows_pipeline_state = build_pipeline_state(
             &device,
@@ -225,7 +244,7 @@ impl MetalRenderer {
             "shadows",
             "shadow_vertex",
             "shadow_fragment",
-            MTLPixelFormat::BGRA8Unorm,
+            RENDER_TARGET_PIXEL_FORMAT,
         );
         let quads_pipeline_state = build_pipeline_state(
             &device,
@@ -233,7 +252,7 @@ impl MetalRenderer {
             "quads",
             "quad_vertex",
             "quad_fragment",
-            MTLPixelFormat::BGRA8Unorm,
+            RENDER_TARGET_PIXEL_FORMAT,
         );
         let blur_horizontal_pipeline_state = build_pipeline_state(
             &device,
@@ -241,7 +260,7 @@ impl MetalRenderer {
             "blur_horizontal",
             "blur_vertex",
             "blur_horizontal_fragment",
-            MTLPixelFormat::BGRA8Unorm,
+            RENDER_TARGET_PIXEL_FORMAT,
         );
         let blur_composite_pipeline_state = build_pipeline_state(
             &device,
@@ -249,7 +268,7 @@ impl MetalRenderer {
             "blur_composite",
             "blur_vertex",
             "blur_composite_fragment",
-            MTLPixelFormat::BGRA8Unorm,
+            RENDER_TARGET_PIXEL_FORMAT,
         );
         let underlines_pipeline_state = build_pipeline_state(
             &device,
@@ -257,7 +276,7 @@ impl MetalRenderer {
             "underlines",
             "underline_vertex",
             "underline_fragment",
-            MTLPixelFormat::BGRA8Unorm,
+            RENDER_TARGET_PIXEL_FORMAT,
         );
         let monochrome_sprites_pipeline_state = build_pipeline_state(
             &device,
@@ -265,7 +284,7 @@ impl MetalRenderer {
             "monochrome_sprites",
             "monochrome_sprite_vertex",
             "monochrome_sprite_fragment",
-            MTLPixelFormat::BGRA8Unorm,
+            RENDER_TARGET_PIXEL_FORMAT,
         );
         let polychrome_sprites_pipeline_state = build_pipeline_state(
             &device,
@@ -273,7 +292,7 @@ impl MetalRenderer {
             "polychrome_sprites",
             "polychrome_sprite_vertex",
             "polychrome_sprite_fragment",
-            MTLPixelFormat::BGRA8Unorm,
+            RENDER_TARGET_PIXEL_FORMAT,
         );
         let surfaces_pipeline_state = build_pipeline_state(
             &device,
@@ -281,7 +300,7 @@ impl MetalRenderer {
             "surfaces",
             "surface_vertex",
             "surface_fragment",
-            MTLPixelFormat::BGRA8Unorm,
+            RENDER_TARGET_PIXEL_FORMAT,
         );
 
         let command_queue = device.new_command_queue();
@@ -317,6 +336,7 @@ impl MetalRenderer {
             blur_horizontal_texture: None,
             path_sample_count: PATH_SAMPLE_COUNT,
             counters: RendererCounters::default(),
+            last_present_instant: None,
         }
     }
 
@@ -417,7 +437,7 @@ impl MetalRenderer {
         let texture_descriptor = metal::TextureDescriptor::new();
         texture_descriptor.set_width(size.width.0 as u64);
         texture_descriptor.set_height(size.height.0 as u64);
-        texture_descriptor.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm);
+        texture_descriptor.set_pixel_format(RENDER_TARGET_PIXEL_FORMAT);
         texture_descriptor
             .set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
         self.path_intermediate_texture = Some(self.device.new_texture(&texture_descriptor));
@@ -443,7 +463,7 @@ impl MetalRenderer {
         let texture_descriptor = metal::TextureDescriptor::new();
         texture_descriptor.set_width(size.width.0 as u64);
         texture_descriptor.set_height(size.height.0 as u64);
-        texture_descriptor.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm);
+        texture_descriptor.set_pixel_format(RENDER_TARGET_PIXEL_FORMAT);
         texture_descriptor
             .set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
         self.cached_surface_texture = Some(self.device.new_texture(&texture_descriptor));
@@ -467,7 +487,7 @@ impl MetalRenderer {
         let texture_descriptor = metal::TextureDescriptor::new();
         texture_descriptor.set_width(size.width.0 as u64);
         texture_descriptor.set_height(size.height.0 as u64);
-        texture_descriptor.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm);
+        texture_descriptor.set_pixel_format(RENDER_TARGET_PIXEL_FORMAT);
         texture_descriptor
             .set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
         self.blur_source_texture = Some(self.device.new_texture(&texture_descriptor));
@@ -489,6 +509,7 @@ impl MetalRenderer {
 
     pub fn draw(&mut self, scene: &Scene) {
         self.counters.draw_calls += 1;
+        self.counters.frames_requested += 1;
         let layer = self.layer.clone();
         let viewport_size = layer.drawable_size();
         let viewport_size: Size<DevicePixels> = size(
@@ -544,6 +565,29 @@ impl MetalRenderer {
                         command_buffer.present_drawable(drawable);
                         command_buffer.commit();
                     }
+
+                    self.counters.frames_presented += 1;
+                    let present_instant = Instant::now();
+                    if let Some(last_present_instant) = self.last_present_instant {
+                        let interval =
+                            present_instant.saturating_duration_since(last_present_instant);
+                        let interval_micros = interval.as_micros() as u64;
+                        self.counters.max_frame_interval_micros =
+                            self.counters.max_frame_interval_micros.max(interval_micros);
+                        if interval > Duration::from_micros(16_667) {
+                            self.counters.missed_display_intervals += 1;
+                        }
+                    }
+                    self.last_present_instant = Some(present_instant);
+                    self.counters.last_present_timestamp_micros = present_instant
+                        .duration_since(drawable_started_at)
+                        .as_micros()
+                        as u64;
+
+                    if next_drawable_wait_micros > 2_000 {
+                        self.counters.drawable_stall_count += 1;
+                    }
+
                     return;
                 }
                 Err(err) => {
@@ -565,6 +609,18 @@ impl MetalRenderer {
                 }
             }
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn debug_counters(&self) -> RendererCounters {
+        self.counters
+    }
+
+    #[allow(dead_code)]
+    pub fn reset_counters(&mut self) {
+        let last_ts = self.counters.last_present_timestamp_micros;
+        self.counters = RendererCounters::default();
+        self.counters.last_present_timestamp_micros = last_ts;
     }
 
     fn ensure_buffer_size(&mut self, scene: &Scene) {

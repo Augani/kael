@@ -2112,6 +2112,12 @@ impl Window {
         self.scale_factor
     }
 
+    /// Returns a pixel snap policy configured for this window's scale factor,
+    /// enabling application code to snap positions to device pixel boundaries.
+    pub fn pixel_snap_policy(&self) -> crate::PixelSnapPolicy {
+        crate::PixelSnapPolicy::new(self.scale_factor)
+    }
+
     /// The size of an em for the base font of the application. Adjusting this value allows the
     /// UI to scale, just like zooming a web page.
     pub fn rem_size(&self) -> Pixels {
@@ -3255,13 +3261,18 @@ impl Window {
         let scale_factor = self.scale_factor();
         let content_mask = self.content_mask();
         let opacity = self.element_opacity();
+        let corner_radii = platform_adjusted_corner_radii(
+            quad.corner_radii,
+            quad.bounds.size,
+            quad.continuous_corners,
+        );
         self.next_frame.scene.insert_primitive(Quad {
             order: 0,
             bounds: quad.bounds.scale_and_snap(scale_factor),
             content_mask: content_mask.scale(scale_factor),
             background: quad.background.opacity(opacity),
             border_color: quad.border_color.opacity(opacity),
-            corner_radii: quad.corner_radii.scale_and_snap(scale_factor),
+            corner_radii: corner_radii.scale_and_snap(scale_factor),
             border_widths: quad.border_widths.scale_and_snap_widths(scale_factor),
             border_style: quad.border_style,
             continuous_corners: if quad.continuous_corners { 1 } else { 0 },
@@ -5730,6 +5741,29 @@ impl From<&'static core::panic::Location<'static>> for ElementId {
     }
 }
 
+fn platform_adjusted_corner_radii(
+    corner_radii: Corners<Pixels>,
+    size: Size<Pixels>,
+    continuous_corners: bool,
+) -> Corners<Pixels> {
+    #[cfg(target_os = "macos")]
+    {
+        if !continuous_corners {
+            return Corners {
+                top_left: corner_radii.top_left * 1.5,
+                top_right: corner_radii.top_right * 1.5,
+                bottom_right: corner_radii.bottom_right * 1.5,
+                bottom_left: corner_radii.bottom_left * 1.5,
+            }
+            .clamp_radii_for_quad_size(size);
+        }
+    }
+
+    let _ = size;
+    let _ = continuous_corners;
+    corner_radii
+}
+
 /// A rectangle to be rendered in the window at the given position and size.
 /// Passed as an argument [`Window::paint_quad`].
 #[derive(Clone)]
@@ -5804,7 +5838,7 @@ pub fn quad(
         border_widths: border_widths.into(),
         border_color: border_color.into(),
         border_style,
-        continuous_corners: false,
+        continuous_corners: true,
         transform: TransformationMatrix::unit(),
         blend_mode: BlendMode::Normal,
     }
@@ -5819,7 +5853,7 @@ pub fn fill(bounds: impl Into<Bounds<Pixels>>, background: impl Into<Background>
         border_widths: (0.).into(),
         border_color: transparent_black(),
         border_style: BorderStyle::default(),
-        continuous_corners: false,
+        continuous_corners: true,
         transform: TransformationMatrix::unit(),
         blend_mode: BlendMode::Normal,
     }
@@ -5838,7 +5872,7 @@ pub fn outline(
         border_widths: (1.).into(),
         border_color: border_color.into(),
         border_style,
-        continuous_corners: false,
+        continuous_corners: true,
         transform: TransformationMatrix::unit(),
         blend_mode: BlendMode::Normal,
     }

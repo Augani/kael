@@ -807,7 +807,7 @@ fragment float4 monochrome_sprite_fragment(
   float4 sample =
       atlas_texture.sample(atlas_texture_sampler, input.tile_position);
   float4 color = input.color;
-  color.a *= sample.a;
+  color.a *= pow(sample.a, 0.85);
   return color;
 }
 
@@ -861,7 +861,7 @@ fragment float4 polychrome_sprite_fragment(
 
   if (sprite.sprite_kind == 1u) {
     float4 tint = hsla_to_rgba(sprite.color);
-    float3 coverage = sample.rgb;
+    float3 coverage = pow(sample.rgb, float3(0.85));
     float coverage_alpha = max(max(coverage.r, coverage.g), coverage.b);
     float shape_alpha = sprite.opacity * saturate(0.5 - distance);
     float alpha = tint.a * coverage_alpha * shape_alpha;
@@ -1264,7 +1264,10 @@ float squircle_sdf(float2 point, Bounds_ScaledPixels bounds,
     float corner_radius = pick_corner_radius(point - center, corner_radii);
     float2 effective_half = half_size - corner_radius;
     float2 q = max(float2(0.0), p - effective_half);
-    float n = 2.5;
+    // Squircle (superellipse) exponent. Tuned to match SwiftUI's `RoundedRectangle.fill()`
+    // default, which renders with a slight continuous corner rather than a pure circle.
+    // n=2 is a pure circle; n=4 is a strong squircle. Apple's app-icon mask uses ~5.
+    float n = 2.1;
     float dist = pow(pow(q.x, n) + pow(q.y, n), 1.0 / n) - corner_radius;
     return dist;
 }

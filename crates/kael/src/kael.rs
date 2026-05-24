@@ -61,6 +61,7 @@ pub mod media_capture;
 #[cfg(feature = "media")]
 pub mod media_playback;
 mod path_builder;
+mod pixel_snap;
 mod platform;
 /// Platform capability detection and feature-level support reporting.
 pub mod platform_caps;
@@ -166,6 +167,7 @@ pub use media_capture::*;
 pub use media_playback::*;
 pub use panels::*;
 pub use path_builder::*;
+pub use pixel_snap::PixelSnapPolicy;
 pub use platform::*;
 pub use platform_caps::*;
 pub use plugin::*;

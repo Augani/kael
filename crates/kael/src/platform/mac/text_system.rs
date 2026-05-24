@@ -1,11 +1,14 @@
 use crate::{
-    Bounds, DevicePixels, Font, FontFallbacks, FontFeatures, FontId, FontMetrics, FontRun,
-    FontStyle, FontWeight, GlyphId, GlyphRasterMode, LineLayout, Pixels, PlatformTextSystem, Point,
-    RenderGlyphParams, Result, SUBPIXEL_VARIANTS_X, ShapedGlyph, ShapedRun, SharedString, Size,
-    point, px, size, swap_rgba_pa_to_bgra,
+    point, px, size, swap_rgba_pa_to_bgra, Bounds, DevicePixels, Font, FontFallbacks, FontFeatures,
+    FontId, FontMetrics, FontRun, FontStyle, FontWeight, GlyphId, GlyphRasterMode, LineLayout,
+    Pixels, PlatformTextSystem, Point, RenderGlyphParams, Result, ShapedGlyph, ShapedRun,
+    SharedString, Size, SUBPIXEL_VARIANTS_X,
 };
 use anyhow::anyhow;
-use cocoa::appkit::CGFloat;
+use cocoa::{
+    appkit::CGFloat,
+    base::{id, nil},
+};
 use collections::HashMap;
 use core_foundation::{
     attributed_string::CFMutableAttributedString,
@@ -15,15 +18,15 @@ use core_foundation::{
 };
 use core_graphics::{
     base::{
-        CGGlyph, kCGBitmapByteOrder32Little, kCGImageAlphaPremultipliedFirst,
-        kCGImageAlphaPremultipliedLast,
+        kCGBitmapByteOrder32Little, kCGImageAlphaPremultipliedFirst,
+        kCGImageAlphaPremultipliedLast, CGGlyph,
     },
     color_space::CGColorSpace,
     context::{CGContext, CGTextDrawingMode},
     display::CGPoint,
 };
 use core_text::{
-    font::CTFont,
+    font::{CTFont, CTFontRef},
     font_descriptor::{
         kCTFontSlantTrait, kCTFontSymbolicTrait, kCTFontWeightTrait, kCTFontWidthTrait,
     },
@@ -39,6 +42,7 @@ use font_kit::{
     source::SystemSource,
     sources::mem::MemSource,
 };
+use objc::{class, msg_send, sel, sel_impl};
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use pathfinder_geometry::{
     rect::{RectF, RectI},
@@ -52,6 +56,20 @@ use super::open_type::apply_features_and_fallbacks;
 
 #[allow(non_upper_case_globals)]
 const kCGImageAlphaOnly: u32 = 7;
+
+/// SF Pro switches from the "Text" to the "Display" optical variant at 20pt.
+/// AppKit/SwiftUI handle this automatically via `+[NSFont systemFontOfSize:weight:]`;
+/// Kael must mirror this to match native rendering at headline sizes.
+const SYSTEM_FONT_DISPLAY_OPTICAL_THRESHOLD: f32 = 20.0;
+
+/// Representative size used to materialize the SF Pro Display optical variant.
+/// The opsz axis travels with the font; cloning to any size >= 20pt keeps the
+/// glyph proportions in the Display range, which is what AppKit produces.
+const SYSTEM_DISPLAY_REPRESENTATIVE_SIZE: f64 = 24.0;
+
+/// Representative size used to materialize the SF Pro Text optical variant
+/// so it matches what AppKit ships at body sizes (11-19pt).
+const SYSTEM_TEXT_REPRESENTATIVE_SIZE: f64 = 14.0;
 
 pub(crate) struct MacTextSystem(RwLock<MacTextSystemState>);
 
@@ -71,6 +89,10 @@ struct MacTextSystemState {
     font_ids_by_font_key: HashMap<FontKey, SmallVec<[FontId; 4]>>,
     postscript_names_by_font_id: HashMap<FontId, String>,
     zwnjs_scratch_space: Vec<(usize, usize)>,
+    /// Maps a system-UI FontId rendered with the SF Pro Text optical variant
+    /// to the matching SF Pro Display variant, swapped in at >=20pt to match
+    /// AppKit/SwiftUI's automatic optical sizing.
+    system_display_variants: HashMap<FontId, FontId>,
 }
 
 impl MacTextSystem {
@@ -84,6 +106,7 @@ impl MacTextSystem {
             font_ids_by_font_key: HashMap::default(),
             postscript_names_by_font_id: HashMap::default(),
             zwnjs_scratch_space: Vec::new(),
+            system_display_variants: HashMap::default(),
         }))
     }
 }
@@ -120,6 +143,16 @@ impl PlatformTextSystem for MacTextSystem {
             Ok(*font_id)
         } else {
             let mut lock = RwLockUpgradableReadGuard::upgrade(lock);
+            if font.family.as_ref() == ".SystemUIFont"
+                && font.style == FontStyle::Normal
+                && font.features.tag_value_list().is_empty()
+                && font.fallbacks.is_none()
+            {
+                let font_id = lock.id_for_system_ui_font(font.weight)?;
+                lock.font_selections.insert(font.clone(), font_id);
+                return Ok(font_id);
+            }
+
             let font_key = FontKey {
                 font_family: font.family.clone(),
                 font_features: font.features.clone(),
@@ -314,11 +347,49 @@ impl MacTextSystemState {
             self.postscript_names_by_font_id
                 .insert(font_id, postscript_name);
             self.fonts
-                .push(font_kit::font::Font::from_core_graphics_font(
-                    requested_font.copy_to_CGFont(),
-                ));
+                .push(unsafe { font_kit::font::Font::from_native_font(&requested_font) });
             font_id
         }
+    }
+
+    fn id_for_system_ui_font(&mut self, weight: FontWeight) -> Result<FontId> {
+        let postscript_name = system_ui_font_postscript_name(weight);
+
+        let text_id = if let Some(font_id) = self
+            .font_ids_by_postscript_name
+            .get(postscript_name)
+            .copied()
+        {
+            font_id
+        } else if let Some(ct_font) =
+            create_system_ui_ct_font(SYSTEM_TEXT_REPRESENTATIVE_SIZE, weight)
+        {
+            // Preferred path: ask AppKit for the system font at a Text-range size
+            // so the opsz axis is set correctly and the CTFont matches what
+            // SwiftUI's `Font.system(size:weight:)` produces below 20pt.
+            self.id_for_native_font(ct_font)
+        } else {
+            // Fallback: legacy path via the private PostScript name. This loses
+            // the opsz axis but is used only if the NSFont API is unavailable.
+            let cg_font = core_graphics::font::CGFont::from_name(&CFString::from_static_string(
+                postscript_name,
+            ))
+            .map_err(|()| anyhow!("failed to load system UI font '{postscript_name}'"))?;
+            self.id_for_native_font(core_text::font::new_from_CGFont(&cg_font, 0.))
+        };
+
+        if !self.system_display_variants.contains_key(&text_id) {
+            if let Some(display_font) =
+                create_system_ui_ct_font(SYSTEM_DISPLAY_REPRESENTATIVE_SIZE, weight)
+            {
+                let display_id = self.id_for_native_font(display_font);
+                if display_id != text_id {
+                    self.system_display_variants.insert(text_id, display_id);
+                }
+            }
+        }
+
+        Ok(text_id)
     }
 
     fn is_emoji(&self, font_id: FontId) -> bool {
@@ -413,11 +484,16 @@ impl MacTextSystemState {
                 .subpixel_variant
                 .map(|v| v as f32 / SUBPIXEL_VARIANTS_X as f32);
             cx.set_text_drawing_mode(CGTextDrawingMode::CGTextFill);
+            // Modern AppKit/SwiftUI render text with `AppleFontSmoothing = 0`
+            // (CG font smoothing OFF) — this is the macOS default since 10.14.
+            // The legacy smoothing path thickens glyphs noticeably on light
+            // backgrounds; leaving it on makes Kael's body text and section
+            // headers look bolder than the same string drawn by SwiftUI.
             if params.raster_mode == GlyphRasterMode::Subpixel {
-                cx.set_font_smoothing_style(16);
-                cx.set_should_smooth_fonts(true);
+                cx.set_should_smooth_fonts(false);
                 cx.set_rgb_fill_color(1.0, 1.0, 1.0, 1.0);
             } else {
+                cx.set_should_smooth_fonts(false);
                 cx.set_gray_fill_color(0.0, 1.0);
             }
             cx.set_allows_antialiasing(true);
@@ -453,6 +529,41 @@ impl MacTextSystemState {
         const ZWNJ: char = '\u{200C}';
         const ZWNJ_STR: &str = "\u{200C}";
         const ZWNJ_SIZE_16: usize = ZWNJ.len_utf16();
+
+        // SF Pro switches optical variants at 20pt. AppKit/SwiftUI swap the font
+        // automatically; do the same here so headlines pick up SF Pro Display
+        // instead of staying on the lighter SF Pro Text glyphs.
+        let display_substituted: Option<SmallVec<[FontRun; 4]>> = if f32::from(font_size)
+            >= SYSTEM_FONT_DISPLAY_OPTICAL_THRESHOLD
+            && !self.system_display_variants.is_empty()
+        {
+            let mut any = false;
+            let swapped = font_runs
+                .iter()
+                .map(|run| {
+                    let mapped = self
+                        .system_display_variants
+                        .get(&run.font_id)
+                        .copied()
+                        .unwrap_or(run.font_id);
+                    if mapped != run.font_id {
+                        any = true;
+                    }
+                    FontRun {
+                        font_id: mapped,
+                        len: run.len,
+                    }
+                })
+                .collect::<SmallVec<[FontRun; 4]>>();
+            if any {
+                Some(swapped)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let font_runs: &[FontRun] = display_substituted.as_deref().unwrap_or(font_runs);
 
         self.zwnjs_scratch_space.clear();
         // Construct the attributed string, converting UTF8 ranges to UTF16 ranges.
@@ -565,6 +676,57 @@ impl MacTextSystemState {
             descent: max_descent.into(),
             len: text.len(),
         }
+    }
+}
+
+fn system_ui_font_postscript_name(weight: FontWeight) -> &'static str {
+    match weight.0 {
+        value if value <= 150.0 => ".AppleSystemUIFontUltraLight",
+        value if value <= 250.0 => ".AppleSystemUIFontThin",
+        value if value <= 350.0 => ".AppleSystemUIFontLight",
+        value if value <= 450.0 => ".AppleSystemUIFont",
+        value if value <= 550.0 => ".AppleSystemUIFontMedium",
+        value if value <= 650.0 => ".AppleSystemUIFontDemi",
+        value if value <= 750.0 => ".AppleSystemUIFontBold",
+        value if value <= 850.0 => ".AppleSystemUIFontHeavy",
+        _ => ".AppleSystemUIFontBlack",
+    }
+}
+
+/// Numeric NSFontWeight that AppKit uses for `+[NSFont systemFontOfSize:weight:]`.
+/// Apple's "Ultra Light" (-0.8) is the lightest weight and maps to the CSS-style
+/// Thin (100), matching the existing `system_ui_font_postscript_name` table.
+fn ns_font_weight(weight: FontWeight) -> CGFloat {
+    match weight.0 {
+        value if value <= 150.0 => -0.8,
+        value if value <= 250.0 => -0.6,
+        value if value <= 350.0 => -0.4,
+        value if value <= 450.0 => 0.0,
+        value if value <= 550.0 => 0.23,
+        value if value <= 650.0 => 0.3,
+        value if value <= 750.0 => 0.4,
+        value if value <= 850.0 => 0.56,
+        _ => 0.62,
+    }
+}
+
+/// Materializes the system UI font via `+[NSFont systemFontOfSize:weight:]`, the
+/// same path SwiftUI uses. The returned CTFont carries the opsz axis set to
+/// `size`, so the Text/Display optical variant matches AppKit's defaults.
+fn create_system_ui_ct_font(size: f64, weight: FontWeight) -> Option<CTFont> {
+    let ns_weight = ns_font_weight(weight);
+    unsafe {
+        let ns_font: id = msg_send![
+            class!(NSFont),
+            systemFontOfSize: size as CGFloat
+            weight: ns_weight
+        ];
+        if ns_font == nil {
+            return None;
+        }
+        // NSFont and CTFontRef are toll-free bridged; the returned object is
+        // autoreleased, so use the +0 wrapper which retains for our copy.
+        Some(CTFont::wrap_under_get_rule(ns_font as CTFontRef))
     }
 }
 
@@ -692,7 +854,7 @@ mod lenient_font_attributes {
         string::{CFString, CFStringRef},
     };
     use core_text::font_descriptor::{
-        CTFontDescriptor, CTFontDescriptorCopyAttribute, kCTFontFamilyNameAttribute,
+        kCTFontFamilyNameAttribute, CTFontDescriptor, CTFontDescriptorCopyAttribute,
     };
 
     pub fn family_name(descriptor: &CTFontDescriptor) -> Option<String> {
@@ -727,7 +889,7 @@ mod lenient_font_attributes {
 
 #[cfg(test)]
 mod tests {
-    use crate::{FontRun, GlyphId, MacTextSystem, PlatformTextSystem, font, px};
+    use crate::{font, px, FontRun, GlyphId, MacTextSystem, PlatformTextSystem};
 
     #[test]
     fn test_layout_line_bom_char() {
@@ -750,7 +912,7 @@ mod tests {
         assert_eq!(layout.runs.len(), 1);
         assert_eq!(layout.runs[0].glyphs.len(), 2);
         assert_eq!(layout.runs[0].glyphs[0].id, GlyphId(68u32)); // a
-        // There's no glyph for \u{feff}
+                                                                 // There's no glyph for \u{feff}
         assert_eq!(layout.runs[0].glyphs[1].id, GlyphId(69u32)); // b
     }
 

@@ -2,4 +2,6 @@
 **/.cargo-ok
 tdesktop/
 .DS_Store
+.claude/
 docs/book/.claude/worktrees/
+examples/native_comparison/

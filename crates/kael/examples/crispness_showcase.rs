@@ -6,6 +6,13 @@ use kael::{
 use std::borrow::Cow;
 use std::path::PathBuf;
 
+const MACOS_SYSTEM_BLUE: u32 = 0x0088FF;
+const MACOS_SYSTEM_RED: u32 = 0xFF383C;
+const MACOS_SYSTEM_GREEN: u32 = 0x34C759;
+const MACOS_SYSTEM_ORANGE: u32 = 0xFF8D28;
+const MACOS_SYSTEM_PURPLE: u32 = 0xCB30E0;
+const MACOS_SYSTEM_GRAY: u32 = 0x8E8E93;
+
 struct FsAssets {
     base: PathBuf,
 }
@@ -101,20 +108,28 @@ impl Render for CrispnessShowcase {
                     .px_6()
                     .pb_4()
                     .child(
-                        card("2px radius").child(div().size_16().bg(rgb(0x007AFF)).rounded(px(2.))),
+                        card("2px radius")
+                            .child(div().size_16().bg(rgb(MACOS_SYSTEM_BLUE)).rounded(px(2.))),
                     )
                     .child(
-                        card("4px radius").child(div().size_16().bg(rgb(0x34C759)).rounded(px(4.))),
+                        card("4px radius")
+                            .child(div().size_16().bg(rgb(MACOS_SYSTEM_GREEN)).rounded(px(4.))),
                     )
                     .child(
-                        card("8px radius").child(div().size_16().bg(rgb(0xFF9500)).rounded(px(8.))),
+                        card("8px radius").child(
+                            div()
+                                .size_16()
+                                .bg(rgb(MACOS_SYSTEM_ORANGE))
+                                .rounded(px(8.)),
+                        ),
                     )
                     .child(
                         card("12px radius")
-                            .child(div().size_16().bg(rgb(0xFF3B30)).rounded(px(12.))),
+                            .child(div().size_16().bg(rgb(MACOS_SYSTEM_RED)).rounded(px(12.))),
                     )
                     .child(
-                        card("Full circle").child(div().size_16().bg(rgb(0xAF52DE)).rounded_full()),
+                        card("Full circle")
+                            .child(div().size_16().bg(rgb(MACOS_SYSTEM_PURPLE)).rounded_full()),
                     ),
             )
             .child(section_label("Borders + Corners — edge crispness"))
@@ -142,7 +157,7 @@ impl Render for CrispnessShowcase {
                                 .bg(rgb(0xffffff))
                                 .rounded(px(8.))
                                 .border_2()
-                                .border_color(rgb(0x007AFF)),
+                                .border_color(rgb(MACOS_SYSTEM_BLUE)),
                         ),
                     )
                     .child(
@@ -153,7 +168,7 @@ impl Render for CrispnessShowcase {
                                 .rounded(px(6.))
                                 .border_1()
                                 .border_dashed()
-                                .border_color(rgb(0x8E8E93)),
+                                .border_color(rgb(MACOS_SYSTEM_GRAY)),
                         ),
                     )
                     .child(
@@ -163,7 +178,7 @@ impl Render for CrispnessShowcase {
                                 .bg(rgb(0xffffff))
                                 .rounded(px(10.))
                                 .border_2()
-                                .border_color(rgb(0xFF3B30)),
+                                .border_color(rgb(MACOS_SYSTEM_RED)),
                         ),
                     ),
             )
@@ -224,7 +239,7 @@ impl Render for CrispnessShowcase {
                         card("Colored shadow").child(
                             div()
                                 .size_16()
-                                .bg(rgb(0x007AFF))
+                                .bg(rgb(MACOS_SYSTEM_BLUE))
                                 .rounded(px(8.))
                                 .shadow(vec![BoxShadow {
                                     color: hsla(211. / 360., 1.0, 0.5, 0.4),
@@ -265,7 +280,7 @@ impl Render for CrispnessShowcase {
                             svg()
                                 .path("icons/check.svg")
                                 .size_4()
-                                .text_color(rgb(0x34C759)),
+                                .text_color(rgb(MACOS_SYSTEM_GREEN)),
                         ),
                     )
                     .child(
@@ -273,7 +288,7 @@ impl Render for CrispnessShowcase {
                             svg()
                                 .path("icons/check.svg")
                                 .size_5()
-                                .text_color(rgb(0x34C759)),
+                                .text_color(rgb(MACOS_SYSTEM_GREEN)),
                         ),
                     )
                     .child(
@@ -281,7 +296,7 @@ impl Render for CrispnessShowcase {
                             svg()
                                 .path("icons/check.svg")
                                 .size_6()
-                                .text_color(rgb(0x34C759)),
+                                .text_color(rgb(MACOS_SYSTEM_GREEN)),
                         ),
                     )
                     .child(
@@ -289,7 +304,7 @@ impl Render for CrispnessShowcase {
                             svg()
                                 .path("icons/close.svg")
                                 .size_4()
-                                .text_color(rgb(0xFF3B30)),
+                                .text_color(rgb(MACOS_SYSTEM_RED)),
                         ),
                     )
                     .child(
@@ -297,7 +312,7 @@ impl Render for CrispnessShowcase {
                             svg()
                                 .path("icons/close.svg")
                                 .size_6()
-                                .text_color(rgb(0xFF3B30)),
+                                .text_color(rgb(MACOS_SYSTEM_RED)),
                         ),
                     )
                     .child(
@@ -305,7 +320,7 @@ impl Render for CrispnessShowcase {
                             svg()
                                 .path("icons/chevron_right.svg")
                                 .size_6()
-                                .text_color(rgb(0x8E8E93)),
+                                .text_color(rgb(MACOS_SYSTEM_GRAY)),
                         ),
                     ),
             )
@@ -432,7 +447,7 @@ impl Render for CrispnessShowcase {
                                     .child(
                                         div()
                                             .size_10()
-                                            .bg(rgb(0x007AFF))
+                                            .bg(rgb(MACOS_SYSTEM_BLUE))
                                             .rounded(px(8.))
                                             .flex()
                                             .items_center()
@@ -480,7 +495,7 @@ impl Render for CrispnessShowcase {
                                     .child(
                                         div()
                                             .size_10()
-                                            .bg(rgb(0xFF9500))
+                                            .bg(rgb(MACOS_SYSTEM_ORANGE))
                                             .rounded(px(8.))
                                             .flex()
                                             .items_center()
@@ -520,6 +535,264 @@ impl Render for CrispnessShowcase {
                                             .text_color(hsla(0., 0., 0.7, 1.0)),
                                     ),
                             ),
+                    ),
+            )
+            .child(section_label("Hairline Grid — 1 device-pixel strokes"))
+            .child(
+                div()
+                    .mx_6()
+                    .mb_4()
+                    .bg(rgb(0xffffff))
+                    .rounded(px(8.))
+                    .p_4()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(hsla(0., 0., 0.5, 1.0))
+                            .child("Each line below should be exactly 1 device pixel, never blurry"),
+                    )
+                    .child(div().h(px(0.5)).bg(rgb(0x000000)).w_full())
+                    .child(div().h(px(0.5)).bg(rgb(MACOS_SYSTEM_BLUE)).w_full())
+                    .child(div().h(px(0.5)).bg(rgb(MACOS_SYSTEM_RED)).w_full())
+                    .child(div().h(px(0.5)).bg(rgb(MACOS_SYSTEM_GREEN)).w_full())
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap_2()
+                            .h(px(60.))
+                            .child(div().w(px(0.5)).bg(rgb(0x000000)).h_full())
+                            .child(div().w(px(0.5)).bg(rgb(MACOS_SYSTEM_BLUE)).h_full())
+                            .child(div().w(px(0.5)).bg(rgb(MACOS_SYSTEM_RED)).h_full())
+                            .child(div().w(px(0.5)).bg(rgb(MACOS_SYSTEM_GREEN)).h_full())
+                            .child(div().w(px(0.5)).bg(rgb(MACOS_SYSTEM_ORANGE)).h_full())
+                            .child(div().w(px(0.5)).bg(rgb(MACOS_SYSTEM_PURPLE)).h_full())
+                            .child(div().w(px(0.5)).bg(rgb(MACOS_SYSTEM_GRAY)).h_full())
+                            .child(div().w(px(0.5)).bg(rgb(0x000000)).h_full()),
+                    ),
+            )
+            .child(section_label("Text Baselines — fractional origin positions"))
+            .child(
+                div()
+                    .mx_6()
+                    .mb_4()
+                    .bg(rgb(0xffffff))
+                    .rounded(px(8.))
+                    .p_4()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(hsla(0., 0., 0.5, 1.0))
+                            .child("Text at sub-pixel y offsets — should not shimmer when scrolling"),
+                    )
+                    .child(div().pt(px(0.0)).text_sm().text_color(hsla(0., 0., 0.1, 1.0)).child("Baseline at +0.0px offset"))
+                    .child(div().pt(px(0.25)).text_sm().text_color(hsla(0., 0., 0.1, 1.0)).child("Baseline at +0.25px offset"))
+                    .child(div().pt(px(0.5)).text_sm().text_color(hsla(0., 0., 0.1, 1.0)).child("Baseline at +0.5px offset"))
+                    .child(div().pt(px(0.75)).text_sm().text_color(hsla(0., 0., 0.1, 1.0)).child("Baseline at +0.75px offset"))
+                    .child(div().pt(px(0.33)).text_sm().text_color(hsla(0., 0., 0.1, 1.0)).child("Baseline at +0.33px offset"))
+                    .child(div().pt(px(0.67)).text_sm().text_color(hsla(0., 0., 0.1, 1.0)).child("Baseline at +0.67px offset")),
+            )
+            .child(section_label("sRGB Gradients — linear blending correctness"))
+            .child(
+                div()
+                    .mx_6()
+                    .mb_4()
+                    .bg(rgb(0xffffff))
+                    .rounded(px(8.))
+                    .p_4()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(hsla(0., 0., 0.5, 1.0))
+                            .child("Gradients should be smooth without banding or muddy midtones"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .h(px(32.))
+                            .rounded(px(4.))
+                            .overflow_hidden()
+                            .child(div().flex_1().bg(rgb(0x000000)))
+                            .child(div().flex_1().bg(rgb(0x1a1a1a)))
+                            .child(div().flex_1().bg(rgb(0x333333)))
+                            .child(div().flex_1().bg(rgb(0x4d4d4d)))
+                            .child(div().flex_1().bg(rgb(0x666666)))
+                            .child(div().flex_1().bg(rgb(0x808080)))
+                            .child(div().flex_1().bg(rgb(0x999999)))
+                            .child(div().flex_1().bg(rgb(0xb3b3b3)))
+                            .child(div().flex_1().bg(rgb(0xcccccc)))
+                            .child(div().flex_1().bg(rgb(0xe6e6e6)))
+                            .child(div().flex_1().bg(rgb(0xffffff))),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .h(px(32.))
+                            .rounded(px(4.))
+                            .overflow_hidden()
+                            .child(div().flex_1().bg(rgb(MACOS_SYSTEM_BLUE)))
+                            .child(div().flex_1().bg(rgb(0x1a8aff)))
+                            .child(div().flex_1().bg(rgb(0x3399ff)))
+                            .child(div().flex_1().bg(rgb(0x4da9ff)))
+                            .child(div().flex_1().bg(rgb(0x66b8ff)))
+                            .child(div().flex_1().bg(rgb(0x80c8ff)))
+                            .child(div().flex_1().bg(rgb(0x99d7ff)))
+                            .child(div().flex_1().bg(rgb(0xb3e6ff)))
+                            .child(div().flex_1().bg(rgb(0xccf0ff)))
+                            .child(div().flex_1().bg(rgb(0xe6f8ff)))
+                            .child(div().flex_1().bg(rgb(0xffffff))),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(hsla(0., 0., 0.5, 1.0))
+                            .child("Alpha-blended edges over background"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap_3()
+                            .child(div().size_12().bg(hsla(0., 0., 0., 0.1)).rounded(px(6.)))
+                            .child(div().size_12().bg(hsla(0., 0., 0., 0.2)).rounded(px(6.)))
+                            .child(div().size_12().bg(hsla(0., 0., 0., 0.3)).rounded(px(6.)))
+                            .child(div().size_12().bg(hsla(0., 0., 0., 0.5)).rounded(px(6.)))
+                            .child(div().size_12().bg(hsla(0., 0., 0., 0.7)).rounded(px(6.)))
+                            .child(div().size_12().bg(hsla(0., 0., 0., 0.9)).rounded(px(6.)))
+                            .child(div().size_12().bg(hsla(211. / 360., 1.0, 0.5, 0.3)).rounded(px(6.)))
+                            .child(div().size_12().bg(hsla(211. / 360., 1.0, 0.5, 0.6)).rounded(px(6.)))
+                            .child(div().size_12().bg(hsla(211. / 360., 1.0, 0.5, 0.9)).rounded(px(6.))),
+                    ),
+            )
+            .child(section_label("Resize Stress — shadows, text, and borders"))
+            .child(
+                div()
+                    .mx_6()
+                    .mb_6()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap_3()
+                    .child(
+                        div()
+                            .size_20()
+                            .bg(rgb(0xffffff))
+                            .rounded(px(8.))
+                            .border_1()
+                            .border_color(hsla(0., 0., 0., 0.1))
+                            .shadow(vec![BoxShadow {
+                                color: hsla(0., 0., 0., 0.15),
+                                offset: point(px(0.), px(2.)),
+                                blur_radius: px(6.),
+                                spread_radius: px(0.),
+                                inset: false,
+                            }])
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(div().text_xs().text_color(hsla(0., 0., 0.4, 1.0)).child("A")),
+                    )
+                    .child(
+                        div()
+                            .size_20()
+                            .bg(rgb(MACOS_SYSTEM_BLUE))
+                            .rounded(px(12.))
+                            .shadow(vec![BoxShadow {
+                                color: hsla(211. / 360., 1.0, 0.5, 0.4),
+                                offset: point(px(0.), px(4.)),
+                                blur_radius: px(12.),
+                                spread_radius: px(0.),
+                                inset: false,
+                            }])
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(div().text_sm().font_weight(kael::FontWeight::BOLD).text_color(rgb(0xffffff)).child("B")),
+                    )
+                    .child(
+                        div()
+                            .size_20()
+                            .bg(rgb(0xffffff))
+                            .rounded(px(6.))
+                            .border_2()
+                            .border_color(rgb(MACOS_SYSTEM_RED))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(div().text_xs().text_color(rgb(MACOS_SYSTEM_RED)).child("C")),
+                    )
+                    .child(
+                        div()
+                            .size_20()
+                            .bg(rgb(MACOS_SYSTEM_GREEN))
+                            .rounded_full()
+                            .shadow(vec![BoxShadow {
+                                color: hsla(140. / 360., 0.68, 0.5, 0.3),
+                                offset: point(px(0.), px(3.)),
+                                blur_radius: px(8.),
+                                spread_radius: px(0.),
+                                inset: false,
+                            }])
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(div().text_sm().font_weight(kael::FontWeight::BOLD).text_color(rgb(0xffffff)).child("D")),
+                    )
+                    .child(
+                        div()
+                            .size_20()
+                            .bg(rgb(0xffffff))
+                            .rounded(px(8.))
+                            .shadow(vec![
+                                BoxShadow {
+                                    color: hsla(0., 0., 0., 0.12),
+                                    offset: point(px(0.), px(1.)),
+                                    blur_radius: px(3.),
+                                    spread_radius: px(0.),
+                                    inset: false,
+                                },
+                                BoxShadow {
+                                    color: hsla(0., 0., 0., 0.08),
+                                    offset: point(px(0.), px(8.)),
+                                    blur_radius: px(24.),
+                                    spread_radius: px(0.),
+                                    inset: false,
+                                },
+                            ])
+                            .border_1()
+                            .border_color(hsla(0., 0., 0., 0.06))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(div().text_xs().text_color(hsla(0., 0., 0.4, 1.0)).child("E")),
+                    )
+                    .child(
+                        div()
+                            .size_20()
+                            .bg(rgb(MACOS_SYSTEM_ORANGE))
+                            .rounded(px(10.))
+                            .shadow(vec![BoxShadow {
+                                color: hsla(38. / 360., 1.0, 0.5, 0.35),
+                                offset: point(px(0.), px(4.)),
+                                blur_radius: px(10.),
+                                spread_radius: px(0.),
+                                inset: false,
+                            }])
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(div().text_sm().font_weight(kael::FontWeight::BOLD).text_color(rgb(0xffffff)).child("F")),
                     ),
             )
             )

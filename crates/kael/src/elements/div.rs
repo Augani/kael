@@ -3622,10 +3622,12 @@ impl Interactivity {
             .auto_scrollbar_state
             .get_or_insert_with(Rc::default)
             .clone();
-        let should_show_scrollbars = self.scroll_elastic_state.as_ref().is_none_or(|state| {
-            let state = state.borrow();
-            state.animating || state.seconds_since_last_scroll() <= AUTO_SCROLLBAR_IDLE_SECONDS
-        });
+        let always_show = scroll_handle.0.borrow().always_show_scrollbars;
+        let should_show_scrollbars = always_show
+            || self.scroll_elastic_state.as_ref().is_none_or(|state| {
+                let state = state.borrow();
+                state.animating || state.seconds_since_last_scroll() <= AUTO_SCROLLBAR_IDLE_SECONDS
+            });
 
         if show_y {
             let track_bounds = auto_scrollbar_track_bounds(bounds, true, show_x);
@@ -5066,6 +5068,7 @@ struct ScrollHandleState {
     scroll_to_bottom: bool,
     overflow: Point<Overflow>,
     active_item: Option<ScrollActiveItem>,
+    always_show_scrollbars: bool,
 }
 
 #[derive(Default, Debug, Clone, Copy)]
@@ -5171,8 +5174,13 @@ impl ScrollHandle {
         });
     }
 
-    /// Update `ScrollHandleState`'s active item for scrolling to in prepaint.
-    /// This scrolls the minimal amount to ensure that the child is the first visible element
+    /// Make scrollbars always visible instead of auto-hiding after idle.
+    pub fn always_show_scrollbars(self) -> Self {
+        self.0.borrow_mut().always_show_scrollbars = true;
+        self
+    }
+
+    /// Scroll the minimal amount to ensure the child is the first visible element.
     pub fn scroll_to_top_of_item(&self, ix: usize) {
         let mut state = self.0.borrow_mut();
         state.active_item = Some(ScrollActiveItem {

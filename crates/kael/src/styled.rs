@@ -1,9 +1,9 @@
 use crate::{
-    self as kael, AbsoluteLength, AlignContent, AlignItems, BlendMode, BorderStyle, CursorStyle,
-    DefiniteLength, Display, Fill, FlexDirection, FlexWrap, Font, FontStyle, FontWeight,
-    GridPlacement, Hsla, JustifyContent, Length, Pixels, SharedString, StrikethroughStyle,
-    StyleRefinement, TextAlign, TextOverflow, TextShadow, TextStyleRefinement, UnderlineStyle,
-    WhiteSpace, point, px, relative, rems,
+    self as kael, point, px, relative, rems, AbsoluteLength, AlignContent, AlignItems, BlendMode,
+    BorderStyle, CursorStyle, DefiniteLength, Display, Fill, FlexDirection, FlexWrap, Font,
+    FontStyle, FontWeight, GridPlacement, Hsla, JustifyContent, Length, Pixels, SharedString,
+    StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow, TextShadow, TextStyleRefinement,
+    UnderlineStyle, WhiteSpace,
 };
 pub use kael_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
@@ -166,9 +166,19 @@ pub trait Styled: Sized {
     }
 
     /// Enables continuous (squircle) corner rounding instead of circular.
-    /// This produces smooth Apple-style corners matching SwiftUI's continuous corner style.
+    /// This is the default for new `Style` instances since it matches SwiftUI's
+    /// `RoundedRectangle.fill()` shape on macOS; call this explicitly only when
+    /// overriding a style that has been switched to circular corners.
     fn continuous_corners(mut self) -> Self {
         self.style().continuous_corners = Some(true);
+        self
+    }
+
+    /// Forces pure quarter-circle corner rounding instead of the default squircle.
+    /// Use this only when matching a design that explicitly requires circular corners;
+    /// for parity with SwiftUI/AppKit you almost always want the default continuous corners.
+    fn circular_corners(mut self) -> Self {
+        self.style().continuous_corners = Some(false);
         self
     }
 

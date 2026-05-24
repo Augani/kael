@@ -251,6 +251,10 @@ pub struct Style {
     pub corner_radii: Corners<AbsoluteLength>,
 
     /// Whether to use continuous (squircle) corner rounding instead of circular.
+    /// Defaults to `true` so rounded rectangles match SwiftUI's `RoundedRectangle.fill()`
+    /// shape on macOS, where AppKit/CoreAnimation render with a slight squircle even
+    /// when the requested style is "circular". Opt out with `.circular_corners()` for
+    /// the legacy pure quarter-circle look.
     pub continuous_corners: bool,
 
     /// The blend mode to apply when rendering this element's background.
@@ -450,7 +454,7 @@ impl Default for TextStyle {
             } else if cfg!(target_os = "windows") {
                 "Segoe UI".into()
             } else {
-                "Helvetica".into()
+                ".SystemUIFont".into()
             },
             font_features: FontFeatures::default(),
             font_fallbacks: None,
@@ -870,7 +874,7 @@ impl Default for Style {
             border_color: None,
             border_style: BorderStyle::default(),
             corner_radii: Corners::default(),
-            continuous_corners: false,
+            continuous_corners: true,
             blend_mode: None,
             backdrop_blur: None,
             backdrop_saturate: None,
