@@ -108,6 +108,14 @@ div().rounded_full()
 div().rounded(px(8.0))
 ```
 
+By default, rounded corners use continuous (squircle) rounding to match SwiftUI's
+`RoundedRectangle` shape on macOS. Use `.circular_corners()` to opt into the
+legacy pure quarter-circle look:
+
+```rust
+div().rounded(px(8.0)).circular_corners()
+```
+
 ## Shadows
 
 ```rust
@@ -160,8 +168,15 @@ div()
 ```
 
 The auto-scrollbar appears only when content exceeds the viewport and tracks
-the scroll position automatically. For custom scrollbar styling, use the
-explicit `scroll_bar()` widget instead (see [Lists & Data](lists-and-data.md)).
+the scroll position automatically. To keep scrollbars visible at all times
+(instead of auto-hiding after idle):
+
+```rust
+let scroll_handle = ScrollHandle::new().always_show_scrollbars();
+```
+
+For custom scrollbar styling, use the explicit `scroll_bar()` widget instead
+(see [Lists & Data](lists-and-data.md)).
 
 ## Positioning
 

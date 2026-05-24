@@ -48,6 +48,8 @@ cargo run -p kael --example <name>
 | Text Wrapper | `cargo run -p kael --example text_wrapper` | Word wrap and text overflow |
 | Painting | `cargo run -p kael --example painting` | Custom GPU painting |
 | SVG | `cargo run -p kael --example svg` | SVG rendering |
+| Crispness Showcase | `cargo run -p kael --example crispness_showcase` | Pixel snapping, hairline strokes, sRGB gradients, corner shapes |
+| Native Comparison | `cargo run -p kael --example native_comparison` | Side-by-side comparison with native AppKit rendering |
 
 ## Media & animation
 

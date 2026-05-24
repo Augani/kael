@@ -1,8 +1,8 @@
 use crate::{
-    point, px, size, swap_rgba_pa_to_bgra, Bounds, DevicePixels, Font, FontFallbacks, FontFeatures,
-    FontId, FontMetrics, FontRun, FontStyle, FontWeight, GlyphId, GlyphRasterMode, LineLayout,
-    Pixels, PlatformTextSystem, Point, RenderGlyphParams, Result, ShapedGlyph, ShapedRun,
-    SharedString, Size, SUBPIXEL_VARIANTS_X,
+    Bounds, DevicePixels, Font, FontFallbacks, FontFeatures, FontId, FontMetrics, FontRun,
+    FontStyle, FontWeight, GlyphId, GlyphRasterMode, LineLayout, Pixels, PlatformTextSystem, Point,
+    RenderGlyphParams, Result, SUBPIXEL_VARIANTS_X, ShapedGlyph, ShapedRun, SharedString, Size,
+    point, px, size, swap_rgba_pa_to_bgra,
 };
 use anyhow::anyhow;
 use cocoa::{
@@ -18,8 +18,8 @@ use core_foundation::{
 };
 use core_graphics::{
     base::{
-        kCGBitmapByteOrder32Little, kCGImageAlphaPremultipliedFirst,
-        kCGImageAlphaPremultipliedLast, CGGlyph,
+        CGGlyph, kCGBitmapByteOrder32Little, kCGImageAlphaPremultipliedFirst,
+        kCGImageAlphaPremultipliedLast,
     },
     color_space::CGColorSpace,
     context::{CGContext, CGTextDrawingMode},
@@ -555,11 +555,7 @@ impl MacTextSystemState {
                     }
                 })
                 .collect::<SmallVec<[FontRun; 4]>>();
-            if any {
-                Some(swapped)
-            } else {
-                None
-            }
+            if any { Some(swapped) } else { None }
         } else {
             None
         };
@@ -854,7 +850,7 @@ mod lenient_font_attributes {
         string::{CFString, CFStringRef},
     };
     use core_text::font_descriptor::{
-        kCTFontFamilyNameAttribute, CTFontDescriptor, CTFontDescriptorCopyAttribute,
+        CTFontDescriptor, CTFontDescriptorCopyAttribute, kCTFontFamilyNameAttribute,
     };
 
     pub fn family_name(descriptor: &CTFontDescriptor) -> Option<String> {
@@ -889,7 +885,7 @@ mod lenient_font_attributes {
 
 #[cfg(test)]
 mod tests {
-    use crate::{font, px, FontRun, GlyphId, MacTextSystem, PlatformTextSystem};
+    use crate::{FontRun, GlyphId, MacTextSystem, PlatformTextSystem, font, px};
 
     #[test]
     fn test_layout_line_bom_char() {
@@ -912,7 +908,7 @@ mod tests {
         assert_eq!(layout.runs.len(), 1);
         assert_eq!(layout.runs[0].glyphs.len(), 2);
         assert_eq!(layout.runs[0].glyphs[0].id, GlyphId(68u32)); // a
-                                                                 // There's no glyph for \u{feff}
+        // There's no glyph for \u{feff}
         assert_eq!(layout.runs[0].glyphs[1].id, GlyphId(69u32)); // b
     }
 

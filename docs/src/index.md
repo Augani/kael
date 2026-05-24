@@ -10,7 +10,7 @@ Kael replaces Electron with a single Rust crate that gives you everything you ne
 |-------|-------------------|
 | **Widgets** | Button, TextInput, Checkbox, Toggle, RadioGroup, Slider, Select, DatePicker, Modal, Popover, Tabs, Disclosure, Progress, Toast, Splitter, and more |
 | **Layout** | GPU-accelerated flexbox via Taffy, responsive sizing, scroll containers |
-| **Rendering** | Metal (macOS), DirectX 11 (Windows), Vulkan (Linux) — 120fps capable |
+| **Rendering** | Metal (macOS), DirectX 11 (Windows), Vulkan (Linux) — 120fps, sRGB-correct, pixel-perfect |
 | **State** | Reactive `Entity<T>` system with automatic re-rendering on change |
 | **Platform** | File dialogs, system tray, native menus, global hotkeys, notifications, clipboard, printing, auto-updates, session persistence |
 | **Advanced** | Plugin system (WASM sandboxed), multi-process IPC, accessibility, theming, gestures |
@@ -62,6 +62,13 @@ fn main() {
     });
 }
 ```
+
+## Native rendering quality
+
+Kael renders with the same sharpness as first-party platform apps:
+
+- **macOS**: SF Pro Text/Display optical sizing (automatic swap at 20pt), sRGB Metal pipeline, continuous (squircle) corners matching SwiftUI, AppKit-matched font smoothing
+- **All platforms**: `PixelSnapPolicy` for hairline strokes, device-pixel-aligned text baselines, and crisp fills at any DPI
 
 ## Platform support
 

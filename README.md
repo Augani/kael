@@ -15,7 +15,9 @@ Kael targets macOS, Linux, and Windows with platform-native rendering backends (
 - Backdrop blur and frosted glass effects
 - Lottie animation playback with background frame rendering
 - SVG rendering and icon atlas system
-- Device-pixel snapping for crisp output at any DPI
+- Device-pixel snapping (`PixelSnapPolicy`) for crisp output at any DPI
+- sRGB-correct render pipeline (Metal color space, linear blending)
+- Native macOS rendering parity (SF Pro optical sizing, continuous corners, AppKit-matched text)
 
 **Layout & Elements**
 - Flexbox and grid layout (via Taffy)
@@ -108,6 +110,8 @@ cargo run -p kael --example webview_demo
 cargo run -p kael --example daemon_app
 cargo run -p kael --example form_controls
 cargo run -p kael --example platform_features
+cargo run -p kael --example crispness_showcase
+cargo run -p kael --example native_comparison
 ```
 
 ## Platform Support
