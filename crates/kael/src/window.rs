@@ -13,7 +13,7 @@ use crate::{
     PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
     PolychromeSprite, PowerMode, PrintJob, ProgressBarState, PromptButton, PromptLevel, Quad,
     Render, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge,
-    SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene,
+    SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow,
     SharedString, Size, StrikethroughStyle, Style, SubscriberSet, Subscription, SystemWindowTab,
     SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextStyle, TextStyleRefinement,
     TransformationMatrix, Underline, UnderlineStyle, UndoRedoManager, WindowAppearance,
@@ -3177,34 +3177,11 @@ impl Window {
                 continue;
             }
 
-            let scaled_blur_radius = shadow.blur_radius.scale(scale_factor);
-            let atlas_params = crate::shadow_cache::ShadowAtlasParams::new(
-                scaled_bounds
-                    .size
-                    .map(|value| DevicePixels(value.0.ceil() as i32)),
-                corner_radii.scale_and_snap(scale_factor),
-                scaled_blur_radius,
-                shadow.color.opacity(opacity),
-                shadow.inset,
-            );
-            let Some(tile) = self
-                .sprite_atlas
-                .get_or_insert_with(&atlas_params.clone().into(), &mut || {
-                    let (size, bytes) = crate::shadow_cache::rasterize_shadow(&atlas_params);
-                    Ok(Some((size, Cow::Owned(bytes))))
-                })
-                .log_err()
-                .flatten()
-            else {
-                continue;
-            };
-
-            self.next_frame.scene.insert_primitive(PolychromeSprite {
+            self.next_frame.scene.insert_primitive(Shadow {
                 order: 0,
-                pad: 0,
-                grayscale: false,
-                opacity: 1.0,
-                bounds: crate::shadow_cache::expanded_bounds(scaled_bounds, scaled_blur_radius),
+                blur_radius: shadow.blur_radius.scale(scale_factor),
+                bounds: scaled_bounds,
+                corner_radii: corner_radii.scale_and_snap(scale_factor),
                 content_mask: if shadow.inset {
                     ContentMask {
                         bounds: bounds.scale_and_snap(scale_factor),
@@ -3212,10 +3189,8 @@ impl Window {
                 } else {
                     content_mask.scale(scale_factor)
                 },
-                corner_radii: Default::default(),
-                tile,
-                sprite_kind: POLYCHROME_SPRITE_KIND_PREMULTIPLIED,
-                color: transparent_black(),
+                color: shadow.color.opacity(opacity),
+                inset: shadow.inset as u32,
             });
         }
     }

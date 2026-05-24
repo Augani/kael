@@ -2359,9 +2359,7 @@ impl PlatformWindow for MacWindow {
         let window = this.native_window;
         this.executor
             .spawn(async move {
-                unsafe {
-                    window.zoom_(nil);
-                }
+                zoom_window_immediately(window);
             })
             .detach();
     }
@@ -2554,46 +2552,8 @@ impl PlatformWindow for MacWindow {
     }
 
     fn titlebar_double_click(&self) {
-        let lock = self.0.lock();
-        let window = lock.native_window;
-        unsafe {
-            let defaults: id = NSUserDefaults::standardUserDefaults();
-            let domain = NSString::alloc(nil).init_str("NSGlobalDomain");
-            let key = NSString::alloc(nil).init_str("AppleActionOnDoubleClick");
-
-            let dict: id = msg_send![defaults, persistentDomainForName: domain];
-            let action: id = if !dict.is_null() {
-                msg_send![dict, objectForKey: key]
-            } else {
-                nil
-            };
-
-            let action_str = if !action.is_null() {
-                CStr::from_ptr(NSString::UTF8String(action)).to_string_lossy()
-            } else {
-                "".into()
-            };
-
-            match action_str.as_ref() {
-                "None" => {}
-                "Minimize" => {
-                    window.miniaturize_(nil);
-                }
-                _ => {
-                    let is_zoomed: BOOL = msg_send![window, isZoomed];
-                    if is_zoomed == YES {
-                        drop(lock);
-                        window.zoom_(nil);
-                    } else {
-                        let screen = window.screen();
-                        let target_frame = NSScreen::visibleFrame(screen);
-                        drop(lock);
-                        let _: () =
-                            msg_send![window, setFrame: target_frame display: YES animate: NO];
-                    }
-                }
-            }
-        }
+        let window = self.0.lock().native_window;
+        perform_titlebar_double_click_action(window)
     }
 
     fn set_progress_bar(&self, state: crate::ProgressBarState) {
@@ -3748,6 +3708,56 @@ fn send_new_event(window_state_lock: &Mutex<MacWindowState>, e: PlatformInput) -
 fn drag_event_position(window_state: &Mutex<MacWindowState>, dragging_info: id) -> Point<Pixels> {
     let drag_location: NSPoint = unsafe { msg_send![dragging_info, draggingLocation] };
     convert_mouse_position(drag_location, window_state.lock().content_size().height)
+}
+
+fn perform_titlebar_double_click_action(window: id) {
+    unsafe {
+        let defaults: id = NSUserDefaults::standardUserDefaults();
+        let domain = NSString::alloc(nil).init_str("NSGlobalDomain");
+        let key = NSString::alloc(nil).init_str("AppleActionOnDoubleClick");
+
+        let dict: id = msg_send![defaults, persistentDomainForName: domain];
+        let action: id = if !dict.is_null() {
+            msg_send![dict, objectForKey: key]
+        } else {
+            nil
+        };
+
+        let action_str = if !action.is_null() {
+            CStr::from_ptr(NSString::UTF8String(action)).to_string_lossy()
+        } else {
+            "".into()
+        };
+
+        match action_str.as_ref() {
+            "None" => {}
+            "Minimize" => {
+                let _: () = msg_send![window, performMiniaturize: nil];
+            }
+            _ => {
+                zoom_window_immediately(window);
+            }
+        }
+    }
+}
+
+fn zoom_window_immediately(window: id) {
+    unsafe {
+        let is_zoomed: BOOL = msg_send![window, isZoomed];
+        if is_zoomed == YES {
+            window.zoom_(nil);
+            return;
+        }
+
+        let screen = window.screen();
+        if screen == nil {
+            let _: () = msg_send![window, performZoom: nil];
+            return;
+        }
+
+        let target_frame = NSScreen::visibleFrame(screen);
+        let _: () = msg_send![window, setFrame: target_frame display: YES animate: NO];
+    }
 }
 
 fn with_input_handler<F, R>(window: &Object, f: F) -> Option<R>
