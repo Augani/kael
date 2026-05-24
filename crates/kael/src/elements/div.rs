@@ -4889,7 +4889,8 @@ mod test {
         AccessibilityAttributes, AccessibilityRole, AccessibilityState, AppContext, Context,
         FocusHandle, InteractiveElement, Interactivity, PanState, ParentElement, PinchState,
         Render, Rgba, ScrollDelta, ScrollHandle, ScrollWheelEvent, StatefulInteractiveElement,
-        StyleRefinement, Styled, SwipeDirection, TestAppContext, Window, div, point, px,
+        StyleRefinement, Styled, SwipeDirection, TestAppContext, VisualContext, Window, div, point,
+        px,
     };
     use std::{
         cell::{Cell, RefCell},
@@ -4980,6 +4981,38 @@ mod test {
         let scrolled_bounds = cx.debug_bounds("horizontal-child").unwrap();
         assert_eq!(scroll_handle.offset().x, px(-40.));
         assert_eq!(scrolled_bounds.left(), px(-40.));
+    }
+
+    #[kael::test]
+    fn scroll_restarts_frame_polling_after_idle(cx: &mut TestAppContext) {
+        let scroll_handle = ScrollHandle::new();
+
+        struct TestView(ScrollHandle);
+
+        impl Render for TestView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div()
+                    .w(px(100.))
+                    .h(px(100.))
+                    .id("idle-scroll-test")
+                    .overflow_y_scroll()
+                    .track_scroll(&self.0)
+                    .child(div().w(px(100.)).h(px(300.)))
+            }
+        }
+
+        let (_view, mut cx) = cx.add_window_view(|_, _| TestView(scroll_handle.clone()));
+        let test_window = cx.test_window(cx.window_handle());
+        test_window.0.lock().frame_polling_active = false;
+
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(50.), px(50.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-40.))),
+            ..Default::default()
+        });
+
+        assert_eq!(scroll_handle.offset().y, px(-40.));
+        assert!(test_window.0.lock().frame_polling_active);
     }
 
     #[kael::test]

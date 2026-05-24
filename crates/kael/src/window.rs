@@ -4322,6 +4322,8 @@ impl Window {
                 self.dispatch_key_event(any_key_event, cx);
             }
 
+            self.update_frame_polling();
+
             DispatchEventResult {
                 propagate: cx.propagate_event,
                 default_prevented: self.default_prevented,
