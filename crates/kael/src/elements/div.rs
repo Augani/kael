@@ -21,10 +21,10 @@ use crate::scroll_elasticity::{
 #[allow(unused_imports)]
 use crate::{
     AbsoluteLength, Action, AnyDrag, AnyElement, AnyTooltip, AnyView, App, AppContext, Background,
-    Bounds, ClickEvent, Context, DispatchPhase, Element, ElementId, Entity, Fill, FocusHandle,
-    GestureRecognizer, Global, GlobalElementId, Hitbox, HitboxBehavior, HitboxId, Hsla,
-    InspectorElementId, IntoElement, IsZero, KeyContext, KeyDownEvent, KeyUpEvent, KeyboardButton,
-    KeyboardClickEvent, LayoutId, MagnifyEvent, ModifiersChangedEvent, MouseButton,
+    Bounds, ClickEvent, Context, CursorStyle, DispatchPhase, Element, ElementId, Entity, Fill,
+    FocusHandle, GestureRecognizer, Global, GlobalElementId, Hitbox, HitboxBehavior, HitboxId,
+    Hsla, InspectorElementId, IntoElement, IsZero, KeyContext, KeyDownEvent, KeyUpEvent,
+    KeyboardButton, KeyboardClickEvent, LayoutId, MagnifyEvent, ModifiersChangedEvent, MouseButton,
     MouseClickEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Overflow, PanGesture,
     PanGestureEvent, PanState, ParentElement, PinchGesture, PinchGestureEvent, Pixels, Point,
     Render, Rgba, ScrollDelta, ScrollWheelEvent, SharedString, Size, Style, StyleRefinement,
@@ -1951,6 +1951,18 @@ pub struct DivFrameState {
     child_layout_ids: SmallVec<[LayoutId; 2]>,
 }
 
+/// Prepaint state for a div.
+pub struct DivPrepaintState {
+    hitbox: Option<Hitbox>,
+    auto_scrollbars: AutoScrollbarHitboxes,
+}
+
+#[derive(Default)]
+struct AutoScrollbarHitboxes {
+    vertical: Option<Hitbox>,
+    horizontal: Option<Hitbox>,
+}
+
 /// Interactivity state displayed an manipulated in the inspector.
 #[derive(Clone)]
 pub struct DivInspectorState {
@@ -1986,7 +1998,7 @@ impl ParentElement for Div {
 
 impl Element for Div {
     type RequestLayoutState = DivFrameState;
-    type PrepaintState = Option<Hitbox>;
+    type PrepaintState = DivPrepaintState;
 
     fn id(&self) -> Option<ElementId> {
         self.interactivity.element_id.clone()
@@ -2041,7 +2053,7 @@ impl Element for Div {
         request_layout: &mut Self::RequestLayoutState,
         window: &mut Window,
         cx: &mut App,
-    ) -> Option<Hitbox> {
+    ) -> DivPrepaintState {
         let has_prepaint_listener = self.prepaint_listener.is_some();
         let mut children_bounds = Vec::with_capacity(if has_prepaint_listener {
             request_layout.child_layout_ids.len()
@@ -2083,6 +2095,7 @@ impl Element for Div {
             scroll_handle.scroll_to_active_item();
         }
 
+        let tracked_scroll_handle = self.interactivity.tracked_scroll_handle.clone();
         self.interactivity.prepaint(
             global_id,
             inspector_id,
@@ -2090,7 +2103,7 @@ impl Element for Div {
             content_size,
             window,
             cx,
-            |_style, scroll_offset, hitbox, window, cx| {
+            |style, scroll_offset, hitbox, window, cx| {
                 window.with_element_offset(scroll_offset, |window| {
                     for child in &mut self.children {
                         child.prepaint(window, cx);
@@ -2101,7 +2114,17 @@ impl Element for Div {
                     listener(children_bounds, window, cx);
                 }
 
-                hitbox
+                let auto_scrollbars = prepaint_auto_scrollbar_hitboxes(
+                    tracked_scroll_handle.as_ref(),
+                    bounds,
+                    style,
+                    window,
+                );
+
+                DivPrepaintState {
+                    hitbox,
+                    auto_scrollbars,
+                }
             },
         )
     }
@@ -2113,7 +2136,7 @@ impl Element for Div {
         inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
-        hitbox: &mut Option<Hitbox>,
+        prepaint: &mut DivPrepaintState,
         window: &mut Window,
         cx: &mut App,
     ) {
@@ -2143,11 +2166,12 @@ impl Element for Div {
                         node
                     });
 
-            self.interactivity.paint(
+            self.interactivity.paint_with_auto_scrollbars(
                 global_id,
                 inspector_id,
                 bounds,
-                hitbox.as_ref(),
+                prepaint.hitbox.as_ref(),
+                &prepaint.auto_scrollbars,
                 window,
                 cx,
                 |_style, window, cx| {
@@ -2569,6 +2593,52 @@ impl Interactivity {
         cx: &mut App,
         f: impl FnOnce(&Style, &mut Window, &mut App),
     ) {
+        self.paint_internal(
+            global_id,
+            _inspector_id,
+            bounds,
+            hitbox,
+            &AutoScrollbarHitboxes::default(),
+            window,
+            cx,
+            f,
+        );
+    }
+
+    fn paint_with_auto_scrollbars(
+        &mut self,
+        global_id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        hitbox: Option<&Hitbox>,
+        auto_scrollbars: &AutoScrollbarHitboxes,
+        window: &mut Window,
+        cx: &mut App,
+        f: impl FnOnce(&Style, &mut Window, &mut App),
+    ) {
+        self.paint_internal(
+            global_id,
+            inspector_id,
+            bounds,
+            hitbox,
+            auto_scrollbars,
+            window,
+            cx,
+            f,
+        );
+    }
+
+    fn paint_internal(
+        &mut self,
+        global_id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        hitbox: Option<&Hitbox>,
+        auto_scrollbars: &AutoScrollbarHitboxes,
+        window: &mut Window,
+        cx: &mut App,
+        f: impl FnOnce(&Style, &mut Window, &mut App),
+    ) {
         self.hovered = hitbox.map(|hitbox| hitbox.is_hovered(window));
         window.with_optional_element_state::<InteractiveElementState, _>(
             global_id,
@@ -2688,7 +2758,15 @@ impl Interactivity {
                                     })
                                 },
                             );
-                            self.paint_auto_scrollbars(bounds, &style, window);
+                            if let Some(element_state) = element_state.as_mut() {
+                                self.paint_auto_scrollbars(
+                                    bounds,
+                                    &style,
+                                    element_state,
+                                    auto_scrollbars,
+                                    window,
+                                );
+                            }
                         });
                     });
                 });
@@ -3511,15 +3589,14 @@ impl Interactivity {
         }
     }
 
-    fn paint_auto_scrollbars(&self, bounds: Bounds<Pixels>, style: &Style, window: &mut Window) {
-        let should_show_scrollbars = self.scroll_elastic_state.as_ref().is_none_or(|state| {
-            let state = state.borrow();
-            state.animating || state.seconds_since_last_scroll() <= AUTO_SCROLLBAR_IDLE_SECONDS
-        });
-        if !should_show_scrollbars {
-            return;
-        }
-
+    fn paint_auto_scrollbars(
+        &self,
+        bounds: Bounds<Pixels>,
+        style: &Style,
+        element_state: &mut InteractiveElementState,
+        auto_scrollbars: &AutoScrollbarHitboxes,
+        window: &mut Window,
+    ) {
         let should_keep_fading = self.scroll_elastic_state.as_ref().is_some_and(|state| {
             let state = state.borrow();
             !state.animating && state.seconds_since_last_scroll() <= AUTO_SCROLLBAR_IDLE_SECONDS
@@ -3541,69 +3618,155 @@ impl Interactivity {
             return;
         }
 
-        let thumb_width = px(7.0);
-        let edge_margin = px(3.0);
-        let end_margin = px(4.0);
+        let state = element_state
+            .auto_scrollbar_state
+            .get_or_insert_with(Rc::default)
+            .clone();
+        let should_show_scrollbars = self.scroll_elastic_state.as_ref().is_none_or(|state| {
+            let state = state.borrow();
+            state.animating || state.seconds_since_last_scroll() <= AUTO_SCROLLBAR_IDLE_SECONDS
+        });
 
         if show_y {
-            let offset = scroll_handle.offset();
-            let viewport_h = bounds.size.height;
-            let content_h = viewport_h + max_offset.height;
-            let thumb_ratio = (viewport_h.0 / content_h.0).clamp(0.05, 1.0);
-            let track_h = viewport_h
-                - end_margin * 2.0
-                - if show_x {
-                    thumb_width + edge_margin
-                } else {
-                    px(0.0)
-                };
-            let thumb_h = (track_h.0 * thumb_ratio).max(20.0);
-            let scroll_fraction = if max_offset.height > Pixels::ZERO {
-                (offset.y.0.abs() / max_offset.height.0).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            let thumb_y = bounds.top() + end_margin + px((track_h.0 - thumb_h) * scroll_fraction);
-
-            let thumb_bounds = Bounds::new(
-                point(bounds.right() - thumb_width - edge_margin, thumb_y),
-                size(thumb_width, px(thumb_h)),
-            );
-
-            let thumb_color = crate::hsla(0., 0., 0.0, 0.5);
-            window
-                .paint_quad(crate::fill(thumb_bounds, thumb_color).corner_radii(thumb_width / 2.0));
+            let track_bounds = auto_scrollbar_track_bounds(bounds, true, show_x);
+            if let Some(hitbox) = auto_scrollbars.vertical.as_ref() {
+                self.paint_auto_scrollbar_axis(
+                    track_bounds,
+                    hitbox,
+                    true,
+                    should_show_scrollbars,
+                    scroll_handle,
+                    &state,
+                    window,
+                );
+            }
         }
 
         if show_x {
-            let offset = scroll_handle.offset();
-            let viewport_w = bounds.size.width;
-            let content_w = viewport_w + max_offset.width;
-            let thumb_ratio = (viewport_w.0 / content_w.0).clamp(0.05, 1.0);
-            let track_w = viewport_w
-                - end_margin * 2.0
-                - if show_y {
-                    thumb_width + edge_margin
-                } else {
-                    px(0.0)
-                };
-            let thumb_w = (track_w.0 * thumb_ratio).max(20.0);
-            let scroll_fraction = if max_offset.width > Pixels::ZERO {
-                (offset.x.0.abs() / max_offset.width.0).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            let thumb_x = bounds.left() + end_margin + px((track_w.0 - thumb_w) * scroll_fraction);
-
-            let thumb_bounds = Bounds::new(
-                point(thumb_x, bounds.bottom() - thumb_width - edge_margin),
-                size(px(thumb_w), thumb_width),
-            );
-
-            let thumb_color = crate::hsla(0., 0., 0.0, 0.5);
-            window
-                .paint_quad(crate::fill(thumb_bounds, thumb_color).corner_radii(thumb_width / 2.0));
+            let track_bounds = auto_scrollbar_track_bounds(bounds, false, show_y);
+            if let Some(hitbox) = auto_scrollbars.horizontal.as_ref() {
+                self.paint_auto_scrollbar_axis(
+                    track_bounds,
+                    hitbox,
+                    false,
+                    should_show_scrollbars,
+                    scroll_handle,
+                    &state,
+                    window,
+                );
+            }
         }
+    }
+
+    fn paint_auto_scrollbar_axis(
+        &self,
+        track_bounds: Bounds<Pixels>,
+        hitbox: &Hitbox,
+        vertical: bool,
+        should_show_scrollbars: bool,
+        scroll_handle: &ScrollHandle,
+        state: &Rc<RefCell<AutoScrollbarState>>,
+        window: &mut Window,
+    ) {
+        let hovered = hitbox.is_hovered(window);
+        let dragging = state
+            .borrow()
+            .drag_state
+            .is_some_and(|drag| drag.vertical == vertical);
+
+        if hovered || dragging {
+            window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
+        }
+
+        if hovered && !should_show_scrollbars {
+            window.refresh();
+        }
+
+        if should_show_scrollbars || hovered || dragging {
+            let thumb_bounds = auto_scrollbar_thumb_bounds(track_bounds, scroll_handle, vertical);
+            let thumb_color = crate::hsla(0., 0., 0.0, 0.5);
+            window.paint_quad(
+                crate::fill(thumb_bounds, thumb_color)
+                    .corner_radii(AUTO_SCROLLBAR_THUMB_WIDTH / 2.0),
+            );
+        }
+
+        let down_hitbox = hitbox.clone();
+        let down_handle = scroll_handle.clone();
+        let down_state = state.clone();
+        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+            if phase != DispatchPhase::Bubble
+                || event.button != MouseButton::Left
+                || !down_hitbox.is_hovered(window)
+            {
+                return;
+            }
+
+            let thumb_bounds = auto_scrollbar_thumb_bounds(track_bounds, &down_handle, vertical);
+            let logical_offset = if thumb_bounds.contains(&event.position) {
+                auto_scrollbar_logical_offset(&down_handle, vertical)
+            } else {
+                auto_scrollbar_logical_offset_for_position(
+                    event.position,
+                    track_bounds,
+                    &down_handle,
+                    vertical,
+                    true,
+                )
+            };
+            set_auto_scrollbar_logical_offset(&down_handle, vertical, logical_offset);
+            down_state.borrow_mut().drag_state = Some(AutoScrollbarDragState {
+                vertical,
+                start_logical_offset: logical_offset,
+                start_position: event.position,
+            });
+            window.refresh();
+            cx.stop_propagation();
+            window.prevent_default();
+        });
+
+        let move_handle = scroll_handle.clone();
+        let move_state = state.clone();
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+            if phase != DispatchPhase::Bubble || !event.dragging() {
+                return;
+            }
+
+            let Some(drag_state) = move_state.borrow().drag_state else {
+                return;
+            };
+            if drag_state.vertical != vertical {
+                return;
+            }
+
+            let logical_offset = auto_scrollbar_logical_offset_for_drag(
+                event.position,
+                track_bounds,
+                &move_handle,
+                vertical,
+                drag_state,
+            );
+            set_auto_scrollbar_logical_offset(&move_handle, vertical, logical_offset);
+            window.refresh();
+            cx.stop_propagation();
+        });
+
+        let up_state = state.clone();
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+            if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
+                return;
+            }
+
+            let mut up_state = up_state.borrow_mut();
+            if up_state
+                .drag_state
+                .is_some_and(|drag_state| drag_state.vertical == vertical)
+            {
+                up_state.drag_state = None;
+                window.refresh();
+                cx.stop_propagation();
+            }
+        });
     }
 
     /// Compute the visual style for this element, based on the current bounds and the element's state.
@@ -3759,7 +3922,20 @@ pub struct InteractiveElementState {
     pub(crate) scroll_elastic_state: Option<Rc<RefCell<ScrollElasticState>>>,
     pub(crate) active_tooltip: Option<Rc<RefCell<Option<ActiveTooltip>>>>,
     pub(crate) active_context_menu: Option<Rc<RefCell<Option<AnyTooltip>>>>,
+    pub(crate) auto_scrollbar_state: Option<Rc<RefCell<AutoScrollbarState>>>,
     pub(crate) prev_bounds: Option<Bounds<Pixels>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AutoScrollbarDragState {
+    vertical: bool,
+    start_logical_offset: Pixels,
+    start_position: Point<Pixels>,
+}
+
+#[derive(Default, Debug)]
+pub(crate) struct AutoScrollbarState {
+    drag_state: Option<AutoScrollbarDragState>,
 }
 
 #[derive(Default)]
@@ -4659,6 +4835,227 @@ fn axis_is_scrollable(overflow: Overflow, max_offset: Pixels) -> bool {
     }
 }
 
+fn prepaint_auto_scrollbar_hitboxes(
+    scroll_handle: Option<&ScrollHandle>,
+    bounds: Bounds<Pixels>,
+    style: &Style,
+    window: &mut Window,
+) -> AutoScrollbarHitboxes {
+    let Some(scroll_handle) = scroll_handle else {
+        return AutoScrollbarHitboxes::default();
+    };
+
+    let max_offset = scroll_handle.max_offset();
+    let show_y = axis_is_scrollable(style.overflow.y, max_offset.height);
+    let show_x = axis_is_scrollable(style.overflow.x, max_offset.width);
+
+    AutoScrollbarHitboxes {
+        vertical: show_y.then(|| {
+            window.insert_hitbox(
+                auto_scrollbar_track_bounds(bounds, true, show_x),
+                HitboxBehavior::Normal,
+            )
+        }),
+        horizontal: show_x.then(|| {
+            window.insert_hitbox(
+                auto_scrollbar_track_bounds(bounds, false, show_y),
+                HitboxBehavior::Normal,
+            )
+        }),
+    }
+}
+
+const AUTO_SCROLLBAR_HITBOX_WIDTH: Pixels = px(12.0);
+const AUTO_SCROLLBAR_THUMB_WIDTH: Pixels = px(7.0);
+const AUTO_SCROLLBAR_EDGE_MARGIN: Pixels = px(3.0);
+const AUTO_SCROLLBAR_END_MARGIN: Pixels = px(4.0);
+
+fn auto_scrollbar_track_bounds(
+    bounds: Bounds<Pixels>,
+    vertical: bool,
+    other_axis_visible: bool,
+) -> Bounds<Pixels> {
+    let other_axis_reserved = if other_axis_visible {
+        AUTO_SCROLLBAR_HITBOX_WIDTH
+    } else {
+        Pixels::ZERO
+    };
+
+    if vertical {
+        Bounds::new(
+            point(bounds.right() - AUTO_SCROLLBAR_HITBOX_WIDTH, bounds.top()),
+            size(
+                AUTO_SCROLLBAR_HITBOX_WIDTH,
+                bounds.size.height - other_axis_reserved,
+            ),
+        )
+    } else {
+        Bounds::new(
+            point(bounds.left(), bounds.bottom() - AUTO_SCROLLBAR_HITBOX_WIDTH),
+            size(
+                bounds.size.width - other_axis_reserved,
+                AUTO_SCROLLBAR_HITBOX_WIDTH,
+            ),
+        )
+    }
+}
+
+fn auto_scrollbar_thumb_bounds(
+    track_bounds: Bounds<Pixels>,
+    scroll_handle: &ScrollHandle,
+    vertical: bool,
+) -> Bounds<Pixels> {
+    let offset = scroll_handle.offset();
+    let max_offset = scroll_handle.max_offset();
+    let viewport = axis_pixels(track_bounds.size, vertical);
+    let max_axis_offset = logical_axis_size(max_offset, vertical);
+    let content = viewport + max_axis_offset;
+    let thumb_ratio = if content > Pixels::ZERO {
+        (viewport.0 / content.0).clamp(0.05, 1.0)
+    } else {
+        1.0
+    };
+    let track_length = (viewport - AUTO_SCROLLBAR_END_MARGIN * 2.0).max(Pixels::ZERO);
+    let thumb_length = (track_length * thumb_ratio).max(px(20.0)).min(track_length);
+    let available = (track_length - thumb_length).max(Pixels::ZERO);
+    let logical_offset = logical_scroll_offset(offset, vertical);
+    let fraction = if max_axis_offset > Pixels::ZERO {
+        (logical_offset.0 / max_axis_offset.0).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    if vertical {
+        Bounds::new(
+            point(
+                track_bounds.right() - AUTO_SCROLLBAR_THUMB_WIDTH - AUTO_SCROLLBAR_EDGE_MARGIN,
+                track_bounds.top() + AUTO_SCROLLBAR_END_MARGIN + available * fraction,
+            ),
+            size(AUTO_SCROLLBAR_THUMB_WIDTH, thumb_length),
+        )
+    } else {
+        Bounds::new(
+            point(
+                track_bounds.left() + AUTO_SCROLLBAR_END_MARGIN + available * fraction,
+                track_bounds.bottom() - AUTO_SCROLLBAR_THUMB_WIDTH - AUTO_SCROLLBAR_EDGE_MARGIN,
+            ),
+            size(thumb_length, AUTO_SCROLLBAR_THUMB_WIDTH),
+        )
+    }
+}
+
+fn auto_scrollbar_logical_offset(scroll_handle: &ScrollHandle, vertical: bool) -> Pixels {
+    logical_scroll_offset(scroll_handle.offset(), vertical)
+}
+
+fn axis_pixels(size: Size<Pixels>, vertical: bool) -> Pixels {
+    if vertical { size.height } else { size.width }
+}
+
+fn logical_axis_size(size: Size<Pixels>, vertical: bool) -> Pixels {
+    axis_pixels(size, vertical)
+}
+
+fn logical_scroll_offset(offset: Point<Pixels>, vertical: bool) -> Pixels {
+    if vertical { -offset.y } else { -offset.x }
+}
+
+fn clamp_pixels(value: Pixels, min: Pixels, max: Pixels) -> Pixels {
+    value.max(min).min(max)
+}
+
+fn auto_scrollbar_logical_offset_for_position(
+    position: Point<Pixels>,
+    track_bounds: Bounds<Pixels>,
+    scroll_handle: &ScrollHandle,
+    vertical: bool,
+    center_thumb: bool,
+) -> Pixels {
+    let max_offset = logical_axis_size(scroll_handle.max_offset(), vertical);
+    if max_offset <= Pixels::ZERO {
+        return Pixels::ZERO;
+    }
+
+    let track_length = (axis_pixels(track_bounds.size, vertical) - AUTO_SCROLLBAR_END_MARGIN * 2.0)
+        .max(Pixels::ZERO);
+    let thumb_length = axis_pixels(
+        auto_scrollbar_thumb_bounds(track_bounds, scroll_handle, vertical).size,
+        vertical,
+    );
+    let available = (track_length - thumb_length).max(Pixels::ZERO);
+    if available <= Pixels::ZERO {
+        return Pixels::ZERO;
+    }
+
+    let pointer = if vertical {
+        position.y - track_bounds.top() - AUTO_SCROLLBAR_END_MARGIN
+    } else {
+        position.x - track_bounds.left() - AUTO_SCROLLBAR_END_MARGIN
+    };
+    let anchor = if center_thumb {
+        pointer - thumb_length / 2.0
+    } else {
+        pointer
+    };
+    let fraction = clamp_pixels(anchor, Pixels::ZERO, available).0 / available.0;
+    max_offset * fraction
+}
+
+fn auto_scrollbar_logical_offset_for_drag(
+    position: Point<Pixels>,
+    track_bounds: Bounds<Pixels>,
+    scroll_handle: &ScrollHandle,
+    vertical: bool,
+    drag_state: AutoScrollbarDragState,
+) -> Pixels {
+    let max_offset = logical_axis_size(scroll_handle.max_offset(), vertical);
+    if max_offset <= Pixels::ZERO {
+        return Pixels::ZERO;
+    }
+
+    let track_length = (axis_pixels(track_bounds.size, vertical) - AUTO_SCROLLBAR_END_MARGIN * 2.0)
+        .max(Pixels::ZERO);
+    let thumb_length = axis_pixels(
+        auto_scrollbar_thumb_bounds(track_bounds, scroll_handle, vertical).size,
+        vertical,
+    );
+    let available = (track_length - thumb_length).max(Pixels::ZERO);
+    if available <= Pixels::ZERO {
+        return Pixels::ZERO;
+    }
+
+    let delta = if vertical {
+        position.y - drag_state.start_position.y
+    } else {
+        position.x - drag_state.start_position.x
+    };
+    clamp_pixels(
+        drag_state.start_logical_offset + max_offset * (delta.0 / available.0),
+        Pixels::ZERO,
+        max_offset,
+    )
+}
+
+fn set_auto_scrollbar_logical_offset(
+    scroll_handle: &ScrollHandle,
+    vertical: bool,
+    logical_offset: Pixels,
+) {
+    let mut offset = scroll_handle.offset();
+    if vertical {
+        offset.y = -logical_offset;
+    } else {
+        offset.x = -logical_offset;
+    }
+    scroll_handle.set_offset(offset);
+    scroll_handle
+        .0
+        .borrow()
+        .elastic
+        .borrow_mut()
+        .mark_scrolled();
+}
+
 #[derive(Default, Debug)]
 struct ScrollHandleState {
     offset: Rc<RefCell<Point<Pixels>>>,
@@ -4887,10 +5284,10 @@ mod test {
     };
     use crate::{
         AccessibilityAttributes, AccessibilityRole, AccessibilityState, AppContext, Context,
-        FocusHandle, InteractiveElement, Interactivity, PanState, ParentElement, PinchState,
-        Render, Rgba, ScrollDelta, ScrollHandle, ScrollWheelEvent, StatefulInteractiveElement,
-        StyleRefinement, Styled, SwipeDirection, TestAppContext, VisualContext, Window, div, point,
-        px,
+        FocusHandle, InteractiveElement, Interactivity, MouseButton, MouseDownEvent,
+        MouseMoveEvent, MouseUpEvent, PanState, ParentElement, PinchState, Render, Rgba,
+        ScrollDelta, ScrollHandle, ScrollWheelEvent, StatefulInteractiveElement, StyleRefinement,
+        Styled, SwipeDirection, TestAppContext, VisualContext, Window, div, point, px,
     };
     use std::{
         cell::{Cell, RefCell},
@@ -5013,6 +5410,55 @@ mod test {
 
         assert_eq!(scroll_handle.offset().y, px(-40.));
         assert!(test_window.0.lock().frame_polling_active);
+    }
+
+    #[kael::test]
+    fn auto_scrollbar_drag_updates_scroll_offset(cx: &mut TestAppContext) {
+        let scroll_handle = ScrollHandle::new();
+
+        struct TestView(ScrollHandle);
+
+        impl Render for TestView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div()
+                    .w(px(100.))
+                    .h(px(100.))
+                    .id("auto-scrollbar-drag-test")
+                    .overflow_y_scroll()
+                    .track_scroll(&self.0)
+                    .child(div().w(px(100.)).h(px(300.)))
+            }
+        }
+
+        let (_view, mut cx) = cx.add_window_view(|_, _| TestView(scroll_handle.clone()));
+
+        cx.simulate_event(MouseMoveEvent {
+            position: point(px(96.), px(10.)),
+            ..Default::default()
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        cx.simulate_event(MouseDownEvent {
+            button: MouseButton::Left,
+            position: point(px(96.), px(10.)),
+            click_count: 1,
+            ..Default::default()
+        });
+        cx.simulate_event(MouseMoveEvent {
+            position: point(px(96.), px(40.)),
+            pressed_button: Some(MouseButton::Left),
+            ..Default::default()
+        });
+        cx.simulate_event(MouseUpEvent {
+            button: MouseButton::Left,
+            position: point(px(96.), px(40.)),
+            click_count: 1,
+            ..Default::default()
+        });
+
+        assert!(scroll_handle.offset().y < px(-80.));
     }
 
     #[kael::test]
