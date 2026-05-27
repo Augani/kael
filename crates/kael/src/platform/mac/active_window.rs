@@ -15,21 +15,19 @@ unsafe extern "C" {
 }
 
 pub fn get_focused_window_info() -> Option<FocusedWindowInfo> {
-    unsafe {
-        let workspace = NSWorkspace::sharedWorkspace();
-        let frontmost_app = workspace.frontmostApplication()?;
-        let app_name = frontmost_app.localizedName()?.to_string();
-        let bundle_id = frontmost_app.bundleIdentifier().map(|id| id.to_string());
-        let pid = frontmost_app.processIdentifier();
-        let window_title = get_window_title_via_accessibility(pid).unwrap_or_default();
+    let workspace = NSWorkspace::sharedWorkspace();
+    let frontmost_app = workspace.frontmostApplication()?;
+    let app_name = frontmost_app.localizedName()?.to_string();
+    let bundle_id = frontmost_app.bundleIdentifier().map(|id| id.to_string());
+    let pid = frontmost_app.processIdentifier();
+    let window_title = get_window_title_via_accessibility(pid).unwrap_or_default();
 
-        Some(FocusedWindowInfo {
-            app_name,
-            window_title,
-            bundle_id,
-            pid: Some(pid as u32),
-        })
-    }
+    Some(FocusedWindowInfo {
+        app_name,
+        window_title,
+        bundle_id,
+        pid: Some(pid as u32),
+    })
 }
 
 fn get_window_title_via_accessibility(pid: i32) -> Option<String> {

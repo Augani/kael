@@ -10,19 +10,19 @@ pub fn request_user_attention(attention_type: AttentionType) -> isize {
         AttentionType::Informational => NSRequestUserAttentionType::InformationalRequest,
         AttentionType::Critical => NSRequestUserAttentionType::CriticalRequest,
     };
-    unsafe { app.requestUserAttention(request_type) }
+    app.requestUserAttention(request_type)
 }
 
 pub fn cancel_user_attention(request_id: isize) {
     let mtm = MainThreadMarker::new().expect("cancel_user_attention must run on the main thread");
     let app = NSApplication::sharedApplication(mtm);
-    unsafe { app.cancelUserAttentionRequest(request_id) };
+    app.cancelUserAttentionRequest(request_id);
 }
 
 pub fn set_dock_badge(label: Option<&str>) {
     let mtm = MainThreadMarker::new().expect("set_dock_badge must run on the main thread");
     let app = NSApplication::sharedApplication(mtm);
-    let dock_tile = unsafe { app.dockTile() };
+    let dock_tile = app.dockTile();
     let ns_label = label.map(NSString::from_str);
-    unsafe { dock_tile.setBadgeLabel(ns_label.as_deref()) };
+    dock_tile.setBadgeLabel(ns_label.as_deref());
 }
