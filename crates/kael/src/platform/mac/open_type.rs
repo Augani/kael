@@ -1,7 +1,7 @@
 #![allow(unused, non_upper_case_globals)]
 
 use crate::{FontFallbacks, FontFeatures};
-use cocoa::appkit::CGFloat;
+use core_graphics::base::CGFloat;
 use core_foundation::{
     array::{
         CFArray, CFArrayAppendArray, CFArrayAppendValue, CFArrayCreateMutable, CFArrayGetCount,
