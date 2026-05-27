@@ -36,7 +36,7 @@ members = [
 [workspace.package]
 version = "0.1.1"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.87"
 authors = ["Augustus Otu"]
 license = "Apache-2.0"
 repository = "https://github.com/Augani/kael"

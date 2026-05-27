@@ -1695,9 +1695,7 @@ impl MacWindow {
                 select_previous_tab_callback: None,
                 toggle_tab_bar_callback: None,
                 activated_least_once: false,
-                accessibility_provider: super::accessibility::MacAccessibilityProvider::new(
-                    "Kael",
-                ),
+                accessibility_provider: super::accessibility::MacAccessibilityProvider::new("Kael"),
                 webviews: HashMap::default(),
                 pending_webview_commands: HashMap::default(),
             })));
