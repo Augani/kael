@@ -1,12 +1,11 @@
 use crate::{
-    DevicePixels, ForegroundExecutor, SharedString, SourceMetadata,
     platform::{ScreenCaptureFrame, ScreenCaptureSource, ScreenCaptureStream},
-    size,
+    size, DevicePixels, ForegroundExecutor, SharedString, SourceMetadata,
 };
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use block::ConcreteBlock;
 use cocoa::{
-    base::{YES, id, nil},
+    base::{id, nil, YES},
     foundation::{NSArray, NSString},
 };
 use collections::HashMap;
@@ -274,7 +273,7 @@ pub(crate) fn get_sources() -> oneshot::Receiver<Result<Vec<Rc<dyn ScreenCapture
     }
 }
 
-#[ctor]
+#[ctor(unsafe)]
 unsafe fn build_classes() {
     let mut decl = ClassDecl::new("GPUIStreamDelegate", class!(NSObject)).unwrap();
     unsafe {

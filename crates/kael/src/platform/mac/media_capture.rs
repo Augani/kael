@@ -2,9 +2,9 @@ use crate::media_capture::{
     CaptureBackend, CaptureConfig, CaptureDeviceInfo, CaptureDeviceKind, CaptureSession,
     CaptureSessionState, DeviceEnumerator, FrameCallback, PixelFormat,
 };
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use cocoa::{
-    base::{BOOL, NO, YES, id, nil},
+    base::{id, nil, BOOL, NO, YES},
     foundation::NSUInteger,
 };
 use core_foundation::{base::TCFType, string::CFStringRef};
@@ -25,15 +25,15 @@ use std::{
     ffi::c_void,
     ptr,
     sync::{
-        Arc,
         atomic::{AtomicU64, Ordering},
+        Arc,
     },
     time::Instant,
 };
 
 use super::{
+    dispatcher::dispatch_sys::{dispatch_get_global_queue, DISPATCH_QUEUE_PRIORITY_HIGH},
     NSStringExt,
-    dispatcher::dispatch_sys::{DISPATCH_QUEUE_PRIORITY_HIGH, dispatch_get_global_queue},
 };
 
 #[link(name = "AVFoundation", kind = "framework")]
@@ -58,7 +58,7 @@ unsafe extern "C" {
 static mut VIDEO_OUTPUT_DELEGATE_CLASS: *const Class = ptr::null();
 const VIDEO_OUTPUT_STATE_IVAR: &str = "video_output_state";
 
-#[ctor]
+#[ctor(unsafe)]
 unsafe fn build_classes() {
     if !unsafe { VIDEO_OUTPUT_DELEGATE_CLASS.is_null() } {
         return;

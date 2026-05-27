@@ -1,13 +1,10 @@
-use crate::{Bounds, DisplayId, Pixels, PlatformDisplay, px, size};
+use crate::{px, size, Bounds, DisplayId, Pixels, PlatformDisplay};
 use anyhow::Result;
-use cocoa::{
-    appkit::NSScreen,
-    base::{id, nil},
-    foundation::{NSDictionary, NSString},
-};
 use core_foundation::uuid::{CFUUIDGetUUIDBytes, CFUUIDRef};
 use core_graphics::display::{CGDirectDisplayID, CGDisplayBounds, CGGetActiveDisplayList};
-use objc::{msg_send, sel, sel_impl};
+use objc2::MainThreadMarker;
+use objc2_app_kit::NSScreen;
+use objc2_foundation::{NSNumber, NSString};
 use uuid::Uuid;
 
 #[derive(Debug)]
@@ -31,15 +28,19 @@ impl MacDisplay {
         // The following is what Chromium does too:
         //
         // https://chromium.googlesource.com/chromium/src/+/66.0.3359.158/ui/display/mac/screen_mac.mm#56
-        unsafe {
-            let screens = NSScreen::screens(nil);
-            let screen = cocoa::foundation::NSArray::objectAtIndex(screens, 0);
-            let device_description = NSScreen::deviceDescription(screen);
-            let screen_number_key: id = NSString::alloc(nil).init_str("NSScreenNumber");
-            let screen_number = device_description.objectForKey_(screen_number_key);
-            let screen_number: CGDirectDisplayID = msg_send![screen_number, unsignedIntegerValue];
-            Self(screen_number)
-        }
+        let mtm =
+            MainThreadMarker::new().expect("MacDisplay::primary must be called on the main thread");
+        let screens = NSScreen::screens(mtm);
+        let screen = screens.objectAtIndex(0);
+        let device_description = screen.deviceDescription();
+        let key = NSString::from_str("NSScreenNumber");
+        let screen_number = device_description
+            .objectForKey(&key)
+            .expect("screen device description missing NSScreenNumber");
+        let screen_number = screen_number
+            .downcast::<NSNumber>()
+            .expect("NSScreenNumber was not an NSNumber");
+        Self(screen_number.unsignedIntegerValue() as CGDirectDisplayID)
     }
 
     /// Obtains an iterator over all currently active system displays.

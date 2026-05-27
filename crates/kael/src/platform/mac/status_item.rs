@@ -38,7 +38,7 @@ use super::screen::Screen;
 static mut VIEW_CLASS: *const Class = ptr::null();
 const STATE_IVAR: &str = "state";
 
-#[ctor]
+#[ctor(unsafe)]
 unsafe fn build_classes() {
     VIEW_CLASS = {
         let mut decl = ClassDecl::new("GPUIStatusItemView", class!(NSView)).unwrap();

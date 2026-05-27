@@ -38,7 +38,6 @@ macos-blade = [
     "blade-macros",
     "blade-util",
     "bytemuck",
-    "objc2",
     "objc2-metal",
 ]
 runtime_shaders = []
@@ -156,7 +155,7 @@ package = "kael_collections"
 version = "0.1.0"
 
 [dependencies.ctor]
-version = "0.3.0"
+version = "1"
 
 [dependencies.derive_more]
 version = "0.99.17"
@@ -647,7 +646,12 @@ version = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies.objc2]
 version = "0.6"
-optional = true
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-app-kit]
+version = "0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-foundation]
+version = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies.objc2-metal]
 version = "0.3"

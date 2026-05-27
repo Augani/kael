@@ -151,7 +151,7 @@ unsafe extern "C" {
 #[link(name = "WebKit", kind = "framework")]
 unsafe extern "C" {}
 
-#[ctor]
+#[ctor(unsafe)]
 unsafe fn build_classes() {
     unsafe {
         WINDOW_CLASS = build_window_class("GPUIWindow", class!(NSWindow));
