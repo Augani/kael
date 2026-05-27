@@ -2,9 +2,9 @@ use crate::media_capture::{
     CaptureBackend, CaptureConfig, CaptureDeviceInfo, CaptureDeviceKind, CaptureSession,
     CaptureSessionState, DeviceEnumerator, FrameCallback, PixelFormat,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use cocoa::{
-    base::{id, nil, BOOL, NO, YES},
+    base::{BOOL, NO, YES, id, nil},
     foundation::NSUInteger,
 };
 use core_foundation::{base::TCFType, string::CFStringRef};
@@ -25,15 +25,15 @@ use std::{
     ffi::c_void,
     ptr,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     time::Instant,
 };
 
 use super::{
-    dispatcher::dispatch_sys::{dispatch_get_global_queue, DISPATCH_QUEUE_PRIORITY_HIGH},
     NSStringExt,
+    dispatcher::dispatch_sys::{DISPATCH_QUEUE_PRIORITY_HIGH, dispatch_get_global_queue},
 };
 
 #[link(name = "AVFoundation", kind = "framework")]

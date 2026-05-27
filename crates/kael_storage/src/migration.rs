@@ -83,7 +83,7 @@ pub(crate) fn rollback_migrations<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{pending_migrations, rollback_migrations, validate_migrations, Migration};
+    use super::{Migration, pending_migrations, rollback_migrations, validate_migrations};
     use crate::Error;
 
     const FIRST: Migration = Migration {

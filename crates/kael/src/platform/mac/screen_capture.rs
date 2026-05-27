@@ -1,11 +1,12 @@
 use crate::{
+    DevicePixels, ForegroundExecutor, SharedString, SourceMetadata,
     platform::{ScreenCaptureFrame, ScreenCaptureSource, ScreenCaptureStream},
-    size, DevicePixels, ForegroundExecutor, SharedString, SourceMetadata,
+    size,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use block::ConcreteBlock;
 use cocoa::{
-    base::{id, nil, YES},
+    base::{YES, id, nil},
     foundation::{NSArray, NSString},
 };
 use collections::HashMap;

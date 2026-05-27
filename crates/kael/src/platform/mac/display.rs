@@ -1,4 +1,4 @@
-use crate::{px, size, Bounds, DisplayId, Pixels, PlatformDisplay};
+use crate::{Bounds, DisplayId, Pixels, PlatformDisplay, px, size};
 use anyhow::Result;
 use core_foundation::uuid::{CFUUIDGetUUIDBytes, CFUUIDRef};
 use core_graphics::display::{CGDirectDisplayID, CGDisplayBounds, CGGetActiveDisplayList};

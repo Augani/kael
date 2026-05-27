@@ -10,11 +10,11 @@ use std::{
 };
 
 use parking_lot::Mutex;
-use rusqlite::{params, Connection, OptionalExtension};
-use serde::{de::DeserializeOwned, Serialize};
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use crate::{platform, Error, Result, Subscription};
+use crate::{Error, Result, Subscription, platform};
 
 type Observer = Arc<dyn Fn(Option<Value>) + Send + Sync + 'static>;
 
@@ -517,7 +517,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
     use tempfile::tempdir;
 
-    use super::{persist_values, JsonKvStore, KvStore, SqliteKvStore};
+    use super::{JsonKvStore, KvStore, SqliteKvStore, persist_values};
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct Preferences {
