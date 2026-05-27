@@ -438,9 +438,13 @@ impl<P: LinuxClient + 'static> Platform for P {
                 let result = match request.response() {
                     Ok(response) => Ok(Some(
                         response
-                            .files()
+                            .uris()
                             .iter()
-                            .map(|file| file.as_ref().to_path_buf())
+                            .filter_map(|uri| {
+                                http_client::Url::parse(uri.as_str())
+                                    .ok()
+                                    .and_then(|url| url.to_file_path().ok())
+                            })
                             .collect::<Vec<_>>(),
                     )),
                     Err(ashpd::Error::Response(_)) => Ok(None),
@@ -508,10 +512,11 @@ impl<P: LinuxClient + 'static> Platform for P {
                     };
 
                     let result = match request.response() {
-                        Ok(response) => Ok(response
-                            .files()
-                            .first()
-                            .map(|file| file.as_ref().to_path_buf())),
+                        Ok(response) => Ok(response.uris().first().and_then(|uri| {
+                            http_client::Url::parse(uri.as_str())
+                                .ok()
+                                .and_then(|url| url.to_file_path().ok())
+                        })),
                         Err(ashpd::Error::Response(_)) => Ok(None),
                         Err(e) => Err(e.into()),
                     };

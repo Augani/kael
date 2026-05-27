@@ -1,10 +1,9 @@
 use crate::{Bounds, DisplayId, Pixels, PlatformDisplay, px, size};
 use anyhow::Result;
 use core_foundation::uuid::{CFUUIDGetUUIDBytes, CFUUIDRef};
-use core_graphics::display::{CGDirectDisplayID, CGDisplayBounds, CGGetActiveDisplayList};
-use objc2::MainThreadMarker;
-use objc2_app_kit::NSScreen;
-use objc2_foundation::{NSNumber, NSString};
+use core_graphics::display::{
+    CGDirectDisplayID, CGDisplayBounds, CGGetActiveDisplayList, CGMainDisplayID,
+};
 use uuid::Uuid;
 
 #[derive(Debug)]
@@ -21,26 +20,11 @@ impl MacDisplay {
     /// Get the primary screen - the one with the menu bar, and whose bottom left
     /// corner is at the origin of the AppKit coordinate system.
     pub fn primary() -> Self {
-        // Instead of iterating through all active systems displays via `all()` we use the first
-        // NSScreen and gets its CGDirectDisplayID, because we can't be sure that `CGGetActiveDisplayList`
-        // will always return a list of active displays (machine might be sleeping).
-        //
-        // The following is what Chromium does too:
-        //
-        // https://chromium.googlesource.com/chromium/src/+/66.0.3359.158/ui/display/mac/screen_mac.mm#56
-        let mtm =
-            MainThreadMarker::new().expect("MacDisplay::primary must be called on the main thread");
-        let screens = NSScreen::screens(mtm);
-        let screen = screens.objectAtIndex(0);
-        let device_description = screen.deviceDescription();
-        let key = NSString::from_str("NSScreenNumber");
-        let screen_number = device_description
-            .objectForKey(&key)
-            .expect("screen device description missing NSScreenNumber");
-        let screen_number = screen_number
-            .downcast::<NSNumber>()
-            .expect("NSScreenNumber was not an NSNumber");
-        Self(screen_number.unsignedIntegerValue() as CGDirectDisplayID)
+        // `CGMainDisplayID` returns the display with the menu bar, whose bottom-left
+        // corner is at the origin of the AppKit coordinate system. Unlike `NSScreen`,
+        // it is safe to call off the main thread (headless/test contexts) and does not
+        // depend on `CGGetActiveDisplayList`, which can be empty while the machine sleeps.
+        Self(unsafe { CGMainDisplayID() })
     }
 
     /// Obtains an iterator over all currently active system displays.
