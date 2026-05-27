@@ -1,8 +1,8 @@
 use crate::{
-    Bounds, DevicePixels, Font, FontFeature, FontFeatures, FontId, FontMetrics, FontRun, FontStyle,
-    FontWeight, GlyphId, LineLayout, Pixels, PlatformTextSystem, Point, RenderGlyphParams,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ShapedGlyph, ShapedRun, SharedString, Size, point,
-    size,
+    point, size, Bounds, DevicePixels, Font, FontFeature, FontFeatures, FontId, FontMetrics,
+    FontRun, FontStyle, FontWeight, GlyphId, LineLayout, Pixels, PlatformTextSystem, Point,
+    RenderGlyphParams, ShapedGlyph, ShapedRun, SharedString, Size, SUBPIXEL_VARIANTS_X,
+    SUBPIXEL_VARIANTS_Y,
 };
 use anyhow::{Context as _, Ok, Result};
 use collections::HashMap;
@@ -61,6 +61,7 @@ struct LoadedFont {
     font: Arc<CosmicTextFont>,
     features: CosmicFontFeatures,
     is_known_emoji_font: bool,
+    weight: cosmic_text::fontdb::Weight,
 }
 
 impl CosmicTextSystem {
@@ -302,14 +303,14 @@ impl CosmicTextSystemState {
             .db()
             .faces()
             .filter(|face| face.families.iter().any(|family| *name == family.0))
-            .map(|face| (face.id, face.post_script_name.clone()))
+            .map(|face| (face.id, face.post_script_name.clone(), face.weight))
             .collect::<SmallVec<[_; 4]>>();
 
         let mut loaded_font_ids = SmallVec::new();
-        for (font_id, postscript_name) in families {
+        for (font_id, postscript_name, weight) in families {
             let font = self
                 .font_system
-                .get_font(font_id)
+                .get_font(font_id, weight)
                 .context("Could not load font")?;
 
             // HACK: To let the storybook run and render Windows caption icons. We should actually do better font fallback.
@@ -331,6 +332,7 @@ impl CosmicTextSystemState {
                 font: font.clone(),
                 features: features.try_into()?,
                 is_known_emoji_font: is_color_emoji_font(&postscript_name, &font),
+                weight,
             });
         }
 
@@ -357,6 +359,7 @@ impl CosmicTextSystemState {
     fn raster_bounds(&mut self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
         let font = &self.loaded_fonts[params.font_id.0].font;
         let is_emoji = self.loaded_fonts[params.font_id.0].is_known_emoji_font;
+        let font_weight = self.loaded_fonts[params.font_id.0].weight;
         // Apply emoji size scaling to ensure emoji glyphs are sized correctly
         // relative to surrounding text (1.0-1.2x the font size per design spec).
         let effective_font_size = if is_emoji {
@@ -377,6 +380,7 @@ impl CosmicTextSystemState {
                     params.glyph_id.0 as u16,
                     (effective_font_size * params.scale_factor).into(),
                     (subpixel_shift.x, subpixel_shift.y.trunc()),
+                    font_weight,
                     cosmic_text::CacheKeyFlags::empty(),
                 )
                 .0,
@@ -401,6 +405,7 @@ impl CosmicTextSystemState {
             let bitmap_size = glyph_bounds.size;
             let font = &self.loaded_fonts[params.font_id.0].font;
             let is_emoji = self.loaded_fonts[params.font_id.0].is_known_emoji_font;
+            let font_weight = self.loaded_fonts[params.font_id.0].weight;
             // Apply emoji size scaling consistent with raster_bounds
             let effective_font_size = if is_emoji {
                 params.font_size * EMOJI_SIZE_SCALE
@@ -420,6 +425,7 @@ impl CosmicTextSystemState {
                         params.glyph_id.0 as u16,
                         (effective_font_size * params.scale_factor).into(),
                         (subpixel_shift.x, subpixel_shift.y.trunc()),
+                        font_weight,
                         cosmic_text::CacheKeyFlags::empty(),
                     )
                     .0,
@@ -454,14 +460,18 @@ impl CosmicTextSystemState {
         {
             FontId(ix)
         } else {
-            let font = self.font_system.get_font(id).unwrap();
-            let face = self.font_system.db().face(id).unwrap();
+            let (face_weight, face_post_script_name) = {
+                let face = self.font_system.db().face(id).unwrap();
+                (face.weight, face.post_script_name.clone())
+            };
+            let font = self.font_system.get_font(id, face_weight).unwrap();
 
             let font_id = FontId(self.loaded_fonts.len());
             self.loaded_fonts.push(LoadedFont {
                 font: font.clone(),
                 features: CosmicFontFeatures::new(),
-                is_known_emoji_font: is_color_emoji_font(&face.post_script_name, &font),
+                is_known_emoji_font: is_color_emoji_font(&face_post_script_name, &font),
+                weight: face_weight,
             });
 
             font_id

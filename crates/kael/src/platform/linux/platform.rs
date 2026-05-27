@@ -1067,7 +1067,7 @@ pub(super) fn open_uri_internal(
     uri: &str,
     activation_token: Option<String>,
 ) {
-    if let Some(uri) = ashpd::url::Url::parse(uri).log_err() {
+    if let Some(uri) = ashpd::Uri::parse(uri).log_err() {
         executor
             .spawn(async move {
                 match ashpd::desktop::open_uri::OpenFileRequest::default()
