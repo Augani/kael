@@ -440,7 +440,11 @@ impl<P: LinuxClient + 'static> Platform for P {
                         response
                             .uris()
                             .iter()
-                            .filter_map(|uri| uri.to_file_path().ok())
+                            .filter_map(|uri| {
+                                http_client::Url::parse(uri.as_str())
+                                    .ok()
+                                    .and_then(|url| url.to_file_path().ok())
+                            })
                             .collect::<Vec<_>>(),
                     )),
                     Err(ashpd::Error::Response(_)) => Ok(None),
@@ -508,10 +512,11 @@ impl<P: LinuxClient + 'static> Platform for P {
                     };
 
                     let result = match request.response() {
-                        Ok(response) => Ok(response
-                            .uris()
-                            .first()
-                            .and_then(|uri| uri.to_file_path().ok())),
+                        Ok(response) => Ok(response.uris().first().and_then(|uri| {
+                            http_client::Url::parse(uri.as_str())
+                                .ok()
+                                .and_then(|url| url.to_file_path().ok())
+                        })),
                         Err(ashpd::Error::Response(_)) => Ok(None),
                         Err(e) => Err(e.into()),
                     };
@@ -1067,7 +1072,7 @@ pub(super) fn open_uri_internal(
     uri: &str,
     activation_token: Option<String>,
 ) {
-    if let Some(uri) = ashpd::url::Url::parse(uri).log_err() {
+    if let Some(uri) = ashpd::Uri::parse(uri).log_err() {
         executor
             .spawn(async move {
                 match ashpd::desktop::open_uri::OpenFileRequest::default()

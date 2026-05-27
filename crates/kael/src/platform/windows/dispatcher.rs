@@ -51,9 +51,11 @@ impl WindowsDispatcher {
 
     fn dispatch_on_threadpool(&self, runnable: Runnable) {
         let handler = {
-            let mut task_wrapper = Some(runnable);
+            let task_wrapper = Mutex::new(Some(runnable));
             WorkItemHandler::new(move |_| {
-                task_wrapper.take().unwrap().run();
+                if let Some(task) = task_wrapper.lock().take() {
+                    task.run();
+                }
                 Ok(())
             })
         };
@@ -62,9 +64,11 @@ impl WindowsDispatcher {
 
     fn dispatch_on_threadpool_after(&self, runnable: Runnable, duration: Duration) {
         let handler = {
-            let mut task_wrapper = Some(runnable);
+            let task_wrapper = Mutex::new(Some(runnable));
             TimerElapsedHandler::new(move |_| {
-                task_wrapper.take().unwrap().run();
+                if let Some(task) = task_wrapper.lock().take() {
+                    task.run();
+                }
                 Ok(())
             })
         };

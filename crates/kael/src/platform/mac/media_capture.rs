@@ -58,7 +58,7 @@ unsafe extern "C" {
 static mut VIDEO_OUTPUT_DELEGATE_CLASS: *const Class = ptr::null();
 const VIDEO_OUTPUT_STATE_IVAR: &str = "video_output_state";
 
-#[ctor]
+#[ctor(unsafe)]
 unsafe fn build_classes() {
     if !unsafe { VIDEO_OUTPUT_DELEGATE_CLASS.is_null() } {
         return;

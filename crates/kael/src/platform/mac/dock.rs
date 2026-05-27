@@ -1,41 +1,28 @@
 use crate::AttentionType;
-use cocoa::base::{id, nil};
-use cocoa::foundation::NSString;
-use objc::{class, msg_send, sel, sel_impl};
-
-const NS_INFORMATIONAL_REQUEST: isize = 10;
-const NS_CRITICAL_REQUEST: isize = 0;
+use objc2::MainThreadMarker;
+use objc2_app_kit::{NSApplication, NSRequestUserAttentionType};
+use objc2_foundation::NSString;
 
 pub fn request_user_attention(attention_type: AttentionType) -> isize {
-    unsafe {
-        let app: id = msg_send![class!(NSApplication), sharedApplication];
-        let request_type = match attention_type {
-            AttentionType::Informational => NS_INFORMATIONAL_REQUEST,
-            AttentionType::Critical => NS_CRITICAL_REQUEST,
-        };
-        msg_send![app, requestUserAttention: request_type]
-    }
+    let mtm = MainThreadMarker::new().expect("request_user_attention must run on the main thread");
+    let app = NSApplication::sharedApplication(mtm);
+    let request_type = match attention_type {
+        AttentionType::Informational => NSRequestUserAttentionType::InformationalRequest,
+        AttentionType::Critical => NSRequestUserAttentionType::CriticalRequest,
+    };
+    app.requestUserAttention(request_type)
 }
 
 pub fn cancel_user_attention(request_id: isize) {
-    unsafe {
-        let app: id = msg_send![class!(NSApplication), sharedApplication];
-        let _: () = msg_send![app, cancelUserAttentionRequest: request_id];
-    }
+    let mtm = MainThreadMarker::new().expect("cancel_user_attention must run on the main thread");
+    let app = NSApplication::sharedApplication(mtm);
+    app.cancelUserAttentionRequest(request_id);
 }
 
 pub fn set_dock_badge(label: Option<&str>) {
-    unsafe {
-        let app: id = msg_send![class!(NSApplication), sharedApplication];
-        let dock_tile: id = msg_send![app, dockTile];
-        let ns_label: id = match label {
-            Some(text) => {
-                let s: id = NSString::alloc(nil).init_str(text);
-                let _: id = msg_send![s, autorelease];
-                s
-            }
-            None => nil,
-        };
-        let _: () = msg_send![dock_tile, setBadgeLabel: ns_label];
-    }
+    let mtm = MainThreadMarker::new().expect("set_dock_badge must run on the main thread");
+    let app = NSApplication::sharedApplication(mtm);
+    let dock_tile = app.dockTile();
+    let ns_label = label.map(NSString::from_str);
+    dock_tile.setBadgeLabel(ns_label.as_deref());
 }

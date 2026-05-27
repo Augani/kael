@@ -5,10 +5,6 @@ use crate::{
     point, px, size, swap_rgba_pa_to_bgra,
 };
 use anyhow::anyhow;
-use cocoa::{
-    appkit::CGFloat,
-    base::{id, nil},
-};
 use collections::HashMap;
 use core_foundation::{
     attributed_string::CFMutableAttributedString,
@@ -16,6 +12,7 @@ use core_foundation::{
     number::CFNumber,
     string::CFString,
 };
+use core_graphics::base::CGFloat;
 use core_graphics::{
     base::{
         CGGlyph, kCGBitmapByteOrder32Little, kCGImageAlphaPremultipliedFirst,
@@ -42,7 +39,8 @@ use font_kit::{
     source::SystemSource,
     sources::mem::MemSource,
 };
-use objc::{class, msg_send, sel, sel_impl};
+use objc2::rc::Retained;
+use objc2_app_kit::NSFont;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use pathfinder_geometry::{
     rect::{RectF, RectI},
@@ -711,19 +709,9 @@ fn ns_font_weight(weight: FontWeight) -> CGFloat {
 /// `size`, so the Text/Display optical variant matches AppKit's defaults.
 fn create_system_ui_ct_font(size: f64, weight: FontWeight) -> Option<CTFont> {
     let ns_weight = ns_font_weight(weight);
-    unsafe {
-        let ns_font: id = msg_send![
-            class!(NSFont),
-            systemFontOfSize: size as CGFloat
-            weight: ns_weight
-        ];
-        if ns_font == nil {
-            return None;
-        }
-        // NSFont and CTFontRef are toll-free bridged; the returned object is
-        // autoreleased, so use the +0 wrapper which retains for our copy.
-        Some(CTFont::wrap_under_get_rule(ns_font as CTFontRef))
-    }
+    let ns_font = NSFont::systemFontOfSize_weight(size as CGFloat, ns_weight);
+    let ct_font_ref = Retained::as_ptr(&ns_font) as CTFontRef;
+    Some(unsafe { CTFont::wrap_under_get_rule(ct_font_ref) })
 }
 
 #[derive(Clone)]

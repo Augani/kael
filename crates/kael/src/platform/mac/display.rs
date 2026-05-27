@@ -1,13 +1,9 @@
 use crate::{Bounds, DisplayId, Pixels, PlatformDisplay, px, size};
 use anyhow::Result;
-use cocoa::{
-    appkit::NSScreen,
-    base::{id, nil},
-    foundation::{NSDictionary, NSString},
-};
 use core_foundation::uuid::{CFUUIDGetUUIDBytes, CFUUIDRef};
-use core_graphics::display::{CGDirectDisplayID, CGDisplayBounds, CGGetActiveDisplayList};
-use objc::{msg_send, sel, sel_impl};
+use core_graphics::display::{
+    CGDirectDisplayID, CGDisplayBounds, CGGetActiveDisplayList, CGMainDisplayID,
+};
 use uuid::Uuid;
 
 #[derive(Debug)]
@@ -24,22 +20,11 @@ impl MacDisplay {
     /// Get the primary screen - the one with the menu bar, and whose bottom left
     /// corner is at the origin of the AppKit coordinate system.
     pub fn primary() -> Self {
-        // Instead of iterating through all active systems displays via `all()` we use the first
-        // NSScreen and gets its CGDirectDisplayID, because we can't be sure that `CGGetActiveDisplayList`
-        // will always return a list of active displays (machine might be sleeping).
-        //
-        // The following is what Chromium does too:
-        //
-        // https://chromium.googlesource.com/chromium/src/+/66.0.3359.158/ui/display/mac/screen_mac.mm#56
-        unsafe {
-            let screens = NSScreen::screens(nil);
-            let screen = cocoa::foundation::NSArray::objectAtIndex(screens, 0);
-            let device_description = NSScreen::deviceDescription(screen);
-            let screen_number_key: id = NSString::alloc(nil).init_str("NSScreenNumber");
-            let screen_number = device_description.objectForKey_(screen_number_key);
-            let screen_number: CGDirectDisplayID = msg_send![screen_number, unsignedIntegerValue];
-            Self(screen_number)
-        }
+        // `CGMainDisplayID` returns the display with the menu bar, whose bottom-left
+        // corner is at the origin of the AppKit coordinate system. Unlike `NSScreen`,
+        // it is safe to call off the main thread (headless/test contexts) and does not
+        // depend on `CGGetActiveDisplayList`, which can be empty while the machine sleeps.
+        Self(unsafe { CGMainDisplayID() })
     }
 
     /// Obtains an iterator over all currently active system displays.

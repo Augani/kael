@@ -1,9 +1,8 @@
-use cocoa::base::id;
 use core_foundation::base::TCFType;
 use core_foundation::base::{CFRelease, CFTypeRef};
 use core_foundation::string::CFString;
 use core_foundation::string::CFStringRef;
-use objc::{class, msg_send, sel, sel_impl};
+use objc2_foundation::NSProcessInfo;
 use std::ffi::c_void;
 
 #[link(name = "IOKit", kind = "framework")]
@@ -66,11 +65,7 @@ pub fn stop_power_save_blocker(id: u32) {
 }
 
 fn low_power_mode_enabled() -> bool {
-    unsafe {
-        let process_info: id = msg_send![class!(NSProcessInfo), processInfo];
-        let enabled: bool = msg_send![process_info, isLowPowerModeEnabled];
-        enabled
-    }
+    NSProcessInfo::processInfo().isLowPowerModeEnabled()
 }
 
 fn on_battery_power() -> bool {

@@ -151,7 +151,7 @@ unsafe extern "C" {
 #[link(name = "WebKit", kind = "framework")]
 unsafe extern "C" {}
 
-#[ctor]
+#[ctor(unsafe)]
 unsafe fn build_classes() {
     unsafe {
         WINDOW_CLASS = build_window_class("GPUIWindow", class!(NSWindow));
@@ -159,7 +159,7 @@ unsafe fn build_classes() {
         VIEW_CLASS = {
             let mut decl = ClassDecl::new("GPUIView", class!(NSView)).unwrap();
             decl.add_ivar::<*mut c_void>(WINDOW_STATE_IVAR);
-            unsafe {
+            {
                 decl.add_method(sel!(dealloc), dealloc_view as extern "C" fn(&Object, Sel));
 
                 decl.add_method(
@@ -307,7 +307,7 @@ unsafe fn build_classes() {
         };
         BLURRED_VIEW_CLASS = {
             let mut decl = ClassDecl::new("BlurredView", class!(NSVisualEffectView)).unwrap();
-            unsafe {
+            {
                 decl.add_method(
                     sel!(initWithFrame:),
                     blurred_view_init_with_frame as extern "C" fn(&Object, Sel, NSRect) -> id,
@@ -322,7 +322,7 @@ unsafe fn build_classes() {
         WEBVIEW_DELEGATE_CLASS = {
             let mut decl = ClassDecl::new("GPUIWebViewDelegate", class!(NSObject)).unwrap();
             decl.add_ivar::<*mut c_void>(WEBVIEW_STATE_IVAR);
-            unsafe {
+            {
                 decl.add_method(
                     sel!(dealloc),
                     dealloc_webview_delegate as extern "C" fn(&Object, Sel),
@@ -348,7 +348,7 @@ unsafe fn build_classes() {
         PRINT_VIEW_CLASS = {
             let mut decl = ClassDecl::new("GPUIPrintView", class!(NSView)).unwrap();
             decl.add_ivar::<*mut c_void>(PRINT_VIEW_STATE_IVAR);
-            unsafe {
+            {
                 decl.add_method(
                     sel!(dealloc),
                     dealloc_print_view as extern "C" fn(&Object, Sel),

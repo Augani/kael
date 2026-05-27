@@ -7,7 +7,9 @@ use windows::{
 };
 
 pub fn biometric_status() -> BiometricStatus {
-    let availability = match UserConsentVerifier::CheckAvailabilityAsync().and_then(|op| op.get()) {
+    let availability = match UserConsentVerifier::CheckAvailabilityAsync()
+        .and_then(super::util::block_on_operation)
+    {
         Ok(availability) => availability,
         Err(_) => return BiometricStatus::Unavailable,
     };
@@ -21,7 +23,8 @@ pub fn biometric_status() -> BiometricStatus {
 
 pub fn authenticate_biometric(reason: &str, callback: Box<dyn FnOnce(bool) + Send>) {
     let message = HSTRING::from(reason);
-    let result = UserConsentVerifier::RequestVerificationAsync(&message).and_then(|op| op.get());
+    let result = UserConsentVerifier::RequestVerificationAsync(&message)
+        .and_then(super::util::block_on_operation);
 
     match result {
         Ok(verification_result) => {

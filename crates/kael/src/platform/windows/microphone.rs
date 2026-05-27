@@ -110,7 +110,10 @@ pub fn microphone_status() -> PermissionStatus {
         }
     };
 
-    match capture.InitializeAsync().and_then(|op| op.get()) {
+    match capture
+        .InitializeAsync()
+        .and_then(super::util::block_on_action)
+    {
         Ok(()) => PermissionStatus::Granted,
         Err(err) => {
             if err.code().0 as u32 == 0x80070005 {

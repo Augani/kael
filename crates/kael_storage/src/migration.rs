@@ -35,10 +35,10 @@ pub(crate) fn validate_migrations(migrations: &[Migration]) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn pending_migrations<'a>(
+pub(crate) fn pending_migrations(
     current_version: u32,
-    migrations: &'a [Migration],
-) -> Result<Vec<&'a Migration>> {
+    migrations: &[Migration],
+) -> Result<Vec<&Migration>> {
     validate_migrations(migrations)?;
 
     Ok(migrations

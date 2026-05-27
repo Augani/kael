@@ -17,6 +17,22 @@ use windows::{
 
 use crate::*;
 
+pub fn block_on_operation<T: windows_core::RuntimeType + 'static>(
+    op: windows_future::IAsyncOperation<T>,
+) -> windows_core::Result<T> {
+    while op.Status()? == windows_future::AsyncStatus::Started {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    op.GetResults()
+}
+
+pub fn block_on_action(op: windows_future::IAsyncAction) -> windows_core::Result<()> {
+    while op.Status()? == windows_future::AsyncStatus::Started {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    op.GetResults()
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum WindowsVersion {
     Win10,
