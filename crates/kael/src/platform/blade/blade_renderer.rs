@@ -191,6 +191,7 @@ impl BladePipelines {
         );
         let shader = gpu.create_shader(gpu::ShaderDesc {
             source: include_str!("shaders.wgsl"),
+            naga_module: None,
         });
         shader.check_struct_size::<GlobalParams>();
         shader.check_struct_size::<SurfaceParams>();
@@ -543,7 +544,10 @@ impl BladeRenderer {
 
     fn wait_for_gpu(&mut self) {
         if let Some(last_sp) = self.last_sync_point.take()
-            && !self.gpu.wait_for(&last_sp, MAX_FRAME_TIME_MS)
+            && !self
+                .gpu
+                .wait_for(&last_sp, MAX_FRAME_TIME_MS)
+                .unwrap_or(true)
         {
             log::error!("GPU hung");
             #[cfg(target_os = "linux")]
@@ -559,7 +563,11 @@ impl BladeRenderer {
                 "your device information is: {:?}",
                 self.gpu.device_information()
             );
-            while !self.gpu.wait_for(&last_sp, MAX_FRAME_TIME_MS) {}
+            while !self
+                .gpu
+                .wait_for(&last_sp, MAX_FRAME_TIME_MS)
+                .unwrap_or(true)
+            {}
         }
     }
 

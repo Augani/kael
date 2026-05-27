@@ -1,8 +1,8 @@
 use crate::{
-    point, size, Bounds, DevicePixels, Font, FontFeature, FontFeatures, FontId, FontMetrics,
-    FontRun, FontStyle, FontWeight, GlyphId, LineLayout, Pixels, PlatformTextSystem, Point,
-    RenderGlyphParams, ShapedGlyph, ShapedRun, SharedString, Size, SUBPIXEL_VARIANTS_X,
-    SUBPIXEL_VARIANTS_Y,
+    Bounds, DevicePixels, Font, FontFeature, FontFeatures, FontId, FontMetrics, FontRun, FontStyle,
+    FontWeight, GlyphId, LineLayout, Pixels, PlatformTextSystem, Point, RenderGlyphParams,
+    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ShapedGlyph, ShapedRun, SharedString, Size, point,
+    size,
 };
 use anyhow::{Context as _, Ok, Result};
 use collections::HashMap;
@@ -512,9 +512,11 @@ impl CosmicTextSystemState {
             font_size.0,
             None, // We do our own wrapping
             cosmic_text::Wrap::None,
+            cosmic_text::Ellipsize::None,
             None,
             &mut layout_lines,
             None,
+            cosmic_text::Hinting::default(),
         );
         let layout = layout_lines.first().unwrap();
 
@@ -611,9 +613,11 @@ impl CosmicTextSystemState {
             font_size.0,
             None,
             cosmic_text::Wrap::None,
+            cosmic_text::Ellipsize::None,
             None,
             &mut layout_lines,
             None,
+            cosmic_text::Hinting::default(),
         );
         let layout = layout_lines.first().unwrap();
 

@@ -438,9 +438,9 @@ impl<P: LinuxClient + 'static> Platform for P {
                 let result = match request.response() {
                     Ok(response) => Ok(Some(
                         response
-                            .uris()
+                            .files()
                             .iter()
-                            .filter_map(|uri| uri.to_file_path().ok())
+                            .map(|file| file.as_ref().to_path_buf())
                             .collect::<Vec<_>>(),
                     )),
                     Err(ashpd::Error::Response(_)) => Ok(None),
@@ -509,9 +509,9 @@ impl<P: LinuxClient + 'static> Platform for P {
 
                     let result = match request.response() {
                         Ok(response) => Ok(response
-                            .uris()
+                            .files()
                             .first()
-                            .and_then(|uri| uri.to_file_path().ok())),
+                            .map(|file| file.as_ref().to_path_buf())),
                         Err(ashpd::Error::Response(_)) => Ok(None),
                         Err(e) => Err(e.into()),
                     };

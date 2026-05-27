@@ -26,7 +26,7 @@ impl BladeContext {
                 gpu::Context::init(gpu::ContextDesc {
                     presentation: true,
                     validation: false,
-                    device_id: device_id_forced.unwrap_or(0),
+                    device_id: device_id_forced,
                     ..Default::default()
                 })
             }
