@@ -5,3 +5,4 @@ tdesktop/
 .claude/
 docs/book/.claude/worktrees/
 examples/native_comparison/
+.playwright-mcp/
