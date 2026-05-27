@@ -41,7 +41,8 @@ version = "0.1.0"
 version = "1.0"
 
 [dependencies.derive_more]
-version = "0.99.17"
+version = "2"
+features = ["full"]
 
 [dependencies.futures]
 version = "0.3"

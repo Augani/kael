@@ -158,7 +158,8 @@ version = "0.1.0"
 version = "1"
 
 [dependencies.derive_more]
-version = "0.99.17"
+version = "2"
+features = ["full"]
 
 [dependencies.etagere]
 version = "0.2"
