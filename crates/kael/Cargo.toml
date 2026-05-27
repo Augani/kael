@@ -331,7 +331,7 @@ features = [
 ]
 
 [dependencies.toml]
-version = "0.8.20"
+version = "1"
 
 [dependencies.slotmap]
 version = "1.0.6"
@@ -347,7 +347,7 @@ version = "2.0"
 version = "0.1"
 
 [dependencies.strum]
-version = "0.27.0"
+version = "0.28"
 features = ["derive"]
 
 [dependencies.sum_tree]
