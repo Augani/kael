@@ -3593,7 +3593,7 @@ dependencies = [
 
 [[package]]
 name = "kael"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "as-raw-xcb-connection",
@@ -3712,7 +3712,7 @@ dependencies = [
 
 [[package]]
 name = "kael-macros"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "heck 0.5.0",
  "kael",
@@ -3724,7 +3724,7 @@ dependencies = [
 
 [[package]]
 name = "kael-media"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ffmpeg-next",
  "parking_lot",
@@ -3734,7 +3734,7 @@ dependencies = [
 
 [[package]]
 name = "kael_audio"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "futures",
@@ -3745,7 +3745,7 @@ dependencies = [
 
 [[package]]
 name = "kael_cache"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -3756,7 +3756,7 @@ dependencies = [
 
 [[package]]
 name = "kael_collections"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "indexmap",
  "rustc-hash 2.1.1",
@@ -3764,7 +3764,7 @@ dependencies = [
 
 [[package]]
 name = "kael_derive_refineable"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3773,7 +3773,7 @@ dependencies = [
 
 [[package]]
 name = "kael_diagnostics"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "kael_http_client",
@@ -3784,7 +3784,7 @@ dependencies = [
 
 [[package]]
 name = "kael_document"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "futures",
@@ -3799,7 +3799,7 @@ dependencies = [
 
 [[package]]
 name = "kael_engines"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "regex",
@@ -3809,7 +3809,7 @@ dependencies = [
 
 [[package]]
 name = "kael_http_client"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-compression",
@@ -3833,7 +3833,7 @@ dependencies = [
 
 [[package]]
 name = "kael_i18n"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -3842,11 +3842,11 @@ dependencies = [
 
 [[package]]
 name = "kael_icons"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "kael_media_sys"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "bindgen 0.71.1",
@@ -3860,7 +3860,7 @@ dependencies = [
 
 [[package]]
 name = "kael_net"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "fastrand 2.3.0",
@@ -3870,7 +3870,7 @@ dependencies = [
 
 [[package]]
 name = "kael_notifications"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "futures",
@@ -3881,7 +3881,7 @@ dependencies = [
 
 [[package]]
 name = "kael_pdf"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "futures",
@@ -3896,7 +3896,7 @@ dependencies = [
 
 [[package]]
 name = "kael_perf"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "kael_collections",
  "serde",
@@ -3905,14 +3905,14 @@ dependencies = [
 
 [[package]]
 name = "kael_refineable"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "kael_derive_refineable",
 ]
 
 [[package]]
 name = "kael_release"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "ed25519-dalek",
@@ -3923,7 +3923,7 @@ dependencies = [
 
 [[package]]
 name = "kael_semantic_version"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -3931,7 +3931,7 @@ dependencies = [
 
 [[package]]
 name = "kael_share"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "block",
@@ -3945,7 +3945,7 @@ dependencies = [
 
 [[package]]
 name = "kael_storage"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "futures",
  "parking_lot",
@@ -3959,7 +3959,7 @@ dependencies = [
 
 [[package]]
 name = "kael_sum_tree"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arrayvec",
  "log",
@@ -3969,7 +3969,7 @@ dependencies = [
 
 [[package]]
 name = "kael_util"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-fs",
@@ -4008,7 +4008,7 @@ dependencies = [
 
 [[package]]
 name = "kael_util_macros"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "kael_perf",
  "quote",

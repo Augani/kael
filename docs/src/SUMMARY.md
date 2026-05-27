@@ -7,6 +7,7 @@
 - [Getting Started](getting-started.md)
 - [Core Concepts](core-concepts.md)
 - [Layout & Styling](layout-and-styling.md)
+- [Animations](animations.md)
 - [Theming](theming.md)
 - [Accessibility](accessibility.md)
 
@@ -14,6 +15,7 @@
 
 - [Form Controls](form-controls.md)
 - [Display & Feedback](display-and-feedback.md)
+- [Canvas & Graphics](graphics.md)
 - [Containers & Overlays](containers.md)
 - [Lists & Data](lists-and-data.md)
 
@@ -25,6 +27,7 @@
 # Advanced
 
 - [Gestures](advanced/gestures.md)
+- [Actions & Keybindings](actions-and-keybindings.md)
 - [Plugins & Extensions](advanced/plugins.md)
 - [Multi-Process & IPC](advanced/multi-process.md)
 - [Security & Permissions](advanced/security.md)

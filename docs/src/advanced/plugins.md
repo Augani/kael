@@ -1,63 +1,85 @@
 # Plugins & Extensions
 
-Kael supports a plugin system with WASM-sandboxed extensions and a contribution-point architecture.
+Kael ships an extension system with a contribution-point architecture. Extensions run out-of-process and can target one of two execution models: a sandboxed **WASM** module, or an **external process** that speaks the extension RPC protocol. The host loads extensions from a manifest, mediates their capabilities through a permission broker, and dispatches commands and notifications to them.
 
-## Extension manifest
+## Defining a manifest
 
-Plugins declare their capabilities in a manifest:
-
-```rust
-use kael::plugin::*;
-
-let manifest = ExtensionManifest {
-    id: "my-plugin".into(),
-    name: "My Plugin".into(),
-    version: "1.0.0".into(),
-    entry_point: "plugin.wasm".into(),
-    contributions: vec![
-        ContributionPoint::Command {
-            id: "myPlugin.hello".into(),
-            title: "Say Hello".into(),
-        },
-        ContributionPoint::Menu {
-            items: vec![
-                PluginMenuItem {
-                    command_id: "myPlugin.hello".into(),
-                    label: "Hello from Plugin".into(),
-                    when: None,
-                },
-            ],
-        },
-    ],
-    permissions: vec!["fs.read".into(), "network".into()],
-};
-```
-
-## Extension registry
+Build a `PluginManifest` with the builder. The positional arguments are `id`, `name`, `version`, `api_version`, `entry_point`, and `execution_model`; contribution points and capabilities are added fluently.
 
 ```rust
-use kael::plugin::ExtensionRegistry;
+use kael::{ContributedCommand, ExecutionModel, PluginManifest};
 
-let mut registry = ExtensionRegistry::new();
-registry.register(manifest)?;
-
-// Query extensions
-let commands = registry.contribution_commands();
-let themes = registry.contribution_themes();
+let manifest = PluginManifest::builder(
+    "com.example.mock",   // id
+    "Mock Plugin",        // display name
+    "1.0.0",              // plugin version
+    "1.0.0",              // host API version it targets
+    "mock.wasm",          // entry point
+    ExecutionModel::Wasm,
+)
+.command(ContributedCommand {
+    id: "mock.hello".to_string(),
+    title: "Say Hello".to_string(),
+    keybinding: None,
+})
+.build()?;
 ```
+
+Manifests can also be loaded from disk with `PluginManifest::from_json`, `PluginManifest::from_toml`, or `PluginManifest::load(path)`.
+
+## Loading and activating
+
+`ExtensionHostRuntime` owns the installed extensions for an app. Load a manifest, then activate it — `activate_with_broker` runs the extension's capability requests through a `PermissionBroker` first.
+
+```rust
+use kael::{ExtensionHostRuntime, PermissionBroker};
+
+let mut runtime = ExtensionHostRuntime::new(&extensions_dir, "my-app");
+runtime.load(manifest)?;
+
+let broker = PermissionBroker::new();
+for ext in runtime.all().iter().map(|e| e.manifest.id.clone()).collect::<Vec<_>>() {
+    runtime.activate_with_broker(&ext, &broker)?;
+}
+```
+
+Other runtime operations: `load_from_directory` (dev mode), `install_from_path`, `uninstall`, `activate` / `deactivate`, `unload`, `send_command`, `broadcast_notification`, and `all` (returns `&ExtensionInfo` with `manifest`, `is_active`, `process_id`, `load_path`, `dev_mode`).
 
 ## Contribution points
 
-| Point | What it extends |
-|-------|----------------|
-| `Command` | Registers a new command |
-| `Menu` | Adds items to menus |
-| `Theme` | Contributes a color theme |
-| `Language` | Adds language support |
-| `Keybinding` | Registers keyboard shortcuts |
-| `View` | Contributes a sidebar/panel view |
-| `Setting` | Adds configuration options |
+Extensions extend the host by contributing entries through the builder:
 
-## Extension host
+| Builder method | Contributes |
+|----------------|-------------|
+| `.command(ContributedCommand)` | A command (`id`, `title`, optional `keybinding`) |
+| `.menu_item(ContributedMenuItem)` | A menu entry (`target_menu`, `label`, `command_id`) |
+| `.panel(ContributedPanel)` | A panel/view (`id`, `title`, `default_position`) |
+| `.settings_schema(json)` | A JSON schema for configurable settings |
+| `.capability(Capability)` | A requested capability (e.g. `Capability::Notification`) |
 
-Extensions run in a sandboxed WASM environment with controlled access to the host application via `extension_rpc`.
+Panels position with `PanelPosition::{Left, Right, Bottom, Floating}`.
+
+## Execution models & RPC
+
+`ExecutionModel::Wasm` runs the entry point as a sandboxed WebAssembly module. `ExecutionModel::ExternalProcess` launches a separate binary that connects over the platform transport and exchanges messages with the host.
+
+The host and an external extension first complete a handshake (`ExtensionHandshake`, version-checked against `EXTENSION_RPC_VERSION`), then exchange a typed envelope:
+
+| Direction | Type | Key variants |
+|-----------|------|--------------|
+| host → ext | `ExtensionRequest` | `Activate`, `Deactivate`, `Shutdown`, `GetContributions`, `ExecuteCommand { command_id, args }` |
+| ext → host | `ExtensionResponse` | `Ack`, `Contributions(Contributions)` |
+| host → ext | `ExtensionNotification` | `SettingsChanged { key, value }` |
+
+Broadcast a notification to every active extension:
+
+```rust
+use kael::ExtensionNotification;
+
+runtime.broadcast_notification(ExtensionNotification::SettingsChanged {
+    key: "theme".to_string(),
+    value: serde_json::json!("dark"),
+});
+```
+
+See `examples/plugin_host.rs` for a complete host UI that loads both a WASM and an external-process extension, activates them through a broker, and streams a live log.

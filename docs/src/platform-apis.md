@@ -337,3 +337,61 @@ let mut reporter = CrashReporter {
 
 reporter.install_hook();
 ```
+
+## App Lifecycle
+
+Launch at login and update the dock/taskbar:
+
+```rust
+cx.set_auto_launch("com.example.app", true)?;
+let enabled = cx.is_auto_launch_enabled("com.example.app");
+
+cx.set_dock_badge(Some("3"));   // None clears it
+cx.set_dock_menu(dock_menu_items);
+```
+
+Enforce a single running instance — acquire a lock at startup and forward later launches to the existing process:
+
+```rust
+use kael::{SingleInstance, send_activate_to_existing};
+
+match SingleInstance::acquire("com.example.app") {
+    Ok(instance) => {
+        instance.on_activate(Box::new(|| { /* focus the existing window */ }));
+        // ... run the app ...
+    }
+    Err(_already_running) => {
+        send_activate_to_existing("com.example.app")?;
+        return; // this duplicate launch exits
+    }
+}
+```
+
+## Biometric Authentication
+
+Gate sensitive actions behind Touch ID / Face ID / Windows Hello. Check availability, then prompt with a reason string and a completion callback:
+
+```rust
+use kael::BiometricStatus;
+
+if let BiometricStatus::Available(_kind) = cx.biometric_status() {
+    cx.authenticate_biometric("Unlock your vault", |success| {
+        if success { /* proceed */ }
+    });
+}
+```
+
+`BiometricStatus` is `Available(BiometricKind)` or `Unavailable`; `BiometricKind` identifies the method (Touch ID, Face ID, fingerprint, Windows Hello).
+
+## Screen & Media Capture
+
+Enumerate capturable displays/windows and stream frames (build with the `screen-capture` feature):
+
+```rust
+if cx.is_screen_capture_supported() {
+    // enumerate sources via cx.screen_capture_sources(..), then start a
+    // capture stream whose frames arrive as ScreenCaptureFrame values
+}
+```
+
+See `examples/capture_demo.rs`.

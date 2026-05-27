@@ -1,12 +1,13 @@
 [package]
-edition = "2024"
+edition.workspace = true
 name = "kael"
-version = "0.1.0"
-authors = ["Adabraka Team"]
+rust-version.workspace = true
+version.workspace = true
+authors.workspace = true
 build = "build.rs"
 publish = true
 description = "GPU-accelerated native UI framework for Rust — build desktop apps with Metal, DirectX, and Vulkan rendering"
-homepage = "https://augani.github.io/kael/"
+homepage.workspace = true
 readme = "README.md"
 keywords = [
     "gui",
@@ -16,10 +17,9 @@ keywords = [
     "native",
 ]
 categories = ["gui", "rendering::graphics-api"]
-license = "Apache-2.0"
-repository = "https://github.com/Augani/kael"
+license.workspace = true
+repository.workspace = true
 exclude = [
-    "tests/",
     "benches/",
     "examples/",
 ]
@@ -116,149 +116,6 @@ path = "tests/fixtures/worker_child.rs"
 name = "kael-extension-child"
 path = "tests/fixtures/extension_child.rs"
 
-[[example]]
-name = "animation"
-path = "examples/animation.rs"
-
-[[example]]
-name = "capture_demo"
-path = "examples/capture_demo.rs"
-
-[[example]]
-name = "data_table"
-path = "examples/data_table.rs"
-
-[[example]]
-name = "drag_drop"
-path = "examples/drag_drop.rs"
-
-[[example]]
-name = "elastic_scrolling"
-path = "examples/elastic_scrolling.rs"
-
-[[example]]
-name = "gif_viewer"
-path = "examples/gif_viewer.rs"
-
-[[example]]
-name = "gradient"
-path = "examples/gradient.rs"
-
-[[example]]
-name = "grid_layout"
-path = "examples/grid_layout.rs"
-
-[[example]]
-name = "hello_world"
-path = "examples/hello_world.rs"
-
-[[example]]
-name = "image"
-path = "examples/image/image.rs"
-
-[[example]]
-name = "image_gallery"
-path = "examples/image_gallery.rs"
-
-[[example]]
-name = "image_loading"
-path = "examples/image_loading.rs"
-
-[[example]]
-name = "input"
-path = "examples/input.rs"
-
-[[example]]
-name = "on_window_close_quit"
-path = "examples/on_window_close_quit.rs"
-
-[[example]]
-name = "plugin_host"
-path = "examples/plugin_host.rs"
-
-[[example]]
-name = "opacity"
-path = "examples/opacity.rs"
-
-[[example]]
-name = "ownership_post"
-path = "examples/ownership_post.rs"
-
-[[example]]
-name = "painting"
-path = "examples/painting.rs"
-
-[[example]]
-name = "paths_bench"
-path = "examples/paths_bench.rs"
-
-[[example]]
-name = "perf_bench"
-path = "examples/perf_bench.rs"
-
-[[example]]
-name = "pattern"
-path = "examples/pattern.rs"
-
-[[example]]
-name = "print_demo"
-path = "examples/print_demo.rs"
-
-[[example]]
-name = "scrollable"
-path = "examples/scrollable.rs"
-
-[[example]]
-name = "set_menus"
-path = "examples/set_menus.rs"
-
-[[example]]
-name = "shadow"
-path = "examples/shadow.rs"
-
-[[example]]
-name = "svg"
-path = "examples/svg/svg.rs"
-
-[[example]]
-name = "tab_stop"
-path = "examples/tab_stop.rs"
-
-[[example]]
-name = "text"
-path = "examples/text.rs"
-
-[[example]]
-name = "text_layout"
-path = "examples/text_layout.rs"
-
-[[example]]
-name = "text_wrapper"
-path = "examples/text_wrapper.rs"
-
-[[example]]
-name = "tree"
-path = "examples/tree.rs"
-
-[[example]]
-name = "uniform_list"
-path = "examples/uniform_list.rs"
-
-[[example]]
-name = "window"
-path = "examples/window.rs"
-
-[[example]]
-name = "window_positioning"
-path = "examples/window_positioning.rs"
-
-[[example]]
-name = "window_shadow"
-path = "examples/window_shadow.rs"
-
-[[example]]
-name = "webview_demo"
-path = "examples/webview_demo.rs"
 
 [[test]]
 name = "action_macros"

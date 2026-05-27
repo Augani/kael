@@ -205,7 +205,7 @@ impl WaylandWindowState {
             visible: true,
             tab_manager: WindowTabManager::new(handle, tab_manager_state),
             accessibility_root: crate::platform::linux::accessibility::AtSpiAccessibleRoot::new(
-                "Adabraka GPUI",
+                "Kael",
             ),
             webviews: HashMap::default(),
         })

@@ -84,13 +84,28 @@ svg()
 
 ## RichText
 
-Text with inline styling and embedded elements:
+Compose text from inline styled spans, clickable entities (links, mentions, hashtags), inline code, and embedded elements:
 
 ```rust
-use kael::rich_text;
+use kael::{rich_text, FontWeight, HighlightStyle, rgb};
 
-// Rich text supports inline styling spans
+rich_text()
+    .text("The ")
+    .styled("quick brown fox", HighlightStyle {
+        color: Some(rgb(0xb45309).into()),
+        font_weight: Some(FontWeight::BOLD),
+        ..Default::default()
+    })
+    .text(" jumps. See the ")
+    .link("docs", "https://augani.github.io/kael/", |_window, _app| {})
+    .text(" or ping ")
+    .mention("@team", "team-id", |_window, _app| {})
+    .text(". Run ")
+    .code("cargo run")
+    .selectable(true)
 ```
+
+Builder methods: `.text()`, `.styled(text, HighlightStyle)`, `.link(text, target, on_click)`, `.mention(text, payload, on_click)`, `.hashtag(text, payload, on_click)`, `.code(text)`, `.inline_element(element)`, `.selectable(bool)`, `.selection_color(color)`. Entity click handlers have the signature `Fn(&mut Window, &mut App)`.
 
 ---
 

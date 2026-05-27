@@ -1,13 +1,17 @@
 [package]
-edition = "2024"
+edition.workspace = true
 name = "kael-macros"
-version = "0.1.0"
+rust-version.workspace = true
+homepage.workspace = true
+version.workspace = true
 publish = true
 description = "Macros for Kael"
-authors = ["Adabraka Team"]
-repository = "https://github.com/Augani/kael"
-readme = false
-license = "Apache-2.0"
+keywords = ["macros", "derive", "gui", "kael", "proc-macro"]
+categories = ["development-tools::procedural-macro-helpers", "gui"]
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+license.workspace = true
 
 [features]
 inspector = []

@@ -34,6 +34,25 @@ div().flex_shrink_0()
 div().flex_none()
 ```
 
+## Grid layout
+
+Switch a container to CSS Grid with `.grid()`, define tracks with `.grid_cols(n)` / `.grid_rows(n)`, and place children with `.col_span(n)` / `.row_span(n)` (or `.col_span_full()` / `.row_span_full()`). `.gap_*()` sets the gutters:
+
+```rust
+div()
+    .grid()
+    .grid_cols(5)
+    .grid_rows(5)
+    .gap_1()
+    .child(div().row_span(1).col_span_full().child("Header"))
+    .child(div().col_span(1).row_span(3).child("Sidebar"))
+    .child(div().col_span(3).row_span(3).child("Content"))
+    .child(div().col_span(1).row_span(3).child("Aside"))
+    .child(div().row_span(1).col_span_full().child("Footer"))
+```
+
+See `examples/grid_layout.rs` for a full "holy grail" layout.
+
 ## Sizing
 
 ```rust

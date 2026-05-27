@@ -1696,7 +1696,7 @@ impl MacWindow {
                 toggle_tab_bar_callback: None,
                 activated_least_once: false,
                 accessibility_provider: super::accessibility::MacAccessibilityProvider::new(
-                    "Adabraka GPUI",
+                    "Kael",
                 ),
                 webviews: HashMap::default(),
                 pending_webview_commands: HashMap::default(),

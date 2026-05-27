@@ -1,7 +1,8 @@
 [package]
 name = "xtask"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+publish = false
 
 [[bin]]
 name = "xtask"

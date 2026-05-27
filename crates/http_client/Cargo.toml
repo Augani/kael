@@ -1,13 +1,17 @@
 [package]
-edition = "2024"
+edition.workspace = true
 name = "kael_http_client"
-version = "0.1.0"
+rust-version.workspace = true
+homepage.workspace = true
+version.workspace = true
 publish = true
 description = "HTTP client library for Kael"
-authors = ["Adabraka Team"]
-repository = "https://github.com/Augani/kael"
-readme = false
-license = "Apache-2.0"
+keywords = ["http", "client", "networking", "kael"]
+categories = ["web-programming::http-client", "network-programming"]
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+license.workspace = true
 
 [features]
 test-support = []

@@ -8,8 +8,14 @@ Kael renders via Metal (macOS), DirectX 11 (Windows), Vulkan (Linux). Apps are p
 
 - [Getting Started](https://augani.github.io/kael/getting-started.html)
 - [Core Concepts](https://augani.github.io/kael/core-concepts.html)
+- [Layout & Styling](https://augani.github.io/kael/layout-and-styling.html)
+- [Animations](https://augani.github.io/kael/animations.html)
+- [Canvas & Graphics](https://augani.github.io/kael/graphics.html)
 - [Form Controls](https://augani.github.io/kael/form-controls.html)
+- [Actions & Keybindings](https://augani.github.io/kael/actions-and-keybindings.html)
 - [Platform APIs](https://augani.github.io/kael/platform-apis.html)
+- [Multi-Process & IPC](https://augani.github.io/kael/advanced/multi-process.html)
+- [Plugins & Extensions](https://augani.github.io/kael/advanced/plugins.html)
 - [Examples](https://augani.github.io/kael/examples.html)
 
 ## Quick start
@@ -84,10 +90,13 @@ All widgets: `widget_name(id, value, ...)` → `.on_change(|value, window, cx| {
 | toast | `Toast::new(title)` | `.body()`, `.duration()`, `.position()` |
 | splitter | `splitter(id, ratio)` | `.on_change()` |
 | label | `label(text, target_id)` | links to control |
+| rich_text | `rich_text()` | `.text()`, `.styled(t, HighlightStyle)`, `.link()`, `.mention()`, `.hashtag()`, `.code()` |
 | uniform_list | `uniform_list(id, count, renderer)` | `.track_scroll()` |
 | recycling_list | `recycling_list(id, count, renderer)` | variable heights |
 | sortable_list | `sortable_list(id, count, renderer)` | `.on_reorder()` |
-| canvas | `canvas(paint_fn)` | custom GPU drawing |
+| canvas | `canvas(prepaint_fn, paint_fn)` | custom GPU drawing |
+| svg | `svg()` | `.path()`, `.size()`, `.text_color()` |
+| lottie | `lottie(source)` | `.autoplay()`, `.loop_forever()`, `.ping_pong()` |
 
 ## Layout (Tailwind-style on div)
 
@@ -95,7 +104,8 @@ All widgets: `widget_name(id, value, ...)` → `.on_change(|value, window, cx| {
 `.w(px(N))` `.h(px(N))` `.size_full()` `.flex_1()` `.p_4()` `.px_3()` `.py_2()` `.m_4()`
 `.bg(rgb(HEX))` `.text_color(rgb(HEX))` `.border_1()` `.border_color()` `.rounded_md()` `.shadow_lg()`
 `.text_sm()` `.text_xl()` `.font_weight(FontWeight::BOLD)`
-`.overflow_y_auto()` `.cursor_pointer()` `.opacity(0.5)`
+`.overflow_y_auto()` `.cursor_pointer()` `.opacity(0.5)` `.backdrop_blur(px(N))`
+Grid: `.grid()` `.grid_cols(N)` `.grid_rows(N)` `.col_span(N)` `.row_span(N)` `.col_span_full()` `.row_span_full()`
 `.when(condition, |this| this.style())` — conditional styling
 `.children(iter)` — render from iterator
 
@@ -106,6 +116,29 @@ All widgets: `widget_name(id, value, ...)` → `.on_change(|value, window, cx| {
 `.on_mouse_down(button, handler)` `.on_key_down(handler)`
 `.context_menu(|menu| menu.item("Label", handler))`
 `.tooltip("text")` `.tooltip_element(|| element)`
+
+## Animations
+
+Bring `AnimationExt` into scope, then `element.with_animation(id, animation, |el, delta| el.mutate(delta))` where `delta` is eased progress `0.0..=1.0`.
+`Animation::new(Duration)` `.with_easing(fn)` `.easing(Easing)` `.delay(d)` `.repeat(Repeat)` `.repeat_forever()`
+`Easing`: `Linear` `EaseIn` `EaseOut` `EaseInOut` `CubicBezier(x1,y1,x2,y2)` `Spring{stiffness,damping,mass}` `Custom(Rc<Fn>)`. `Repeat`: `Once` `Count(n)` `Forever`.
+Keyframes: `Keyframes::new().at(0.0, |k| k.opacity(0.4)).at(1.0, |k| k.opacity(1.0))` + `el.with_keyframes(id, kf, anim)`.
+Cancellable: `el.with_cancellable_animation(id, anim, f) -> (el, AnimationHandle)`; `handle.cancel()`.
+Elastic scrolling is automatic on macOS for scroll containers; `ScrollHandle::new()` exposes `.offset()` / `.set_offset(point)` / `.max_offset()`.
+
+## Canvas & graphics
+
+Immediate-mode: `canvas(|bounds, win, app| { prepaint }, |bounds, state, win, app| { win.paint_quad(fill(bounds, color)); win.paint_path(path, color); })`.
+Paths: `PathBuilder::fill()` or `PathBuilder::stroke(px(N))` → `.move_to(p)` `.line_to(p)` `.curve_to(to, ctrl)` `.cubic_curve_to(to, c1, c2)` `.close()` `.build()?`.
+Gradients (pass to `.bg`): `linear_gradient(angle, linear_color_stop(rgb(..), 0.0), linear_color_stop(rgb(..), 1.0))`, also `radial_gradient`, `conic_gradient`, `multi_stop_linear_gradient`.
+SVG: `svg().path("icon.svg").size(px(N)).text_color(rgb(..))`. Lottie: `lottie(src).autoplay().loop_forever()`.
+
+## Actions & keybindings
+
+Define: `actions!(namespace, [Save, Undo, Redo])`.
+Bind once at startup: `cx.bind_keys([KeyBinding::new("cmd-s", Save, None), KeyBinding::new("tab", Tab, Some("Editor"))])` (3rd arg = optional key context).
+Handle: `div().track_focus(&self.focus_handle).on_action(cx.listener(Self::on_save))`, where `fn on_save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>)`.
+Focus: `cx.focus_handle().tab_index(N).tab_stop(true)`; `window.focus(&h)` / `window.focus_next()` / `window.focus_prev()`.
 
 ## Platform APIs
 
@@ -125,6 +158,21 @@ All widgets: `widget_name(id, value, ...)` → `.on_change(|value, window, cx| {
 | Session | `SessionStore::new("app-id")?.save_window_states(&states)` |
 | Displays | `cx.displays()`, `cx.primary_display()` |
 | Crash reports | `CrashReporter { ... }.install_hook()` |
+| Auto-launch | `cx.set_auto_launch(app_id, true)?`, `cx.is_auto_launch_enabled(app_id)` |
+| Dock | `cx.set_dock_badge(Some("3"))`, `cx.set_dock_menu(items)` |
+| Single instance | `SingleInstance::acquire(app_id)?`, `send_activate_to_existing(app_id)?` |
+| Biometric | `cx.biometric_status()`, `cx.authenticate_biometric(reason, \|ok\| { ... })` |
+| Screen capture | `cx.is_screen_capture_supported()`, `cx.screen_capture_sources(..)` |
+
+## Multi-process & IPC
+
+Host: `WorkerHost::with_temp_dir()`; `ProcessInfo::worker(ProcessId(0), "name").executable(path)`; `host.spawn_worker(ProcessClass::Worker, info)?`; `worker.request(json)?` / `.health_check()?` / `.fire_and_forget(json)?`; `host.on_event(|event: SupervisorEvent| { ... })`.
+Child binary: `WorkerClient::connect_from_env()?.run(|req, progress| -> Result<WorkerResponse, WorkerError> { ... })`.
+Messages: `WorkerRequest::{Ping, Execute { payload }}`, `WorkerResponse::{Pong, Result(value)}`, `WorkerProgress::Update(value)`, `WorkerError::{Execution(String), Cancelled}`. Transport: Unix sockets (macOS/Linux), named pipes (Windows).
+
+## Extensions
+
+`ExtensionHostRuntime::new(dir, app_id)`; build with `PluginManifest::builder(id, name, version, api_version, entry_point, ExecutionModel::Wasm | ExecutionModel::ExternalProcess).command(ContributedCommand { id, title, keybinding }).build()?`; `runtime.load(manifest)?`; `runtime.activate_with_broker(&id, &PermissionBroker::new())?`; `runtime.broadcast_notification(ExtensionNotification::SettingsChanged { key, value })`. Contribution points: commands, menu items, panels, settings schema.
 
 ## Theming
 

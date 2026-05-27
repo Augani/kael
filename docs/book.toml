@@ -1,6 +1,6 @@
 [book]
 title = "Kael Documentation"
-authors = ["Adabraka Team"]
+authors = ["Augustus Otu"]
 description = "GPU-accelerated UI framework for native desktop apps — the Electron replacement"
 src = "src"
 language = "en"

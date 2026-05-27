@@ -762,7 +762,7 @@ impl X11WindowState {
                 last_sync_counter: None,
                 tab_manager: WindowTabManager::new(handle, tab_manager_state),
                 accessibility_root: crate::platform::linux::accessibility::AtSpiAccessibleRoot::new(
-                    "Adabraka GPUI",
+                    "Kael",
                 ),
                 webviews: HashMap::default(),
             })

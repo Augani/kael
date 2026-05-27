@@ -1,6 +1,6 @@
 /*
  * Copyright 2022 - 2025 Zed Industries, Inc. (original code)
- * Copyright 2025 Adabraka Team (modifications)
+ * Copyright 2025 Augustus Otu (modifications)
  * License: Apache-2.0
  * See LICENSE-APACHE for complete license terms
  *

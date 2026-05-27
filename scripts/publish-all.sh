@@ -1,6 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
+DRY_RUN=0
+if [[ "${1:-}" == "--dry-run" ]]; then
+  DRY_RUN=1
+fi
+
 CRATES=(
   # Tier 0: independent crates
   kael_collections
@@ -40,11 +45,20 @@ CRATES=(
 
 publish_crate() {
   local crate="$1"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "$(date -u +%H:%M:%S) Dry-run $crate..."
+    if cargo publish --dry-run -p "$crate"; then
+      echo "$(date -u +%H:%M:%S) ✓ $crate ok (dry-run)"
+      return 0
+    fi
+    echo "$(date -u +%H:%M:%S) ✗ $crate FAILED (dry-run)"
+    return 1
+  fi
   while true; do
     echo "$(date -u +%H:%M:%S) Publishing $crate..."
-    output=$(cargo publish -p "$crate" 2>&1) || true
+    if output=$(cargo publish -p "$crate" 2>&1); then status=0; else status=$?; fi
 
-    if echo "$output" | grep -q "Published\|already been uploaded"; then
+    if [[ $status -eq 0 ]] || echo "$output" | grep -qiE "Uploaded |already (exists|been uploaded)|is already uploaded"; then
       echo "$(date -u +%H:%M:%S) ✓ $crate published"
       return 0
     fi
@@ -72,4 +86,8 @@ for crate in "${CRATES[@]}"; do
   echo ""
 done
 
-echo "=== All crates published! ==="
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "=== Dry-run complete (no crates uploaded) ==="
+else
+  echo "=== All crates published! ==="
+fi

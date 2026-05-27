@@ -1,10 +1,16 @@
 [package]
 name = "kael_i18n"
-version = "0.1.0"
-edition = "2024"
+rust-version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+version.workspace = true
+edition.workspace = true
 publish = true
 description = "Internationalization and localization support for the Kael UI framework"
-repository = "https://github.com/Augani/kael"
+keywords = ["i18n", "internationalization", "localization", "kael"]
+categories = ["internationalization", "localization"]
+readme = "README.md"
+repository.workspace = true
 license.workspace = true
 
 [dependencies]

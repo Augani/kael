@@ -1,10 +1,16 @@
 [package]
 name = "kael_net"
-version = "0.1.0"
-edition = "2024"
+rust-version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+version.workspace = true
+edition.workspace = true
 publish = true
 description = "Networking and sync primitives for the Kael UI framework"
-repository = "https://github.com/Augani/kael"
+keywords = ["networking", "http", "sync", "kael"]
+categories = ["network-programming"]
+readme = "README.md"
+repository.workspace = true
 license.workspace = true
 
 [dependencies]

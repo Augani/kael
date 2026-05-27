@@ -1,13 +1,17 @@
 [package]
-edition = "2024"
+edition.workspace = true
 name = "kael_notifications"
-version = "0.1.0"
+rust-version.workspace = true
+homepage.workspace = true
+version.workspace = true
 publish = true
 description = "Notification services for Kael"
-authors = ["Adabraka Team"]
-repository = "https://github.com/Augani/kael"
-readme = false
-license = "Apache-2.0"
+keywords = ["notifications", "desktop", "native", "kael"]
+categories = ["os", "gui"]
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+license.workspace = true
 
 [lib]
 name = "kael_notifications"

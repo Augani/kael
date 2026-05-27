@@ -813,7 +813,7 @@ mod tests {
             ExecutionModel::ExternalProcess,
         )
         .description("A sample external-process extension for builder validation")
-        .author("Adabraka")
+        .author("Augustus Otu")
         .capability(Capability::ClipboardRead)
         .capability(Capability::Notification)
         .command(ContributedCommand {

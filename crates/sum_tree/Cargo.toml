@@ -1,13 +1,17 @@
 [package]
-edition = "2024"
+edition.workspace = true
 name = "kael_sum_tree"
-version = "0.1.0"
+rust-version.workspace = true
+homepage.workspace = true
+version.workspace = true
 publish = true
 description = "A sum tree data structure, a concurrency-friendly B-tree for Kael"
-authors = ["Adabraka Team"]
-repository = "https://github.com/Augani/kael"
-readme = false
-license = "Apache-2.0"
+keywords = ["b-tree", "sumtree", "data-structures", "kael"]
+categories = ["data-structures"]
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+license.workspace = true
 
 [lib]
 name = "kael_sum_tree"
