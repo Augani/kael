@@ -1,0 +1,283 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - navigation "Table of contents" [ref=e3]:
+      - list [ref=e5]:
+        - listitem [ref=e6]:
+          - link "Introduction" [ref=e8] [cursor=pointer]:
+            - /url: index.html
+        - listitem
+        - listitem [ref=e9]: Guides
+        - listitem [ref=e10]:
+          - link "Getting Started" [ref=e12] [cursor=pointer]:
+            - /url: getting-started.html
+            - strong [ref=e13]: "1."
+            - text: Getting Started
+          - list [ref=e15]:
+            - listitem [ref=e16]:
+              - link "Prerequisites" [ref=e18] [cursor=pointer]:
+                - /url: "#prerequisites"
+            - listitem [ref=e19]:
+              - link "Create a new project" [ref=e21] [cursor=pointer]:
+                - /url: "#create-a-new-project"
+            - listitem [ref=e22]:
+              - link "Your first window" [ref=e24] [cursor=pointer]:
+                - /url: "#your-first-window"
+            - listitem [ref=e25]:
+              - link "What just happened" [ref=e27] [cursor=pointer]:
+                - /url: "#what-just-happened"
+            - listitem [ref=e28]:
+              - link "Key patterns" [ref=e30] [cursor=pointer]:
+                - /url: "#key-patterns"
+              - list [ref=e31]:
+                - listitem [ref=e32]:
+                  - link "Builder pattern for UI" [ref=e34] [cursor=pointer]:
+                    - /url: "#builder-pattern-for-ui"
+                - listitem [ref=e35]:
+                  - link "Reactive state" [ref=e37] [cursor=pointer]:
+                    - /url: "#reactive-state"
+                - listitem [ref=e38]:
+                  - link "Custom rendering" [ref=e40] [cursor=pointer]:
+                    - /url: "#custom-rendering"
+            - listitem [ref=e41]:
+              - link "Next steps" [ref=e43] [cursor=pointer]:
+                - /url: "#next-steps"
+        - listitem [ref=e44]:
+          - link "Core Concepts" [ref=e46] [cursor=pointer]:
+            - /url: core-concepts.html
+            - strong [ref=e47]: "2."
+            - text: Core Concepts
+        - listitem [ref=e48]:
+          - link "Layout & Styling" [ref=e50] [cursor=pointer]:
+            - /url: layout-and-styling.html
+            - strong [ref=e51]: "3."
+            - text: Layout & Styling
+        - listitem [ref=e52]:
+          - link "Animations" [ref=e54] [cursor=pointer]:
+            - /url: animations.html
+            - strong [ref=e55]: "4."
+            - text: Animations
+        - listitem [ref=e56]:
+          - link "Theming" [ref=e58] [cursor=pointer]:
+            - /url: theming.html
+            - strong [ref=e59]: "5."
+            - text: Theming
+        - listitem [ref=e60]:
+          - link "Accessibility" [ref=e62] [cursor=pointer]:
+            - /url: accessibility.html
+            - strong [ref=e63]: "6."
+            - text: Accessibility
+        - listitem
+        - listitem [ref=e64]: Widget Reference
+        - listitem [ref=e65]:
+          - link "Form Controls" [ref=e67] [cursor=pointer]:
+            - /url: form-controls.html
+            - strong [ref=e68]: "7."
+            - text: Form Controls
+        - listitem [ref=e69]:
+          - link "Display & Feedback" [ref=e71] [cursor=pointer]:
+            - /url: display-and-feedback.html
+            - strong [ref=e72]: "8."
+            - text: Display & Feedback
+        - listitem [ref=e73]:
+          - link "Canvas & Graphics" [ref=e75] [cursor=pointer]:
+            - /url: graphics.html
+            - strong [ref=e76]: "9."
+            - text: Canvas & Graphics
+        - listitem [ref=e77]:
+          - link "Containers & Overlays" [ref=e79] [cursor=pointer]:
+            - /url: containers.html
+            - strong [ref=e80]: "10."
+            - text: Containers & Overlays
+        - listitem [ref=e81]:
+          - link "Lists & Data" [ref=e83] [cursor=pointer]:
+            - /url: lists-and-data.html
+            - strong [ref=e84]: "11."
+            - text: Lists & Data
+        - listitem
+        - listitem [ref=e85]: Platform
+        - listitem [ref=e86]:
+          - link "Platform APIs" [ref=e88] [cursor=pointer]:
+            - /url: platform-apis.html
+            - strong [ref=e89]: "12."
+            - text: Platform APIs
+        - listitem [ref=e90]:
+          - link "Examples Gallery" [ref=e92] [cursor=pointer]:
+            - /url: examples.html
+            - strong [ref=e93]: "13."
+            - text: Examples Gallery
+        - listitem
+        - listitem [ref=e94]: Advanced
+        - listitem [ref=e95]:
+          - link "Gestures" [ref=e97] [cursor=pointer]:
+            - /url: advanced/gestures.html
+            - strong [ref=e98]: "14."
+            - text: Gestures
+        - listitem [ref=e99]:
+          - link "Actions & Keybindings" [ref=e101] [cursor=pointer]:
+            - /url: actions-and-keybindings.html
+            - strong [ref=e102]: "15."
+            - text: Actions & Keybindings
+        - listitem [ref=e103]:
+          - link "Plugins & Extensions" [ref=e105] [cursor=pointer]:
+            - /url: advanced/plugins.html
+            - strong [ref=e106]: "16."
+            - text: Plugins & Extensions
+        - listitem [ref=e107]:
+          - link "Multi-Process & IPC" [ref=e109] [cursor=pointer]:
+            - /url: advanced/multi-process.html
+            - strong [ref=e110]: "17."
+            - text: Multi-Process & IPC
+        - listitem [ref=e111]:
+          - link "Security & Permissions" [ref=e113] [cursor=pointer]:
+            - /url: advanced/security.html
+            - strong [ref=e114]: "18."
+            - text: Security & Permissions
+        - listitem
+        - listitem [ref=e115]
+        - listitem [ref=e116]:
+          - link "For LLMs" [ref=e118] [cursor=pointer]:
+            - /url: llms.html
+    - generic [ref=e122]:
+      - generic [ref=e124]:
+        - generic [ref=e125]:
+          - generic "Toggle Table of Contents" [ref=e126] [cursor=pointer]:
+            - img [ref=e128]
+          - button "Change theme" [ref=e130] [cursor=pointer]:
+            - img [ref=e132]
+          - text: ✓
+        - heading "Kael Documentation" [level=1] [ref=e134] [cursor=pointer]
+        - generic [ref=e135]:
+          - link "Print this book" [ref=e136] [cursor=pointer]:
+            - /url: print.html
+            - img [ref=e138]
+          - link "Git repository" [ref=e140] [cursor=pointer]:
+            - /url: https://github.com/Augani/kael
+            - img [ref=e142]
+          - link "Suggest an edit" [ref=e144] [cursor=pointer]:
+            - /url: https://github.com/Augani/kael/edit/main/docs/src/getting-started.md
+            - img [ref=e146]
+      - generic [ref=e148]:
+        - main [ref=e149]:
+          - heading "Getting Started" [level=1] [ref=e150]:
+            - link "Getting Started" [ref=e151] [cursor=pointer]:
+              - /url: "#getting-started"
+          - heading "Prerequisites" [level=2] [ref=e152]:
+            - link "Prerequisites" [ref=e153] [cursor=pointer]:
+              - /url: "#prerequisites"
+          - list [ref=e154]:
+            - listitem [ref=e155]:
+              - strong [ref=e156]: Rust
+              - text: 1.85+ (edition 2024) —
+              - link "install via rustup" [ref=e157] [cursor=pointer]:
+                - /url: https://rustup.rs/
+            - listitem [ref=e158]:
+              - strong [ref=e159]: "Platform dependencies:"
+          - paragraph [ref=e160]:
+            - strong [ref=e161]: "macOS:"
+            - text: Xcode command line tools
+          - code [ref=e163]: xcode-select --install
+          - paragraph [ref=e164]:
+            - strong [ref=e165]: "Linux (Ubuntu/Debian):"
+          - code [ref=e167]: sudo apt-get install -y \ libxkbcommon-dev libwayland-dev libxcb1-dev \ libvulkan-dev libfontconfig1-dev
+          - paragraph [ref=e168]:
+            - strong [ref=e169]: "Windows:"
+            - text: Visual Studio Build Tools with C++ workload
+          - heading "Create a new project" [level=2] [ref=e170]:
+            - link "Create a new project" [ref=e171] [cursor=pointer]:
+              - /url: "#create-a-new-project"
+          - code [ref=e173]: cargo new my_app cd my_app
+          - paragraph [ref=e174]:
+            - text: Add Kael to
+            - code [ref=e175]: Cargo.toml
+            - text: ":"
+          - code [ref=e177]: "[dependencies] kael = \"0.1\""
+          - heading "Your first window" [level=2] [ref=e178]:
+            - link "Your first window" [ref=e179] [cursor=pointer]:
+              - /url: "#your-first-window"
+          - paragraph [ref=e180]:
+            - text: Replace
+            - code [ref=e181]: src/main.rs
+            - text: "with:"
+          - code [ref=e183]:
+            - text: use kael::*; use kael::prelude::*;
+            - generic [ref=e184]: struct Counter
+            - text: "{ count: i32, } impl Render for Counter {"
+            - generic [ref=e185]: fn render
+            - text: "(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement { let entity = cx.entity(); div() .size_full() .flex() .flex_col() .items_center() .justify_center() .gap_4() .bg(rgb(0x1E1E1E)) .text_color(rgb(0xFFFFFF)) .child( div().text_3xl().child(format!(\"Count: {}\", self.count)) ) .child( div() .flex() .gap_2() .child( button(\"decrement\") .label(\"-1\") .on_click({ let entity = entity.clone(); move |_, _, cx| { entity.update(cx, |this, cx| { this.count -= 1; cx.notify(); }); } }) ) .child( button(\"increment\") .label(\"+1\") .on_click({ let entity = entity.clone(); move |_, _, cx| { entity.update(cx, |this, cx| { this.count += 1; cx.notify(); }); } }) ) ) } }"
+            - generic [ref=e186]: fn main
+            - text: "() { Application::new().run(|cx: &mut App| { let bounds = Bounds::centered(None, size(px(400.0), px(300.0)), cx); cx.open_window( WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() }, |_, cx| cx.new(|_| Counter { count: 0 }), ).unwrap(); cx.activate(true); }); }"
+          - paragraph [ref=e187]: "Run it:"
+          - code [ref=e189]: cargo run
+          - heading "What just happened" [level=2] [ref=e190]:
+            - link "What just happened" [ref=e191] [cursor=pointer]:
+              - /url: "#what-just-happened"
+          - list [ref=e192]:
+            - listitem [ref=e193]:
+              - strong [ref=e194]:
+                - code [ref=e195]: Application::new().run()
+              - text: — boots the platform event loop
+            - listitem [ref=e196]:
+              - strong [ref=e197]:
+                - code [ref=e198]: cx.open_window()
+              - text: — creates a native window with GPU rendering
+            - listitem [ref=e199]:
+              - strong [ref=e200]:
+                - code [ref=e201]: "cx.new(|_| Counter { count: 0 })"
+              - text: — creates a reactive
+              - code [ref=e202]: Entity<Counter>
+            - listitem [ref=e203]:
+              - strong [ref=e204]:
+                - code [ref=e205]: impl Render for Counter
+              - text: — defines what the entity draws each frame
+            - listitem [ref=e206]:
+              - strong [ref=e207]:
+                - code [ref=e208]: cx.notify()
+              - text: — tells the framework to re-render after state changes
+          - heading "Key patterns" [level=2] [ref=e209]:
+            - link "Key patterns" [ref=e210] [cursor=pointer]:
+              - /url: "#key-patterns"
+          - heading "Builder pattern for UI" [level=3] [ref=e211]:
+            - link "Builder pattern for UI" [ref=e212] [cursor=pointer]:
+              - /url: "#builder-pattern-for-ui"
+          - paragraph [ref=e213]: "Every element uses method chaining. No JSX, no templates — just Rust:"
+          - code [ref=e215]: div() .flex() .flex_col() .gap_4() .p_4() .bg(rgb(0x1E1E1E)) .text_color(rgb(0xFFFFFF)) .child("Hello")
+          - heading "Reactive state" [level=3] [ref=e216]:
+            - link "Reactive state" [ref=e217] [cursor=pointer]:
+              - /url: "#reactive-state"
+          - paragraph [ref=e218]:
+            - text: State lives in your struct. Mutate it, call
+            - code [ref=e219]: cx.notify()
+            - text: ", and the framework re-renders:"
+          - code [ref=e221]: "entity.update(cx, |this, cx| { this.count += 1; cx.notify(); });"
+          - heading "Custom rendering" [level=3] [ref=e222]:
+            - link "Custom rendering" [ref=e223] [cursor=pointer]:
+              - /url: "#custom-rendering"
+          - paragraph [ref=e224]:
+            - text: Every widget accepts
+            - code [ref=e225]: .render_with()
+            - text: "for full visual control:"
+          - code [ref=e227]: "button(\"save\") .label(\"Save\") .render_with(|state, _window, _cx| { div() .px_4().py_2() .rounded(px(8.0)) .bg(if state.focused { rgb(0x2563eb) } else { rgb(0x3b82f6) }) .text_color(rgb(0xffffff)) .child(state.label.unwrap_or_default()) .into_any_element() })"
+          - heading "Next steps" [level=2] [ref=e228]:
+            - link "Next steps" [ref=e229] [cursor=pointer]:
+              - /url: "#next-steps"
+          - list [ref=e230]:
+            - listitem [ref=e231]:
+              - link "Core Concepts" [ref=e232] [cursor=pointer]:
+                - /url: core-concepts.html
+              - text: — understand Entity, Context, and the render cycle
+            - listitem [ref=e233]:
+              - link "Form Controls" [ref=e234] [cursor=pointer]:
+                - /url: form-controls.html
+              - text: — buttons, inputs, checkboxes, sliders, and more
+            - listitem [ref=e235]:
+              - link "Platform APIs" [ref=e236] [cursor=pointer]:
+                - /url: platform-apis.html
+              - text: — file dialogs, system tray, notifications
+        - navigation "Page navigation" [ref=e237]:
+          - link "Previous chapter" [ref=e238] [cursor=pointer]:
+            - /url: index.html
+            - img [ref=e240]
+          - link "Next chapter" [ref=e242] [cursor=pointer]:
+            - /url: core-concepts.html
+            - img [ref=e244]
+  - button "Copy for LLM" [ref=e246] [cursor=pointer]

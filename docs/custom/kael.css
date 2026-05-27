@@ -24,3 +24,7 @@
 .copy-llm-btn.copied {
     background: #16a34a;
 }
+
+.copy-llm-btn.copy-failed {
+    background: #dc2626;
+}
