@@ -1,14 +1,10 @@
 use crate::{
-    Bounds, DevicePixels, Font, FontFallbacks, FontFeatures, FontId, FontMetrics, FontRun,
-    FontStyle, FontWeight, GlyphId, GlyphRasterMode, LineLayout, Pixels, PlatformTextSystem, Point,
-    RenderGlyphParams, Result, SUBPIXEL_VARIANTS_X, ShapedGlyph, ShapedRun, SharedString, Size,
-    point, px, size, swap_rgba_pa_to_bgra,
+    point, px, size, swap_rgba_pa_to_bgra, Bounds, DevicePixels, Font, FontFallbacks, FontFeatures,
+    FontId, FontMetrics, FontRun, FontStyle, FontWeight, GlyphId, GlyphRasterMode, LineLayout,
+    Pixels, PlatformTextSystem, Point, RenderGlyphParams, Result, ShapedGlyph, ShapedRun,
+    SharedString, Size, SUBPIXEL_VARIANTS_X,
 };
 use anyhow::anyhow;
-use cocoa::{
-    appkit::CGFloat,
-    base::{id, nil},
-};
 use collections::HashMap;
 use core_foundation::{
     attributed_string::CFMutableAttributedString,
@@ -16,10 +12,11 @@ use core_foundation::{
     number::CFNumber,
     string::CFString,
 };
+use core_graphics::base::CGFloat;
 use core_graphics::{
     base::{
-        CGGlyph, kCGBitmapByteOrder32Little, kCGImageAlphaPremultipliedFirst,
-        kCGImageAlphaPremultipliedLast,
+        kCGBitmapByteOrder32Little, kCGImageAlphaPremultipliedFirst,
+        kCGImageAlphaPremultipliedLast, CGGlyph,
     },
     color_space::CGColorSpace,
     context::{CGContext, CGTextDrawingMode},
@@ -42,7 +39,8 @@ use font_kit::{
     source::SystemSource,
     sources::mem::MemSource,
 };
-use objc::{class, msg_send, sel, sel_impl};
+use objc2::rc::Retained;
+use objc2_app_kit::NSFont;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use pathfinder_geometry::{
     rect::{RectF, RectI},
@@ -555,7 +553,11 @@ impl MacTextSystemState {
                     }
                 })
                 .collect::<SmallVec<[FontRun; 4]>>();
-            if any { Some(swapped) } else { None }
+            if any {
+                Some(swapped)
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -711,19 +713,9 @@ fn ns_font_weight(weight: FontWeight) -> CGFloat {
 /// `size`, so the Text/Display optical variant matches AppKit's defaults.
 fn create_system_ui_ct_font(size: f64, weight: FontWeight) -> Option<CTFont> {
     let ns_weight = ns_font_weight(weight);
-    unsafe {
-        let ns_font: id = msg_send![
-            class!(NSFont),
-            systemFontOfSize: size as CGFloat
-            weight: ns_weight
-        ];
-        if ns_font == nil {
-            return None;
-        }
-        // NSFont and CTFontRef are toll-free bridged; the returned object is
-        // autoreleased, so use the +0 wrapper which retains for our copy.
-        Some(CTFont::wrap_under_get_rule(ns_font as CTFontRef))
-    }
+    let ns_font = NSFont::systemFontOfSize_weight(size as CGFloat, ns_weight);
+    let ct_font_ref = Retained::as_ptr(&ns_font) as CTFontRef;
+    Some(unsafe { CTFont::wrap_under_get_rule(ct_font_ref) })
 }
 
 #[derive(Clone)]
@@ -850,7 +842,7 @@ mod lenient_font_attributes {
         string::{CFString, CFStringRef},
     };
     use core_text::font_descriptor::{
-        CTFontDescriptor, CTFontDescriptorCopyAttribute, kCTFontFamilyNameAttribute,
+        kCTFontFamilyNameAttribute, CTFontDescriptor, CTFontDescriptorCopyAttribute,
     };
 
     pub fn family_name(descriptor: &CTFontDescriptor) -> Option<String> {
@@ -885,7 +877,7 @@ mod lenient_font_attributes {
 
 #[cfg(test)]
 mod tests {
-    use crate::{FontRun, GlyphId, MacTextSystem, PlatformTextSystem, font, px};
+    use crate::{font, px, FontRun, GlyphId, MacTextSystem, PlatformTextSystem};
 
     #[test]
     fn test_layout_line_bom_char() {
@@ -908,7 +900,7 @@ mod tests {
         assert_eq!(layout.runs.len(), 1);
         assert_eq!(layout.runs[0].glyphs.len(), 2);
         assert_eq!(layout.runs[0].glyphs[0].id, GlyphId(68u32)); // a
-        // There's no glyph for \u{feff}
+                                                                 // There's no glyph for \u{feff}
         assert_eq!(layout.runs[0].glyphs[1].id, GlyphId(69u32)); // b
     }
 
