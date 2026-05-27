@@ -10,11 +10,11 @@ use std::{
 };
 
 use parking_lot::Mutex;
-use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Serialize, de::DeserializeOwned};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 
-use crate::{Error, Result, Subscription, platform};
+use crate::{platform, Error, Result, Subscription};
 
 type Observer = Arc<dyn Fn(Option<Value>) + Send + Sync + 'static>;
 
@@ -271,7 +271,6 @@ impl KvStore for JsonKvStore {
     {
         let callback = Arc::new(callback);
         let observer: Observer = {
-            let callback = callback.clone();
             Arc::new(move |value| {
                 let deserialized = value.and_then(|value| serde_json::from_value(value).ok());
                 callback(deserialized);
@@ -295,7 +294,7 @@ impl KvStore for JsonKvStore {
         observer(current_value);
 
         let state = self.state.clone();
-        let unsubscribe_key = key.clone();
+        let unsubscribe_key = key;
         Subscription::new(move || {
             let mut state = state.lock();
             if let Some(observers) = state.observers.get_mut(&unsubscribe_key) {
@@ -389,7 +388,6 @@ impl KvStore for SqliteKvStore {
     {
         let callback = Arc::new(callback);
         let observer: Observer = {
-            let callback = callback.clone();
             Arc::new(move |value| {
                 let deserialized = value.and_then(|value| serde_json::from_value(value).ok());
                 callback(deserialized);
@@ -414,7 +412,7 @@ impl KvStore for SqliteKvStore {
         observer(current_value);
 
         let observers = self.observers.clone();
-        let unsubscribe_key = key.clone();
+        let unsubscribe_key = key;
         Subscription::new(move || {
             let mut state = observers.lock();
             if let Some(observers) = state.observers.get_mut(&unsubscribe_key) {
@@ -519,7 +517,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
     use tempfile::tempdir;
 
-    use super::{JsonKvStore, KvStore, SqliteKvStore, persist_values};
+    use super::{persist_values, JsonKvStore, KvStore, SqliteKvStore};
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct Preferences {

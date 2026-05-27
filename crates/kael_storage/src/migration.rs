@@ -35,10 +35,10 @@ pub(crate) fn validate_migrations(migrations: &[Migration]) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn pending_migrations<'a>(
+pub(crate) fn pending_migrations(
     current_version: u32,
-    migrations: &'a [Migration],
-) -> Result<Vec<&'a Migration>> {
+    migrations: &[Migration],
+) -> Result<Vec<&Migration>> {
     validate_migrations(migrations)?;
 
     Ok(migrations
@@ -83,7 +83,7 @@ pub(crate) fn rollback_migrations<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{Migration, pending_migrations, rollback_migrations, validate_migrations};
+    use super::{pending_migrations, rollback_migrations, validate_migrations, Migration};
     use crate::Error;
 
     const FIRST: Migration = Migration {
