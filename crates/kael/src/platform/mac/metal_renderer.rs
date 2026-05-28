@@ -6,11 +6,8 @@ use crate::{
 };
 use anyhow::Result;
 use block::ConcreteBlock;
-use cocoa::{
-    base::{NO, YES},
-    foundation::{NSSize, NSUInteger},
-    quartzcore::AutoresizingMask,
-};
+use cocoa::foundation::NSUInteger;
+use objc2_foundation::NSSize;
 
 use core_foundation::base::TCFType;
 use core_video::{
@@ -19,7 +16,8 @@ use core_video::{
 };
 use foreign_types::{ForeignType, ForeignTypeRef};
 use metal::{CAMetalLayer, CommandQueue, MTLPixelFormat, MTLResourceOptions, NSRange};
-use objc::{self, msg_send, sel, sel_impl};
+use objc2::msg_send;
+use objc2::runtime::AnyObject;
 use parking_lot::Mutex;
 
 use std::{
@@ -182,14 +180,14 @@ impl MetalRenderer {
                 core_graphics::color_space::kCGColorSpaceSRGB,
             )
             .expect("failed to create sRGB color space");
-            let _: () = msg_send![&*layer, setColorspace: cg_color_space];
-            let _: () = msg_send![&*layer, setAllowsNextDrawableTimeout: NO];
-            let _: () = msg_send![&*layer, setNeedsDisplayOnBoundsChange: YES];
-            let _: () = msg_send![
-                &*layer,
-                setAutoresizingMask: AutoresizingMask::WIDTH_SIZABLE
-                    | AutoresizingMask::HEIGHT_SIZABLE
-            ];
+            // CALayer autoresizing mask bits: kCALayerWidthSizable=2, kCALayerHeightSizable=16
+            const CA_AUTORESIZING_MASK: u32 = 2 | 16;
+            let layer_obj = (&*layer as *const _) as *mut AnyObject;
+            let cs_ptr = cg_color_space.as_ptr() as *mut std::ffi::c_void;
+            let _: () = msg_send![layer_obj, setColorspace: cs_ptr];
+            let _: () = msg_send![layer_obj, setAllowsNextDrawableTimeout: false];
+            let _: () = msg_send![layer_obj, setNeedsDisplayOnBoundsChange: true];
+            let _: () = msg_send![layer_obj, setAutoresizingMask: CA_AUTORESIZING_MASK];
         }
         #[cfg(feature = "runtime_shaders")]
         let library = device
@@ -370,10 +368,8 @@ impl MetalRenderer {
             height: new_size.height.0 as f64,
         };
         unsafe {
-            let _: () = msg_send![
-                self.layer(),
-                setDrawableSize: drawable_size
-            ];
+            let layer_obj = (self.layer() as *const _) as *mut AnyObject;
+            let _: () = msg_send![layer_obj, setDrawableSize: drawable_size];
         }
         let device_pixels_size = Size {
             width: DevicePixels(drawable_size.width as i32),
