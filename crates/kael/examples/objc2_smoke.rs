@@ -3,9 +3,9 @@
 use std::{cell::RefCell, rc::Rc, sync::OnceLock, time::Instant};
 
 use kael::{
-    actions, div, prelude::*, px, rgb, size, text_input, App, Application, Bounds, Context, Entity,
-    FontWeight, Keystroke, Menu, MenuItem, OsAction, Pixels, SharedString, Window, WindowBounds,
-    WindowOptions,
+    App, Application, Bounds, Context, Entity, FontWeight, Keystroke, Menu, MenuItem, OsAction,
+    Pixels, SharedString, Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, rgb,
+    size, text_input,
 };
 
 actions!(
