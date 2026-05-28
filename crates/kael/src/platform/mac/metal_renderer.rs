@@ -1,12 +1,11 @@
 use super::metal_atlas::MetalAtlas;
 use crate::{
-    AtlasTextureId, Background, BlurRect, Bounds, ContentMask, Corners, DevicePixels, Hsla,
-    MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
-    ScaledPixels, Scene, Shadow, Size, Surface, Underline, point, size,
+    point, size, AtlasTextureId, Background, BlurRect, Bounds, ContentMask, Corners, DevicePixels,
+    Hsla, MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
+    ScaledPixels, Scene, Shadow, Size, Surface, Underline,
 };
 use anyhow::Result;
 use block::ConcreteBlock;
-use cocoa::foundation::NSUInteger;
 use objc2_foundation::NSSize;
 
 use core_foundation::base::TCFType;
@@ -16,9 +15,17 @@ use core_video::{
 };
 use foreign_types::{ForeignType, ForeignTypeRef};
 use metal::{CAMetalLayer, CommandQueue, MTLPixelFormat, MTLResourceOptions, NSRange};
+use objc2::encode::{Encode, Encoding};
 use objc2::msg_send;
 use objc2::runtime::AnyObject;
 use parking_lot::Mutex;
+
+#[repr(transparent)]
+struct CGColorSpacePtr(*mut c_void);
+
+unsafe impl Encode for CGColorSpacePtr {
+    const ENCODING: Encoding = Encoding::Pointer(&Encoding::Struct("CGColorSpace", &[]));
+}
 
 use std::{
     cell::Cell,
@@ -183,7 +190,7 @@ impl MetalRenderer {
             // CALayer autoresizing mask bits: kCALayerWidthSizable=2, kCALayerHeightSizable=16
             const CA_AUTORESIZING_MASK: u32 = 2 | 16;
             let layer_obj = (&*layer as *const _) as *mut AnyObject;
-            let cs_ptr = cg_color_space.as_ptr() as *mut std::ffi::c_void;
+            let cs_ptr = CGColorSpacePtr(cg_color_space.as_ptr() as *mut c_void);
             let _: () = msg_send![layer_obj, setColorspace: cs_ptr];
             let _: () = msg_send![layer_obj, setAllowsNextDrawableTimeout: false];
             let _: () = msg_send![layer_obj, setNeedsDisplayOnBoundsChange: true];
@@ -713,7 +720,7 @@ impl MetalRenderer {
 
         instance_buffer.metal_buffer.did_modify_range(NSRange {
             location: 0,
-            length: instance_offset as NSUInteger,
+            length: instance_offset as u64,
         });
         Ok(command_buffer.to_owned())
     }

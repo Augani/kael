@@ -1,6 +1,9 @@
 use crate::WindowAppearance;
-use cocoa::base::id;
+use objc2::runtime::AnyObject;
 use objc2_app_kit::NSAppearance;
+
+#[allow(non_camel_case_types)]
+type id = *mut AnyObject;
 
 impl WindowAppearance {
     pub(crate) unsafe fn from_native(appearance: id) -> Self {

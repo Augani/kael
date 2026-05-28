@@ -1,11 +1,15 @@
 use crate::platform::TrayMenuItem;
 use crate::{Bounds, Pixels, point, px, size};
-use cocoa::base::{id, nil};
 use objc2::msg_send;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
 use objc2_foundation::{NSRect, NSSize, NSString};
 use std::cell::Cell;
 use std::ffi::c_void;
+
+#[allow(non_camel_case_types)]
+type id = *mut AnyObject;
+#[allow(non_upper_case_globals)]
+const nil: id = std::ptr::null_mut();
 
 pub(crate) struct MacTray {
     status_item: *mut AnyObject,
@@ -133,7 +137,7 @@ impl MacTray {
                 let button: *mut AnyObject = msg_send![self.status_item, button];
                 if !button.is_null() {
                     let _: () = msg_send![button, setTarget: std::ptr::null_mut::<AnyObject>()];
-                    let null_sel: *const std::ffi::c_void = std::ptr::null();
+                    let null_sel: Option<Sel> = None;
                     let _: () = msg_send![button, setAction: null_sel];
                 }
 
@@ -223,7 +227,7 @@ pub(crate) unsafe fn build_menu_with_selector(menu: id, items: &[TrayMenuItem], 
                     let title = NSString::from_str(label.as_ref());
                     let menu_item_alloc: *mut AnyObject = msg_send![class(c"NSMenuItem"), alloc];
                     let empty = NSString::from_str("");
-                    let null_sel: *const std::ffi::c_void = std::ptr::null();
+                    let null_sel: Option<Sel> = None;
                     let menu_item: *mut AnyObject = msg_send![
                         menu_item_alloc,
                         initWithTitle: &*title,
@@ -244,7 +248,7 @@ pub(crate) unsafe fn build_menu_with_selector(menu: id, items: &[TrayMenuItem], 
                     let title = NSString::from_str(label.as_ref());
                     let menu_item_alloc: *mut AnyObject = msg_send![class(c"NSMenuItem"), alloc];
                     let empty = NSString::from_str("");
-                    let null_sel: *const std::ffi::c_void = std::ptr::null();
+                    let null_sel: Option<Sel> = None;
                     let menu_item: *mut AnyObject = msg_send![
                         menu_item_alloc,
                         initWithTitle: &*title,
@@ -260,7 +264,7 @@ pub(crate) unsafe fn build_menu_with_selector(menu: id, items: &[TrayMenuItem], 
                     let title = NSString::from_str(label.as_ref());
                     let menu_item_alloc: *mut AnyObject = msg_send![class(c"NSMenuItem"), alloc];
                     let empty = NSString::from_str("");
-                    let null_sel: *const std::ffi::c_void = std::ptr::null();
+                    let null_sel: Option<Sel> = None;
                     let menu_item: *mut AnyObject = msg_send![
                         menu_item_alloc,
                         initWithTitle: &*title,

@@ -1,7 +1,11 @@
-use cocoa::base::id;
-use cocoa::foundation::NSRange;
+#![allow(dead_code)]
+
 use objc2::msg_send;
 use objc2::runtime::{AnyClass, AnyObject};
+use objc2_foundation::NSRange;
+
+#[allow(non_camel_case_types)]
+type id = *mut AnyObject;
 
 /// The `cocoa` crate does not define NSAttributedString (and related Cocoa classes),
 /// which are needed for copying rich text (that is, text intermingled with images)
@@ -19,10 +23,6 @@ pub trait NSAttributedString: Sized {
     unsafe fn RTFDFromRange_documentAttributes_(self, range: NSRange, attrs: id) -> id;
     unsafe fn RTFFromRange_documentAttributes_(self, range: NSRange, attrs: id) -> id;
     unsafe fn string(self) -> id;
-}
-
-fn to_objc2_range(range: NSRange) -> objc2_foundation::NSRange {
-    objc2_foundation::NSRange::new(range.location as usize, range.length as usize)
 }
 
 impl NSAttributedString for id {
@@ -44,7 +44,6 @@ impl NSAttributedString for id {
     unsafe fn RTFDFromRange_documentAttributes_(self, range: NSRange, attrs: id) -> id {
         let receiver = self as *mut AnyObject;
         let attrs = attrs as *mut AnyObject;
-        let range = to_objc2_range(range);
         let out: *mut AnyObject =
             unsafe { msg_send![receiver, RTFDFromRange: range, documentAttributes: attrs] };
         out as id
@@ -53,7 +52,6 @@ impl NSAttributedString for id {
     unsafe fn RTFFromRange_documentAttributes_(self, range: NSRange, attrs: id) -> id {
         let receiver = self as *mut AnyObject;
         let attrs = attrs as *mut AnyObject;
-        let range = to_objc2_range(range);
         let out: *mut AnyObject =
             unsafe { msg_send![receiver, RTFFromRange: range, documentAttributes: attrs] };
         out as id

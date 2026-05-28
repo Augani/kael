@@ -1,9 +1,9 @@
 use crate::Keystroke;
-use cocoa::base::id;
+use objc2::runtime::AnyObject;
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
 use std::collections::HashMap;
 
-pub(crate) fn keystroke_matches_event(keystroke: &Keystroke, event: id) -> bool {
+pub(crate) fn keystroke_matches_event(keystroke: &Keystroke, event: *mut AnyObject) -> bool {
     let event: &NSEvent = unsafe { &*(event as *const NSEvent) };
     if event.r#type() != NSEventType::KeyDown {
         return false;
@@ -11,7 +11,7 @@ pub(crate) fn keystroke_matches_event(keystroke: &Keystroke, event: id) -> bool 
     matches_modifiers_and_key(keystroke, event)
 }
 
-pub(crate) fn is_hotkey_released(keystroke: &Keystroke, event: id) -> bool {
+pub(crate) fn is_hotkey_released(keystroke: &Keystroke, event: *mut AnyObject) -> bool {
     let event: &NSEvent = unsafe { &*(event as *const NSEvent) };
     match event.r#type() {
         NSEventType::KeyUp => key_matches_ignoring_modifiers(keystroke, event),
@@ -103,7 +103,7 @@ fn normalize_key_name(char_key: &str) -> &str {
 
 pub(crate) fn find_matching_hotkey(
     registrations: &HashMap<u32, Keystroke>,
-    event: id,
+    event: *mut AnyObject,
 ) -> Option<u32> {
     for (id, keystroke) in registrations {
         if keystroke_matches_event(keystroke, event) {
@@ -116,7 +116,7 @@ pub(crate) fn find_matching_hotkey(
 pub(crate) fn find_matching_hotkey_released(
     active_hotkey: Option<u32>,
     registrations: &HashMap<u32, Keystroke>,
-    event: id,
+    event: *mut AnyObject,
 ) -> Option<u32> {
     let active_id = active_hotkey?;
     let keystroke = registrations.get(&active_id)?;
