@@ -1,24 +1,32 @@
 use crate::{BiometricKind, BiometricStatus};
-use cocoa::base::{BOOL, YES, id, nil};
-use cocoa::foundation::NSString;
-use objc::{class, msg_send, sel, sel_impl};
+use block2::RcBlock;
+use objc2::msg_send;
+use objc2::runtime::{AnyClass, AnyObject, Bool};
+use objc2_foundation::NSString;
 
 const LA_POLICY_BIOMETRICS: i64 = 1;
 
 #[link(name = "LocalAuthentication", kind = "framework")]
 unsafe extern "C" {}
 
+fn la_context_class() -> Option<&'static AnyClass> {
+    AnyClass::get(c"LAContext")
+}
+
 pub fn biometric_status() -> BiometricStatus {
+    let Some(class) = la_context_class() else {
+        return BiometricStatus::Unavailable;
+    };
     unsafe {
-        let context: id = msg_send![class!(LAContext), new];
-        let mut error: id = nil;
-        let can_evaluate: BOOL = msg_send![
+        let context: *mut AnyObject = msg_send![class, new];
+        let mut error: *mut AnyObject = std::ptr::null_mut();
+        let can_evaluate: Bool = msg_send![
             context,
-            canEvaluatePolicy: LA_POLICY_BIOMETRICS
+            canEvaluatePolicy: LA_POLICY_BIOMETRICS,
             error: &mut error
         ];
         let _: () = msg_send![context, release];
-        if can_evaluate == YES {
+        if can_evaluate.as_bool() {
             BiometricStatus::Available(BiometricKind::TouchId)
         } else {
             BiometricStatus::Unavailable
@@ -27,24 +35,25 @@ pub fn biometric_status() -> BiometricStatus {
 }
 
 pub fn authenticate_biometric(reason: &str, callback: Box<dyn FnOnce(bool) + Send>) {
+    let Some(class) = la_context_class() else {
+        callback(false);
+        return;
+    };
     unsafe {
-        let context: id = msg_send![class!(LAContext), new];
-        let reason_ns = NSString::alloc(nil).init_str(reason);
-        let _: id = msg_send![reason_ns, autorelease];
+        let context: *mut AnyObject = msg_send![class, new];
+        let reason_ns = NSString::from_str(reason);
 
         let callback = std::sync::Mutex::new(Some(callback));
-
-        let block = block::ConcreteBlock::new(move |success: BOOL, _error: id| {
-            if let Some(cb) = callback.lock().ok().and_then(|mut guard| guard.take()) {
-                cb(success == YES);
+        let block = RcBlock::new(move |success: Bool, _error: *mut AnyObject| {
+            if let Some(cb) = callback.lock().ok().and_then(|mut g| g.take()) {
+                cb(success.as_bool());
             }
         });
-        let block = block.copy();
 
         let _: () = msg_send![
             context,
-            evaluatePolicy: LA_POLICY_BIOMETRICS
-            localizedReason: reason_ns
+            evaluatePolicy: LA_POLICY_BIOMETRICS,
+            localizedReason: &*reason_ns,
             reply: &*block
         ];
 
