@@ -1879,7 +1879,11 @@ impl Platform for MacPlatform {
         unsafe {
             let menu: id = msg_send![class!(NSMenu), new];
             let _: () = msg_send![menu, setAutoenablesItems: NO];
-            super::tray::build_menu_with_selector(menu, &items, sel!(handleContextMenuItem:));
+            super::tray::build_menu_with_selector(
+                menu,
+                &items,
+                objc2::runtime::Sel::register(c"handleContextMenuItem:"),
+            );
 
             let main_screen: id = cocoa::appkit::NSScreen::mainScreen(nil);
             let screen_height = if main_screen != nil {
