@@ -1,41 +1,40 @@
 use anyhow::Result;
-use cocoa::base::{id, nil};
-use objc::{class, msg_send, sel, sel_impl};
+use objc2::msg_send;
+use objc2::runtime::{AnyClass, AnyObject};
+
+fn sm_app_service_main_app() -> Option<*mut AnyObject> {
+    let class = AnyClass::get(c"SMAppService")?;
+    let service: *mut AnyObject = unsafe { msg_send![class, mainApp] };
+    (!service.is_null()).then_some(service)
+}
 
 pub fn set_auto_launch(_app_id: &str, enabled: bool) -> Result<()> {
-    unsafe {
-        let service: id = msg_send![class!(SMAppService), mainApp];
-        if service == nil {
-            return Err(anyhow::anyhow!(
-                "SMAppService not available (requires macOS 13+)"
-            ));
-        }
+    let Some(service) = sm_app_service_main_app() else {
+        return Err(anyhow::anyhow!(
+            "SMAppService not available (requires macOS 13+)"
+        ));
+    };
 
-        if enabled {
-            let error: id = nil;
-            let success: bool = msg_send![service, registerAndReturnError: &error];
-            if !success {
-                return Err(anyhow::anyhow!("Failed to register auto-launch"));
-            }
-        } else {
-            let error: id = nil;
-            let success: bool = msg_send![service, unregisterAndReturnError: &error];
-            if !success {
-                return Err(anyhow::anyhow!("Failed to unregister auto-launch"));
-            }
-        }
+    let mut error: *mut AnyObject = std::ptr::null_mut();
+    let success: bool = if enabled {
+        unsafe { msg_send![service, registerAndReturnError: &mut error] }
+    } else {
+        unsafe { msg_send![service, unregisterAndReturnError: &mut error] }
+    };
 
-        Ok(())
+    if !success {
+        return Err(anyhow::anyhow!(
+            "Failed to {}register auto-launch",
+            if enabled { "" } else { "un" }
+        ));
     }
+    Ok(())
 }
 
 pub fn is_auto_launch_enabled(_app_id: &str) -> bool {
-    unsafe {
-        let service: id = msg_send![class!(SMAppService), mainApp];
-        if service == nil {
-            return false;
-        }
-        let status: isize = msg_send![service, status];
-        status == 1
-    }
+    let Some(service) = sm_app_service_main_app() else {
+        return false;
+    };
+    let status: isize = unsafe { msg_send![service, status] };
+    status == 1
 }

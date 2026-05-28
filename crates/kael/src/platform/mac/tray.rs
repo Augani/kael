@@ -1,68 +1,75 @@
 use crate::platform::TrayMenuItem;
 use crate::{Bounds, Pixels, point, px, size};
-use cocoa::{
-    appkit::NSScreen,
-    base::{NO, YES, id, nil},
-    foundation::{NSData, NSSize, NSString},
-};
-use objc::{class, msg_send, rc::StrongPtr, sel, sel_impl};
+use objc2::msg_send;
+use objc2::runtime::{AnyClass, AnyObject, Sel};
+use objc2_foundation::{NSRect, NSSize, NSString};
 use std::cell::Cell;
 use std::ffi::c_void;
 
+#[allow(non_camel_case_types)]
+type id = *mut AnyObject;
+#[allow(non_upper_case_globals)]
+const nil: id = std::ptr::null_mut();
+
 pub(crate) struct MacTray {
-    status_item: StrongPtr,
+    status_item: *mut AnyObject,
     panel_mode: Cell<bool>,
-    stored_menu: Cell<id>,
+    stored_menu: Cell<*mut AnyObject>,
+}
+
+unsafe fn class(name: &std::ffi::CStr) -> &'static AnyClass {
+    AnyClass::get(name).unwrap_or_else(|| panic!("missing class {name:?}"))
 }
 
 impl MacTray {
     pub fn new() -> Self {
         unsafe {
-            let status_bar: id = msg_send![class!(NSStatusBar), systemStatusBar];
+            let status_bar: *mut AnyObject = msg_send![class(c"NSStatusBar"), systemStatusBar];
             let length: f64 = -1.0;
-            let status_item: id = msg_send![status_bar, statusItemWithLength: length];
-            let status_item = StrongPtr::retain(status_item);
-            let _: () = msg_send![*status_item, setVisible: YES];
+            let status_item: *mut AnyObject = msg_send![status_bar, statusItemWithLength: length];
+            let _: *mut AnyObject = msg_send![status_item, retain];
+            let _: () = msg_send![status_item, setVisible: true];
 
-            let button: id = msg_send![*status_item, button];
-            if button != nil {
-                let default_title = NSString::alloc(nil).init_str("App");
-                let _: () = msg_send![button, setTitle: default_title];
+            let button: *mut AnyObject = msg_send![status_item, button];
+            if !button.is_null() {
+                let default_title = NSString::from_str("App");
+                let _: () = msg_send![button, setTitle: &*default_title];
             }
 
             Self {
                 status_item,
                 panel_mode: Cell::new(false),
-                stored_menu: Cell::new(nil),
+                stored_menu: Cell::new(std::ptr::null_mut()),
             }
         }
     }
 
     pub fn set_icon(&self, icon_data: Option<&[u8]>) {
         unsafe {
-            let button: id = msg_send![*self.status_item, button];
-            if button == nil {
+            let button: *mut AnyObject = msg_send![self.status_item, button];
+            if button.is_null() {
                 return;
             }
             match icon_data {
                 Some(data) => {
-                    let ns_data: id = NSData::dataWithBytes_length_(
-                        nil,
-                        data.as_ptr() as *const c_void,
-                        data.len() as u64,
-                    );
-                    let image: id = msg_send![class!(NSImage), alloc];
-                    let image: id = msg_send![image, initWithData: ns_data];
-                    if image != nil {
-                        let _: () = msg_send![image, setSize: NSSize::new(18.0, 18.0)];
-                        let _: () = msg_send![image, setTemplate: YES];
+                    let ns_data: *mut AnyObject = msg_send![
+                        class(c"NSData"),
+                        dataWithBytes: data.as_ptr() as *const c_void,
+                        length: data.len() as u64
+                    ];
+                    let image_alloc: *mut AnyObject = msg_send![class(c"NSImage"), alloc];
+                    let image: *mut AnyObject = msg_send![image_alloc, initWithData: ns_data];
+                    if !image.is_null() {
+                        let target_size = NSSize::new(18.0, 18.0);
+                        let _: () = msg_send![image, setSize: target_size];
+                        let _: () = msg_send![image, setTemplate: true];
                         let _: () = msg_send![button, setImage: image];
-                        let empty = NSString::alloc(nil).init_str("");
-                        let _: () = msg_send![button, setTitle: empty];
+                        let empty = NSString::from_str("");
+                        let _: () = msg_send![button, setTitle: &*empty];
                     }
                 }
                 None => {
-                    let _: () = msg_send![button, setImage: nil];
+                    let _: () = msg_send![button, setImage: std::ptr::null_mut::<AnyObject>()];
                 }
             }
         }
@@ -71,41 +78,42 @@ impl MacTray {
     #[allow(dead_code)]
     pub fn set_title(&self, title: &str) {
         unsafe {
-            let button: id = msg_send![*self.status_item, button];
-            if button == nil {
+            let button: *mut AnyObject = msg_send![self.status_item, button];
+            if button.is_null() {
                 return;
             }
-            let ns_title = NSString::alloc(nil).init_str(title);
-            let _: () = msg_send![button, setTitle: ns_title];
+            let ns_title = NSString::from_str(title);
+            let _: () = msg_send![button, setTitle: &*ns_title];
         }
     }
 
     pub fn set_tooltip(&self, tooltip: &str) {
         unsafe {
-            let button: id = msg_send![*self.status_item, button];
-            if button == nil {
+            let button: *mut AnyObject = msg_send![self.status_item, button];
+            if button.is_null() {
                 return;
             }
-            let ns_tooltip = NSString::alloc(nil).init_str(tooltip);
-            let _: () = msg_send![button, setToolTip: ns_tooltip];
+            let ns_tooltip = NSString::from_str(tooltip);
+            let _: () = msg_send![button, setToolTip: &*ns_tooltip];
         }
     }
 
     pub fn set_menu(&self, items: Vec<TrayMenuItem>) {
         unsafe {
             let old_menu = self.stored_menu.get();
-            if old_menu != nil {
+            if !old_menu.is_null() {
                 let _: () = msg_send![old_menu, release];
             }
 
-            let menu: id = msg_send![class!(NSMenu), new];
-            let _: () = msg_send![menu, setAutoenablesItems: NO];
-            build_menu_with_selector(menu, &items, sel!(handleTrayMenuItem:));
+            let menu: *mut AnyObject = msg_send![class(c"NSMenu"), new];
+            let _: () = msg_send![menu, setAutoenablesItems: false];
+            let selector = Sel::register(c"handleTrayMenuItem:");
+            build_menu_with_selector(menu as id, &items, selector);
 
             self.stored_menu.set(menu);
 
             if !self.panel_mode.get() {
-                let _: () = msg_send![*self.status_item, setMenu: menu];
+                let _: () = msg_send![self.status_item, setMenu: menu];
             }
         }
     }
@@ -114,27 +122,28 @@ impl MacTray {
         self.panel_mode.set(enabled);
         unsafe {
             if enabled {
-                let _: () = msg_send![*self.status_item, setMenu: nil];
+                let _: () = msg_send![self.status_item, setMenu: std::ptr::null_mut::<AnyObject>()];
 
-                let button: id = msg_send![*self.status_item, button];
-                if button != nil {
+                let button: *mut AnyObject = msg_send![self.status_item, button];
+                if !button.is_null() {
                     let delegate = get_app_delegate();
-                    if delegate != nil {
+                    if !delegate.is_null() {
                         let _: () = msg_send![button, setTarget: delegate];
-                        let _: () = msg_send![button, setAction: sel!(handleTrayPanelClick:)];
+                        let panel_sel = Sel::register(c"handleTrayPanelClick:");
+                        let _: () = msg_send![button, setAction: panel_sel];
                     }
                 }
             } else {
-                let button: id = msg_send![*self.status_item, button];
-                if button != nil {
-                    let null_sel: *const std::ffi::c_void = std::ptr::null();
-                    let _: () = msg_send![button, setTarget: nil];
+                let button: *mut AnyObject = msg_send![self.status_item, button];
+                if !button.is_null() {
+                    let _: () = msg_send![button, setTarget: std::ptr::null_mut::<AnyObject>()];
+                    let null_sel: Option<Sel> = None;
                     let _: () = msg_send![button, setAction: null_sel];
                 }
 
                 let stored = self.stored_menu.get();
-                if stored != nil {
-                    let _: () = msg_send![*self.status_item, setMenu: stored];
+                if !stored.is_null() {
+                    let _: () = msg_send![self.status_item, setMenu: stored];
                 }
             }
         }
@@ -142,23 +151,23 @@ impl MacTray {
 
     pub fn get_icon_bounds(&self) -> Option<Bounds<Pixels>> {
         unsafe {
-            let button: id = msg_send![*self.status_item, button];
-            if button == nil {
+            let button: *mut AnyObject = msg_send![self.status_item, button];
+            if button.is_null() {
                 return None;
             }
 
-            let button_window: id = msg_send![button, window];
-            if button_window == nil {
+            let button_window: *mut AnyObject = msg_send![button, window];
+            if button_window.is_null() {
                 return None;
             }
 
-            let frame: cocoa::foundation::NSRect = msg_send![button_window, frame];
+            let frame: NSRect = msg_send![button_window, frame];
 
-            let main_screen: id = NSScreen::mainScreen(nil);
-            if main_screen == nil {
+            let main_screen: *mut AnyObject = msg_send![class(c"NSScreen"), mainScreen];
+            if main_screen.is_null() {
                 return None;
             }
-            let screen_frame = NSScreen::frame(main_screen);
+            let screen_frame: NSRect = msg_send![main_screen, frame];
 
             let flipped_y = screen_frame.size.height - frame.origin.y - frame.size.height;
 
@@ -174,84 +183,101 @@ impl Drop for MacTray {
     fn drop(&mut self) {
         unsafe {
             let stored = self.stored_menu.get();
-            if stored != nil {
+            if !stored.is_null() {
                 let _: () = msg_send![stored, release];
             }
-            let status_bar: id = msg_send![class!(NSStatusBar), systemStatusBar];
-            let _: () = msg_send![status_bar, removeStatusItem: *self.status_item];
+            let status_bar: *mut AnyObject = msg_send![class(c"NSStatusBar"), systemStatusBar];
+            let _: () = msg_send![status_bar, removeStatusItem: self.status_item];
+            let _: () = msg_send![self.status_item, release];
         }
     }
 }
 
-unsafe fn get_app_delegate() -> id {
-    let app: id = msg_send![class!(NSApplication), sharedApplication];
-    msg_send![app, delegate]
+unsafe fn get_app_delegate() -> *mut AnyObject {
+    unsafe {
+        let app: *mut AnyObject = msg_send![class(c"NSApplication"), sharedApplication];
+        msg_send![app, delegate]
+    }
 }
 
 pub(crate) unsafe fn configure_actionable_item_with_selector(
     menu_item: id,
     item_id: &str,
-    selector: objc::runtime::Sel,
+    selector: Sel,
 ) {
     unsafe {
         let delegate = get_app_delegate();
-        if delegate != nil {
+        if !delegate.is_null() {
+            let menu_item = menu_item as *mut AnyObject;
             let _: () = msg_send![menu_item, setTarget: delegate];
             let _: () = msg_send![menu_item, setAction: selector];
-            let represented = NSString::alloc(nil).init_str(item_id);
-            let _: () = msg_send![menu_item, setRepresentedObject: represented];
-            let _: () = msg_send![menu_item, setEnabled: YES];
+            let represented = NSString::from_str(item_id);
+            let _: () = msg_send![menu_item, setRepresentedObject: &*represented];
+            let _: () = msg_send![menu_item, setEnabled: true];
         }
     }
 }
 
-pub(crate) unsafe fn build_menu_with_selector(
-    menu: id,
-    items: &[TrayMenuItem],
-    selector: objc::runtime::Sel,
-) {
+pub(crate) unsafe fn build_menu_with_selector(menu: id, items: &[TrayMenuItem], selector: Sel) {
     unsafe {
+        let menu = menu as *mut AnyObject;
         for item in items {
             match item {
                 TrayMenuItem::Action { label, id } => {
-                    let title = NSString::alloc(nil).init_str(label.as_ref());
-                    let menu_item: id = msg_send![class!(NSMenuItem), alloc];
-                    let empty = NSString::alloc(nil).init_str("");
-                    let menu_item: id =
-                        msg_send![menu_item, initWithTitle:title action:nil keyEquivalent:empty];
-                    configure_actionable_item_with_selector(menu_item, id.as_ref(), selector);
+                    let title = NSString::from_str(label.as_ref());
+                    let menu_item_alloc: *mut AnyObject = msg_send![class(c"NSMenuItem"), alloc];
+                    let empty = NSString::from_str("");
+                    let null_sel: Option<Sel> = None;
+                    let menu_item: *mut AnyObject = msg_send![
+                        menu_item_alloc,
+                        initWithTitle: &*title,
+                        action: null_sel,
+                        keyEquivalent: &*empty
+                    ];
+                    configure_actionable_item_with_selector(menu_item as id, id.as_ref(), selector);
                     let _: () = msg_send![menu, addItem: menu_item];
                 }
                 TrayMenuItem::Separator => {
-                    let separator: id = msg_send![class!(NSMenuItem), separatorItem];
+                    let separator: *mut AnyObject = msg_send![class(c"NSMenuItem"), separatorItem];
                     let _: () = msg_send![menu, addItem: separator];
                 }
                 TrayMenuItem::Submenu {
                     label,
                     items: sub_items,
                 } => {
-                    let title = NSString::alloc(nil).init_str(label.as_ref());
-                    let menu_item: id = msg_send![class!(NSMenuItem), alloc];
-                    let empty = NSString::alloc(nil).init_str("");
-                    let menu_item: id =
-                        msg_send![menu_item, initWithTitle:title action:nil keyEquivalent:empty];
-                    let submenu: id = msg_send![class!(NSMenu), new];
-                    build_menu_with_selector(submenu, sub_items, selector);
+                    let title = NSString::from_str(label.as_ref());
+                    let menu_item_alloc: *mut AnyObject = msg_send![class(c"NSMenuItem"), alloc];
+                    let empty = NSString::from_str("");
+                    let null_sel: Option<Sel> = None;
+                    let menu_item: *mut AnyObject = msg_send![
+                        menu_item_alloc,
+                        initWithTitle: &*title,
+                        action: null_sel,
+                        keyEquivalent: &*empty
+                    ];
+                    let submenu: *mut AnyObject = msg_send![class(c"NSMenu"), new];
+                    build_menu_with_selector(submenu as id, sub_items, selector);
                     let _: () = msg_send![menu_item, setSubmenu: submenu];
                     let _: () = msg_send![menu, addItem: menu_item];
                 }
                 TrayMenuItem::Toggle { label, checked, id } => {
-                    let title = NSString::alloc(nil).init_str(label.as_ref());
-                    let menu_item: id = msg_send![class!(NSMenuItem), alloc];
-                    let empty = NSString::alloc(nil).init_str("");
-                    let menu_item: id =
-                        msg_send![menu_item, initWithTitle:title action:nil keyEquivalent:empty];
-                    configure_actionable_item_with_selector(menu_item, id.as_ref(), selector);
+                    let title = NSString::from_str(label.as_ref());
+                    let menu_item_alloc: *mut AnyObject = msg_send![class(c"NSMenuItem"), alloc];
+                    let empty = NSString::from_str("");
+                    let null_sel: Option<Sel> = None;
+                    let menu_item: *mut AnyObject = msg_send![
+                        menu_item_alloc,
+                        initWithTitle: &*title,
+                        action: null_sel,
+                        keyEquivalent: &*empty
+                    ];
+                    configure_actionable_item_with_selector(menu_item as id, id.as_ref(), selector);
                     let state: isize = if *checked { 1 } else { 0 };
                     let _: () = msg_send![menu_item, setState: state];
                     let _: () = msg_send![menu, addItem: menu_item];
                 }
             }
         }
+        let _ = nil;
     }
 }

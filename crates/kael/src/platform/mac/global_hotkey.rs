@@ -1,55 +1,47 @@
 use crate::Keystroke;
-use cocoa::{
-    appkit::{NSEvent, NSEventModifierFlags, NSEventType},
-    base::{id, nil},
-};
-use objc::{msg_send, sel, sel_impl};
+use objc2::runtime::AnyObject;
+use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
 use std::collections::HashMap;
 
-pub(crate) fn keystroke_matches_event(keystroke: &Keystroke, event: id) -> bool {
-    unsafe {
-        let event_type = event.eventType();
-        if event_type != NSEventType::NSKeyDown {
-            return false;
-        }
-
-        matches_modifiers_and_key(keystroke, event)
-    }
-}
-
-pub(crate) fn is_hotkey_released(keystroke: &Keystroke, event: id) -> bool {
-    unsafe {
-        let event_type = event.eventType();
-        match event_type {
-            NSEventType::NSKeyUp => key_matches_ignoring_modifiers(keystroke, event),
-            NSEventType::NSFlagsChanged => required_modifier_released(keystroke, event),
-            _ => false,
-        }
-    }
-}
-
-#[allow(unsafe_op_in_unsafe_fn)]
-unsafe fn key_matches_ignoring_modifiers(keystroke: &Keystroke, event: id) -> bool {
-    let chars_ignoring: id = msg_send![event, charactersIgnoringModifiers];
-    if chars_ignoring == nil {
+pub(crate) fn keystroke_matches_event(keystroke: &Keystroke, event: *mut AnyObject) -> bool {
+    let event: &NSEvent = unsafe { &*(event as *const NSEvent) };
+    if event.r#type() != NSEventType::KeyDown {
         return false;
     }
-    let chars_str: *const std::ffi::c_char = msg_send![chars_ignoring, UTF8String];
+    matches_modifiers_and_key(keystroke, event)
+}
+
+pub(crate) fn is_hotkey_released(keystroke: &Keystroke, event: *mut AnyObject) -> bool {
+    let event: &NSEvent = unsafe { &*(event as *const NSEvent) };
+    match event.r#type() {
+        NSEventType::KeyUp => key_matches_ignoring_modifiers(keystroke, event),
+        NSEventType::FlagsChanged => required_modifier_released(keystroke, event),
+        _ => false,
+    }
+}
+
+fn key_matches_ignoring_modifiers(keystroke: &Keystroke, event: &NSEvent) -> bool {
+    let Some(chars_ignoring) = event.charactersIgnoringModifiers() else {
+        return false;
+    };
+    let chars_str = chars_ignoring.UTF8String();
     if chars_str.is_null() {
         return false;
     }
-    let chars = std::ffi::CStr::from_ptr(chars_str).to_str().unwrap_or("");
+    let chars = unsafe { std::ffi::CStr::from_ptr(chars_str) }
+        .to_str()
+        .unwrap_or("");
     let event_key = chars.to_lowercase();
     let target_key = keystroke.key.to_lowercase();
     event_key == target_key || normalize_key_name(&event_key) == target_key
 }
 
-unsafe fn required_modifier_released(keystroke: &Keystroke, event: id) -> bool {
-    let modifiers = unsafe { event.modifierFlags() };
-    let has_cmd = modifiers.contains(NSEventModifierFlags::NSCommandKeyMask);
-    let has_ctrl = modifiers.contains(NSEventModifierFlags::NSControlKeyMask);
-    let has_alt = modifiers.contains(NSEventModifierFlags::NSAlternateKeyMask);
-    let has_shift = modifiers.contains(NSEventModifierFlags::NSShiftKeyMask);
+fn required_modifier_released(keystroke: &Keystroke, event: &NSEvent) -> bool {
+    let modifiers = event.modifierFlags();
+    let has_cmd = modifiers.contains(NSEventModifierFlags::Command);
+    let has_ctrl = modifiers.contains(NSEventModifierFlags::Control);
+    let has_alt = modifiers.contains(NSEventModifierFlags::Option);
+    let has_shift = modifiers.contains(NSEventModifierFlags::Shift);
 
     (keystroke.modifiers.platform && !has_cmd)
         || (keystroke.modifiers.control && !has_ctrl)
@@ -57,13 +49,12 @@ unsafe fn required_modifier_released(keystroke: &Keystroke, event: id) -> bool {
         || (keystroke.modifiers.shift && !has_shift)
 }
 
-#[allow(unsafe_op_in_unsafe_fn)]
-unsafe fn matches_modifiers_and_key(keystroke: &Keystroke, event: id) -> bool {
+fn matches_modifiers_and_key(keystroke: &Keystroke, event: &NSEvent) -> bool {
     let modifiers = event.modifierFlags();
-    let event_cmd = modifiers.contains(NSEventModifierFlags::NSCommandKeyMask);
-    let event_ctrl = modifiers.contains(NSEventModifierFlags::NSControlKeyMask);
-    let event_alt = modifiers.contains(NSEventModifierFlags::NSAlternateKeyMask);
-    let event_shift = modifiers.contains(NSEventModifierFlags::NSShiftKeyMask);
+    let event_cmd = modifiers.contains(NSEventModifierFlags::Command);
+    let event_ctrl = modifiers.contains(NSEventModifierFlags::Control);
+    let event_alt = modifiers.contains(NSEventModifierFlags::Option);
+    let event_shift = modifiers.contains(NSEventModifierFlags::Shift);
 
     if keystroke.modifiers.platform != event_cmd
         || keystroke.modifiers.control != event_ctrl
@@ -73,15 +64,16 @@ unsafe fn matches_modifiers_and_key(keystroke: &Keystroke, event: id) -> bool {
         return false;
     }
 
-    let chars_ignoring: id = msg_send![event, charactersIgnoringModifiers];
-    if chars_ignoring == nil {
+    let Some(chars_ignoring) = event.charactersIgnoringModifiers() else {
         return false;
-    }
-    let chars_str: *const std::ffi::c_char = msg_send![chars_ignoring, UTF8String];
+    };
+    let chars_str = chars_ignoring.UTF8String();
     if chars_str.is_null() {
         return false;
     }
-    let chars = std::ffi::CStr::from_ptr(chars_str).to_str().unwrap_or("");
+    let chars = unsafe { std::ffi::CStr::from_ptr(chars_str) }
+        .to_str()
+        .unwrap_or("");
 
     let event_key = chars.to_lowercase();
     let target_key = keystroke.key.to_lowercase();
@@ -111,7 +103,7 @@ fn normalize_key_name(char_key: &str) -> &str {
 
 pub(crate) fn find_matching_hotkey(
     registrations: &HashMap<u32, Keystroke>,
-    event: id,
+    event: *mut AnyObject,
 ) -> Option<u32> {
     for (id, keystroke) in registrations {
         if keystroke_matches_event(keystroke, event) {
@@ -124,7 +116,7 @@ pub(crate) fn find_matching_hotkey(
 pub(crate) fn find_matching_hotkey_released(
     active_hotkey: Option<u32>,
     registrations: &HashMap<u32, Keystroke>,
-    event: id,
+    event: *mut AnyObject,
 ) -> Option<u32> {
     let active_id = active_hotkey?;
     let keystroke = registrations.get(&active_id)?;

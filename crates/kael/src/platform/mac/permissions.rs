@@ -1,14 +1,11 @@
 use crate::platform::PermissionStatus;
-use block::ConcreteBlock;
-use cocoa::{
-    base::{BOOL, YES, id},
-    foundation::NSInteger,
-};
+use block2::RcBlock;
 use core_foundation::base::TCFType;
 use core_foundation::boolean::CFBoolean;
 use core_foundation::dictionary::CFMutableDictionary;
 use core_foundation::string::CFString;
-use objc::{class, msg_send, sel, sel_impl};
+use objc2::msg_send;
+use objc2::runtime::{AnyClass, AnyObject, Bool};
 use std::{
     ffi::c_void,
     ptr,
@@ -28,21 +25,19 @@ unsafe extern "C" {
 
 #[link(name = "AVFoundation", kind = "framework")]
 unsafe extern "C" {
-    static AVMediaTypeAudio: id;
-    static AVMediaTypeVideo: id;
+    static AVMediaTypeAudio: *mut AnyObject;
+    static AVMediaTypeVideo: *mut AnyObject;
 }
 
-const AV_AUTHORIZATION_STATUS_NOT_DETERMINED: NSInteger = 0;
-const AV_AUTHORIZATION_STATUS_DENIED: NSInteger = 2;
-const AV_AUTHORIZATION_STATUS_AUTHORIZED: NSInteger = 3;
+const AV_AUTHORIZATION_STATUS_NOT_DETERMINED: isize = 0;
+const AV_AUTHORIZATION_STATUS_DENIED: isize = 2;
+const AV_AUTHORIZATION_STATUS_AUTHORIZED: isize = 3;
 
 pub fn accessibility_status() -> PermissionStatus {
-    unsafe {
-        if AXIsProcessTrusted() {
-            PermissionStatus::Granted
-        } else {
-            PermissionStatus::Denied
-        }
+    if unsafe { AXIsProcessTrusted() } {
+        PermissionStatus::Granted
+    } else {
+        PermissionStatus::Denied
     }
 }
 
@@ -72,26 +67,35 @@ pub fn request_camera_permission(callback: Box<dyn FnOnce(bool)>) {
     request_media_permission(unsafe { AVMediaTypeVideo }, callback);
 }
 
-fn authorization_status(media_type: id) -> PermissionStatus {
-    unsafe {
-        let status: NSInteger =
-            msg_send![class!(AVCaptureDevice), authorizationStatusForMediaType: media_type];
-        match status {
-            AV_AUTHORIZATION_STATUS_AUTHORIZED => PermissionStatus::Granted,
-            AV_AUTHORIZATION_STATUS_NOT_DETERMINED => PermissionStatus::NotDetermined,
-            AV_AUTHORIZATION_STATUS_DENIED => PermissionStatus::Denied,
-            _ => PermissionStatus::Denied,
-        }
+fn av_capture_device_class() -> Option<&'static AnyClass> {
+    AnyClass::get(c"AVCaptureDevice")
+}
+
+fn authorization_status(media_type: *mut AnyObject) -> PermissionStatus {
+    let Some(class) = av_capture_device_class() else {
+        return PermissionStatus::Denied;
+    };
+    let status: isize = unsafe { msg_send![class, authorizationStatusForMediaType: media_type] };
+    match status {
+        AV_AUTHORIZATION_STATUS_AUTHORIZED => PermissionStatus::Granted,
+        AV_AUTHORIZATION_STATUS_NOT_DETERMINED => PermissionStatus::NotDetermined,
+        AV_AUTHORIZATION_STATUS_DENIED => PermissionStatus::Denied,
+        _ => PermissionStatus::Denied,
     }
 }
 
-fn request_media_permission(media_type: id, callback: Box<dyn FnOnce(bool)>) {
+fn request_media_permission(media_type: *mut AnyObject, callback: Box<dyn FnOnce(bool)>) {
+    let Some(class) = av_capture_device_class() else {
+        return;
+    };
+
     let callback_ptr = Arc::new(AtomicPtr::new(
         Box::into_raw(Box::new(callback)) as *mut c_void
     ));
-    let block = ConcreteBlock::new({
+
+    let block = RcBlock::new({
         let callback_ptr = Arc::clone(&callback_ptr);
-        move |granted: BOOL| {
+        move |granted: Bool| {
             let callback = callback_ptr.swap(ptr::null_mut(), Ordering::AcqRel);
             if callback.is_null() {
                 return;
@@ -99,7 +103,7 @@ fn request_media_permission(media_type: id, callback: Box<dyn FnOnce(bool)>) {
 
             let context = Box::new(PermissionRequestContext {
                 callback,
-                granted: granted == YES,
+                granted: granted.as_bool(),
             });
 
             unsafe {
@@ -110,14 +114,13 @@ fn request_media_permission(media_type: id, callback: Box<dyn FnOnce(bool)>) {
                 );
             }
         }
-    })
-    .copy();
+    });
 
     unsafe {
         let _: () = msg_send![
-            class!(AVCaptureDevice),
-            requestAccessForMediaType: media_type
-            completionHandler: block
+            class,
+            requestAccessForMediaType: media_type,
+            completionHandler: &*block
         ];
     }
 }

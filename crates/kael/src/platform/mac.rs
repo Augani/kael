@@ -1,7 +1,5 @@
 //! Macos screen have a y axis that goings up from the bottom of the screen and
 //! an origin at the bottom left of the main display.
-#![allow(deprecated)]
-
 mod dispatcher;
 mod display;
 mod display_link;
@@ -55,12 +53,12 @@ mod window;
 mod window_appearance;
 
 use crate::{DevicePixels, Pixels, Size, px, size};
-use cocoa::{
-    base::{id, nil},
-    foundation::{NSAutoreleasePool, NSNotFound, NSRect, NSSize, NSString, NSUInteger},
+use objc2::{
+    msg_send,
+    rc::Retained,
+    runtime::{AnyObject, Bool},
 };
-
-use objc::runtime::{BOOL, NO, YES};
+use objc2_foundation::{NSRect, NSSize, NSString, NSUInteger};
 use std::{
     ffi::{CStr, c_char},
     ops::Range,
@@ -89,12 +87,12 @@ pub(crate) use text_system::*;
 pub(crate) type PlatformScreenCaptureFrame = CVImageBuffer;
 
 trait BoolExt {
-    fn to_objc(self) -> BOOL;
+    fn to_objc(self) -> Bool;
 }
 
 impl BoolExt for bool {
-    fn to_objc(self) -> BOOL {
-        if self { YES } else { NO }
+    fn to_objc(self) -> Bool {
+        if self { Bool::YES } else { Bool::NO }
     }
 }
 
@@ -102,36 +100,37 @@ trait NSStringExt {
     unsafe fn to_str(&self) -> &str;
 }
 
-impl NSStringExt for id {
+impl NSStringExt for *mut AnyObject {
     unsafe fn to_str(&self) -> &str {
         unsafe {
-            let cstr = self.UTF8String();
+            let cstr: *const c_char = msg_send![*self, UTF8String];
             if cstr.is_null() {
                 ""
             } else {
-                CStr::from_ptr(cstr as *mut c_char).to_str().unwrap()
+                CStr::from_ptr(cstr).to_str().unwrap()
             }
         }
     }
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-struct NSRange {
-    pub location: NSUInteger,
-    pub length: NSUInteger,
+pub(crate) use objc2_foundation::NSRange;
+
+trait NSRangeExt {
+    fn invalid() -> Self;
+    fn is_valid(&self) -> bool;
+    fn to_range(self) -> Option<Range<usize>>;
 }
 
-impl NSRange {
+impl NSRangeExt for NSRange {
     fn invalid() -> Self {
         Self {
-            location: NSNotFound as NSUInteger,
+            location: NSUInteger::MAX,
             length: 0,
         }
     }
 
     fn is_valid(&self) -> bool {
-        self.location != NSNotFound as NSUInteger
+        self.location != NSUInteger::MAX
     }
 
     fn to_range(self) -> Option<Range<usize>> {
@@ -145,28 +144,10 @@ impl NSRange {
     }
 }
 
-impl From<Range<usize>> for NSRange {
-    fn from(range: Range<usize>) -> Self {
-        NSRange {
-            location: range.start as NSUInteger,
-            length: range.len() as NSUInteger,
-        }
-    }
-}
-
-unsafe impl objc::Encode for NSRange {
-    fn encode() -> objc::Encoding {
-        let encoding = format!(
-            "{{NSRange={}{}}}",
-            NSUInteger::encode().as_str(),
-            NSUInteger::encode().as_str()
-        );
-        unsafe { objc::Encoding::from_str(&encoding) }
-    }
-}
-
-unsafe fn ns_string(string: &str) -> id {
-    unsafe { NSString::alloc(nil).init_str(string).autorelease() }
+unsafe fn ns_string(string: &str) -> *mut AnyObject {
+    let string = NSString::from_str(string);
+    let string = Retained::into_raw(string);
+    unsafe { msg_send![string, autorelease] }
 }
 
 impl From<NSSize> for Size<Pixels> {
