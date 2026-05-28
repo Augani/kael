@@ -3,6 +3,7 @@
 tdesktop/
 .DS_Store
 .claude/
+.claude-tasks.md
 docs/book/.claude/worktrees/
 examples/native_comparison/
 .playwright-mcp/
