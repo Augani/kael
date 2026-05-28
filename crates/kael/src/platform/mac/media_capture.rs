@@ -3,26 +3,19 @@ use crate::media_capture::{
     CaptureSessionState, DeviceEnumerator, FrameCallback, PixelFormat,
 };
 use anyhow::{Result, anyhow};
-use cocoa::{
-    base::{BOOL, NO, YES, id, nil},
-    foundation::NSUInteger,
-};
 use core_foundation::{base::TCFType, string::CFStringRef};
 use core_video::image_buffer::CVImageBufferRef;
-use ctor::ctor;
 use media::{
     core_media::{CMSampleBuffer, CMSampleBufferRef},
     core_video::kCVPixelFormatType_32BGRA,
 };
-use objc::{
-    class,
-    declare::ClassDecl,
-    msg_send,
-    runtime::{Class, Object, Sel},
-    sel, sel_impl,
-};
+use objc2::rc::Retained;
+use objc2::runtime::{AnyClass, AnyObject};
+use objc2::{AnyThread, DefinedClass, define_class, msg_send};
+use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
+use std::cell::Cell;
 use std::{
-    ffi::c_void,
+    ffi::{CStr, c_void},
     ptr,
     sync::{
         Arc,
@@ -31,15 +24,12 @@ use std::{
     time::Instant,
 };
 
-use super::{
-    NSStringExt,
-    dispatcher::dispatch_sys::{DISPATCH_QUEUE_PRIORITY_HIGH, dispatch_get_global_queue},
-};
+use super::dispatcher::dispatch_sys::{DISPATCH_QUEUE_PRIORITY_HIGH, dispatch_get_global_queue};
 
 #[link(name = "AVFoundation", kind = "framework")]
 unsafe extern "C" {
-    static AVMediaTypeAudio: id;
-    static AVMediaTypeVideo: id;
+    static AVMediaTypeAudio: *mut AnyObject;
+    static AVMediaTypeVideo: *mut AnyObject;
 }
 
 #[link(name = "CoreVideo", kind = "framework")]
@@ -55,27 +45,147 @@ unsafe extern "C" {
     fn CVPixelBufferGetPixelFormatType(pixel_buffer: CVImageBufferRef) -> u32;
 }
 
-static mut VIDEO_OUTPUT_DELEGATE_CLASS: *const Class = ptr::null();
-const VIDEO_OUTPUT_STATE_IVAR: &str = "video_output_state";
+unsafe fn lookup_class(name: &CStr) -> &'static AnyClass {
+    AnyClass::get(name).unwrap_or_else(|| panic!("missing class {name:?}"))
+}
 
-#[ctor(unsafe)]
-unsafe fn build_classes() {
-    if !unsafe { VIDEO_OUTPUT_DELEGATE_CLASS.is_null() } {
-        return;
+unsafe fn ns_string_to_str(s: *mut AnyObject) -> String {
+    if s.is_null() {
+        return String::new();
+    }
+    let ns: &NSString = unsafe { &*(s as *const NSString) };
+    ns.to_string()
+}
+
+unsafe fn release_obj(object: *mut AnyObject) {
+    if !object.is_null() {
+        unsafe {
+            let _: () = msg_send![object, release];
+        }
+    }
+}
+
+#[derive(Default)]
+struct VideoOutputDelegateIvars {
+    state: Cell<*mut c_void>,
+}
+
+define_class!(
+    #[unsafe(super = NSObject)]
+    #[ivars = VideoOutputDelegateIvars]
+    #[name = "GPUICameraVideoOutputDelegate"]
+    struct GPUICameraVideoOutputDelegate;
+
+    unsafe impl NSObjectProtocol for GPUICameraVideoOutputDelegate {}
+
+    impl GPUICameraVideoOutputDelegate {
+        #[unsafe(method(captureOutput:didOutputSampleBuffer:fromConnection:))]
+        fn did_output(
+            &self,
+            _output: *mut AnyObject,
+            sample_buffer: *mut AnyObject,
+            _connection: *mut AnyObject,
+        ) {
+            let state_ptr = self.ivars().state.get();
+            if state_ptr.is_null() || sample_buffer.is_null() {
+                return;
+            }
+
+            let start = Instant::now();
+            let state = unsafe { &*(state_ptr as *const VideoOutputState) };
+            unsafe {
+                let sample_buffer =
+                    CMSampleBuffer::wrap_under_get_rule(sample_buffer as CMSampleBufferRef);
+                let Some(image_buffer) = sample_buffer.image_buffer() else {
+                    state.dropped.fetch_add(1, Ordering::Relaxed);
+                    return;
+                };
+
+                let pixel_buffer = image_buffer.as_concrete_TypeRef();
+                if CVPixelBufferLockBaseAddress(pixel_buffer, 0) != 0 {
+                    state.dropped.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+
+                let pixel_format = CVPixelBufferGetPixelFormatType(pixel_buffer);
+                if pixel_format != kCVPixelFormatType_32BGRA {
+                    let _ = CVPixelBufferUnlockBaseAddress(pixel_buffer, 0);
+                    state.dropped.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+
+                let width = CVPixelBufferGetWidth(pixel_buffer) as u32;
+                let height = CVPixelBufferGetHeight(pixel_buffer) as u32;
+                let bytes_per_row = CVPixelBufferGetBytesPerRow(pixel_buffer);
+                let base_address = CVPixelBufferGetBaseAddress(pixel_buffer) as *const u8;
+                if base_address.is_null() {
+                    let _ = CVPixelBufferUnlockBaseAddress(pixel_buffer, 0);
+                    state.dropped.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+
+                let expected_bytes_per_row = width as usize * 4;
+                let mut data = vec![0u8; expected_bytes_per_row * height as usize];
+                for row in 0..height as usize {
+                    let source = base_address.add(row * bytes_per_row);
+                    let target = &mut data
+                        [row * expected_bytes_per_row..(row + 1) * expected_bytes_per_row];
+                    ptr::copy_nonoverlapping(source, target.as_mut_ptr(), expected_bytes_per_row);
+                }
+
+                let _ = CVPixelBufferUnlockBaseAddress(pixel_buffer, 0);
+
+                let timestamp_ms = sample_buffer
+                    .sample_timing_info(0)
+                    .map(|timing| {
+                        cmtime_to_millis(
+                            timing.presentationTimeStamp.value,
+                            timing.presentationTimeStamp.timescale,
+                        )
+                    })
+                    .unwrap_or_default();
+
+                (state.callback)(crate::media_capture::CaptureFrame::Video {
+                    width,
+                    height,
+                    format: PixelFormat::Bgra32,
+                    data: Arc::new(data),
+                    timestamp_ms,
+                });
+                state
+                    .latency_ms
+                    .store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
+            }
+        }
+
+        #[unsafe(method(captureOutput:didDropSampleBuffer:fromConnection:))]
+        fn did_drop(
+            &self,
+            _output: *mut AnyObject,
+            _sample_buffer: *mut AnyObject,
+            _connection: *mut AnyObject,
+        ) {
+            let state_ptr = self.ivars().state.get();
+            if state_ptr.is_null() {
+                return;
+            }
+            let state = unsafe { &*(state_ptr as *const VideoOutputState) };
+            state.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+);
+
+impl GPUICameraVideoOutputDelegate {
+    fn new(state_ptr: *mut c_void) -> Retained<Self> {
+        let this = Self::alloc().set_ivars(VideoOutputDelegateIvars {
+            state: Cell::new(state_ptr),
+        });
+        unsafe { msg_send![super(this), init] }
     }
 
-    let mut decl = ClassDecl::new("GPUICameraVideoOutputDelegate", class!(NSObject)).unwrap();
-    decl.add_ivar::<*mut c_void>(VIDEO_OUTPUT_STATE_IVAR);
-    unsafe {
-        decl.add_method(
-            sel!(captureOutput:didOutputSampleBuffer:fromConnection:),
-            capture_output_did_output_sample_buffer as extern "C" fn(&Object, Sel, id, id, id),
-        );
-        decl.add_method(
-            sel!(captureOutput:didDropSampleBuffer:fromConnection:),
-            capture_output_did_drop_sample_buffer as extern "C" fn(&Object, Sel, id, id, id),
-        );
-        VIDEO_OUTPUT_DELEGATE_CLASS = decl.register();
+    fn take_state(&self) -> *mut c_void {
+        let ptr = self.ivars().state.replace(ptr::null_mut());
+        ptr
     }
 }
 
@@ -117,10 +227,10 @@ struct MacCameraCaptureSession {
     state: CaptureSessionState,
     dropped: Arc<AtomicU64>,
     latency_ms: Arc<AtomicU64>,
-    capture_session: Option<id>,
-    capture_input: Option<id>,
-    video_output: Option<id>,
-    video_output_delegate: Option<id>,
+    capture_session: Option<*mut AnyObject>,
+    capture_input: Option<*mut AnyObject>,
+    video_output: Option<*mut AnyObject>,
+    video_output_delegate: Option<Retained<GPUICameraVideoOutputDelegate>>,
 }
 
 impl MacCameraCaptureSession {
@@ -151,91 +261,85 @@ impl CaptureSession for MacCameraCaptureSession {
         self.dropped.store(0, Ordering::Relaxed);
         self.latency_ms.store(0, Ordering::Relaxed);
 
-        let session: id = unsafe { msg_send![class!(AVCaptureSession), new] };
-        let video_output: id = unsafe { msg_send![class!(AVCaptureVideoDataOutput), new] };
-        let video_output_delegate: id = unsafe { msg_send![VIDEO_OUTPUT_DELEGATE_CLASS, new] };
-
-        let delegate_state = Box::new(VideoOutputState {
-            callback,
-            dropped: Arc::clone(&self.dropped),
-            latency_ms: Arc::clone(&self.latency_ms),
-        });
         unsafe {
-            (*video_output_delegate).set_ivar(
-                VIDEO_OUTPUT_STATE_IVAR,
-                Box::into_raw(delegate_state) as *mut c_void,
-            );
-        }
+            let session: *mut AnyObject = msg_send![lookup_class(c"AVCaptureSession"), new];
+            let video_output: *mut AnyObject =
+                msg_send![lookup_class(c"AVCaptureVideoDataOutput"), new];
 
-        let input = match unsafe { create_camera_input(&self.config.device_id) } {
-            Ok(input) => input,
-            Err(error) => {
-                unsafe {
-                    release_delegate_state(video_output_delegate);
-                    release_obj(video_output_delegate);
+            let delegate_state = Box::new(VideoOutputState {
+                callback,
+                dropped: Arc::clone(&self.dropped),
+                latency_ms: Arc::clone(&self.latency_ms),
+            });
+            let state_ptr = Box::into_raw(delegate_state) as *mut c_void;
+            let video_output_delegate = GPUICameraVideoOutputDelegate::new(state_ptr);
+
+            let input = match create_camera_input(&self.config.device_id) {
+                Ok(input) => input,
+                Err(error) => {
+                    drop(Box::from_raw(state_ptr as *mut VideoOutputState));
+                    drop(video_output_delegate);
                     release_obj(video_output);
                     release_obj(session);
+                    self.state = CaptureSessionState::Error;
+                    return Err(error);
                 }
+            };
+
+            if let Err(error) = configure_video_output(video_output) {
+                release_obj(input);
+                drop(Box::from_raw(state_ptr as *mut VideoOutputState));
+                drop(video_output_delegate);
+                release_obj(video_output);
+                release_obj(session);
                 self.state = CaptureSessionState::Error;
                 return Err(error);
             }
-        };
 
-        if let Err(error) = unsafe { configure_video_output(video_output) } {
-            unsafe {
+            let can_add_input: bool = msg_send![session, canAddInput: input];
+            let can_add_output: bool = msg_send![session, canAddOutput: video_output];
+            if !can_add_input || !can_add_output {
                 release_obj(input);
-                release_delegate_state(video_output_delegate);
-                release_obj(video_output_delegate);
+                drop(Box::from_raw(state_ptr as *mut VideoOutputState));
+                drop(video_output_delegate);
                 release_obj(video_output);
                 release_obj(session);
+                self.state = CaptureSessionState::Error;
+                anyhow::bail!(
+                    "AVFoundation camera session could not add the selected input/output"
+                );
             }
-            self.state = CaptureSessionState::Error;
-            return Err(error);
-        }
 
-        let can_add_input: BOOL = unsafe { msg_send![session, canAddInput: input] };
-        let can_add_output: BOOL = unsafe { msg_send![session, canAddOutput: video_output] };
-        if can_add_input != YES || can_add_output != YES {
-            unsafe {
-                release_obj(input);
-                release_delegate_state(video_output_delegate);
-                release_obj(video_output_delegate);
-                release_obj(video_output);
-                release_obj(session);
-            }
-            self.state = CaptureSessionState::Error;
-            anyhow::bail!("AVFoundation camera session could not add the selected input/output");
-        }
-
-        unsafe {
             let _: () = msg_send![session, addInput: input];
             let _: () = msg_send![session, addOutput: video_output];
             let queue =
                 dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH.try_into().unwrap(), 0);
-            let _: () = msg_send![video_output, setSampleBufferDelegate: video_output_delegate queue: queue];
+            let queue_obj = queue as *mut c_void;
+            let _: () = msg_send![video_output, setSampleBufferDelegate: &*video_output_delegate, queue: queue_obj];
             let _: () = msg_send![session, startRunning];
-        }
 
-        let is_running: BOOL = unsafe { msg_send![session, isRunning] };
-        if is_running != YES {
-            unsafe {
-                let _: () = msg_send![video_output, setSampleBufferDelegate:nil queue:nil];
+            let is_running: bool = msg_send![session, isRunning];
+            if !is_running {
+                let null_obj: *mut AnyObject = ptr::null_mut();
+                let null_q: *mut c_void = ptr::null_mut();
+                let _: () =
+                    msg_send![video_output, setSampleBufferDelegate: null_obj, queue: null_q];
                 let _: () = msg_send![session, stopRunning];
                 release_obj(input);
-                release_delegate_state(video_output_delegate);
-                release_obj(video_output_delegate);
+                drop(Box::from_raw(state_ptr as *mut VideoOutputState));
+                drop(video_output_delegate);
                 release_obj(video_output);
                 release_obj(session);
+                self.state = CaptureSessionState::Error;
+                anyhow::bail!("AVFoundation camera session failed to start running");
             }
-            self.state = CaptureSessionState::Error;
-            anyhow::bail!("AVFoundation camera session failed to start running");
-        }
 
-        self.capture_session = Some(session);
-        self.capture_input = Some(input);
-        self.video_output = Some(video_output);
-        self.video_output_delegate = Some(video_output_delegate);
-        self.state = CaptureSessionState::Running;
+            self.capture_session = Some(session);
+            self.capture_input = Some(input);
+            self.video_output = Some(video_output);
+            self.video_output_delegate = Some(video_output_delegate);
+            self.state = CaptureSessionState::Running;
+        }
         Ok(())
     }
 
@@ -265,7 +369,10 @@ impl CaptureSession for MacCameraCaptureSession {
     fn stop(&mut self) -> Result<()> {
         if let Some(video_output) = self.video_output {
             unsafe {
-                let _: () = msg_send![video_output, setSampleBufferDelegate:nil queue:nil];
+                let null_obj: *mut AnyObject = ptr::null_mut();
+                let null_q: *mut c_void = ptr::null_mut();
+                let _: () =
+                    msg_send![video_output, setSampleBufferDelegate: null_obj, queue: null_q];
             }
         }
         if let Some(session) = self.capture_session {
@@ -274,10 +381,11 @@ impl CaptureSession for MacCameraCaptureSession {
             }
         }
         if let Some(delegate) = self.video_output_delegate.take() {
-            unsafe {
-                release_delegate_state(delegate);
-                release_obj(delegate);
+            let state_ptr = delegate.take_state();
+            if !state_ptr.is_null() {
+                drop(unsafe { Box::from_raw(state_ptr as *mut VideoOutputState) });
             }
+            drop(delegate);
         }
         if let Some(video_output) = self.video_output.take() {
             unsafe {
@@ -383,30 +491,34 @@ struct VideoOutputState {
     latency_ms: Arc<AtomicU64>,
 }
 
-fn enumerate_devices(kind: CaptureDeviceKind, media_type: id) -> Result<Vec<CaptureDeviceInfo>> {
+fn enumerate_devices(
+    kind: CaptureDeviceKind,
+    media_type: *mut AnyObject,
+) -> Result<Vec<CaptureDeviceInfo>> {
     unsafe {
-        let devices: id = msg_send![class!(AVCaptureDevice), devicesWithMediaType: media_type];
-        if devices == nil {
+        let devices: *mut AnyObject =
+            msg_send![lookup_class(c"AVCaptureDevice"), devicesWithMediaType: media_type];
+        if devices.is_null() {
             return Ok(Vec::new());
         }
 
-        let count: NSUInteger = msg_send![devices, count];
-        let mut result = Vec::with_capacity(count as usize);
+        let count: usize = msg_send![devices, count];
+        let mut result = Vec::with_capacity(count);
         for index in 0..count {
-            let device: id = msg_send![devices, objectAtIndex: index];
-            if device == nil {
+            let device: *mut AnyObject = msg_send![devices, objectAtIndex: index];
+            if device.is_null() {
                 continue;
             }
 
-            let unique_id: id = msg_send![device, uniqueID];
-            let localized_name: id = msg_send![device, localizedName];
-            let connected: BOOL = msg_send![device, isConnected];
+            let unique_id: *mut AnyObject = msg_send![device, uniqueID];
+            let localized_name: *mut AnyObject = msg_send![device, localizedName];
+            let connected: bool = msg_send![device, isConnected];
 
             result.push(CaptureDeviceInfo {
-                id: NSStringExt::to_str(&unique_id).to_string(),
-                name: NSStringExt::to_str(&localized_name).to_string(),
+                id: ns_string_to_str(unique_id),
+                name: ns_string_to_str(localized_name),
                 kind,
-                is_available: connected != NO,
+                is_available: connected,
             });
         }
 
@@ -414,178 +526,70 @@ fn enumerate_devices(kind: CaptureDeviceKind, media_type: id) -> Result<Vec<Capt
     }
 }
 
-unsafe fn create_camera_input(device_id: &str) -> Result<id> {
-    let devices: id =
-        unsafe { msg_send![class!(AVCaptureDevice), devicesWithMediaType: AVMediaTypeVideo] };
-    if devices == nil {
-        anyhow::bail!("AVFoundation did not return any video capture devices");
-    }
-
-    let count: NSUInteger = unsafe { msg_send![devices, count] };
-    let mut selected_device = nil;
-    for index in 0..count {
-        let candidate: id = unsafe { msg_send![devices, objectAtIndex: index] };
-        if candidate == nil {
-            continue;
-        }
-
-        let unique_id: id = unsafe { msg_send![candidate, uniqueID] };
-        if unsafe { NSStringExt::to_str(&unique_id) } == device_id {
-            selected_device = candidate;
-            break;
-        }
-    }
-
-    if selected_device == nil {
-        anyhow::bail!("camera device `{device_id}` is no longer available");
-    }
-
-    let mut error: id = nil;
-    let input: id = unsafe {
-        msg_send![class!(AVCaptureDeviceInput), deviceInputWithDevice:selected_device error:&mut error]
-    };
-    if input == nil {
-        if error != nil {
-            let description: id = unsafe { msg_send![error, localizedDescription] };
-            anyhow::bail!("failed to open camera `{device_id}`: {}", unsafe {
-                NSStringExt::to_str(&description)
-            });
-        }
-        anyhow::bail!("failed to create an AVFoundation input for `{device_id}`");
-    }
-
-    Ok(input)
-}
-
-unsafe fn configure_video_output(video_output: id) -> Result<()> {
-    let pixel_format: id =
-        unsafe { msg_send![class!(NSNumber), numberWithUnsignedInt:kCVPixelFormatType_32BGRA] };
-    let settings: id = unsafe {
-        msg_send![
-            class!(NSDictionary),
-            dictionaryWithObject: pixel_format
-            forKey: kCVPixelBufferPixelFormatTypeKey as id
-        ]
-    };
-    let _: () = unsafe { msg_send![video_output, setVideoSettings: settings] };
-    let _: () = unsafe { msg_send![video_output, setAlwaysDiscardsLateVideoFrames: YES] };
-    Ok(())
-}
-
-unsafe fn release_delegate_state(delegate: id) {
-    if delegate == nil {
-        return;
-    }
-
-    let delegate = unsafe { delegate.as_ref() }.unwrap();
-    let state_ptr = unsafe { *delegate.get_ivar::<*mut c_void>(VIDEO_OUTPUT_STATE_IVAR) };
-    if !state_ptr.is_null() {
-        drop(unsafe { Box::from_raw(state_ptr as *mut VideoOutputState) });
-        unsafe {
-            (*(delegate as *const Object as *mut Object))
-                .set_ivar(VIDEO_OUTPUT_STATE_IVAR, ptr::null_mut::<c_void>());
-        }
-    }
-}
-
-unsafe fn release_obj(object: id) {
-    if object != nil {
-        let _: () = unsafe { msg_send![object, release] };
-    }
-}
-
-extern "C" fn capture_output_did_output_sample_buffer(
-    this: &Object,
-    _: Sel,
-    _output: id,
-    sample_buffer: id,
-    _connection: id,
-) {
-    let state_ptr = unsafe { *this.get_ivar::<*mut c_void>(VIDEO_OUTPUT_STATE_IVAR) };
-    if state_ptr.is_null() || sample_buffer == nil {
-        return;
-    }
-
-    let start = Instant::now();
-    let state = unsafe { &*(state_ptr as *const VideoOutputState) };
+unsafe fn create_camera_input(device_id: &str) -> Result<*mut AnyObject> {
     unsafe {
-        let sample_buffer = CMSampleBuffer::wrap_under_get_rule(sample_buffer as CMSampleBufferRef);
-        let Some(image_buffer) = sample_buffer.image_buffer() else {
-            state.dropped.fetch_add(1, Ordering::Relaxed);
-            return;
-        };
-
-        let pixel_buffer = image_buffer.as_concrete_TypeRef();
-        if CVPixelBufferLockBaseAddress(pixel_buffer, 0) != 0 {
-            state.dropped.fetch_add(1, Ordering::Relaxed);
-            return;
+        let devices: *mut AnyObject =
+            msg_send![lookup_class(c"AVCaptureDevice"), devicesWithMediaType: AVMediaTypeVideo];
+        if devices.is_null() {
+            anyhow::bail!("AVFoundation did not return any video capture devices");
         }
 
-        let pixel_format = CVPixelBufferGetPixelFormatType(pixel_buffer);
-        if pixel_format != kCVPixelFormatType_32BGRA {
-            let _ = CVPixelBufferUnlockBaseAddress(pixel_buffer, 0);
-            state.dropped.fetch_add(1, Ordering::Relaxed);
-            return;
+        let count: usize = msg_send![devices, count];
+        let mut selected_device: *mut AnyObject = ptr::null_mut();
+        for index in 0..count {
+            let candidate: *mut AnyObject = msg_send![devices, objectAtIndex: index];
+            if candidate.is_null() {
+                continue;
+            }
+
+            let unique_id: *mut AnyObject = msg_send![candidate, uniqueID];
+            if ns_string_to_str(unique_id) == device_id {
+                selected_device = candidate;
+                break;
+            }
         }
 
-        let width = CVPixelBufferGetWidth(pixel_buffer) as u32;
-        let height = CVPixelBufferGetHeight(pixel_buffer) as u32;
-        let bytes_per_row = CVPixelBufferGetBytesPerRow(pixel_buffer);
-        let base_address = CVPixelBufferGetBaseAddress(pixel_buffer) as *const u8;
-        if base_address.is_null() {
-            let _ = CVPixelBufferUnlockBaseAddress(pixel_buffer, 0);
-            state.dropped.fetch_add(1, Ordering::Relaxed);
-            return;
+        if selected_device.is_null() {
+            anyhow::bail!("camera device `{device_id}` is no longer available");
         }
 
-        let expected_bytes_per_row = width as usize * 4;
-        let mut data = vec![0u8; expected_bytes_per_row * height as usize];
-        for row in 0..height as usize {
-            let source = base_address.add(row * bytes_per_row);
-            let target =
-                &mut data[row * expected_bytes_per_row..(row + 1) * expected_bytes_per_row];
-            ptr::copy_nonoverlapping(source, target.as_mut_ptr(), expected_bytes_per_row);
+        let mut error: *mut AnyObject = ptr::null_mut();
+        let input: *mut AnyObject = msg_send![
+            lookup_class(c"AVCaptureDeviceInput"),
+            deviceInputWithDevice: selected_device,
+            error: &mut error
+        ];
+        if input.is_null() {
+            if !error.is_null() {
+                let description: *mut AnyObject = msg_send![error, localizedDescription];
+                anyhow::bail!(
+                    "failed to open camera `{device_id}`: {}",
+                    ns_string_to_str(description)
+                );
+            }
+            anyhow::bail!("failed to create an AVFoundation input for `{device_id}`");
         }
 
-        let _ = CVPixelBufferUnlockBaseAddress(pixel_buffer, 0);
-
-        let timestamp_ms = sample_buffer
-            .sample_timing_info(0)
-            .map(|timing| {
-                cmtime_to_millis(
-                    timing.presentationTimeStamp.value,
-                    timing.presentationTimeStamp.timescale,
-                )
-            })
-            .unwrap_or_default();
-
-        (state.callback)(crate::media_capture::CaptureFrame::Video {
-            width,
-            height,
-            format: PixelFormat::Bgra32,
-            data: Arc::new(data),
-            timestamp_ms,
-        });
-        state
-            .latency_ms
-            .store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
+        Ok(input)
     }
 }
 
-extern "C" fn capture_output_did_drop_sample_buffer(
-    this: &Object,
-    _: Sel,
-    _output: id,
-    _sample_buffer: id,
-    _connection: id,
-) {
-    let state_ptr = unsafe { *this.get_ivar::<*mut c_void>(VIDEO_OUTPUT_STATE_IVAR) };
-    if state_ptr.is_null() {
-        return;
+unsafe fn configure_video_output(video_output: *mut AnyObject) -> Result<()> {
+    unsafe {
+        let pixel_format: *mut AnyObject = msg_send![
+            lookup_class(c"NSNumber"),
+            numberWithUnsignedInt: kCVPixelFormatType_32BGRA
+        ];
+        let key_ptr = kCVPixelBufferPixelFormatTypeKey as *mut AnyObject;
+        let settings: *mut AnyObject = msg_send![
+            lookup_class(c"NSDictionary"),
+            dictionaryWithObject: pixel_format,
+            forKey: key_ptr
+        ];
+        let _: () = msg_send![video_output, setVideoSettings: settings];
+        let _: () = msg_send![video_output, setAlwaysDiscardsLateVideoFrames: true];
     }
-
-    let state = unsafe { &*(state_ptr as *const VideoOutputState) };
-    state.dropped.fetch_add(1, Ordering::Relaxed);
+    Ok(())
 }
 
 fn cmtime_to_millis(value: i64, timescale: i32) -> u64 {
