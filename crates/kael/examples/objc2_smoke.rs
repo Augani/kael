@@ -57,8 +57,11 @@ impl Logger {
             lines.drain(0..overflow);
         }
         drop(lines);
-        if let Some(entity) = self.entity.borrow().as_ref() {
-            entity.update(cx, |_, cx| cx.notify());
+        let entity = self.entity.borrow().clone();
+        if let Some(entity) = entity {
+            cx.defer(move |cx| {
+                entity.update(cx, |_, cx| cx.notify());
+            });
         }
     }
 }

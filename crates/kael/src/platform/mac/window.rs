@@ -3183,7 +3183,7 @@ extern "C" fn handle_view_event(this: id, _: Sel, native_event: id) {
                 drop(lock);
                 unsafe {
                     let input_context: id = msg_send![this, inputContext];
-                    msg_send![input_context, handleEvent: native_event]
+                    let _: BOOL = msg_send![input_context, handleEvent: native_event];
                 }
                 lock = window_state.as_ref().lock();
             }
@@ -3576,7 +3576,7 @@ fn get_frame(this: id) -> NSRect {
 extern "C" fn insert_text(this: id, _: Sel, text: id, replacement_range: NSRange) {
     unsafe {
         let is_attributed_string: BOOL =
-            msg_send![text, isKindOfClass: [lookup_class(c"NSAttributedString")]];
+            msg_send![text, isKindOfClass: lookup_class(c"NSAttributedString")];
         let text: id = if is_attributed_string == YES {
             msg_send![text, string]
         } else {
@@ -3600,7 +3600,7 @@ extern "C" fn set_marked_text(
 ) {
     unsafe {
         let is_attributed_string: BOOL =
-            msg_send![text, isKindOfClass: [lookup_class(c"NSAttributedString")]];
+            msg_send![text, isKindOfClass: lookup_class(c"NSAttributedString")];
         let text: id = if is_attributed_string == YES {
             msg_send![text, string]
         } else {
