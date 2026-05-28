@@ -14,7 +14,7 @@ use cocoa::{
 };
 use core_foundation::data::{CFDataGetBytePtr, CFDataRef};
 use core_graphics::event::CGKeyCode;
-use objc::{msg_send, sel, sel_impl};
+use objc::{msg_send, runtime::Object, sel, sel_impl};
 use std::{borrow::Cow, ffi::c_void};
 
 const BACKSPACE_KEY: u16 = 0x7f;
@@ -518,7 +518,7 @@ fn chars_for_modified_key(code: CGKeyCode, modifiers: u32) -> String {
     };
     if layout_data.is_null() {
         unsafe {
-            let _: () = msg_send![keyboard, release];
+            let _: () = msg_send![keyboard as *mut Object, release];
         }
         return "".to_string();
     }
@@ -551,7 +551,7 @@ fn chars_for_modified_key(code: CGKeyCode, modifiers: u32) -> String {
                 &mut buffer as *mut u16,
             );
         }
-        let _: () = msg_send![keyboard, release];
+        let _: () = msg_send![keyboard as *mut Object, release];
     }
     String::from_utf16(&buffer[..buffer_size]).unwrap_or_default()
 }
