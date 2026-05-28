@@ -3660,6 +3660,7 @@ dependencies = [
  "blade-macros",
  "blade-util",
  "block",
+ "block2",
  "bytemuck",
  "calloop",
  "calloop-wayland-source",

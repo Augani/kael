@@ -600,6 +600,9 @@ package = "zed-scap"
 [target.'cfg(target_os = "macos")'.dependencies.block]
 version = "0.1"
 
+[target.'cfg(target_os = "macos")'.dependencies.block2]
+version = "0.6"
+
 [target.'cfg(target_os = "macos")'.dependencies.cocoa]
 version = "0.26"
 
