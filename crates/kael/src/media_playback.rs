@@ -336,12 +336,10 @@ fn video_frame_delay(frames: &[VideoFrame], index: usize) -> Delay {
         .or_else(|| {
             index
                 .checked_sub(1)
-                .and_then(|previous| {
-                    Some(
-                        frames[index]
-                            .timestamp
-                            .saturating_sub(frames[previous].timestamp),
-                    )
+                .map(|previous| {
+                    frames[index]
+                        .timestamp
+                        .saturating_sub(frames[previous].timestamp)
                 })
                 .filter(|delay| !delay.is_zero())
         })
@@ -710,13 +708,7 @@ fn buffer_strategy_for_motion(
     } else {
         estimated_frame_interval
     };
-    let movement = previous_position.map(|previous_position| {
-        if position >= previous_position {
-            position - previous_position
-        } else {
-            previous_position - position
-        }
-    });
+    let movement = previous_position.map(|previous_position| position.abs_diff(previous_position));
     let moved_backward =
         previous_position.is_some_and(|previous_position| position < previous_position);
     let movement_frames = movement

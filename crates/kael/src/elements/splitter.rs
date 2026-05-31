@@ -1,13 +1,13 @@
 use super::local_history::{
-    WindowValueHistory, ensure_local_undo_redo_bindings, local_undo_redo_key_context,
-    register_focused_action_handler_when,
+    ensure_local_undo_redo_bindings, local_undo_redo_key_context,
+    register_focused_action_handler_when, WindowValueHistory,
 };
 use crate::{
-    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
-    AccessibilityValue, App, BorderStyle, Bounds, CursorStyle, DispatchPhase, Element, ElementId,
-    GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, Interactivity, IntoElement,
-    KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, Redo, Undo, Window, fill, outline, point, px, relative, size,
+    fill, outline, point, px, relative, size, AccessibilityAction, AccessibilityAttributes,
+    AccessibilityRole, AccessibilityState, AccessibilityValue, App, BorderStyle, Bounds,
+    CursorStyle, DispatchPhase, Element, ElementId, GlobalElementId, Hitbox, HitboxBehavior,
+    InspectorElementId, Interactivity, IntoElement, KeyDownEvent, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Redo, Undo, Window,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -37,6 +37,15 @@ impl SplitterPersistentState {
 
     fn sync_from_props(&mut self, value: Pixels) {
         if self.value == value {
+            return;
+        }
+
+        // A controlled caller that writes the reported value back into the
+        // `value` prop (directly, or via inverted/quantized mapping for a
+        // far-anchored pane) would otherwise cancel the live gesture on the
+        // next frame. Keep the in-progress drag authoritative; the prop is
+        // re-adopted on the first frame after the drag ends.
+        if self.drag_state.is_some() {
             return;
         }
 
@@ -584,7 +593,7 @@ fn splitter_fraction(value: Pixels, range: (Pixels, Pixels)) -> f64 {
     if span <= Pixels::ZERO {
         0.0
     } else {
-        ((value.0 - range.0.0) / span.0).clamp(0.0, 1.0) as f64
+        ((value.0 - range.0 .0) / span.0).clamp(0.0, 1.0) as f64
     }
 }
 
@@ -677,7 +686,7 @@ mod tests {
     use super::*;
     use crate::elements::div::InteractiveElement;
     use crate::{
-        Context, Modifiers, MouseButton, ParentElement, Render, Styled, TestAppContext, div,
+        div, Context, Modifiers, MouseButton, ParentElement, Render, Styled, TestAppContext,
     };
     use std::{cell::Cell, rc::Rc};
 

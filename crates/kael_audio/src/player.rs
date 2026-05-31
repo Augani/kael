@@ -1,6 +1,6 @@
 //! Audio player and track types.
 
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, path::PathBuf, rc::Rc, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use parking_lot::Mutex;
@@ -116,7 +116,7 @@ const MAX_DECODED_AUDIO_BYTES: u64 = 256 * 1024 * 1024;
 /// A clonable audio player that wraps `kael-media` playback.
 #[derive(Clone)]
 pub struct AudioPlayer {
-    inner: Arc<Mutex<AudioPlayerState>>,
+    inner: Rc<Mutex<AudioPlayerState>>,
 }
 
 struct AudioPlayerState {
@@ -136,7 +136,7 @@ impl AudioPlayer {
     /// Creates a new audio player.
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(AudioPlayerState {
+            inner: Rc::new(Mutex::new(AudioPlayerState {
                 current_track: None,
                 handle: None,
                 playback_state: PlaybackState::Idle,
@@ -158,7 +158,7 @@ impl AudioPlayer {
         channels: u16,
         bits_per_sample: u16,
     ) -> bool {
-        let bytes_per_sample = (bits_per_sample as u64 + 7) / 8;
+        let bytes_per_sample = (bits_per_sample as u64).div_ceil(8);
         let total = (duration.as_secs_f64() * sample_rate as f64) as u64
             * channels as u64
             * bytes_per_sample;

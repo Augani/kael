@@ -12,6 +12,7 @@ use std::{
     hash::{Hash, Hasher},
     io::{self, BufReader, Cursor, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    rc::Rc,
     sync::Arc,
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
@@ -497,7 +498,7 @@ struct AudioProbeRequest {
 /// A clonable controller for audio playback.
 #[derive(Clone)]
 pub struct AudioHandle {
-    state: Arc<Mutex<AudioHandleState>>,
+    state: Rc<Mutex<AudioHandleState>>,
 }
 
 impl fmt::Debug for AudioHandle {
@@ -517,7 +518,7 @@ impl AudioHandle {
     /// Create a new audio handle for the given source.
     pub fn new(source: impl Into<MediaSource>) -> Self {
         Self {
-            state: Arc::new(Mutex::new(AudioHandleState {
+            state: Rc::new(Mutex::new(AudioHandleState {
                 source: source.into(),
                 volume: 1.0,
                 duration: None,
@@ -1242,7 +1243,6 @@ mod tests {
     fn duration_probe_works_for_reader_backed_wav() {
         let wav = Arc::<[u8]>::from(silent_wav(8_000, 8_000));
         let handle = AudioHandle::new(MediaSource::reader("reader-wav", {
-            let wav = wav.clone();
             move || Ok(Cursor::new(wav.clone()))
         }));
 
@@ -1280,7 +1280,6 @@ mod tests {
     fn video_decoder_accepts_reader_backed_sources() {
         let payload = Arc::<[u8]>::from([0u8; 16]);
         let decoder = MediaDecoder::new(MediaSource::reader("reader-video", {
-            let payload = payload.clone();
             move || Ok(Cursor::new(payload.clone()))
         }));
 

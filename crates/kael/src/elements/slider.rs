@@ -1,13 +1,14 @@
 use super::local_history::{
-    WindowValueHistory, ensure_local_undo_redo_bindings, local_undo_redo_key_context,
-    register_focused_action_handler_when,
+    ensure_local_undo_redo_bindings, local_undo_redo_key_context,
+    register_focused_action_handler_when, WindowValueHistory,
 };
 use crate::{
-    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
-    AccessibilityValue, App, BorderStyle, Bounds, CursorStyle, DispatchPhase, Element, ElementId,
-    GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, InteractiveElement, Interactivity,
-    IntoElement, KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Pixels, Point, Redo, Styled, Undo, Window, fill, outline, point, px, relative, size,
+    fill, outline, point, px, relative, size, AccessibilityAction, AccessibilityAttributes,
+    AccessibilityRole, AccessibilityState, AccessibilityValue, App, BorderStyle, Bounds,
+    CursorStyle, DispatchPhase, Element, ElementId, GlobalElementId, Hitbox, HitboxBehavior,
+    InspectorElementId, InteractiveElement, Interactivity, IntoElement, KeyDownEvent, LayoutId,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Redo, Styled, Undo,
+    Window,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -36,6 +37,14 @@ impl SliderPersistentState {
 
     fn sync_from_props(&mut self, value: f64) {
         if slider_values_equal(self.value, value) {
+            return;
+        }
+
+        // Keep an in-progress drag authoritative: a controlled caller that
+        // dispatches on_change and feeds the (possibly quantized/clamped)
+        // model value back into this prop must not cancel the live gesture.
+        // The prop is re-adopted on the first frame after the drag ends.
+        if self.drag_state.is_some() {
             return;
         }
 
@@ -734,7 +743,7 @@ fn slider_value_for_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Context, Modifiers, MouseButton, ParentElement, Render, TestAppContext, div};
+    use crate::{div, Context, Modifiers, MouseButton, ParentElement, Render, TestAppContext};
     use std::cell::Cell;
 
     struct SliderView {
