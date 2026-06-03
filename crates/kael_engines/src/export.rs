@@ -60,6 +60,62 @@ pub fn encode_ppm(image: &Image) -> Vec<u8> {
     bytes
 }
 
+fn next_ppm_uint(bytes: &[u8], pos: &mut usize) -> Option<u32> {
+    loop {
+        while *pos < bytes.len() && bytes[*pos].is_ascii_whitespace() {
+            *pos += 1;
+        }
+        if *pos < bytes.len() && bytes[*pos] == b'#' {
+            while *pos < bytes.len() && bytes[*pos] != b'\n' {
+                *pos += 1;
+            }
+        } else {
+            break;
+        }
+    }
+    let start = *pos;
+    while *pos < bytes.len() && bytes[*pos].is_ascii_digit() {
+        *pos += 1;
+    }
+    if *pos == start {
+        return None;
+    }
+    std::str::from_utf8(&bytes[start..*pos]).ok()?.parse().ok()
+}
+
+/// Decode a binary PPM (P6) into an [`Image`] (8-bit RGB → `f32`, alpha 1.0) — the decode
+/// counterpart to [`encode_ppm`]. Tolerates header comments and whitespace; returns
+/// `None` on malformed input or a non-255 max value.
+pub fn decode_ppm(bytes: &[u8]) -> Option<Image> {
+    if bytes.len() < 2 || &bytes[0..2] != b"P6" {
+        return None;
+    }
+    let mut pos = 2;
+    let width = next_ppm_uint(bytes, &mut pos)?;
+    let height = next_ppm_uint(bytes, &mut pos)?;
+    let maxval = next_ppm_uint(bytes, &mut pos)?;
+    if maxval != 255 {
+        return None;
+    }
+    // Exactly one whitespace byte separates the max value from the binary data.
+    pos += 1;
+    let pixel_count = (width as usize).checked_mul(height as usize)?;
+    let data = bytes.get(pos..pos.checked_add(pixel_count * 3)?)?;
+    let mut image = Image::new(width, height);
+    image.pixels = data
+        .chunks_exact(3)
+        .map(|rgb| {
+            [
+                rgb[0] as f32 / 255.0,
+                rgb[1] as f32 / 255.0,
+                rgb[2] as f32 / 255.0,
+                1.0,
+            ]
+        })
+        .collect();
+    Some(image)
+}
+
 /// Encode interleaved `samples` as a 16-bit PCM WAV (RIFF/WAVE) file — the dependency-free
 /// audio export target, the [`mix_range`](crate::audio_mix::mix_range) counterpart to
 /// [`encode_ppm`]. Float samples are clamped to `-1.0..=1.0` and quantized to `i16`.
@@ -244,6 +300,28 @@ mod tests {
         let ppm = encode_ppm(&image);
         // 1.5 -> 255, -0.5 -> 0, 0.5 -> round(127.5) = 128.
         assert_eq!(&ppm[ppm.len() - 3..], &[255, 0, 128]);
+    }
+
+    #[test]
+    fn ppm_round_trips_through_encode_decode() {
+        let mut image = Image::new(2, 1);
+        image.pixels = vec![[1.0, 0.0, 0.0, 1.0], [0.0, 0.5, 1.0, 1.0]];
+        let decoded = decode_ppm(&encode_ppm(&image)).unwrap();
+        assert_eq!((decoded.width, decoded.height), (2, 1));
+        for (got, want) in decoded.pixels.iter().zip(&image.pixels) {
+            for channel in 0..4 {
+                assert!(
+                    (got[channel] - want[channel]).abs() < 1.0 / 255.0 + 1e-6,
+                    "{got:?} vs {want:?}"
+                );
+            }
+        }
+        // Header comments and whitespace are tolerated.
+        let commented = b"P6\n# a comment\n2 1\n255\n\xff\x00\x00\x00\x80\xff";
+        assert!(decode_ppm(commented).is_some());
+        // Malformed input is rejected.
+        assert!(decode_ppm(b"P3 plain ppm").is_none());
+        assert!(decode_ppm(&encode_ppm(&image)[..5]).is_none());
     }
 
     #[test]
