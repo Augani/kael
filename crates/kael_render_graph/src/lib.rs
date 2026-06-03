@@ -1560,6 +1560,32 @@ pub mod reference {
         })
     }
 
+    /// A single-input white-balance op adjusting `temperature` (warm/cool) and `tint`
+    /// (green/magenta), each normalized to `-1..=1`, via the simple per-channel-gain
+    /// model: `r *= 1 + temperature`, `b *= 1 - temperature`, `g *= 1 - tint` (so a
+    /// positive `temperature` warms by raising red and lowering blue, and a positive
+    /// `tint` shifts toward magenta by lowering green). Channels clamp to `0..=1` and
+    /// alpha is passed through. `(0, 0)` is the identity. This is the lightweight UI
+    /// control, not a chromatic-adaptation transform (that lives in `video_color`).
+    pub fn temperature_tint(temperature: f32, tint: f32) -> PassOp<'static> {
+        let red_gain = 1.0 + temperature;
+        let green_gain = 1.0 - tint;
+        let blue_gain = 1.0 - temperature;
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            for (output_pixel, source_pixel) in output.pixels.iter_mut().zip(&source.pixels) {
+                *output_pixel = [
+                    (source_pixel[0] * red_gain).clamp(0.0, 1.0),
+                    (source_pixel[1] * green_gain).clamp(0.0, 1.0),
+                    (source_pixel[2] * blue_gain).clamp(0.0, 1.0),
+                    source_pixel[3],
+                ];
+            }
+        })
+    }
+
     /// A single-input op that mirrors `inputs[0]` left-to-right.
     pub fn flip_horizontal() -> PassOp<'static> {
         Box::new(|inputs, output| {
@@ -2301,6 +2327,49 @@ pub mod reference {
             assert!((out.pixel(0, 0)[1] - 0.4).abs() < 1e-6);
             assert!((out.pixel(0, 0)[2] - 1.0).abs() < 1e-6);
             assert_eq!(out.pixel(0, 0)[3], 0.5);
+        }
+
+        #[test]
+        fn temperature_tint_neutral_is_identity() {
+            let source = Image::filled(2, 2, [0.3, 0.5, 0.7, 0.8]);
+            let mut out = Image::new(2, 2);
+            temperature_tint(0.0, 0.0)(&[&source], &mut out);
+            assert_eq!(out.pixels, source.pixels);
+        }
+
+        #[test]
+        fn temperature_warms_and_cools_red_blue_axis() {
+            let gray = Image::filled(1, 1, [0.5, 0.5, 0.5, 1.0]);
+
+            // Warming raises red, lowers blue, leaves green and alpha alone.
+            let mut warm = Image::new(1, 1);
+            temperature_tint(0.5, 0.0)(&[&gray], &mut warm);
+            assert!((warm.pixel(0, 0)[0] - 0.75).abs() < 1e-6);
+            assert!((warm.pixel(0, 0)[1] - 0.5).abs() < 1e-6);
+            assert!((warm.pixel(0, 0)[2] - 0.25).abs() < 1e-6);
+            assert_eq!(warm.pixel(0, 0)[3], 1.0);
+
+            // Cooling is the mirror image: blue up, red down.
+            let mut cool = Image::new(1, 1);
+            temperature_tint(-0.5, 0.0)(&[&gray], &mut cool);
+            assert!((cool.pixel(0, 0)[0] - 0.25).abs() < 1e-6);
+            assert!((cool.pixel(0, 0)[2] - 0.75).abs() < 1e-6);
+        }
+
+        #[test]
+        fn tint_shifts_green_magenta_axis_and_clamps() {
+            let gray = Image::filled(1, 1, [0.5, 0.5, 0.5, 1.0]);
+
+            // Positive tint moves toward magenta: green drops, red/blue unchanged.
+            let mut magenta = Image::new(1, 1);
+            temperature_tint(0.0, 0.5)(&[&gray], &mut magenta);
+            assert!((magenta.pixel(0, 0)[1] - 0.25).abs() < 1e-6);
+            assert!((magenta.pixel(0, 0)[0] - 0.5).abs() < 1e-6);
+
+            // Negative tint adds green, clamped to the display ceiling.
+            let mut green = Image::new(1, 1);
+            temperature_tint(0.0, -2.0)(&[&gray], &mut green);
+            assert!((green.pixel(0, 0)[1] - 1.0).abs() < 1e-6);
         }
 
         #[test]
