@@ -3693,6 +3693,7 @@ dependencies = [
  "kael_collections",
  "kael_diagnostics",
  "kael_document",
+ "kael_gpu_budget",
  "kael_http_client",
  "kael_icons",
  "kael_media_sys",

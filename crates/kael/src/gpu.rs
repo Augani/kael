@@ -7,53 +7,9 @@
 //! cached GPU texture/buffer with the manager, `touch` it on use, and call
 //! [`GpuMemoryManager::ensure_available`] before a large allocation.
 
-/// A snapshot of GPU memory budget and usage for the default device.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GpuMemoryBudget {
-    /// The device-recommended maximum working-set size, in bytes.
-    pub total_bytes: u64,
-    /// Bytes currently allocated on the device by this process.
-    pub used_bytes: u64,
-    /// Whether the device shares memory with the CPU (unified memory).
-    pub has_unified_memory: bool,
-}
-
-impl GpuMemoryBudget {
-    /// Bytes still available within the device budget.
-    pub fn available_bytes(&self) -> u64 {
-        self.total_bytes.saturating_sub(self.used_bytes)
-    }
-
-    /// Fraction of the budget currently in use, in `0.0..=1.0`.
-    pub fn utilization(&self) -> f64 {
-        if self.total_bytes == 0 {
-            0.0
-        } else {
-            (self.used_bytes as f64 / self.total_bytes as f64).clamp(0.0, 1.0)
-        }
-    }
-
-    /// Query the default GPU's budget, or `None` if it is unavailable on this
-    /// platform/backend.
-    pub fn query() -> Option<Self> {
-        platform_query()
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn platform_query() -> Option<GpuMemoryBudget> {
-    let device = metal::Device::system_default()?;
-    Some(GpuMemoryBudget {
-        total_bytes: device.recommended_max_working_set_size(),
-        used_bytes: device.current_allocated_size() as u64,
-        has_unified_memory: device.has_unified_memory(),
-    })
-}
-
-#[cfg(not(target_os = "macos"))]
-fn platform_query() -> Option<GpuMemoryBudget> {
-    None
-}
+/// A snapshot of GPU memory budget and usage for the default device, with a real
+/// query on every backend (Metal / DXGI / Vulkan) via [`kael_gpu_budget`].
+pub use kael_gpu_budget::GpuMemoryBudget;
 
 /// Identifier for a resource registered with a [`GpuMemoryManager`].
 pub type GpuResourceId = u64;

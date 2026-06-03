@@ -150,6 +150,11 @@ path = "../kael_release"
 package = "kael_release"
 version = "0.1.0"
 
+[dependencies.kael_gpu_budget]
+path = "../kael_gpu_budget"
+package = "kael_gpu_budget"
+version = "0.1.0"
+
 [dependencies.blade-graphics]
 version = "0.8"
 optional = true
