@@ -718,6 +718,27 @@ impl Timeline {
         }
         self.recompute_duration();
     }
+
+    /// Ripple-delete the time range `[start, start + length)` from every track — the
+    /// multi-track "extract" edit and the inverse of [`ripple_insert_gap`](Self::ripple_insert_gap).
+    /// Clips straddling either boundary are split, clips fully inside the range are removed,
+    /// and everything after the range ripples left by `length` so all tracks stay in sync. A
+    /// zero `length` is a no-op.
+    pub fn ripple_delete_range(&mut self, start: u64, length: u64) {
+        if length == 0 {
+            return;
+        }
+        let end = start + length;
+        for track in &mut self.tracks {
+            track.split_at(start);
+            track.split_at(end);
+            track
+                .clips
+                .retain(|clip| !(clip.track_offset >= start && clip.track_end() <= end));
+        }
+        self.ripple_close_gap(start, length);
+        self.recompute_duration();
+    }
 }
 
 /// A request to generate a thumbnail from a media source.
@@ -1127,6 +1148,76 @@ mod tests {
             tl.ripple_insert(5, sample_clip("x", 0, 5, 0)),
             Err(TimelineEditError::OutOfBounds)
         ));
+    }
+
+    #[test]
+    fn ripple_delete_range_extracts_and_closes_across_tracks() {
+        let make = || {
+            vec![
+                sample_clip("before", 0, 5, 0),  // [0,5)
+                sample_clip("mid", 0, 20, 10),   // [10,30) - removed
+                sample_clip("after", 0, 10, 30), // [30,40)
+            ]
+        };
+        let mut tl = Timeline {
+            tracks: vec![
+                sample_track("v1", TrackType::Video, make()),
+                sample_track("v2", TrackType::Video, make()),
+            ],
+            frame_rate: 30.0,
+            duration_frames: 40,
+        };
+        tl.ripple_delete_range(10, 20);
+
+        for track in &tl.tracks {
+            assert_eq!(track.clips.len(), 2, "the mid clip is removed");
+            let before = track.clips.iter().find(|c| c.id == "before").unwrap();
+            assert_eq!(before.track_offset, 0); // untouched
+            let after = track.clips.iter().find(|c| c.id == "after").unwrap();
+            assert_eq!(after.track_offset, 10); // rippled left by 20 (30 -> 10)
+        }
+        assert_eq!(tl.duration_frames, 20);
+    }
+
+    #[test]
+    fn ripple_delete_range_splits_a_straddling_clip() {
+        let mut tl = Timeline {
+            tracks: vec![sample_track(
+                "v1",
+                TrackType::Video,
+                vec![sample_clip("a", 0, 40, 0)], // [0,40) spans the whole range
+            )],
+            frame_rate: 30.0,
+            duration_frames: 40,
+        };
+        // Remove the middle [10,30): the clip is split at both edges; the inner part goes.
+        tl.ripple_delete_range(10, 20);
+        // Left part [0,10) stays; right part [30,40) ripples to [10,20).
+        let offsets: Vec<(u64, u64)> = tl.tracks[0]
+            .clips
+            .iter()
+            .map(|c| (c.track_offset, c.track_end()))
+            .collect();
+        assert!(offsets.contains(&(0, 10)));
+        assert!(offsets.contains(&(10, 20)));
+        assert_eq!(tl.tracks[0].clips.len(), 2);
+        assert_eq!(tl.duration_frames, 20);
+    }
+
+    #[test]
+    fn ripple_delete_range_zero_length_is_a_noop() {
+        let mut tl = Timeline {
+            tracks: vec![sample_track(
+                "v1",
+                TrackType::Video,
+                vec![sample_clip("a", 0, 20, 10)],
+            )],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        tl.ripple_delete_range(5, 0);
+        assert_eq!(tl.tracks[0].clips.len(), 1);
+        assert_eq!(tl.tracks[0].clips[0].track_offset, 10);
     }
 
     #[test]
