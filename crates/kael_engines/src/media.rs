@@ -261,6 +261,22 @@ pub struct TrackFrameRequest {
     pub effects: EffectStack,
 }
 
+/// Two clips overlapping on one track at a frame — a crossfade transition between the
+/// outgoing clip (ending) and the incoming clip (starting).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Transition {
+    /// The id of the outgoing clip (the one that started earlier).
+    pub outgoing: String,
+    /// The id of the incoming clip (the one that started later).
+    pub incoming: String,
+    /// The source frame to present from the outgoing clip.
+    pub outgoing_source_frame: u64,
+    /// The source frame to present from the incoming clip.
+    pub incoming_source_frame: u64,
+    /// Mix position across the overlap: `0.0` is fully outgoing, `1.0` fully incoming.
+    pub progress: f32,
+}
+
 impl TimelineTrack {
     fn clip_index(&self, id: &str) -> Result<usize, TimelineEditError> {
         self.clips
@@ -618,6 +634,40 @@ impl Timeline {
             }
         }
         requests
+    }
+
+    /// Detect a crossfade transition on track `track_index` at `frame`: when two clips
+    /// overlap there, returns the outgoing/incoming clips, their source frames, and the mix
+    /// progress across the overlap region. Returns `None` for fewer than two overlapping
+    /// clips or an unknown track. This is the pure-logic detection a transition compositor
+    /// consumes; if more than two clips overlap, the earliest- and latest-starting are used.
+    pub fn transition_at(&self, track_index: usize, frame: u64) -> Option<Transition> {
+        let track = self.tracks.get(track_index)?;
+        let mut active: Vec<(&TimelineClip, u64)> = track
+            .clips
+            .iter()
+            .filter_map(|clip| clip.source_frame_at(frame).map(|source| (clip, source)))
+            .collect();
+        if active.len() < 2 {
+            return None;
+        }
+        active.sort_by_key(|(clip, _)| clip.track_offset);
+        let (outgoing, outgoing_source_frame) = active[0];
+        let (incoming, incoming_source_frame) = active[active.len() - 1];
+
+        let overlap_start = incoming.track_offset;
+        let overlap_end = outgoing.track_end().min(incoming.track_end());
+        if overlap_end <= overlap_start {
+            return None;
+        }
+        let progress = (frame - overlap_start) as f32 / (overlap_end - overlap_start) as f32;
+        Some(Transition {
+            outgoing: outgoing.id.clone(),
+            incoming: incoming.id.clone(),
+            outgoing_source_frame,
+            incoming_source_frame,
+            progress: progress.clamp(0.0, 1.0),
+        })
     }
 
     /// The set of frames an edit can snap to: clip edges (in and out) across every
@@ -980,6 +1030,55 @@ mod tests {
         let active = tl.frame_requests(10);
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].track_id, "v2");
+    }
+
+    #[test]
+    fn transition_at_detects_overlapping_clips() {
+        // Clip "a" [0,30) and clip "b" [20,50) overlap on [20,30).
+        let tl = Timeline {
+            tracks: vec![sample_track(
+                "v1",
+                TrackType::Video,
+                vec![sample_clip("a", 0, 30, 0), sample_clip("b", 0, 30, 20)],
+            )],
+            frame_rate: 30.0,
+            duration_frames: 50,
+        };
+
+        // Before the overlap: a single clip, no transition.
+        assert!(tl.transition_at(0, 10).is_none());
+        // After the overlap: only "b".
+        assert!(tl.transition_at(0, 40).is_none());
+
+        // Midway through the overlap (frame 25 of [20,30)) -> progress 0.5.
+        let mid = tl.transition_at(0, 25).expect("overlap is a transition");
+        assert_eq!(mid.outgoing, "a");
+        assert_eq!(mid.incoming, "b");
+        assert_eq!(mid.outgoing_source_frame, 25); // a: 0 + (25 - 0)
+        assert_eq!(mid.incoming_source_frame, 5); // b: 0 + (25 - 20)
+        assert!((mid.progress - 0.5).abs() < 1e-6);
+
+        // Overlap edges: 0 at the start, near 1 at the end.
+        assert!((tl.transition_at(0, 20).unwrap().progress - 0.0).abs() < 1e-6);
+        assert!(tl.transition_at(0, 29).unwrap().progress > 0.8);
+    }
+
+    #[test]
+    fn transition_at_is_none_without_overlap_or_track() {
+        let tl = Timeline {
+            tracks: vec![sample_track(
+                "v1",
+                TrackType::Video,
+                vec![sample_clip("a", 0, 20, 0), sample_clip("b", 0, 20, 30)],
+            )],
+            frame_rate: 30.0,
+            duration_frames: 50,
+        };
+        // [0,20) and [30,50) do not overlap.
+        assert!(tl.transition_at(0, 10).is_none());
+        assert!(tl.transition_at(0, 35).is_none());
+        // Unknown track index.
+        assert!(tl.transition_at(9, 10).is_none());
     }
 
     #[test]
