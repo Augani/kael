@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::effects::EffectStack;
 use crate::playback::Timebase;
 use crate::timecode::Timecode;
 
@@ -62,6 +63,9 @@ pub struct TimelineClip {
     /// How this clip composites over lower tracks (defaults to source-over).
     #[serde(default)]
     pub blend_mode: ClipBlendMode,
+    /// The ordered effect stack applied to the clip before compositing (defaults to empty).
+    #[serde(default)]
+    pub effects: EffectStack,
 }
 
 fn default_clip_opacity() -> f32 {
@@ -252,6 +256,8 @@ pub struct TrackFrameRequest {
     pub opacity: f32,
     /// The clip's blend mode over lower tracks.
     pub blend_mode: ClipBlendMode,
+    /// The clip's effect stack, applied to its source image before compositing.
+    pub effects: EffectStack,
 }
 
 impl TimelineTrack {
@@ -420,6 +426,7 @@ impl TimelineTrack {
                 track_offset: at_track_frame,
                 opacity: clip.opacity,
                 blend_mode: clip.blend_mode,
+                effects: clip.effects.clone(),
             },
         );
         Ok(new_id)
@@ -581,6 +588,7 @@ impl Timeline {
                     source_frame,
                     opacity: clip.opacity,
                     blend_mode: clip.blend_mode,
+                    effects: clip.effects.clone(),
                 });
             }
         }
@@ -824,6 +832,7 @@ mod tests {
             track_offset: offset,
             opacity: 1.0,
             blend_mode: ClipBlendMode::Normal,
+            effects: Default::default(),
         }
     }
 

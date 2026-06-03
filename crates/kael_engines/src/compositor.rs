@@ -69,6 +69,8 @@ pub struct LayerPass {
     pub clip_id: String,
     /// The pass that produces the clip's source image.
     pub source: PassId,
+    /// The clip's effect passes, applied in order between the source and the composite.
+    pub effects: Vec<PassId>,
     /// The pass that blends this layer over the accumulated result below it.
     pub composite: PassId,
 }
@@ -119,13 +121,34 @@ pub fn build_frame_graph(timeline: &Timeline, frame: u64) -> FrameGraph {
                 .param_hash(fnv1a(request.clip_id.as_bytes())),
         );
 
+        // Chain the clip's effect stack between the source and the composite; each effect
+        // pass reads the previous stage. The composite reads the last stage (the source
+        // itself when the stack is empty). Cache keys fold the upstream key, so a changed
+        // source frame invalidates the effects, and a changed effect param invalidates only
+        // that effect and everything after it.
+        let mut stage = layer_texture;
+        let mut effects = Vec::new();
+        for (effect_index, effect) in request.effects.effects.iter().enumerate() {
+            let effect_texture = graph.add_resource(ResourceDesc::transient_texture(format!(
+                "effect_{index}_{effect_index}"
+            )));
+            let effect_pass = graph.add_pass(
+                PassDesc::new(format!("effect_{index}_{effect_index}"))
+                    .read(stage)
+                    .write(effect_texture)
+                    .param_hash(effect.param_hash()),
+            );
+            effects.push(effect_pass);
+            stage = effect_texture;
+        }
+
         let composited = graph.add_resource(ResourceDesc::transient_texture(format!(
             "composited_{index}"
         )));
         let composite = graph.add_pass(
             PassDesc::new(format!("composite_{index}"))
                 .read(accumulator)
-                .read(layer_texture)
+                .read(stage)
                 .write(composited)
                 .param_hash(blend_param(request.blend_mode as u8, request.opacity)),
         );
@@ -134,6 +157,7 @@ pub fn build_frame_graph(timeline: &Timeline, frame: u64) -> FrameGraph {
             track_id: request.track_id,
             clip_id: request.clip_id,
             source,
+            effects,
             composite,
         });
         accumulator = composited;
@@ -167,12 +191,13 @@ fn blend_param(blend_mode: u8, opacity: f32) -> u64 {
 /// [`execute`](kael_render_graph::reference::execute)).
 ///
 /// Each source pass becomes an op writing the layer's decoded image (fetched from
-/// `provider`); each composite pass applies the clip's opacity and blends the layer over
-/// the accumulator. The background pass is intentionally left without an op so it clears to
-/// transparent. Running the result yields the same image as [`composite_frame`], so the
-/// graph form is the preview==export oracle with per-layer caching. A layer whose frame the
-/// provider cannot supply (or supplies at the wrong size) stays transparent, matching
-/// `composite_frame`'s skip behavior.
+/// `provider`); each effect pass applies its [`ClipEffect`](crate::effects::ClipEffect) op;
+/// each composite pass applies the clip's opacity and blends the layer over the accumulator.
+/// The background pass is intentionally left without an op so it clears to transparent.
+/// Running the result composites the effect-applied layers, and with empty effect stacks it
+/// matches [`composite_frame`] exactly — the preview==export oracle with per-layer caching.
+/// A layer whose frame the provider cannot supply (or supplies at the wrong size) stays
+/// transparent, matching `composite_frame`'s skip behavior.
 pub fn frame_graph_ops(
     frame_graph: &FrameGraph,
     timeline: &Timeline,
@@ -191,6 +216,10 @@ pub fn frame_graph_ops(
             .frame(&request.source, request.source_frame, width, height)
             .filter(|fetched| fetched.width == width && fetched.height == height);
         ops.insert(layer.source, source_op(image));
+
+        for (effect_pass, effect) in layer.effects.iter().zip(&request.effects.effects) {
+            ops.insert(*effect_pass, effect.to_pass_op());
+        }
 
         let opacity = request.opacity.clamp(0.0, 1.0);
         ops.insert(
@@ -269,6 +298,7 @@ impl FrameProvider for StillImageProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::effects::{ClipEffect, EffectStack};
     use crate::media::{ClipBlendMode, TimelineClip, TimelineTrack, TrackType};
     use std::collections::HashMap;
 
@@ -299,6 +329,7 @@ mod tests {
             track_offset: offset,
             opacity: 1.0,
             blend_mode: ClipBlendMode::Normal,
+            effects: Default::default(),
         }
     }
 
@@ -438,6 +469,63 @@ mod tests {
             assert!(ops.contains_key(&layer.composite));
         }
         assert_eq!(ops.len(), fg.layers.len() * 2);
+    }
+
+    #[test]
+    fn build_frame_graph_chains_clip_effect_passes_in_order() {
+        let mut timeline = Timeline {
+            tracks: vec![track("v1", vec![clip("a", "red", 0, 30, 0)])],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        timeline.tracks[0].clips[0].effects = EffectStack {
+            effects: vec![
+                ClipEffect::Exposure { stops: 1.0 },
+                ClipEffect::Gamma { power: 2.0 },
+            ],
+        };
+        let fg = build_frame_graph(&timeline, 10);
+        assert_eq!(fg.layers[0].effects.len(), 2);
+
+        let compiled = fg.graph.compile().expect("frame graph compiles");
+        let order = compiled.execution_order();
+        let pos = |p| order.iter().position(|&q| q == p).unwrap();
+        let layer = &fg.layers[0];
+        assert!(pos(layer.source) < pos(layer.effects[0]));
+        assert!(pos(layer.effects[0]) < pos(layer.effects[1]));
+        assert!(pos(layer.effects[1]) < pos(layer.composite));
+    }
+
+    #[test]
+    fn frame_graph_applies_clip_effects_during_execution() {
+        let mut timeline = Timeline {
+            tracks: vec![track("v1", vec![clip("a", "gray", 0, 30, 0)])],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        timeline.tracks[0].clips[0].effects = EffectStack {
+            effects: vec![ClipEffect::Exposure { stops: 1.0 }],
+        };
+        let provider = provider(&[("gray", [0.3, 0.3, 0.3, 1.0])]);
+
+        let fg = build_frame_graph(&timeline, 10);
+        let compiled = fg.graph.compile().unwrap();
+        let ops = frame_graph_ops(&fg, &timeline, 10, 2, 2, &provider);
+        let mut cache = HashMap::new();
+        let (images, _) = kael_render_graph::reference::execute_cached(
+            &fg.graph,
+            &compiled,
+            2,
+            2,
+            &HashMap::new(),
+            &ops,
+            &mut cache,
+        )
+        .unwrap();
+
+        // Exposure +1 doubles the source (0.3 -> 0.6) before it composites over transparent.
+        let out = images[&fg.output].pixel(0, 0);
+        assert!((out[0] - 0.6).abs() < 1e-6, "{out:?}");
     }
 
     #[test]

@@ -360,6 +360,7 @@ mod tests {
                     track_offset: 0,
                     opacity: 1.0,
                     blend_mode: Default::default(),
+                    effects: Default::default(),
                 }],
             }],
             frame_rate: 30.0,

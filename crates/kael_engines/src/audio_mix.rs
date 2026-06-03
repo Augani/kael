@@ -264,6 +264,7 @@ mod tests {
             track_offset: offset,
             opacity: 1.0,
             blend_mode: Default::default(),
+            effects: Default::default(),
         }
     }
 
