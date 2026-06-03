@@ -1067,6 +1067,18 @@ pub fn apply_cdl(rgb: [f32; 3], slope: [f32; 3], offset: [f32; 3], power: [f32; 
     out
 }
 
+/// Apply the ASC CDL saturation control (the `SAT` that follows slope/offset/power):
+/// blend each channel toward the Rec.709-weighted luma by `saturation` (`1.0` leaves the
+/// color unchanged, `0.0` is grayscale, `> 1.0` boosts). Luminance-preserving.
+pub fn apply_saturation(rgb: [f32; 3], saturation: f32) -> [f32; 3] {
+    let luma = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+    [
+        luma + saturation * (rgb[0] - luma),
+        luma + saturation * (rgb[1] - luma),
+        luma + saturation * (rgb[2] - luma),
+    ]
+}
+
 #[cfg(test)]
 mod grade_tests {
     use super::*;
@@ -1104,5 +1116,33 @@ mod grade_tests {
     fn negative_intermediate_is_clamped() {
         let out = apply_cdl([0.1, 0.1, 0.1], [1.0; 3], [-0.5; 3], [2.0; 3]);
         assert_eq!(out, [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn saturation_unity_is_identity_and_zero_is_grayscale() {
+        let color = [0.8, 0.4, 0.2];
+        assert!(close(apply_saturation(color, 1.0), color, 1e-6));
+
+        // Zero saturation collapses every channel to the shared luma.
+        let gray = apply_saturation(color, 0.0);
+        let luma = 0.2126 * 0.8 + 0.7152 * 0.4 + 0.0722 * 0.2;
+        assert!(close(gray, [luma, luma, luma], 1e-6));
+    }
+
+    #[test]
+    fn saturation_preserves_luminance() {
+        let color = [0.8, 0.4, 0.2];
+        let luma = |c: [f32; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+        let original = luma(color);
+        for sat in [0.0, 0.5, 1.5, 2.0] {
+            let out = apply_saturation(color, sat);
+            assert!((luma(out) - original).abs() < 1e-5, "sat {sat}: {out:?}");
+        }
+        // Boosting pushes channels further from the luma.
+        let boosted = apply_saturation(color, 2.0);
+        assert!(
+            boosted[0] > color[0] && boosted[2] < color[2],
+            "{boosted:?}"
+        );
     }
 }
