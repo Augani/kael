@@ -820,7 +820,9 @@ pub mod reference {
         }
     }
 
-    /// Separable blend modes for compositing one layer over another.
+    /// Separable blend modes for compositing one layer over another, following the
+    /// W3C Compositing and Blending Level 1 separable-blend definitions (the set a
+    /// non-linear editor exposes for clip blending).
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum BlendMode {
         /// Source-over (no color blending).
@@ -831,6 +833,24 @@ pub mod reference {
         Screen,
         /// Clamped additive (linear dodge).
         Add,
+        /// Keeps the darker of the two colors per channel.
+        Darken,
+        /// Keeps the lighter of the two colors per channel.
+        Lighten,
+        /// Multiply on dark backdrops, screen on light ones (contrast).
+        Overlay,
+        /// Like [`BlendMode::Overlay`] but keyed on the source (harsh spotlight).
+        HardLight,
+        /// Gentle dodge/burn keyed on the source.
+        SoftLight,
+        /// Brightens the backdrop toward the source.
+        ColorDodge,
+        /// Darkens the backdrop toward the source.
+        ColorBurn,
+        /// Absolute per-channel difference.
+        Difference,
+        /// Like [`BlendMode::Difference`] but with lower contrast.
+        Exclusion,
     }
 
     impl BlendMode {
@@ -840,7 +860,53 @@ pub mod reference {
                 Self::Multiply => backdrop * source,
                 Self::Screen => backdrop + source - backdrop * source,
                 Self::Add => (backdrop + source).min(1.0),
+                Self::Darken => backdrop.min(source),
+                Self::Lighten => backdrop.max(source),
+                Self::Overlay => hard_light(source, backdrop),
+                Self::HardLight => hard_light(backdrop, source),
+                Self::SoftLight => soft_light(backdrop, source),
+                Self::ColorDodge => {
+                    if backdrop == 0.0 {
+                        0.0
+                    } else if source >= 1.0 {
+                        1.0
+                    } else {
+                        (backdrop / (1.0 - source)).min(1.0)
+                    }
+                }
+                Self::ColorBurn => {
+                    if backdrop >= 1.0 {
+                        1.0
+                    } else if source == 0.0 {
+                        0.0
+                    } else {
+                        1.0 - ((1.0 - backdrop) / source).min(1.0)
+                    }
+                }
+                Self::Difference => (backdrop - source).abs(),
+                Self::Exclusion => backdrop + source - 2.0 * backdrop * source,
             }
+        }
+    }
+
+    fn hard_light(backdrop: f32, source: f32) -> f32 {
+        if source <= 0.5 {
+            2.0 * backdrop * source
+        } else {
+            1.0 - 2.0 * (1.0 - backdrop) * (1.0 - source)
+        }
+    }
+
+    fn soft_light(backdrop: f32, source: f32) -> f32 {
+        if source <= 0.5 {
+            backdrop - (1.0 - 2.0 * source) * backdrop * (1.0 - backdrop)
+        } else {
+            let d = if backdrop <= 0.25 {
+                ((16.0 * backdrop - 12.0) * backdrop + 4.0) * backdrop
+            } else {
+                backdrop.sqrt()
+            };
+            backdrop + (2.0 * source - 1.0) * (d - backdrop)
         }
     }
 
@@ -999,6 +1065,46 @@ pub mod reference {
             assert!((run(BlendMode::Multiply) - 0.25).abs() < 1e-6);
             assert!((run(BlendMode::Screen) - 0.75).abs() < 1e-6);
             assert!((run(BlendMode::Add) - 1.0).abs() < 1e-6);
+        }
+
+        #[test]
+        fn separable_blend_modes_match_w3c() {
+            // Opaque layers reduce the W3C compositing formula to the raw blend, so
+            // the output channel equals BlendMode::apply(backdrop, source) exactly.
+            let backdrop = Image::filled(1, 1, [0.6, 0.6, 0.6, 1.0]);
+            let source = Image::filled(1, 1, [0.25, 0.25, 0.25, 1.0]);
+            let run = |mode| {
+                let mut out = Image::new(1, 1);
+                blend(mode)(&[&source, &backdrop], &mut out);
+                out.pixel(0, 0)[0]
+            };
+            let approx = |actual: f32, expected: f32| (actual - expected).abs() < 1e-5;
+            assert!(approx(run(BlendMode::Darken), 0.25));
+            assert!(approx(run(BlendMode::Lighten), 0.6));
+            assert!(approx(run(BlendMode::HardLight), 0.30));
+            assert!(approx(run(BlendMode::Overlay), 0.40));
+            assert!(approx(run(BlendMode::Difference), 0.35));
+            assert!(approx(run(BlendMode::Exclusion), 0.55));
+            assert!(approx(run(BlendMode::ColorDodge), 0.8));
+            assert!(approx(run(BlendMode::ColorBurn), 0.0));
+            assert!(approx(run(BlendMode::SoftLight), 0.48));
+        }
+
+        #[test]
+        fn blend_mode_boundary_cases_are_defined() {
+            // Dodge/burn have spec-defined behavior at the 0 and 1 source boundaries.
+            let white = Image::filled(1, 1, [1.0, 1.0, 1.0, 1.0]);
+            let black = Image::filled(1, 1, [0.0, 0.0, 0.0, 1.0]);
+            let gray = Image::filled(1, 1, [0.5, 0.5, 0.5, 1.0]);
+            let channel = |mode, top: &Image, bottom: &Image| {
+                let mut out = Image::new(1, 1);
+                blend(mode)(&[top, bottom], &mut out);
+                out.pixel(0, 0)[0]
+            };
+            // A fully-white source dodges the backdrop to white.
+            assert!((channel(BlendMode::ColorDodge, &white, &gray) - 1.0).abs() < 1e-6);
+            // A fully-black source burns the backdrop to black.
+            assert!((channel(BlendMode::ColorBurn, &black, &gray) - 0.0).abs() < 1e-6);
         }
 
         #[test]
