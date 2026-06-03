@@ -3927,6 +3927,7 @@ version = "0.1.2"
 dependencies = [
  "anyhow",
  "fastrand 2.4.1",
+ "kael_secrets",
  "serde",
  "serde_json",
 ]

@@ -13,7 +13,7 @@ pub mod presence;
 /// Retry policy with exponential backoff.
 pub mod retry;
 
-pub use auth::{AuthToken, TokenStore};
+pub use auth::{AuthToken, SecureTokenStore, TokenStore};
 pub use client::{ApiRequest, ApiResponse, HttpMethod};
 pub use offline::{OfflineQueue, QueuedRequest};
 pub use presence::{Presence, PresenceStatus, PresenceTracker};

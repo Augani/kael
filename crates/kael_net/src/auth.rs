@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use kael_secrets::SecretStore;
+
 /// An authentication token for a named service.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct AuthToken {
@@ -85,6 +87,54 @@ impl TokenStore {
 impl Default for TokenStore {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// A persistent token store backed by an OS keychain via [`kael_secrets`].
+///
+/// Tokens are JSON-serialized and stored as secrets under a single keychain
+/// service namespace, keyed by the logical service name. Unlike [`TokenStore`]
+/// (in-memory only), credentials stored here survive restarts and are protected
+/// by the platform secret store rather than held in plaintext.
+pub struct SecureTokenStore {
+    keychain_service: String,
+    store: Box<dyn SecretStore>,
+}
+
+impl SecureTokenStore {
+    /// Create a store that persists tokens under `keychain_service` using the
+    /// provided secret backend.
+    pub fn new(keychain_service: impl Into<String>, store: Box<dyn SecretStore>) -> Self {
+        Self {
+            keychain_service: keychain_service.into(),
+            store,
+        }
+    }
+
+    /// Create a store using the platform's default secret backend (the OS
+    /// keychain where available).
+    pub fn with_default_store(keychain_service: impl Into<String>) -> Self {
+        Self::new(keychain_service, kael_secrets::default_store())
+    }
+
+    /// Persist `token` for `service`, replacing any existing value.
+    pub fn set(&self, service: &str, token: &AuthToken) -> anyhow::Result<()> {
+        let json = serde_json::to_vec(token)?;
+        self.store
+            .set_secret(&self.keychain_service, service, &json)
+    }
+
+    /// Load the token for `service`, or `None` if absent.
+    pub fn get(&self, service: &str) -> anyhow::Result<Option<AuthToken>> {
+        match self.store.get_secret(&self.keychain_service, service)? {
+            Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Delete the token for `service`. Succeeds even if absent.
+    pub fn remove(&self, service: &str) -> anyhow::Result<()> {
+        self.store.delete_secret(&self.keychain_service, service)
     }
 }
 
@@ -214,5 +264,39 @@ mod tests {
         assert_eq!(store.get("github").unwrap().token, "gh");
         assert_eq!(store.get("gitlab").unwrap().token, "gl");
         assert_eq!(store.get("bitbucket").unwrap().token, "bb");
+    }
+
+    #[test]
+    fn secure_store_round_trips() {
+        let store = SecureTokenStore::new(
+            "com.kael.test",
+            Box::new(kael_secrets::MemorySecretStore::new()),
+        );
+        assert!(store.get("github").unwrap().is_none());
+
+        store
+            .set("github", &make_token("gh_secret", Some(123)))
+            .unwrap();
+        let loaded = store.get("github").unwrap().unwrap();
+        assert_eq!(loaded.token, "gh_secret");
+        assert_eq!(loaded.expires_at, Some(123));
+
+        store
+            .set("github", &make_token("gh_rotated", None))
+            .unwrap();
+        assert_eq!(store.get("github").unwrap().unwrap().token, "gh_rotated");
+
+        store.remove("github").unwrap();
+        assert!(store.get("github").unwrap().is_none());
+    }
+
+    #[test]
+    fn secure_store_isolates_services() {
+        let store = SecureTokenStore::new("ns", Box::new(kael_secrets::MemorySecretStore::new()));
+        store.set("a", &make_token("ta", None)).unwrap();
+        store.set("b", &make_token("tb", None)).unwrap();
+        assert_eq!(store.get("a").unwrap().unwrap().token, "ta");
+        assert_eq!(store.get("b").unwrap().unwrap().token, "tb");
+        assert!(store.get("c").unwrap().is_none());
     }
 }
