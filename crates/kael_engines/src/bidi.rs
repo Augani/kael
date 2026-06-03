@@ -161,6 +161,147 @@ pub fn reorder_visual(runs: &[DirectionalRun], base: Direction) -> Vec<Direction
         .collect()
 }
 
+/// A UAX #9 bidirectional character type (the subset used by the weak-type rules).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BidiClass {
+    /// Strong left-to-right.
+    L,
+    /// Strong right-to-left.
+    R,
+    /// Strong right-to-left Arabic letter.
+    Al,
+    /// European number.
+    En,
+    /// European number separator (`+`, `-`).
+    Es,
+    /// European number terminator (`#`, `$`, `%`, currency).
+    Et,
+    /// Arabic number.
+    An,
+    /// Common number separator (`,`, `.`, `:`).
+    Cs,
+    /// Non-spacing mark.
+    Nsm,
+    /// Other neutral.
+    On,
+}
+
+/// Classify a character into its [`BidiClass`] (common ranges; approximate, used as the
+/// input to [`resolve_weak_types`]).
+pub fn bidi_class(ch: char) -> BidiClass {
+    let code = ch as u32;
+    match code {
+        0x0660..=0x0669 | 0x066B..=0x066C | 0x06F0..=0x06F9 => BidiClass::An,
+        0x0030..=0x0039 => BidiClass::En,
+        0x002B | 0x002D => BidiClass::Es,
+        0x0023 | 0x0024 | 0x0025 | 0x00A2..=0x00A5 => BidiClass::Et,
+        0x002C | 0x002E | 0x002F | 0x003A => BidiClass::Cs,
+        0x0300..=0x036F | 0x0483..=0x0489 | 0x0591..=0x05BD => BidiClass::Nsm,
+        _ if is_rtl_char(ch) => {
+            // Arabic letters are AL; Hebrew and other RTL scripts are R.
+            if matches!(code, 0x0600..=0x06FF | 0x0750..=0x077F | 0x08A0..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFF)
+            {
+                BidiClass::Al
+            } else {
+                BidiClass::R
+            }
+        }
+        _ if ch.is_alphabetic() => BidiClass::L,
+        _ => BidiClass::On,
+    }
+}
+
+/// Resolve weak types in a single-level character sequence per UAX #9 rules W1–W7.
+///
+/// Operates on the class sequence directly (so the rules are testable independent of
+/// classification) using the paragraph `base` as the start-of-run strong type. Numbers
+/// (EN/AN), separators (ES/CS), terminators (ET), and marks (NSM) are resolved; the
+/// result feeds neutral resolution and reordering.
+pub fn resolve_weak_types(classes: &[BidiClass], base: Direction) -> Vec<BidiClass> {
+    let sor = if base == Direction::Rtl {
+        BidiClass::R
+    } else {
+        BidiClass::L
+    };
+    let mut types = classes.to_vec();
+
+    // W1: NSM takes the type of the previous character (start-of-run if first).
+    for index in 0..types.len() {
+        if types[index] == BidiClass::Nsm {
+            types[index] = if index == 0 { sor } else { types[index - 1] };
+        }
+    }
+
+    // W2: EN becomes AN when the last strong type is AL.
+    let mut last_strong = sor;
+    for class in &mut types {
+        match *class {
+            BidiClass::R | BidiClass::L | BidiClass::Al => last_strong = *class,
+            BidiClass::En if last_strong == BidiClass::Al => *class = BidiClass::An,
+            _ => {}
+        }
+    }
+
+    // W3: AL becomes R.
+    for class in &mut types {
+        if *class == BidiClass::Al {
+            *class = BidiClass::R;
+        }
+    }
+
+    // W4: a single ES between two EN, or a single CS between two numbers of the same
+    // kind, joins them.
+    for index in 1..types.len().saturating_sub(1) {
+        let (prev, next) = (types[index - 1], types[index + 1]);
+        types[index] = match types[index] {
+            BidiClass::Es if prev == BidiClass::En && next == BidiClass::En => BidiClass::En,
+            BidiClass::Cs if prev == BidiClass::En && next == BidiClass::En => BidiClass::En,
+            BidiClass::Cs if prev == BidiClass::An && next == BidiClass::An => BidiClass::An,
+            other => other,
+        };
+    }
+
+    // W5: a run of ET adjacent to EN becomes EN.
+    let len = types.len();
+    let mut index = 0;
+    while index < len {
+        if types[index] == BidiClass::Et {
+            let start = index;
+            while index < len && types[index] == BidiClass::Et {
+                index += 1;
+            }
+            let touches_en = (start > 0 && types[start - 1] == BidiClass::En)
+                || (index < len && types[index] == BidiClass::En);
+            if touches_en {
+                for class in &mut types[start..index] {
+                    *class = BidiClass::En;
+                }
+            }
+        } else {
+            index += 1;
+        }
+    }
+
+    // W6: remaining separators and terminators become neutral.
+    for class in &mut types {
+        if matches!(*class, BidiClass::Es | BidiClass::Et | BidiClass::Cs) {
+            *class = BidiClass::On;
+        }
+    }
+
+    // W7: EN becomes L when the last strong type is L.
+    let mut last_strong = sor;
+    for class in &mut types {
+        match *class {
+            BidiClass::R | BidiClass::L => last_strong = *class,
+            BidiClass::En if last_strong == BidiClass::L => *class = BidiClass::L,
+            _ => {}
+        }
+    }
+
+    types
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,5 +417,74 @@ mod tests {
     #[test]
     fn reorder_empty_is_empty() {
         assert!(reorder_visual(&[], Direction::Ltr).is_empty());
+    }
+
+    use BidiClass::*;
+
+    #[test]
+    fn bidi_class_classifies_numbers_and_letters() {
+        assert_eq!(bidi_class('5'), En);
+        assert_eq!(bidi_class('\u{0665}'), An); // Arabic-Indic five
+        assert_eq!(bidi_class('ا'), Al); // Arabic alef
+        assert_eq!(bidi_class('א'), R); // Hebrew aleph
+        assert_eq!(bidi_class('a'), L);
+        assert_eq!(bidi_class('+'), Es);
+        assert_eq!(bidi_class(','), Cs);
+        assert_eq!(bidi_class('$'), Et);
+    }
+
+    #[test]
+    fn w1_nsm_takes_previous_type() {
+        assert_eq!(resolve_weak_types(&[L, Nsm], Direction::Ltr), vec![L, L]);
+        // Leading NSM takes the start-of-run type (base).
+        assert_eq!(resolve_weak_types(&[Nsm], Direction::Rtl), vec![R]);
+    }
+
+    #[test]
+    fn w2_w3_arabic_number_and_letter_resolution() {
+        // AL EN -> (W2) AL AN -> (W3) R AN.
+        assert_eq!(resolve_weak_types(&[Al, En], Direction::Rtl), vec![R, An]);
+        // A lone AL becomes R.
+        assert_eq!(resolve_weak_types(&[Al], Direction::Rtl), vec![R]);
+    }
+
+    #[test]
+    fn w4_single_separator_joins_numbers() {
+        // Base RTL so W7 leaves EN intact, isolating W4.
+        assert_eq!(
+            resolve_weak_types(&[En, Es, En], Direction::Rtl),
+            vec![En, En, En]
+        );
+        assert_eq!(
+            resolve_weak_types(&[En, Cs, En], Direction::Rtl),
+            vec![En, En, En]
+        );
+        assert_eq!(
+            resolve_weak_types(&[An, Cs, An], Direction::Rtl),
+            vec![An, An, An]
+        );
+        // Double separators are not joined (then W6 -> ON).
+        assert_eq!(
+            resolve_weak_types(&[En, Es, Es, En], Direction::Rtl),
+            vec![En, On, On, En]
+        );
+    }
+
+    #[test]
+    fn w5_terminators_adjacent_to_numbers() {
+        assert_eq!(resolve_weak_types(&[Et, En], Direction::Rtl), vec![En, En]);
+        assert_eq!(
+            resolve_weak_types(&[En, Et, Et], Direction::Rtl),
+            vec![En, En, En]
+        );
+        // A terminator with no adjacent number falls through to W6 -> ON.
+        assert_eq!(resolve_weak_types(&[Et], Direction::Rtl), vec![On]);
+    }
+
+    #[test]
+    fn w7_european_number_after_left_becomes_left() {
+        assert_eq!(resolve_weak_types(&[L, En], Direction::Ltr), vec![L, L]);
+        // After a strong R the European number stays EN.
+        assert_eq!(resolve_weak_types(&[R, En], Direction::Rtl), vec![R, En]);
     }
 }
