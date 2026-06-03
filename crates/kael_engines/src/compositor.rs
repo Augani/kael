@@ -25,11 +25,13 @@ pub trait FrameProvider {
 
 /// Composite the timeline at `frame` into a single `width` x `height` image.
 ///
-/// Each track's active clip is fetched from `provider` and stacked in track-declaration
-/// order (the first track is the bottom layer), honoring the clip's opacity and blend
-/// mode. Tracks with no active clip — or whose source frame the provider cannot supply,
-/// or whose supplied image is the wrong size — are skipped. The result is transparent
-/// where nothing is active.
+/// Each track's active clip is fetched from `provider`, its effect stack is applied, and the
+/// layers are stacked in track-declaration order (the first track is the bottom layer),
+/// honoring the clip's opacity and blend mode. Tracks with no active clip — or whose source
+/// frame the provider cannot supply, or whose supplied image is the wrong size — are skipped.
+/// The result is transparent where nothing is active. This matches the graph form built by
+/// [`build_frame_graph`] (run via [`render_frames`]), so it remains the preview==export
+/// oracle.
 pub fn composite_frame(
     timeline: &Timeline,
     frame: u64,
@@ -39,13 +41,14 @@ pub fn composite_frame(
 ) -> Image {
     let mut output = Image::new(width, height);
     for request in timeline.frame_requests(frame) {
-        let Some(mut layer) = provider.frame(&request.source, request.source_frame, width, height)
+        let Some(layer) = provider.frame(&request.source, request.source_frame, width, height)
         else {
             continue;
         };
         if layer.width != width || layer.height != height {
             continue;
         }
+        let mut layer = request.effects.apply(&layer);
         let opacity = request.opacity.clamp(0.0, 1.0);
         if opacity < 1.0 {
             for pixel in layer.pixels.iter_mut() {
@@ -466,7 +469,11 @@ mod tests {
             frame_rate: 30.0,
             duration_frames: 30,
         };
-        // Exercise opacity + a non-trivial blend mode on the top layer.
+        // Exercise an effect stack, opacity, and a non-trivial blend mode on the top layer
+        // so the equivalence covers the source -> effects -> opacity -> blend path.
+        timeline.tracks[1].clips[0].effects = EffectStack {
+            effects: vec![ClipEffect::Exposure { stops: -1.0 }],
+        };
         timeline.tracks[1].clips[0].opacity = 0.5;
         timeline.tracks[1].clips[0].blend_mode = ClipBlendMode::Multiply;
 
@@ -622,6 +629,31 @@ mod tests {
                 image.pixel(0, 0)
             );
         }
+    }
+
+    #[test]
+    fn composite_frame_applies_clip_effects() {
+        let mut timeline = Timeline {
+            tracks: vec![track("v1", vec![clip("a", "gray", 0, 30, 0)])],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        let provider = provider(&[("gray", [0.3, 0.3, 0.3, 1.0])]);
+
+        // Without effects the layer composites at its source value.
+        let plain = composite_frame(&timeline, 10, 2, 2, &provider);
+        assert!((plain.pixel(0, 0)[0] - 0.3).abs() < 1e-6);
+
+        // With an exposure effect, composite_frame (the export path) reflects it.
+        timeline.tracks[0].clips[0].effects = EffectStack {
+            effects: vec![ClipEffect::Exposure { stops: 1.0 }],
+        };
+        let graded = composite_frame(&timeline, 10, 2, 2, &provider);
+        assert!(
+            (graded.pixel(0, 0)[0] - 0.6).abs() < 1e-6,
+            "{:?}",
+            graded.pixel(0, 0)
+        );
     }
 
     #[test]
