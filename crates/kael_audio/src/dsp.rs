@@ -162,6 +162,227 @@ pub fn waveform_peaks(samples: &[f32], channels: u16, buckets: usize) -> Vec<Wav
     peaks
 }
 
+/// A second-order (biquad) IIR filter using the RBJ Audio-EQ-Cookbook coefficients.
+///
+/// Direct Form I; coefficients are normalized by `a0` at construction. One instance
+/// holds the per-channel delay state, so use one filter per channel. These are the
+/// per-track EQ inserts in the mixing graph.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Biquad {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+    x1: f32,
+    x2: f32,
+    y1: f32,
+    y2: f32,
+}
+
+impl Biquad {
+    fn from_coeffs(b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) -> Self {
+        Self {
+            b0: b0 / a0,
+            b1: b1 / a0,
+            b2: b2 / a0,
+            a1: a1 / a0,
+            a2: a2 / a0,
+            x1: 0.0,
+            x2: 0.0,
+            y1: 0.0,
+            y2: 0.0,
+        }
+    }
+
+    fn omega(freq_hz: f32, sample_rate: u32) -> (f32, f32, f32) {
+        let w0 = 2.0 * std::f32::consts::PI * (freq_hz / sample_rate as f32);
+        (w0.sin(), w0.cos(), w0.sin())
+    }
+
+    /// A low-pass filter at `freq_hz` with resonance `q` (0.707 is maximally flat).
+    pub fn low_pass(freq_hz: f32, sample_rate: u32, q: f32) -> Self {
+        let (sin_w, cos_w, _) = Self::omega(freq_hz, sample_rate);
+        let alpha = sin_w / (2.0 * q.max(1e-4));
+        Self::from_coeffs(
+            (1.0 - cos_w) / 2.0,
+            1.0 - cos_w,
+            (1.0 - cos_w) / 2.0,
+            1.0 + alpha,
+            -2.0 * cos_w,
+            1.0 - alpha,
+        )
+    }
+
+    /// A high-pass filter at `freq_hz` with resonance `q`.
+    pub fn high_pass(freq_hz: f32, sample_rate: u32, q: f32) -> Self {
+        let (sin_w, cos_w, _) = Self::omega(freq_hz, sample_rate);
+        let alpha = sin_w / (2.0 * q.max(1e-4));
+        Self::from_coeffs(
+            (1.0 + cos_w) / 2.0,
+            -(1.0 + cos_w),
+            (1.0 + cos_w) / 2.0,
+            1.0 + alpha,
+            -2.0 * cos_w,
+            1.0 - alpha,
+        )
+    }
+
+    /// A band-pass filter (0 dB peak gain) centered at `freq_hz` with width set by `q`.
+    pub fn band_pass(freq_hz: f32, sample_rate: u32, q: f32) -> Self {
+        let (sin_w, cos_w, _) = Self::omega(freq_hz, sample_rate);
+        let alpha = sin_w / (2.0 * q.max(1e-4));
+        Self::from_coeffs(alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cos_w, 1.0 - alpha)
+    }
+
+    /// A peaking EQ that boosts or cuts `gain_db` around `freq_hz` (the parametric band).
+    pub fn peaking_eq(freq_hz: f32, sample_rate: u32, q: f32, gain_db: f32) -> Self {
+        let (sin_w, cos_w, _) = Self::omega(freq_hz, sample_rate);
+        let alpha = sin_w / (2.0 * q.max(1e-4));
+        let amp = 10f32.powf(gain_db / 40.0);
+        Self::from_coeffs(
+            1.0 + alpha * amp,
+            -2.0 * cos_w,
+            1.0 - alpha * amp,
+            1.0 + alpha / amp,
+            -2.0 * cos_w,
+            1.0 - alpha / amp,
+        )
+    }
+
+    /// A low-shelf filter applying `gain_db` below `freq_hz`.
+    pub fn low_shelf(freq_hz: f32, sample_rate: u32, q: f32, gain_db: f32) -> Self {
+        let (sin_w, cos_w, _) = Self::omega(freq_hz, sample_rate);
+        let alpha = sin_w / (2.0 * q.max(1e-4));
+        let amp = 10f32.powf(gain_db / 40.0);
+        let beta = 2.0 * amp.sqrt() * alpha;
+        Self::from_coeffs(
+            amp * ((amp + 1.0) - (amp - 1.0) * cos_w + beta),
+            2.0 * amp * ((amp - 1.0) - (amp + 1.0) * cos_w),
+            amp * ((amp + 1.0) - (amp - 1.0) * cos_w - beta),
+            (amp + 1.0) + (amp - 1.0) * cos_w + beta,
+            -2.0 * ((amp - 1.0) + (amp + 1.0) * cos_w),
+            (amp + 1.0) + (amp - 1.0) * cos_w - beta,
+        )
+    }
+
+    /// A high-shelf filter applying `gain_db` above `freq_hz`.
+    pub fn high_shelf(freq_hz: f32, sample_rate: u32, q: f32, gain_db: f32) -> Self {
+        let (sin_w, cos_w, _) = Self::omega(freq_hz, sample_rate);
+        let alpha = sin_w / (2.0 * q.max(1e-4));
+        let amp = 10f32.powf(gain_db / 40.0);
+        let beta = 2.0 * amp.sqrt() * alpha;
+        Self::from_coeffs(
+            amp * ((amp + 1.0) + (amp - 1.0) * cos_w + beta),
+            -2.0 * amp * ((amp - 1.0) + (amp + 1.0) * cos_w),
+            amp * ((amp + 1.0) + (amp - 1.0) * cos_w - beta),
+            (amp + 1.0) - (amp - 1.0) * cos_w + beta,
+            2.0 * ((amp - 1.0) - (amp + 1.0) * cos_w),
+            (amp + 1.0) - (amp - 1.0) * cos_w - beta,
+        )
+    }
+
+    /// Process one sample, advancing the filter state.
+    pub fn process_sample(&mut self, input: f32) -> f32 {
+        let output = self.b0 * input + self.b1 * self.x1 + self.b2 * self.x2
+            - self.a1 * self.y1
+            - self.a2 * self.y2;
+        self.x2 = self.x1;
+        self.x1 = input;
+        self.y2 = self.y1;
+        self.y1 = output;
+        output
+    }
+
+    /// Process a mono buffer in place.
+    pub fn process(&mut self, buffer: &mut [f32]) {
+        for sample in buffer.iter_mut() {
+            *sample = self.process_sample(*sample);
+        }
+    }
+
+    /// The steady-state gain at DC (0 Hz), useful for validating filter type.
+    pub fn dc_gain(&self) -> f32 {
+        (self.b0 + self.b1 + self.b2) / (1.0 + self.a1 + self.a2)
+    }
+
+    /// Clear the delay state without changing the coefficients.
+    pub fn reset(&mut self) {
+        self.x1 = 0.0;
+        self.x2 = 0.0;
+        self.y1 = 0.0;
+        self.y2 = 0.0;
+    }
+}
+
+/// A feed-forward peak compressor: a dynamics insert that attenuates signal above a
+/// threshold by `ratio`, with attack/release smoothing and make-up gain.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Compressor {
+    threshold_db: f32,
+    ratio: f32,
+    attack_coeff: f32,
+    release_coeff: f32,
+    makeup_db: f32,
+    envelope: f32,
+}
+
+impl Compressor {
+    /// Build a compressor. `attack_ms`/`release_ms` set the envelope time constants.
+    pub fn new(
+        threshold_db: f32,
+        ratio: f32,
+        attack_ms: f32,
+        release_ms: f32,
+        makeup_db: f32,
+        sample_rate: u32,
+    ) -> Self {
+        Self {
+            threshold_db,
+            ratio: ratio.max(1.0),
+            attack_coeff: time_coeff(attack_ms, sample_rate),
+            release_coeff: time_coeff(release_ms, sample_rate),
+            makeup_db,
+            envelope: 0.0,
+        }
+    }
+
+    /// Process one sample, returning the gain-adjusted output.
+    pub fn process_sample(&mut self, input: f32) -> f32 {
+        let level = input.abs();
+        let coeff = if level > self.envelope {
+            self.attack_coeff
+        } else {
+            self.release_coeff
+        };
+        self.envelope = coeff * self.envelope + (1.0 - coeff) * level;
+
+        let env_db = 20.0 * self.envelope.max(1e-9).log10();
+        let over = env_db - self.threshold_db;
+        let reduction_db = if over > 0.0 {
+            over * (1.0 / self.ratio - 1.0)
+        } else {
+            0.0
+        };
+        let gain = 10f32.powf((reduction_db + self.makeup_db) / 20.0);
+        input * gain
+    }
+
+    /// Process a mono buffer in place.
+    pub fn process(&mut self, buffer: &mut [f32]) {
+        for sample in buffer.iter_mut() {
+            *sample = self.process_sample(*sample);
+        }
+    }
+}
+
+fn time_coeff(time_ms: f32, sample_rate: u32) -> f32 {
+    if time_ms <= 0.0 {
+        return 0.0;
+    }
+    (-1.0 / (time_ms * 0.001 * sample_rate as f32)).exp()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,5 +469,98 @@ mod tests {
             .all(|peak| (peak.min - 0.5).abs() < 1e-6 && (peak.max - 0.5).abs() < 1e-6));
         assert!(waveform_peaks(&[], 1, 4).is_empty());
         assert!(waveform_peaks(&samples, 1, 0).is_empty());
+    }
+
+    #[test]
+    fn biquad_lowpass_passes_dc_highpass_blocks_it() {
+        let lp = Biquad::low_pass(1000.0, 48_000, 0.707);
+        assert!((lp.dc_gain() - 1.0).abs() < 1e-4, "lp dc {}", lp.dc_gain());
+        let hp = Biquad::high_pass(1000.0, 48_000, 0.707);
+        assert!(hp.dc_gain().abs() < 1e-4, "hp dc {}", hp.dc_gain());
+    }
+
+    #[test]
+    fn biquad_lowpass_attenuates_nyquist() {
+        let mut lp = Biquad::low_pass(1000.0, 48_000, 0.707);
+        let mut last = 0.0;
+        for i in 0..2000 {
+            let x = if i % 2 == 0 { 1.0 } else { -1.0 };
+            last = lp.process_sample(x);
+        }
+        assert!(last.abs() < 0.1, "nyquist not attenuated: {last}");
+    }
+
+    #[test]
+    fn biquad_peaking_eq_zero_gain_is_identity() {
+        let mut eq = Biquad::peaking_eq(1000.0, 48_000, 1.0, 0.0);
+        for x in [0.3f32, -0.7, 0.1, 0.9, -0.2] {
+            let y = eq.process_sample(x);
+            assert!((y - x).abs() < 1e-5, "0dB peaking changed {x} -> {y}");
+        }
+    }
+
+    #[test]
+    fn biquad_shelves_have_expected_dc_gain() {
+        // +6 dB low shelf boosts DC by A^2 = 10^(6/20) ~= 1.995.
+        let low = Biquad::low_shelf(1000.0, 48_000, 0.707, 6.0);
+        assert!(
+            (low.dc_gain() - 1.995).abs() < 0.05,
+            "low shelf dc {}",
+            low.dc_gain()
+        );
+        // High shelf leaves DC at unity.
+        let high = Biquad::high_shelf(1000.0, 48_000, 0.707, 6.0);
+        assert!(
+            (high.dc_gain() - 1.0).abs() < 1e-3,
+            "high shelf dc {}",
+            high.dc_gain()
+        );
+    }
+
+    #[test]
+    fn biquad_reset_clears_state() {
+        let mut lp = Biquad::low_pass(1000.0, 48_000, 0.707);
+        lp.process_sample(1.0);
+        lp.reset();
+        assert_eq!((lp.x1, lp.x2, lp.y1, lp.y2), (0.0, 0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn compressor_passes_quiet_attenuates_loud() {
+        let mut quiet = Compressor::new(-20.0, 4.0, 1.0, 50.0, 0.0, 48_000);
+        let mut out_quiet = 0.0;
+        for _ in 0..4800 {
+            out_quiet = quiet.process_sample(0.01);
+        }
+        assert!(
+            (out_quiet - 0.01).abs() < 1e-3,
+            "quiet altered: {out_quiet}"
+        );
+
+        let mut loud = Compressor::new(-20.0, 4.0, 1.0, 50.0, 0.0, 48_000);
+        let mut out_loud = 0.0;
+        for _ in 0..4800 {
+            out_loud = loud.process_sample(0.5);
+        }
+        let reduction_db = 20.0 * (out_loud.abs() / 0.5).log10();
+        assert!(
+            reduction_db < -1.0,
+            "loud not compressed: {reduction_db} dB ({out_loud})"
+        );
+    }
+
+    #[test]
+    fn compressor_makeup_gain_lifts_sub_threshold_level() {
+        let mut comp = Compressor::new(0.0, 2.0, 1.0, 10.0, 6.0, 48_000);
+        let mut out = 0.0;
+        for _ in 0..960 {
+            out = comp.process_sample(0.1);
+        }
+        // Below threshold, only +6 dB make-up applies (~x1.995).
+        assert!(
+            (out / 0.1 - 1.995).abs() < 0.05,
+            "makeup off: {}",
+            out / 0.1
+        );
     }
 }
