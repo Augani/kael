@@ -4,6 +4,7 @@
 
 pub mod audio_mix;
 pub mod automation;
+pub mod bidi;
 pub mod canvas;
 pub mod compositor;
 pub mod crash_report;
