@@ -1,4 +1,4 @@
-use anyhow::{Context as _, Result, bail};
+use anyhow::{bail, Context as _, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
@@ -109,10 +109,40 @@ fn bundle_macos(
     let mut artifacts = vec![bundle_dir.clone()];
     #[cfg(target_os = "macos")]
     if !options.dry_run && binary.is_some() {
+        let identity = config
+            .signing
+            .as_ref()
+            .and_then(|signing| signing.macos_certificate.as_deref());
+        match identity {
+            Some(identity) => {
+                codesign_app(&bundle_dir, identity).context("failed to codesign .app")?;
+                println!(
+                    "codesigned {} with identity {identity}",
+                    bundle_dir.display()
+                );
+            }
+            None => println!(
+                "note: no signing.macos_certificate configured — producing an unsigned build"
+            ),
+        }
+
         let dmg_path = output.join(format!("{app_name_slug}.dmg"));
         let dmg =
             create_dmg(&bundle_dir, &dmg_path, app_name).context("failed to create macOS .dmg")?;
         println!("macOS .dmg created: {}", dmg.display());
+
+        if identity.is_some() {
+            match std::env::var("KAEL_NOTARY_PROFILE").ok() {
+                Some(profile) if !profile.is_empty() => {
+                    notarize_and_staple(&dmg, &profile).context("failed to notarize macOS .dmg")?;
+                    println!("notarized and stapled {}", dmg.display());
+                }
+                _ => println!(
+                    "note: KAEL_NOTARY_PROFILE not set — skipping notarization of {}",
+                    dmg.display()
+                ),
+            }
+        }
         artifacts.push(dmg);
     }
     Ok(artifacts)
@@ -143,6 +173,51 @@ fn create_dmg(app_bundle: &Path, dmg_path: &Path, volume_name: &str) -> Result<P
         bail!("hdiutil create failed with status {status}");
     }
     Ok(dmg_path.to_path_buf())
+}
+
+/// Code-sign an `.app` bundle with the hardened runtime, ready for notarization.
+///
+/// `identity` is a keychain identity (e.g. `"Developer ID Application: Acme (TEAMID)"`).
+/// Requires a valid Apple Developer certificate in the keychain.
+#[cfg(target_os = "macos")]
+fn codesign_app(app_bundle: &Path, identity: &str) -> Result<()> {
+    let status = Command::new("codesign")
+        .args(["--force", "--deep", "--options", "runtime", "--timestamp"])
+        .arg("--sign")
+        .arg(identity)
+        .arg(app_bundle)
+        .status()
+        .context("failed to run codesign")?;
+    if !status.success() {
+        bail!("codesign failed with status {status}");
+    }
+    Ok(())
+}
+
+/// Submit a `.dmg` to Apple's notary service and staple the resulting ticket.
+///
+/// `keychain_profile` is a profile name previously stored with
+/// `xcrun notarytool store-credentials`. Blocks until notarization completes.
+#[cfg(target_os = "macos")]
+fn notarize_and_staple(dmg: &Path, keychain_profile: &str) -> Result<()> {
+    let submit = Command::new("xcrun")
+        .args(["notarytool", "submit"])
+        .arg(dmg)
+        .args(["--keychain-profile", keychain_profile, "--wait"])
+        .status()
+        .context("failed to run xcrun notarytool submit")?;
+    if !submit.success() {
+        bail!("notarytool submit failed with status {submit}");
+    }
+    let staple = Command::new("xcrun")
+        .args(["stapler", "staple"])
+        .arg(dmg)
+        .status()
+        .context("failed to run xcrun stapler")?;
+    if !staple.success() {
+        bail!("stapler staple failed with status {staple}");
+    }
+    Ok(())
 }
 
 fn generate_info_plist(config: &DistConfig, executable_name: &str) -> String {
@@ -200,19 +275,20 @@ fn bundle_windows(
         fs::create_dir_all(&bundle_dir)?;
     }
 
-    let metadata_path = bundle_dir.join("installer.json");
-    let metadata = serde_json::json!({
-        "name": config.name,
-        "version": config.version,
-        "description": config.bundle.file_description,
-    });
+    let wix_path = bundle_dir.join(format!("{app_name}.wxs"));
+    let wix_source = generate_wix_source(config, &app_name);
     if options.dry_run {
         println!(
-            "dry-run: would write installer metadata to {}",
-            metadata_path.display()
+            "dry-run: would write WiX installer source to {}",
+            wix_path.display()
         );
     } else {
-        fs::write(&metadata_path, serde_json::to_string_pretty(&metadata)?)?;
+        fs::write(&wix_path, wix_source)?;
+        println!(
+            "WiX installer source written: {} (build the .msi with `wix build {}`)",
+            wix_path.display(),
+            wix_path.display()
+        );
     }
 
     if let Some(binary) = binary {
@@ -328,6 +404,89 @@ fn generate_desktop_entry(config: &DistConfig) -> String {
     )
 }
 
+/// Generate a WiX v4 installer source (`.wxs`) that a CI runner compiles into a
+/// signed `.msi` via `wix build`. The `UpgradeCode` is derived deterministically
+/// from `app_id` so successive releases are recognised as upgrades of one product.
+fn generate_wix_source(config: &DistConfig, exe_name: &str) -> String {
+    let name = xml_escape(&config.name);
+    let version = xml_escape(&config.version);
+    let manufacturer = xml_escape(config.bundle.copyright.as_deref().unwrap_or(&config.name));
+    let upgrade_code = deterministic_guid(&format!("{}::wix-upgrade-code", config.app_id));
+    let exe = xml_escape(exe_name);
+
+    let icon_block = config
+        .icons
+        .windows
+        .as_ref()
+        .and_then(|path| path.file_name())
+        .and_then(|name| name.to_str())
+        .map(|icon_file| {
+            let icon = xml_escape(icon_file);
+            format!(
+                "    <Icon Id=\"AppIcon\" SourceFile=\"{icon}\" />\n    <Property Id=\"ARPPRODUCTICON\" Value=\"AppIcon\" />\n"
+            )
+        })
+        .unwrap_or_default();
+
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="{name}" Manufacturer="{manufacturer}" Version="{version}" UpgradeCode="{upgrade_code}" Language="1033" Scope="perMachine" Compressed="yes">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of {name} is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+{icon_block}    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="{name}">
+        <Component Id="MainExecutable">
+          <File Id="AppExe" Source="{exe}.exe" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="Main" Title="{name}" Level="1">
+      <ComponentRef Id="MainExecutable" />
+    </Feature>
+  </Package>
+</Wix>
+"#
+    )
+}
+
+/// Derive a stable RFC-4122 GUID from `seed` (SHA-256 based, version-5 style).
+///
+/// Used for the WiX `UpgradeCode`, which must be identical across releases of the
+/// same product but distinct between products — exactly what a content hash gives.
+fn deterministic_guid(seed: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(seed.as_bytes());
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex = hex::encode_upper(bytes);
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
+fn xml_escape(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,6 +541,68 @@ mod tests {
         let app_name = config.name.to_lowercase().replace(' ', "-");
         let expected = format!("{}.AppDir", app_name);
         assert_eq!(expected, "test-app.AppDir");
+    }
+
+    fn sample_config() -> DistConfig {
+        DistConfig {
+            app_id: "com.kael.demo".to_string(),
+            name: "Kael Demo".to_string(),
+            version: "1.2.3".to_string(),
+            icons: crate::IconSet {
+                macos: None,
+                windows: None,
+                linux: None,
+            },
+            bundle: crate::BundleMetadata {
+                copyright: Some("Acme Inc".to_string()),
+                category: None,
+                minimum_system_version: None,
+                file_description: None,
+                linux_categories: None,
+            },
+            signing: None,
+            updater: None,
+        }
+    }
+
+    #[test]
+    fn wix_source_has_buildable_structure() {
+        let wix = generate_wix_source(&sample_config(), "kael-demo");
+        assert!(wix.contains("<Wix xmlns=\"http://wixtoolset.org/schemas/v4/wxs\">"));
+        assert!(wix.contains("<Package Name=\"Kael Demo\""));
+        assert!(wix.contains("Manufacturer=\"Acme Inc\""));
+        assert!(wix.contains("Version=\"1.2.3\""));
+        assert!(wix.contains("Source=\"kael-demo.exe\""));
+        assert!(wix.contains("<Feature Id=\"Main\""));
+        assert!(wix.contains("UpgradeCode=\""));
+    }
+
+    #[test]
+    fn wix_upgrade_code_is_deterministic_and_valid_guid() {
+        let first = generate_wix_source(&sample_config(), "kael-demo");
+        let second = generate_wix_source(&sample_config(), "kael-demo");
+        assert_eq!(first, second);
+
+        let guid = deterministic_guid("com.kael.demo::wix-upgrade-code");
+        let parts: Vec<&str> = guid.split('-').collect();
+        assert_eq!(
+            parts.iter().map(|p| p.len()).collect::<Vec<_>>(),
+            vec![8, 4, 4, 4, 12]
+        );
+        assert!(guid.chars().all(|c| c.is_ascii_hexdigit() || c == '-'));
+        assert_eq!(&guid[14..15], "5");
+        assert!(matches!(&guid[19..20], "8" | "9" | "A" | "B"));
+
+        let other = deterministic_guid("com.other.app::wix-upgrade-code");
+        assert_ne!(guid, other);
+    }
+
+    #[test]
+    fn xml_escape_escapes_markup_metacharacters() {
+        assert_eq!(
+            xml_escape("a & b <c> \"d\" 'e'"),
+            "a &amp; b &lt;c&gt; &quot;d&quot; &apos;e&apos;"
+        );
     }
 }
 
