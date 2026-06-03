@@ -5,6 +5,7 @@
 pub mod canvas;
 pub mod compositor;
 pub mod dashboard;
+pub mod export;
 pub mod generators;
 pub mod frame_cache;
 pub mod ide;
