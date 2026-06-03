@@ -4,6 +4,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::playback::Timebase;
+
 /// Metadata extracted from probing a media file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaProbe {
@@ -142,6 +144,36 @@ impl TimelineClip {
     pub fn track_end(&self) -> u64 {
         self.track_offset + self.duration()
     }
+
+    /// Whether the clip is visible at the given track (timeline) frame.
+    pub fn contains_track_frame(&self, frame: u64) -> bool {
+        frame >= self.track_offset && frame < self.track_end()
+    }
+
+    /// The source-media frame this clip displays at the given track frame, or
+    /// `None` when the clip is not visible there. This is the exact frame a
+    /// decoder must produce for frame-accurate playback.
+    pub fn source_frame_at(&self, frame: u64) -> Option<u64> {
+        if self.contains_track_frame(frame) {
+            Some(self.start_frame + (frame - self.track_offset))
+        } else {
+            None
+        }
+    }
+}
+
+/// The decode request for one track at a given timeline frame: which source
+/// frame of which clip must be produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackFrameRequest {
+    /// The track the visible clip lives on.
+    pub track_id: String,
+    /// The clip that is visible at the requested frame.
+    pub clip_id: String,
+    /// The source-media path to decode from.
+    pub source: String,
+    /// The frame index within the source media to present.
+    pub source_frame: u64,
 }
 
 impl TimelineTrack {
@@ -422,6 +454,36 @@ impl Timeline {
             .max()
             .unwrap_or(0);
     }
+
+    /// The exact timebase (rational fps) of this timeline, or `None` if the frame
+    /// rate is not a usable value.
+    pub fn timebase(&self) -> Option<Timebase> {
+        Timebase::from_fps(self.frame_rate)
+    }
+
+    /// Resolve, for each track, the source frame that must be decoded to present
+    /// timeline `frame` — the transport's per-tick decode schedule.
+    ///
+    /// Tracks with no clip at `frame` are omitted; tracks are returned in
+    /// declaration order, and within a track the first clip covering the frame wins.
+    pub fn frame_requests(&self, frame: u64) -> Vec<TrackFrameRequest> {
+        let mut requests = Vec::new();
+        for track in &self.tracks {
+            if let Some((clip, source_frame)) = track
+                .clips
+                .iter()
+                .find_map(|clip| clip.source_frame_at(frame).map(|sf| (clip, sf)))
+            {
+                requests.push(TrackFrameRequest {
+                    track_id: track.id.clone(),
+                    clip_id: clip.id.clone(),
+                    source: clip.source.clone(),
+                    source_frame,
+                });
+            }
+        }
+        requests
+    }
 }
 
 /// A request to generate a thumbnail from a media source.
@@ -592,6 +654,70 @@ mod tests {
             track_type,
             clips,
         }
+    }
+
+    #[test]
+    fn clip_source_frame_maps_track_to_source() {
+        let clip = sample_clip("c", 100, 110, 50);
+        assert_eq!(clip.duration(), 10);
+        assert_eq!(clip.track_end(), 60);
+        assert!(!clip.contains_track_frame(49));
+        assert!(clip.contains_track_frame(50));
+        assert!(clip.contains_track_frame(59));
+        assert!(!clip.contains_track_frame(60));
+        assert_eq!(clip.source_frame_at(50), Some(100));
+        assert_eq!(clip.source_frame_at(55), Some(105));
+        assert_eq!(clip.source_frame_at(59), Some(109));
+        assert_eq!(clip.source_frame_at(60), None);
+        assert_eq!(clip.source_frame_at(0), None);
+    }
+
+    #[test]
+    fn timeline_frame_requests_resolve_active_source_frames_per_track() {
+        let tl = Timeline {
+            tracks: vec![
+                sample_track(
+                    "v1",
+                    TrackType::Video,
+                    vec![sample_clip("a", 0, 30, 0), sample_clip("b", 200, 260, 30)],
+                ),
+                sample_track("v2", TrackType::Video, vec![sample_clip("c", 500, 560, 40)]),
+            ],
+            frame_rate: 30.0,
+            duration_frames: 100,
+        };
+
+        let early = tl.frame_requests(10);
+        assert_eq!(early.len(), 1);
+        assert_eq!(early[0].track_id, "v1");
+        assert_eq!(early[0].clip_id, "a");
+        assert_eq!(early[0].source_frame, 10);
+
+        let mid = tl.frame_requests(45);
+        assert_eq!(mid.len(), 2);
+        assert_eq!((mid[0].clip_id.as_str(), mid[0].source_frame), ("b", 215));
+        assert_eq!(
+            (mid[1].track_id.as_str(), mid[1].clip_id.as_str(), mid[1].source_frame),
+            ("v2", "c", 505)
+        );
+
+        assert!(tl.frame_requests(100).is_empty());
+    }
+
+    #[test]
+    fn timeline_timebase_snaps_to_exact_rational() {
+        let tl = Timeline {
+            tracks: vec![],
+            frame_rate: 29.97,
+            duration_frames: 0,
+        };
+        assert_eq!(tl.timebase(), Some(Timebase::NTSC));
+        let bad = Timeline {
+            tracks: vec![],
+            frame_rate: 0.0,
+            duration_frames: 0,
+        };
+        assert_eq!(bad.timebase(), None);
     }
 
     #[test]
