@@ -2025,6 +2025,33 @@ pub mod reference {
         })
     }
 
+    /// A single-input solarize (Sabattier effect) of `inputs[0]`: per RGB channel, values
+    /// at or above `threshold` are inverted to `1 - value` while values below it are kept,
+    /// producing the characteristic tonal fold. A `threshold` above 1 passes through; 0
+    /// fully inverts. Alpha is unchanged.
+    pub fn solarize(threshold: f32) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            let fold = |value: f32| {
+                if value >= threshold {
+                    1.0 - value
+                } else {
+                    value
+                }
+            };
+            for (output_pixel, source_pixel) in output.pixels.iter_mut().zip(&source.pixels) {
+                *output_pixel = [
+                    fold(source_pixel[0]),
+                    fold(source_pixel[1]),
+                    fold(source_pixel[2]),
+                    source_pixel[3],
+                ];
+            }
+        })
+    }
+
     /// A single-input op that posterizes `inputs[0]` to `levels` discrete steps per RGB
     /// channel (clamped to at least 2) — the stylize/banding effect. Alpha passes through.
     pub fn posterize(levels: u32) -> PassOp<'static> {
@@ -3076,6 +3103,37 @@ pub mod reference {
             levels(0.0, 1.0, 1.0, 0.2, 0.8)(&[&ramp], &mut ends);
             assert!((ends.pixel(0, 0)[0] - 0.2).abs() < 1e-6);
             assert!((ends.pixel(1, 0)[0] - 0.8).abs() < 1e-6);
+        }
+
+        #[test]
+        fn solarize_high_threshold_passes_through() {
+            let source = Image::filled(2, 2, [0.2, 0.55, 0.95, 0.6]);
+            let mut out = Image::new(2, 2);
+            solarize(1.5)(&[&source], &mut out);
+            assert_eq!(out.pixels, source.pixels);
+        }
+
+        #[test]
+        fn solarize_zero_threshold_fully_inverts() {
+            let source = Image::filled(1, 1, [0.2, 0.6, 0.9, 1.0]);
+            let mut out = Image::new(1, 1);
+            solarize(0.0)(&[&source], &mut out);
+            assert!((out.pixel(0, 0)[0] - 0.8).abs() < 1e-6);
+            assert!((out.pixel(0, 0)[1] - 0.4).abs() < 1e-6);
+            assert!((out.pixel(0, 0)[2] - 0.1).abs() < 1e-6);
+            assert_eq!(out.pixel(0, 0)[3], 1.0);
+        }
+
+        #[test]
+        fn solarize_folds_values_above_the_threshold() {
+            // Below 0.5 kept; at/above 0.5 inverted (the Sabattier fold).
+            let source = Image::filled(1, 1, [0.3, 0.5, 0.8, 0.4]);
+            let mut out = Image::new(1, 1);
+            solarize(0.5)(&[&source], &mut out);
+            assert!((out.pixel(0, 0)[0] - 0.3).abs() < 1e-6);
+            assert!((out.pixel(0, 0)[1] - 0.5).abs() < 1e-6);
+            assert!((out.pixel(0, 0)[2] - 0.2).abs() < 1e-6);
+            assert_eq!(out.pixel(0, 0)[3], 0.4);
         }
 
         #[test]
