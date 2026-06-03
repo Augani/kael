@@ -9,6 +9,7 @@ pub mod canvas;
 pub mod compositor;
 pub mod crash_report;
 pub mod dashboard;
+pub mod effects;
 pub mod export;
 pub mod generators;
 pub mod frame_cache;

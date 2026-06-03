@@ -1,0 +1,250 @@
+//! Serializable per-clip effects.
+//!
+//! [`ClipEffect`] is a small, project-storable description of one reference-compositor
+//! effect pass, and knows both the op it maps to and the cache parameter hash it
+//! contributes. [`EffectStack`] is an ordered list applied to a clip's source image before
+//! compositing — the bridge between the reference effect library and the timeline/project
+//! model (V5 keyframe params, P2-B effect stacks, P4-C project format).
+
+use kael_render_graph::reference::{
+    exposure, gamma, gaussian_blur, saturation, solarize, temperature_tint, vignette, Image, PassOp,
+};
+use serde::{Deserialize, Serialize};
+
+/// A single serializable image effect applied to a clip before compositing.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum ClipEffect {
+    /// Gaussian blur of standard deviation `sigma` pixels.
+    GaussianBlur {
+        /// Blur radius (standard deviation) in pixels.
+        sigma: f32,
+    },
+    /// Exposure adjustment in stops (`+1` doubles each channel).
+    Exposure {
+        /// Stops of exposure.
+        stops: f32,
+    },
+    /// Gamma curve `value^power`.
+    Gamma {
+        /// Gamma power.
+        power: f32,
+    },
+    /// Saturation scale (`1` unchanged, `0` grayscale).
+    Saturation {
+        /// Saturation multiplier.
+        amount: f32,
+    },
+    /// White-balance temperature/tint, each normalized to `-1..=1`.
+    WhiteBalance {
+        /// Warm/cool axis.
+        temperature: f32,
+        /// Green/magenta axis.
+        tint: f32,
+    },
+    /// Radial vignette darkening toward the edges.
+    Vignette {
+        /// Darkening strength.
+        amount: f32,
+        /// Normalized radius where darkening begins.
+        radius: f32,
+        /// Falloff width.
+        softness: f32,
+    },
+    /// Solarize (Sabattier) fold at `threshold`.
+    Solarize {
+        /// Fold threshold.
+        threshold: f32,
+    },
+}
+
+impl ClipEffect {
+    /// The reference compositor op that applies this effect to a single input image.
+    pub fn to_pass_op(self) -> PassOp<'static> {
+        match self {
+            ClipEffect::GaussianBlur { sigma } => gaussian_blur(sigma),
+            ClipEffect::Exposure { stops } => exposure(stops),
+            ClipEffect::Gamma { power } => gamma(power),
+            ClipEffect::Saturation { amount } => saturation(amount),
+            ClipEffect::WhiteBalance { temperature, tint } => temperature_tint(temperature, tint),
+            ClipEffect::Vignette {
+                amount,
+                radius,
+                softness,
+            } => vignette(amount, radius, softness),
+            ClipEffect::Solarize { threshold } => solarize(threshold),
+        }
+    }
+
+    /// A stable hash of this effect's identity and parameters, for render-graph cache keys.
+    pub fn param_hash(self) -> u64 {
+        let (tag, params): (u8, [f32; 3]) = match self {
+            ClipEffect::GaussianBlur { sigma } => (1, [sigma, 0.0, 0.0]),
+            ClipEffect::Exposure { stops } => (2, [stops, 0.0, 0.0]),
+            ClipEffect::Gamma { power } => (3, [power, 0.0, 0.0]),
+            ClipEffect::Saturation { amount } => (4, [amount, 0.0, 0.0]),
+            ClipEffect::WhiteBalance { temperature, tint } => (5, [temperature, tint, 0.0]),
+            ClipEffect::Vignette {
+                amount,
+                radius,
+                softness,
+            } => (6, [amount, radius, softness]),
+            ClipEffect::Solarize { threshold } => (7, [threshold, 0.0, 0.0]),
+        };
+        let mut hash = fnv_mix(FNV_OFFSET, tag as u64);
+        for value in params {
+            hash = fnv_mix(hash, value.to_bits() as u64);
+        }
+        hash
+    }
+}
+
+/// An ordered stack of [`ClipEffect`]s applied to a clip's source image.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EffectStack {
+    /// The effects, applied in order (the first listed is applied first).
+    pub effects: Vec<ClipEffect>,
+}
+
+impl EffectStack {
+    /// An empty stack (the identity).
+    pub fn new() -> Self {
+        Self {
+            effects: Vec::new(),
+        }
+    }
+
+    /// Whether the stack has no effects.
+    pub fn is_empty(&self) -> bool {
+        self.effects.is_empty()
+    }
+
+    /// The number of effects in the stack.
+    pub fn len(&self) -> usize {
+        self.effects.len()
+    }
+
+    /// Apply every effect in order to `source`, returning the result. An empty stack
+    /// returns an unchanged copy.
+    pub fn apply(&self, source: &Image) -> Image {
+        let mut current = source.clone();
+        for effect in &self.effects {
+            let mut next = Image::new(current.width, current.height);
+            effect.to_pass_op()(&[&current], &mut next);
+            current = next;
+        }
+        current
+    }
+
+    /// A stable hash folding every effect's parameter hash in order, for cache keys. The
+    /// order matters: `[a, b]` and `[b, a]` hash differently.
+    pub fn param_hash(&self) -> u64 {
+        let mut hash = FNV_OFFSET;
+        for effect in &self.effects {
+            hash = fnv_mix(hash, effect.param_hash());
+        }
+        hash
+    }
+}
+
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+fn fnv_mix(mut hash: u64, value: u64) -> u64 {
+    for byte in value.to_le_bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kael_render_graph::reference::Image;
+
+    #[test]
+    fn clip_effect_serde_round_trips() {
+        let effects = [
+            ClipEffect::GaussianBlur { sigma: 2.5 },
+            ClipEffect::Exposure { stops: -1.0 },
+            ClipEffect::Gamma { power: 2.2 },
+            ClipEffect::Saturation { amount: 0.0 },
+            ClipEffect::WhiteBalance {
+                temperature: 0.3,
+                tint: -0.2,
+            },
+            ClipEffect::Vignette {
+                amount: 0.8,
+                radius: 0.2,
+                softness: 0.5,
+            },
+            ClipEffect::Solarize { threshold: 0.5 },
+        ];
+        for effect in effects {
+            let json = serde_json::to_string(&effect).unwrap();
+            let restored: ClipEffect = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored, effect);
+        }
+    }
+
+    #[test]
+    fn empty_stack_is_identity() {
+        let source = Image::filled(4, 4, [0.3, 0.6, 0.9, 1.0]);
+        let stack = EffectStack::new();
+        assert!(stack.is_empty());
+        assert_eq!(stack.apply(&source).pixels, source.pixels);
+    }
+
+    #[test]
+    fn stack_applies_effects_in_order() {
+        let source = Image::filled(2, 2, [0.25, 0.25, 0.25, 1.0]);
+
+        // Exposure +1 doubles (0.25 -> 0.5), then gamma 2 squares (0.5 -> 0.25).
+        let forward = EffectStack {
+            effects: vec![
+                ClipEffect::Exposure { stops: 1.0 },
+                ClipEffect::Gamma { power: 2.0 },
+            ],
+        };
+        assert!((forward.apply(&source).pixel(0, 0)[0] - 0.25).abs() < 1e-6);
+
+        // Reversed: gamma 2 first (0.25 -> 0.0625), then exposure +1 (-> 0.125).
+        let reversed = EffectStack {
+            effects: vec![
+                ClipEffect::Gamma { power: 2.0 },
+                ClipEffect::Exposure { stops: 1.0 },
+            ],
+        };
+        assert!((reversed.apply(&source).pixel(0, 0)[0] - 0.125).abs() < 1e-6);
+    }
+
+    #[test]
+    fn param_hash_tracks_params_and_order() {
+        // Same params hash equal; different params differ.
+        assert_eq!(
+            ClipEffect::GaussianBlur { sigma: 1.0 }.param_hash(),
+            ClipEffect::GaussianBlur { sigma: 1.0 }.param_hash()
+        );
+        assert_ne!(
+            ClipEffect::GaussianBlur { sigma: 1.0 }.param_hash(),
+            ClipEffect::GaussianBlur { sigma: 2.0 }.param_hash()
+        );
+        // Distinct variants with the same leading param differ.
+        assert_ne!(
+            ClipEffect::Exposure { stops: 1.0 }.param_hash(),
+            ClipEffect::Gamma { power: 1.0 }.param_hash()
+        );
+
+        // Stack order changes the fold.
+        let a = ClipEffect::Exposure { stops: 1.0 };
+        let b = ClipEffect::Gamma { power: 2.0 };
+        let forward = EffectStack {
+            effects: vec![a, b],
+        };
+        let reversed = EffectStack {
+            effects: vec![b, a],
+        };
+        assert_ne!(forward.param_hash(), reversed.param_hash());
+        assert_ne!(forward.param_hash(), EffectStack::new().param_hash());
+    }
+}
