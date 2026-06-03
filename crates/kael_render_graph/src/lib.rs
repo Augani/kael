@@ -199,6 +199,11 @@ impl RenderGraph {
         id
     }
 
+    /// The declaration of `pass`, or `None` if the handle is unknown.
+    pub fn pass(&self, pass: PassId) -> Option<&PassDesc> {
+        self.passes.get(pass.0 as usize)
+    }
+
     /// Validate and schedule the graph: checks resource handles, enforces a
     /// single writer per resource, topologically orders the passes (erroring on
     /// cycles), computes per-pass cache keys, and computes resource lifetimes.
@@ -688,5 +693,173 @@ mod tests {
             allocation.slot_of[t1.0 as usize],
             allocation.slot_of[t2.0 as usize]
         );
+    }
+}
+
+/// A CPU reference executor for a compiled [`RenderGraph`].
+///
+/// Runs each pass in schedule order over linear straight-alpha RGBA `f32`
+/// images, producing the logical result a GPU backend should — a correctness
+/// oracle and the "preview == export" reference (export determinism, V10).
+pub mod reference {
+    use std::collections::HashMap;
+
+    use anyhow::{Result, anyhow};
+
+    use super::{CompiledGraph, PassId, RenderGraph, ResourceId};
+
+    /// A linear, straight-alpha RGBA image.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Image {
+        /// Width in pixels.
+        pub width: u32,
+        /// Height in pixels.
+        pub height: u32,
+        /// Row-major `[r, g, b, a]` pixels in linear light.
+        pub pixels: Vec<[f32; 4]>,
+    }
+
+    impl Image {
+        /// A transparent-black image.
+        pub fn new(width: u32, height: u32) -> Self {
+            Self {
+                width,
+                height,
+                pixels: vec![[0.0; 4]; (width * height) as usize],
+            }
+        }
+
+        /// An image filled with a single color.
+        pub fn filled(width: u32, height: u32, color: [f32; 4]) -> Self {
+            Self {
+                width,
+                height,
+                pixels: vec![color; (width * height) as usize],
+            }
+        }
+
+        /// The pixel at `(x, y)`.
+        pub fn pixel(&self, x: u32, y: u32) -> [f32; 4] {
+            self.pixels[(y * self.width + x) as usize]
+        }
+    }
+
+    /// A pass implementation: read `inputs` (in the pass's declared read order)
+    /// and write `output`.
+    pub type PassOp<'a> = Box<dyn Fn(&[&Image], &mut Image) + 'a>;
+
+    /// Execute `compiled` over CPU images, returning the image written for each
+    /// resource. `imported` supplies externally-owned inputs; `ops` supplies a
+    /// closure per pass (passes without an op leave their output cleared).
+    pub fn execute<'ops>(
+        graph: &RenderGraph,
+        compiled: &CompiledGraph,
+        width: u32,
+        height: u32,
+        imported: &HashMap<ResourceId, Image>,
+        ops: &HashMap<PassId, PassOp<'ops>>,
+    ) -> Result<HashMap<ResourceId, Image>> {
+        let mut images: HashMap<ResourceId, Image> = imported.clone();
+
+        for &pass_id in compiled.execution_order() {
+            let pass = graph
+                .pass(pass_id)
+                .ok_or_else(|| anyhow!("compiled graph references unknown {pass_id:?}"))?;
+
+            let mut inputs = Vec::with_capacity(pass.reads.len());
+            for resource in &pass.reads {
+                let image = images.get(resource).ok_or_else(|| {
+                    anyhow!("pass '{}' reads unproduced {:?}", pass.name, resource)
+                })?;
+                inputs.push(image);
+            }
+
+            let mut output = Image::new(width, height);
+            if let Some(op) = ops.get(&pass_id) {
+                op(&inputs, &mut output);
+            }
+
+            for &resource in &pass.writes {
+                images.insert(resource, output.clone());
+            }
+        }
+
+        Ok(images)
+    }
+
+    /// A pass op that fills the output with a constant color.
+    pub fn fill(color: [f32; 4]) -> PassOp<'static> {
+        Box::new(move |_inputs, output| {
+            for pixel in output.pixels.iter_mut() {
+                *pixel = color;
+            }
+        })
+    }
+
+    /// A pass op compositing `inputs[0]` (top) over `inputs[1]` (bottom) with
+    /// straight-alpha source-over.
+    pub fn blend_over(inputs: &[&Image], output: &mut Image) {
+        if inputs.len() < 2 {
+            return;
+        }
+        let (top, bottom) = (inputs[0], inputs[1]);
+        for (index, pixel) in output.pixels.iter_mut().enumerate() {
+            let t = top.pixels[index];
+            let b = bottom.pixels[index];
+            let out_a = t[3] + b[3] * (1.0 - t[3]);
+            let mut out = [0.0f32; 4];
+            out[3] = out_a;
+            for channel in 0..3 {
+                out[channel] = if out_a <= f32::EPSILON {
+                    0.0
+                } else {
+                    (t[channel] * t[3] + b[channel] * b[3] * (1.0 - t[3])) / out_a
+                };
+            }
+            *pixel = out;
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::{PassDesc, ResourceDesc};
+
+        #[test]
+        fn executes_a_composite() {
+            let mut graph = RenderGraph::new();
+            let overlay = graph.add_resource(ResourceDesc::transient_texture("overlay"));
+            let bg = graph.add_resource(ResourceDesc::imported_texture("bg"));
+            let out = graph.add_resource(ResourceDesc::transient_texture("out"));
+
+            let paint = graph.add_pass(PassDesc::new("paint").write(overlay));
+            let comp = graph.add_pass(PassDesc::new("comp").read(overlay).read(bg).write(out));
+            let compiled = graph.compile().unwrap();
+
+            let mut imported = HashMap::new();
+            imported.insert(bg, Image::filled(2, 2, [0.0, 0.0, 1.0, 1.0]));
+
+            let mut ops: HashMap<PassId, PassOp<'static>> = HashMap::new();
+            ops.insert(paint, fill([1.0, 0.0, 0.0, 0.5]));
+            ops.insert(comp, Box::new(blend_over));
+
+            let result = execute(&graph, &compiled, 2, 2, &imported, &ops).unwrap();
+            let pixel = result[&out].pixel(1, 1);
+            assert!((pixel[0] - 0.5).abs() < 1e-6, "{pixel:?}");
+            assert!((pixel[1] - 0.0).abs() < 1e-6, "{pixel:?}");
+            assert!((pixel[2] - 0.5).abs() < 1e-6, "{pixel:?}");
+            assert!((pixel[3] - 1.0).abs() < 1e-6, "{pixel:?}");
+        }
+
+        #[test]
+        fn errors_on_unproduced_input() {
+            let mut graph = RenderGraph::new();
+            let missing = graph.add_resource(ResourceDesc::transient_texture("missing"));
+            let out = graph.add_resource(ResourceDesc::transient_texture("out"));
+            graph.add_pass(PassDesc::new("p").read(missing).write(out));
+            let compiled = graph.compile().unwrap();
+            let result = execute(&graph, &compiled, 1, 1, &HashMap::new(), &HashMap::new());
+            assert!(result.is_err());
+        }
     }
 }
