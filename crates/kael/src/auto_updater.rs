@@ -11,9 +11,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, bail};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use ed25519_dalek::{Signature, VerifyingKey};
 use futures::AsyncReadExt as _;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 
+use kael_release::update::{UpdateChannel, UpdateManifest, verify_manifest};
 use semantic_version::SemanticVersion;
 
 /// Configuration for the auto-updater.
@@ -37,8 +42,14 @@ pub struct UpdateInfo {
     pub release_notes: Option<String>,
     /// URL to download the update package.
     pub download_url: String,
-    /// Optional cryptographic signature for verification.
+    /// Base64-encoded ed25519 signature over the release manifest.
     pub signature: Option<String>,
+    /// Expected SHA-256 (lowercase hex) of the downloaded package.
+    #[serde(default)]
+    pub sha256: Option<String>,
+    /// Expected size of the downloaded package in bytes.
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
 }
 
 /// Progress information during an update download.
@@ -100,6 +111,9 @@ pub struct AutoUpdater {
     status: UpdateStatus,
     latest_update: Option<UpdateInfo>,
     downloaded_path: Option<std::path::PathBuf>,
+    verifying_key: Option<VerifyingKey>,
+    update_channel: UpdateChannel,
+    require_signature: bool,
 }
 
 impl AutoUpdater {
@@ -118,12 +132,55 @@ impl AutoUpdater {
             status: UpdateStatus::Idle,
             latest_update: None,
             downloaded_path: None,
+            verifying_key: None,
+            update_channel: UpdateChannel::Stable,
+            require_signature: true,
         }
     }
 
     /// Set the platform-specific installer backend.
     pub fn set_installer(&mut self, installer: Arc<dyn PlatformInstaller>) {
         self.installer = Some(installer);
+    }
+
+    /// Configure the ed25519 public key used to authenticate update manifests.
+    ///
+    /// `public_key` must be the 32-byte ed25519 public key whose private
+    /// counterpart signs release manifests. Once configured, every downloaded
+    /// package is refused before installation unless it carries a valid
+    /// signature over a manifest matching its advertised version, channel, URL,
+    /// hash, and size, and the downloaded bytes hash to that signed SHA-256.
+    pub fn set_public_key(&mut self, public_key: &[u8]) -> Result<()> {
+        let key_array: [u8; 32] = public_key
+            .try_into()
+            .map_err(|_| anyhow!("ed25519 public key must be exactly 32 bytes"))?;
+        let key = VerifyingKey::from_bytes(&key_array)
+            .map_err(|_| anyhow!("invalid ed25519 public key"))?;
+        self.verifying_key = Some(key);
+        Ok(())
+    }
+
+    /// Configure the ed25519 public key from a hex-encoded string.
+    pub fn set_public_key_hex(&mut self, hex_key: &str) -> Result<()> {
+        let bytes = hex::decode(hex_key.trim()).context("update public key is not valid hex")?;
+        self.set_public_key(&bytes)
+    }
+
+    /// Set the release channel whose manifests this updater trusts.
+    ///
+    /// The channel participates in the signed manifest payload, so it must match
+    /// the channel the publisher signed for. Defaults to the stable channel.
+    pub fn set_update_channel(&mut self, channel: impl AsRef<str>) {
+        self.update_channel = channel_from_str(channel.as_ref());
+    }
+
+    /// Control whether a valid signature and hash are mandatory before install.
+    ///
+    /// Defaults to `true` (fail closed). Disabling this re-opens the updater to
+    /// installing unverified packages and is intended only for tests or
+    /// environments that guarantee package integrity by other means.
+    pub fn set_require_signature(&mut self, require: bool) {
+        self.require_signature = require;
     }
 
     /// Returns the current update status.
@@ -232,27 +289,100 @@ impl AutoUpdater {
             .await
             .context("failed to read update package")?;
 
-        // Report final progress
         on_progress(DownloadProgress {
             bytes_downloaded: bytes.len() as u64,
             total_bytes,
         });
 
-        // Write to a temp file
-        let temp_dir = std::env::temp_dir();
-        let filename = update
-            .download_url
-            .rsplit('/')
-            .next()
-            .unwrap_or("update_package");
-        let download_path = temp_dir.join(format!("gpui_update_{}", filename));
+        if let Err(err) = self.verify_package(&update, &bytes) {
+            self.downloaded_path = None;
+            self.status = UpdateStatus::Error(err.to_string());
+            return Err(err).context("update package failed verification; refusing to install");
+        }
 
+        let staging_dir =
+            std::env::temp_dir().join(format!("kael_update_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&staging_dir)
+            .context("failed to create update staging directory")?;
+        restrict_dir_permissions(&staging_dir);
+
+        let download_path = staging_dir.join(sanitize_package_filename(&update.download_url));
         std::fs::write(&download_path, &bytes).context("failed to write update package to disk")?;
 
         self.downloaded_path = Some(download_path.clone());
         self.status = UpdateStatus::ReadyToInstall;
 
         Ok(download_path)
+    }
+
+    fn verify_package(&self, update: &UpdateInfo, bytes: &[u8]) -> Result<()> {
+        match self.verifying_key.as_ref() {
+            Some(key) => {
+                let signature_b64 = update.signature.as_deref().ok_or_else(|| {
+                    anyhow!("update is unsigned but signature verification is required")
+                })?;
+                let signature_bytes = BASE64
+                    .decode(signature_b64)
+                    .context("update signature is not valid base64")?;
+                let signature_array: [u8; 64] = signature_bytes
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| anyhow!("update signature must be 64 bytes"))?;
+                let signature = Signature::from_bytes(&signature_array);
+
+                let sha256 = update
+                    .sha256
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("signed update is missing its sha256 hash"))?;
+                let size_bytes = update
+                    .size_bytes
+                    .ok_or_else(|| anyhow!("signed update is missing its size"))?;
+
+                let manifest = UpdateManifest {
+                    version: update.version.to_string(),
+                    channel: self.update_channel.clone(),
+                    url: update.download_url.clone(),
+                    sha256: sha256.to_string(),
+                    size_bytes,
+                    release_notes: None,
+                    min_version: None,
+                };
+                if !verify_manifest(&manifest, &signature, key) {
+                    bail!("update signature verification failed");
+                }
+            }
+            None => {
+                if self.require_signature {
+                    bail!(
+                        "auto-update signature verification is required but no public key is configured"
+                    );
+                }
+            }
+        }
+
+        match update.sha256.as_deref() {
+            Some(expected) => {
+                if let Some(expected_size) = update.size_bytes {
+                    if bytes.len() as u64 != expected_size {
+                        bail!(
+                            "update size mismatch: expected {expected_size} bytes, downloaded {}",
+                            bytes.len()
+                        );
+                    }
+                }
+                let actual = sha256_hex(bytes);
+                if actual.len() != expected.len() || !actual.eq_ignore_ascii_case(expected) {
+                    bail!("update hash mismatch: expected {expected}, downloaded {actual}");
+                }
+            }
+            None => {
+                if self.require_signature {
+                    bail!("update is missing a sha256 hash; cannot verify integrity");
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Install the downloaded update and restart the application.
@@ -272,6 +402,56 @@ impl AutoUpdater {
             .ok_or_else(|| anyhow!("no update has been downloaded"))?;
 
         installer.install_and_restart(path)
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
+
+fn channel_from_str(channel: &str) -> UpdateChannel {
+    let trimmed = channel.trim();
+    if trimmed.eq_ignore_ascii_case("stable") {
+        UpdateChannel::Stable
+    } else if trimmed.eq_ignore_ascii_case("beta") {
+        UpdateChannel::Beta
+    } else if trimmed.eq_ignore_ascii_case("nightly") {
+        UpdateChannel::Nightly
+    } else {
+        UpdateChannel::Custom(trimmed.to_string())
+    }
+}
+
+fn sanitize_package_filename(download_url: &str) -> String {
+    let candidate = download_url
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("");
+    let cleaned: String = candidate
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        .collect();
+    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
+        "update_package".to_string()
+    } else {
+        cleaned
+    }
+}
+
+fn restrict_dir_permissions(dir: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
     }
 }
 
@@ -300,6 +480,10 @@ struct JsonFeedItem {
     download_url: String,
     #[serde(default)]
     signature: Option<String>,
+    #[serde(default)]
+    sha256: Option<String>,
+    #[serde(default)]
+    size_bytes: Option<u64>,
 }
 
 /// Parse a JSON update feed.
@@ -332,6 +516,8 @@ fn parse_json_feed(body: &str) -> Result<Vec<UpdateInfo>> {
                 release_notes: item.release_notes,
                 download_url: item.download_url,
                 signature: item.signature,
+                sha256: item.sha256,
+                size_bytes: item.size_bytes,
             })
         })
         .collect()
@@ -361,8 +547,14 @@ fn parse_appcast_xml(body: &str) -> Result<Vec<UpdateInfo>> {
 
         let download_url = extract_xml_attr(&item_block, "url");
 
-        let signature = extract_xml_attr(&item_block, "sparkle:dsaSignature")
-            .or_else(|| extract_xml_attr(&item_block, "sparkle:edSignature"));
+        let signature = extract_xml_attr(&item_block, "sparkle:edSignature")
+            .or_else(|| extract_xml_attr(&item_block, "sparkle:dsaSignature"));
+
+        let sha256 = extract_xml_attr(&item_block, "sparkle:sha256")
+            .or_else(|| extract_xml_attr(&item_block, "sha256"));
+
+        let size_bytes =
+            extract_xml_attr(&item_block, "length").and_then(|len| len.parse::<u64>().ok());
 
         let release_notes = extract_xml_tag_content(&item_block, "description");
 
@@ -373,6 +565,8 @@ fn parse_appcast_xml(body: &str) -> Result<Vec<UpdateInfo>> {
                     release_notes,
                     download_url,
                     signature,
+                    sha256,
+                    size_bytes,
                 });
             }
         }
@@ -987,6 +1181,8 @@ mod tests {
             release_notes: Some("Fixed a bug".to_string()),
             download_url: "https://example.com/v2.5.1.zip".to_string(),
             signature: Some("sig_value".to_string()),
+            sha256: Some("a".repeat(64)),
+            size_bytes: Some(4096),
         };
 
         let json = serde_json::to_string(&info).unwrap();
@@ -996,6 +1192,8 @@ mod tests {
         assert_eq!(deserialized.release_notes, info.release_notes);
         assert_eq!(deserialized.download_url, info.download_url);
         assert_eq!(deserialized.signature, info.signature);
+        assert_eq!(deserialized.sha256, info.sha256);
+        assert_eq!(deserialized.size_bytes, info.size_bytes);
     }
 
     #[test]
@@ -1024,6 +1222,206 @@ mod tests {
 
         let result = updater.install_and_restart();
         assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Update verification tests (RCE hotfix)
+    // -----------------------------------------------------------------------
+
+    fn signed_update_fixture(bytes: &[u8], channel: UpdateChannel) -> (VerifyingKey, UpdateInfo) {
+        use ed25519_dalek::SigningKey;
+
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let verifying_key = signing_key.verifying_key();
+
+        let sha256 = sha256_hex(bytes);
+        let size_bytes = bytes.len() as u64;
+        let version = SemanticVersion::new(1, 2, 0);
+        let download_url = "https://example.com/MyApp-1.2.0.zip".to_string();
+
+        let manifest = UpdateManifest {
+            version: version.to_string(),
+            channel,
+            url: download_url.clone(),
+            sha256: sha256.clone(),
+            size_bytes,
+            release_notes: None,
+            min_version: None,
+        };
+        let signature = kael_release::update::sign_manifest(&manifest, &signing_key);
+        let signature_b64 = BASE64.encode(signature.to_bytes());
+
+        (
+            verifying_key,
+            UpdateInfo {
+                version,
+                release_notes: None,
+                download_url,
+                signature: Some(signature_b64),
+                sha256: Some(sha256),
+                size_bytes: Some(size_bytes),
+            },
+        )
+    }
+
+    fn updater_with_key(key: &VerifyingKey) -> AutoUpdater {
+        let config = AutoUpdaterConfig {
+            feed_url: "https://example.com/feed".to_string(),
+            check_interval: Duration::from_secs(3600),
+            allow_prerelease: false,
+        };
+        let client = http_client::FakeHttpClient::with_200_response();
+        let mut updater = AutoUpdater::new(config, SemanticVersion::new(1, 0, 0), client);
+        updater.set_public_key(key.as_bytes()).unwrap();
+        updater
+    }
+
+    #[test]
+    fn test_verify_package_accepts_genuine_payload() {
+        let bytes = b"genuine update payload".to_vec();
+        let (key, update) = signed_update_fixture(&bytes, UpdateChannel::Stable);
+        let updater = updater_with_key(&key);
+        assert!(updater.verify_package(&update, &bytes).is_ok());
+    }
+
+    #[test]
+    fn test_verify_package_rejects_tampered_bytes() {
+        let bytes = b"genuine update payload".to_vec();
+        let (key, update) = signed_update_fixture(&bytes, UpdateChannel::Stable);
+        let updater = updater_with_key(&key);
+
+        let tampered = b"malware payload xxxxxx".to_vec();
+        assert_eq!(tampered.len(), bytes.len());
+        let err = updater.verify_package(&update, &tampered).unwrap_err();
+        assert!(err.to_string().contains("hash mismatch"), "{err}");
+    }
+
+    #[test]
+    fn test_verify_package_rejects_unsigned_when_key_configured() {
+        let bytes = b"genuine update payload".to_vec();
+        let (key, mut update) = signed_update_fixture(&bytes, UpdateChannel::Stable);
+        update.signature = None;
+        let updater = updater_with_key(&key);
+        let err = updater.verify_package(&update, &bytes).unwrap_err();
+        assert!(err.to_string().contains("unsigned"), "{err}");
+    }
+
+    #[test]
+    fn test_verify_package_rejects_wrong_key() {
+        let bytes = b"genuine update payload".to_vec();
+        let (_real_key, update) = signed_update_fixture(&bytes, UpdateChannel::Stable);
+        let other = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]).verifying_key();
+        let updater = updater_with_key(&other);
+        let err = updater.verify_package(&update, &bytes).unwrap_err();
+        assert!(
+            err.to_string().contains("signature verification failed"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_verify_package_rejects_channel_mismatch() {
+        let bytes = b"genuine update payload".to_vec();
+        let (key, update) = signed_update_fixture(&bytes, UpdateChannel::Beta);
+        let mut updater = updater_with_key(&key);
+        updater.set_update_channel("stable");
+        assert!(updater.verify_package(&update, &bytes).is_err());
+    }
+
+    #[test]
+    fn test_verify_fails_closed_without_public_key() {
+        let bytes = b"genuine update payload".to_vec();
+        let (_key, update) = signed_update_fixture(&bytes, UpdateChannel::Stable);
+        let config = AutoUpdaterConfig {
+            feed_url: "https://example.com/feed".to_string(),
+            check_interval: Duration::from_secs(3600),
+            allow_prerelease: false,
+        };
+        let client = http_client::FakeHttpClient::with_200_response();
+        let updater = AutoUpdater::new(config, SemanticVersion::new(1, 0, 0), client);
+        let err = updater.verify_package(&update, &bytes).unwrap_err();
+        assert!(
+            err.to_string().contains("no public key is configured"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_download_update_rejects_tampered_before_ready() {
+        use http_client::{AsyncBody, FakeHttpClient, Response};
+
+        let genuine = b"genuine update payload".to_vec();
+        let (key, update) = signed_update_fixture(&genuine, UpdateChannel::Stable);
+
+        let served = b"malware payload xxxxxx".to_vec();
+        let client = FakeHttpClient::create(move |_req| {
+            let body = served.clone();
+            async move {
+                Ok(Response::builder()
+                    .status(200)
+                    .body(AsyncBody::from(body))
+                    .unwrap())
+            }
+        });
+
+        let config = AutoUpdaterConfig {
+            feed_url: "https://example.com/feed".to_string(),
+            check_interval: Duration::from_secs(3600),
+            allow_prerelease: false,
+        };
+        let mut updater = AutoUpdater::new(config, SemanticVersion::new(1, 0, 0), client);
+        updater.set_public_key(key.as_bytes()).unwrap();
+        updater.latest_update = Some(update);
+
+        let result = smol::block_on(updater.download_update(|_| {}));
+        assert!(result.is_err());
+        assert!(matches!(updater.status(), UpdateStatus::Error(_)));
+        assert_ne!(*updater.status(), UpdateStatus::ReadyToInstall);
+        assert!(updater.downloaded_path.is_none());
+        assert!(updater.install_and_restart().is_err());
+    }
+
+    #[test]
+    fn test_download_update_accepts_genuine_and_marks_ready() {
+        use http_client::{AsyncBody, FakeHttpClient, Response};
+
+        let genuine = b"genuine update payload".to_vec();
+        let (key, update) = signed_update_fixture(&genuine, UpdateChannel::Stable);
+
+        let served = genuine.clone();
+        let client = FakeHttpClient::create(move |_req| {
+            let body = served.clone();
+            async move {
+                Ok(Response::builder()
+                    .status(200)
+                    .body(AsyncBody::from(body))
+                    .unwrap())
+            }
+        });
+
+        let config = AutoUpdaterConfig {
+            feed_url: "https://example.com/feed".to_string(),
+            check_interval: Duration::from_secs(3600),
+            allow_prerelease: false,
+        };
+        let mut updater = AutoUpdater::new(config, SemanticVersion::new(1, 0, 0), client);
+        updater.set_public_key(key.as_bytes()).unwrap();
+        updater.latest_update = Some(update);
+
+        let path = smol::block_on(updater.download_update(|_| {})).unwrap();
+        assert_eq!(*updater.status(), UpdateStatus::ReadyToInstall);
+        assert!(path.exists());
+
+        let path_str = path.to_string_lossy();
+        assert!(path_str.contains("kael_update_"), "{path_str}");
+        assert!(!path_str.contains("gpui_update_"), "{path_str}");
+
+        let on_disk = std::fs::read(&path).unwrap();
+        assert_eq!(on_disk, genuine);
+
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 
     // -----------------------------------------------------------------------

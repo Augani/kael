@@ -213,24 +213,30 @@ Kael windows follow native platform conventions automatically:
 
 ## Auto-Update
 
-Built-in application update pipeline:
+Built-in application update pipeline. Update packages are verified with an
+ed25519 signature over the release manifest **and** a SHA-256 of the downloaded
+bytes before installation; verification is mandatory by default (fail closed),
+so a public key must be configured.
 
 ```rust
 let config = AutoUpdaterConfig {
     feed_url: "https://releases.myapp.com/appcast.xml".into(),
-    ..Default::default()
+    check_interval: Duration::from_secs(86_400),
+    allow_prerelease: false,
 };
 
-let updater = AutoUpdater::new(config, current_version, http_client);
+let mut updater = AutoUpdater::new(config, current_version, http_client);
+updater.set_public_key_hex(RELEASE_PUBLIC_KEY_HEX)?;
+updater.set_update_channel("stable");
 
-// Check for updates
-let status = updater.check_for_updates().await;
-match status {
-    UpdateStatus::UpdateAvailable(info) => {
-        println!("New version: {}", info.version);
-    }
-    UpdateStatus::UpToDate => println!("Already up to date"),
-    _ => {}
+if let Some(info) = updater.check_for_updates().await? {
+    println!("New version: {}", info.version);
+    let package = updater.download_update(|p| {
+        if let Some(f) = p.fraction() {
+            println!("downloading: {:.0}%", f * 100.0);
+        }
+    }).await?; // returns Err if the signature or hash does not verify
+    let _ = package;
 }
 ```
 
