@@ -95,6 +95,72 @@ pub fn segment_runs(text: &str, base: Direction) -> Vec<DirectionalRun> {
     runs
 }
 
+/// Reorder logical-order `runs` into visual (display) order against `base`, applying the
+/// UAX #9 rule L2 at the run level: assign each run an embedding level (even for the base
+/// parity, odd for the opposite), reverse the run sequence within each level from highest
+/// down to the lowest odd level, and reverse the characters of each right-to-left run.
+///
+/// Exact for run-level reordering; it does not handle per-character weak-type levels.
+pub fn reorder_visual(runs: &[DirectionalRun], base: Direction) -> Vec<DirectionalRun> {
+    if runs.is_empty() {
+        return Vec::new();
+    }
+    let base_level: u8 = if base == Direction::Ltr { 0 } else { 1 };
+    let levels: Vec<u8> = runs
+        .iter()
+        .map(|run| {
+            let run_parity = u8::from(run.direction == Direction::Rtl);
+            if run_parity == base_level % 2 {
+                base_level
+            } else {
+                base_level + 1
+            }
+        })
+        .collect();
+
+    let mut order: Vec<usize> = (0..runs.len()).collect();
+    let max_level = levels.iter().copied().max().unwrap_or(0);
+    let min_odd = levels
+        .iter()
+        .copied()
+        .filter(|level| level % 2 == 1)
+        .min()
+        .unwrap_or(max_level + 1);
+
+    let mut level = max_level;
+    while level >= min_odd {
+        let mut index = 0;
+        while index < order.len() {
+            if levels[order[index]] >= level {
+                let start = index;
+                while index < order.len() && levels[order[index]] >= level {
+                    index += 1;
+                }
+                order[start..index].reverse();
+            } else {
+                index += 1;
+            }
+        }
+        level -= 1;
+    }
+
+    order
+        .into_iter()
+        .map(|index| {
+            let run = &runs[index];
+            let text = if levels[index] % 2 == 1 {
+                run.text.chars().rev().collect()
+            } else {
+                run.text.clone()
+            };
+            DirectionalRun {
+                text,
+                direction: run.direction,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,5 +238,43 @@ mod tests {
     #[test]
     fn empty_text_has_no_runs() {
         assert!(segment_runs("", Direction::Ltr).is_empty());
+    }
+
+    fn visual(text: &str, base: Direction) -> String {
+        reorder_visual(&segment_runs(text, base), base)
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn reorder_pure_ltr_is_unchanged() {
+        assert_eq!(visual("abc", Direction::Ltr), "abc");
+    }
+
+    #[test]
+    fn reorder_reverses_single_rtl_run() {
+        let expected: String = HEBREW.chars().rev().collect();
+        assert_eq!(visual(HEBREW, Direction::Rtl), expected);
+    }
+
+    #[test]
+    fn reorder_ltr_base_with_embedded_rtl() {
+        let hebrew_rev: String = HEBREW.chars().rev().collect();
+        assert_eq!(
+            visual(&format!("abc{HEBREW}"), Direction::Ltr),
+            format!("abc{hebrew_rev}")
+        );
+    }
+
+    #[test]
+    fn reorder_rtl_base_with_embedded_ltr() {
+        // Logical Hebrew-aleph + "bc" in an RTL paragraph displays as "bc" then aleph.
+        assert_eq!(visual("אbc", Direction::Rtl), "bcא");
+    }
+
+    #[test]
+    fn reorder_empty_is_empty() {
+        assert!(reorder_visual(&[], Direction::Ltr).is_empty());
     }
 }
