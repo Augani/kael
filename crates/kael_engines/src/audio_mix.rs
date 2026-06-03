@@ -507,6 +507,7 @@ mod tests {
             blend_mode: Default::default(),
             effects: Default::default(),
             transform: Default::default(),
+            transform_curve: None,
         }
     }
 

@@ -180,6 +180,7 @@ mod tests {
                     blend_mode: Default::default(),
                     effects: Default::default(),
                     transform: Default::default(),
+                    transform_curve: None,
                 }],
             }],
             frame_rate: 30.0,
@@ -331,6 +332,7 @@ mod tests {
             blend_mode: Default::default(),
             effects: Default::default(),
             transform: Default::default(),
+            transform_curve: None,
         }
     }
 

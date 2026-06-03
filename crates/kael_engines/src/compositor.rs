@@ -484,6 +484,7 @@ mod tests {
             blend_mode: ClipBlendMode::Normal,
             effects: Default::default(),
             transform: Default::default(),
+            transform_curve: None,
         }
     }
 

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::automation::Automation;
 use crate::effects::{AnimatedEffectStack, EffectStack};
 use crate::playback::Timebase;
-use crate::transform::ClipTransform;
+use crate::transform::{AnimatedClipTransform, ClipTransform};
 use crate::timecode::Timecode;
 
 /// Metadata extracted from probing a media file.
@@ -78,6 +78,10 @@ pub struct TimelineClip {
     /// effect stack (defaults to identity — fills the frame).
     #[serde(default)]
     pub transform: ClipTransform,
+    /// Optional keyframed transform (clip-local time) for Ken Burns / animated PiP; overrides
+    /// `transform` per frame when present (defaults to none).
+    #[serde(default)]
+    pub transform_curve: Option<AnimatedClipTransform>,
 }
 
 fn default_clip_opacity() -> f32 {
@@ -459,6 +463,7 @@ impl TimelineTrack {
                 blend_mode: clip.blend_mode,
                 effects: clip.effects.clone(),
                 transform: clip.transform,
+                transform_curve: clip.transform_curve.clone(),
             },
         );
         Ok(new_id)
@@ -648,7 +653,10 @@ impl Timeline {
                         .map_or(clip.opacity, |curve| curve.sample(time_ms)),
                     blend_mode: clip.blend_mode,
                     effects: clip.effects.resolve(time_ms),
-                    transform: clip.transform,
+                    transform: clip
+                        .transform_curve
+                        .as_ref()
+                        .map_or(clip.transform, |curve| curve.resolve(time_ms)),
                 });
             }
         }
@@ -973,6 +981,7 @@ mod tests {
             blend_mode: ClipBlendMode::Normal,
             effects: Default::default(),
             transform: Default::default(),
+            transform_curve: None,
         }
     }
 
@@ -1142,6 +1151,41 @@ mod tests {
             duration_frames: 60,
         };
         assert!((tl.frame_requests(10)[0].opacity - 0.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn keyframed_transform_curve_overrides_static_transform() {
+        use crate::automation::{Interpolation, Keyframe};
+        use crate::transform::AnimatedClipTransform;
+
+        let mut scale = Automation::constant(1.0);
+        scale.add(Keyframe {
+            time_ms: 0,
+            value: 1.0,
+            interpolation: Interpolation::Linear,
+        });
+        scale.add(Keyframe {
+            time_ms: 1000,
+            value: 0.5,
+            interpolation: Interpolation::Linear,
+        });
+        let mut clip = sample_clip("a", 0, 60, 0);
+        clip.transform_curve = Some(AnimatedClipTransform {
+            scale_x: scale.clone(),
+            scale_y: scale,
+            center_x: Automation::constant(0.5),
+            center_y: Automation::constant(0.5),
+            rotation: Automation::constant(0.0),
+        });
+        let tl = Timeline {
+            tracks: vec![sample_track("v1", TrackType::Video, vec![clip])],
+            frame_rate: 30.0,
+            duration_frames: 60,
+        };
+        // Ken Burns zoom: scale ramps 1 -> 0.5 over the first second (clip-local).
+        assert!((tl.frame_requests(0)[0].transform.scale_x - 1.0).abs() < 1e-6);
+        assert!((tl.frame_requests(15)[0].transform.scale_x - 0.75).abs() < 1e-6);
+        assert!((tl.frame_requests(30)[0].transform.scale_x - 0.5).abs() < 1e-6);
     }
 
     #[test]
