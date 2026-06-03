@@ -1386,6 +1386,51 @@ pub mod reference {
         })
     }
 
+    /// A single-input op adjusting exposure by `stops`: each RGB channel is multiplied by
+    /// `2^stops` and clamped to `0..=1` (alpha unchanged). `stops` 0 is a passthrough.
+    pub fn exposure(stops: f32) -> PassOp<'static> {
+        let gain = 2.0f32.powf(stops);
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            for (output_pixel, source_pixel) in output.pixels.iter_mut().zip(&source.pixels) {
+                *output_pixel = [
+                    (source_pixel[0] * gain).clamp(0.0, 1.0),
+                    (source_pixel[1] * gain).clamp(0.0, 1.0),
+                    (source_pixel[2] * gain).clamp(0.0, 1.0),
+                    source_pixel[3],
+                ];
+            }
+        })
+    }
+
+    /// A single-input op applying a `power` gamma curve to each RGB channel (clamped to
+    /// `0..=1`, alpha unchanged). `power` 1 is a passthrough; non-positive powers pass
+    /// the channel through.
+    pub fn gamma(power: f32) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            let curve = |value: f32| {
+                if power > 0.0 {
+                    value.clamp(0.0, 1.0).powf(power)
+                } else {
+                    value
+                }
+            };
+            for (output_pixel, source_pixel) in output.pixels.iter_mut().zip(&source.pixels) {
+                *output_pixel = [
+                    curve(source_pixel[0]),
+                    curve(source_pixel[1]),
+                    curve(source_pixel[2]),
+                    source_pixel[3],
+                ];
+            }
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -1785,6 +1830,34 @@ pub mod reference {
             assert_eq!(out.pixel(0, 0), [0.3, 0.4, 0.4, 1.0]);
             assert_eq!(out.pixel(1, 0), [0.8, 0.2, 0.1, 1.0]);
             assert_eq!(out.pixel(2, 0), [1.0, 1.0, 1.0, 1.0]);
+        }
+
+        #[test]
+        fn exposure_and_gamma_adjust_channels() {
+            let mut source = Image::new(1, 1);
+            source.pixels = vec![[0.25, 0.5, 1.0, 0.5]];
+
+            // +1 stop doubles each channel (clamped); alpha unchanged.
+            let mut brighter = Image::new(1, 1);
+            exposure(1.0)(&[&source], &mut brighter);
+            assert_eq!(brighter.pixel(0, 0), [0.5, 1.0, 1.0, 0.5]);
+
+            // 0 stops is a passthrough.
+            let mut same = Image::new(1, 1);
+            exposure(0.0)(&[&source], &mut same);
+            assert_eq!(same.pixel(0, 0), source.pixels[0]);
+
+            // Gamma 2 squares; alpha unchanged.
+            let mut squared = Image::new(1, 1);
+            gamma(2.0)(&[&source], &mut squared);
+            assert!((squared.pixel(0, 0)[0] - 0.0625).abs() < 1e-6);
+            assert!((squared.pixel(0, 0)[1] - 0.25).abs() < 1e-6);
+            assert_eq!(squared.pixel(0, 0)[3], 0.5);
+
+            // Gamma 0.5 is a square root.
+            let mut rooted = Image::new(1, 1);
+            gamma(0.5)(&[&source], &mut rooted);
+            assert!((rooted.pixel(0, 0)[0] - 0.5).abs() < 1e-6);
         }
     }
 }
