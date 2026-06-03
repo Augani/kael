@@ -222,6 +222,24 @@ pub fn apply_fade_out(buffer: &mut [f32], samples: usize) {
     }
 }
 
+/// Equal-power crossfade from `outgoing` to `incoming` across the overlap (the shorter of
+/// the two lengths): the outgoing gain follows `cos`, the incoming `sin`, keeping constant
+/// power through the transition. The audio clip-transition mix.
+pub fn crossfade(outgoing: &[f32], incoming: &[f32]) -> Vec<f32> {
+    let length = outgoing.len().min(incoming.len());
+    let mut output = Vec::with_capacity(length);
+    for index in 0..length {
+        let t = if length <= 1 {
+            0.0
+        } else {
+            index as f32 / (length - 1) as f32
+        };
+        let angle = t * std::f32::consts::FRAC_PI_2;
+        output.push(outgoing[index] * angle.cos() + incoming[index] * angle.sin());
+    }
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,5 +449,25 @@ mod tests {
         let mut short = vec![1.0f32; 2];
         apply_fade_in(&mut short, 100);
         assert!(close(short[0], 0.0) && close(short[1], 1.0));
+    }
+
+    #[test]
+    fn crossfade_blends_outgoing_to_incoming() {
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-5;
+        let result = crossfade(&[1.0; 3], &[0.0; 3]);
+        // Starts full outgoing, ends full incoming (0 here), equal-power midpoint.
+        assert!(close(result[0], 1.0));
+        assert!(close(result[2], 0.0));
+        assert!(close(result[1], std::f32::consts::FRAC_1_SQRT_2));
+
+        // Identical sources follow cos+sin (constant-power law).
+        let same = crossfade(&[1.0; 3], &[1.0; 3]);
+        for (index, &value) in same.iter().enumerate() {
+            let angle = index as f32 / 2.0 * std::f32::consts::FRAC_PI_2;
+            assert!(close(value, angle.cos() + angle.sin()));
+        }
+
+        // Mismatched lengths use the shorter.
+        assert_eq!(crossfade(&[1.0, 1.0], &[0.0]).len(), 1);
     }
 }
