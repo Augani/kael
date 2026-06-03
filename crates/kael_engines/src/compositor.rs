@@ -480,6 +480,7 @@ mod tests {
             end_frame: end,
             track_offset: offset,
             opacity: 1.0,
+            opacity_curve: None,
             blend_mode: ClipBlendMode::Normal,
             effects: Default::default(),
             transform: Default::default(),

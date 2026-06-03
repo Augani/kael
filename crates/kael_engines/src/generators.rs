@@ -415,6 +415,7 @@ mod tests {
                     end_frame: 30,
                     track_offset: 0,
                     opacity: 1.0,
+                    opacity_curve: None,
                     blend_mode: Default::default(),
                     effects: Default::default(),
                     transform: Default::default(),

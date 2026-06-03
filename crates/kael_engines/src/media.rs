@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::automation::Automation;
 use crate::effects::{AnimatedEffectStack, EffectStack};
 use crate::playback::Timebase;
 use crate::transform::ClipTransform;
@@ -58,9 +59,14 @@ pub struct TimelineClip {
     pub end_frame: u64,
     /// Offset in track frames where the clip begins.
     pub track_offset: u64,
-    /// Layer opacity in `0..=1` applied when compositing (defaults to fully opaque).
+    /// Layer opacity in `0..=1` applied when compositing (defaults to fully opaque). When
+    /// `opacity_curve` is set it overrides this constant per frame.
     #[serde(default = "default_clip_opacity")]
     pub opacity: f32,
+    /// Optional keyframed opacity (clip-local time) for fades; overrides `opacity` per frame
+    /// when present (defaults to none).
+    #[serde(default)]
+    pub opacity_curve: Option<Automation>,
     /// How this clip composites over lower tracks (defaults to source-over).
     #[serde(default)]
     pub blend_mode: ClipBlendMode,
@@ -449,6 +455,7 @@ impl TimelineTrack {
                 end_frame: clip.end_frame,
                 track_offset: at_track_frame,
                 opacity: clip.opacity,
+                opacity_curve: clip.opacity_curve.clone(),
                 blend_mode: clip.blend_mode,
                 effects: clip.effects.clone(),
                 transform: clip.transform,
@@ -635,7 +642,10 @@ impl Timeline {
                     clip_id: clip.id.clone(),
                     source: clip.source.clone(),
                     source_frame,
-                    opacity: clip.opacity,
+                    opacity: clip
+                        .opacity_curve
+                        .as_ref()
+                        .map_or(clip.opacity, |curve| curve.sample(time_ms)),
                     blend_mode: clip.blend_mode,
                     effects: clip.effects.resolve(time_ms),
                     transform: clip.transform,
@@ -959,6 +969,7 @@ mod tests {
             end_frame: end,
             track_offset: offset,
             opacity: 1.0,
+            opacity_curve: None,
             blend_mode: ClipBlendMode::Normal,
             effects: Default::default(),
             transform: Default::default(),
@@ -1089,6 +1100,48 @@ mod tests {
         assert!(tl.transition_at(0, 35).is_none());
         // Unknown track index.
         assert!(tl.transition_at(9, 10).is_none());
+    }
+
+    #[test]
+    fn keyframed_opacity_curve_overrides_static_opacity() {
+        use crate::automation::{Interpolation, Keyframe};
+
+        let mut clip = sample_clip("a", 0, 60, 0);
+        let mut curve = Automation::constant(1.0);
+        curve.add(Keyframe {
+            time_ms: 0,
+            value: 1.0,
+            interpolation: Interpolation::Linear,
+        });
+        curve.add(Keyframe {
+            time_ms: 1000,
+            value: 0.0,
+            interpolation: Interpolation::Linear,
+        });
+        clip.opacity = 0.25; // ignored while the curve is present
+        clip.opacity_curve = Some(curve);
+
+        let tl = Timeline {
+            tracks: vec![sample_track("v1", TrackType::Video, vec![clip])],
+            frame_rate: 30.0,
+            duration_frames: 60,
+        };
+        // The curve (clip-local time) ramps 1 -> 0 over the first second, overriding 0.25.
+        assert!((tl.frame_requests(0)[0].opacity - 1.0).abs() < 1e-6);
+        assert!((tl.frame_requests(15)[0].opacity - 0.5).abs() < 1e-6);
+        assert!((tl.frame_requests(30)[0].opacity - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn static_opacity_used_without_a_curve() {
+        let mut clip = sample_clip("a", 0, 60, 0);
+        clip.opacity = 0.4;
+        let tl = Timeline {
+            tracks: vec![sample_track("v1", TrackType::Video, vec![clip])],
+            frame_rate: 30.0,
+            duration_frames: 60,
+        };
+        assert!((tl.frame_requests(10)[0].opacity - 0.4).abs() < 1e-6);
     }
 
     #[test]
