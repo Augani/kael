@@ -153,6 +153,50 @@ pub fn pan_gains(pan: f32, law: PanLaw) -> (f32, f32) {
     }
 }
 
+/// The floor used for near-silent levels, in dBFS.
+pub const SILENCE_DBFS: f32 = -120.0;
+
+/// Convert a linear amplitude to dBFS (`0 dB` = `1.0`). Magnitudes at or below `1e-6`
+/// clamp to [`SILENCE_DBFS`].
+pub fn linear_to_dbfs(linear: f32) -> f32 {
+    let magnitude = linear.abs();
+    if magnitude <= 1e-6 {
+        SILENCE_DBFS
+    } else {
+        20.0 * magnitude.log10()
+    }
+}
+
+/// Convert dBFS to a linear amplitude.
+pub fn dbfs_to_linear(dbfs: f32) -> f32 {
+    10f32.powf(dbfs / 20.0)
+}
+
+/// Peak and RMS level of a sample buffer, in dBFS.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LevelMeter {
+    /// Peak (maximum absolute) level.
+    pub peak_dbfs: f32,
+    /// RMS (root-mean-square) level.
+    pub rms_dbfs: f32,
+}
+
+/// Measure the peak and RMS level of `samples` in dBFS. An empty buffer reads as silence.
+pub fn meter(samples: &[f32]) -> LevelMeter {
+    if samples.is_empty() {
+        return LevelMeter {
+            peak_dbfs: SILENCE_DBFS,
+            rms_dbfs: SILENCE_DBFS,
+        };
+    }
+    let peak = samples.iter().fold(0.0f32, |max, &s| max.max(s.abs()));
+    let mean_square = samples.iter().map(|&s| s * s).sum::<f32>() / samples.len() as f32;
+    LevelMeter {
+        peak_dbfs: linear_to_dbfs(peak),
+        rms_dbfs: linear_to_dbfs(mean_square.sqrt()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,5 +355,28 @@ mod tests {
             pan_gains(5.0, PanLaw::Linear),
             pan_gains(1.0, PanLaw::Linear)
         );
+    }
+
+    #[test]
+    fn dbfs_conversions_and_level_metering() {
+        let close = |a: f32, b: f32| (a - b).abs() < 0.01;
+        assert!(close(linear_to_dbfs(1.0), 0.0));
+        assert!(close(linear_to_dbfs(0.5), -6.0206));
+        assert_eq!(linear_to_dbfs(0.0), SILENCE_DBFS);
+        assert!(close(dbfs_to_linear(0.0), 1.0));
+        assert!(close(dbfs_to_linear(-6.0206), 0.5));
+
+        // Constant ±0.5 buffer: peak == rms == 0.5 -> ~-6 dBFS.
+        let level = meter(&[0.5, -0.5, 0.5, -0.5]);
+        assert!(close(level.peak_dbfs, -6.0206));
+        assert!(close(level.rms_dbfs, -6.0206));
+
+        // A single full-scale spike: peak 0 dBFS, RMS below it.
+        let level = meter(&[1.0, 0.0, 0.0, 0.0]);
+        assert!(close(level.peak_dbfs, 0.0));
+        assert!(level.rms_dbfs < level.peak_dbfs);
+
+        // Empty buffer reads as silence.
+        assert_eq!(meter(&[]).peak_dbfs, SILENCE_DBFS);
     }
 }
