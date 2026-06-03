@@ -46,6 +46,20 @@ pub fn render_range(
     rendered
 }
 
+/// Encode an image as a binary PPM (P6) — an uncompressed RGB frame, the dependency-free
+/// image-sequence export target. Linear `f32` channels are clamped to `0..=1` and
+/// quantized to 8-bit; alpha is dropped (PPM has no alpha channel).
+pub fn encode_ppm(image: &Image) -> Vec<u8> {
+    let mut bytes = format!("P6\n{} {}\n255\n", image.width, image.height).into_bytes();
+    bytes.reserve(image.pixels.len() * 3);
+    for pixel in &image.pixels {
+        for channel in &pixel[0..3] {
+            bytes.push((channel.clamp(0.0, 1.0) * 255.0).round() as u8);
+        }
+    }
+    bytes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,5 +142,56 @@ mod tests {
             sink.frames
         };
         assert_eq!(collect(), collect());
+    }
+
+    #[test]
+    fn encode_ppm_writes_p6_header_and_rgb_bytes() {
+        let mut image = Image::new(2, 1);
+        image.pixels = vec![[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0]];
+        let ppm = encode_ppm(&image);
+        let header = b"P6\n2 1\n255\n";
+        assert!(ppm.starts_with(header));
+        // Red then green, 3 bytes per pixel, alpha dropped.
+        assert_eq!(&ppm[header.len()..], &[255, 0, 0, 0, 255, 0]);
+        assert_eq!(ppm.len(), header.len() + 6);
+    }
+
+    #[test]
+    fn encode_ppm_clamps_and_quantizes() {
+        let mut image = Image::new(1, 1);
+        image.pixels = vec![[1.5, -0.5, 0.5, 1.0]];
+        let ppm = encode_ppm(&image);
+        // 1.5 -> 255, -0.5 -> 0, 0.5 -> round(127.5) = 128.
+        assert_eq!(&ppm[ppm.len() - 3..], &[255, 0, 128]);
+    }
+
+    #[test]
+    fn render_range_to_ppm_produces_valid_frames() {
+        let timeline = Timeline {
+            tracks: vec![TimelineTrack {
+                id: "v1".to_string(),
+                name: "v1".to_string(),
+                track_type: TrackType::Video,
+                clips: vec![clip("a", "color:1,0,0,1", 0, 4, 0)],
+            }],
+            frame_rate: 30.0,
+            duration_frames: 4,
+        };
+        struct PpmSink {
+            files: Vec<Vec<u8>>,
+        }
+        impl ExportSink for PpmSink {
+            fn frame(&mut self, _index: u64, _pts: Duration, image: &Image) {
+                self.files.push(encode_ppm(image));
+            }
+        }
+        let mut sink = PpmSink { files: Vec::new() };
+        render_range(&timeline, 0..3, 2, 2, &GeneratorProvider, &mut sink);
+        assert_eq!(sink.files.len(), 3);
+        for file in &sink.files {
+            assert!(file.starts_with(b"P6\n2 2\n255\n"));
+            // 2x2 red frame: every pixel is 255,0,0.
+            assert!(file.ends_with(&[255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0]));
+        }
     }
 }
