@@ -134,6 +134,44 @@ pub fn waveform(image: &Image) -> Waveform {
     }
 }
 
+/// A vectorscope: a 2-D chroma histogram. Neutral colors land at the center; saturated
+/// colors spread outward by hue. Cells are indexed `cr_cell * size + cb_cell`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Vectorscope {
+    /// Cells per axis.
+    pub size: u32,
+    /// `size * size` chroma cell counts.
+    pub cells: Vec<u32>,
+}
+
+impl Vectorscope {
+    /// The count in the cell at `(cb_cell, cr_cell)`.
+    pub fn at(&self, cb_cell: u32, cr_cell: u32) -> u32 {
+        self.cells[(cr_cell * self.size + cb_cell) as usize]
+    }
+}
+
+/// Compute the [`Vectorscope`] of `image` on a `size`×`size` chroma grid using BT.709
+/// Cb/Cr. `size` is clamped to at least 2.
+pub fn vectorscope(image: &Image, size: u32) -> Vectorscope {
+    let size = size.max(2);
+    let axis = (size - 1) as f32;
+    let mut cells = vec![0u32; (size * size) as usize];
+    const KR: f32 = 0.2126;
+    const KB: f32 = 0.0722;
+    for pixel in &image.pixels {
+        let (r, g, b) = (pixel[0], pixel[1], pixel[2]);
+        let luma = KR * r + (1.0 - KR - KB) * g + KB * b;
+        // Cb/Cr normalized to 0..=1 with neutral at 0.5.
+        let cb = (0.5 * (b - luma) / (1.0 - KB) + 0.5).clamp(0.0, 1.0);
+        let cr = (0.5 * (r - luma) / (1.0 - KR) + 0.5).clamp(0.0, 1.0);
+        let cb_cell = (cb * axis).round() as u32;
+        let cr_cell = (cr * axis).round() as u32;
+        cells[(cr_cell * size + cb_cell) as usize] += 1;
+    }
+    Vectorscope { size, cells }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,5 +273,24 @@ mod tests {
         assert_eq!(scope.at(2, 255), 2);
         // Nothing elsewhere in those columns.
         assert_eq!(scope.at(0, 255), 0);
+    }
+
+    #[test]
+    fn vectorscope_centers_neutrals_and_spreads_saturated_colors() {
+        // A neutral gray lands at the center cell (size 16 -> 0.5*15 rounds to 8).
+        let gray = vectorscope(&Image::filled(4, 4, [0.5, 0.5, 0.5, 1.0]), 16);
+        assert_eq!(gray.at(8, 8), 16);
+        assert_eq!(gray.cells.iter().sum::<u32>(), 16);
+
+        // Saturated red leaves the center and sits high on the Cr (red) axis.
+        let red = vectorscope(&Image::filled(2, 2, [1.0, 0.0, 0.0, 1.0]), 16);
+        assert_eq!(red.at(8, 8), 0);
+        assert_eq!(red.cells.iter().sum::<u32>(), 4);
+        let populated = red.cells.iter().position(|&count| count > 0).unwrap();
+        assert!(
+            populated / 16 > 8,
+            "red should be high Cr: cr_cell={}",
+            populated / 16
+        );
     }
 }
