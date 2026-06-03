@@ -596,6 +596,30 @@ pub fn gamut_conversion_matrix(from: ColorPrimaries, to: ColorPrimaries) -> Mat3
     mat3_mul(xyz_to_rgb_matrix(to), rgb_to_xyz_matrix(from))
 }
 
+/// The CIE-XYZ Bradford chromatic-adaptation matrix from `source_white` to
+/// `dest_white` (both as CIE xy chromaticities) — the principled basis of white
+/// balance and color-temperature grading.
+///
+/// Adapts colors viewed under the source illuminant to appear correct under the
+/// destination illuminant; by construction it maps the source white exactly onto the
+/// destination white. Apply in linear CIE-XYZ (convert RGB→XYZ, adapt, XYZ→RGB).
+pub fn bradford_adaptation_matrix(source_white: [f32; 2], dest_white: [f32; 2]) -> Mat3 {
+    const BRADFORD: Mat3 = [
+        [0.8951, 0.2664, -0.1614],
+        [-0.7502, 1.7135, 0.0367],
+        [0.0389, -0.0685, 1.0296],
+    ];
+    let source_lms = mat3_vec(BRADFORD, chromaticity_to_xyz(source_white));
+    let dest_lms = mat3_vec(BRADFORD, chromaticity_to_xyz(dest_white));
+    let scale = [
+        [dest_lms[0] / source_lms[0], 0.0, 0.0],
+        [0.0, dest_lms[1] / source_lms[1], 0.0],
+        [0.0, 0.0, dest_lms[2] / source_lms[2]],
+    ];
+    let bradford_inverse = mat3_inverse(BRADFORD).expect("Bradford matrix is invertible");
+    mat3_mul(bradford_inverse, mat3_mul(scale, BRADFORD))
+}
+
 /// A deterministic per-pixel color transform for rendering and export.
 ///
 /// Applies, in order: decode the input transfer function to linear light, convert
@@ -789,6 +813,42 @@ mod primaries_tests {
         assert!(
             red[1].abs() < 0.1 && red[2].abs() < 0.1,
             "709 red in 2020: {red:?}"
+        );
+    }
+
+    #[test]
+    fn bradford_adapts_source_white_to_destination_white() {
+        let d65 = [0.3127, 0.3290];
+        let d50 = [0.3457, 0.3585];
+
+        // Same illuminant -> identity.
+        let identity = bradford_adaptation_matrix(d65, d65);
+        for i in 0..3 {
+            for j in 0..3 {
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert!(
+                    close(identity[i][j], expected, 1e-5),
+                    "[{i}][{j}] = {}",
+                    identity[i][j]
+                );
+            }
+        }
+
+        // The defining property: D65 -> D50 maps the D65 white exactly onto the D50 white.
+        let adapt = bradford_adaptation_matrix(d65, d50);
+        let adapted = mat3_vec(adapt, chromaticity_to_xyz(d65));
+        let target = chromaticity_to_xyz(d50);
+        assert!(
+            close(adapted[0], target[0], 1e-4),
+            "X {adapted:?} vs {target:?}"
+        );
+        assert!(
+            close(adapted[1], target[1], 1e-4),
+            "Y {adapted:?} vs {target:?}"
+        );
+        assert!(
+            close(adapted[2], target[2], 1e-4),
+            "Z {adapted:?} vs {target:?}"
         );
     }
 }
