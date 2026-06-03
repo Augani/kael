@@ -100,6 +100,40 @@ pub fn apply_auto_levels(image: &Image, black: u8, white: u8) -> Image {
     output
 }
 
+/// A waveform monitor: for each image column, the count of pixels at each of 256 luma
+/// levels — the broadcast scope showing how brightness is distributed horizontally.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Waveform {
+    /// Number of columns (image width).
+    pub width: u32,
+    /// Counts indexed `column * 256 + level`.
+    pub levels: Vec<u32>,
+}
+
+impl Waveform {
+    /// The count of pixels in `column` at luma `level`.
+    pub fn at(&self, column: u32, level: u8) -> u32 {
+        self.levels[column as usize * 256 + level as usize]
+    }
+}
+
+/// Compute the [`Waveform`] of `image` (Rec.709 luma per column).
+pub fn waveform(image: &Image) -> Waveform {
+    let mut levels = vec![0u32; image.width as usize * 256];
+    for y in 0..image.height {
+        for x in 0..image.width {
+            let pixel = image.pixel(x, y);
+            let luma = 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2];
+            let level = (luma.clamp(0.0, 1.0) * 255.0).round() as usize;
+            levels[x as usize * 256 + level] += 1;
+        }
+    }
+    Waveform {
+        width: image.width,
+        levels,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,5 +213,27 @@ mod tests {
         let image = Image::filled(2, 2, [0.3, 0.4, 0.5, 1.0]);
         let out = apply_auto_levels(&image, 128, 128);
         assert_eq!(out.pixels, image.pixels);
+    }
+
+    #[test]
+    fn waveform_bins_each_column_by_luma() {
+        // Three columns over two rows: black, mid-gray, white.
+        let mut image = Image::new(3, 2);
+        image.pixels = vec![
+            [0.0, 0.0, 0.0, 1.0],
+            [0.5, 0.5, 0.5, 1.0],
+            [1.0, 1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [0.5, 0.5, 0.5, 1.0],
+            [1.0, 1.0, 1.0, 1.0],
+        ];
+        let scope = waveform(&image);
+        assert_eq!(scope.width, 3);
+        // Each column has both rows at a single level.
+        assert_eq!(scope.at(0, 0), 2);
+        assert_eq!(scope.at(1, 128), 2); // round(0.5*255) = 128
+        assert_eq!(scope.at(2, 255), 2);
+        // Nothing elsewhere in those columns.
+        assert_eq!(scope.at(0, 255), 0);
     }
 }
