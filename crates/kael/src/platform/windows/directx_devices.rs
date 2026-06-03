@@ -8,17 +8,16 @@ use windows::Win32::{
             D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
         },
         Direct3D11::{
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_DEBUG,
-            D3D11_FEATURE_D3D10_X_HARDWARE_OPTIONS, D3D11_FEATURE_DATA_D3D10_X_HARDWARE_OPTIONS,
-            D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext,
+            D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            D3D11_CREATE_DEVICE_DEBUG, D3D11_FEATURE_D3D10_X_HARDWARE_OPTIONS,
+            D3D11_FEATURE_DATA_D3D10_X_HARDWARE_OPTIONS, D3D11_SDK_VERSION,
         },
         Dxgi::{
-            CreateDXGIFactory2, DXGI_CREATE_FACTORY_DEBUG, DXGI_CREATE_FACTORY_FLAGS,
-            IDXGIAdapter1, IDXGIFactory6,
+            CreateDXGIFactory2, IDXGIAdapter1, IDXGIFactory6, DXGI_CREATE_FACTORY_DEBUG,
+            DXGI_CREATE_FACTORY_FLAGS, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
         },
     },
 };
-use windows::core::Interface;
 
 pub(crate) fn try_to_recover_from_device_lost<T>(
     mut f: impl FnMut() -> Result<T>,
@@ -122,12 +121,15 @@ fn get_dxgi_factory(debug_layer_available: bool) -> Result<IDXGIFactory6> {
 #[inline]
 fn get_adapter(dxgi_factory: &IDXGIFactory6, debug_layer_available: bool) -> Result<IDXGIAdapter1> {
     for adapter_index in 0.. {
-        let adapter: IDXGIAdapter1 = unsafe { dxgi_factory.EnumAdapters(adapter_index)?.cast()? };
+        let adapter: IDXGIAdapter1 = unsafe {
+            dxgi_factory
+                .EnumAdapterByGpuPreference(adapter_index, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE)?
+        };
         if let Ok(desc) = unsafe { adapter.GetDesc1() } {
             let gpu_name = String::from_utf16_lossy(&desc.Description)
                 .trim_matches(char::from(0))
                 .to_string();
-            log::info!("Using GPU: {}", gpu_name);
+            log::info!("Using GPU (high-performance preference): {}", gpu_name);
         }
         // Check to see whether the adapter supports Direct3D 11, but don't
         // create the actual device yet.
