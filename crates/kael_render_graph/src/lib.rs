@@ -2131,6 +2131,41 @@ pub mod reference {
         })
     }
 
+    /// A single-input op rotating `inputs[0]` by `radians` (counter-clockwise) about the
+    /// image center, bilinearly sampled. Source coordinates falling outside the image become
+    /// transparent — rotation reveals transparent corners. `radians` 0 is the identity.
+    pub fn rotate(radians: f32) -> PassOp<'static> {
+        let (sin, cos) = radians.sin_cos();
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            if source.width != output.width || source.height != output.height {
+                return;
+            }
+            let (width, height) = (output.width, output.height);
+            let (center_x, center_y) = (width as f32 / 2.0, height as f32 / 2.0);
+            for y in 0..height {
+                for x in 0..width {
+                    let dx = x as f32 + 0.5 - center_x;
+                    let dy = y as f32 + 0.5 - center_y;
+                    let source_x = center_x + dx * cos + dy * sin - 0.5;
+                    let source_y = center_y - dx * sin + dy * cos - 0.5;
+                    let pixel = if source_x >= -0.5
+                        && source_x <= width as f32 - 0.5
+                        && source_y >= -0.5
+                        && source_y <= height as f32 - 0.5
+                    {
+                        sample_bilinear(source, source_x, source_y)
+                    } else {
+                        [0.0; 4]
+                    };
+                    output.pixels[(y * width + x) as usize] = pixel;
+                }
+            }
+        })
+    }
+
     /// A single-input op that fits `inputs[0]` into the output preserving its aspect ratio,
     /// centered, with transparent bars (letterbox / pillarbox) — for placing content of a
     /// different resolution or aspect on the output frame.
@@ -3708,6 +3743,44 @@ pub mod reference {
             let mut flipped_v = Image::new(1, 3);
             flip_vertical()(&[&column], &mut flipped_v);
             assert_eq!(flipped_v.pixels, vec![blue, green, red]);
+        }
+
+        #[test]
+        fn rotate_zero_is_identity() {
+            let mut source = Image::new(3, 3);
+            source.pixels[4] = [0.8, 0.2, 0.5, 1.0];
+            let mut out = Image::new(3, 3);
+            rotate(0.0)(&[&source], &mut out);
+            for (got, want) in out.pixels.iter().zip(&source.pixels) {
+                for channel in 0..4 {
+                    assert!(
+                        (got[channel] - want[channel]).abs() < 1e-6,
+                        "{got:?} vs {want:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn rotate_180_swaps_opposite_corners() {
+            let mut source = Image::filled(3, 3, [0.0, 0.0, 0.0, 1.0]);
+            source.pixels[0] = [1.0, 0.0, 0.0, 1.0]; // (0,0) red
+            source.pixels[4] = [0.0, 1.0, 0.0, 1.0]; // (1,1) green center
+            let mut out = Image::new(3, 3);
+            rotate(std::f32::consts::PI)(&[&source], &mut out);
+            // 180 deg about center: the red corner moves to (2,2); the center is fixed.
+            assert!((out.pixel(2, 2)[0] - 1.0).abs() < 1e-5);
+            assert!((out.pixel(1, 1)[1] - 1.0).abs() < 1e-5);
+            assert!(out.pixel(0, 0)[0] < 1e-5);
+        }
+
+        #[test]
+        fn rotate_preserves_a_solid_center() {
+            let solid = Image::filled(5, 5, [0.3, 0.6, 0.9, 1.0]);
+            let mut out = Image::new(5, 5);
+            rotate(0.5)(&[&solid], &mut out);
+            let center = out.pixel(2, 2);
+            assert!((center[0] - 0.3).abs() < 1e-5 && (center[2] - 0.9).abs() < 1e-5);
         }
 
         #[test]
