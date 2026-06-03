@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::playback::Timebase;
+use crate::timecode::Timecode;
 
 /// Metadata extracted from probing a media file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -540,6 +541,15 @@ impl Timeline {
         Timebase::from_fps(self.frame_rate)
     }
 
+    /// The SMPTE (non-drop) timecode for timeline `frame` at this timeline's frame rate
+    /// (rounded to the nearest integer), or `None` if the frame rate is not usable.
+    pub fn timecode_at(&self, frame: u64) -> Option<Timecode> {
+        if self.frame_rate <= 0.0 || !self.frame_rate.is_finite() {
+            return None;
+        }
+        Some(Timecode::from_frame(frame, self.frame_rate.round() as u32))
+    }
+
     /// Resolve, for each track, the source frame that must be decoded to present
     /// timeline `frame` — the transport's per-tick decode schedule.
     ///
@@ -877,6 +887,29 @@ mod tests {
             duration_frames: 0,
         };
         assert_eq!(bad.timebase(), None);
+    }
+
+    #[test]
+    fn timeline_timecode_at_uses_rounded_fps() {
+        let tl = Timeline {
+            tracks: vec![],
+            frame_rate: 30.0,
+            duration_frames: 0,
+        };
+        assert_eq!(tl.timecode_at(90).unwrap().to_string(), "00:00:03:00");
+        // 29.97 rounds to 30 fps for the displayed timecode.
+        let ntsc = Timeline {
+            tracks: vec![],
+            frame_rate: 29.97,
+            duration_frames: 0,
+        };
+        assert_eq!(ntsc.timecode_at(30).unwrap().to_string(), "00:00:01:00");
+        let bad = Timeline {
+            tracks: vec![],
+            frame_rate: 0.0,
+            duration_frames: 0,
+        };
+        assert!(bad.timecode_at(0).is_none());
     }
 
     #[test]
