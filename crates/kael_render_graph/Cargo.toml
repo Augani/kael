@@ -1,0 +1,42 @@
+[package]
+edition.workspace = true
+name = "kael_render_graph"
+rust-version.workspace = true
+homepage.workspace = true
+version.workspace = true
+publish = true
+description = "Render-graph: pass/resource DAG, scheduling, and time-varying cache invalidation for Kael"
+keywords = ["render-graph", "gpu", "rendering", "kael"]
+categories = ["rendering::graphics-api"]
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[lib]
+name = "kael_render_graph"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies.anyhow]
+version = "1.0.86"
+
+[lints.clippy]
+dbg_macro = "deny"
+declare_interior_mutable_const = "deny"
+disallowed_methods = "deny"
+large_enum_variant = "allow"
+let_underscore_future = "allow"
+nonminimal_bool = "allow"
+redundant_clone = "deny"
+single_range_in_vec_init = "allow"
+todo = "deny"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[lints.clippy.style]
+level = "allow"
+priority = -1
+
+[lints.rust.unexpected_cfgs]
+level = "allow"
+priority = 0

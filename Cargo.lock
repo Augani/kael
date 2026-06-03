@@ -3986,6 +3986,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kael_render_graph"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "kael_secrets"
 version = "0.1.2"
 dependencies = [
