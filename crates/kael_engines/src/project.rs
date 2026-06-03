@@ -178,6 +178,7 @@ mod tests {
                     opacity: 1.0,
                     blend_mode: Default::default(),
                     effects: Default::default(),
+                    transform: Default::default(),
                 }],
             }],
             frame_rate: 30.0,
@@ -327,6 +328,7 @@ mod tests {
             opacity: 1.0,
             blend_mode: Default::default(),
             effects: Default::default(),
+            transform: Default::default(),
         }
     }
 

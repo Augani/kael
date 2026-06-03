@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::effects::{AnimatedEffectStack, EffectStack};
 use crate::playback::Timebase;
+use crate::transform::ClipTransform;
 use crate::timecode::Timecode;
 
 /// Metadata extracted from probing a media file.
@@ -67,6 +68,10 @@ pub struct TimelineClip {
     /// before compositing (defaults to empty).
     #[serde(default)]
     pub effects: AnimatedEffectStack,
+    /// The clip's geometric transform (position/scale within the frame), applied after the
+    /// effect stack (defaults to identity — fills the frame).
+    #[serde(default)]
+    pub transform: ClipTransform,
 }
 
 fn default_clip_opacity() -> f32 {
@@ -444,6 +449,7 @@ impl TimelineTrack {
                 opacity: clip.opacity,
                 blend_mode: clip.blend_mode,
                 effects: clip.effects.clone(),
+                transform: clip.transform,
             },
         );
         Ok(new_id)
@@ -952,6 +958,7 @@ mod tests {
             opacity: 1.0,
             blend_mode: ClipBlendMode::Normal,
             effects: Default::default(),
+            transform: Default::default(),
         }
     }
 

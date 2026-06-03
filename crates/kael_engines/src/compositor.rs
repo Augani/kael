@@ -73,7 +73,8 @@ pub fn composite_frame(
             } else {
                 0
             };
-            let mut layer = clip.effects.resolve(time_ms).apply(&image);
+            let effected = clip.effects.resolve(time_ms).apply(&image);
+            let mut layer = clip.transform.apply(&effected);
             let opacity = clip.opacity.clamp(0.0, 1.0);
             if opacity < 1.0 {
                 for pixel in layer.pixels.iter_mut() {
@@ -308,12 +309,19 @@ pub fn render_frames(
     let mut cache = HashMap::new();
     let mut rendered = Vec::new();
     for frame in frames {
-        // The graph path does not yet emit transition passes, so frames with a clip overlap
-        // are composited directly (still exact, just uncached); non-transition frames keep
-        // the cached graph path. This keeps render_frames == composite_frame for every frame.
-        let has_transition =
+        // The graph path does not yet emit transition or transform passes, so frames with a
+        // clip overlap or a non-identity clip transform are composited directly (still exact,
+        // just uncached); the rest keep the cached graph path. This keeps render_frames ==
+        // composite_frame for every frame.
+        let has_overlap =
             (0..timeline.tracks.len()).any(|index| timeline.transition_at(index, frame).is_some());
-        if has_transition {
+        let has_transform = timeline.tracks.iter().any(|track| {
+            track.enabled
+                && track.clips.iter().any(|clip| {
+                    clip.source_frame_at(frame).is_some() && !clip.transform.is_identity()
+                })
+        });
+        if has_overlap || has_transform {
             rendered.push(composite_frame(timeline, frame, width, height, provider));
             continue;
         }
@@ -373,7 +381,8 @@ pub fn render_transition(
         } else {
             0
         };
-        Some(clip.effects.resolve(time_ms).apply(&image))
+        let effected = clip.effects.resolve(time_ms).apply(&image);
+        Some(clip.transform.apply(&effected))
     };
     let outgoing = render_side(&transition.outgoing, transition.outgoing_source_frame)?;
     let incoming = render_side(&transition.incoming, transition.incoming_source_frame)?;
@@ -425,6 +434,7 @@ mod tests {
     use crate::automation::{Automation, Interpolation, Keyframe};
     use crate::effects::{AnimatedEffect, AnimatedEffectStack, ClipEffect, EffectStack};
     use crate::media::{ClipBlendMode, TimelineClip, TimelineTrack, TrackType};
+    use crate::transform::ClipTransform;
     use std::collections::HashMap;
 
     struct SolidProvider {
@@ -455,6 +465,7 @@ mod tests {
             opacity: 1.0,
             blend_mode: ClipBlendMode::Normal,
             effects: Default::default(),
+            transform: Default::default(),
         }
     }
 
@@ -767,6 +778,51 @@ mod tests {
         assert!((value_at(30) - 0.6).abs() < 1e-4, "{}", value_at(30));
         // The ramp is monotonic in between.
         assert!(value_at(0) < value_at(15) && value_at(15) < value_at(30));
+    }
+
+    #[test]
+    fn composite_frame_applies_clip_transform() {
+        let mut timeline = Timeline {
+            tracks: vec![track("v1", vec![clip("a", "white", 0, 30, 0)])],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        // A half-size, centered picture-in-picture.
+        timeline.tracks[0].clips[0].transform = ClipTransform {
+            scale_x: 0.5,
+            scale_y: 0.5,
+            center_x: 0.5,
+            center_y: 0.5,
+        };
+        let provider = provider(&[("white", [1.0, 1.0, 1.0, 1.0])]);
+        let out = composite_frame(&timeline, 10, 4, 4, &provider);
+        // The PiP box ([1,3) x [1,3)) is opaque; the borders are transparent.
+        assert_eq!(out.pixel(2, 2), [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(out.pixel(0, 0)[3], 0.0);
+    }
+
+    #[test]
+    fn render_frames_matches_composite_frame_with_a_transform() {
+        let mut timeline = Timeline {
+            tracks: vec![track("v1", vec![clip("a", "white", 0, 30, 0)])],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        timeline.tracks[0].clips[0].transform = ClipTransform {
+            scale_x: 0.5,
+            scale_y: 0.5,
+            center_x: 0.5,
+            center_y: 0.5,
+        };
+        let provider = provider(&[("white", [1.0, 1.0, 1.0, 1.0])]);
+        let frames = render_frames(&timeline, 0..3, 4, 4, &provider);
+        for (offset, frame) in (0..3u64).enumerate() {
+            assert_eq!(
+                frames[offset].pixels,
+                composite_frame(&timeline, frame, 4, 4, &provider).pixels,
+                "frame {frame}"
+            );
+        }
     }
 
     #[test]
