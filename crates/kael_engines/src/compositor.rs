@@ -102,6 +102,8 @@ pub struct LayerPass {
     pub source: PassId,
     /// The clip's effect passes, applied in order between the source and the composite.
     pub effects: Vec<PassId>,
+    /// The clip's geometric transform pass, if the transform is non-identity.
+    pub transform: Option<PassId>,
     /// The pass that blends this layer over the accumulated result below it.
     pub composite: PassId,
 }
@@ -173,6 +175,23 @@ pub fn build_frame_graph(timeline: &Timeline, frame: u64) -> FrameGraph {
             stage = effect_texture;
         }
 
+        // A non-identity geometric transform is a pass after the effect chain.
+        let transform = if request.transform.is_identity() {
+            None
+        } else {
+            let transform_texture = graph.add_resource(ResourceDesc::transient_texture(format!(
+                "transform_{index}"
+            )));
+            let transform_pass = graph.add_pass(
+                PassDesc::new(format!("transform_{index}"))
+                    .read(stage)
+                    .write(transform_texture)
+                    .param_hash(request.transform.param_hash()),
+            );
+            stage = transform_texture;
+            Some(transform_pass)
+        };
+
         let composited = graph.add_resource(ResourceDesc::transient_texture(format!(
             "composited_{index}"
         )));
@@ -189,6 +208,7 @@ pub fn build_frame_graph(timeline: &Timeline, frame: u64) -> FrameGraph {
             clip_id: request.clip_id,
             source,
             effects,
+            transform,
             composite,
         });
         accumulator = composited;
@@ -251,6 +271,9 @@ pub fn frame_graph_ops(
         for (effect_pass, effect) in layer.effects.iter().zip(&request.effects.effects) {
             ops.insert(*effect_pass, effect.to_pass_op());
         }
+        if let Some(transform_pass) = layer.transform {
+            ops.insert(transform_pass, request.transform.to_pass_op());
+        }
 
         let opacity = request.opacity.clamp(0.0, 1.0);
         ops.insert(
@@ -309,19 +332,13 @@ pub fn render_frames(
     let mut cache = HashMap::new();
     let mut rendered = Vec::new();
     for frame in frames {
-        // The graph path does not yet emit transition or transform passes, so frames with a
-        // clip overlap or a non-identity clip transform are composited directly (still exact,
-        // just uncached); the rest keep the cached graph path. This keeps render_frames ==
-        // composite_frame for every frame.
+        // The graph path does not yet emit transition passes, so frames with a clip overlap
+        // are composited directly (still exact, just uncached); the rest — including clip
+        // transforms, now graph passes — keep the cached graph path. This keeps
+        // render_frames == composite_frame for every frame.
         let has_overlap =
             (0..timeline.tracks.len()).any(|index| timeline.transition_at(index, frame).is_some());
-        let has_transform = timeline.tracks.iter().any(|track| {
-            track.enabled
-                && track.clips.iter().any(|clip| {
-                    clip.source_frame_at(frame).is_some() && !clip.transform.is_identity()
-                })
-        });
-        if has_overlap || has_transform {
+        if has_overlap {
             rendered.push(composite_frame(timeline, frame, width, height, provider));
             continue;
         }
@@ -636,6 +653,36 @@ mod tests {
         assert!(pos(layer.source) < pos(layer.effects[0]));
         assert!(pos(layer.effects[0]) < pos(layer.effects[1]));
         assert!(pos(layer.effects[1]) < pos(layer.composite));
+    }
+
+    #[test]
+    fn build_frame_graph_emits_a_transform_pass() {
+        let mut timeline = Timeline {
+            tracks: vec![track("v1", vec![clip("a", "white", 0, 30, 0)])],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        // No transform -> no transform pass.
+        assert!(build_frame_graph(&timeline, 10).layers[0]
+            .transform
+            .is_none());
+
+        // A non-identity transform -> a pass between the source and the composite.
+        timeline.tracks[0].clips[0].transform = ClipTransform {
+            scale_x: 0.5,
+            scale_y: 0.5,
+            center_x: 0.5,
+            center_y: 0.5,
+            rotation: 0.0,
+        };
+        let fg = build_frame_graph(&timeline, 10);
+        let layer = &fg.layers[0];
+        let transform = layer.transform.expect("transform pass present");
+        let compiled = fg.graph.compile().expect("compiles");
+        let order = compiled.execution_order();
+        let pos = |p| order.iter().position(|&q| q == p).unwrap();
+        assert!(pos(layer.source) < pos(transform));
+        assert!(pos(transform) < pos(layer.composite));
     }
 
     #[test]

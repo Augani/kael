@@ -5,7 +5,7 @@
 //! `place` op, so it composes with the effect stack and the compositor like any other
 //! clip-applied step.
 
-use kael_render_graph::reference::{place, rotate, Image};
+use kael_render_graph::reference::{place, rotate, Image, PassOp};
 use serde::{Deserialize, Serialize};
 
 /// A clip's geometric transform within the frame, in normalized coordinates: the content is
@@ -84,6 +84,38 @@ impl ClipTransform {
         let mut output = Image::new(width, height);
         place(dst_x, dst_y, dst_width, dst_height)(&[&rotated], &mut output);
         output
+    }
+
+    /// A single-input render-graph pass that applies this transform to `inputs[0]` — the
+    /// graph form of [`apply`](Self::apply), for the compositor's frame graph.
+    pub fn to_pass_op(self) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            let transformed = self.apply(source);
+            if transformed.pixels.len() == output.pixels.len() {
+                output.pixels.clone_from(&transformed.pixels);
+            }
+        })
+    }
+
+    /// A stable hash of the transform's parameters, for render-graph cache keys.
+    pub fn param_hash(self) -> u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for value in [
+            self.scale_x,
+            self.scale_y,
+            self.center_x,
+            self.center_y,
+            self.rotation,
+        ] {
+            for byte in value.to_bits().to_le_bytes() {
+                hash ^= byte as u64;
+                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        hash
     }
 }
 

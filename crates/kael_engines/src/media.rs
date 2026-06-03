@@ -264,6 +264,8 @@ pub struct TrackFrameRequest {
     pub blend_mode: ClipBlendMode,
     /// The clip's effect stack, applied to its source image before compositing.
     pub effects: EffectStack,
+    /// The clip's geometric transform, applied after the effect stack.
+    pub transform: ClipTransform,
 }
 
 /// Two clips overlapping on one track at a frame — a crossfade transition between the
@@ -636,6 +638,7 @@ impl Timeline {
                     opacity: clip.opacity,
                     blend_mode: clip.blend_mode,
                     effects: clip.effects.resolve(time_ms),
+                    transform: clip.transform,
                 });
             }
         }
