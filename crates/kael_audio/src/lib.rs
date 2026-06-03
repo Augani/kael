@@ -2,6 +2,8 @@
 
 #![deny(missing_docs)]
 
+/// Audio DSP processors: gain, pan, filtering, limiting, fades, metering.
+pub mod dsp;
 /// Shared clamps for playback values.
 pub mod effects;
 /// Real-time mixing graph with a device-sample-counter master clock.
@@ -18,6 +20,7 @@ pub mod session;
 pub mod spatial;
 
 pub use anyhow::Result;
+pub use dsp::OnePole;
 pub use kael_media::AudioPlaybackError;
 pub use mixer::{
     AudioClock, AudioEngine, BufferSource, Mixer, SampleSource, SineSource, VoiceId,
