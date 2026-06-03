@@ -8,6 +8,7 @@
 //! path is exercised without a decoder.
 
 use kael_render_graph::reference::{blend, Image};
+use kael_render_graph::{PassDesc, PassId, RenderGraph, ResourceDesc, ResourceId};
 
 use crate::media::Timeline;
 
@@ -54,6 +55,109 @@ pub fn composite_frame(
         output = next;
     }
     output
+}
+
+/// One composited layer in a [`FrameGraph`]: the source pass producing the clip's image
+/// and the composite pass blending it over the layers below.
+#[derive(Debug, Clone)]
+pub struct LayerPass {
+    /// The track this layer came from.
+    pub track_id: String,
+    /// The clip visible on that track at the requested frame.
+    pub clip_id: String,
+    /// The pass that produces the clip's source image.
+    pub source: PassId,
+    /// The pass that blends this layer over the accumulated result below it.
+    pub composite: PassId,
+}
+
+/// The compositing render-graph for one timeline frame: the abstract pass DAG plus the
+/// resource holding the final composited image.
+///
+/// This is the schedulable form of [`composite_frame`] — the same bottom-to-top stack
+/// expressed as render-graph passes so a cache-aware executor
+/// ([`execute_cached`](kael_render_graph::reference::execute_cached)) can skip layers whose
+/// source frame and blend parameters are unchanged across frames. Each source pass carries
+/// its clip's source frame as the pass frame PTS, so advancing the timeline invalidates
+/// only the layers whose source frame actually changed.
+#[derive(Debug)]
+pub struct FrameGraph {
+    /// The pass DAG: a background clear, then per-layer source + composite passes chained
+    /// bottom-to-top.
+    pub graph: RenderGraph,
+    /// The resource holding the final composited frame (the cleared background when no
+    /// layer is visible).
+    pub output: ResourceId,
+    /// The visible layers, bottom-to-top.
+    pub layers: Vec<LayerPass>,
+}
+
+/// Build the compositing [`FrameGraph`] for `timeline` at `frame`.
+///
+/// Mirrors [`composite_frame`]'s bottom-to-top stack as render-graph passes: a cleared
+/// background, then for each visible layer a source pass (tagged with the clip identity and
+/// its source frame as the pass PTS) and a composite pass blending it over the accumulator.
+/// Disabled tracks and tracks with no active clip are excluded (via
+/// [`Timeline::frame_requests`]).
+pub fn build_frame_graph(timeline: &Timeline, frame: u64) -> FrameGraph {
+    let mut graph = RenderGraph::new();
+    let background = graph.add_resource(ResourceDesc::transient_texture("background"));
+    graph.add_pass(PassDesc::new("background").write(background));
+
+    let mut accumulator = background;
+    let mut layers = Vec::new();
+
+    for (index, request) in timeline.frame_requests(frame).into_iter().enumerate() {
+        let layer_texture =
+            graph.add_resource(ResourceDesc::transient_texture(format!("layer_{index}")));
+        let source = graph.add_pass(
+            PassDesc::new(format!("source_{index}"))
+                .write(layer_texture)
+                .frame_pts(request.source_frame as i64)
+                .param_hash(fnv1a(request.clip_id.as_bytes())),
+        );
+
+        let composited = graph.add_resource(ResourceDesc::transient_texture(format!(
+            "composited_{index}"
+        )));
+        let composite = graph.add_pass(
+            PassDesc::new(format!("composite_{index}"))
+                .read(accumulator)
+                .read(layer_texture)
+                .write(composited)
+                .param_hash(blend_param(request.blend_mode as u8, request.opacity)),
+        );
+
+        layers.push(LayerPass {
+            track_id: request.track_id,
+            clip_id: request.clip_id,
+            source,
+            composite,
+        });
+        accumulator = composited;
+    }
+
+    FrameGraph {
+        graph,
+        output: accumulator,
+        layers,
+    }
+}
+
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for &byte in bytes {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn blend_param(blend_mode: u8, opacity: f32) -> u64 {
+    let mut bytes = [0u8; 5];
+    bytes[0] = blend_mode;
+    bytes[1..].copy_from_slice(&opacity.to_le_bytes());
+    fnv1a(&bytes)
 }
 
 /// A [`FrameProvider`] serving a single decoded still image per source — a photo, freeze
@@ -146,6 +250,64 @@ mod tests {
                 .map(|(source, color)| (source.to_string(), *color))
                 .collect(),
         }
+    }
+
+    #[test]
+    fn build_frame_graph_has_a_layer_per_visible_track() {
+        let timeline = Timeline {
+            tracks: vec![
+                track("v1", vec![clip("a", "red", 0, 30, 0)]),
+                track("v2", vec![clip("b", "blue", 0, 30, 0)]),
+            ],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        let fg = build_frame_graph(&timeline, 10);
+        assert_eq!(fg.layers.len(), 2);
+
+        let compiled = fg.graph.compile().expect("frame graph compiles");
+        let order = compiled.execution_order();
+        for layer in &fg.layers {
+            let source_pos = order.iter().position(|&p| p == layer.source).unwrap();
+            let composite_pos = order.iter().position(|&p| p == layer.composite).unwrap();
+            assert!(
+                source_pos < composite_pos,
+                "source must precede its composite"
+            );
+        }
+    }
+
+    #[test]
+    fn build_frame_graph_excludes_disabled_tracks() {
+        let mut timeline = Timeline {
+            tracks: vec![
+                track("v1", vec![clip("a", "red", 0, 30, 0)]),
+                track("v2", vec![clip("b", "blue", 0, 30, 0)]),
+            ],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        timeline.tracks[0].enabled = false;
+        let fg = build_frame_graph(&timeline, 10);
+        assert_eq!(fg.layers.len(), 1);
+        assert_eq!(fg.layers[0].track_id, "v2");
+    }
+
+    #[test]
+    fn build_frame_graph_cache_keys_track_the_source_frame() {
+        let timeline = Timeline {
+            tracks: vec![track("v1", vec![clip("a", "red", 0, 60, 0)])],
+            frame_rate: 30.0,
+            duration_frames: 60,
+        };
+        let key_at = |frame: u64| {
+            let fg = build_frame_graph(&timeline, frame);
+            let compiled = fg.graph.compile().unwrap();
+            compiled.cache_key(fg.layers[0].source).unwrap()
+        };
+        // Deterministic at a fixed frame; invalidated as the source frame advances.
+        assert_eq!(key_at(10), key_at(10));
+        assert_ne!(key_at(10), key_at(20));
     }
 
     #[test]
