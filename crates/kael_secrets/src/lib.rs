@@ -1,10 +1,10 @@
 //! Secure credential storage backed by the operating-system keychain.
 //!
 //! Replaces ad-hoc in-memory/plaintext token storage with the platform secret
-//! store: the macOS Keychain today (Windows Credential Manager and Linux
-//! Secret Service are pending native backends and currently fall back to the
-//! in-process [`MemorySecretStore`]). Use [`default_store`] to obtain the best
-//! available store for the current platform.
+//! store: the macOS Keychain, the Windows Credential Manager, and the Linux
+//! freedesktop Secret Service, with an in-process [`MemorySecretStore`] fallback
+//! elsewhere. Use [`default_store`] to obtain the best available store for the
+//! current platform.
 
 #![deny(missing_docs)]
 
@@ -196,10 +196,81 @@ mod windows_backend {
 #[cfg(target_os = "windows")]
 pub use windows_backend::CredentialStore;
 
+#[cfg(target_os = "linux")]
+mod linux_backend {
+    use std::collections::HashMap;
+
+    use super::{Result, SecretStore};
+    use anyhow::anyhow;
+    use secret_service::EncryptionType;
+    use secret_service::blocking::SecretService;
+
+    /// A [`SecretStore`] backed by the freedesktop Secret Service over D-Bus.
+    pub struct SecretServiceStore;
+
+    fn attributes<'a>(service: &'a str, account: &'a str) -> HashMap<&'a str, &'a str> {
+        HashMap::from([("service", service), ("account", account)])
+    }
+
+    impl SecretStore for SecretServiceStore {
+        fn set_secret(&self, service: &str, account: &str, secret: &[u8]) -> Result<()> {
+            let session = SecretService::connect(EncryptionType::Dh)
+                .map_err(|error| anyhow!("secret service connect failed: {error}"))?;
+            let collection = session
+                .get_default_collection()
+                .map_err(|error| anyhow!("secret service collection failed: {error}"))?;
+            collection
+                .create_item(
+                    &format!("{service}/{account}"),
+                    attributes(service, account),
+                    secret,
+                    true,
+                    "application/octet-stream",
+                )
+                .map_err(|error| anyhow!("secret service write failed: {error}"))?;
+            Ok(())
+        }
+
+        fn get_secret(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>> {
+            let session = SecretService::connect(EncryptionType::Dh)
+                .map_err(|error| anyhow!("secret service connect failed: {error}"))?;
+            let result = session
+                .search_items(attributes(service, account))
+                .map_err(|error| anyhow!("secret service search failed: {error}"))?;
+            match result.unlocked.first() {
+                Some(item) => {
+                    let secret = item
+                        .get_secret()
+                        .map_err(|error| anyhow!("secret service read failed: {error}"))?;
+                    Ok(Some(secret))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn delete_secret(&self, service: &str, account: &str) -> Result<()> {
+            let session = SecretService::connect(EncryptionType::Dh)
+                .map_err(|error| anyhow!("secret service connect failed: {error}"))?;
+            let result = session
+                .search_items(attributes(service, account))
+                .map_err(|error| anyhow!("secret service search failed: {error}"))?;
+            for item in result.unlocked {
+                item.delete()
+                    .map_err(|error| anyhow!("secret service delete failed: {error}"))?;
+            }
+            Ok(())
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub use linux_backend::SecretServiceStore;
+
 /// Return the best available [`SecretStore`] for the current platform.
 ///
-/// macOS uses the system Keychain and Windows the Credential Manager; other
-/// platforms fall back to the in-process [`MemorySecretStore`].
+/// macOS uses the Keychain, Windows the Credential Manager, and Linux the
+/// freedesktop Secret Service; other platforms fall back to the in-process
+/// [`MemorySecretStore`].
 pub fn default_store() -> Box<dyn SecretStore> {
     #[cfg(target_os = "macos")]
     {
@@ -209,7 +280,11 @@ pub fn default_store() -> Box<dyn SecretStore> {
     {
         Box::new(CredentialStore)
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        Box::new(SecretServiceStore)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         Box::new(MemorySecretStore::new())
     }

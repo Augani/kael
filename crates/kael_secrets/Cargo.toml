@@ -33,6 +33,10 @@ features = [
     "Win32_Security_Credentials",
 ]
 
+[target.'cfg(target_os = "linux")'.dependencies.secret-service]
+version = "4"
+features = ["rt-async-io-crypto-rust"]
+
 [lints.clippy]
 dbg_macro = "deny"
 declare_interior_mutable_const = "deny"
