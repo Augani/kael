@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "accesskit"
+version = "0.17.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3d3b8f9bae46a948369bc4a03e815d4ed6d616bd00de4051133a5019dc31c5a"
+
+[[package]]
 name = "addr2line"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3649,6 +3655,7 @@ dependencies = [
 name = "kael"
 version = "0.1.2"
 dependencies = [
+ "accesskit",
  "anyhow",
  "as-raw-xcb-connection",
  "ashpd 0.13.11",

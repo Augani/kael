@@ -141,6 +141,40 @@ impl AccessibilityRole {
                 | AccessibilityRole::Toolbar
         )
     }
+
+    /// Map to the closest AccessKit role (P3-A spike, roadmap §9 action 12).
+    pub fn to_accesskit(self) -> accesskit::Role {
+        use accesskit::Role;
+        match self {
+            Self::Application | Self::Window => Role::Window,
+            Self::Button => Role::Button,
+            Self::TextInput => Role::TextInput,
+            Self::StaticText => Role::Label,
+            Self::Group | Self::Pane => Role::Group,
+            Self::List => Role::List,
+            Self::ListItem => Role::ListItem,
+            Self::ScrollBar => Role::ScrollBar,
+            Self::Image => Role::Image,
+            Self::Link => Role::Link,
+            Self::Menu => Role::Menu,
+            Self::MenuItem => Role::MenuItem,
+            Self::Tab => Role::Tab,
+            Self::TabPanel => Role::TabPanel,
+            Self::Toolbar => Role::Toolbar,
+            Self::Tree => Role::Tree,
+            Self::TreeItem => Role::TreeItem,
+            Self::CheckBox => Role::CheckBox,
+            Self::RadioButton => Role::RadioButton,
+            Self::Slider => Role::Slider,
+            Self::ProgressBar => Role::ProgressIndicator,
+            Self::Separator => Role::Splitter,
+            Self::Dialog => Role::Dialog,
+            Self::Alert => Role::Alert,
+            Self::ComboBox => Role::ComboBox,
+            Self::Switch => Role::Switch,
+            Self::Unknown => Role::Unknown,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -283,6 +317,28 @@ impl AccessibilityNode {
             children: Vec::new(),
             parent: None,
         }
+    }
+
+    /// Convert this node to an AccessKit node (P3-A spike, roadmap §9 action 12).
+    ///
+    /// Maps role, label, description, and child ids. Geometry (bounds) is **not**
+    /// yet emitted — wiring the layout system to produce a stable, geometry-bearing
+    /// incremental tree is the remaining deep P3-A work this spike exposes.
+    pub fn to_accesskit_node(&self) -> accesskit::Node {
+        let mut node = accesskit::Node::new(self.role.to_accesskit());
+        if let Some(label) = &self.label {
+            node.set_label(label.as_str());
+        }
+        if let Some(description) = &self.description {
+            node.set_description(description.as_str());
+        }
+        let children: Vec<accesskit::NodeId> = self
+            .children
+            .iter()
+            .map(|child| accesskit::NodeId(child.0))
+            .collect();
+        node.set_children(children);
+        node
     }
 
     /// Set the label for this node.
@@ -690,5 +746,36 @@ mod tests {
         assert_eq!(tree.get(button_id).unwrap().parent, Some(group_id));
         assert_eq!(tree.get(group_id).unwrap().parent, Some(tree.root));
         assert!(tree.get(group_id).unwrap().children.contains(&button_id));
+    }
+}
+
+#[cfg(test)]
+mod accesskit_spike_tests {
+    use super::*;
+
+    #[test]
+    fn role_maps_to_accesskit() {
+        assert_eq!(
+            AccessibilityRole::Button.to_accesskit(),
+            accesskit::Role::Button
+        );
+        assert_eq!(
+            AccessibilityRole::Slider.to_accesskit(),
+            accesskit::Role::Slider
+        );
+        assert_eq!(
+            AccessibilityRole::Unknown.to_accesskit(),
+            accesskit::Role::Unknown
+        );
+    }
+
+    #[test]
+    fn node_converts_role_label_and_children() {
+        let mut node = AccessibilityNode::new(AccessibilityRole::Button).with_label("OK");
+        node.children = vec![AccessibilityId(7)];
+        let ak = node.to_accesskit_node();
+        assert_eq!(ak.role(), accesskit::Role::Button);
+        assert_eq!(ak.label(), Some("OK"));
+        assert_eq!(ak.children(), [accesskit::NodeId(7)]);
     }
 }
