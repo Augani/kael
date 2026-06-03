@@ -152,6 +152,7 @@ mod tests {
                 id: "v1".to_string(),
                 name: "Video".to_string(),
                 track_type: TrackType::Video,
+                enabled: true,
                 clips: vec![TimelineClip {
                     id: "a".to_string(),
                     source: "a.mov".to_string(),

@@ -134,6 +134,14 @@ pub struct TimelineTrack {
     pub track_type: TrackType,
     /// Ordered list of clips.
     pub clips: Vec<TimelineClip>,
+    /// Whether the track contributes to the composite/mix (defaults to enabled). A
+    /// disabled track is hidden (video) or muted (audio).
+    #[serde(default = "default_track_enabled")]
+    pub enabled: bool,
+}
+
+fn default_track_enabled() -> bool {
+    true
 }
 
 /// An error from a timeline edit operation.
@@ -558,6 +566,9 @@ impl Timeline {
     pub fn frame_requests(&self, frame: u64) -> Vec<TrackFrameRequest> {
         let mut requests = Vec::new();
         for track in &self.tracks {
+            if !track.enabled {
+                continue;
+            }
             if let Some((clip, source_frame)) = track
                 .clips
                 .iter()
@@ -822,6 +833,7 @@ mod tests {
             name: format!("Track {id}"),
             track_type,
             clips,
+            enabled: true,
         }
     }
 
@@ -871,6 +883,25 @@ mod tests {
         );
 
         assert!(tl.frame_requests(100).is_empty());
+    }
+
+    #[test]
+    fn disabled_track_is_excluded_from_frame_requests() {
+        let mut tl = Timeline {
+            tracks: vec![
+                sample_track("v1", TrackType::Video, vec![sample_clip("a", 0, 60, 0)]),
+                sample_track("v2", TrackType::Video, vec![sample_clip("b", 0, 60, 0)]),
+            ],
+            frame_rate: 30.0,
+            duration_frames: 60,
+        };
+
+        assert_eq!(tl.frame_requests(10).len(), 2);
+
+        tl.tracks[0].enabled = false;
+        let active = tl.frame_requests(10);
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].track_id, "v2");
     }
 
     #[test]

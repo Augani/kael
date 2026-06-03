@@ -135,6 +135,7 @@ mod tests {
             name: id.to_string(),
             track_type: TrackType::Video,
             clips,
+            enabled: true,
         }
     }
 

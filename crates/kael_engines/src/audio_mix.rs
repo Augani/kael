@@ -49,7 +49,7 @@ pub fn mix_range(
     for (index, frame) in range.enumerate() {
         let base = index * spf;
         for track in &timeline.tracks {
-            if track.track_type != TrackType::Audio {
+            if track.track_type != TrackType::Audio || !track.enabled {
                 continue;
             }
             let Some((clip, source_frame)) = track
@@ -273,6 +273,7 @@ mod tests {
             name: "t".to_string(),
             track_type,
             clips,
+            enabled: true,
         }
     }
 
@@ -308,6 +309,21 @@ mod tests {
         let out = mix_range(&tl, 0..1, 48_000, &ConstProvider { value: 0.5 }).unwrap();
         // Two overlapping audio tracks sum: 0.5 + 0.5 = 1.0.
         assert!(out.iter().all(|sample| (sample - 1.0).abs() < 1e-6));
+    }
+
+    #[test]
+    fn disabled_track_is_muted_in_the_mix() {
+        let mut tl = timeline(
+            vec![
+                track(TrackType::Audio, vec![clip("a", 0, 4, 0)]),
+                track(TrackType::Audio, vec![clip("b", 0, 4, 0)]),
+            ],
+            30.0,
+        );
+        tl.tracks[1].enabled = false;
+        let out = mix_range(&tl, 0..1, 48_000, &ConstProvider { value: 0.5 }).unwrap();
+        // The muted second track contributes nothing: only 0.5 remains.
+        assert!(out.iter().all(|sample| (sample - 0.5).abs() < 1e-6));
     }
 
     #[test]
