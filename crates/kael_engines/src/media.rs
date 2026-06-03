@@ -221,6 +221,41 @@ impl TimelineTrack {
         Ok(())
     }
 
+    /// Slide the clip by `delta` track frames, absorbing the move into the
+    /// adjacent previous and next clips (its own content and duration unchanged).
+    /// Requires adjacent neighbors on both sides.
+    pub fn slide(&mut self, id: &str, delta: i64) -> Result<(), TimelineEditError> {
+        let index = self.clip_index(id)?;
+        let start = self.clips[index].track_offset;
+        let end = self.clips[index].track_end();
+        let prev_index = self
+            .clips
+            .iter()
+            .position(|clip| clip.track_end() == start)
+            .ok_or(TimelineEditError::NotAdjacent)?;
+        let next_index = self
+            .clips
+            .iter()
+            .position(|clip| clip.track_offset == end)
+            .ok_or(TimelineEditError::NotAdjacent)?;
+
+        let new_offset = offset_by(self.clips[index].track_offset, delta)?;
+        let new_prev_end = offset_by(self.clips[prev_index].end_frame, delta)?;
+        let new_next_start = offset_by(self.clips[next_index].start_frame, delta)?;
+        let new_next_offset = offset_by(self.clips[next_index].track_offset, delta)?;
+        if new_prev_end <= self.clips[prev_index].start_frame
+            || new_next_start >= self.clips[next_index].end_frame
+        {
+            return Err(TimelineEditError::InvalidDuration);
+        }
+
+        self.clips[index].track_offset = new_offset;
+        self.clips[prev_index].end_frame = new_prev_end;
+        self.clips[next_index].start_frame = new_next_start;
+        self.clips[next_index].track_offset = new_next_offset;
+        Ok(())
+    }
+
     /// Split the clip at `at_track_frame`, returning the id of the new right clip.
     pub fn split(&mut self, id: &str, at_track_frame: u64) -> Result<String, TimelineEditError> {
         let index = self.clip_index(id)?;
@@ -811,6 +846,29 @@ mod tests {
         assert_eq!(b.start_frame, 10);
         assert_eq!(track.clips[0].duration() + b.duration(), span);
         assert!(!track.has_overlap());
+    }
+
+    #[test]
+    fn slide_moves_clip_absorbing_into_neighbors() {
+        let mut track = edit_track(vec![
+            sample_clip("prev", 0, 50, 0),
+            sample_clip("mid", 0, 50, 50),
+            sample_clip("next", 0, 50, 100),
+        ]);
+        track.slide("mid", 10).unwrap();
+        let prev = track.clips.iter().find(|clip| clip.id == "prev").unwrap();
+        let mid = track.clips.iter().find(|clip| clip.id == "mid").unwrap();
+        let next = track.clips.iter().find(|clip| clip.id == "next").unwrap();
+        assert_eq!(mid.track_offset, 60);
+        assert_eq!(mid.duration(), 50);
+        assert_eq!((prev.end_frame, prev.track_end()), (60, 60));
+        assert_eq!((next.start_frame, next.track_offset), (10, 110));
+        assert!(!track.has_overlap());
+        assert!(track.gaps().is_empty());
+        assert_eq!(
+            edit_track(vec![sample_clip("solo", 0, 50, 0)]).slide("solo", 10),
+            Err(TimelineEditError::NotAdjacent)
+        );
     }
 
     #[test]
