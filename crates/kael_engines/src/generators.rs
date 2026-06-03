@@ -96,7 +96,9 @@ impl Generator {
     pub fn parse(source: &str) -> Option<Self> {
         let (scheme, rest) = source.split_once(':')?;
         match scheme {
-            "color" => Some(Self::Solid(parse_color(rest)?)),
+            "color" => Some(Self::Solid(
+                parse_hex_color(rest).or_else(|| parse_color(rest))?,
+            )),
             "gradient" => {
                 let parts: Vec<&str> = rest.split('|').collect();
                 if parts.len() != 3 {
@@ -147,6 +149,40 @@ fn parse_color(text: &str) -> Option<[f32; 4]> {
         color[channel] = part.trim().parse::<f32>().ok()?;
     }
     Some(color)
+}
+
+/// Parse a hex color string (`#RGB`, `#RRGGBB`, or `#RRGGBBAA`) into `[r, g, b, a]` in
+/// `0..=1` (missing alpha is opaque). The values are used straight, not sRGB-decoded.
+/// Returns `None` if the string is not `#` followed by 3, 6, or 8 hex digits.
+pub fn parse_hex_color(text: &str) -> Option<[f32; 4]> {
+    let hex = text.trim().strip_prefix('#')?;
+    if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let channel = |slice: &str| u8::from_str_radix(slice, 16).ok().map(|v| v as f32 / 255.0);
+    match hex.len() {
+        3 => {
+            let mut color = [1.0f32; 4];
+            for (index, digit) in hex.chars().enumerate() {
+                let value = digit.to_digit(16)? as u8;
+                color[index] = (value * 16 + value) as f32 / 255.0;
+            }
+            Some(color)
+        }
+        6 => Some([
+            channel(&hex[0..2])?,
+            channel(&hex[2..4])?,
+            channel(&hex[4..6])?,
+            1.0,
+        ]),
+        8 => Some([
+            channel(&hex[0..2])?,
+            channel(&hex[2..4])?,
+            channel(&hex[4..6])?,
+            channel(&hex[6..8])?,
+        ]),
+        _ => None,
+    }
 }
 
 /// A [`FrameProvider`] that renders procedural generator clips from their `source` URI.
@@ -213,6 +249,34 @@ mod tests {
         assert_eq!(Generator::parse("file.mp4"), None);
         assert_eq!(Generator::parse("color:1,0,0"), None);
         assert_eq!(Generator::parse("gradient:bad"), None);
+    }
+
+    #[test]
+    fn parse_hex_color_handles_common_forms() {
+        assert_eq!(parse_hex_color("#ff0000"), Some([1.0, 0.0, 0.0, 1.0]));
+        assert_eq!(parse_hex_color("#fff"), Some([1.0, 1.0, 1.0, 1.0]));
+        // #abc expands each nibble: a -> 0xaa.
+        assert!((parse_hex_color("#abc").unwrap()[0] - 0xaa as f32 / 255.0).abs() < 1e-6);
+        // 8-digit form carries alpha.
+        let rgba = parse_hex_color("#00ff0080").unwrap();
+        assert_eq!(rgba[1], 1.0);
+        assert!((rgba[3] - 128.0 / 255.0).abs() < 1e-6);
+        // Malformed.
+        assert_eq!(parse_hex_color("ff0000"), None);
+        assert_eq!(parse_hex_color("#ff00"), None);
+        assert_eq!(parse_hex_color("#gggggg"), None);
+    }
+
+    #[test]
+    fn color_generator_accepts_hex_and_floats() {
+        assert_eq!(
+            Generator::parse("color:#ff0000"),
+            Some(Generator::Solid([1.0, 0.0, 0.0, 1.0]))
+        );
+        assert_eq!(
+            Generator::parse("color:0,1,0,1"),
+            Some(Generator::Solid([0.0, 1.0, 0.0, 1.0]))
+        );
     }
 
     #[test]
