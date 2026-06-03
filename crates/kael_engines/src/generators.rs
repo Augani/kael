@@ -62,6 +62,28 @@ pub fn checkerboard(a: [f32; 4], b: [f32; 4], cell: u32, width: u32, height: u32
     image
 }
 
+/// A two-color radial gradient from `center` (at the image center) to `edge` (at the
+/// farthest corner).
+pub fn radial_gradient(center: [f32; 4], edge: [f32; 4], width: u32, height: u32) -> Image {
+    let cx = (width as f32 - 1.0) / 2.0;
+    let cy = (height as f32 - 1.0) / 2.0;
+    let max_distance = (cx * cx + cy * cy).sqrt().max(f32::EPSILON);
+    let mut image = Image::new(width, height);
+    for y in 0..height {
+        for x in 0..width {
+            let dx = x as f32 - cx;
+            let dy = y as f32 - cy;
+            let t = ((dx * dx + dy * dy).sqrt() / max_distance).min(1.0);
+            let mut color = [0.0f32; 4];
+            for channel in 0..4 {
+                color[channel] = center[channel] * (1.0 - t) + edge[channel] * t;
+            }
+            image.pixels[(y * width + x) as usize] = color;
+        }
+    }
+    image
+}
+
 /// A procedural source: the parsed form of a generator clip's `source` string.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Generator {
@@ -84,6 +106,13 @@ pub enum Generator {
         b: [f32; 4],
         /// Square edge length in pixels.
         cell: u32,
+    },
+    /// A two-color radial gradient (center to edge).
+    RadialGradient {
+        /// Color at the image center.
+        center: [f32; 4],
+        /// Color at the farthest corner.
+        edge: [f32; 4],
     },
 }
 
@@ -121,6 +150,16 @@ impl Generator {
                     cell: parts[2].trim().parse::<u32>().ok()?,
                 })
             }
+            "radial" => {
+                let parts: Vec<&str> = rest.split('|').collect();
+                if parts.len() != 2 {
+                    return None;
+                }
+                Some(Self::RadialGradient {
+                    center: parse_color(parts[0])?,
+                    edge: parse_color(parts[1])?,
+                })
+            }
             _ => None,
         }
     }
@@ -135,6 +174,7 @@ impl Generator {
                 vertical,
             } => linear_gradient(*start, *end, *vertical, width, height),
             Self::Checkerboard { a, b, cell } => checkerboard(*a, *b, *cell, width, height),
+            Self::RadialGradient { center, edge } => radial_gradient(*center, *edge, width, height),
         }
     }
 }
@@ -230,6 +270,31 @@ mod tests {
         assert_eq!(image.pixel(1, 0), b);
         assert_eq!(image.pixel(0, 1), b);
         assert_eq!(image.pixel(1, 1), a);
+    }
+
+    #[test]
+    fn radial_gradient_runs_center_to_corner() {
+        // 3x3: the center pixel is the center color, the corners are the edge color.
+        let image = radial_gradient([1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0], 3, 3);
+        assert_eq!(image.pixel(1, 1), [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(image.pixel(0, 0), [0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn radial_generator_parses_and_renders() {
+        assert_eq!(
+            Generator::parse("radial:1,1,1,1|0,0,0,1"),
+            Some(Generator::RadialGradient {
+                center: [1.0; 4],
+                edge: [0.0, 0.0, 0.0, 1.0]
+            })
+        );
+        let rendered = Generator::parse("radial:1,1,1,1|0,0,0,1")
+            .unwrap()
+            .render(3, 3);
+        assert_eq!(rendered.pixel(1, 1)[0], 1.0);
+        // Missing the second color is rejected.
+        assert_eq!(Generator::parse("radial:1,1,1,1"), None);
     }
 
     #[test]
