@@ -321,6 +321,56 @@ impl PlaybackClock {
     pub fn current_frame(&self, master_now: Duration) -> u64 {
         self.timebase.time_to_frame(self.position(master_now))
     }
+
+    /// The frame visible when looping over `loop_region` — the position wrapped into the
+    /// region (for looped review playback).
+    pub fn current_frame_looped(&self, master_now: Duration, loop_region: &LoopRegion) -> u64 {
+        self.timebase
+            .time_to_frame(loop_region.wrap(self.position(master_now)))
+    }
+}
+
+/// A half-open `[start, end)` loop region in media time, for looped review playback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoopRegion {
+    /// Loop start (inclusive).
+    pub start: Duration,
+    /// Loop end (exclusive).
+    pub end: Duration,
+}
+
+impl LoopRegion {
+    /// Create a loop region, normalizing so `start <= end`.
+    pub fn new(start: Duration, end: Duration) -> Self {
+        if start <= end {
+            Self { start, end }
+        } else {
+            Self {
+                start: end,
+                end: start,
+            }
+        }
+    }
+
+    /// The loop length.
+    pub fn length(&self) -> Duration {
+        self.end.saturating_sub(self.start)
+    }
+
+    /// Wrap `position` into the region: positions before `start` pass through; positions at
+    /// or past `end` fold back from `start` by the loop length. A zero-length region pins to
+    /// `start`.
+    pub fn wrap(&self, position: Duration) -> Duration {
+        let length = self.length();
+        if length.is_zero() {
+            return self.start;
+        }
+        if position < self.end {
+            return position;
+        }
+        let offset_nanos = (position - self.start).as_nanos() % length.as_nanos();
+        self.start + Duration::from_nanos(offset_nanos as u64)
+    }
 }
 
 #[cfg(test)]
@@ -486,5 +536,30 @@ mod tests {
         assert_eq!(clock.rate(), 0.0);
         clock.play(ms(0));
         assert_eq!(clock.position(ms(1000)), Duration::ZERO);
+    }
+
+    #[test]
+    fn loop_region_wraps_position() {
+        let region = LoopRegion::new(ms(1000), ms(3000));
+        assert_eq!(region.length(), ms(2000));
+        // Before and within the region pass through.
+        assert_eq!(region.wrap(ms(500)), ms(500));
+        assert_eq!(region.wrap(ms(2000)), ms(2000));
+        // At/after the end fold back from the start.
+        assert_eq!(region.wrap(ms(3000)), ms(1000));
+        assert_eq!(region.wrap(ms(4000)), ms(2000));
+        assert_eq!(region.wrap(ms(5000)), ms(1000));
+        // Reversed arguments normalize; a zero-length region pins to start.
+        assert_eq!(LoopRegion::new(ms(3000), ms(1000)), region);
+        assert_eq!(LoopRegion::new(ms(2000), ms(2000)).wrap(ms(5000)), ms(2000));
+    }
+
+    #[test]
+    fn playback_clock_loops_frames_within_region() {
+        let mut clock = PlaybackClock::new(Timebase::THIRTY);
+        clock.play(ms(0));
+        let region = LoopRegion::new(ms(0), ms(1000)); // 30 frames @ 30 fps
+                                                       // 1.5s media -> looped 0.5s -> frame 15.
+        assert_eq!(clock.current_frame_looped(ms(1500), &region), 15);
     }
 }
