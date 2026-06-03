@@ -635,3 +635,60 @@ mod lut_tests {
         assert!(Lut3d::from_samples(1, vec![[0.0; 3]]).is_none());
     }
 }
+
+/// Apply an ASC CDL primary grade to a color: per channel `(in*slope + offset)^power`
+/// (slope = gain, offset = lift, power = gamma), clamped at zero before the power.
+///
+/// The standard lift/gamma/gain primary correction for color grading.
+pub fn apply_cdl(rgb: [f32; 3], slope: [f32; 3], offset: [f32; 3], power: [f32; 3]) -> [f32; 3] {
+    let mut out = [0.0f32; 3];
+    for channel in 0..3 {
+        let value = (rgb[channel] * slope[channel] + offset[channel]).max(0.0);
+        out[channel] = if power[channel] > 0.0 {
+            value.powf(power[channel])
+        } else {
+            value
+        };
+    }
+    out
+}
+
+#[cfg(test)]
+mod grade_tests {
+    use super::*;
+
+    fn close(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
+        (0..3).all(|i| (a[i] - b[i]).abs() <= tol)
+    }
+
+    #[test]
+    fn identity_grade_is_passthrough() {
+        let out = apply_cdl([0.2, 0.5, 0.8], [1.0; 3], [0.0; 3], [1.0; 3]);
+        assert!(close(out, [0.2, 0.5, 0.8], 1e-6));
+    }
+
+    #[test]
+    fn slope_scales_offset_lifts_power_gammas() {
+        assert!(close(
+            apply_cdl([0.25, 0.25, 0.25], [2.0; 3], [0.0; 3], [1.0; 3]),
+            [0.5, 0.5, 0.5],
+            1e-6
+        ));
+        assert!(close(
+            apply_cdl([0.2, 0.2, 0.2], [1.0; 3], [0.1; 3], [1.0; 3]),
+            [0.3, 0.3, 0.3],
+            1e-6
+        ));
+        assert!(close(
+            apply_cdl([0.5, 0.5, 0.5], [1.0; 3], [0.0; 3], [2.0; 3]),
+            [0.25, 0.25, 0.25],
+            1e-6
+        ));
+    }
+
+    #[test]
+    fn negative_intermediate_is_clamped() {
+        let out = apply_cdl([0.1, 0.1, 0.1], [1.0; 3], [-0.5; 3], [2.0; 3]);
+        assert_eq!(out, [0.0, 0.0, 0.0]);
+    }
+}
