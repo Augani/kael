@@ -1285,6 +1285,48 @@ pub mod reference {
         })
     }
 
+    /// A single-input op converting straight (non-premultiplied) alpha to premultiplied:
+    /// each color channel is multiplied by alpha.
+    pub fn premultiply() -> PassOp<'static> {
+        Box::new(|inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            for (output_pixel, source_pixel) in output.pixels.iter_mut().zip(&source.pixels) {
+                let alpha = source_pixel[3];
+                *output_pixel = [
+                    source_pixel[0] * alpha,
+                    source_pixel[1] * alpha,
+                    source_pixel[2] * alpha,
+                    alpha,
+                ];
+            }
+        })
+    }
+
+    /// A single-input op converting premultiplied alpha back to straight: each color
+    /// channel is divided by alpha (fully-transparent pixels become zero).
+    pub fn unpremultiply() -> PassOp<'static> {
+        Box::new(|inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            for (output_pixel, source_pixel) in output.pixels.iter_mut().zip(&source.pixels) {
+                let alpha = source_pixel[3];
+                *output_pixel = if alpha <= f32::EPSILON {
+                    [0.0, 0.0, 0.0, alpha]
+                } else {
+                    [
+                        source_pixel[0] / alpha,
+                        source_pixel[1] / alpha,
+                        source_pixel[2] / alpha,
+                        alpha,
+                    ]
+                };
+            }
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -1600,6 +1642,24 @@ pub mod reference {
             assert_eq!(out.pixel(2, 0)[3], 1.0);
             // Color channels are preserved for kept pixels.
             assert_eq!(&out.pixel(2, 0)[0..3], &[1.0, 0.0, 0.0]);
+        }
+
+        #[test]
+        fn premultiply_unpremultiply_round_trip() {
+            let mut source = Image::new(2, 1);
+            source.pixels = vec![[1.0, 0.5, 0.0, 0.5], [0.0, 0.0, 0.0, 0.0]];
+
+            let mut premultiplied = Image::new(2, 1);
+            premultiply()(&[&source], &mut premultiplied);
+            // Straight [1, 0.5, 0] at alpha 0.5 -> premultiplied [0.5, 0.25, 0].
+            assert_eq!(premultiplied.pixel(0, 0), [0.5, 0.25, 0.0, 0.5]);
+            assert_eq!(premultiplied.pixel(1, 0), [0.0, 0.0, 0.0, 0.0]);
+
+            let mut restored = Image::new(2, 1);
+            unpremultiply()(&[&premultiplied], &mut restored);
+            assert_eq!(restored.pixel(0, 0), [1.0, 0.5, 0.0, 0.5]);
+            // Fully transparent stays zero (no divide by zero).
+            assert_eq!(restored.pixel(1, 0), [0.0, 0.0, 0.0, 0.0]);
         }
     }
 }
