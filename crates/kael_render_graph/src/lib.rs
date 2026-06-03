@@ -1527,6 +1527,26 @@ pub mod reference {
         })
     }
 
+    /// A single-input op that posterizes `inputs[0]` to `levels` discrete steps per RGB
+    /// channel (clamped to at least 2) — the stylize/banding effect. Alpha passes through.
+    pub fn posterize(levels: u32) -> PassOp<'static> {
+        let steps = levels.max(2) as f32 - 1.0;
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            let quantize = |value: f32| (value.clamp(0.0, 1.0) * steps).round() / steps;
+            for (output_pixel, source_pixel) in output.pixels.iter_mut().zip(&source.pixels) {
+                *output_pixel = [
+                    quantize(source_pixel[0]),
+                    quantize(source_pixel[1]),
+                    quantize(source_pixel[2]),
+                    source_pixel[3],
+                ];
+            }
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -2013,6 +2033,30 @@ pub mod reference {
                 assert!((gray.pixel(0, 0)[channel] - luma).abs() < 1e-5);
             }
             assert_eq!(gray.pixel(0, 0)[3], 1.0);
+        }
+
+        #[test]
+        fn posterize_quantizes_channels() {
+            let mut source = Image::new(1, 1);
+            source.pixels = vec![[0.3, 0.6, 0.9, 0.5]];
+
+            // 2 levels round to 0 or 1; alpha passes through.
+            let mut two = Image::new(1, 1);
+            posterize(2)(&[&source], &mut two);
+            assert_eq!(two.pixel(0, 0), [0.0, 1.0, 1.0, 0.5]);
+
+            // 4 levels snap to the nearest of {0, 1/3, 2/3, 1}.
+            let mut four = Image::new(1, 1);
+            posterize(4)(&[&source], &mut four);
+            let close = |a: f32, b: f32| (a - b).abs() < 1e-5;
+            assert!(close(four.pixel(0, 0)[0], 1.0 / 3.0));
+            assert!(close(four.pixel(0, 0)[1], 2.0 / 3.0));
+            assert!(close(four.pixel(0, 0)[2], 1.0));
+
+            // Fewer than 2 levels clamps to 2.
+            let mut one = Image::new(1, 1);
+            posterize(1)(&[&source], &mut one);
+            assert_eq!(one.pixel(0, 0), two.pixel(0, 0));
         }
     }
 }
