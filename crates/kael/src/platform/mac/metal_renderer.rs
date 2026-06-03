@@ -1,8 +1,8 @@
 use super::metal_atlas::MetalAtlas;
 use crate::{
-    AtlasTextureId, Background, BlurRect, Bounds, ContentMask, Corners, DevicePixels, Hsla,
-    MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
-    ScaledPixels, Scene, Shadow, Size, Surface, Underline, point, size,
+    point, size, AtlasTextureId, Background, BlurRect, Bounds, ContentMask, Corners, DevicePixels,
+    Hsla, MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
+    ScaledPixels, Scene, Shadow, Size, Surface, Underline,
 };
 use anyhow::Result;
 use block::ConcreteBlock;
@@ -2026,6 +2026,13 @@ impl MetalRenderer {
                 Some(metal::TextureRef::from_ptr(texture as *mut _))
             });
 
+            let ycbcr_matrix = surface_ycbcr_matrix(&surface.image_buffer);
+            command_encoder.set_fragment_bytes(
+                SurfaceInputIndex::YCbCrMatrix as u64,
+                mem::size_of_val(&ycbcr_matrix) as u64,
+                ycbcr_matrix.as_ptr() as *const _,
+            );
+
             unsafe {
                 let buffer_contents = (instance_buffer.metal_buffer.contents() as *mut u8)
                     .add(*instance_offset)
@@ -2052,6 +2059,43 @@ fn texture_covers(texture: Option<&metal::Texture>, size: Size<DevicePixels>) ->
     };
 
     texture.width() as i32 >= size.width.0 && texture.height() as i32 >= size.height.0
+}
+
+/// Select the YCbCr→RGB matrix for a video surface from its frame's tagged
+/// colorspace, defaulting to BT.601 when no matrix attachment is present.
+///
+/// The biplanar surface format is full-range 8-bit, so range/bit-depth are fixed;
+/// only the matrix coefficients (BT.601 / BT.709 / BT.2020) vary by frame.
+fn surface_ycbcr_matrix(image_buffer: &core_video::pixel_buffer::CVPixelBuffer) -> [[f32; 4]; 4] {
+    use crate::video_color::{ycbcr_to_rgb_matrix, VideoColorRange};
+    let coefficients = surface_matrix_coefficients(image_buffer);
+    ycbcr_to_rgb_matrix(coefficients, VideoColorRange::Full, 8)
+}
+
+fn surface_matrix_coefficients(
+    image_buffer: &core_video::pixel_buffer::CVPixelBuffer,
+) -> crate::video_color::VideoMatrixCoefficients {
+    use crate::video_color::VideoMatrixCoefficients;
+    use core_video::buffer::CVBufferGetAttachment;
+    use core_video::image_buffer::{
+        kCVImageBufferYCbCrMatrixKey, CVYCbCrMatrixGetIntegerCodePointForString,
+    };
+
+    let value = unsafe {
+        CVBufferGetAttachment(
+            image_buffer.as_concrete_TypeRef(),
+            kCVImageBufferYCbCrMatrixKey,
+            std::ptr::null_mut(),
+        )
+    };
+    if value.is_null() {
+        return VideoMatrixCoefficients::Bt601;
+    }
+    match unsafe { CVYCbCrMatrixGetIntegerCodePointForString(value as _) } {
+        1 => VideoMatrixCoefficients::Bt709,
+        9 | 10 => VideoMatrixCoefficients::Bt2020Ncl,
+        _ => VideoMatrixCoefficients::Bt601,
+    }
 }
 
 /// Pixels read back from an off-screen render, in the renderer's native
@@ -2300,6 +2344,7 @@ enum SurfaceInputIndex {
     TextureSize = 3,
     YTexture = 4,
     CbCrTexture = 5,
+    YCbCrMatrix = 6,
 }
 
 #[repr(C)]
@@ -2362,7 +2407,7 @@ impl BlurPass {
 #[cfg(test)]
 mod offscreen_tests {
     use super::*;
-    use crate::{TransformationMatrix, hsla};
+    use crate::{hsla, TransformationMatrix};
 
     fn headless() -> Option<MetalRenderer> {
         if !metal_is_available() {
@@ -2505,6 +2550,162 @@ mod offscreen_tests {
         assert!(
             frame.rgba[above_underline] > 0.6,
             "quad red should render under the multi-primitive path"
+        );
+    }
+
+    fn make_solid_nv12(
+        side: usize,
+        y_val: u8,
+        cb_val: u8,
+        cr_val: u8,
+        matrix: core_foundation::string::CFStringRef,
+    ) -> core_video::pixel_buffer::CVPixelBuffer {
+        use core_foundation::base::{CFType, TCFType};
+        use core_foundation::boolean::CFBoolean;
+        use core_foundation::dictionary::CFDictionary;
+        use core_foundation::string::CFString;
+        use core_video::buffer::{kCVAttachmentMode_ShouldPropagate, CVBufferSetAttachment};
+        use core_video::image_buffer::kCVImageBufferYCbCrMatrixKey;
+        use core_video::pixel_buffer::{
+            kCVPixelBufferIOSurfacePropertiesKey, kCVPixelBufferMetalCompatibilityKey,
+            CVPixelBuffer,
+        };
+
+        let empty: CFDictionary<CFString, CFType> = CFDictionary::from_CFType_pairs(&[]);
+        let options = CFDictionary::from_CFType_pairs(&[
+            (
+                unsafe { CFString::wrap_under_get_rule(kCVPixelBufferMetalCompatibilityKey) },
+                CFBoolean::true_value().as_CFType(),
+            ),
+            (
+                unsafe { CFString::wrap_under_get_rule(kCVPixelBufferIOSurfacePropertiesKey) },
+                empty.as_CFType(),
+            ),
+        ]);
+
+        let buffer = CVPixelBuffer::new(
+            kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+            side,
+            side,
+            Some(&options),
+        )
+        .expect("create NV12 pixel buffer");
+
+        buffer.lock_base_address(0);
+        unsafe {
+            let y_base = buffer.get_base_address_of_plane(0) as *mut u8;
+            let y_stride = buffer.get_bytes_per_row_of_plane(0);
+            for row in 0..buffer.get_height_of_plane(0) {
+                for col in 0..buffer.get_width_of_plane(0) {
+                    *y_base.add(row * y_stride + col) = y_val;
+                }
+            }
+            let c_base = buffer.get_base_address_of_plane(1) as *mut u8;
+            let c_stride = buffer.get_bytes_per_row_of_plane(1);
+            for row in 0..buffer.get_height_of_plane(1) {
+                for col in 0..buffer.get_width_of_plane(1) {
+                    *c_base.add(row * c_stride + col * 2) = cb_val;
+                    *c_base.add(row * c_stride + col * 2 + 1) = cr_val;
+                }
+            }
+        }
+        buffer.unlock_base_address(0);
+
+        unsafe {
+            CVBufferSetAttachment(
+                buffer.as_concrete_TypeRef(),
+                kCVImageBufferYCbCrMatrixKey,
+                matrix as _,
+                kCVAttachmentMode_ShouldPropagate,
+            );
+        }
+        buffer
+    }
+
+    fn render_surface_center(
+        renderer: &mut MetalRenderer,
+        image_buffer: core_video::pixel_buffer::CVPixelBuffer,
+        side: usize,
+    ) -> (u8, u8, u8) {
+        let bounds = Bounds {
+            origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size: size(ScaledPixels(side as f32), ScaledPixels(side as f32)),
+        };
+        let mut scene = Scene::default();
+        scene.insert_primitive(PaintSurface {
+            order: 0,
+            bounds,
+            content_mask: ContentMask { bounds },
+            image_buffer,
+        });
+        scene.finish();
+        let frame = renderer
+            .render_scene_to_bytes(
+                &scene,
+                size(DevicePixels(side as i32), DevicePixels(side as i32)),
+            )
+            .unwrap();
+        let center = (((side / 2) * side) + (side / 2)) * 4;
+        (
+            frame.bgra[center + 2],
+            frame.bgra[center + 1],
+            frame.bgra[center],
+        )
+    }
+
+    #[test]
+    fn offscreen_surface_uses_tagged_colorspace_matrix() {
+        use crate::video_color::{convert_ycbcr, VideoColorRange, VideoMatrixCoefficients};
+        use core_video::image_buffer::{
+            kCVImageBufferYCbCrMatrix_ITU_R_601_4, kCVImageBufferYCbCrMatrix_ITU_R_709_2,
+        };
+        let Some(mut renderer) = headless() else {
+            return;
+        };
+
+        let side = 16usize;
+        let (y, cb, cr) = (150u8, 90u8, 180u8);
+
+        let buffer_601 = make_solid_nv12(side, y, cb, cr, unsafe {
+            kCVImageBufferYCbCrMatrix_ITU_R_601_4
+        });
+        let buffer_709 = make_solid_nv12(side, y, cb, cr, unsafe {
+            kCVImageBufferYCbCrMatrix_ITU_R_709_2
+        });
+        let (r601, g601, b601) = render_surface_center(&mut renderer, buffer_601, side);
+        let (r709, g709, b709) = render_surface_center(&mut renderer, buffer_709, side);
+
+        let expect = |coeffs| {
+            let rgb = convert_ycbcr(
+                coeffs,
+                VideoColorRange::Full,
+                8,
+                y as f32 / 255.0,
+                cb as f32 / 255.0,
+                cr as f32 / 255.0,
+            );
+            let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
+            (q(rgb[0]), q(rgb[1]), q(rgb[2]))
+        };
+        let (er6, eg6, eb6) = expect(VideoMatrixCoefficients::Bt601);
+        let (er7, eg7, eb7) = expect(VideoMatrixCoefficients::Bt709);
+
+        let tol = 6i32;
+        let close = |a: u8, b: i32| (a as i32 - b).abs() <= tol;
+        assert!(
+            close(r601, er6) && close(g601, eg6) && close(b601, eb6),
+            "601 surface got ({r601},{g601},{b601}), expected ~({er6},{eg6},{eb6})"
+        );
+        assert!(
+            close(r709, er7) && close(g709, eg7) && close(b709, eb7),
+            "709 surface got ({r709},{g709},{b709}), expected ~({er7},{eg7},{eb7})"
+        );
+        let divergence = (r601 as i32 - r709 as i32).abs()
+            + (g601 as i32 - g709 as i32).abs()
+            + (b601 as i32 - b709 as i32).abs();
+        assert!(
+            divergence > tol,
+            "colorspace dispatch must change output: 601=({r601},{g601},{b601}) 709=({r709},{g709},{b709})"
         );
     }
 }
