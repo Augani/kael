@@ -411,6 +411,18 @@ pub fn integrated_lufs(samples: &[f32], sample_rate: u32) -> f32 {
     loudness(mean) as f32
 }
 
+/// The linear gain that brings `samples`' [`integrated_lufs`] to `target_lufs` (e.g. `-14`
+/// for streaming, `-23` for broadcast). Loudness scales by `20*log10(gain)`, so the gain is
+/// `target - current` dB in linear form. Returns `1.0` when the input is silent or too short
+/// to measure. Pair with [`apply_gain`] to loudness-normalize a buffer.
+pub fn lufs_normalize_gain(samples: &[f32], target_lufs: f32, sample_rate: u32) -> f32 {
+    let current = integrated_lufs(samples, sample_rate);
+    if current <= SILENCE_DBFS {
+        return 1.0;
+    }
+    dbfs_to_linear(target_lufs - current)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -756,5 +768,19 @@ mod tests {
         // Shorter than one 400 ms block.
         assert_eq!(integrated_lufs(&tone(0.5, 100), 48_000), SILENCE_DBFS);
         assert_eq!(integrated_lufs(&tone(0.5, 48_000), 0), SILENCE_DBFS);
+    }
+
+    #[test]
+    fn lufs_normalize_gain_hits_the_target_loudness() {
+        let mut signal = tone(0.5, 96_000);
+        let gain = lufs_normalize_gain(&signal, -23.0, 48_000);
+        apply_gain(&mut signal, gain);
+        assert!((integrated_lufs(&signal, 48_000) - (-23.0)).abs() < 0.1);
+    }
+
+    #[test]
+    fn lufs_normalize_gain_is_unity_for_silence() {
+        assert_eq!(lufs_normalize_gain(&[0.0; 48_000], -23.0, 48_000), 1.0);
+        assert_eq!(lufs_normalize_gain(&[], -23.0, 48_000), 1.0);
     }
 }
