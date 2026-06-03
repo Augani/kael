@@ -1616,6 +1616,49 @@ pub mod reference {
         })
     }
 
+    /// A single-input median (despeckle) filter of `inputs[0]`: each RGB channel is
+    /// replaced by the median of its `(2*radius+1)²` edge-clamped neighborhood, which
+    /// removes salt-and-pepper outliers while preserving edges (unlike a linear blur).
+    /// Alpha is passed through. A `radius` of 0 is the identity.
+    pub fn median_filter(radius: u32) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            if source.width != output.width || source.height != output.height {
+                return;
+            }
+            if radius == 0 {
+                output.pixels.copy_from_slice(&source.pixels);
+                return;
+            }
+            let radius = radius as i32;
+            let (width, height) = (source.width as i32, source.height as i32);
+            for y in 0..height {
+                for x in 0..width {
+                    let mut channels: [Vec<f32>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+                    for dy in -radius..=radius {
+                        for dx in -radius..=radius {
+                            let sx = (x + dx).clamp(0, width - 1);
+                            let sy = (y + dy).clamp(0, height - 1);
+                            let pixel = source.pixels[(sy * width + sx) as usize];
+                            for (channel, samples) in channels.iter_mut().enumerate() {
+                                samples.push(pixel[channel]);
+                            }
+                        }
+                    }
+                    let index = (y * width + x) as usize;
+                    let mut result = source.pixels[index];
+                    for (channel, samples) in channels.iter_mut().enumerate() {
+                        samples.sort_by(f32::total_cmp);
+                        result[channel] = samples[samples.len() / 2];
+                    }
+                    output.pixels[index] = result;
+                }
+            }
+        })
+    }
+
     /// A single-input op that keys out (sets alpha to 0) pixels of `inputs[0]` whose
     /// Rec.709 luma is below `threshold` — a simple luma key for masking dark areas.
     /// Color channels are preserved; brighter pixels keep their alpha.
@@ -2888,6 +2931,54 @@ pub mod reference {
             assert!((out.pixel(0, 0)[0] - 0.2).abs() < 1e-6);
             assert!((out.pixel(1, 0)[0] - 0.2).abs() < 1e-6);
             assert!((out.pixel(2, 0)[0] - 0.9).abs() < 1e-6);
+        }
+
+        #[test]
+        fn median_filter_radius_zero_or_flat_is_unchanged() {
+            let mut varied = Image::new(3, 3);
+            varied.pixels[4] = [0.8, 0.2, 0.5, 1.0];
+            let mut out = Image::new(3, 3);
+            median_filter(0)(&[&varied], &mut out);
+            assert_eq!(out.pixels, varied.pixels);
+
+            let flat = Image::filled(5, 5, [0.3, 0.6, 0.9, 1.0]);
+            let mut flat_out = Image::new(5, 5);
+            median_filter(1)(&[&flat], &mut flat_out);
+            assert_eq!(flat_out.pixels, flat.pixels);
+        }
+
+        #[test]
+        fn median_filter_removes_isolated_outliers() {
+            // A flat field with one bright speck; the median rejects the outlier.
+            let mut source = Image::filled(5, 5, [0.2, 0.2, 0.2, 1.0]);
+            source.pixels[2 * 5 + 2] = [1.0, 1.0, 1.0, 1.0];
+            let mut out = Image::new(5, 5);
+            median_filter(1)(&[&source], &mut out);
+            assert!((out.pixel(2, 2)[0] - 0.2).abs() < 1e-6);
+            assert!((out.pixel(0, 0)[0] - 0.2).abs() < 1e-6);
+        }
+
+        #[test]
+        fn median_filter_preserves_edges_without_blurring() {
+            // A hard vertical edge: a median produces no intermediate (blurred) values.
+            let mut source = Image::filled(5, 5, [0.0, 0.0, 0.0, 1.0]);
+            for y in 0..5 {
+                for x in 2..5 {
+                    source.pixels[y * 5 + x] = [1.0, 1.0, 1.0, 1.0];
+                }
+            }
+            let mut out = Image::new(5, 5);
+            median_filter(1)(&[&source], &mut out);
+            // Flat interiors stay exactly black / white; the boundary stays crisp (1.0).
+            assert!((out.pixel(0, 2)[0] - 0.0).abs() < 1e-6);
+            assert!((out.pixel(4, 2)[0] - 1.0).abs() < 1e-6);
+            assert!((out.pixel(2, 2)[0] - 1.0).abs() < 1e-6);
+            for pixel in &out.pixels {
+                assert!(
+                    pixel[0] < 1e-6 || (pixel[0] - 1.0).abs() < 1e-6,
+                    "{pixel:?}"
+                );
+            }
         }
 
         #[test]
