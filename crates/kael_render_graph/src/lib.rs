@@ -1333,6 +1333,51 @@ pub mod reference {
         })
     }
 
+    /// A single-input directional (motion) blur of `inputs[0]`: each output pixel is the
+    /// average of `2*radius+1` edge-clamped bilinear samples taken at one-pixel steps
+    /// along the motion vector `(dx, dy)`. Unlike the isotropic [`gaussian_blur`], it
+    /// smears only along the vector's direction (the vector's magnitude is ignored —
+    /// only its direction and `radius` matter), so edges parallel to the motion stay
+    /// sharp. A zero `radius` or a zero-length vector is the identity.
+    pub fn directional_blur(dx: f32, dy: f32, radius: u32) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            if source.width != output.width || source.height != output.height {
+                return;
+            }
+            let length = (dx * dx + dy * dy).sqrt();
+            if radius == 0 || length == 0.0 {
+                output.pixels.copy_from_slice(&source.pixels);
+                return;
+            }
+            let (step_x, step_y) = (dx / length, dy / length);
+            let radius = radius as i32;
+            let tap_count = (radius * 2 + 1) as f32;
+            let (width, height) = (output.width, output.height);
+            for y in 0..height {
+                for x in 0..width {
+                    let mut sum = [0.0f32; 4];
+                    for tap in -radius..=radius {
+                        let u = x as f32 + tap as f32 * step_x;
+                        let v = y as f32 + tap as f32 * step_y;
+                        let sample = sample_bilinear(source, u, v);
+                        for channel in 0..4 {
+                            sum[channel] += sample[channel];
+                        }
+                    }
+                    output.pixels[(y * width + x) as usize] = [
+                        sum[0] / tap_count,
+                        sum[1] / tap_count,
+                        sum[2] / tap_count,
+                        sum[3] / tap_count,
+                    ];
+                }
+            }
+        })
+    }
+
     /// A single-input op that keys out (sets alpha to 0) pixels of `inputs[0]` whose
     /// Rec.709 luma is below `threshold` — a simple luma key for masking dark areas.
     /// Color channels are preserved; brighter pixels keep their alpha.
@@ -2212,6 +2257,56 @@ pub mod reference {
             assert!(out.pixel(2, 0)[0] < 0.3, "{:?}", out.pixel(2, 0));
             assert!(out.pixel(3, 0)[0] > 0.7, "{:?}", out.pixel(3, 0));
             assert!((out.pixel(2, 0)[3] - 1.0).abs() < 1e-6);
+        }
+
+        #[test]
+        fn directional_blur_zero_radius_is_identity() {
+            let mut source = Image::new(3, 3);
+            source.pixels[4] = [0.9, 0.1, 0.4, 1.0];
+            let mut out = Image::new(3, 3);
+            directional_blur(1.0, 1.0, 0)(&[&source], &mut out);
+            assert_eq!(out.pixels, source.pixels);
+
+            // A zero-length vector is also a passthrough regardless of radius.
+            let mut out2 = Image::new(3, 3);
+            directional_blur(0.0, 0.0, 4)(&[&source], &mut out2);
+            assert_eq!(out2.pixels, source.pixels);
+        }
+
+        #[test]
+        fn directional_blur_preserves_a_flat_region() {
+            let solid = Image::filled(5, 5, [0.2, 0.4, 0.6, 1.0]);
+            let mut out = Image::new(5, 5);
+            directional_blur(1.0, 0.0, 2)(&[&solid], &mut out);
+            for pixel in &out.pixels {
+                for channel in 0..4 {
+                    assert!((pixel[channel] - solid.pixels[0][channel]).abs() < 1e-6);
+                }
+            }
+        }
+
+        #[test]
+        fn directional_blur_smears_only_along_its_axis() {
+            // A bright vertical line spreads sideways under a horizontal blur...
+            let mut column = Image::new(5, 5);
+            for y in 0..5 {
+                column.pixels[y * 5 + 2] = [1.0, 1.0, 1.0, 1.0];
+            }
+            let mut blurred_column = Image::new(5, 5);
+            directional_blur(1.0, 0.0, 1)(&[&column], &mut blurred_column);
+            assert!(blurred_column.pixel(2, 2)[0] < 1.0);
+            assert!(blurred_column.pixel(1, 2)[0] > 0.0);
+            assert!(blurred_column.pixel(3, 2)[0] > 0.0);
+
+            // ...while a bright horizontal line is left sharp by the same horizontal blur.
+            let mut row = Image::new(5, 5);
+            for x in 0..5 {
+                row.pixels[2 * 5 + x] = [1.0, 1.0, 1.0, 1.0];
+            }
+            let mut blurred_row = Image::new(5, 5);
+            directional_blur(1.0, 0.0, 1)(&[&row], &mut blurred_row);
+            assert!((blurred_row.pixel(2, 2)[0] - 1.0).abs() < 1e-6);
+            assert!(blurred_row.pixel(2, 1)[0] < 1e-6);
         }
 
         #[test]
