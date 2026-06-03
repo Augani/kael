@@ -2708,4 +2708,47 @@ mod offscreen_tests {
             "colorspace dispatch must change output: 601=({r601},{g601},{b601}) 709=({r709},{g709},{b709})"
         );
     }
+
+    #[test]
+    fn golden_diff_catches_render_determinism_and_differences() {
+        use crate::golden::{compare, Tolerance};
+        let Some(mut renderer) = headless() else {
+            return;
+        };
+        let dims = size(DevicePixels(16), DevicePixels(16));
+        let render = |r: &mut MetalRenderer, color: Hsla| {
+            let mut scene = Scene::default();
+            scene.insert_primitive(full_viewport_quad(16.0, color));
+            scene.finish();
+            r.render_scene_to_bytes(&scene, dims).unwrap()
+        };
+
+        let red_a = render(&mut renderer, hsla(0.0, 1.0, 0.5, 1.0));
+        let red_b = render(&mut renderer, hsla(0.0, 1.0, 0.5, 1.0));
+        let blue = render(&mut renderer, hsla(0.66, 1.0, 0.5, 1.0));
+
+        // Identical scenes rasterize deterministically — exact, zero-diff match.
+        let same = compare(
+            &red_a.bgra,
+            &red_b.bgra,
+            red_a.width,
+            red_a.height,
+            &Tolerance::exact(),
+        )
+        .unwrap();
+        assert_eq!(same.failing_pixels, 0);
+        assert!(same.passes(&Tolerance::exact()));
+
+        // A genuinely different frame fails even the lenient GPU tolerance.
+        let differ = compare(
+            &red_a.bgra,
+            &blue.bgra,
+            red_a.width,
+            red_a.height,
+            &Tolerance::gpu(),
+        )
+        .unwrap();
+        assert!(differ.failing_pixels > 0);
+        assert!(!differ.passes(&Tolerance::gpu()));
+    }
 }

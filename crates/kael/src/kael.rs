@@ -50,6 +50,8 @@ mod file_watcher;
 mod geometry;
 mod global;
 /// GPU memory budgeting and eviction.
+/// Golden-image pixel-diff comparison for the headless render pipeline.
+pub mod golden;
 pub mod gpu;
 /// Headless off-screen rendering for benchmarks and golden-image tests.
 pub mod headless_render;
