@@ -1986,6 +1986,45 @@ pub mod reference {
         })
     }
 
+    /// A single-input levels remap of `inputs[0]` per RGB channel (the Photoshop "Levels"
+    /// control): the input range `[in_black, in_white]` is normalized to `0..=1` (clamped),
+    /// reshaped by `gamma` as `t^(1/gamma)`, then mapped onto the output range
+    /// `[out_black, out_white]`. Identity is `(0, 1, 1, 0, 1)`. A degenerate input range
+    /// (`in_white <= in_black`) or a non-positive `gamma` skips that step; alpha is unchanged.
+    pub fn levels(
+        in_black: f32,
+        in_white: f32,
+        gamma: f32,
+        out_black: f32,
+        out_white: f32,
+    ) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            let span = in_white - in_black;
+            let remap = |value: f32| {
+                let mut normalized = if span > 0.0 {
+                    ((value - in_black) / span).clamp(0.0, 1.0)
+                } else {
+                    value.clamp(0.0, 1.0)
+                };
+                if gamma > 0.0 {
+                    normalized = normalized.powf(1.0 / gamma);
+                }
+                out_black + normalized * (out_white - out_black)
+            };
+            for (output_pixel, source_pixel) in output.pixels.iter_mut().zip(&source.pixels) {
+                *output_pixel = [
+                    remap(source_pixel[0]),
+                    remap(source_pixel[1]),
+                    remap(source_pixel[2]),
+                    source_pixel[3],
+                ];
+            }
+        })
+    }
+
     /// A single-input op that posterizes `inputs[0]` to `levels` discrete steps per RGB
     /// channel (clamped to at least 2) — the stylize/banding effect. Alpha passes through.
     pub fn posterize(levels: u32) -> PassOp<'static> {
@@ -2979,6 +3018,64 @@ pub mod reference {
                 &mut hot,
             );
             assert!((hot.pixel(0, 0)[0] - 1.0).abs() < 1e-6);
+        }
+
+        #[test]
+        fn levels_identity_passes_through() {
+            let source = Image::filled(2, 2, [0.2, 0.55, 0.9, 0.7]);
+            let mut out = Image::new(2, 2);
+            levels(0.0, 1.0, 1.0, 0.0, 1.0)(&[&source], &mut out);
+            for (got, want) in out.pixels.iter().zip(&source.pixels) {
+                for channel in 0..4 {
+                    assert!(
+                        (got[channel] - want[channel]).abs() < 1e-6,
+                        "{got:?} vs {want:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn levels_input_range_clips_and_expands_contrast() {
+            let mut source = Image::new(5, 1);
+            source.pixels = vec![
+                [0.1, 0.1, 0.1, 1.0],
+                [0.25, 0.25, 0.25, 1.0],
+                [0.5, 0.5, 0.5, 1.0],
+                [0.75, 0.75, 0.75, 1.0],
+                [0.9, 0.9, 0.9, 1.0],
+            ];
+            // Map [0.25, 0.75] onto [0, 1]: below 0.25 -> 0, above 0.75 -> 1, midpoint -> 0.5.
+            let mut out = Image::new(5, 1);
+            levels(0.25, 0.75, 1.0, 0.0, 1.0)(&[&source], &mut out);
+            let expected = [0.0, 0.0, 0.5, 1.0, 1.0];
+            for (x, want) in expected.iter().enumerate() {
+                assert!(
+                    (out.pixel(x as u32, 0)[0] - want).abs() < 1e-6,
+                    "{}",
+                    out.pixel(x as u32, 0)[0]
+                );
+            }
+        }
+
+        #[test]
+        fn levels_output_range_and_gamma_apply() {
+            let gray = Image::filled(1, 1, [0.25, 0.25, 0.25, 0.5]);
+
+            // Output range compresses to [0.2, 0.8]; gamma 2 lifts 0.25 -> 0.5 first.
+            let mut out = Image::new(1, 1);
+            levels(0.0, 1.0, 2.0, 0.2, 0.8)(&[&gray], &mut out);
+            // 0.25^(1/2) = 0.5, then 0.2 + 0.5*(0.6) = 0.5.
+            assert!((out.pixel(0, 0)[0] - 0.5).abs() < 1e-6);
+            assert_eq!(out.pixel(0, 0)[3], 0.5);
+
+            // Pure output remap of black/white: 0 -> out_black, 1 -> out_white.
+            let mut ramp = Image::new(2, 1);
+            let mut ends = Image::new(2, 1);
+            ramp.pixels = vec![[0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]];
+            levels(0.0, 1.0, 1.0, 0.2, 0.8)(&[&ramp], &mut ends);
+            assert!((ends.pixel(0, 0)[0] - 0.2).abs() < 1e-6);
+            assert!((ends.pixel(1, 0)[0] - 0.8).abs() < 1e-6);
         }
 
         #[test]
