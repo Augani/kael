@@ -31,6 +31,13 @@ impl SubtitleTrack {
         Self { cues }
     }
 
+    /// Parse a WebVTT document into a track (cues sorted by start time).
+    pub fn from_webvtt(input: &str) -> Self {
+        let mut cues = parse_webvtt(input);
+        cues.sort_by_key(|cue| (cue.start_ms, cue.end_ms));
+        Self { cues }
+    }
+
     /// The cues, in start-time order.
     pub fn cues(&self) -> &[SubtitleCue] {
         &self.cues
@@ -94,17 +101,70 @@ pub fn parse_srt(input: &str) -> Vec<SubtitleCue> {
     cues
 }
 
+/// Parse a WebVTT document into cues (unsorted; header, `NOTE`/`STYLE`/`REGION` blocks,
+/// and malformed blocks are skipped; trailing cue settings on the timing line are ignored).
+pub fn parse_webvtt(input: &str) -> Vec<SubtitleCue> {
+    let normalized = input.replace("\r\n", "\n").replace('\r', "\n");
+    let mut cues = Vec::new();
+    for block in normalized.split("\n\n") {
+        let lines: Vec<&str> = block
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        let Some(first) = lines.first() else {
+            continue;
+        };
+        if first.starts_with("WEBVTT")
+            || first.starts_with("NOTE")
+            || first.starts_with("STYLE")
+            || first.starts_with("REGION")
+        {
+            continue;
+        }
+        let Some(timing_index) = lines.iter().position(|line| line.contains("-->")) else {
+            continue;
+        };
+        let Some((start_text, rest)) = lines[timing_index].split_once("-->") else {
+            continue;
+        };
+        // The end timestamp is the first token after `-->`; cue settings follow it.
+        let end_text = rest.split_whitespace().next().unwrap_or_default();
+        let (Some(start_ms), Some(end_ms)) =
+            (parse_timestamp(start_text), parse_timestamp(end_text))
+        else {
+            continue;
+        };
+        let text = lines[timing_index + 1..].join("\n");
+        if text.is_empty() {
+            continue;
+        }
+        cues.push(SubtitleCue {
+            start_ms,
+            end_ms,
+            text,
+        });
+    }
+    cues
+}
+
 fn parse_timestamp(text: &str) -> Option<u64> {
-    let (clock, millis) = text.trim().split_once(',')?;
-    let parts: Vec<&str> = clock.split(':').collect();
-    if parts.len() != 3 {
+    // Accept both SubRip (`HH:MM:SS,mmm`) and WebVTT (`HH:MM:SS.mmm` or `MM:SS.mmm`).
+    let (clock, millis) = text.trim().split_once(['.', ','])?;
+    let milliseconds: u64 = millis.parse().ok()?;
+    if milliseconds >= 1000 {
         return None;
     }
-    let hours: u64 = parts[0].trim().parse().ok()?;
-    let minutes: u64 = parts[1].parse().ok()?;
-    let seconds: u64 = parts[2].parse().ok()?;
-    let milliseconds: u64 = millis.parse().ok()?;
-    if minutes >= 60 || seconds >= 60 || milliseconds >= 1000 {
+    let parts: Vec<&str> = clock.split(':').collect();
+    let (hours, minutes, seconds): (u64, u64, u64) = match parts.len() {
+        3 => (
+            parts[0].trim().parse().ok()?,
+            parts[1].parse().ok()?,
+            parts[2].parse().ok()?,
+        ),
+        2 => (0, parts[0].trim().parse().ok()?, parts[1].parse().ok()?),
+        _ => return None,
+    };
+    if minutes >= 60 || seconds >= 60 {
         return None;
     }
     Some(hours * 3_600_000 + minutes * 60_000 + seconds * 1_000 + milliseconds)
@@ -181,5 +241,39 @@ mod tests {
     fn format_timestamp_pads_fields() {
         assert_eq!(format_timestamp(3_723_004), "01:02:03,004");
         assert_eq!(format_timestamp(0), "00:00:00,000");
+    }
+
+    const VTT: &str = "WEBVTT\n\nNOTE this is a comment\n\n1\n00:00:01.000 --> 00:00:04.000 position:50%\nHello world\n\n00:05.500 --> 00:08.000\nSecond\nline\n";
+
+    #[test]
+    fn parses_webvtt_with_header_notes_settings_and_short_timestamps() {
+        let track = SubtitleTrack::from_webvtt(VTT);
+        assert_eq!(track.cues().len(), 2);
+        // Dot-separated milliseconds, cue settings stripped from the timing line.
+        assert_eq!(track.cues()[0].start_ms, 1000);
+        assert_eq!(track.cues()[0].end_ms, 4000);
+        assert_eq!(track.cues()[0].text, "Hello world");
+        // MM:SS.mmm form (no hours) is accepted.
+        assert_eq!(track.cues()[1].start_ms, 5500);
+        assert_eq!(track.cues()[1].end_ms, 8000);
+        assert_eq!(track.cues()[1].text, "Second\nline");
+    }
+
+    #[test]
+    fn webvtt_active_at_resolves_caption() {
+        let track = SubtitleTrack::from_webvtt(VTT);
+        assert_eq!(
+            track.active_at(2000).map(|c| c.text.as_str()),
+            Some("Hello world")
+        );
+        assert_eq!(track.active_at(4500), None);
+    }
+
+    #[test]
+    fn timestamp_parser_accepts_both_separators() {
+        // SubRip comma and WebVTT dot resolve to the same value.
+        assert_eq!(parse_timestamp("00:00:01,500"), Some(1500));
+        assert_eq!(parse_timestamp("00:00:01.500"), Some(1500));
+        assert_eq!(parse_timestamp("01:30.250"), Some(90_250));
     }
 }
