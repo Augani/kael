@@ -787,6 +787,63 @@ pub mod reference {
         Ok(images)
     }
 
+    /// Execute `compiled` like [`execute`], but memoize each pass's output by its
+    /// [`CompiledGraph::cache_key`] in `cache` (carried across frames). A pass whose key is
+    /// already cached is reused without running its op; only passes with a new key — the
+    /// dirty subtree — re-execute. Returns the per-resource images and the passes that
+    /// actually ran. This is the CPU reference for V9's dirty-subtree graph caching: a key
+    /// folds in the pass's params, frame PTS, topology, and upstream producers, so a changed
+    /// effect param or frame re-runs only it and its dependents. Time-varying imported
+    /// content must be tagged via the consuming pass's frame PTS / param hash, since the key
+    /// does not hash imported pixels.
+    pub fn execute_cached<'ops>(
+        graph: &RenderGraph,
+        compiled: &CompiledGraph,
+        width: u32,
+        height: u32,
+        imported: &HashMap<ResourceId, Image>,
+        ops: &HashMap<PassId, PassOp<'ops>>,
+        cache: &mut HashMap<u64, Image>,
+    ) -> Result<(HashMap<ResourceId, Image>, Vec<PassId>)> {
+        let mut images: HashMap<ResourceId, Image> = imported.clone();
+        let mut executed = Vec::new();
+
+        for &pass_id in compiled.execution_order() {
+            let pass = graph
+                .pass(pass_id)
+                .ok_or_else(|| anyhow!("compiled graph references unknown {pass_id:?}"))?;
+            let key = compiled
+                .cache_key(pass_id)
+                .ok_or_else(|| anyhow!("compiled graph has no cache key for {pass_id:?}"))?;
+
+            let output = if let Some(cached) = cache.get(&key) {
+                cached.clone()
+            } else {
+                let mut inputs = Vec::with_capacity(pass.reads.len());
+                for resource in &pass.reads {
+                    let image = images.get(resource).ok_or_else(|| {
+                        anyhow!("pass '{}' reads unproduced {:?}", pass.name, resource)
+                    })?;
+                    inputs.push(image);
+                }
+
+                let mut produced = Image::new(width, height);
+                if let Some(op) = ops.get(&pass_id) {
+                    op(&inputs, &mut produced);
+                }
+                executed.push(pass_id);
+                cache.insert(key, produced.clone());
+                produced
+            };
+
+            for &resource in &pass.writes {
+                images.insert(resource, output.clone());
+            }
+        }
+
+        Ok((images, executed))
+    }
+
     /// A pass op that fills the output with a constant color.
     pub fn fill(color: [f32; 4]) -> PassOp<'static> {
         Box::new(move |_inputs, output| {
@@ -2284,6 +2341,99 @@ pub mod reference {
     mod tests {
         use super::*;
         use crate::{PassDesc, ResourceDesc};
+
+        fn cache_chain(effect_param: u64) -> (RenderGraph, [PassId; 3], ResourceId) {
+            let mut graph = RenderGraph::new();
+            let frame = graph.add_resource(ResourceDesc::transient_texture("frame"));
+            let composited = graph.add_resource(ResourceDesc::transient_texture("composited"));
+            let backbuffer = graph.add_resource(ResourceDesc::imported_texture("backbuffer"));
+            let decode = graph.add_pass(PassDesc::new("decode").write(frame).frame_pts(0));
+            let effect = graph.add_pass(
+                PassDesc::new("effect")
+                    .read(frame)
+                    .write(composited)
+                    .param_hash(effect_param),
+            );
+            let present =
+                graph.add_pass(PassDesc::new("present").read(composited).write(backbuffer));
+            (graph, [decode, effect, present], backbuffer)
+        }
+
+        fn chain_ops(ids: [PassId; 3]) -> HashMap<PassId, PassOp<'static>> {
+            let mut ops = HashMap::new();
+            ops.insert(ids[0], fill([1.0, 0.0, 0.0, 1.0]));
+            ops.insert(ids[1], fill([0.0, 1.0, 0.0, 1.0]));
+            ops.insert(ids[2], fill([0.0, 0.0, 1.0, 1.0]));
+            ops
+        }
+
+        #[test]
+        fn execute_cached_skips_unchanged_passes_on_replay() {
+            let (graph, ids, backbuffer) = cache_chain(7);
+            let compiled = graph.compile().unwrap();
+            let ops = chain_ops(ids);
+            let imported = HashMap::new();
+            let mut cache = HashMap::new();
+
+            let (first, ran_first) =
+                execute_cached(&graph, &compiled, 2, 2, &imported, &ops, &mut cache).unwrap();
+            assert_eq!(ran_first.len(), 3, "every pass runs on the cold cache");
+
+            let (second, ran_second) =
+                execute_cached(&graph, &compiled, 2, 2, &imported, &ops, &mut cache).unwrap();
+            assert!(
+                ran_second.is_empty(),
+                "an identical replay is all cache hits"
+            );
+            assert_eq!(first[&backbuffer].pixels, second[&backbuffer].pixels);
+        }
+
+        #[test]
+        fn execute_cached_reruns_only_the_dirty_subtree() {
+            let (graph_a, ids_a, _) = cache_chain(7);
+            let compiled_a = graph_a.compile().unwrap();
+            let ops_a = chain_ops(ids_a);
+            let imported = HashMap::new();
+            let mut cache = HashMap::new();
+            execute_cached(&graph_a, &compiled_a, 2, 2, &imported, &ops_a, &mut cache).unwrap();
+
+            // Same graph but a changed effect parameter, sharing the cache.
+            let (graph_b, ids_b, _) = cache_chain(8);
+            let [decode_b, effect_b, present_b] = ids_b;
+            let compiled_b = graph_b.compile().unwrap();
+            let ops_b = chain_ops(ids_b);
+            let (_, ran) =
+                execute_cached(&graph_b, &compiled_b, 2, 2, &imported, &ops_b, &mut cache).unwrap();
+
+            assert!(
+                !ran.contains(&decode_b),
+                "decode is unaffected and stays cached"
+            );
+            assert!(ran.contains(&effect_b), "the changed effect re-runs");
+            assert!(
+                ran.contains(&present_b),
+                "present depends on the effect and re-runs"
+            );
+            assert_eq!(ran.len(), 2);
+        }
+
+        #[test]
+        fn execute_cached_matches_uncached_execute() {
+            let (graph, ids, _) = cache_chain(7);
+            let compiled = graph.compile().unwrap();
+            let ops = chain_ops(ids);
+            let imported = HashMap::new();
+
+            let plain = execute(&graph, &compiled, 2, 2, &imported, &ops).unwrap();
+            let mut cache = HashMap::new();
+            let (cached, _) =
+                execute_cached(&graph, &compiled, 2, 2, &imported, &ops, &mut cache).unwrap();
+
+            assert_eq!(plain.len(), cached.len());
+            for (resource, image) in &plain {
+                assert_eq!(cached[resource].pixels, image.pixels, "{resource:?}");
+            }
+        }
 
         #[test]
         fn executes_a_composite() {
