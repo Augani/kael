@@ -1505,6 +1505,28 @@ pub mod reference {
         })
     }
 
+    /// A single-input op adjusting saturation: each RGB channel is blended toward the
+    /// Rec.709 luma by `amount` (`1` unchanged, `0` grayscale, `> 1` boost), clamped to
+    /// `0..=1`. Alpha passes through. Completes the exposure/gamma/saturation trio.
+    pub fn saturation(amount: f32) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            for (output_pixel, source_pixel) in output.pixels.iter_mut().zip(&source.pixels) {
+                let luma =
+                    0.2126 * source_pixel[0] + 0.7152 * source_pixel[1] + 0.0722 * source_pixel[2];
+                let mix = |channel: f32| (luma + amount * (channel - luma)).clamp(0.0, 1.0);
+                *output_pixel = [
+                    mix(source_pixel[0]),
+                    mix(source_pixel[1]),
+                    mix(source_pixel[2]),
+                    source_pixel[3],
+                ];
+            }
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -1968,6 +1990,29 @@ pub mod reference {
             assert_eq!(out.pixel(3, 0), [0.0, 0.0, 0.0, 0.0]);
             assert_eq!(out.pixel(1, 0), [1.0, 1.0, 1.0, 1.0]);
             assert_eq!(out.pixel(2, 1), [1.0, 1.0, 1.0, 1.0]);
+        }
+
+        #[test]
+        fn saturation_unchanged_at_one_grayscale_at_zero() {
+            let color = [0.8, 0.4, 0.2, 1.0];
+            let luma = 0.2126 * 0.8 + 0.7152 * 0.4 + 0.0722 * 0.2;
+            let mut source = Image::new(1, 1);
+            source.pixels = vec![color];
+
+            // amount 1 leaves color unchanged.
+            let mut same = Image::new(1, 1);
+            saturation(1.0)(&[&source], &mut same);
+            for channel in 0..3 {
+                assert!((same.pixel(0, 0)[channel] - color[channel]).abs() < 1e-6);
+            }
+
+            // amount 0 collapses each channel to the luma; alpha unchanged.
+            let mut gray = Image::new(1, 1);
+            saturation(0.0)(&[&source], &mut gray);
+            for channel in 0..3 {
+                assert!((gray.pixel(0, 0)[channel] - luma).abs() < 1e-5);
+            }
+            assert_eq!(gray.pixel(0, 0)[3], 1.0);
         }
     }
 }
