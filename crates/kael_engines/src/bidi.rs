@@ -302,6 +302,41 @@ pub fn resolve_weak_types(classes: &[BidiClass], base: Direction) -> Vec<BidiCla
     types
 }
 
+/// The Bidi_Mirroring_Glyph of `ch` for UAX#9 rule L4: in a right-to-left run, paired
+/// punctuation is replaced by its mirror image (e.g. `(` ↔ `)`, `«` ↔ `»`). Characters with
+/// no mirror are returned unchanged. Covers the common bracket, angle, guillemet, and
+/// comparison pairs.
+pub fn mirror_char(ch: char) -> char {
+    match ch {
+        '(' => ')',
+        ')' => '(',
+        '[' => ']',
+        ']' => '[',
+        '{' => '}',
+        '}' => '{',
+        '<' => '>',
+        '>' => '<',
+        '\u{00AB}' => '\u{00BB}', // « »
+        '\u{00BB}' => '\u{00AB}',
+        '\u{2039}' => '\u{203A}', // ‹ ›
+        '\u{203A}' => '\u{2039}',
+        '\u{2264}' => '\u{2265}', // ≤ ≥
+        '\u{2265}' => '\u{2264}',
+        '\u{2308}' => '\u{2309}', // ⌈ ⌉
+        '\u{2309}' => '\u{2308}',
+        '\u{230A}' => '\u{230B}', // ⌊ ⌋
+        '\u{230B}' => '\u{230A}',
+        '\u{27E8}' => '\u{27E9}', // ⟨ ⟩
+        '\u{27E9}' => '\u{27E8}',
+        other => other,
+    }
+}
+
+/// Whether `ch` has a Bidi mirror (a distinct [`mirror_char`]).
+pub fn is_mirrored(ch: char) -> bool {
+    mirror_char(ch) != ch
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,5 +521,28 @@ mod tests {
         assert_eq!(resolve_weak_types(&[L, En], Direction::Ltr), vec![L, L]);
         // After a strong R the European number stays EN.
         assert_eq!(resolve_weak_types(&[R, En], Direction::Rtl), vec![R, En]);
+    }
+
+    #[test]
+    fn mirror_char_swaps_paired_punctuation() {
+        assert_eq!(mirror_char('('), ')');
+        assert_eq!(mirror_char(')'), '(');
+        assert_eq!(mirror_char('['), ']');
+        assert_eq!(mirror_char('<'), '>');
+        assert_eq!(mirror_char('\u{00AB}'), '\u{00BB}'); // « -> »
+        assert_eq!(mirror_char('\u{2265}'), '\u{2264}'); // ≥ -> ≤
+                                                         // Mirroring is an involution.
+        for ch in ['(', '[', '{', '<', '\u{00AB}', '\u{2039}', '\u{27E8}'] {
+            assert_eq!(mirror_char(mirror_char(ch)), ch);
+        }
+    }
+
+    #[test]
+    fn non_mirrored_chars_are_unchanged() {
+        assert_eq!(mirror_char('a'), 'a');
+        assert_eq!(mirror_char('5'), '5');
+        assert_eq!(mirror_char('\u{0627}'), '\u{0627}'); // Arabic alef has no mirror
+        assert!(!is_mirrored('a'));
+        assert!(is_mirrored('('));
     }
 }
