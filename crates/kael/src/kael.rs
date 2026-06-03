@@ -105,6 +105,8 @@ mod text_system;
 pub mod theme;
 mod tracer;
 mod util;
+/// Video color: YCbCr→RGB matrices and transfer functions.
+pub mod video_color;
 mod view;
 /// Virtualized data models for lists, tables, and trees.
 pub mod virtual_data;
@@ -206,6 +208,7 @@ pub use tracer::*;
 #[cfg(any(test, feature = "test-support"))]
 pub use util::smol_timeout;
 pub use util::{FutureExt, Timeout, arc_cow::ArcCow};
+pub use video_color::*;
 pub use view::*;
 pub use virtual_data::*;
 pub use webview::*;
