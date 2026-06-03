@@ -144,12 +144,39 @@ pub struct ResourceLifetime {
     pub last_pass_order: usize,
 }
 
-/// A validated, scheduled graph with per-pass cache keys and resource lifetimes.
+/// A synchronization point: `resource` written by `after` must be made visible
+/// to `before` (a read-after-write dependency) before that pass executes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Barrier {
+    /// The resource the barrier synchronizes.
+    pub resource: ResourceId,
+    /// The producing pass.
+    pub after: PassId,
+    /// The consuming pass.
+    pub before: PassId,
+}
+
+/// Assignment of transient resources to reusable physical memory slots.
+///
+/// Transient resources whose lifetimes do not overlap can share a slot, so
+/// `slot_count` is typically smaller than the number of transient resources.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransientAllocation {
+    /// Per-resource slot index (`None` for imported or unused resources).
+    pub slot_of: Vec<Option<usize>>,
+    /// Total number of distinct slots required.
+    pub slot_count: usize,
+}
+
+/// A validated, scheduled graph with per-pass cache keys, resource lifetimes,
+/// barriers, and transient-memory aliasing.
 #[derive(Debug, Clone)]
 pub struct CompiledGraph {
     order: Vec<PassId>,
     cache_keys: Vec<u64>,
     lifetimes: Vec<Option<ResourceLifetime>>,
+    transient: Vec<bool>,
+    barriers: Vec<Barrier>,
 }
 
 impl RenderGraph {
@@ -213,10 +240,33 @@ impl RenderGraph {
             keys_by_pass[pass_id.0 as usize] = cache_keys[position];
         }
 
+        let mut barriers = Vec::new();
+        for (reader_index, pass) in self.passes.iter().enumerate() {
+            for &resource in &pass.reads {
+                if let Some(producer) = writer[resource.0 as usize] {
+                    if producer.0 as usize != reader_index {
+                        barriers.push(Barrier {
+                            resource,
+                            after: producer,
+                            before: PassId(reader_index as u32),
+                        });
+                    }
+                }
+            }
+        }
+
+        let transient = self
+            .resources
+            .iter()
+            .map(|resource| !resource.imported)
+            .collect();
+
         Ok(CompiledGraph {
             order,
             cache_keys: keys_by_pass,
             lifetimes,
+            transient,
+            barriers,
         })
     }
 
@@ -364,6 +414,56 @@ impl CompiledGraph {
             }
         }
         changed
+    }
+
+    /// Read-after-write synchronization points the backend must insert.
+    pub fn barriers(&self) -> &[Barrier] {
+        &self.barriers
+    }
+
+    /// Assign transient resources to reusable memory slots using a greedy
+    /// lifetime-interval coloring: transients whose lifetimes do not overlap
+    /// share a slot. Imported resources are never assigned a slot.
+    pub fn assign_transient_memory(&self) -> TransientAllocation {
+        let mut items: Vec<ResourceLifetime> = self
+            .lifetimes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, lifetime)| {
+                let lifetime = (*lifetime)?;
+                if *self.transient.get(index).unwrap_or(&false) {
+                    Some(lifetime)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        items.sort_by_key(|lifetime| (lifetime.first_pass_order, lifetime.last_pass_order));
+
+        let mut slot_of = vec![None; self.lifetimes.len()];
+        let mut slot_last_use: Vec<usize> = Vec::new();
+
+        for lifetime in items {
+            let free_slot = slot_last_use
+                .iter()
+                .position(|&last| last < lifetime.first_pass_order);
+            let slot = match free_slot {
+                Some(slot) => {
+                    slot_last_use[slot] = lifetime.last_pass_order;
+                    slot
+                }
+                None => {
+                    slot_last_use.push(lifetime.last_pass_order);
+                    slot_last_use.len() - 1
+                }
+            };
+            slot_of[lifetime.resource.0 as usize] = Some(slot);
+        }
+
+        TransientAllocation {
+            slot_of,
+            slot_count: slot_last_use.len(),
+        }
     }
 }
 
@@ -532,5 +632,61 @@ mod tests {
         assert!(!compiled
             .non_overlapping(chain.frame)
             .contains(&chain.composited));
+    }
+
+    #[test]
+    fn barriers_track_read_after_write() {
+        let chain = build_chain(0, 0);
+        let compiled = chain.graph.compile().unwrap();
+        let barriers = compiled.barriers();
+
+        assert!(barriers
+            .iter()
+            .any(|barrier| barrier.resource == chain.frame
+                && barrier.after == chain.decode
+                && barrier.before == chain.effect));
+        assert!(barriers
+            .iter()
+            .any(|barrier| barrier.resource == chain.composited
+                && barrier.after == chain.effect
+                && barrier.before == chain.present));
+    }
+
+    #[test]
+    fn imported_resource_gets_no_transient_slot() {
+        let mut graph = RenderGraph::new();
+        let frame = graph.add_resource(ResourceDesc::transient_texture("frame"));
+        let backbuffer = graph.add_resource(ResourceDesc::imported_texture("backbuffer"));
+        graph.add_pass(PassDesc::new("decode").write(frame));
+        graph.add_pass(PassDesc::new("present").read(frame).write(backbuffer));
+
+        let allocation = graph.compile().unwrap().assign_transient_memory();
+        assert!(allocation.slot_of[frame.0 as usize].is_some());
+        assert!(allocation.slot_of[backbuffer.0 as usize].is_none());
+    }
+
+    #[test]
+    fn disjoint_transients_share_a_slot() {
+        let mut graph = RenderGraph::new();
+        let t1 = graph.add_resource(ResourceDesc::transient_texture("t1"));
+        let t2 = graph.add_resource(ResourceDesc::transient_texture("t2"));
+        let t3 = graph.add_resource(ResourceDesc::transient_texture("t3"));
+        graph.add_pass(PassDesc::new("a").write(t1));
+        graph.add_pass(PassDesc::new("b").read(t1).write(t2));
+        graph.add_pass(PassDesc::new("c").read(t2).write(t3));
+        graph.add_pass(PassDesc::new("d").read(t3));
+
+        let allocation = graph.compile().unwrap().assign_transient_memory();
+        // t1 [0,1] and t3 [2,3] do not overlap and reuse the same slot; t2 [1,2]
+        // overlaps both, so two slots total.
+        assert_eq!(allocation.slot_count, 2);
+        assert_eq!(
+            allocation.slot_of[t1.0 as usize],
+            allocation.slot_of[t3.0 as usize]
+        );
+        assert_ne!(
+            allocation.slot_of[t1.0 as usize],
+            allocation.slot_of[t2.0 as usize]
+        );
     }
 }
