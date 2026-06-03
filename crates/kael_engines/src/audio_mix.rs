@@ -423,6 +423,63 @@ pub fn lufs_normalize_gain(samples: &[f32], target_lufs: f32, sample_rate: u32) 
     dbfs_to_linear(target_lufs - current)
 }
 
+fn sinc(x: f64) -> f64 {
+    if x.abs() < 1e-12 {
+        1.0
+    } else {
+        let px = std::f64::consts::PI * x;
+        px.sin() / px
+    }
+}
+
+fn lanczos_kernel(x: f64, half_window: f64) -> f64 {
+    if x.abs() >= half_window {
+        0.0
+    } else {
+        sinc(x) * sinc(x / half_window)
+    }
+}
+
+/// Resample mono `input` from `from_rate` to `to_rate` with a normalized Lanczos
+/// (windowed-sinc) kernel of `half_window` lobes — higher quality than linear interpolation
+/// (less aliasing), used to conform sources to the project sample rate (V4). Weights are
+/// normalized so DC and level are preserved and partial edge windows stay correct. Equal
+/// rates pass through; empty input or a zero rate yields an empty buffer.
+pub fn resample_lanczos(input: &[f32], from_rate: u32, to_rate: u32, half_window: u32) -> Vec<f32> {
+    if input.is_empty() || from_rate == 0 || to_rate == 0 {
+        return Vec::new();
+    }
+    if from_rate == to_rate {
+        return input.to_vec();
+    }
+    let lobes = half_window.max(1) as i64;
+    let lobes_f = lobes as f64;
+    let ratio = from_rate as f64 / to_rate as f64;
+    let out_len = ((input.len() as f64) * to_rate as f64 / from_rate as f64).round() as usize;
+    let mut output = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        let center = i as f64 * ratio;
+        let base = center.floor() as i64;
+        let mut sum = 0.0f64;
+        let mut weight_sum = 0.0f64;
+        for n in (base - lobes + 1)..=(base + lobes) {
+            if n < 0 || n as usize >= input.len() {
+                continue;
+            }
+            let weight = lanczos_kernel(center - n as f64, lobes_f);
+            sum += input[n as usize] as f64 * weight;
+            weight_sum += weight;
+        }
+        let value = if weight_sum.abs() > 1e-12 {
+            sum / weight_sum
+        } else {
+            0.0
+        };
+        output.push(value as f32);
+    }
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -782,5 +839,44 @@ mod tests {
     fn lufs_normalize_gain_is_unity_for_silence() {
         assert_eq!(lufs_normalize_gain(&[0.0; 48_000], -23.0, 48_000), 1.0);
         assert_eq!(lufs_normalize_gain(&[], -23.0, 48_000), 1.0);
+    }
+
+    #[test]
+    fn resample_lanczos_passes_through_and_guards_edges() {
+        let input = vec![0.1, 0.2, 0.3];
+        assert_eq!(resample_lanczos(&input, 48_000, 48_000, 4), input);
+        assert!(resample_lanczos(&[], 24_000, 48_000, 4).is_empty());
+        assert!(resample_lanczos(&input, 0, 48_000, 4).is_empty());
+    }
+
+    #[test]
+    fn resample_lanczos_changes_length_by_ratio() {
+        let input = vec![0.0f32; 100];
+        assert_eq!(resample_lanczos(&input, 24_000, 48_000, 4).len(), 200);
+        assert_eq!(resample_lanczos(&input, 48_000, 24_000, 4).len(), 50);
+    }
+
+    #[test]
+    fn resample_lanczos_preserves_dc() {
+        // Normalized weights keep a constant constant everywhere, edges included.
+        let output = resample_lanczos(&vec![0.5f32; 64], 24_000, 48_000, 4);
+        assert!(output.iter().all(|&s| (s - 0.5).abs() < 1e-4));
+    }
+
+    #[test]
+    fn resample_lanczos_2x_recovers_original_samples() {
+        // Upsampling 2x: even output positions land exactly on input samples (the kernel is
+        // zero at every nonzero integer offset), so they reproduce the source.
+        let input: Vec<f32> = (0..64).map(|n| (n as f32 * 0.3).sin() * 0.5).collect();
+        let output = resample_lanczos(&input, 24_000, 48_000, 4);
+        assert_eq!(output.len(), 128);
+        for k in 0..64 {
+            assert!(
+                (output[2 * k] - input[k]).abs() < 1e-4,
+                "k={k}: {} vs {}",
+                output[2 * k],
+                input[k]
+            );
+        }
     }
 }
