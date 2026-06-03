@@ -1079,6 +1079,40 @@ pub fn apply_saturation(rgb: [f32; 3], saturation: f32) -> [f32; 3] {
     ]
 }
 
+/// A complete ASC CDL grade — per-channel Slope/Offset/Power plus Saturation — as
+/// carried by a `.cdl`/`.ccc` file. [`Cdl::apply`] runs SOP then SAT, the standard order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Cdl {
+    /// Per-channel slope (gain).
+    pub slope: [f32; 3],
+    /// Per-channel offset (lift).
+    pub offset: [f32; 3],
+    /// Per-channel power (gamma).
+    pub power: [f32; 3],
+    /// Saturation applied after slope/offset/power.
+    pub saturation: f32,
+}
+
+impl Cdl {
+    /// The neutral grade that leaves color unchanged.
+    pub fn identity() -> Self {
+        Self {
+            slope: [1.0; 3],
+            offset: [0.0; 3],
+            power: [1.0; 3],
+            saturation: 1.0,
+        }
+    }
+
+    /// Apply the grade to a color: slope/offset/power then saturation.
+    pub fn apply(&self, rgb: [f32; 3]) -> [f32; 3] {
+        apply_saturation(
+            apply_cdl(rgb, self.slope, self.offset, self.power),
+            self.saturation,
+        )
+    }
+}
+
 #[cfg(test)]
 mod grade_tests {
     use super::*;
@@ -1143,6 +1177,30 @@ mod grade_tests {
         assert!(
             boosted[0] > color[0] && boosted[2] < color[2],
             "{boosted:?}"
+        );
+    }
+
+    #[test]
+    fn cdl_identity_is_passthrough_and_grade_composes_sop_then_sat() {
+        let color = [0.25, 0.5, 0.75];
+        assert!(close(Cdl::identity().apply(color), color, 1e-6));
+
+        // Slope 2.0 doubles each channel (SOP), saturation 1.0 leaves it.
+        let gained = Cdl {
+            slope: [2.0; 3],
+            ..Cdl::identity()
+        };
+        assert!(close(gained.apply([0.2, 0.3, 0.4]), [0.4, 0.6, 0.8], 1e-5));
+
+        // Saturation 0 after SOP collapses to luma.
+        let desaturate = Cdl {
+            saturation: 0.0,
+            ..Cdl::identity()
+        };
+        let out = desaturate.apply(color);
+        assert!(
+            close(out, [out[0], out[0], out[0]], 1e-6),
+            "grayscale: {out:?}"
         );
     }
 }
