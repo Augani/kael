@@ -240,6 +240,42 @@ pub fn crossfade(outgoing: &[f32], incoming: &[f32]) -> Vec<f32> {
     output
 }
 
+/// Scale every sample in `buffer` by `gain` in place.
+pub fn apply_gain(buffer: &mut [f32], gain: f32) {
+    for sample in buffer.iter_mut() {
+        *sample *= gain;
+    }
+}
+
+/// The linear gain that scales `samples` so their peak magnitude reaches `target_dbfs`.
+/// Returns `1.0` for silence (nothing to normalize). Combine with [`apply_gain`] to
+/// peak-normalize a buffer.
+pub fn peak_normalize_gain(samples: &[f32], target_dbfs: f32) -> f32 {
+    let peak = samples
+        .iter()
+        .fold(0.0f32, |max, &sample| max.max(sample.abs()));
+    if peak <= 0.0 {
+        return 1.0;
+    }
+    dbfs_to_linear(target_dbfs) / peak
+}
+
+/// The linear gain that scales `samples` so their RMS level reaches `target_dbfs`.
+/// Returns `1.0` for silence. Combine with [`apply_gain`] to loudness-normalize a buffer to
+/// a target RMS (a simpler stand-in for full BS.1770 LUFS normalization).
+pub fn rms_normalize_gain(samples: &[f32], target_dbfs: f32) -> f32 {
+    if samples.is_empty() {
+        return 1.0;
+    }
+    let mean_square =
+        samples.iter().map(|&sample| sample * sample).sum::<f32>() / samples.len() as f32;
+    let rms = mean_square.sqrt();
+    if rms <= 0.0 {
+        return 1.0;
+    }
+    dbfs_to_linear(target_dbfs) / rms
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,5 +522,41 @@ mod tests {
 
         // Mismatched lengths use the shorter.
         assert_eq!(crossfade(&[1.0, 1.0], &[0.0]).len(), 1);
+    }
+
+    #[test]
+    fn apply_gain_scales_every_sample() {
+        let mut buffer = vec![0.5, -0.25, 0.0];
+        apply_gain(&mut buffer, 2.0);
+        assert_eq!(buffer, vec![1.0, -0.5, 0.0]);
+    }
+
+    #[test]
+    fn peak_normalize_brings_the_peak_to_target() {
+        let mut buffer = vec![0.25, -0.5, 0.1];
+        // 0 dBFS == linear 1.0; the peak of 0.5 needs 2x to reach it.
+        let gain = peak_normalize_gain(&buffer, 0.0);
+        assert!((gain - 2.0).abs() < 1e-6);
+        apply_gain(&mut buffer, gain);
+        let peak = buffer.iter().fold(0.0f32, |max, &s| max.max(s.abs()));
+        assert!((peak - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rms_normalize_brings_the_rms_to_target() {
+        // A square-ish signal of amplitude 0.5 has RMS 0.5; normalizing to 0 dBFS doubles it.
+        let mut buffer = vec![0.5, -0.5, 0.5, -0.5];
+        let gain = rms_normalize_gain(&buffer, 0.0);
+        assert!((gain - 2.0).abs() < 1e-6);
+        apply_gain(&mut buffer, gain);
+        assert_eq!(meter(&buffer).rms_dbfs.round(), 0.0);
+    }
+
+    #[test]
+    fn normalize_gains_are_unity_for_silence() {
+        assert_eq!(peak_normalize_gain(&[0.0, 0.0], 0.0), 1.0);
+        assert_eq!(peak_normalize_gain(&[], -3.0), 1.0);
+        assert_eq!(rms_normalize_gain(&[0.0, 0.0], 0.0), 1.0);
+        assert_eq!(rms_normalize_gain(&[], -3.0), 1.0);
     }
 }
