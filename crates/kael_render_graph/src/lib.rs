@@ -1529,6 +1529,37 @@ pub mod reference {
         })
     }
 
+    /// A single-input primary color-correction op applying per-channel **lift / gamma /
+    /// gain** (the colorist three-way / color-wheels model) to `inputs[0]`. Per RGB
+    /// channel `c`: `out = clamp(in * gain[c] + lift[c], 0, 1) ^ (1 / gamma[c])` — `gain`
+    /// scales (highlights move most), `lift` offsets (shadows move most), and `gamma`
+    /// reshapes midtones (a value > 1 brightens them). Alpha is passed through. The
+    /// identity is `lift = [0; 3]`, `gamma = [1; 3]`, `gain = [1; 3]`; a non-positive
+    /// `gamma[c]` skips that channel's power step.
+    pub fn lift_gamma_gain(lift: [f32; 3], gamma: [f32; 3], gain: [f32; 3]) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            let grade = |value: f32, lift: f32, gamma: f32, gain: f32| {
+                let scaled = (value * gain + lift).clamp(0.0, 1.0);
+                if gamma > 0.0 {
+                    scaled.powf(1.0 / gamma)
+                } else {
+                    scaled
+                }
+            };
+            for (output_pixel, source_pixel) in output.pixels.iter_mut().zip(&source.pixels) {
+                *output_pixel = [
+                    grade(source_pixel[0], lift[0], gamma[0], gain[0]),
+                    grade(source_pixel[1], lift[1], gamma[1], gain[1]),
+                    grade(source_pixel[2], lift[2], gamma[2], gain[2]),
+                    source_pixel[3],
+                ];
+            }
+        })
+    }
+
     /// A single-input op that mirrors `inputs[0]` left-to-right.
     pub fn flip_horizontal() -> PassOp<'static> {
         Box::new(|inputs, output| {
@@ -2217,6 +2248,59 @@ pub mod reference {
             let mut rooted = Image::new(1, 1);
             gamma(0.5)(&[&source], &mut rooted);
             assert!((rooted.pixel(0, 0)[0] - 0.5).abs() < 1e-6);
+        }
+
+        #[test]
+        fn lift_gamma_gain_identity_passes_through() {
+            let mut source = Image::new(2, 1);
+            source.pixels = vec![[0.2, 0.5, 0.8, 1.0], [0.0, 0.4, 1.0, 0.25]];
+            let mut out = Image::new(2, 1);
+            lift_gamma_gain([0.0; 3], [1.0; 3], [1.0; 3])(&[&source], &mut out);
+            for (got, want) in out.pixels.iter().zip(&source.pixels) {
+                for channel in 0..4 {
+                    assert!(
+                        (got[channel] - want[channel]).abs() < 1e-6,
+                        "{got:?} vs {want:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn lift_gamma_gain_lift_raises_shadows_gain_scales_highlights() {
+            let mut source = Image::new(2, 1);
+            source.pixels = vec![[0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]];
+
+            // Lift offsets every channel: black is raised to the lift value.
+            let mut lifted = Image::new(2, 1);
+            lift_gamma_gain([0.2; 3], [1.0; 3], [1.0; 3])(&[&source], &mut lifted);
+            assert!((lifted.pixel(0, 0)[0] - 0.2).abs() < 1e-6);
+            assert!((lifted.pixel(1, 0)[0] - 1.0).abs() < 1e-6);
+
+            // Gain scales: white drops to the gain value while black (×gain) stays put.
+            let mut gained = Image::new(2, 1);
+            lift_gamma_gain([0.0; 3], [1.0; 3], [0.5; 3])(&[&source], &mut gained);
+            assert!((gained.pixel(0, 0)[0] - 0.0).abs() < 1e-6);
+            assert!((gained.pixel(1, 0)[0] - 0.5).abs() < 1e-6);
+
+            // Gamma > 1 brightens midtones: 0.25 ^ (1/2) = 0.5.
+            let mut mid = Image::new(1, 1);
+            let gray = Image::filled(1, 1, [0.25, 0.25, 0.25, 1.0]);
+            lift_gamma_gain([0.0; 3], [2.0; 3], [1.0; 3])(&[&gray], &mut mid);
+            assert!((mid.pixel(0, 0)[0] - 0.5).abs() < 1e-6);
+        }
+
+        #[test]
+        fn lift_gamma_gain_is_per_channel_and_clamped() {
+            let gray = Image::filled(1, 1, [0.4, 0.4, 0.4, 0.5]);
+
+            // Only the blue channel is gained; red and green are untouched; blue clamps.
+            let mut out = Image::new(1, 1);
+            lift_gamma_gain([0.0; 3], [1.0; 3], [1.0, 1.0, 3.0])(&[&gray], &mut out);
+            assert!((out.pixel(0, 0)[0] - 0.4).abs() < 1e-6);
+            assert!((out.pixel(0, 0)[1] - 0.4).abs() < 1e-6);
+            assert!((out.pixel(0, 0)[2] - 1.0).abs() < 1e-6);
+            assert_eq!(out.pixel(0, 0)[3], 0.5);
         }
 
         #[test]
