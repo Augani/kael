@@ -55,17 +55,36 @@ pub struct Project {
     /// Sequence markers (cue / chapter points).
     #[serde(default)]
     pub markers: MarkerSet,
+    /// Transient unsaved-changes flag (not persisted).
+    #[serde(skip)]
+    dirty: bool,
 }
 
 impl Project {
-    /// Create a project at the current format version with no markers.
+    /// Create a project at the current format version with no markers, marked saved.
     pub fn new(name: impl Into<String>, timeline: Timeline) -> Self {
         Self {
             format_version: PROJECT_FORMAT_VERSION,
             name: name.into(),
             timeline,
             markers: MarkerSet::new(),
+            dirty: false,
         }
+    }
+
+    /// Whether the project has unsaved changes.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Flag the project as having unsaved changes (call after an edit).
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Clear the unsaved-changes flag (call after persisting).
+    pub fn mark_saved(&mut self) {
+        self.dirty = false;
     }
 
     /// Serialize to pretty JSON.
@@ -227,6 +246,22 @@ mod tests {
         let restored = Project::from_json(&project.to_json().unwrap()).unwrap();
         assert_eq!(restored.markers.len(), 1);
         assert_eq!(restored.markers.nearest(120).map(|m| m.frame), Some(120));
+    }
+
+    #[test]
+    fn tracks_unsaved_changes_transiently() {
+        let mut project = Project::new("p", sample_timeline());
+        assert!(!project.is_dirty());
+        project.mark_dirty();
+        assert!(project.is_dirty());
+        project.mark_saved();
+        assert!(!project.is_dirty());
+
+        // The dirty flag is not serialized; a loaded project starts clean.
+        let json = project.to_json().unwrap();
+        assert!(!json.contains("dirty"));
+        let loaded = Project::from_json(&json).unwrap();
+        assert!(!loaded.is_dirty());
     }
 
     #[test]
