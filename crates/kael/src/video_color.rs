@@ -596,6 +596,144 @@ pub fn gamut_conversion_matrix(from: ColorPrimaries, to: ColorPrimaries) -> Mat3
     mat3_mul(xyz_to_rgb_matrix(to), rgb_to_xyz_matrix(from))
 }
 
+/// A deterministic per-pixel color transform for rendering and export.
+///
+/// Applies, in order: decode the input transfer function to linear light, convert
+/// gamut from the input to the output primaries, optionally tone-map HDR into the SDR
+/// range, then re-encode with the output transfer function. With identical input/output
+/// transfer + primaries and no tone map it is an exact round-trip — the determinism the
+/// preview==export contract depends on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ColorPipeline {
+    /// Transfer function the input is encoded with (decoded to linear first).
+    pub input_transfer: TransferFunction,
+    /// Color primaries the input RGB is expressed in.
+    pub input_primaries: ColorPrimaries,
+    /// Color primaries to convert to before encoding.
+    pub output_primaries: ColorPrimaries,
+    /// Optional HDR→SDR tone map applied in linear light.
+    pub tone_map: Option<ToneMap>,
+    /// Transfer function to re-encode the output with.
+    pub output_transfer: TransferFunction,
+}
+
+impl ColorPipeline {
+    /// An identity pipeline: linear in/out, matching primaries, no tone map.
+    pub fn identity(primaries: ColorPrimaries) -> Self {
+        Self {
+            input_transfer: TransferFunction::Linear,
+            input_primaries: primaries,
+            output_primaries: primaries,
+            tone_map: None,
+            output_transfer: TransferFunction::Linear,
+        }
+    }
+
+    /// Apply the pipeline to one gamma-encoded R'G'B' triple, returning the
+    /// re-encoded output triple.
+    pub fn apply(&self, rgb: [f32; 3]) -> [f32; 3] {
+        let mut color = [
+            self.input_transfer.to_linear(rgb[0]),
+            self.input_transfer.to_linear(rgb[1]),
+            self.input_transfer.to_linear(rgb[2]),
+        ];
+
+        if self.input_primaries != self.output_primaries {
+            color = mat3_vec(
+                gamut_conversion_matrix(self.input_primaries, self.output_primaries),
+                color,
+            );
+        }
+
+        if let Some(tone_map) = self.tone_map {
+            color = [
+                tone_map.apply(color[0]),
+                tone_map.apply(color[1]),
+                tone_map.apply(color[2]),
+            ];
+        }
+
+        [
+            self.output_transfer.from_linear(color[0]),
+            self.output_transfer.from_linear(color[1]),
+            self.output_transfer.from_linear(color[2]),
+        ]
+    }
+}
+
+#[cfg(test)]
+mod pipeline_tests {
+    use super::*;
+
+    fn close(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
+        (0..3).all(|i| (a[i] - b[i]).abs() <= tol)
+    }
+
+    #[test]
+    fn identity_pipeline_is_passthrough() {
+        let pipeline = ColorPipeline::identity(ColorPrimaries::Bt709);
+        assert!(close(
+            pipeline.apply([0.2, 0.5, 0.8]),
+            [0.2, 0.5, 0.8],
+            1e-6
+        ));
+    }
+
+    #[test]
+    fn srgb_decode_encode_round_trips() {
+        let pipeline = ColorPipeline {
+            input_transfer: TransferFunction::Srgb,
+            input_primaries: ColorPrimaries::Bt709,
+            output_primaries: ColorPrimaries::Bt709,
+            tone_map: None,
+            output_transfer: TransferFunction::Srgb,
+        };
+        for value in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let out = pipeline.apply([value, value, value]);
+            assert!(
+                close(out, [value, value, value], 1e-4),
+                "{value} -> {out:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn gamut_conversion_changes_saturated_colors() {
+        let pipeline = ColorPipeline {
+            input_transfer: TransferFunction::Linear,
+            input_primaries: ColorPrimaries::Bt709,
+            output_primaries: ColorPrimaries::Bt2020,
+            tone_map: None,
+            output_transfer: TransferFunction::Linear,
+        };
+        // A pure 709 red maps to a smaller red component in the wider 2020 gamut.
+        let out = pipeline.apply([1.0, 0.0, 0.0]);
+        assert!(out[0] > 0.6 && out[0] < 1.0, "709 red in 2020: {out:?}");
+        assert!(out[1].abs() < 0.1 && out[2].abs() < 0.1, "{out:?}");
+        // White is gamut-invariant.
+        assert!(close(
+            pipeline.apply([1.0, 1.0, 1.0]),
+            [1.0, 1.0, 1.0],
+            2e-3
+        ));
+    }
+
+    #[test]
+    fn tone_map_brings_hdr_into_range() {
+        let pipeline = ColorPipeline {
+            input_transfer: TransferFunction::Linear,
+            input_primaries: ColorPrimaries::Bt2020,
+            output_primaries: ColorPrimaries::Bt709,
+            tone_map: Some(ToneMap::Reinhard),
+            output_transfer: TransferFunction::Srgb,
+        };
+        // A very bright linear input is compressed into displayable 0..=1.
+        let out = pipeline.apply([4.0, 4.0, 4.0]);
+        assert!(out.iter().all(|&c| (0.0..=1.0).contains(&c)), "{out:?}");
+        assert!(out[0] > 0.0, "non-black output: {out:?}");
+    }
+}
+
 #[cfg(test)]
 mod primaries_tests {
     use super::*;
