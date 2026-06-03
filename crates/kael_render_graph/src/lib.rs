@@ -1195,6 +1195,46 @@ pub mod reference {
         })
     }
 
+    /// A single-input op that box-blurs `inputs[0]` with the given pixel `radius` (a
+    /// simple defocus). Each output pixel is the average of the `(2·radius+1)²`
+    /// neighborhood, clamped at the edges; `radius` 0 is a passthrough.
+    pub fn box_blur(radius: u32) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            if source.width != output.width || source.height != output.height {
+                return;
+            }
+            let radius = radius as i32;
+            let (width, height) = (output.width as i32, output.height as i32);
+            for y in 0..height {
+                for x in 0..width {
+                    let mut sum = [0.0f32; 4];
+                    let mut count = 0.0f32;
+                    for dy in -radius..=radius {
+                        for dx in -radius..=radius {
+                            let sx = (x + dx).clamp(0, width - 1);
+                            let sy = (y + dy).clamp(0, height - 1);
+                            let pixel = source.pixels[(sy * width + sx) as usize];
+                            for channel in 0..4 {
+                                sum[channel] += pixel[channel];
+                            }
+                            count += 1.0;
+                        }
+                    }
+                    let index = (y * width + x) as usize;
+                    output.pixels[index] = [
+                        sum[0] / count,
+                        sum[1] / count,
+                        sum[2] / count,
+                        sum[3] / count,
+                    ];
+                }
+            }
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -1435,6 +1475,46 @@ pub mod reference {
             place(2, 1, 1, 1)(&[&source], &mut out);
             assert_eq!(out.pixel(2, 1), [0.0, 1.0, 0.0, 1.0]);
             assert_eq!(out.pixel(0, 0), [0.0, 0.0, 0.0, 0.0]);
+        }
+
+        #[test]
+        fn box_blur_radius_zero_is_passthrough() {
+            let mut source = Image::new(2, 2);
+            source.pixels = vec![
+                [1.0, 0.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0, 1.0],
+                [0.0, 0.0, 1.0, 1.0],
+                [1.0, 1.0, 0.0, 1.0],
+            ];
+            let mut out = Image::new(2, 2);
+            box_blur(0)(&[&source], &mut out);
+            assert_eq!(out.pixels, source.pixels);
+        }
+
+        #[test]
+        fn box_blur_preserves_solids_and_smooths_edges() {
+            // A solid fill is unchanged (averaging equal neighbors).
+            let solid = Image::filled(3, 3, [0.5, 0.5, 0.5, 1.0]);
+            let mut out = Image::new(3, 3);
+            box_blur(1)(&[&solid], &mut out);
+            assert!(out.pixels.iter().all(|p| (p[0] - 0.5).abs() < 1e-6));
+
+            // A black|white edge smooths monotonically.
+            let mut edge = Image::new(4, 1);
+            edge.pixels = vec![
+                [0.0, 0.0, 0.0, 1.0],
+                [0.0, 0.0, 0.0, 1.0],
+                [1.0, 1.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0, 1.0],
+            ];
+            let mut blurred = Image::new(4, 1);
+            box_blur(1)(&[&edge], &mut blurred);
+            let red: Vec<f32> = blurred.pixels.iter().map(|p| p[0]).collect();
+            assert!((red[0]).abs() < 1e-6 && (red[3] - 1.0).abs() < 1e-6);
+            assert!(
+                red[1] > red[0] && red[2] > red[1] && red[3] > red[2],
+                "{red:?}"
+            );
         }
     }
 }
