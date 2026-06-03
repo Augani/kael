@@ -8,6 +8,8 @@
 use kael_render_graph::reference::{place, rotate, Image, PassOp};
 use serde::{Deserialize, Serialize};
 
+use crate::automation::Automation;
+
 /// A clip's geometric transform within the frame, in normalized coordinates: the content is
 /// rotated about its center by `rotation` radians, then drawn into a `scale_x` × `scale_y`
 /// box (relative to the frame) centered at `(center_x, center_y)` (`0.5, 0.5` is the frame
@@ -119,6 +121,49 @@ impl ClipTransform {
     }
 }
 
+/// A [`ClipTransform`] whose parameters are [`Automation`] curves rather than constants — a
+/// keyframed transform (Ken Burns / animated PiP). [`resolve`](AnimatedClipTransform::resolve)
+/// samples every curve at a time to produce the concrete [`ClipTransform`] for that moment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnimatedClipTransform {
+    /// Horizontal scale over time.
+    pub scale_x: Automation,
+    /// Vertical scale over time.
+    pub scale_y: Automation,
+    /// Normalized horizontal center over time.
+    pub center_x: Automation,
+    /// Normalized vertical center over time.
+    pub center_y: Automation,
+    /// Rotation (radians) over time.
+    pub rotation: Automation,
+}
+
+impl AnimatedClipTransform {
+    /// Sample every parameter curve at `time_ms` to produce the concrete transform.
+    pub fn resolve(&self, time_ms: u64) -> ClipTransform {
+        ClipTransform {
+            scale_x: self.scale_x.sample(time_ms),
+            scale_y: self.scale_y.sample(time_ms),
+            center_x: self.center_x.sample(time_ms),
+            center_y: self.center_y.sample(time_ms),
+            rotation: self.rotation.sample(time_ms),
+        }
+    }
+}
+
+impl From<ClipTransform> for AnimatedClipTransform {
+    /// Lift a static transform into a keyframed one whose parameters are constant curves.
+    fn from(transform: ClipTransform) -> Self {
+        Self {
+            scale_x: Automation::constant(transform.scale_x),
+            scale_y: Automation::constant(transform.scale_y),
+            center_x: Automation::constant(transform.center_x),
+            center_y: Automation::constant(transform.center_y),
+            rotation: Automation::constant(transform.rotation),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +242,57 @@ mod tests {
         // 180 deg about center moves the red corner to (2,2).
         let out = transform.apply(&source);
         assert!((out.pixel(2, 2)[0] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn animated_transform_resolves_keyframed_scale() {
+        use crate::automation::{Interpolation, Keyframe};
+        let mut scale = Automation::constant(1.0);
+        scale.add(Keyframe {
+            time_ms: 0,
+            value: 1.0,
+            interpolation: Interpolation::Linear,
+        });
+        scale.add(Keyframe {
+            time_ms: 1000,
+            value: 0.5,
+            interpolation: Interpolation::Linear,
+        });
+        let animated = AnimatedClipTransform {
+            scale_x: scale.clone(),
+            scale_y: scale,
+            center_x: Automation::constant(0.5),
+            center_y: Automation::constant(0.5),
+            rotation: Automation::constant(0.0),
+        };
+        assert!((animated.resolve(0).scale_x - 1.0).abs() < 1e-6);
+        assert!((animated.resolve(500).scale_x - 0.75).abs() < 1e-6);
+        assert!((animated.resolve(1000).scale_x - 0.5).abs() < 1e-6);
+        // Unanimated params stay constant.
+        assert!((animated.resolve(500).center_x - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn animated_transform_from_static_resolves_to_constants() {
+        let static_transform = ClipTransform {
+            scale_x: 0.5,
+            scale_y: 0.5,
+            center_x: 0.25,
+            center_y: 0.75,
+            rotation: 1.0,
+        };
+        let animated: AnimatedClipTransform = static_transform.into();
+        assert_eq!(animated.resolve(0), static_transform);
+        assert_eq!(animated.resolve(5000), static_transform);
+    }
+
+    #[test]
+    fn animated_transform_serde_round_trips() {
+        let animated: AnimatedClipTransform = ClipTransform::default().into();
+        let json = serde_json::to_string(&animated).unwrap();
+        assert_eq!(
+            serde_json::from_str::<AnimatedClipTransform>(&json).unwrap(),
+            animated
+        );
     }
 }
