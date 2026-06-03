@@ -557,6 +557,35 @@ impl Timeline {
         }
         requests
     }
+
+    /// The set of frames an edit can snap to: clip edges (in and out) across every
+    /// track plus the timeline origin, sorted ascending and de-duplicated.
+    pub fn snap_points(&self) -> Vec<u64> {
+        let mut points = vec![0u64];
+        for track in &self.tracks {
+            for clip in &track.clips {
+                points.push(clip.track_offset);
+                points.push(clip.track_end());
+            }
+        }
+        points.sort_unstable();
+        points.dedup();
+        points
+    }
+
+    /// Snap `frame` to the nearest [`snap_point`](Timeline::snap_points) within
+    /// `threshold` frames, or return `frame` unchanged when none is close enough.
+    /// Ties prefer the earlier snap point.
+    pub fn snap_frame(&self, frame: u64, threshold: u64) -> u64 {
+        let mut best: Option<(u64, u64)> = None;
+        for point in self.snap_points() {
+            let distance = frame.abs_diff(point);
+            if distance <= threshold && best.is_none_or(|(_, d)| distance < d) {
+                best = Some((point, distance));
+            }
+        }
+        best.map(|(point, _)| point).unwrap_or(frame)
+    }
 }
 
 /// A request to generate a thumbnail from a media source.
@@ -793,6 +822,41 @@ mod tests {
             duration_frames: 0,
         };
         assert_eq!(bad.timebase(), None);
+    }
+
+    #[test]
+    fn snap_points_are_clip_edges_plus_origin() {
+        let tl = Timeline {
+            tracks: vec![
+                sample_track("v1", TrackType::Video, vec![sample_clip("a", 0, 30, 10)]),
+                sample_track("v2", TrackType::Video, vec![sample_clip("b", 0, 20, 50)]),
+            ],
+            frame_rate: 30.0,
+            duration_frames: 70,
+        };
+        // origin 0, clip a [10,40), clip b [50,70) -> 0,10,40,50,70.
+        assert_eq!(tl.snap_points(), vec![0, 10, 40, 50, 70]);
+    }
+
+    #[test]
+    fn snap_frame_pulls_to_nearest_edge_within_threshold() {
+        let tl = Timeline {
+            tracks: vec![sample_track(
+                "v1",
+                TrackType::Video,
+                vec![sample_clip("a", 0, 30, 100)],
+            )],
+            frame_rate: 30.0,
+            duration_frames: 130,
+        };
+        // Near the in-edge 100.
+        assert_eq!(tl.snap_frame(103, 5), 100);
+        // Near the out-edge 130.
+        assert_eq!(tl.snap_frame(128, 5), 130);
+        // Outside the threshold -> unchanged.
+        assert_eq!(tl.snap_frame(115, 5), 115);
+        // Exactly on a point stays put.
+        assert_eq!(tl.snap_frame(100, 5), 100);
     }
 
     #[test]

@@ -120,7 +120,7 @@ impl Project {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::{TimelineClip, TimelineTrack, TrackType};
+    use crate::media::{ClipBlendMode, TimelineClip, TimelineTrack, TrackType};
 
     fn sample_timeline() -> Timeline {
         Timeline {
@@ -171,6 +171,39 @@ mod tests {
         assert_eq!(project.format_version, PROJECT_FORMAT_VERSION);
         // duration recomputed from the clip: track_offset 10 + duration 50 = 60.
         assert_eq!(project.timeline.duration_frames, 60);
+    }
+
+    #[test]
+    fn legacy_clip_without_layer_props_defaults_to_opaque_normal() {
+        // A document predating per-clip opacity/blend_mode must still load, with the
+        // new fields filled by their serde defaults.
+        let json = r#"{
+            "format_version": 2,
+            "name": "legacy",
+            "timeline": {
+                "tracks": [{
+                    "id": "v1", "name": "Video", "track_type": "Video",
+                    "clips": [{ "id": "a", "source": "a.mov", "start_frame": 0, "end_frame": 50, "track_offset": 0 }]
+                }],
+                "frame_rate": 30.0,
+                "duration_frames": 50
+            }
+        }"#;
+        let project = Project::from_json(json).unwrap();
+        let clip = &project.timeline.tracks[0].clips[0];
+        assert_eq!(clip.opacity, 1.0);
+        assert_eq!(clip.blend_mode, ClipBlendMode::Normal);
+    }
+
+    #[test]
+    fn non_default_layer_props_survive_round_trip() {
+        let mut timeline = sample_timeline();
+        timeline.tracks[0].clips[0].opacity = 0.5;
+        timeline.tracks[0].clips[0].blend_mode = ClipBlendMode::Multiply;
+        let restored = Project::from_json(&Project::new("p", timeline).to_json().unwrap()).unwrap();
+        let clip = &restored.timeline.tracks[0].clips[0];
+        assert_eq!(clip.opacity, 0.5);
+        assert_eq!(clip.blend_mode, ClipBlendMode::Multiply);
     }
 
     #[test]
