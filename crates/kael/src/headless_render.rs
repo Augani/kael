@@ -152,7 +152,7 @@ impl HeadlessRenderer {
                 DevicePixels(self.width as i32),
                 DevicePixels(self.height as i32),
             );
-            let readback = renderer.render_quads_to_f16(&scene, viewport)?;
+            let readback = renderer.render_scene_to_f16(&scene, viewport)?;
             let mut peak = 0.0f32;
             let mut checksum = 0xcbf2_9ce4_8422_2325u64;
             for &value in &readback.rgba {

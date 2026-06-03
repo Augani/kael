@@ -135,6 +135,8 @@ pub(crate) struct MetalRenderer {
     shadows_pipeline_state: metal::RenderPipelineState,
     quads_pipeline_state: metal::RenderPipelineState,
     quads_pipeline_state_rgba16f: metal::RenderPipelineState,
+    shadows_pipeline_state_rgba16f: metal::RenderPipelineState,
+    underlines_pipeline_state_rgba16f: metal::RenderPipelineState,
     blur_horizontal_pipeline_state: metal::RenderPipelineState,
     blur_composite_pipeline_state: metal::RenderPipelineState,
     underlines_pipeline_state: metal::RenderPipelineState,
@@ -268,6 +270,22 @@ impl MetalRenderer {
             "quad_fragment",
             metal::MTLPixelFormat::RGBA16Float,
         );
+        let shadows_pipeline_state_rgba16f = build_pipeline_state(
+            &device,
+            &library,
+            "shadows_rgba16f",
+            "shadow_vertex",
+            "shadow_fragment",
+            metal::MTLPixelFormat::RGBA16Float,
+        );
+        let underlines_pipeline_state_rgba16f = build_pipeline_state(
+            &device,
+            &library,
+            "underlines_rgba16f",
+            "underline_vertex",
+            "underline_fragment",
+            metal::MTLPixelFormat::RGBA16Float,
+        );
         let blur_horizontal_pipeline_state = build_pipeline_state(
             &device,
             &library,
@@ -332,6 +350,8 @@ impl MetalRenderer {
             shadows_pipeline_state,
             quads_pipeline_state,
             quads_pipeline_state_rgba16f,
+            shadows_pipeline_state_rgba16f,
+            underlines_pipeline_state_rgba16f,
             blur_horizontal_pipeline_state,
             blur_composite_pipeline_state,
             underlines_pipeline_state,
@@ -760,7 +780,55 @@ impl MetalRenderer {
         })
     }
 
-    pub(crate) fn render_quads_to_f16(
+    fn encode_instanced<T>(
+        &self,
+        encoder: &metal::RenderCommandEncoderRef,
+        pipeline: &metal::RenderPipelineStateRef,
+        instances: &[T],
+        viewport_size: Size<DevicePixels>,
+        instance_buffer: &mut InstanceBuffer,
+        instance_offset: &mut usize,
+    ) -> bool {
+        if instances.is_empty() {
+            return true;
+        }
+        align_offset(instance_offset);
+        let bytes_len = mem::size_of_val(instances);
+        if *instance_offset + bytes_len > instance_buffer.size {
+            return false;
+        }
+        encoder.set_render_pipeline_state(pipeline);
+        encoder.set_vertex_buffer(0, Some(&self.unit_vertices), 0);
+        encoder.set_vertex_buffer(
+            1,
+            Some(&instance_buffer.metal_buffer),
+            *instance_offset as u64,
+        );
+        encoder.set_fragment_buffer(
+            1,
+            Some(&instance_buffer.metal_buffer),
+            *instance_offset as u64,
+        );
+        encoder.set_vertex_bytes(
+            2,
+            mem::size_of_val(&viewport_size) as u64,
+            &viewport_size as *const Size<DevicePixels> as *const _,
+        );
+        unsafe {
+            let dst = (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset);
+            ptr::copy_nonoverlapping(instances.as_ptr() as *const u8, dst, bytes_len);
+        }
+        encoder.draw_primitives_instanced(
+            metal::MTLPrimitiveType::Triangle,
+            0,
+            6,
+            instances.len() as u64,
+        );
+        *instance_offset += bytes_len;
+        true
+    }
+
+    pub(crate) fn render_scene_to_f16(
         &mut self,
         scene: &Scene,
         viewport_size: Size<DevicePixels>,
@@ -793,53 +861,42 @@ impl MetalRenderer {
             alpha,
         );
 
-        let quads: &[Quad] = &scene.quads;
         let mut instance_offset = 0usize;
-        let mut overflow = false;
-        if !quads.is_empty() {
-            align_offset(&mut instance_offset);
-            let quad_bytes_len = mem::size_of_val(quads);
-            if instance_offset + quad_bytes_len > instance_buffer.size {
-                overflow = true;
-            } else {
-                command_encoder.set_render_pipeline_state(&self.quads_pipeline_state_rgba16f);
-                command_encoder.set_vertex_buffer(
-                    QuadInputIndex::Vertices as u64,
-                    Some(&self.unit_vertices),
-                    0,
-                );
-                command_encoder.set_vertex_buffer(
-                    QuadInputIndex::Quads as u64,
-                    Some(&instance_buffer.metal_buffer),
-                    instance_offset as u64,
-                );
-                command_encoder.set_fragment_buffer(
-                    QuadInputIndex::Quads as u64,
-                    Some(&instance_buffer.metal_buffer),
-                    instance_offset as u64,
-                );
-                command_encoder.set_vertex_bytes(
-                    QuadInputIndex::ViewportSize as u64,
-                    mem::size_of_val(&viewport_size) as u64,
-                    &viewport_size as *const Size<DevicePixels> as *const _,
-                );
-                let buffer_contents = unsafe {
-                    (instance_buffer.metal_buffer.contents() as *mut u8).add(instance_offset)
-                };
-                unsafe {
-                    ptr::copy_nonoverlapping(
-                        quads.as_ptr() as *const u8,
-                        buffer_contents,
-                        quad_bytes_len,
-                    );
+        let mut error: Option<&'static str> = None;
+        for batch in scene.batches() {
+            let ok = match batch {
+                PrimitiveBatch::Quads(quads) => self.encode_instanced(
+                    command_encoder,
+                    &self.quads_pipeline_state_rgba16f,
+                    quads,
+                    viewport_size,
+                    &mut instance_buffer,
+                    &mut instance_offset,
+                ),
+                PrimitiveBatch::Shadows(shadows) => self.encode_instanced(
+                    command_encoder,
+                    &self.shadows_pipeline_state_rgba16f,
+                    shadows,
+                    viewport_size,
+                    &mut instance_buffer,
+                    &mut instance_offset,
+                ),
+                PrimitiveBatch::Underlines(underlines) => self.encode_instanced(
+                    command_encoder,
+                    &self.underlines_pipeline_state_rgba16f,
+                    underlines,
+                    viewport_size,
+                    &mut instance_buffer,
+                    &mut instance_offset,
+                ),
+                _ => {
+                    error = Some("primitive type not yet supported in the RGBA16F render path");
+                    break;
                 }
-                command_encoder.draw_primitives_instanced(
-                    metal::MTLPrimitiveType::Triangle,
-                    0,
-                    6,
-                    quads.len() as u64,
-                );
-                instance_offset += quad_bytes_len;
+            };
+            if !ok {
+                error = Some("instance buffer capacity exceeded during RGBA16F render");
+                break;
             }
         }
         command_encoder.end_encoding();
@@ -877,8 +934,8 @@ impl MetalRenderer {
         command_buffer.wait_until_completed();
         self.instance_buffer_pool.lock().release(instance_buffer);
 
-        if overflow {
-            anyhow::bail!("quads exceeded instance buffer capacity during RGBA16F render");
+        if let Some(message) = error {
+            anyhow::bail!("{message}");
         }
 
         let row_stride = bytes_per_row as usize;
@@ -2384,7 +2441,7 @@ mod offscreen_tests {
         scene.insert_primitive(full_viewport_quad(16.0, hsla(0.0, 1.0, 0.5, 1.0)));
         scene.finish();
         let frame = renderer
-            .render_quads_to_f16(&scene, size(DevicePixels(16), DevicePixels(16)))
+            .render_scene_to_f16(&scene, size(DevicePixels(16), DevicePixels(16)))
             .unwrap();
         assert_eq!((frame.width, frame.height), (16, 16));
         assert_eq!(frame.rgba.len(), 16 * 16 * 4);
@@ -2409,8 +2466,45 @@ mod offscreen_tests {
         let mut scene = Scene::default();
         scene.finish();
         let frame = renderer
-            .render_quads_to_f16(&scene, size(DevicePixels(8), DevicePixels(8)))
+            .render_scene_to_f16(&scene, size(DevicePixels(8), DevicePixels(8)))
             .unwrap();
         assert!(frame.rgba.iter().all(|&value| value == 0.0));
+    }
+
+    #[test]
+    fn offscreen_rgba16f_renders_multiple_primitive_types() {
+        let Some(mut renderer) = headless() else {
+            return;
+        };
+        let full = Bounds {
+            origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size: size(ScaledPixels(16.0), ScaledPixels(16.0)),
+        };
+        let mut scene = Scene::default();
+        scene.insert_primitive(full_viewport_quad(16.0, hsla(0.0, 1.0, 0.5, 1.0)));
+        scene.insert_primitive(Underline {
+            order: 0,
+            pad: 0,
+            bounds: Bounds {
+                origin: point(ScaledPixels(2.0), ScaledPixels(12.0)),
+                size: size(ScaledPixels(12.0), ScaledPixels(2.0)),
+            },
+            content_mask: ContentMask { bounds: full },
+            color: hsla(0.6, 1.0, 0.5, 1.0),
+            thickness: ScaledPixels(2.0),
+            wavy: 0,
+        });
+        scene.finish();
+
+        // Renders through the batch loop (Quads + Underlines) with no
+        // "unsupported primitive" error.
+        let frame = renderer
+            .render_scene_to_f16(&scene, size(DevicePixels(16), DevicePixels(16)))
+            .unwrap();
+        let above_underline = ((4 * 16) + 8) * 4;
+        assert!(
+            frame.rgba[above_underline] > 0.6,
+            "quad red should render under the multi-primitive path"
+        );
     }
 }
