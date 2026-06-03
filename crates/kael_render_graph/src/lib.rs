@@ -1365,6 +1365,27 @@ pub mod reference {
         })
     }
 
+    /// A single-input op suppressing green spill: clamps each pixel's green channel to at
+    /// most the maximum of its red and blue (the standard green-screen despill). Use after
+    /// [`chroma_key`] to remove green fringing on retained subjects. Red, blue, and alpha
+    /// pass through.
+    pub fn despill_green() -> PassOp<'static> {
+        Box::new(|inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            for (output_pixel, source_pixel) in output.pixels.iter_mut().zip(&source.pixels) {
+                let limit = source_pixel[0].max(source_pixel[2]);
+                *output_pixel = [
+                    source_pixel[0],
+                    source_pixel[1].min(limit),
+                    source_pixel[2],
+                    source_pixel[3],
+                ];
+            }
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -1749,6 +1770,21 @@ pub mod reference {
                 "{:?}",
                 out.pixel(1, 0)
             );
+        }
+
+        #[test]
+        fn despill_green_limits_green_to_red_blue_maximum() {
+            let mut source = Image::new(3, 1);
+            source.pixels = vec![
+                [0.3, 0.9, 0.4, 1.0], // green spill -> g = min(0.9, max(0.3, 0.4)) = 0.4
+                [0.8, 0.2, 0.1, 1.0], // green already below the limit -> unchanged
+                [1.0, 1.0, 1.0, 1.0], // white -> unchanged
+            ];
+            let mut out = Image::new(3, 1);
+            despill_green()(&[&source], &mut out);
+            assert_eq!(out.pixel(0, 0), [0.3, 0.4, 0.4, 1.0]);
+            assert_eq!(out.pixel(1, 0), [0.8, 0.2, 0.1, 1.0]);
+            assert_eq!(out.pixel(2, 0), [1.0, 1.0, 1.0, 1.0]);
         }
     }
 }
