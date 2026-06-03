@@ -3985,6 +3985,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kael_secrets"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "parking_lot",
+ "security-framework",
+]
+
+[[package]]
 name = "kael_semantic_version"
 version = "0.1.2"
 dependencies = [
