@@ -520,3 +520,118 @@ mod primaries_tests {
         );
     }
 }
+
+/// A 3D color lookup table (e.g. a `.cube` LUT), trilinearly interpolated.
+///
+/// Samples are stored in `.cube` order: red varies fastest, then green, then
+/// blue. Input and output colors are in `0..=1`.
+pub struct Lut3d {
+    size: usize,
+    samples: Vec<[f32; 3]>,
+}
+
+impl Lut3d {
+    /// An identity LUT of the given per-axis size (clamped to `>= 2`).
+    pub fn identity(size: usize) -> Self {
+        let size = size.max(2);
+        let denom = (size - 1) as f32;
+        let mut samples = Vec::with_capacity(size * size * size);
+        for blue in 0..size {
+            for green in 0..size {
+                for red in 0..size {
+                    samples.push([
+                        red as f32 / denom,
+                        green as f32 / denom,
+                        blue as f32 / denom,
+                    ]);
+                }
+            }
+        }
+        Self { size, samples }
+    }
+
+    /// Build from `size^3` samples in `.cube` order, or `None` if the count is wrong.
+    pub fn from_samples(size: usize, samples: Vec<[f32; 3]>) -> Option<Self> {
+        if size < 2 || samples.len() != size * size * size {
+            return None;
+        }
+        Some(Self { size, samples })
+    }
+
+    /// The per-axis size.
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
+    fn at(&self, red: usize, green: usize, blue: usize) -> [f32; 3] {
+        self.samples[red + green * self.size + blue * self.size * self.size]
+    }
+
+    /// Trilinearly sample the LUT for an input color in `0..=1`.
+    pub fn sample(&self, rgb: [f32; 3]) -> [f32; 3] {
+        let max = (self.size - 1) as f32;
+        let scale = |channel: f32| channel.clamp(0.0, 1.0) * max;
+        let (rf, gf, bf) = (scale(rgb[0]), scale(rgb[1]), scale(rgb[2]));
+        let (r0, g0, b0) = (
+            rf.floor() as usize,
+            gf.floor() as usize,
+            bf.floor() as usize,
+        );
+        let last = self.size - 1;
+        let (r1, g1, b1) = ((r0 + 1).min(last), (g0 + 1).min(last), (b0 + 1).min(last));
+        let (dr, dg, db) = (rf - r0 as f32, gf - g0 as f32, bf - b0 as f32);
+
+        let lerp = |a: [f32; 3], b: [f32; 3], t: f32| {
+            [
+                a[0] + (b[0] - a[0]) * t,
+                a[1] + (b[1] - a[1]) * t,
+                a[2] + (b[2] - a[2]) * t,
+            ]
+        };
+
+        let c00 = lerp(self.at(r0, g0, b0), self.at(r1, g0, b0), dr);
+        let c01 = lerp(self.at(r0, g0, b1), self.at(r1, g0, b1), dr);
+        let c10 = lerp(self.at(r0, g1, b0), self.at(r1, g1, b0), dr);
+        let c11 = lerp(self.at(r0, g1, b1), self.at(r1, g1, b1), dr);
+        let c0 = lerp(c00, c10, dg);
+        let c1 = lerp(c01, c11, dg);
+        lerp(c0, c1, db)
+    }
+}
+
+#[cfg(test)]
+mod lut_tests {
+    use super::*;
+
+    fn close(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
+        (0..3).all(|i| (a[i] - b[i]).abs() <= tol)
+    }
+
+    #[test]
+    fn identity_lut_returns_input() {
+        let lut = Lut3d::identity(2);
+        assert!(close(lut.sample([0.3, 0.6, 0.9]), [0.3, 0.6, 0.9], 1e-5));
+        assert!(close(lut.sample([0.0, 0.5, 1.0]), [0.0, 0.5, 1.0], 1e-5));
+    }
+
+    #[test]
+    fn inverting_lut_negates_channels() {
+        let inverted: Vec<[f32; 3]> = Lut3d::identity(2)
+            .samples
+            .iter()
+            .map(|s| [1.0 - s[0], 1.0 - s[1], 1.0 - s[2]])
+            .collect();
+        let lut = Lut3d::from_samples(2, inverted).unwrap();
+        assert!(close(
+            lut.sample([0.25, 0.5, 0.75]),
+            [0.75, 0.5, 0.25],
+            1e-5
+        ));
+    }
+
+    #[test]
+    fn from_samples_rejects_wrong_count() {
+        assert!(Lut3d::from_samples(2, vec![[0.0; 3]; 7]).is_none());
+        assert!(Lut3d::from_samples(1, vec![[0.0; 3]]).is_none());
+    }
+}
