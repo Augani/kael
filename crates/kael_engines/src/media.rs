@@ -68,6 +68,208 @@ pub struct TimelineTrack {
     pub clips: Vec<TimelineClip>,
 }
 
+/// An error from a timeline edit operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TimelineEditError {
+    /// No clip with the given id exists on the track.
+    ClipNotFound,
+    /// The edit would produce a zero or negative clip duration.
+    InvalidDuration,
+    /// The edit would move a source point or track position before zero.
+    OutOfBounds,
+    /// The operation requires two adjacent clips that were not found.
+    NotAdjacent,
+    /// The split position is not strictly inside the clip.
+    InvalidSplit,
+}
+
+impl std::fmt::Display for TimelineEditError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = match self {
+            Self::ClipNotFound => "clip not found",
+            Self::InvalidDuration => "edit would produce a non-positive clip duration",
+            Self::OutOfBounds => "edit would move past the start of the source or track",
+            Self::NotAdjacent => "operation requires two adjacent clips",
+            Self::InvalidSplit => "split position is not inside the clip",
+        };
+        f.write_str(message)
+    }
+}
+
+impl std::error::Error for TimelineEditError {}
+
+fn offset_by(value: u64, delta: i64) -> Result<u64, TimelineEditError> {
+    let result = value as i128 + delta as i128;
+    if result < 0 || result > u64::MAX as i128 {
+        Err(TimelineEditError::OutOfBounds)
+    } else {
+        Ok(result as u64)
+    }
+}
+
+impl TimelineClip {
+    /// The clip's duration in frames.
+    pub fn duration(&self) -> u64 {
+        self.end_frame.saturating_sub(self.start_frame)
+    }
+
+    /// The exclusive end of the clip on the track.
+    pub fn track_end(&self) -> u64 {
+        self.track_offset + self.duration()
+    }
+}
+
+impl TimelineTrack {
+    fn clip_index(&self, id: &str) -> Result<usize, TimelineEditError> {
+        self.clips
+            .iter()
+            .position(|clip| clip.id == id)
+            .ok_or(TimelineEditError::ClipNotFound)
+    }
+
+    /// Trim the clip's in-point (left edge) by `delta`, keeping its out-point
+    /// fixed on the track. Positive `delta` shortens the clip.
+    pub fn trim_in(&mut self, id: &str, delta: i64) -> Result<(), TimelineEditError> {
+        let index = self.clip_index(id)?;
+        let clip = &self.clips[index];
+        let new_start = offset_by(clip.start_frame, delta)?;
+        let new_offset = offset_by(clip.track_offset, delta)?;
+        if new_start >= clip.end_frame {
+            return Err(TimelineEditError::InvalidDuration);
+        }
+        let clip = &mut self.clips[index];
+        clip.start_frame = new_start;
+        clip.track_offset = new_offset;
+        Ok(())
+    }
+
+    /// Trim the clip's out-point (right edge) by `delta`. Positive `delta`
+    /// lengthens the clip.
+    pub fn trim_out(&mut self, id: &str, delta: i64) -> Result<(), TimelineEditError> {
+        let index = self.clip_index(id)?;
+        let new_end = offset_by(self.clips[index].end_frame, delta)?;
+        if new_end <= self.clips[index].start_frame {
+            return Err(TimelineEditError::InvalidDuration);
+        }
+        self.clips[index].end_frame = new_end;
+        Ok(())
+    }
+
+    /// Trim the out-point by `delta` and ripple all later clips by the same
+    /// amount, closing or opening the gap.
+    pub fn ripple_trim_out(&mut self, id: &str, delta: i64) -> Result<(), TimelineEditError> {
+        let index = self.clip_index(id)?;
+        let pivot = self.clips[index].track_offset;
+        self.trim_out(id, delta)?;
+        for (i, clip) in self.clips.iter_mut().enumerate() {
+            if i != index && clip.track_offset > pivot {
+                clip.track_offset = offset_by(clip.track_offset, delta)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Remove a clip and shift all later clips left to close the gap.
+    pub fn ripple_delete(&mut self, id: &str) -> Result<TimelineClip, TimelineEditError> {
+        let index = self.clip_index(id)?;
+        let removed = self.clips.remove(index);
+        let shift = removed.duration() as i64;
+        for clip in self.clips.iter_mut() {
+            if clip.track_offset > removed.track_offset {
+                clip.track_offset = offset_by(clip.track_offset, -shift)?;
+            }
+        }
+        Ok(removed)
+    }
+
+    /// Slip the clip's source window by `delta` (both in and out), leaving its
+    /// track position and duration unchanged.
+    pub fn slip(&mut self, id: &str, delta: i64) -> Result<(), TimelineEditError> {
+        let index = self.clip_index(id)?;
+        let new_start = offset_by(self.clips[index].start_frame, delta)?;
+        let new_end = offset_by(self.clips[index].end_frame, delta)?;
+        let clip = &mut self.clips[index];
+        clip.start_frame = new_start;
+        clip.end_frame = new_end;
+        Ok(())
+    }
+
+    /// Roll the edit point between `left_id` and its immediately following,
+    /// adjacent clip by `delta`, keeping the combined span fixed.
+    pub fn roll(&mut self, left_id: &str, delta: i64) -> Result<(), TimelineEditError> {
+        let left_index = self.clip_index(left_id)?;
+        let boundary = self.clips[left_index].track_end();
+        let right_index = self
+            .clips
+            .iter()
+            .position(|clip| clip.track_offset == boundary)
+            .ok_or(TimelineEditError::NotAdjacent)?;
+
+        let new_left_end = offset_by(self.clips[left_index].end_frame, delta)?;
+        if new_left_end <= self.clips[left_index].start_frame {
+            return Err(TimelineEditError::InvalidDuration);
+        }
+        let new_right_start = offset_by(self.clips[right_index].start_frame, delta)?;
+        let new_right_offset = offset_by(self.clips[right_index].track_offset, delta)?;
+        if new_right_start >= self.clips[right_index].end_frame {
+            return Err(TimelineEditError::InvalidDuration);
+        }
+
+        self.clips[left_index].end_frame = new_left_end;
+        self.clips[right_index].start_frame = new_right_start;
+        self.clips[right_index].track_offset = new_right_offset;
+        Ok(())
+    }
+
+    /// Split the clip at `at_track_frame`, returning the id of the new right clip.
+    pub fn split(&mut self, id: &str, at_track_frame: u64) -> Result<String, TimelineEditError> {
+        let index = self.clip_index(id)?;
+        let clip = self.clips[index].clone();
+        if at_track_frame <= clip.track_offset || at_track_frame >= clip.track_end() {
+            return Err(TimelineEditError::InvalidSplit);
+        }
+        let split_source = clip.start_frame + (at_track_frame - clip.track_offset);
+        let new_id = format!("{}-split", clip.id);
+
+        self.clips[index].end_frame = split_source;
+        self.clips.insert(
+            index + 1,
+            TimelineClip {
+                id: new_id.clone(),
+                source: clip.source,
+                start_frame: split_source,
+                end_frame: clip.end_frame,
+                track_offset: at_track_frame,
+            },
+        );
+        Ok(new_id)
+    }
+
+    /// Empty ranges between consecutive clips, in track order.
+    pub fn gaps(&self) -> Vec<(u64, u64)> {
+        let mut clips: Vec<&TimelineClip> = self.clips.iter().collect();
+        clips.sort_by_key(|clip| clip.track_offset);
+        let mut gaps = Vec::new();
+        let mut cursor = 0u64;
+        for clip in clips {
+            if clip.track_offset > cursor {
+                gaps.push((cursor, clip.track_offset));
+            }
+            cursor = cursor.max(clip.track_end());
+        }
+        gaps
+    }
+
+    /// Whether any two clips overlap on the track.
+    pub fn has_overlap(&self) -> bool {
+        let mut clips: Vec<&TimelineClip> = self.clips.iter().collect();
+        clips.sort_by_key(|clip| clip.track_offset);
+        clips
+            .windows(2)
+            .any(|pair| pair[1].track_offset < pair[0].track_end())
+    }
+}
+
 /// A multi-track editing timeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Timeline {
@@ -515,5 +717,131 @@ mod tests {
         let deser: MediaProbe = serde_json::from_str(&json).unwrap();
         assert_eq!(deser.path, "test.mp4");
         assert_eq!(deser.duration_ms, 5000);
+    }
+
+    fn edit_track(clips: Vec<TimelineClip>) -> TimelineTrack {
+        sample_track("v1", TrackType::Video, clips)
+    }
+
+    #[test]
+    fn clip_duration_and_track_end() {
+        let clip = sample_clip("a", 10, 40, 100);
+        assert_eq!(clip.duration(), 30);
+        assert_eq!(clip.track_end(), 130);
+    }
+
+    #[test]
+    fn trim_in_shortens_and_keeps_out_fixed() {
+        let mut track = edit_track(vec![sample_clip("a", 0, 100, 0)]);
+        track.trim_in("a", 20).unwrap();
+        let clip = &track.clips[0];
+        assert_eq!(clip.start_frame, 20);
+        assert_eq!(clip.track_offset, 20);
+        assert_eq!(clip.track_end(), 100);
+        assert_eq!(clip.duration(), 80);
+    }
+
+    #[test]
+    fn trim_out_changes_duration_with_bounds() {
+        let mut track = edit_track(vec![sample_clip("a", 0, 100, 0)]);
+        track.trim_out("a", -30).unwrap();
+        assert_eq!(track.clips[0].duration(), 70);
+        assert_eq!(
+            track.trim_out("a", -70),
+            Err(TimelineEditError::InvalidDuration)
+        );
+        assert_eq!(
+            track.trim_out("a", -1000),
+            Err(TimelineEditError::OutOfBounds)
+        );
+        assert_eq!(
+            track.trim_out("missing", 1),
+            Err(TimelineEditError::ClipNotFound)
+        );
+    }
+
+    #[test]
+    fn ripple_trim_out_shifts_later_clips() {
+        let mut track = edit_track(vec![
+            sample_clip("a", 0, 50, 0),
+            sample_clip("b", 0, 50, 50),
+        ]);
+        track.ripple_trim_out("a", -10).unwrap();
+        assert_eq!(track.clips[0].duration(), 40);
+        assert_eq!(track.clips[1].track_offset, 40);
+        assert!(track.gaps().is_empty());
+    }
+
+    #[test]
+    fn ripple_delete_closes_the_gap() {
+        let mut track = edit_track(vec![
+            sample_clip("a", 0, 50, 0),
+            sample_clip("b", 0, 50, 50),
+            sample_clip("c", 0, 50, 100),
+        ]);
+        track.ripple_delete("b").unwrap();
+        assert_eq!(track.clips.len(), 2);
+        let c = track.clips.iter().find(|clip| clip.id == "c").unwrap();
+        assert_eq!(c.track_offset, 50);
+        assert!(!track.has_overlap());
+    }
+
+    #[test]
+    fn slip_changes_source_not_position() {
+        let mut track = edit_track(vec![sample_clip("a", 10, 60, 100)]);
+        track.slip("a", 5).unwrap();
+        let clip = &track.clips[0];
+        assert_eq!((clip.start_frame, clip.end_frame), (15, 65));
+        assert_eq!(clip.track_offset, 100);
+        assert_eq!(clip.duration(), 50);
+        assert_eq!(track.slip("a", -100), Err(TimelineEditError::OutOfBounds));
+    }
+
+    #[test]
+    fn roll_moves_boundary_keeping_span() {
+        let mut track = edit_track(vec![
+            sample_clip("a", 0, 50, 0),
+            sample_clip("b", 0, 50, 50),
+        ]);
+        let span = track.clips[0].duration() + track.clips[1].duration();
+        track.roll("a", 10).unwrap();
+        assert_eq!(track.clips[0].track_end(), 60);
+        let b = track.clips.iter().find(|clip| clip.id == "b").unwrap();
+        assert_eq!(b.track_offset, 60);
+        assert_eq!(b.start_frame, 10);
+        assert_eq!(track.clips[0].duration() + b.duration(), span);
+        assert!(!track.has_overlap());
+    }
+
+    #[test]
+    fn split_creates_two_adjacent_clips() {
+        let mut track = edit_track(vec![sample_clip("a", 100, 200, 0)]);
+        let new_id = track.split("a", 30).unwrap();
+        assert_eq!(track.clips.len(), 2);
+        assert_eq!(track.clips[0].end_frame, 130);
+        assert_eq!(track.clips[0].track_end(), 30);
+        let right = track.clips.iter().find(|clip| clip.id == new_id).unwrap();
+        assert_eq!(
+            (right.start_frame, right.end_frame, right.track_offset),
+            (130, 200, 30)
+        );
+        assert_eq!(track.split("a", 0), Err(TimelineEditError::InvalidSplit));
+        assert!(!track.has_overlap());
+    }
+
+    #[test]
+    fn gaps_and_overlap_detection() {
+        let track = edit_track(vec![
+            sample_clip("a", 0, 50, 0),
+            sample_clip("b", 0, 50, 80),
+        ]);
+        assert_eq!(track.gaps(), vec![(50, 80)]);
+        assert!(!track.has_overlap());
+
+        let overlapping = edit_track(vec![
+            sample_clip("a", 0, 50, 0),
+            sample_clip("b", 0, 50, 30),
+        ]);
+        assert!(overlapping.has_overlap());
     }
 }
