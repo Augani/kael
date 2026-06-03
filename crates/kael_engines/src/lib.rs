@@ -9,6 +9,7 @@ pub mod export;
 pub mod generators;
 pub mod frame_cache;
 pub mod ide;
+pub mod markers;
 pub mod media;
 pub mod playback;
 pub mod project;
