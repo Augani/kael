@@ -3798,8 +3798,10 @@ name = "kael_audio"
 version = "0.1.2"
 dependencies = [
  "anyhow",
+ "cpal",
  "futures",
  "kael-media",
+ "log",
  "parking_lot",
  "smol",
 ]

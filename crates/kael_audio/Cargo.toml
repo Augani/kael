@@ -21,6 +21,12 @@ doctest = false
 [dependencies.anyhow]
 version = "1.0.86"
 
+[dependencies.cpal]
+version = "0.15"
+
+[dependencies.log]
+version = "0.4"
+
 [dependencies.kael_media]
 path = "../kael-media"
 package = "kael-media"
