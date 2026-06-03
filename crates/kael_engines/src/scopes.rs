@@ -67,6 +67,39 @@ impl Histogram {
     }
 }
 
+/// Compute auto-contrast black/white input levels from the luma histogram: the bins at
+/// the `shadow` and `highlight` cumulative fractions (e.g. 0.01 and 0.99 to ignore
+/// outliers).
+pub fn auto_levels(histogram: &Histogram, shadow: f32, highlight: f32) -> (u8, u8) {
+    (
+        Histogram::percentile(&histogram.luma, shadow),
+        Histogram::percentile(&histogram.luma, highlight),
+    )
+}
+
+/// Apply a levels stretch to `image`: map input `black/255` to 0 and `white/255` to 1,
+/// clamping outside the range. Alpha is preserved. A zero-width range leaves the image
+/// unchanged.
+pub fn apply_auto_levels(image: &Image, black: u8, white: u8) -> Image {
+    let black_norm = black as f32 / 255.0;
+    let white_norm = white as f32 / 255.0;
+    let range = white_norm - black_norm;
+    let mut output = Image::new(image.width, image.height);
+    if range <= f32::EPSILON {
+        output.pixels = image.pixels.clone();
+        return output;
+    }
+    output.pixels = image
+        .pixels
+        .iter()
+        .map(|pixel| {
+            let remap = |value: f32| ((value - black_norm) / range).clamp(0.0, 1.0);
+            [remap(pixel[0]), remap(pixel[1]), remap(pixel[2]), pixel[3]]
+        })
+        .collect();
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,5 +148,36 @@ mod tests {
         let histogram = histogram(&Image::new(0, 0));
         assert_eq!(histogram.total(), 0);
         assert_eq!(Histogram::percentile(&histogram.luma, 0.5), 0);
+    }
+
+    #[test]
+    fn auto_levels_stretches_a_low_contrast_image() {
+        // Half the pixels at gray 0.25 (luma bin 64), half at 0.75 (bin 191).
+        let mut image = Image::new(2, 1);
+        image.pixels = vec![[0.25, 0.25, 0.25, 1.0], [0.75, 0.75, 0.75, 1.0]];
+        let (black, white) = auto_levels(&histogram(&image), 0.25, 0.75);
+        assert_eq!((black, white), (64, 191));
+
+        // Applying the stretch maps the dark gray to ~0 and the light gray to ~1.
+        let stretched = apply_auto_levels(&image, black, white);
+        assert!(
+            stretched.pixel(0, 0)[0] < 0.01,
+            "{:?}",
+            stretched.pixel(0, 0)
+        );
+        assert!(
+            stretched.pixel(1, 0)[0] > 0.99,
+            "{:?}",
+            stretched.pixel(1, 0)
+        );
+        // Alpha is preserved.
+        assert_eq!(stretched.pixel(0, 0)[3], 1.0);
+    }
+
+    #[test]
+    fn apply_auto_levels_zero_range_is_passthrough() {
+        let image = Image::filled(2, 2, [0.3, 0.4, 0.5, 1.0]);
+        let out = apply_auto_levels(&image, 128, 128);
+        assert_eq!(out.pixels, image.pixels);
     }
 }
