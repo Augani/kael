@@ -360,6 +360,57 @@ pub fn momentary_lufs(samples: &[f32], sample_rate: u32) -> f32 {
     (-0.691 + 10.0 * mean_square.log10()) as f32
 }
 
+/// Integrated loudness of a mono `samples` buffer in **LUFS** (ITU-R BS.1770): the K-weighted
+/// signal is measured in 400 ms blocks (100 ms hop); an absolute gate at -70 LUFS and a
+/// relative gate at 10 LU below the gated mean discard quiet blocks; the surviving blocks'
+/// mean power becomes the program loudness — the value used for normalization targets (e.g.
+/// -14 LUFS streaming, -23 LUFS broadcast). Returns [`SILENCE_DBFS`] when no full 400 ms
+/// block fits or every block is gated out.
+pub fn integrated_lufs(samples: &[f32], sample_rate: u32) -> f32 {
+    if sample_rate == 0 {
+        return SILENCE_DBFS;
+    }
+    let block = (sample_rate as usize * 4) / 10;
+    let hop = (sample_rate as usize) / 10;
+    if block == 0 || hop == 0 || samples.len() < block {
+        return SILENCE_DBFS;
+    }
+    let (shelf, hpf) = k_weighting(sample_rate);
+    let weighted = hpf.process(&shelf.process(samples));
+
+    let mut block_power: Vec<f64> = Vec::new();
+    let mut start = 0;
+    while start + block <= weighted.len() {
+        let mean_square = weighted[start..start + block]
+            .iter()
+            .map(|&s| (s as f64).powi(2))
+            .sum::<f64>()
+            / block as f64;
+        block_power.push(mean_square);
+        start += hop;
+    }
+
+    let loudness = |mean_square: f64| -0.691 + 10.0 * mean_square.log10();
+    let absolute: Vec<f64> = block_power
+        .into_iter()
+        .filter(|&ms| ms > 0.0 && loudness(ms) >= -70.0)
+        .collect();
+    if absolute.is_empty() {
+        return SILENCE_DBFS;
+    }
+    let absolute_mean = absolute.iter().sum::<f64>() / absolute.len() as f64;
+    let relative_threshold = loudness(absolute_mean) - 10.0;
+    let gated: Vec<f64> = absolute
+        .into_iter()
+        .filter(|&ms| loudness(ms) >= relative_threshold)
+        .collect();
+    if gated.is_empty() {
+        return SILENCE_DBFS;
+    }
+    let mean = gated.iter().sum::<f64>() / gated.len() as f64;
+    loudness(mean) as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -676,5 +727,34 @@ mod tests {
         assert!(
             momentary_lufs(&tone(0.2, 4800), 48_000) < momentary_lufs(&tone(0.4, 4800), 48_000)
         );
+    }
+
+    #[test]
+    fn integrated_lufs_gates_out_silence() {
+        // A 2 s tone followed by 2 s of silence reads close to the tone alone — the absolute
+        // gate discards the silent blocks, unlike a naive average (which would be ~3 LU low).
+        let mut tone_then_silence = tone(0.5, 96_000);
+        tone_then_silence.resize(192_000, 0.0);
+        let with_silence = integrated_lufs(&tone_then_silence, 48_000);
+        let tone_only = integrated_lufs(&tone(0.5, 96_000), 48_000);
+        assert!(
+            (with_silence - tone_only).abs() < 1.5,
+            "{with_silence} vs {tone_only}"
+        );
+    }
+
+    #[test]
+    fn integrated_lufs_rises_about_6db_when_amplitude_doubles() {
+        let quiet = integrated_lufs(&tone(0.25, 96_000), 48_000);
+        let loud = integrated_lufs(&tone(0.5, 96_000), 48_000);
+        assert!((loud - quiet - 6.0206).abs() < 0.1, "{quiet} -> {loud}");
+    }
+
+    #[test]
+    fn integrated_lufs_floors_on_silence_and_short_input() {
+        assert_eq!(integrated_lufs(&[0.0; 48_000], 48_000), SILENCE_DBFS);
+        // Shorter than one 400 ms block.
+        assert_eq!(integrated_lufs(&tone(0.5, 100), 48_000), SILENCE_DBFS);
+        assert_eq!(integrated_lufs(&tone(0.5, 48_000), 0), SILENCE_DBFS);
     }
 }
