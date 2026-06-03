@@ -1011,6 +1011,109 @@ pub mod reference {
         })
     }
 
+    /// A two-input transition op: a hard vertical wipe revealing `inputs[1]` from
+    /// the top over `inputs[0]` as `progress` goes `0..=1`.
+    pub fn wipe_vertical(progress: f32) -> PassOp<'static> {
+        let progress = progress.clamp(0.0, 1.0);
+        Box::new(move |inputs, output| {
+            if inputs.len() < 2 {
+                return;
+            }
+            let (from, to) = (inputs[0], inputs[1]);
+            let boundary = (progress * output.height as f32) as u32;
+            for y in 0..output.height {
+                for x in 0..output.width {
+                    let index = (y * output.width + x) as usize;
+                    output.pixels[index] = if y < boundary {
+                        to.pixels[index]
+                    } else {
+                        from.pixels[index]
+                    };
+                }
+            }
+        })
+    }
+
+    /// A two-input transition op: dip through a solid `color` (e.g. dip-to-black).
+    /// `inputs[0]` fades to `color` over the first half of `progress`, then `color`
+    /// fades to `inputs[1]` over the second half.
+    pub fn dip_to_color(color: [f32; 4], progress: f32) -> PassOp<'static> {
+        let progress = progress.clamp(0.0, 1.0);
+        Box::new(move |inputs, output| {
+            if inputs.len() < 2 {
+                return;
+            }
+            let (from, to) = (inputs[0], inputs[1]);
+            // mix is the weight of the image (vs the dip color): 1 at the ends,
+            // 0 at the midpoint where only the color shows.
+            let (source, mix) = if progress < 0.5 {
+                (from, 1.0 - progress * 2.0)
+            } else {
+                (to, progress * 2.0 - 1.0)
+            };
+            for (index, pixel) in output.pixels.iter_mut().enumerate() {
+                let edge = source.pixels[index];
+                let mut out = [0.0f32; 4];
+                for channel in 0..4 {
+                    out[channel] = edge[channel] * mix + color[channel] * (1.0 - mix);
+                }
+                *pixel = out;
+            }
+        })
+    }
+
+    /// A two-input transition op: an iris (circular) wipe revealing `inputs[1]` in an
+    /// expanding circle from the center over `inputs[0]` as `progress` goes `0..=1`.
+    pub fn iris(progress: f32) -> PassOp<'static> {
+        let progress = progress.clamp(0.0, 1.0);
+        Box::new(move |inputs, output| {
+            if inputs.len() < 2 {
+                return;
+            }
+            let (from, to) = (inputs[0], inputs[1]);
+            let (cx, cy) = (output.width as f32 / 2.0, output.height as f32 / 2.0);
+            let max_radius = (cx * cx + cy * cy).sqrt();
+            let radius = progress * max_radius;
+            for y in 0..output.height {
+                for x in 0..output.width {
+                    let index = (y * output.width + x) as usize;
+                    let (dx, dy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
+                    output.pixels[index] = if (dx * dx + dy * dy).sqrt() < radius {
+                        to.pixels[index]
+                    } else {
+                        from.pixels[index]
+                    };
+                }
+            }
+        })
+    }
+
+    /// A two-input transition op: `inputs[1]` slides in from the right, pushing
+    /// `inputs[0]` out to the left, as `progress` goes `0..=1`.
+    pub fn push_horizontal(progress: f32) -> PassOp<'static> {
+        let progress = progress.clamp(0.0, 1.0);
+        Box::new(move |inputs, output| {
+            if inputs.len() < 2 {
+                return;
+            }
+            let (from, to) = (inputs[0], inputs[1]);
+            let width = output.width;
+            let shift = (progress * width as f32) as u32;
+            let split = width - shift;
+            for y in 0..output.height {
+                let row = y * width;
+                for x in 0..width {
+                    let index = (row + x) as usize;
+                    output.pixels[index] = if x < split {
+                        from.pixels[(row + x + shift) as usize]
+                    } else {
+                        to.pixels[(row + (x - split)) as usize]
+                    };
+                }
+            }
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -1141,6 +1244,69 @@ pub mod reference {
             assert_eq!(out.pixel(1, 0), [0.0, 0.0, 1.0, 1.0]);
             assert_eq!(out.pixel(2, 0), [1.0, 0.0, 0.0, 1.0]);
             assert_eq!(out.pixel(3, 0), [1.0, 0.0, 0.0, 1.0]);
+        }
+
+        #[test]
+        fn wipe_vertical_reveals_from_top() {
+            let red = Image::filled(1, 4, [1.0, 0.0, 0.0, 1.0]);
+            let blue = Image::filled(1, 4, [0.0, 0.0, 1.0, 1.0]);
+            let mut out = Image::new(1, 4);
+            wipe_vertical(0.5)(&[&red, &blue], &mut out);
+            assert_eq!(out.pixel(0, 0), [0.0, 0.0, 1.0, 1.0]);
+            assert_eq!(out.pixel(0, 1), [0.0, 0.0, 1.0, 1.0]);
+            assert_eq!(out.pixel(0, 2), [1.0, 0.0, 0.0, 1.0]);
+            assert_eq!(out.pixel(0, 3), [1.0, 0.0, 0.0, 1.0]);
+        }
+
+        #[test]
+        fn dip_to_color_passes_through_color_at_midpoint() {
+            let red = Image::filled(1, 1, [1.0, 0.0, 0.0, 1.0]);
+            let blue = Image::filled(1, 1, [0.0, 0.0, 1.0, 1.0]);
+            let black = [0.0, 0.0, 0.0, 1.0];
+            let run = |progress| {
+                let mut out = Image::new(1, 1);
+                dip_to_color(black, progress)(&[&red, &blue], &mut out);
+                out.pixel(0, 0)
+            };
+            assert_eq!(run(0.0), [1.0, 0.0, 0.0, 1.0]);
+            assert_eq!(run(1.0), [0.0, 0.0, 1.0, 1.0]);
+            let mid = run(0.5);
+            assert!(
+                mid.iter().zip(black).all(|(a, b)| (a - b).abs() < 1e-6),
+                "midpoint should be the dip color: {mid:?}"
+            );
+        }
+
+        #[test]
+        fn iris_expands_from_center() {
+            let red = Image::filled(3, 3, [1.0, 0.0, 0.0, 1.0]);
+            let blue = Image::filled(3, 3, [0.0, 0.0, 1.0, 1.0]);
+            let mut out0 = Image::new(3, 3);
+            iris(0.0)(&[&red, &blue], &mut out0);
+            assert!(out0.pixels.iter().all(|p| *p == [1.0, 0.0, 0.0, 1.0]));
+            let mut out1 = Image::new(3, 3);
+            iris(1.0)(&[&red, &blue], &mut out1);
+            assert!(out1.pixels.iter().all(|p| *p == [0.0, 0.0, 1.0, 1.0]));
+            let mut mid = Image::new(3, 3);
+            iris(0.2)(&[&red, &blue], &mut mid);
+            assert_eq!(mid.pixel(1, 1), [0.0, 0.0, 1.0, 1.0]);
+            assert_eq!(mid.pixel(0, 0), [1.0, 0.0, 0.0, 1.0]);
+        }
+
+        #[test]
+        fn push_horizontal_slides_in_from_right() {
+            let red = Image::filled(4, 1, [1.0, 0.0, 0.0, 1.0]);
+            let blue = Image::filled(4, 1, [0.0, 0.0, 1.0, 1.0]);
+            let run = |progress| {
+                let mut out = Image::new(4, 1);
+                push_horizontal(progress)(&[&red, &blue], &mut out);
+                out
+            };
+            assert!(run(0.0).pixels.iter().all(|p| *p == [1.0, 0.0, 0.0, 1.0]));
+            assert!(run(1.0).pixels.iter().all(|p| *p == [0.0, 0.0, 1.0, 1.0]));
+            let half = run(0.5);
+            assert_eq!(half.pixel(0, 0), [1.0, 0.0, 0.0, 1.0]);
+            assert_eq!(half.pixel(3, 0), [0.0, 0.0, 1.0, 1.0]);
         }
     }
 }
