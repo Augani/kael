@@ -577,14 +577,61 @@ impl Timeline {
     /// `threshold` frames, or return `frame` unchanged when none is close enough.
     /// Ties prefer the earlier snap point.
     pub fn snap_frame(&self, frame: u64, threshold: u64) -> u64 {
+        self.snap_frame_with(frame, threshold, &[])
+    }
+
+    /// Like [`snap_frame`](Timeline::snap_frame) but also considers `extra_points`
+    /// (e.g. marker frames from a [`MarkerSet`](crate::markers::MarkerSet)) as snap
+    /// targets alongside clip edges.
+    pub fn snap_frame_with(&self, frame: u64, threshold: u64, extra_points: &[u64]) -> u64 {
         let mut best: Option<(u64, u64)> = None;
-        for point in self.snap_points() {
+        let candidates = self
+            .snap_points()
+            .into_iter()
+            .chain(extra_points.iter().copied());
+        for point in candidates {
             let distance = frame.abs_diff(point);
-            if distance <= threshold && best.is_none_or(|(_, d)| distance < d) {
+            if distance <= threshold && best.is_none_or(|(_, closest)| distance < closest) {
                 best = Some((point, distance));
             }
         }
         best.map(|(point, _)| point).unwrap_or(frame)
+    }
+
+    /// Ripple-insert `frames` of empty space at `at_frame` across every track: every
+    /// clip that begins at or after `at_frame` shifts later by `frames`, keeping all
+    /// tracks in sync. Recomputes the timeline duration.
+    pub fn ripple_insert_gap(&mut self, at_frame: u64, frames: u64) {
+        if frames == 0 {
+            return;
+        }
+        for track in &mut self.tracks {
+            for clip in &mut track.clips {
+                if clip.track_offset >= at_frame {
+                    clip.track_offset += frames;
+                }
+            }
+        }
+        self.recompute_duration();
+    }
+
+    /// Ripple-close a `frames`-wide gap starting at `at_frame` across every track:
+    /// every clip that begins at or after the end of the gap shifts earlier by
+    /// `frames`. The caller is responsible for the span being an actual gap (no clip
+    /// straddles it). Recomputes the timeline duration.
+    pub fn ripple_close_gap(&mut self, at_frame: u64, frames: u64) {
+        if frames == 0 {
+            return;
+        }
+        let gap_end = at_frame + frames;
+        for track in &mut self.tracks {
+            for clip in &mut track.clips {
+                if clip.track_offset >= gap_end {
+                    clip.track_offset -= frames;
+                }
+            }
+        }
+        self.recompute_duration();
     }
 }
 
@@ -857,6 +904,59 @@ mod tests {
         assert_eq!(tl.snap_frame(115, 5), 115);
         // Exactly on a point stays put.
         assert_eq!(tl.snap_frame(100, 5), 100);
+    }
+
+    #[test]
+    fn snap_frame_with_considers_marker_frames() {
+        let tl = Timeline {
+            tracks: vec![sample_track(
+                "v1",
+                TrackType::Video,
+                vec![sample_clip("a", 0, 30, 0)],
+            )],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        // No clip edge near 200, but a marker is.
+        assert_eq!(tl.snap_frame(202, 5), 202);
+        assert_eq!(tl.snap_frame_with(202, 5, &[200]), 200);
+        // Clip edge still wins when closer than the marker.
+        assert_eq!(tl.snap_frame_with(31, 5, &[36]), 30);
+    }
+
+    #[test]
+    fn ripple_insert_gap_shifts_all_tracks_in_sync() {
+        let mut tl = Timeline {
+            tracks: vec![
+                sample_track("v1", TrackType::Video, vec![sample_clip("a", 0, 20, 50)]),
+                sample_track("v2", TrackType::Video, vec![sample_clip("b", 0, 20, 80)]),
+            ],
+            frame_rate: 30.0,
+            duration_frames: 100,
+        };
+        tl.ripple_insert_gap(60, 10);
+        // Clip a (offset 50, before 60) stays; clip b (offset 80, after) shifts +10.
+        assert_eq!(tl.tracks[0].clips[0].track_offset, 50);
+        assert_eq!(tl.tracks[1].clips[0].track_offset, 90);
+        assert_eq!(tl.duration_frames, 110);
+    }
+
+    #[test]
+    fn ripple_close_gap_pulls_later_clips_earlier() {
+        let mut tl = Timeline {
+            tracks: vec![sample_track(
+                "v1",
+                TrackType::Video,
+                vec![sample_clip("a", 0, 20, 0), sample_clip("b", 0, 20, 40)],
+            )],
+            frame_rate: 30.0,
+            duration_frames: 60,
+        };
+        // Gap [20,40) is empty; close it.
+        tl.ripple_close_gap(20, 20);
+        assert_eq!(tl.tracks[0].clips[0].track_offset, 0);
+        assert_eq!(tl.tracks[0].clips[1].track_offset, 20);
+        assert_eq!(tl.duration_frames, 40);
     }
 
     #[test]
