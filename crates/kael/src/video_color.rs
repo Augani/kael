@@ -139,6 +139,8 @@ pub enum TransferFunction {
     Bt1886,
     /// SMPTE ST 2084 (PQ), normalized so `1.0` maps to 10,000 cd/m².
     Pq,
+    /// Hybrid Log-Gamma (BT.2100 / ARIB STD-B67), scene-referred.
+    Hlg,
 }
 
 impl TransferFunction {
@@ -166,6 +168,16 @@ impl TransferFunction {
                 let den = C2 - C3 * vp;
                 (num / den).powf(1.0 / M1)
             }
+            Self::Hlg => {
+                const A: f32 = 0.178_832_77;
+                const B: f32 = 0.284_668_92;
+                const C: f32 = 0.559_910_73;
+                if value <= 0.5 {
+                    (value * value) / 3.0
+                } else {
+                    (((value - C) / A).exp() + B) / 12.0
+                }
+            }
         }
     }
 
@@ -191,8 +203,74 @@ impl TransferFunction {
                 let vm = value.powf(M1);
                 ((C1 + C2 * vm) / (1.0 + C3 * vm)).powf(M2)
             }
+            Self::Hlg => {
+                const A: f32 = 0.178_832_77;
+                const B: f32 = 0.284_668_92;
+                const C: f32 = 0.559_910_73;
+                if value <= 1.0 / 12.0 {
+                    (3.0 * value).sqrt()
+                } else {
+                    A * (12.0 * value - B).ln() + C
+                }
+            }
         }
     }
+}
+
+/// Tone-mapping operators that compress linear HDR light (which may exceed `1.0`)
+/// into the `0..=1` SDR range for display or deterministic export.
+///
+/// Each operates per channel on non-negative linear light and is monotonic, so the
+/// same input always maps to the same output — the property export determinism needs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ToneMap {
+    /// Reinhard: `x / (1 + x)`.
+    Reinhard,
+    /// Reinhard with a white point that maps exactly to `1.0`.
+    ReinhardExtended {
+        /// Linear luminance that should saturate to display white.
+        white_point: f32,
+    },
+    /// Hable / Uncharted-2 filmic curve.
+    Hable,
+    /// Narkowicz ACES filmic approximation.
+    AcesFilmic,
+}
+
+impl ToneMap {
+    /// Map one linear channel value (clamped to `≥ 0`) into `0..=1`.
+    pub fn apply(self, x: f32) -> f32 {
+        let x = x.max(0.0);
+        match self {
+            Self::Reinhard => x / (1.0 + x),
+            Self::ReinhardExtended { white_point } => {
+                let white = white_point.max(f32::EPSILON);
+                ((x * (1.0 + x / (white * white))) / (1.0 + x)).clamp(0.0, 1.0)
+            }
+            Self::Hable => {
+                const WHITE: f32 = 11.2;
+                (hable_curve(x) / hable_curve(WHITE)).clamp(0.0, 1.0)
+            }
+            Self::AcesFilmic => {
+                const A: f32 = 2.51;
+                const B: f32 = 0.03;
+                const C: f32 = 2.43;
+                const D: f32 = 0.59;
+                const E: f32 = 0.14;
+                ((x * (A * x + B)) / (x * (C * x + D) + E)).clamp(0.0, 1.0)
+            }
+        }
+    }
+}
+
+fn hable_curve(value: f32) -> f32 {
+    const A: f32 = 0.15;
+    const B: f32 = 0.50;
+    const C: f32 = 0.10;
+    const D: f32 = 0.20;
+    const E: f32 = 0.02;
+    const F: f32 = 0.30;
+    ((value * (A * value + C * B) + D * E) / (value * (A * value + B) + D * F)) - E / F
 }
 
 #[cfg(test)]
@@ -344,6 +422,62 @@ mod tests {
             let round = TransferFunction::Pq.from_linear(TransferFunction::Pq.to_linear(v));
             assert!(close(round, v, 2e-3), "pq roundtrip {v} -> {round}");
         }
+    }
+
+    #[test]
+    fn hlg_transfer_endpoints_knee_and_roundtrip() {
+        assert!(close(TransferFunction::Hlg.to_linear(0.0), 0.0, 1e-6));
+        assert!(close(TransferFunction::Hlg.from_linear(0.0), 0.0, 1e-6));
+        assert!(close(TransferFunction::Hlg.to_linear(1.0), 1.0, 1e-4));
+        assert!(close(TransferFunction::Hlg.from_linear(1.0), 1.0, 1e-4));
+        // Signal 0.5 is the spec knee at scene-linear 1/12.
+        assert!(close(
+            TransferFunction::Hlg.to_linear(0.5),
+            1.0 / 12.0,
+            1e-4
+        ));
+        for v in [0.05, 0.2, 0.5, 0.8, 1.0] {
+            let round = TransferFunction::Hlg.from_linear(TransferFunction::Hlg.to_linear(v));
+            assert!(close(round, v, 2e-3), "hlg roundtrip {v} -> {round}");
+        }
+    }
+
+    #[test]
+    fn tone_maps_compress_hdr_into_unit_range() {
+        for tm in [
+            ToneMap::Reinhard,
+            ToneMap::ReinhardExtended { white_point: 4.0 },
+            ToneMap::Hable,
+            ToneMap::AcesFilmic,
+        ] {
+            assert!(close(tm.apply(0.0), 0.0, 1e-4), "{tm:?} at 0");
+            let bright = tm.apply(50.0);
+            assert!(
+                (0.9..=1.0).contains(&bright),
+                "{tm:?} saturates near 1: {bright}"
+            );
+            let mut prev = -1.0;
+            for x in [0.0, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0] {
+                let y = tm.apply(x);
+                assert!((0.0..=1.0).contains(&y), "{tm:?}({x}) in range: {y}");
+                assert!(y >= prev - 1e-6, "{tm:?} monotonic at {x}: {y} < {prev}");
+                prev = y;
+            }
+        }
+    }
+
+    #[test]
+    fn tone_map_known_values_and_clamping() {
+        assert!(close(ToneMap::Reinhard.apply(1.0), 0.5, 1e-6));
+        assert!(close(ToneMap::Reinhard.apply(3.0), 0.75, 1e-6));
+        // The extended white point maps exactly to display white.
+        assert!(close(
+            ToneMap::ReinhardExtended { white_point: 2.0 }.apply(2.0),
+            1.0,
+            1e-6
+        ));
+        // Negative input is clamped to zero before mapping.
+        assert!(close(ToneMap::AcesFilmic.apply(-5.0), 0.0, 1e-6));
     }
 }
 
