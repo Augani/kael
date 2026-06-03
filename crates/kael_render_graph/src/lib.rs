@@ -1487,6 +1487,45 @@ pub mod reference {
         })
     }
 
+    /// A single-input vignette darkening `inputs[0]` toward its edges: each pixel's RGB is
+    /// scaled by `max(1 - amount * smoothstep(t), 0)`, where `t` ramps from 0 to 1 across
+    /// `softness` once the normalized distance from center (0 at center, 1 at a corner)
+    /// passes `radius`. `amount` 0 is the identity and the center stays bright (for
+    /// `radius > 0`); farther pixels darken monotonically. Alpha is unchanged.
+    pub fn vignette(amount: f32, radius: f32, softness: f32) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            if source.width != output.width || source.height != output.height {
+                return;
+            }
+            let (width, height) = (source.width, source.height);
+            if width == 0 || height == 0 {
+                return;
+            }
+            let corner_distance = 0.5f32.sqrt();
+            let falloff = softness.max(f32::EPSILON);
+            for y in 0..height {
+                for x in 0..width {
+                    let dx = (x as f32 + 0.5) / width as f32 - 0.5;
+                    let dy = (y as f32 + 0.5) / height as f32 - 0.5;
+                    let distance = (dx * dx + dy * dy).sqrt() / corner_distance;
+                    let t = ((distance - radius) / falloff).clamp(0.0, 1.0);
+                    let smooth = t * t * (3.0 - 2.0 * t);
+                    let factor = (1.0 - amount * smooth).max(0.0);
+                    let pixel = source.pixels[(y * width + x) as usize];
+                    output.pixels[(y * width + x) as usize] = [
+                        pixel[0] * factor,
+                        pixel[1] * factor,
+                        pixel[2] * factor,
+                        pixel[3],
+                    ];
+                }
+            }
+        })
+    }
+
     /// A single-input op that keys out (sets alpha to 0) pixels of `inputs[0]` whose
     /// Rec.709 luma is below `threshold` — a simple luma key for masking dark areas.
     /// Color channels are preserved; brighter pixels keep their alpha.
@@ -2553,6 +2592,33 @@ pub mod reference {
             // Alpha is untouched throughout.
             assert_eq!(out.pixel(1, 2)[3], 1.0);
             assert_eq!(out.pixel(2, 2)[3], 1.0);
+        }
+
+        #[test]
+        fn vignette_zero_amount_is_identity() {
+            let mut source = Image::new(4, 4);
+            source.pixels[5] = [0.8, 0.4, 0.2, 1.0];
+            source.pixels[10] = [0.3, 0.7, 0.9, 0.5];
+            let mut out = Image::new(4, 4);
+            vignette(0.0, 0.5, 0.5)(&[&source], &mut out);
+            assert_eq!(out.pixels, source.pixels);
+        }
+
+        #[test]
+        fn vignette_darkens_monotonically_outward() {
+            let source = Image::filled(5, 5, [0.8, 0.8, 0.8, 1.0]);
+            let mut out = Image::new(5, 5);
+            vignette(1.0, 0.0, 1.0)(&[&source], &mut out);
+
+            let center = out.pixel(2, 2)[0];
+            let edge = out.pixel(0, 2)[0];
+            let corner = out.pixel(0, 0)[0];
+            // The center stays bright; brightness falls off toward the corners.
+            assert!((center - 0.8).abs() < 1e-6);
+            assert!(edge < center);
+            assert!(corner < edge);
+            // Alpha survives the darkening.
+            assert_eq!(out.pixel(0, 0)[3], 1.0);
         }
 
         #[test]
