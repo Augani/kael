@@ -433,6 +433,22 @@ impl TimelineTrack {
         Ok(new_id)
     }
 
+    /// Split whichever clip strictly straddles `at_track_frame` at that point, returning
+    /// whether a split occurred. A frame at a clip boundary or in a gap is a no-op.
+    fn split_at(&mut self, at_track_frame: u64) -> bool {
+        let straddling = self
+            .clips
+            .iter()
+            .find(|clip| clip.track_offset < at_track_frame && at_track_frame < clip.track_end())
+            .map(|clip| clip.id.clone());
+        if let Some(id) = straddling {
+            let _ = self.split(&id, at_track_frame);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Insert `clip` at its `track_offset`, rippling clips at or after that
     /// position right by the clip's duration (no overwrite).
     pub fn insert_clip(&mut self, clip: TimelineClip) {
@@ -659,6 +675,29 @@ impl Timeline {
             }
         }
         self.recompute_duration();
+    }
+
+    /// Insert `clip` on track `track_index` at its `track_offset` as a synchronized
+    /// "insert edit": any clip straddling the insertion point on *every* track is split
+    /// there, then everything at or after it ripples right by the clip's duration, so all
+    /// tracks stay in sync (unlike [`TimelineTrack::insert_clip`], which ripples only its
+    /// own track). Returns [`TimelineEditError::OutOfBounds`] for an unknown track index.
+    pub fn ripple_insert(
+        &mut self,
+        track_index: usize,
+        clip: TimelineClip,
+    ) -> Result<(), TimelineEditError> {
+        if track_index >= self.tracks.len() {
+            return Err(TimelineEditError::OutOfBounds);
+        }
+        let at = clip.track_offset;
+        for track in &mut self.tracks {
+            track.split_at(at);
+        }
+        self.ripple_insert_gap(at, clip.duration());
+        self.tracks[track_index].clips.push(clip);
+        self.recompute_duration();
+        Ok(())
     }
 
     /// Ripple-close a `frames`-wide gap starting at `at_frame` across every track:
@@ -1029,6 +1068,65 @@ mod tests {
         assert_eq!(tl.tracks[0].clips[0].track_offset, 50);
         assert_eq!(tl.tracks[1].clips[0].track_offset, 90);
         assert_eq!(tl.duration_frames, 110);
+    }
+
+    #[test]
+    fn ripple_insert_keeps_other_tracks_in_sync() {
+        let mut tl = Timeline {
+            tracks: vec![
+                sample_track("v1", TrackType::Video, vec![sample_clip("a", 0, 20, 10)]),
+                sample_track("v2", TrackType::Video, vec![sample_clip("b", 0, 20, 10)]),
+            ],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        // Insert a 5-frame clip at a clip boundary (offset 10) on track 0.
+        tl.ripple_insert(0, sample_clip("ins", 0, 5, 10)).unwrap();
+
+        // Track 0 gains the inserted clip; the original ripples right by 5.
+        assert_eq!(tl.tracks[0].clips.len(), 2);
+        let inserted = tl.tracks[0].clips.iter().find(|c| c.id == "ins").unwrap();
+        assert_eq!(inserted.track_offset, 10);
+        let original = tl.tracks[0].clips.iter().find(|c| c.id == "a").unwrap();
+        assert_eq!(original.track_offset, 15);
+        // Track 1 ripples too, so the tracks stay in sync.
+        assert_eq!(tl.tracks[1].clips[0].track_offset, 15);
+    }
+
+    #[test]
+    fn ripple_insert_splits_a_straddling_clip() {
+        let mut tl = Timeline {
+            tracks: vec![sample_track(
+                "v1",
+                TrackType::Video,
+                vec![sample_clip("a", 0, 30, 0)],
+            )],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        // Insert inside clip "a" (offset 10): it splits at 10, then the tail ripples.
+        tl.ripple_insert(0, sample_clip("ins", 0, 5, 10)).unwrap();
+        assert_eq!(tl.tracks[0].clips.len(), 3);
+
+        let head = tl.tracks[0].clips.iter().find(|c| c.id == "a").unwrap();
+        assert_eq!((head.track_offset, head.track_end()), (0, 10));
+        let inserted = tl.tracks[0].clips.iter().find(|c| c.id == "ins").unwrap();
+        assert_eq!(inserted.track_offset, 10);
+        let tail = tl.tracks[0].clips.iter().find(|c| c.id == "a-split").unwrap();
+        assert_eq!(tail.track_offset, 15);
+    }
+
+    #[test]
+    fn ripple_insert_rejects_unknown_track() {
+        let mut tl = Timeline {
+            tracks: vec![sample_track("v1", TrackType::Video, vec![])],
+            frame_rate: 30.0,
+            duration_frames: 0,
+        };
+        assert!(matches!(
+            tl.ripple_insert(5, sample_clip("x", 0, 5, 0)),
+            Err(TimelineEditError::OutOfBounds)
+        ));
     }
 
     #[test]
