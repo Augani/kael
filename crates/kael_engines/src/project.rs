@@ -139,11 +139,27 @@ impl Project {
         }
         relinked
     }
+
+    /// Every distinct media source the project references, sorted ascending — the set a
+    /// media manager would check for offline media or relink in bulk.
+    pub fn media_sources(&self) -> Vec<String> {
+        let mut sources: Vec<String> = self
+            .timeline
+            .tracks
+            .iter()
+            .flat_map(|track| track.clips.iter().map(|clip| clip.source.clone()))
+            .collect();
+        sources.sort();
+        sources.dedup();
+        sources
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::automation::{Automation, Interpolation, Keyframe};
+    use crate::effects::{AnimatedEffect, AnimatedEffectStack};
     use crate::media::{ClipBlendMode, TimelineClip, TimelineTrack, TrackType};
 
     fn sample_timeline() -> Timeline {
@@ -299,5 +315,89 @@ mod tests {
         assert_eq!(project.relink_source("a.mov", "b.mov"), 1);
         assert_eq!(project.timeline.tracks[0].clips[0].source, "b.mov");
         assert_eq!(project.relink_source("missing.mov", "x.mov"), 0);
+    }
+
+    fn clip_from(id: &str, source: &str) -> TimelineClip {
+        TimelineClip {
+            id: id.to_string(),
+            source: source.to_string(),
+            start_frame: 0,
+            end_frame: 50,
+            track_offset: 0,
+            opacity: 1.0,
+            blend_mode: Default::default(),
+            effects: Default::default(),
+        }
+    }
+
+    fn video_track(id: &str, clips: Vec<TimelineClip>) -> TimelineTrack {
+        TimelineTrack {
+            id: id.to_string(),
+            name: id.to_string(),
+            track_type: TrackType::Video,
+            clips,
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn lists_distinct_media_sources_sorted() {
+        let timeline = Timeline {
+            tracks: vec![
+                video_track("v1", vec![clip_from("a", "b.mov"), clip_from("b", "a.mov")]),
+                // A duplicate source on another track collapses to one entry.
+                video_track("v2", vec![clip_from("c", "b.mov")]),
+            ],
+            frame_rate: 30.0,
+            duration_frames: 50,
+        };
+        let project = Project::new("p", timeline);
+        assert_eq!(
+            project.media_sources(),
+            vec!["a.mov".to_string(), "b.mov".to_string()]
+        );
+    }
+
+    #[test]
+    fn keyframed_effects_survive_a_round_trip() {
+        let mut stops = Automation::constant(0.0);
+        stops.add(Keyframe {
+            time_ms: 0,
+            value: 0.0,
+            interpolation: Interpolation::Linear,
+        });
+        stops.add(Keyframe {
+            time_ms: 1000,
+            value: 1.5,
+            interpolation: Interpolation::Smooth,
+        });
+        let mut timeline = sample_timeline();
+        timeline.tracks[0].clips[0].effects = AnimatedEffectStack {
+            effects: vec![AnimatedEffect::Exposure { stops }],
+        };
+
+        let json = Project::new("p", timeline.clone()).to_json().unwrap();
+        let restored = Project::from_json(&json).unwrap();
+        assert_eq!(
+            restored.timeline.tracks[0].clips[0].effects,
+            timeline.tracks[0].clips[0].effects
+        );
+    }
+
+    #[test]
+    fn legacy_clip_without_effects_loads_with_empty_stack() {
+        // A document predating the effects field must still load, with an empty stack.
+        let json = r#"{
+            "format_version": 2, "name": "legacy",
+            "timeline": {
+                "tracks": [{
+                    "id": "v1", "name": "Video", "track_type": "Video",
+                    "clips": [{ "id": "a", "source": "a.mov", "start_frame": 0, "end_frame": 50, "track_offset": 0 }]
+                }],
+                "frame_rate": 30.0, "duration_frames": 50
+            }
+        }"#;
+        let project = Project::from_json(json).unwrap();
+        assert!(project.timeline.tracks[0].clips[0].effects.is_empty());
     }
 }
