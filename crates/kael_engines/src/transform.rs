@@ -5,13 +5,14 @@
 //! `place` op, so it composes with the effect stack and the compositor like any other
 //! clip-applied step.
 
-use kael_render_graph::reference::{place, Image};
+use kael_render_graph::reference::{place, rotate, Image};
 use serde::{Deserialize, Serialize};
 
-/// A clip's position and scale within the frame, in normalized coordinates. The clip is
-/// drawn into a `scale_x` × `scale_y` box (relative to the frame) centered at
-/// `(center_x, center_y)` (`0.5, 0.5` is the frame center); area outside the box is
-/// transparent. The identity (`scale 1, center 0.5`) fills the frame.
+/// A clip's geometric transform within the frame, in normalized coordinates: the content is
+/// rotated about its center by `rotation` radians, then drawn into a `scale_x` × `scale_y`
+/// box (relative to the frame) centered at `(center_x, center_y)` (`0.5, 0.5` is the frame
+/// center); area outside the box is transparent. The identity (`scale 1, center 0.5,
+/// rotation 0`) fills the frame.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ClipTransform {
     /// Horizontal size relative to the frame width (`1.0` is full width).
@@ -22,6 +23,9 @@ pub struct ClipTransform {
     pub center_x: f32,
     /// Normalized vertical center of the box (`0.5` is centered).
     pub center_y: f32,
+    /// Counter-clockwise rotation of the content about its center, in radians.
+    #[serde(default)]
+    pub rotation: f32,
 }
 
 impl Default for ClipTransform {
@@ -31,29 +35,54 @@ impl Default for ClipTransform {
             scale_y: 1.0,
             center_x: 0.5,
             center_y: 0.5,
+            rotation: 0.0,
         }
     }
 }
 
 impl ClipTransform {
-    /// Whether this transform leaves the image unchanged (fills the frame, centered).
+    /// Whether this transform leaves the image unchanged (fills the frame, centered, unrotated).
     pub fn is_identity(&self) -> bool {
+        self.scale_x == 1.0
+            && self.scale_y == 1.0
+            && self.center_x == 0.5
+            && self.center_y == 0.5
+            && self.rotation == 0.0
+    }
+
+    fn box_is_identity(&self) -> bool {
         self.scale_x == 1.0 && self.scale_y == 1.0 && self.center_x == 0.5 && self.center_y == 0.5
     }
 
-    /// Apply the transform to `source`, returning a same-size image with the clip scaled and
-    /// positioned into its box (the rest transparent). The identity returns an unchanged copy.
+    fn dst_rect(&self, width: u32, height: u32) -> (i32, i32, u32, u32) {
+        let dst_width = (self.scale_x * width as f32).round().max(0.0) as u32;
+        let dst_height = (self.scale_y * height as f32).round().max(0.0) as u32;
+        let dst_x = (self.center_x * width as f32 - dst_width as f32 / 2.0).round() as i32;
+        let dst_y = (self.center_y * height as f32 - dst_height as f32 / 2.0).round() as i32;
+        (dst_x, dst_y, dst_width, dst_height)
+    }
+
+    /// Apply the transform to `source`: rotate the content about its center, then scale and
+    /// position it into its box (the rest transparent). The identity returns an unchanged copy.
     pub fn apply(&self, source: &Image) -> Image {
         if self.is_identity() {
             return source.clone();
         }
         let (width, height) = (source.width, source.height);
-        let dst_width = (self.scale_x * width as f32).round().max(0.0) as u32;
-        let dst_height = (self.scale_y * height as f32).round().max(0.0) as u32;
-        let dst_x = (self.center_x * width as f32 - dst_width as f32 / 2.0).round() as i32;
-        let dst_y = (self.center_y * height as f32 - dst_height as f32 / 2.0).round() as i32;
+
+        let mut rotated = Image::new(width, height);
+        if self.rotation != 0.0 {
+            rotate(self.rotation)(&[source], &mut rotated);
+        } else {
+            rotated.pixels.clone_from(&source.pixels);
+        }
+
+        if self.box_is_identity() {
+            return rotated;
+        }
+        let (dst_x, dst_y, dst_width, dst_height) = self.dst_rect(width, height);
         let mut output = Image::new(width, height);
-        place(dst_x, dst_y, dst_width, dst_height)(&[source], &mut output);
+        place(dst_x, dst_y, dst_width, dst_height)(&[&rotated], &mut output);
         output
     }
 }
@@ -82,6 +111,7 @@ mod tests {
             scale_y: 0.5,
             center_x: 0.5,
             center_y: 0.5,
+            rotation: 0.0,
         };
         let out = transform.apply(&source);
         // The destination box is [1,3) x [1,3): center is opaque, corners transparent.
@@ -99,6 +129,7 @@ mod tests {
             scale_y: 0.5,
             center_x: 0.25,
             center_y: 0.25,
+            rotation: 0.0,
         };
         let out = transform.apply(&source);
         // Box centered at (1,1) spanning [0,2) x [0,2): top-left opaque, center transparent.
@@ -113,11 +144,26 @@ mod tests {
             scale_y: 0.5,
             center_x: 0.3,
             center_y: 0.6,
+            rotation: 1.2,
         };
         let json = serde_json::to_string(&transform).unwrap();
         assert_eq!(
             serde_json::from_str::<ClipTransform>(&json).unwrap(),
             transform
         );
+    }
+
+    #[test]
+    fn clip_transform_rotates_the_content() {
+        let mut source = Image::filled(3, 3, [0.0, 0.0, 0.0, 1.0]);
+        source.pixels[0] = [1.0, 0.0, 0.0, 1.0]; // (0,0) red
+        let transform = ClipTransform {
+            rotation: std::f32::consts::PI,
+            ..ClipTransform::default()
+        };
+        assert!(!transform.is_identity());
+        // 180 deg about center moves the red corner to (2,2).
+        let out = transform.apply(&source);
+        assert!((out.pixel(2, 2)[0] - 1.0).abs() < 1e-5);
     }
 }

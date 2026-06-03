@@ -793,6 +793,7 @@ mod tests {
             scale_y: 0.5,
             center_x: 0.5,
             center_y: 0.5,
+            rotation: 0.0,
         };
         let provider = provider(&[("white", [1.0, 1.0, 1.0, 1.0])]);
         let out = composite_frame(&timeline, 10, 4, 4, &provider);
@@ -813,6 +814,7 @@ mod tests {
             scale_y: 0.5,
             center_x: 0.5,
             center_y: 0.5,
+            rotation: 0.0,
         };
         let provider = provider(&[("white", [1.0, 1.0, 1.0, 1.0])]);
         let frames = render_frames(&timeline, 0..3, 4, 4, &provider);
