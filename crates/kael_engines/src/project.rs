@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::markers::MarkerSet;
 use crate::media::Timeline;
 
 /// The current on-disk project format version.
@@ -51,15 +52,19 @@ pub struct Project {
     pub name: String,
     /// The editing timeline.
     pub timeline: Timeline,
+    /// Sequence markers (cue / chapter points).
+    #[serde(default)]
+    pub markers: MarkerSet,
 }
 
 impl Project {
-    /// Create a project at the current format version.
+    /// Create a project at the current format version with no markers.
     pub fn new(name: impl Into<String>, timeline: Timeline) -> Self {
         Self {
             format_version: PROJECT_FORMAT_VERSION,
             name: name.into(),
             timeline,
+            markers: MarkerSet::new(),
         }
     }
 
@@ -204,6 +209,24 @@ mod tests {
         let clip = &restored.timeline.tracks[0].clips[0];
         assert_eq!(clip.opacity, 0.5);
         assert_eq!(clip.blend_mode, ClipBlendMode::Multiply);
+    }
+
+    #[test]
+    fn markers_persist_and_default_empty() {
+        use crate::markers::Marker;
+        // A document without markers loads with an empty set.
+        let legacy = r#"{
+            "format_version": 2, "name": "p",
+            "timeline": { "tracks": [], "frame_rate": 30.0, "duration_frames": 0 }
+        }"#;
+        assert!(Project::from_json(legacy).unwrap().markers.is_empty());
+
+        // Markers survive save/load.
+        let mut project = Project::new("p", sample_timeline());
+        project.markers.add(Marker::new(120, "chapter 2"));
+        let restored = Project::from_json(&project.to_json().unwrap()).unwrap();
+        assert_eq!(restored.markers.len(), 1);
+        assert_eq!(restored.markers.nearest(120).map(|m| m.frame), Some(120));
     }
 
     #[test]
