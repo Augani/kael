@@ -1,19 +1,23 @@
 use kael::{
     BenchmarkHarness, BenchmarkMetric, BenchmarkResult, BenchmarkScenario, ColdStartCollector,
-    InputLatencyCollector, LongSessionCollector, MemoryCollector, MetricCollector,
-    SmoothnessCollector, check_regressions, compare_results, load_results_from_json,
+    HeadlessBackend, HeadlessRenderer, InputLatencyCollector, LongSessionCollector,
+    MemoryCollector, MetricCollector, SmoothnessCollector, check_regressions, compare_results,
+    load_results_from_json,
 };
-use std::{
-    path::Path,
-    time::{Duration, Instant},
-};
+use std::{hint::black_box, path::Path};
 
-const BASELINE_PATH: &str = "benchmarks/baselines/gpui-messaging-baseline.json";
+const BASELINE_PATH: &str = "benchmarks/baselines/kael-messaging-baseline.json";
 const OUTPUT_PATH: &str = "benchmark-results.json";
 const REGRESSION_THRESHOLD: f64 = 15.0;
+const FRAME_WIDTH: u32 = 512;
+const FRAME_HEIGHT: u32 = 288;
+
+fn frame_quads(scenario: BenchmarkScenario) -> usize {
+    scenario.complexity_score() as usize
+}
 
 fn main() {
-    println!("GPUI Performance Benchmark Harness");
+    println!("Kael Performance Benchmark Harness");
     println!("==================================\n");
 
     let args: Vec<String> = std::env::args().collect();
@@ -24,14 +28,27 @@ fn main() {
         .map(|w| w[1].clone())
         .unwrap_or_else(|| OUTPUT_PATH.to_string());
 
+    let mut renderer = HeadlessRenderer::new(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("failed to create headless renderer");
+    match renderer.backend() {
+        HeadlessBackend::Gpu => {
+            println!("Render backend: GPU (real off-screen rasterization + read-back)\n")
+        }
+        HeadlessBackend::CpuOnly => {
+            println!(
+                "Render backend: CPU-only (real scene build + batching, no GPU on this host)\n"
+            )
+        }
+    }
+
     let mut harness = BenchmarkHarness::new();
 
     run_cold_start_benchmark(&mut harness);
-    run_memory_benchmark(&mut harness);
-    run_input_latency_benchmark(&mut harness);
-    run_scroll_smoothness_benchmark(&mut harness);
-    run_resize_smoothness_benchmark(&mut harness);
-    run_long_session_benchmark(&mut harness);
+    run_memory_benchmark(&mut harness, &mut renderer);
+    run_input_latency_benchmark(&mut harness, &mut renderer);
+    run_scroll_smoothness_benchmark(&mut harness, &mut renderer);
+    run_resize_smoothness_benchmark(&mut harness, &mut renderer);
+    run_long_session_benchmark(&mut harness, &mut renderer);
 
     let json = harness
         .export_to_json()
@@ -55,17 +72,22 @@ fn run_cold_start_benchmark(harness: &mut BenchmarkHarness) {
 
     let result = harness.run_with_collectors(
         BenchmarkScenario::Messaging,
-        "gpui",
+        "kael",
         &mut collectors,
         |_collectors| {
-            simulate_workload(BenchmarkScenario::Messaging);
+            let mut fresh = HeadlessRenderer::new(FRAME_WIDTH, FRAME_HEIGHT)
+                .expect("failed to create headless renderer");
+            let frame = fresh
+                .render_frame(frame_quads(BenchmarkScenario::Messaging))
+                .expect("cold-start render failed");
+            black_box(frame.checksum);
         },
     );
 
     print_result(&result);
 }
 
-fn run_memory_benchmark(harness: &mut BenchmarkHarness) {
+fn run_memory_benchmark(harness: &mut BenchmarkHarness, renderer: &mut HeadlessRenderer) {
     println!("[Scenario] Memory — Workspace");
 
     let mut memory = MemoryCollector::new();
@@ -73,17 +95,22 @@ fn run_memory_benchmark(harness: &mut BenchmarkHarness) {
 
     let result = harness.run_with_collectors(
         BenchmarkScenario::Workspace,
-        "gpui",
+        "kael",
         &mut collectors,
         |_collectors| {
-            simulate_workload(BenchmarkScenario::Workspace);
+            for _ in 0..30 {
+                let frame = renderer
+                    .render_frame(frame_quads(BenchmarkScenario::Workspace))
+                    .expect("memory-scenario render failed");
+                black_box(frame.checksum);
+            }
         },
     );
 
     print_result(&result);
 }
 
-fn run_input_latency_benchmark(harness: &mut Harness) {
+fn run_input_latency_benchmark(harness: &mut BenchmarkHarness, renderer: &mut HeadlessRenderer) {
     println!("[Scenario] Input Latency — MediaControl");
 
     let mut latency = InputLatencyCollector::new();
@@ -91,7 +118,7 @@ fn run_input_latency_benchmark(harness: &mut Harness) {
 
     let result = harness.run_with_collectors(
         BenchmarkScenario::MediaControl,
-        "gpui",
+        "kael",
         &mut collectors,
         |collectors| {
             let latency = collectors[0]
@@ -100,7 +127,10 @@ fn run_input_latency_benchmark(harness: &mut Harness) {
                 .unwrap();
             for _ in 0..60 {
                 latency.record_input();
-                simulate_frame(Duration::from_millis(16));
+                let frame = renderer
+                    .render_frame(frame_quads(BenchmarkScenario::MediaControl))
+                    .expect("input-latency render failed");
+                black_box(frame.checksum);
                 latency.record_frame_presented();
             }
         },
@@ -109,7 +139,10 @@ fn run_input_latency_benchmark(harness: &mut Harness) {
     print_result(&result);
 }
 
-fn run_scroll_smoothness_benchmark(harness: &mut Harness) {
+fn run_scroll_smoothness_benchmark(
+    harness: &mut BenchmarkHarness,
+    renderer: &mut HeadlessRenderer,
+) {
     println!("[Scenario] Scroll Smoothness — Messaging");
 
     let mut smoothness = SmoothnessCollector::new(BenchmarkMetric::ScrollSmoothness);
@@ -117,7 +150,7 @@ fn run_scroll_smoothness_benchmark(harness: &mut Harness) {
 
     let result = harness.run_with_collectors(
         BenchmarkScenario::Messaging,
-        "gpui",
+        "kael",
         &mut collectors,
         |collectors| {
             let smoothness = collectors[0]
@@ -125,7 +158,10 @@ fn run_scroll_smoothness_benchmark(harness: &mut Harness) {
                 .downcast_mut::<SmoothnessCollector>()
                 .unwrap();
             for _ in 0..120 {
-                simulate_frame(Duration::from_millis(16));
+                let frame = renderer
+                    .render_frame(frame_quads(BenchmarkScenario::Messaging))
+                    .expect("scroll-smoothness render failed");
+                black_box(frame.checksum);
                 smoothness.record_frame();
             }
         },
@@ -134,7 +170,10 @@ fn run_scroll_smoothness_benchmark(harness: &mut Harness) {
     print_result(&result);
 }
 
-fn run_resize_smoothness_benchmark(harness: &mut Harness) {
+fn run_resize_smoothness_benchmark(
+    harness: &mut BenchmarkHarness,
+    renderer: &mut HeadlessRenderer,
+) {
     println!("[Scenario] Resize Smoothness — Workspace");
 
     let mut smoothness = SmoothnessCollector::new(BenchmarkMetric::ResizeSmoothness);
@@ -142,7 +181,7 @@ fn run_resize_smoothness_benchmark(harness: &mut Harness) {
 
     let result = harness.run_with_collectors(
         BenchmarkScenario::Workspace,
-        "gpui",
+        "kael",
         &mut collectors,
         |collectors| {
             let smoothness = collectors[0]
@@ -150,7 +189,10 @@ fn run_resize_smoothness_benchmark(harness: &mut Harness) {
                 .downcast_mut::<SmoothnessCollector>()
                 .unwrap();
             for _ in 0..90 {
-                simulate_frame(Duration::from_millis(16));
+                let frame = renderer
+                    .render_frame(frame_quads(BenchmarkScenario::Workspace))
+                    .expect("resize-smoothness render failed");
+                black_box(frame.checksum);
                 smoothness.record_frame();
             }
         },
@@ -159,15 +201,15 @@ fn run_resize_smoothness_benchmark(harness: &mut Harness) {
     print_result(&result);
 }
 
-fn run_long_session_benchmark(harness: &mut Harness) {
+fn run_long_session_benchmark(harness: &mut BenchmarkHarness, renderer: &mut HeadlessRenderer) {
     println!("[Scenario] Long Session — MediaControl");
 
-    let mut session = LongSessionCollector::new(Duration::from_millis(100));
+    let mut session = LongSessionCollector::new(std::time::Duration::from_millis(100));
     let mut collectors: [&mut dyn MetricCollector; 1] = [&mut session];
 
     let result = harness.run_with_collectors(
         BenchmarkScenario::MediaControl,
-        "gpui",
+        "kael",
         &mut collectors,
         |collectors| {
             let session = collectors[0]
@@ -175,30 +217,16 @@ fn run_long_session_benchmark(harness: &mut Harness) {
                 .downcast_mut::<LongSessionCollector>()
                 .unwrap();
             for _ in 0..50 {
-                simulate_frame(Duration::from_millis(100));
+                let frame = renderer
+                    .render_frame(frame_quads(BenchmarkScenario::MediaControl))
+                    .expect("long-session render failed");
+                black_box(frame.checksum);
                 session.sample();
             }
         },
     );
 
     print_result(&result);
-}
-
-fn simulate_workload(scenario: BenchmarkScenario) {
-    let complexity = scenario.complexity_score();
-    let iterations = complexity.max(1);
-    let mut accumulator = 0u64;
-    for i in 0..iterations {
-        accumulator = accumulator.wrapping_add(i as u64);
-    }
-    std::hint::black_box(accumulator);
-}
-
-fn simulate_frame(target_duration: Duration) {
-    let start = Instant::now();
-    while start.elapsed() < target_duration {
-        std::hint::black_box(0u64);
-    }
 }
 
 fn print_result(result: &BenchmarkResult) {
@@ -260,12 +288,10 @@ fn compare_against_baseline(results: &[BenchmarkResult], baseline_path: &str) {
                     } else {
                         "✗"
                     }
+                } else if comp.percent_change > 0.0 {
+                    "✓"
                 } else {
-                    if comp.percent_change > 0.0 {
-                        "✓"
-                    } else {
-                        "✗"
-                    }
+                    "✗"
                 };
                 println!(
                     "    {:>24}: {:>+8.2}% ({:.2} → {:.2} {}) {}",
@@ -297,5 +323,3 @@ fn compare_against_baseline(results: &[BenchmarkResult], baseline_path: &str) {
         println!("\nNo regressions detected.");
     }
 }
-
-type Harness = BenchmarkHarness;

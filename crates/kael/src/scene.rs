@@ -57,6 +57,29 @@ impl Scene {
         self.paint_operations.len()
     }
 
+    pub(crate) fn structural_checksum(&self) -> u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        let mut mix = |value: u64| {
+            hash ^= value;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        };
+        mix(self.shadows.len() as u64);
+        mix(self.blur_rects.len() as u64);
+        mix(self.quads.len() as u64);
+        mix(self.paths.len() as u64);
+        mix(self.underlines.len() as u64);
+        mix(self.monochrome_sprites.len() as u64);
+        mix(self.polychrome_sprites.len() as u64);
+        mix(self.surfaces.len() as u64);
+        for quad in &self.quads {
+            mix(quad.bounds.origin.x.0.to_bits() as u64);
+            mix(quad.bounds.origin.y.0.to_bits() as u64);
+            mix(quad.bounds.size.width.0.to_bits() as u64);
+            mix(quad.bounds.size.height.0.to_bits() as u64);
+        }
+        hash
+    }
+
     pub fn push_layer(&mut self, bounds: Bounds<ScaledPixels>) {
         let order = self.primitive_bounds.insert(bounds);
         self.layer_stack.push(order);

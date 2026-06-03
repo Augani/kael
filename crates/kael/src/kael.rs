@@ -49,6 +49,8 @@ pub mod extension_rpc;
 mod file_watcher;
 mod geometry;
 mod global;
+/// Headless off-screen rendering for benchmarks and golden-image tests.
+pub mod headless_render;
 mod icons;
 mod input;
 mod inspector;
@@ -153,6 +155,7 @@ pub use file_watcher::*;
 pub use geometry::*;
 pub use gesture::*;
 pub use global::*;
+pub use headless_render::*;
 pub use http_client;
 pub use input::*;
 pub use inspector::*;

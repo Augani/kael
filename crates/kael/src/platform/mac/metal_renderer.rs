@@ -626,6 +626,130 @@ impl MetalRenderer {
         self.counters.last_present_timestamp_micros = last_ts;
     }
 
+    pub(crate) fn render_scene_to_bytes(
+        &mut self,
+        scene: &Scene,
+        viewport_size: Size<DevicePixels>,
+    ) -> Result<OffscreenReadback> {
+        let width = viewport_size.width.0.max(0) as u64;
+        let height = viewport_size.height.0.max(0) as u64;
+        if width == 0 || height == 0 {
+            anyhow::bail!("offscreen render requires a non-zero viewport");
+        }
+
+        let descriptor = metal::TextureDescriptor::new();
+        descriptor.set_width(width);
+        descriptor.set_height(height);
+        descriptor.set_pixel_format(RENDER_TARGET_PIXEL_FORMAT);
+        descriptor
+            .set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
+        let target = self.device.new_texture(&descriptor);
+        let target_ref: &metal::TextureRef = &target;
+
+        self.ensure_buffer_size(scene);
+        let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
+
+        let command_queue = self.command_queue.clone();
+        let command_buffer = command_queue.new_command_buffer();
+        let alpha = if self.layer.is_opaque() { 1.0 } else { 0.0 };
+        let mut instance_offset = 0;
+
+        let command_encoder = new_texture_command_encoder(
+            command_buffer,
+            target_ref,
+            viewport_size,
+            metal::MTLLoadAction::Clear,
+            alpha,
+        );
+
+        let scene_ok = self.draw_scene_with_encoder(
+            scene,
+            &mut instance_buffer,
+            &mut instance_offset,
+            viewport_size,
+            command_buffer,
+            target_ref,
+            command_encoder,
+            |command_buffer, load_action| {
+                new_texture_command_encoder(
+                    command_buffer,
+                    target_ref,
+                    viewport_size,
+                    load_action,
+                    alpha,
+                )
+            },
+        );
+
+        let snapshots_ok = scene_ok
+            && self.draw_cached_surface_snapshots(
+                scene,
+                &mut instance_buffer,
+                &mut instance_offset,
+                viewport_size,
+                command_buffer,
+            );
+
+        instance_buffer.metal_buffer.did_modify_range(NSRange {
+            location: 0,
+            length: instance_offset as u64,
+        });
+
+        let bytes_per_row = align_up_256(width * 4);
+        let buffer_len = bytes_per_row * height;
+        let staging = self
+            .device
+            .new_buffer(buffer_len, MTLResourceOptions::StorageModeShared);
+
+        let blit = command_buffer.new_blit_command_encoder();
+        blit.copy_from_texture_to_buffer(
+            target_ref,
+            0,
+            0,
+            metal::MTLOrigin { x: 0, y: 0, z: 0 },
+            metal::MTLSize {
+                width,
+                height,
+                depth: 1,
+            },
+            &staging,
+            0,
+            bytes_per_row,
+            buffer_len,
+            metal::MTLBlitOption::empty(),
+        );
+        blit.end_encoding();
+
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        self.instance_buffer_pool.lock().release(instance_buffer);
+
+        if !snapshots_ok {
+            anyhow::bail!("scene exceeded instance buffer capacity during offscreen render");
+        }
+
+        let row_bytes = (width * 4) as usize;
+        let src_stride = bytes_per_row as usize;
+        let mut bgra = vec![0u8; row_bytes * height as usize];
+        unsafe {
+            let contents = staging.contents() as *const u8;
+            let src = std::slice::from_raw_parts(contents, buffer_len as usize);
+            for y in 0..height as usize {
+                let src_start = y * src_stride;
+                let dst_start = y * row_bytes;
+                bgra[dst_start..dst_start + row_bytes]
+                    .copy_from_slice(&src[src_start..src_start + row_bytes]);
+            }
+        }
+
+        Ok(OffscreenReadback {
+            width: width as u32,
+            height: height as u32,
+            bgra,
+        })
+    }
+
     fn ensure_buffer_size(&mut self, scene: &Scene) {
         const ALIGN: usize = 256;
         let align_up = |size: usize| size.div_ceil(ALIGN) * ALIGN;
@@ -1654,6 +1778,22 @@ fn texture_covers(texture: Option<&metal::Texture>, size: Size<DevicePixels>) ->
     texture.width() as i32 >= size.width.0 && texture.height() as i32 >= size.height.0
 }
 
+/// Pixels read back from an off-screen render, in the renderer's native
+/// `BGRA8Unorm` layout, tightly packed at `width * 4` bytes per row.
+pub(crate) struct OffscreenReadback {
+    pub width: u32,
+    pub height: u32,
+    pub bgra: Vec<u8>,
+}
+
+fn align_up_256(value: u64) -> u64 {
+    (value + 255) & !255
+}
+
+pub(crate) fn metal_is_available() -> bool {
+    !metal::Device::all().is_empty()
+}
+
 fn new_drawable_command_encoder<'a>(
     command_buffer: &'a metal::CommandBufferRef,
     drawable: &'a metal::MetalDrawableRef,
@@ -1915,5 +2055,79 @@ impl BlurPass {
             blur_radius: blur_rect.blur_radius,
             saturation: blur_rect.saturation,
         }
+    }
+}
+
+#[cfg(test)]
+mod offscreen_tests {
+    use super::*;
+    use crate::{TransformationMatrix, hsla};
+
+    fn headless() -> Option<MetalRenderer> {
+        if !metal_is_available() {
+            eprintln!("skipping offscreen test: no Metal device available");
+            return None;
+        }
+        Some(MetalRenderer::new(Arc::new(Mutex::new(
+            InstanceBufferPool::default(),
+        ))))
+    }
+
+    fn full_viewport_quad(side: f32, color: Hsla) -> Quad {
+        let bounds = Bounds {
+            origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size: size(ScaledPixels(side), ScaledPixels(side)),
+        };
+        Quad {
+            bounds,
+            content_mask: ContentMask { bounds },
+            background: Background::from(color),
+            transform: TransformationMatrix::unit(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn offscreen_empty_scene_clears_to_transparent() {
+        let Some(mut renderer) = headless() else {
+            return;
+        };
+        let mut scene = Scene::default();
+        scene.finish();
+        let frame = renderer
+            .render_scene_to_bytes(&scene, size(DevicePixels(16), DevicePixels(16)))
+            .unwrap();
+        assert_eq!((frame.width, frame.height), (16, 16));
+        assert_eq!(frame.bgra.len(), 16 * 16 * 4);
+        assert!(
+            frame.bgra.iter().all(|&byte| byte == 0),
+            "transparent clear should produce all-zero BGRA"
+        );
+    }
+
+    #[test]
+    fn offscreen_opaque_quad_fills_its_color() {
+        let Some(mut renderer) = headless() else {
+            return;
+        };
+        let mut scene = Scene::default();
+        scene.insert_primitive(full_viewport_quad(16.0, hsla(0.0, 1.0, 0.5, 1.0)));
+        scene.finish();
+        let frame = renderer
+            .render_scene_to_bytes(&scene, size(DevicePixels(16), DevicePixels(16)))
+            .unwrap();
+
+        let center = ((8 * 16) + 8) * 4;
+        let (b, g, r, a) = (
+            frame.bgra[center],
+            frame.bgra[center + 1],
+            frame.bgra[center + 2],
+            frame.bgra[center + 3],
+        );
+        assert!(a > 200, "center should be near-opaque, got a={a}");
+        assert!(
+            r > 150 && r > g && r > b,
+            "red quad should dominate the center pixel: r={r} g={g} b={b}"
+        );
     }
 }
