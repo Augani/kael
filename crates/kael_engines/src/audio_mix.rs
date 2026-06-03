@@ -276,6 +276,90 @@ pub fn rms_normalize_gain(samples: &[f32], target_dbfs: f32) -> f32 {
     dbfs_to_linear(target_dbfs) / rms
 }
 
+struct Biquad {
+    b0: f64,
+    b1: f64,
+    b2: f64,
+    a1: f64,
+    a2: f64,
+}
+
+impl Biquad {
+    fn process(&self, input: &[f32]) -> Vec<f32> {
+        let (mut x1, mut x2, mut y1, mut y2) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+        input
+            .iter()
+            .map(|&sample| {
+                let x0 = sample as f64;
+                let y0 = self.b0 * x0 + self.b1 * x1 + self.b2 * x2 - self.a1 * y1 - self.a2 * y2;
+                x2 = x1;
+                x1 = x0;
+                y2 = y1;
+                y1 = y0;
+                y0 as f32
+            })
+            .collect()
+    }
+}
+
+fn high_pass(sample_rate: f64, fc: f64, q: f64) -> Biquad {
+    let w0 = 2.0 * std::f64::consts::PI * fc / sample_rate;
+    let cos_w0 = w0.cos();
+    let alpha = w0.sin() / (2.0 * q);
+    let a0 = 1.0 + alpha;
+    Biquad {
+        b0: ((1.0 + cos_w0) / 2.0) / a0,
+        b1: -(1.0 + cos_w0) / a0,
+        b2: ((1.0 + cos_w0) / 2.0) / a0,
+        a1: (-2.0 * cos_w0) / a0,
+        a2: (1.0 - alpha) / a0,
+    }
+}
+
+fn high_shelf(sample_rate: f64, fc: f64, gain_db: f64, q: f64) -> Biquad {
+    let amp = 10.0_f64.powf(gain_db / 40.0);
+    let w0 = 2.0 * std::f64::consts::PI * fc / sample_rate;
+    let cos_w0 = w0.cos();
+    let alpha = w0.sin() / (2.0 * q);
+    let shelf = 2.0 * amp.sqrt() * alpha;
+    let a0 = (amp + 1.0) - (amp - 1.0) * cos_w0 + shelf;
+    Biquad {
+        b0: (amp * ((amp + 1.0) + (amp - 1.0) * cos_w0 + shelf)) / a0,
+        b1: (-2.0 * amp * ((amp - 1.0) + (amp + 1.0) * cos_w0)) / a0,
+        b2: (amp * ((amp + 1.0) + (amp - 1.0) * cos_w0 - shelf)) / a0,
+        a1: (2.0 * ((amp - 1.0) - (amp + 1.0) * cos_w0)) / a0,
+        a2: ((amp + 1.0) - (amp - 1.0) * cos_w0 - shelf) / a0,
+    }
+}
+
+/// The ITU-R BS.1770 "K-weighting" two-stage prefilter (high-shelf then high-pass) at
+/// `sample_rate`, used before measuring loudness.
+fn k_weighting(sample_rate: u32) -> (Biquad, Biquad) {
+    let fs = sample_rate as f64;
+    (
+        high_shelf(fs, 1681.974450955533, 3.999843853973347, 0.7071752369554196),
+        high_pass(fs, 38.13547087613982, 0.5003270373238773),
+    )
+}
+
+/// Momentary loudness of a mono `samples` buffer in **LUFS** (ITU-R BS.1770 K-weighting):
+/// `-0.691 + 10*log10(mean_square)` of the K-weighted signal. This is the broadcast
+/// loudness measure behind LUFS metering (the gated *integrated* loudness adds block gating
+/// on top). Silence (or a zero sample rate) returns [`SILENCE_DBFS`].
+pub fn momentary_lufs(samples: &[f32], sample_rate: u32) -> f32 {
+    if samples.is_empty() || sample_rate == 0 {
+        return SILENCE_DBFS;
+    }
+    let (shelf, hpf) = k_weighting(sample_rate);
+    let weighted = hpf.process(&shelf.process(samples));
+    let mean_square =
+        weighted.iter().map(|&s| (s as f64).powi(2)).sum::<f64>() / weighted.len() as f64;
+    if mean_square <= 0.0 {
+        return SILENCE_DBFS;
+    }
+    (-0.691 + 10.0 * mean_square.log10()) as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -558,5 +642,39 @@ mod tests {
         assert_eq!(peak_normalize_gain(&[], -3.0), 1.0);
         assert_eq!(rms_normalize_gain(&[0.0, 0.0], 0.0), 1.0);
         assert_eq!(rms_normalize_gain(&[], -3.0), 1.0);
+    }
+
+    fn tone(amplitude: f32, samples: usize) -> Vec<f32> {
+        (0..samples)
+            .map(|n| (n as f32 * 0.13).sin() * amplitude)
+            .collect()
+    }
+
+    #[test]
+    fn momentary_lufs_rises_about_6db_when_amplitude_doubles() {
+        // The K-weighting filter is linear, so doubling amplitude is 4x power = +6.02 LU,
+        // independent of the exact coefficients.
+        let quiet = momentary_lufs(&tone(0.25, 4800), 48_000);
+        let loud = momentary_lufs(&tone(0.5, 4800), 48_000);
+        assert!((loud - quiet - 6.0206).abs() < 0.05, "{quiet} -> {loud}");
+    }
+
+    #[test]
+    fn momentary_lufs_rejects_dc_offset() {
+        // A constant offset is removed by the K-weighting high-pass, so it reads far
+        // quieter than an equal-amplitude tone.
+        let dc = momentary_lufs(&vec![0.5f32; 48_000], 48_000);
+        let tone = momentary_lufs(&tone(0.5, 48_000), 48_000);
+        assert!(dc < tone - 20.0, "dc {dc} vs tone {tone}");
+    }
+
+    #[test]
+    fn momentary_lufs_is_monotonic_and_floors_at_silence() {
+        assert_eq!(momentary_lufs(&[0.0; 1000], 48_000), SILENCE_DBFS);
+        assert_eq!(momentary_lufs(&[], 48_000), SILENCE_DBFS);
+        assert_eq!(momentary_lufs(&tone(0.4, 1000), 0), SILENCE_DBFS);
+        assert!(
+            momentary_lufs(&tone(0.2, 4800), 48_000) < momentary_lufs(&tone(0.4, 4800), 48_000)
+        );
     }
 }
