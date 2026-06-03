@@ -8,9 +8,10 @@
 
 use anyhow::Result;
 
+#[cfg(target_os = "macos")]
+use crate::DevicePixels;
 use crate::{
-    Background, Bounds, ContentMask, DevicePixels, ScaledPixels, Scene, TransformationMatrix, hsla,
-    point, size,
+    Background, Bounds, ContentMask, ScaledPixels, Scene, TransformationMatrix, hsla, point, size,
 };
 
 /// Which rendering backend a [`HeadlessRenderer`] is using.
@@ -168,6 +169,7 @@ impl HeadlessRenderer {
             });
         }
 
+        let _ = complexity;
         anyhow::bail!("RGBA16Float rendering is only available on the GPU backend")
     }
 
