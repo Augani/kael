@@ -20,7 +20,7 @@ pub mod session;
 pub mod spatial;
 
 pub use anyhow::Result;
-pub use dsp::OnePole;
+pub use dsp::{OnePole, WaveformPeak, waveform_peaks};
 pub use kael_media::AudioPlaybackError;
 pub use mixer::{
     AudioClock, AudioEngine, BufferSource, Mixer, SampleSource, SineSource, VoiceId,

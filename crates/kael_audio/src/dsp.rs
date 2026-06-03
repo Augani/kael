@@ -124,6 +124,44 @@ impl OnePole {
     }
 }
 
+/// A min/max sample pair for one waveform display bucket.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WaveformPeak {
+    /// Minimum (most negative) mono sample in the bucket.
+    pub min: f32,
+    /// Maximum (most positive) mono sample in the bucket.
+    pub max: f32,
+}
+
+/// Downsample interleaved audio to `buckets` min/max peaks of the channel-summed
+/// mono signal, for timeline waveform rendering.
+pub fn waveform_peaks(samples: &[f32], channels: u16, buckets: usize) -> Vec<WaveformPeak> {
+    let channels = channels.max(1) as usize;
+    let frames = samples.len() / channels;
+    if frames == 0 || buckets == 0 {
+        return Vec::new();
+    }
+    let mut peaks = Vec::with_capacity(buckets);
+    for bucket in 0..buckets {
+        let start = bucket * frames / buckets;
+        let end = (((bucket + 1) * frames / buckets).max(start + 1)).min(frames);
+        let mut min = f32::INFINITY;
+        let mut max = f32::NEG_INFINITY;
+        for frame in start..end {
+            let base = frame * channels;
+            let mono = samples[base..base + channels].iter().sum::<f32>() / channels as f32;
+            min = min.min(mono);
+            max = max.max(mono);
+        }
+        if min > max {
+            min = 0.0;
+            max = 0.0;
+        }
+        peaks.push(WaveformPeak { min, max });
+    }
+    peaks
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +227,26 @@ mod tests {
         }
         assert!((low_out - 1.0).abs() < 1e-2, "low-pass DC -> {low_out}");
         assert!(high_out.abs() < 1e-2, "high-pass DC -> {high_out}");
+    }
+
+    #[test]
+    fn waveform_peaks_bucket_a_ramp() {
+        let samples: Vec<f32> = (0..8).map(|i| i as f32).collect();
+        let peaks = waveform_peaks(&samples, 1, 4);
+        assert_eq!(peaks.len(), 4);
+        assert_eq!(peaks[0], WaveformPeak { min: 0.0, max: 1.0 });
+        assert_eq!(peaks[3], WaveformPeak { min: 6.0, max: 7.0 });
+    }
+
+    #[test]
+    fn waveform_peaks_constant_and_edges() {
+        let samples = vec![0.5f32; 100];
+        let peaks = waveform_peaks(&samples, 1, 10);
+        assert_eq!(peaks.len(), 10);
+        assert!(peaks
+            .iter()
+            .all(|peak| (peak.min - 0.5).abs() < 1e-6 && (peak.max - 0.5).abs() < 1e-6));
+        assert!(waveform_peaks(&[], 1, 4).is_empty());
+        assert!(waveform_peaks(&samples, 1, 0).is_empty());
     }
 }
