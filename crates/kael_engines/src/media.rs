@@ -229,6 +229,30 @@ fn subtract_track_range(clip: &TimelineClip, start: u64, end: u64) -> Vec<Timeli
 }
 
 impl TimelineClip {
+    /// A clip of source `[start_frame, end_frame)` placed at `track_offset`, with default
+    /// opacity, blend mode, effects, and transform.
+    pub fn new(
+        id: impl Into<String>,
+        source: impl Into<String>,
+        start_frame: u64,
+        end_frame: u64,
+        track_offset: u64,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            source: source.into(),
+            start_frame,
+            end_frame,
+            track_offset,
+            opacity: 1.0,
+            opacity_curve: None,
+            blend_mode: ClipBlendMode::default(),
+            effects: AnimatedEffectStack::default(),
+            transform: ClipTransform::default(),
+            transform_curve: None,
+        }
+    }
+
     /// The clip's duration in frames.
     pub fn duration(&self) -> u64 {
         self.end_frame.saturating_sub(self.start_frame)
@@ -773,6 +797,56 @@ impl Timeline {
         }
         self.ripple_insert_gap(at, clip.duration());
         self.tracks[track_index].clips.push(clip);
+        self.recompute_duration();
+        Ok(())
+    }
+
+    /// Three-point insert edit: place the source range `[source_in, source_out)` of `source`
+    /// at `timeline_in` on track `track_index` as a synchronized [`ripple_insert`](Self::ripple_insert).
+    /// Returns [`TimelineEditError::InvalidDuration`] for an empty source range.
+    pub fn three_point_insert(
+        &mut self,
+        track_index: usize,
+        clip_id: impl Into<String>,
+        source: impl Into<String>,
+        source_in: u64,
+        source_out: u64,
+        timeline_in: u64,
+    ) -> Result<(), TimelineEditError> {
+        if source_out <= source_in {
+            return Err(TimelineEditError::InvalidDuration);
+        }
+        let clip = TimelineClip::new(clip_id, source, source_in, source_out, timeline_in);
+        self.ripple_insert(track_index, clip)
+    }
+
+    /// Three-point overwrite edit: place the source range `[source_in, source_out)` of
+    /// `source` at `timeline_in` on track `track_index`, overwriting whatever it covers on
+    /// that track (no ripple). Returns [`TimelineEditError::InvalidDuration`] for an empty
+    /// source range or [`TimelineEditError::OutOfBounds`] for an unknown track.
+    pub fn three_point_overwrite(
+        &mut self,
+        track_index: usize,
+        clip_id: impl Into<String>,
+        source: impl Into<String>,
+        source_in: u64,
+        source_out: u64,
+        timeline_in: u64,
+    ) -> Result<(), TimelineEditError> {
+        if source_out <= source_in {
+            return Err(TimelineEditError::InvalidDuration);
+        }
+        let track = self
+            .tracks
+            .get_mut(track_index)
+            .ok_or(TimelineEditError::OutOfBounds)?;
+        track.overwrite_clip(TimelineClip::new(
+            clip_id,
+            source,
+            source_in,
+            source_out,
+            timeline_in,
+        ));
         self.recompute_duration();
         Ok(())
     }
@@ -1353,6 +1427,78 @@ mod tests {
         assert!(matches!(
             tl.ripple_insert(5, sample_clip("x", 0, 5, 0)),
             Err(TimelineEditError::OutOfBounds)
+        ));
+    }
+
+    #[test]
+    fn three_point_insert_places_a_source_subclip() {
+        let mut tl = Timeline {
+            tracks: vec![sample_track(
+                "v1",
+                TrackType::Video,
+                vec![sample_clip("a", 0, 20, 10)],
+            )],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        // Insert source [100,130) of "media" at timeline 10.
+        tl.three_point_insert(0, "ins", "media", 100, 130, 10).unwrap();
+        let inserted = tl.tracks[0].clips.iter().find(|c| c.id == "ins").unwrap();
+        assert_eq!(inserted.source, "media");
+        assert_eq!(
+            (
+                inserted.start_frame,
+                inserted.end_frame,
+                inserted.track_offset
+            ),
+            (100, 130, 10)
+        );
+        assert_eq!(inserted.duration(), 30);
+        // The original rippled right by the inserted duration.
+        let original = tl.tracks[0].clips.iter().find(|c| c.id == "a").unwrap();
+        assert_eq!(original.track_offset, 40);
+    }
+
+    #[test]
+    fn three_point_overwrite_replaces_covered_content() {
+        let mut tl = Timeline {
+            tracks: vec![sample_track(
+                "v1",
+                TrackType::Video,
+                vec![sample_clip("a", 0, 60, 0)],
+            )],
+            frame_rate: 30.0,
+            duration_frames: 60,
+        };
+        // Overwrite [10,30) on the track with a new source.
+        tl.three_point_overwrite(0, "ovr", "media", 0, 20, 10).unwrap();
+        let ovr = tl.tracks[0].clips.iter().find(|c| c.id == "ovr").unwrap();
+        assert_eq!((ovr.track_offset, ovr.track_end()), (10, 30));
+        // The original split around the overwrite into a head and a tail.
+        assert!(tl.tracks[0]
+            .clips
+            .iter()
+            .any(|c| c.track_offset == 0 && c.track_end() == 10));
+        assert!(tl.tracks[0]
+            .clips
+            .iter()
+            .any(|c| c.track_offset == 30 && c.track_end() == 60));
+    }
+
+    #[test]
+    fn three_point_edits_reject_an_empty_source_range() {
+        let mut tl = Timeline {
+            tracks: vec![sample_track("v1", TrackType::Video, vec![])],
+            frame_rate: 30.0,
+            duration_frames: 0,
+        };
+        assert!(matches!(
+            tl.three_point_insert(0, "x", "m", 50, 50, 0),
+            Err(TimelineEditError::InvalidDuration)
+        ));
+        assert!(matches!(
+            tl.three_point_overwrite(0, "x", "m", 50, 40, 0),
+            Err(TimelineEditError::InvalidDuration)
         ));
     }
 
