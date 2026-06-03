@@ -337,6 +337,25 @@ pub fn is_mirrored(ch: char) -> bool {
     mirror_char(ch) != ch
 }
 
+/// Reorder `text` into visual (left-to-right display) order per UAX#9: detect the paragraph
+/// base direction, segment into directional runs, apply the L2 run/character reordering, and
+/// mirror paired punctuation in right-to-left runs (L4). The returned string is what a
+/// left-to-right renderer draws in order. Pure left-to-right text is returned unchanged.
+pub fn display_order(text: &str) -> String {
+    let base = base_direction(text);
+    let runs = reorder_visual(&segment_runs(text, base), base);
+    let mut output = String::new();
+    for run in runs {
+        if run.direction == Direction::Rtl {
+            // reorder_visual already reversed the run; L4 mirrors its paired punctuation.
+            output.extend(run.text.chars().map(mirror_char));
+        } else {
+            output.push_str(&run.text);
+        }
+    }
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,5 +563,27 @@ mod tests {
         assert_eq!(mirror_char('\u{0627}'), '\u{0627}'); // Arabic alef has no mirror
         assert!(!is_mirrored('a'));
         assert!(is_mirrored('('));
+    }
+
+    #[test]
+    fn display_order_leaves_ltr_unchanged() {
+        assert_eq!(display_order("abc(def)"), "abc(def)");
+        assert_eq!(display_order(""), "");
+    }
+
+    #[test]
+    fn display_order_reverses_a_pure_rtl_run() {
+        // A pure right-to-left paragraph reads reversed in left-to-right display order.
+        let expected: String = HEBREW.chars().rev().collect();
+        assert_eq!(display_order(HEBREW), expected);
+    }
+
+    #[test]
+    fn display_order_mirrors_brackets_around_rtl() {
+        // The RTL content reverses; the surrounding brackets mirror back so they still face
+        // inward in the left-to-right display.
+        let input = format!("({HEBREW})");
+        let expected = format!("({})", HEBREW.chars().rev().collect::<String>());
+        assert_eq!(display_order(&input), expected);
     }
 }
