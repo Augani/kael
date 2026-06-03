@@ -1,6 +1,8 @@
 use anyhow::{Context as _, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
+use std::process::Command;
 
 use crate::DistConfig;
 
@@ -103,7 +105,44 @@ fn bundle_macos(
     }
 
     println!("macOS bundle created: {}", bundle_dir.display());
-    Ok(vec![bundle_dir])
+
+    let mut artifacts = vec![bundle_dir.clone()];
+    #[cfg(target_os = "macos")]
+    if !options.dry_run && binary.is_some() {
+        let dmg_path = output.join(format!("{app_name_slug}.dmg"));
+        let dmg =
+            create_dmg(&bundle_dir, &dmg_path, app_name).context("failed to create macOS .dmg")?;
+        println!("macOS .dmg created: {}", dmg.display());
+        artifacts.push(dmg);
+    }
+    Ok(artifacts)
+}
+
+/// Build a compressed `.dmg` disk image containing `app_bundle` using `hdiutil`.
+///
+/// This produces the installer container; code-signing and notarization (which
+/// require an Apple Developer certificate) are a separate downstream step.
+#[cfg(target_os = "macos")]
+fn create_dmg(app_bundle: &Path, dmg_path: &Path, volume_name: &str) -> Result<PathBuf> {
+    if dmg_path.exists() {
+        fs::remove_file(dmg_path)?;
+    }
+    let status = Command::new("hdiutil")
+        .arg("create")
+        .arg("-volname")
+        .arg(volume_name)
+        .arg("-srcfolder")
+        .arg(app_bundle)
+        .arg("-ov")
+        .arg("-format")
+        .arg("UDZO")
+        .arg(dmg_path)
+        .status()
+        .context("failed to run hdiutil create")?;
+    if !status.success() {
+        bail!("hdiutil create failed with status {status}");
+    }
+    Ok(dmg_path.to_path_buf())
 }
 
 fn generate_info_plist(config: &DistConfig, executable_name: &str) -> String {
@@ -343,5 +382,28 @@ mod tests {
         let app_name = config.name.to_lowercase().replace(' ', "-");
         let expected = format!("{}.AppDir", app_name);
         assert_eq!(expected, "test-app.AppDir");
+    }
+}
+
+#[cfg(test)]
+#[cfg(target_os = "macos")]
+mod dmg_tests {
+    use super::*;
+
+    #[test]
+    fn create_dmg_produces_a_real_image() {
+        let scratch = std::env::temp_dir().join(format!("kael_dmg_test_{}", std::process::id()));
+        let app = scratch.join("Demo.app");
+        fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+        fs::write(app.join("Contents/Info.plist"), "<plist></plist>").unwrap();
+        fs::write(app.join("Contents/MacOS/demo"), b"#!/bin/sh\n").unwrap();
+
+        let dmg_path = scratch.join("demo.dmg");
+        let dmg = create_dmg(&app, &dmg_path, "Demo").expect("hdiutil create");
+
+        assert!(dmg.exists(), "dmg should exist");
+        assert!(dmg.metadata().unwrap().len() > 0, "dmg should be non-empty");
+
+        let _ = fs::remove_dir_all(&scratch);
     }
 }
