@@ -125,6 +125,34 @@ impl AudioProvider for WavAudioProvider {
     }
 }
 
+/// How a stereo pan position maps to left/right channel gains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanLaw {
+    /// Linear (constant-gain): -6 dB at center.
+    Linear,
+    /// Constant-power: -3 dB at center (sin/cos law).
+    ConstantPower,
+    /// Compromise: -4.5 dB at center (geometric mean of the two).
+    Minus4_5dB,
+}
+
+/// Left/right gains for `pan` in `-1..=1` (-1 hard left, 0 center, +1 hard right) under
+/// the given [`PanLaw`]. Pan is clamped to the valid range.
+pub fn pan_gains(pan: f32, law: PanLaw) -> (f32, f32) {
+    let position = (pan.clamp(-1.0, 1.0) + 1.0) / 2.0; // 0 = left, 1 = right
+    let (linear_left, linear_right) = (1.0 - position, position);
+    let angle = position * std::f32::consts::FRAC_PI_2;
+    let (power_left, power_right) = (angle.cos(), angle.sin());
+    match law {
+        PanLaw::Linear => (linear_left, linear_right),
+        PanLaw::ConstantPower => (power_left, power_right),
+        PanLaw::Minus4_5dB => (
+            (linear_left * power_left).sqrt(),
+            (linear_right * power_right).sqrt(),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,5 +286,30 @@ mod tests {
         let out = mix_range(&tl, 0..2, 48_000, &provider).unwrap();
         assert_eq!(out.len(), 3200);
         assert!(out.iter().all(|&s| (s - 0.5).abs() < 1e-3), "decoded ~0.5");
+    }
+
+    #[test]
+    fn pan_gains_follow_the_law() {
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-4;
+
+        // Center: linear -6 dB, constant-power -3 dB, compromise -4.5 dB.
+        let (left, right) = pan_gains(0.0, PanLaw::Linear);
+        assert!(close(left, 0.5) && close(right, 0.5));
+        let (left, right) = pan_gains(0.0, PanLaw::ConstantPower);
+        assert!(close(left, 0.70711) && close(right, 0.70711));
+        let (left, right) = pan_gains(0.0, PanLaw::Minus4_5dB);
+        assert!(close(left, (0.5_f32 * 0.70711).sqrt()) && close(left, right));
+
+        // Hard left / right.
+        let (left, right) = pan_gains(-1.0, PanLaw::ConstantPower);
+        assert!(close(left, 1.0) && close(right, 0.0));
+        let (left, right) = pan_gains(1.0, PanLaw::Linear);
+        assert!(close(left, 0.0) && close(right, 1.0));
+
+        // Pan is clamped to the valid range.
+        assert_eq!(
+            pan_gains(5.0, PanLaw::Linear),
+            pan_gains(1.0, PanLaw::Linear)
+        );
     }
 }
