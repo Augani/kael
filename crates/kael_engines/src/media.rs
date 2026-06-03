@@ -55,6 +55,71 @@ pub struct TimelineClip {
     pub end_frame: u64,
     /// Offset in track frames where the clip begins.
     pub track_offset: u64,
+    /// Layer opacity in `0..=1` applied when compositing (defaults to fully opaque).
+    #[serde(default = "default_clip_opacity")]
+    pub opacity: f32,
+    /// How this clip composites over lower tracks (defaults to source-over).
+    #[serde(default)]
+    pub blend_mode: ClipBlendMode,
+}
+
+fn default_clip_opacity() -> f32 {
+    1.0
+}
+
+/// How a clip composites over the tracks beneath it (serializable mirror of the
+/// reference compositor's blend modes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ClipBlendMode {
+    /// Source-over (the default).
+    #[default]
+    Normal,
+    /// Multiply (darken).
+    Multiply,
+    /// Screen (lighten).
+    Screen,
+    /// Clamped additive.
+    Add,
+    /// Per-channel minimum.
+    Darken,
+    /// Per-channel maximum.
+    Lighten,
+    /// Contrast (multiply/screen keyed on the backdrop).
+    Overlay,
+    /// Contrast keyed on the source.
+    HardLight,
+    /// Gentle dodge/burn.
+    SoftLight,
+    /// Brighten toward the source.
+    ColorDodge,
+    /// Darken toward the source.
+    ColorBurn,
+    /// Absolute difference.
+    Difference,
+    /// Lower-contrast difference.
+    Exclusion,
+}
+
+impl ClipBlendMode {
+    /// Map to the reference compositor's blend mode.
+    pub fn to_render_graph(self) -> kael_render_graph::reference::BlendMode {
+        use kael_render_graph::reference::BlendMode;
+        match self {
+            Self::Normal => BlendMode::Normal,
+            Self::Multiply => BlendMode::Multiply,
+            Self::Screen => BlendMode::Screen,
+            Self::Add => BlendMode::Add,
+            Self::Darken => BlendMode::Darken,
+            Self::Lighten => BlendMode::Lighten,
+            Self::Overlay => BlendMode::Overlay,
+            Self::HardLight => BlendMode::HardLight,
+            Self::SoftLight => BlendMode::SoftLight,
+            Self::ColorDodge => BlendMode::ColorDodge,
+            Self::ColorBurn => BlendMode::ColorBurn,
+            Self::Difference => BlendMode::Difference,
+            Self::Exclusion => BlendMode::Exclusion,
+        }
+    }
 }
 
 /// A single track within a timeline.
@@ -164,7 +229,7 @@ impl TimelineClip {
 
 /// The decode request for one track at a given timeline frame: which source
 /// frame of which clip must be produced.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TrackFrameRequest {
     /// The track the visible clip lives on.
     pub track_id: String,
@@ -174,6 +239,10 @@ pub struct TrackFrameRequest {
     pub source: String,
     /// The frame index within the source media to present.
     pub source_frame: u64,
+    /// The clip's layer opacity in `0..=1`.
+    pub opacity: f32,
+    /// The clip's blend mode over lower tracks.
+    pub blend_mode: ClipBlendMode,
 }
 
 impl TimelineTrack {
@@ -332,6 +401,8 @@ impl TimelineTrack {
                 start_frame: split_source,
                 end_frame: clip.end_frame,
                 track_offset: at_track_frame,
+                opacity: clip.opacity,
+                blend_mode: clip.blend_mode,
             },
         );
         Ok(new_id)
@@ -479,6 +550,8 @@ impl Timeline {
                     clip_id: clip.id.clone(),
                     source: clip.source.clone(),
                     source_frame,
+                    opacity: clip.opacity,
+                    blend_mode: clip.blend_mode,
                 });
             }
         }
@@ -644,6 +717,8 @@ mod tests {
             start_frame: start,
             end_frame: end,
             track_offset: offset,
+            opacity: 1.0,
+            blend_mode: ClipBlendMode::Normal,
         }
     }
 

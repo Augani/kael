@@ -7,7 +7,7 @@
 //! decoder in production, a synthetic generator in tests — so the full timeline→pixels
 //! path is exercised without a decoder.
 
-use kael_render_graph::reference::{blend_over, Image};
+use kael_render_graph::reference::{blend, Image};
 
 use crate::media::Timeline;
 
@@ -23,9 +23,10 @@ pub trait FrameProvider {
 /// Composite the timeline at `frame` into a single `width` x `height` image.
 ///
 /// Each track's active clip is fetched from `provider` and stacked in track-declaration
-/// order (the first track is the bottom layer) with source-over compositing. Tracks with
-/// no active clip — or whose source frame the provider cannot supply, or whose supplied
-/// image is the wrong size — are skipped. The result is transparent where nothing is active.
+/// order (the first track is the bottom layer), honoring the clip's opacity and blend
+/// mode. Tracks with no active clip — or whose source frame the provider cannot supply,
+/// or whose supplied image is the wrong size — are skipped. The result is transparent
+/// where nothing is active.
 pub fn composite_frame(
     timeline: &Timeline,
     frame: u64,
@@ -35,15 +36,21 @@ pub fn composite_frame(
 ) -> Image {
     let mut output = Image::new(width, height);
     for request in timeline.frame_requests(frame) {
-        let Some(layer) = provider.frame(&request.source, request.source_frame, width, height)
+        let Some(mut layer) = provider.frame(&request.source, request.source_frame, width, height)
         else {
             continue;
         };
         if layer.width != width || layer.height != height {
             continue;
         }
+        let opacity = request.opacity.clamp(0.0, 1.0);
+        if opacity < 1.0 {
+            for pixel in layer.pixels.iter_mut() {
+                pixel[3] *= opacity;
+            }
+        }
         let mut next = Image::new(width, height);
-        blend_over(&[&layer, &output], &mut next);
+        blend(request.blend_mode.to_render_graph())(&[&layer, &output], &mut next);
         output = next;
     }
     output
@@ -52,7 +59,7 @@ pub fn composite_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::{TimelineClip, TimelineTrack, TrackType};
+    use crate::media::{ClipBlendMode, TimelineClip, TimelineTrack, TrackType};
     use std::collections::HashMap;
 
     struct SolidProvider {
@@ -80,6 +87,8 @@ mod tests {
             start_frame: start,
             end_frame: end,
             track_offset: offset,
+            opacity: 1.0,
+            blend_mode: ClipBlendMode::Normal,
         }
     }
 
@@ -187,5 +196,54 @@ mod tests {
         };
         let out = composite_frame(&timeline, 10, 2, 2, &provider(&[]));
         assert!(out.pixels.iter().all(|pixel| pixel[3] == 0.0));
+    }
+
+    #[test]
+    fn clip_opacity_attenuates_layer_alpha() {
+        let mut faded = clip("a", "red", 0, 30, 0);
+        faded.opacity = 0.5;
+        let timeline = Timeline {
+            tracks: vec![track("v1", vec![faded])],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        let pixel = composite_frame(
+            &timeline,
+            5,
+            1,
+            1,
+            &provider(&[("red", [1.0, 0.0, 0.0, 1.0])]),
+        )
+        .pixel(0, 0);
+        assert!((pixel[3] - 0.5).abs() < 1e-5, "alpha {}", pixel[3]);
+        assert!((pixel[0] - 1.0).abs() < 1e-5, "red preserved {}", pixel[0]);
+    }
+
+    #[test]
+    fn clip_blend_mode_multiplies_lower_track() {
+        let mut top = clip("b", "gray", 0, 30, 0);
+        top.blend_mode = ClipBlendMode::Multiply;
+        let timeline = Timeline {
+            tracks: vec![
+                track("v1", vec![clip("a", "gray", 0, 30, 0)]),
+                track("v2", vec![top]),
+            ],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        let pixel = composite_frame(
+            &timeline,
+            5,
+            1,
+            1,
+            &provider(&[("gray", [0.5, 0.5, 0.5, 1.0])]),
+        )
+        .pixel(0, 0);
+        // 0.5 multiplied by 0.5 = 0.25.
+        assert!(
+            (pixel[0] - 0.25).abs() < 1e-5,
+            "multiply -> 0.25, got {}",
+            pixel[0]
+        );
     }
 }

@@ -134,6 +134,8 @@ mod tests {
                     start_frame: 0,
                     end_frame: 50,
                     track_offset: 0,
+                    opacity: 1.0,
+                    blend_mode: Default::default(),
                 }],
             }],
             frame_rate: 30.0,
