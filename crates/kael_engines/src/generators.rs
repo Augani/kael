@@ -84,6 +84,33 @@ pub fn radial_gradient(center: [f32; 4], edge: [f32; 4], width: u32, height: u32
     image
 }
 
+/// EBU/SMPTE 75% color bars: seven equal-width vertical bars — white, yellow, cyan, green,
+/// magenta, red, blue at 75% intensity — the standard broadcast test pattern. The bars run
+/// full height; empty dimensions yield an empty image.
+pub fn color_bars(width: u32, height: u32) -> Image {
+    const BARS: [[f32; 3]; 7] = [
+        [0.75, 0.75, 0.75],
+        [0.75, 0.75, 0.0],
+        [0.0, 0.75, 0.75],
+        [0.0, 0.75, 0.0],
+        [0.75, 0.0, 0.75],
+        [0.75, 0.0, 0.0],
+        [0.0, 0.0, 0.75],
+    ];
+    let mut image = Image::new(width, height);
+    if width == 0 || height == 0 {
+        return image;
+    }
+    for y in 0..height {
+        for x in 0..width {
+            let bar = (x as usize * 7 / width as usize).min(6);
+            let [red, green, blue] = BARS[bar];
+            image.pixels[(y * width + x) as usize] = [red, green, blue, 1.0];
+        }
+    }
+    image
+}
+
 /// A procedural source: the parsed form of a generator clip's `source` string.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Generator {
@@ -114,6 +141,8 @@ pub enum Generator {
         /// Color at the farthest corner.
         edge: [f32; 4],
     },
+    /// EBU/SMPTE 75% color bars.
+    ColorBars,
 }
 
 impl Generator {
@@ -122,7 +151,12 @@ impl Generator {
     /// * `color:r,g,b,a`
     /// * `gradient:r,g,b,a|r,g,b,a|h` (or `|v` for vertical)
     /// * `checker:r,g,b,a|r,g,b,a|cell`
+    /// * `radial:r,g,b,a|r,g,b,a`
+    /// * `bars` (EBU/SMPTE 75% color bars)
     pub fn parse(source: &str) -> Option<Self> {
+        if source == "bars" {
+            return Some(Self::ColorBars);
+        }
         let (scheme, rest) = source.split_once(':')?;
         match scheme {
             "color" => Some(Self::Solid(
@@ -175,6 +209,7 @@ impl Generator {
             } => linear_gradient(*start, *end, *vertical, width, height),
             Self::Checkerboard { a, b, cell } => checkerboard(*a, *b, *cell, width, height),
             Self::RadialGradient { center, edge } => radial_gradient(*center, *edge, width, height),
+            Self::ColorBars => color_bars(width, height),
         }
     }
 }
@@ -295,6 +330,27 @@ mod tests {
         assert_eq!(rendered.pixel(1, 1)[0], 1.0);
         // Missing the second color is rejected.
         assert_eq!(Generator::parse("radial:1,1,1,1"), None);
+    }
+
+    #[test]
+    fn color_bars_lays_out_seven_vertical_bars() {
+        // A 7-wide image puts one bar per column.
+        let bars = color_bars(7, 2);
+        assert_eq!(bars.pixel(0, 0), [0.75, 0.75, 0.75, 1.0]); // white
+        assert_eq!(bars.pixel(1, 0), [0.75, 0.75, 0.0, 1.0]); // yellow
+        assert_eq!(bars.pixel(2, 0), [0.0, 0.75, 0.75, 1.0]); // cyan
+        assert_eq!(bars.pixel(6, 0), [0.0, 0.0, 0.75, 1.0]); // blue
+                                                             // Bars run the full height (same color down a column).
+        assert_eq!(bars.pixel(3, 0), bars.pixel(3, 1));
+    }
+
+    #[test]
+    fn bars_generator_parses_and_renders() {
+        assert_eq!(Generator::parse("bars"), Some(Generator::ColorBars));
+        let rendered = Generator::parse("bars").unwrap().render(7, 1);
+        assert_eq!(rendered.pixels, color_bars(7, 1).pixels);
+        // Empty dimensions do not panic.
+        assert!(color_bars(0, 4).pixels.is_empty());
     }
 
     #[test]
