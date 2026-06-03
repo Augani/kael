@@ -49,6 +49,8 @@ pub mod extension_rpc;
 mod file_watcher;
 mod geometry;
 mod global;
+/// GPU memory budgeting and eviction.
+pub mod gpu;
 /// Headless off-screen rendering for benchmarks and golden-image tests.
 pub mod headless_render;
 mod icons;
@@ -155,6 +157,7 @@ pub use file_watcher::*;
 pub use geometry::*;
 pub use gesture::*;
 pub use global::*;
+pub use gpu::*;
 pub use headless_render::*;
 pub use http_client;
 pub use input::*;
