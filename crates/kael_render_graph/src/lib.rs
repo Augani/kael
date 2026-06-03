@@ -1259,6 +1259,32 @@ pub mod reference {
         })
     }
 
+    /// A single-input op that keys out (sets alpha to 0) pixels of `inputs[0]` within
+    /// `tolerance` Euclidean RGB distance of the key `color` — a basic chroma (color) key
+    /// for green/blue screen. Color channels are preserved.
+    pub fn chroma_key(color: [f32; 3], tolerance: f32) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            if source.width != output.width || source.height != output.height {
+                return;
+            }
+            for (output_pixel, source_pixel) in output.pixels.iter_mut().zip(&source.pixels) {
+                let distance = ((source_pixel[0] - color[0]).powi(2)
+                    + (source_pixel[1] - color[1]).powi(2)
+                    + (source_pixel[2] - color[2]).powi(2))
+                .sqrt();
+                let alpha = if distance <= tolerance {
+                    0.0
+                } else {
+                    source_pixel[3]
+                };
+                *output_pixel = [source_pixel[0], source_pixel[1], source_pixel[2], alpha];
+            }
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -1557,6 +1583,23 @@ pub mod reference {
             // Color channels are preserved; only alpha changes.
             assert_eq!(out.pixel(2, 0), [1.0, 1.0, 1.0, 1.0]);
             assert_eq!(&out.pixel(0, 0)[0..3], &[0.0, 0.0, 0.0]);
+        }
+
+        #[test]
+        fn chroma_key_removes_key_color_and_keeps_others() {
+            let mut source = Image::new(3, 1);
+            source.pixels = vec![
+                [0.0, 1.0, 0.0, 1.0], // pure green -> keyed
+                [0.1, 0.9, 0.1, 1.0], // near green (dist ~0.17 < 0.2) -> keyed
+                [1.0, 0.0, 0.0, 1.0], // red (far) -> kept
+            ];
+            let mut out = Image::new(3, 1);
+            chroma_key([0.0, 1.0, 0.0], 0.2)(&[&source], &mut out);
+            assert_eq!(out.pixel(0, 0)[3], 0.0);
+            assert_eq!(out.pixel(1, 0)[3], 0.0);
+            assert_eq!(out.pixel(2, 0)[3], 1.0);
+            // Color channels are preserved for kept pixels.
+            assert_eq!(&out.pixel(2, 0)[0..3], &[1.0, 0.0, 0.0]);
         }
     }
 }
