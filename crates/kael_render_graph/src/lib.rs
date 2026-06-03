@@ -1378,6 +1378,73 @@ pub mod reference {
         })
     }
 
+    /// A single-input drop-shadow of `inputs[0]`: the source's alpha is offset by
+    /// `(offset_x, offset_y)` pixels, blurred with [`gaussian_blur`] of radius `sigma`,
+    /// scaled by `opacity`, tinted with `color`, and the source is composited over it
+    /// with the straight-alpha "over" operator. A fully opaque source is returned
+    /// unchanged (its shadow is entirely occluded); `opacity == 0` yields the source.
+    pub fn drop_shadow(
+        offset_x: i32,
+        offset_y: i32,
+        sigma: f32,
+        color: [f32; 3],
+        opacity: f32,
+    ) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            if source.width != output.width || source.height != output.height {
+                return;
+            }
+            let (width, height) = (source.width, source.height);
+
+            let mut shadow = Image::new(width, height);
+            for y in 0..height as i64 {
+                for x in 0..width as i64 {
+                    let sx = x - offset_x as i64;
+                    let sy = y - offset_y as i64;
+                    let alpha = if sx >= 0 && sx < width as i64 && sy >= 0 && sy < height as i64 {
+                        source.pixels[(sy as u32 * width + sx as u32) as usize][3]
+                    } else {
+                        0.0
+                    };
+                    shadow.pixels[(y as u32 * width + x as u32) as usize] =
+                        [alpha, alpha, alpha, alpha];
+                }
+            }
+
+            let mut blurred = Image::new(width, height);
+            gaussian_blur(sigma)(&[&shadow], &mut blurred);
+
+            for ((out_pixel, source_pixel), blur_pixel) in output
+                .pixels
+                .iter_mut()
+                .zip(&source.pixels)
+                .zip(&blurred.pixels)
+            {
+                let source_alpha = source_pixel[3];
+                let shadow_alpha = (blur_pixel[3] * opacity).clamp(0.0, 1.0);
+                let out_alpha = source_alpha + shadow_alpha * (1.0 - source_alpha);
+                if out_alpha > 0.0 {
+                    let over = |source_channel: f32, shadow_channel: f32| {
+                        (source_channel * source_alpha
+                            + shadow_channel * shadow_alpha * (1.0 - source_alpha))
+                            / out_alpha
+                    };
+                    *out_pixel = [
+                        over(source_pixel[0], color[0]),
+                        over(source_pixel[1], color[1]),
+                        over(source_pixel[2], color[2]),
+                        out_alpha,
+                    ];
+                } else {
+                    *out_pixel = [0.0, 0.0, 0.0, 0.0];
+                }
+            }
+        })
+    }
+
     /// A single-input op that keys out (sets alpha to 0) pixels of `inputs[0]` whose
     /// Rec.709 luma is below `threshold` — a simple luma key for masking dark areas.
     /// Color channels are preserved; brighter pixels keep their alpha.
@@ -2355,6 +2422,55 @@ pub mod reference {
             directional_blur(1.0, 0.0, 1)(&[&row], &mut blurred_row);
             assert!((blurred_row.pixel(2, 2)[0] - 1.0).abs() < 1e-6);
             assert!(blurred_row.pixel(2, 1)[0] < 1e-6);
+        }
+
+        #[test]
+        fn drop_shadow_leaves_a_fully_opaque_source_unchanged() {
+            let source = Image::filled(5, 5, [0.3, 0.6, 0.9, 1.0]);
+            let mut out = Image::new(5, 5);
+            drop_shadow(2, 2, 1.5, [0.0, 0.0, 0.0], 1.0)(&[&source], &mut out);
+            for (got, want) in out.pixels.iter().zip(&source.pixels) {
+                for channel in 0..4 {
+                    assert!(
+                        (got[channel] - want[channel]).abs() < 1e-6,
+                        "{got:?} vs {want:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn drop_shadow_casts_into_transparent_areas() {
+            // One opaque white pixel on a transparent field; an unblurred (1,1) shadow.
+            let mut source = Image::new(5, 5);
+            source.pixels[2 * 5 + 2] = [1.0, 1.0, 1.0, 1.0];
+            let mut out = Image::new(5, 5);
+            drop_shadow(1, 1, 0.0, [0.0, 0.0, 0.0], 1.0)(&[&source], &mut out);
+
+            // The shadow lands down-right of the source, opaque black, where it was clear.
+            let shadow = out.pixel(3, 3);
+            assert!(shadow[0] < 1e-6 && shadow[1] < 1e-6 && shadow[2] < 1e-6);
+            assert!((shadow[3] - 1.0).abs() < 1e-6);
+            // The source pixel itself is untouched (its own shadow is occluded).
+            let center = out.pixel(2, 2);
+            assert!((center[0] - 1.0).abs() < 1e-6 && (center[3] - 1.0).abs() < 1e-6);
+        }
+
+        #[test]
+        fn drop_shadow_zero_opacity_returns_source() {
+            let mut source = Image::new(4, 4);
+            source.pixels[5] = [0.8, 0.2, 0.5, 1.0];
+            source.pixels[10] = [0.1, 0.9, 0.3, 0.6];
+            let mut out = Image::new(4, 4);
+            drop_shadow(1, 1, 2.0, [0.0, 0.0, 0.0], 0.0)(&[&source], &mut out);
+            for (got, want) in out.pixels.iter().zip(&source.pixels) {
+                for channel in 0..4 {
+                    assert!(
+                        (got[channel] - want[channel]).abs() < 1e-6,
+                        "{got:?} vs {want:?}"
+                    );
+                }
+            }
         }
 
         #[test]
