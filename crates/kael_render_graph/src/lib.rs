@@ -1235,6 +1235,71 @@ pub mod reference {
         })
     }
 
+    /// A single-input separable Gaussian blur of `inputs[0]` with standard deviation
+    /// `sigma` (in pixels), edge-clamped. Unlike [`box_blur`], the Gaussian kernel is
+    /// smooth and free of box-filter ringing, which makes it the basis for glow, soft
+    /// focus, and drop shadows. The kernel is truncated at three standard deviations
+    /// and normalized to unit sum, so a flat region is preserved exactly. The two 1D
+    /// passes cost O(width·height·radius) rather than the O(width·height·radius²) of a
+    /// naive 2D kernel. A non-positive `sigma` (or an empty image) is the identity.
+    pub fn gaussian_blur(sigma: f32) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            if source.width != output.width || source.height != output.height {
+                return;
+            }
+            if sigma <= 0.0 || source.pixels.is_empty() {
+                output.pixels.copy_from_slice(&source.pixels);
+                return;
+            }
+
+            let radius = (sigma * 3.0).ceil() as i32;
+            let denom = 2.0 * sigma * sigma;
+            let mut kernel = Vec::with_capacity((radius * 2 + 1) as usize);
+            let mut total = 0.0f32;
+            for offset in -radius..=radius {
+                let coordinate = offset as f32;
+                let weight = (-(coordinate * coordinate) / denom).exp();
+                kernel.push(weight);
+                total += weight;
+            }
+            for weight in &mut kernel {
+                *weight /= total;
+            }
+
+            let (width, height) = (output.width as i32, output.height as i32);
+            let mut horizontal = vec![[0.0f32; 4]; source.pixels.len()];
+            for y in 0..height {
+                for x in 0..width {
+                    let mut sum = [0.0f32; 4];
+                    for (tap, &weight) in kernel.iter().enumerate() {
+                        let sx = (x + tap as i32 - radius).clamp(0, width - 1);
+                        let pixel = source.pixels[(y * width + sx) as usize];
+                        for channel in 0..4 {
+                            sum[channel] += pixel[channel] * weight;
+                        }
+                    }
+                    horizontal[(y * width + x) as usize] = sum;
+                }
+            }
+            for y in 0..height {
+                for x in 0..width {
+                    let mut sum = [0.0f32; 4];
+                    for (tap, &weight) in kernel.iter().enumerate() {
+                        let sy = (y + tap as i32 - radius).clamp(0, height - 1);
+                        let pixel = horizontal[(sy * width + x) as usize];
+                        for channel in 0..4 {
+                            sum[channel] += pixel[channel] * weight;
+                        }
+                    }
+                    output.pixels[(y * width + x) as usize] = sum;
+                }
+            }
+        })
+    }
+
     /// A single-input op that keys out (sets alpha to 0) pixels of `inputs[0]` whose
     /// Rec.709 luma is below `threshold` — a simple luma key for masking dark areas.
     /// Color channels are preserved; brighter pixels keep their alpha.
@@ -1970,6 +2035,45 @@ pub mod reference {
             let mut out = Image::new(3, 3);
             convolve_3x3(sharpen)(&[&solid], &mut out);
             assert!(out.pixels.iter().all(|p| (p[0] - 0.5).abs() < 1e-6));
+        }
+
+        #[test]
+        fn gaussian_blur_preserves_a_flat_region() {
+            let solid = Image::filled(8, 8, [0.3, 0.6, 0.9, 1.0]);
+            let mut out = Image::new(8, 8);
+            gaussian_blur(2.0)(&[&solid], &mut out);
+            for pixel in &out.pixels {
+                for channel in 0..4 {
+                    assert!((pixel[channel] - solid.pixels[0][channel]).abs() < 1e-5);
+                }
+            }
+        }
+
+        #[test]
+        fn gaussian_blur_zero_sigma_is_identity() {
+            let mut source = Image::new(3, 3);
+            source.pixels[4] = [1.0, 0.5, 0.25, 1.0];
+            let mut out = Image::new(3, 3);
+            gaussian_blur(0.0)(&[&source], &mut out);
+            assert_eq!(out.pixels, source.pixels);
+        }
+
+        #[test]
+        fn gaussian_blur_spreads_an_impulse_symmetrically() {
+            let mut source = Image::new(5, 5);
+            source.pixels[2 * 5 + 2] = [1.0, 0.0, 0.0, 0.0];
+            let mut out = Image::new(5, 5);
+            gaussian_blur(1.0)(&[&source], &mut out);
+
+            let center = out.pixel(2, 2)[0];
+            assert!(center > 0.0 && center < 1.0);
+            assert!((out.pixel(1, 2)[0] - out.pixel(3, 2)[0]).abs() < 1e-6);
+            assert!((out.pixel(2, 1)[0] - out.pixel(2, 3)[0]).abs() < 1e-6);
+            assert!((out.pixel(1, 1)[0] - out.pixel(3, 3)[0]).abs() < 1e-6);
+            assert!((out.pixel(1, 1)[0] - out.pixel(1, 3)[0]).abs() < 1e-6);
+            assert!(out.pixel(1, 2)[0] > 0.0);
+            assert!(center > out.pixel(1, 2)[0]);
+            assert!(out.pixel(1, 2)[0] > out.pixel(0, 2)[0]);
         }
 
         #[test]
