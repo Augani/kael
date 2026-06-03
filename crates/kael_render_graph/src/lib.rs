@@ -1300,6 +1300,39 @@ pub mod reference {
         })
     }
 
+    /// A single-input unsharp-mask sharpen of `inputs[0]`: the classic
+    /// `result = source + amount * (source - blur(source))`, where the blur is the
+    /// [`gaussian_blur`] of radius `sigma`. Boosting the high-frequency residual
+    /// raises local contrast at edges with a tunable radius and strength, unlike the
+    /// fixed 3x3 [`convolve_3x3`] sharpen kernel. Color channels are clamped to the
+    /// display range `[0, 1]`; alpha is passed through unchanged. `amount == 0` (or a
+    /// non-positive `sigma`) is the identity, and a flat region is preserved exactly.
+    pub fn unsharp_mask(sigma: f32, amount: f32) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            if source.width != output.width || source.height != output.height {
+                return;
+            }
+            let mut blurred = Image::new(source.width, source.height);
+            gaussian_blur(sigma)(inputs, &mut blurred);
+            for ((out_pixel, source_pixel), blur_pixel) in output
+                .pixels
+                .iter_mut()
+                .zip(&source.pixels)
+                .zip(&blurred.pixels)
+            {
+                for channel in 0..3 {
+                    let high_pass = source_pixel[channel] - blur_pixel[channel];
+                    out_pixel[channel] =
+                        (source_pixel[channel] + amount * high_pass).clamp(0.0, 1.0);
+                }
+                out_pixel[3] = source_pixel[3];
+            }
+        })
+    }
+
     /// A single-input op that keys out (sets alpha to 0) pixels of `inputs[0]` whose
     /// Rec.709 luma is below `threshold` — a simple luma key for masking dark areas.
     /// Color channels are preserved; brighter pixels keep their alpha.
@@ -2074,6 +2107,54 @@ pub mod reference {
             assert!(out.pixel(1, 2)[0] > 0.0);
             assert!(center > out.pixel(1, 2)[0]);
             assert!(out.pixel(1, 2)[0] > out.pixel(0, 2)[0]);
+        }
+
+        #[test]
+        fn unsharp_mask_zero_amount_is_identity() {
+            let mut source = Image::new(4, 4);
+            source.pixels[5] = [0.8, 0.2, 0.5, 1.0];
+            source.pixels[10] = [0.1, 0.9, 0.3, 0.5];
+            let mut out = Image::new(4, 4);
+            unsharp_mask(2.0, 0.0)(&[&source], &mut out);
+            for (got, want) in out.pixels.iter().zip(&source.pixels) {
+                for channel in 0..4 {
+                    assert!(
+                        (got[channel] - want[channel]).abs() < 1e-6,
+                        "{got:?} vs {want:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn unsharp_mask_preserves_a_flat_region() {
+            let solid = Image::filled(6, 6, [0.4, 0.5, 0.6, 1.0]);
+            let mut out = Image::new(6, 6);
+            unsharp_mask(1.5, 1.5)(&[&solid], &mut out);
+            for pixel in &out.pixels {
+                for channel in 0..4 {
+                    assert!((pixel[channel] - solid.pixels[0][channel]).abs() < 1e-5);
+                }
+            }
+        }
+
+        #[test]
+        fn unsharp_mask_overshoots_at_an_edge() {
+            let mut source = Image::new(6, 1);
+            for x in 0..3 {
+                source.pixels[x] = [0.3, 0.3, 0.3, 1.0];
+            }
+            for x in 3..6 {
+                source.pixels[x] = [0.7, 0.7, 0.7, 1.0];
+            }
+            let mut out = Image::new(6, 1);
+            unsharp_mask(1.0, 1.0)(&[&source], &mut out);
+
+            // The dark pixel adjacent to the edge undershoots below 0.3; the bright one
+            // overshoots above 0.7 — the signature of an unsharp mask raising contrast.
+            assert!(out.pixel(2, 0)[0] < 0.3, "{:?}", out.pixel(2, 0));
+            assert!(out.pixel(3, 0)[0] > 0.7, "{:?}", out.pixel(3, 0));
+            assert!((out.pixel(2, 0)[3] - 1.0).abs() < 1e-6);
         }
 
         #[test]
