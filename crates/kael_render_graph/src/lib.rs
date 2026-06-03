@@ -1445,6 +1445,48 @@ pub mod reference {
         })
     }
 
+    /// A single-input bloom / glow of `inputs[0]`: a bright-pass (`max(channel -
+    /// threshold, 0)` per RGB channel) is blurred with [`gaussian_blur`] of radius `sigma`,
+    /// scaled by `intensity`, and added back, then clamped to `0..=1`. Bright regions
+    /// spill a soft halo into their neighbors. `threshold >= 1` (nothing passes) or
+    /// `intensity == 0` returns the source; alpha is unchanged.
+    pub fn bloom(threshold: f32, sigma: f32, intensity: f32) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            if source.width != output.width || source.height != output.height {
+                return;
+            }
+            let mut bright = Image::new(source.width, source.height);
+            for (bright_pixel, source_pixel) in bright.pixels.iter_mut().zip(&source.pixels) {
+                *bright_pixel = [
+                    (source_pixel[0] - threshold).max(0.0),
+                    (source_pixel[1] - threshold).max(0.0),
+                    (source_pixel[2] - threshold).max(0.0),
+                    1.0,
+                ];
+            }
+
+            let mut blurred = Image::new(source.width, source.height);
+            gaussian_blur(sigma)(&[&bright], &mut blurred);
+
+            for ((out_pixel, source_pixel), blur_pixel) in output
+                .pixels
+                .iter_mut()
+                .zip(&source.pixels)
+                .zip(&blurred.pixels)
+            {
+                *out_pixel = [
+                    (source_pixel[0] + intensity * blur_pixel[0]).clamp(0.0, 1.0),
+                    (source_pixel[1] + intensity * blur_pixel[1]).clamp(0.0, 1.0),
+                    (source_pixel[2] + intensity * blur_pixel[2]).clamp(0.0, 1.0),
+                    source_pixel[3],
+                ];
+            }
+        })
+    }
+
     /// A single-input op that keys out (sets alpha to 0) pixels of `inputs[0]` whose
     /// Rec.709 luma is below `threshold` — a simple luma key for masking dark areas.
     /// Color channels are preserved; brighter pixels keep their alpha.
@@ -2471,6 +2513,46 @@ pub mod reference {
                     );
                 }
             }
+        }
+
+        #[test]
+        fn bloom_below_threshold_or_zero_intensity_is_identity() {
+            let source = Image::filled(4, 4, [0.4, 0.5, 0.6, 1.0]);
+
+            // Threshold 1.0: nothing in [0,1] passes the bright-pass.
+            let mut gated = Image::new(4, 4);
+            bloom(1.0, 2.0, 1.0)(&[&source], &mut gated);
+            // Zero intensity: the halo contributes nothing.
+            let mut dark = Image::new(4, 4);
+            bloom(0.0, 2.0, 0.0)(&[&source], &mut dark);
+
+            for out in [&gated, &dark] {
+                for (got, want) in out.pixels.iter().zip(&source.pixels) {
+                    for channel in 0..4 {
+                        assert!(
+                            (got[channel] - want[channel]).abs() < 1e-6,
+                            "{got:?} vs {want:?}"
+                        );
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn bloom_spreads_bright_regions_into_neighbors() {
+            let mut source = Image::filled(5, 5, [0.0, 0.0, 0.0, 1.0]);
+            source.pixels[2 * 5 + 2] = [1.0, 1.0, 1.0, 1.0];
+            let mut out = Image::new(5, 5);
+            bloom(0.5, 1.0, 1.0)(&[&source], &mut out);
+
+            // A previously dark neighbor picks up the glow halo.
+            assert!(out.pixel(1, 2)[0] > 0.0);
+            assert!(out.pixel(2, 1)[0] > 0.0);
+            // The bright source is preserved (clamped at the display ceiling).
+            assert!(out.pixel(2, 2)[0] >= 1.0 - 1e-6);
+            // Alpha is untouched throughout.
+            assert_eq!(out.pixel(1, 2)[3], 1.0);
+            assert_eq!(out.pixel(2, 2)[3], 1.0);
         }
 
         #[test]
