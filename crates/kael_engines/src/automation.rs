@@ -17,6 +17,14 @@ pub enum Interpolation {
     Linear,
     /// Smoothstep ease in/out toward the next keyframe's value.
     Smooth,
+    /// Quadratic ease-in (slow start).
+    EaseInQuad,
+    /// Quadratic ease-out (slow end).
+    EaseOutQuad,
+    /// Cubic ease-in (slower start).
+    EaseInCubic,
+    /// Cubic ease-out (slower end).
+    EaseOutCubic,
 }
 
 /// A single control point: a value at a time, plus how it transitions onward.
@@ -95,6 +103,10 @@ impl Automation {
             Interpolation::Hold => return start.value,
             Interpolation::Linear => progress,
             Interpolation::Smooth => progress * progress * (3.0 - 2.0 * progress),
+            Interpolation::EaseInQuad => progress * progress,
+            Interpolation::EaseOutQuad => progress * (2.0 - progress),
+            Interpolation::EaseInCubic => progress * progress * progress,
+            Interpolation::EaseOutCubic => 1.0 - (1.0 - progress).powi(3),
         };
         start.value + (end.value - start.value) * eased
     }
@@ -170,5 +182,31 @@ mod tests {
         curve.add(keyframe(50, 0.9, Interpolation::Hold));
         assert_eq!(curve.keyframes().len(), 3);
         assert_eq!(curve.sample(50), 0.9);
+    }
+
+    #[test]
+    fn easing_curves_have_exact_endpoints_and_known_midpoints() {
+        let curve = |interpolation| {
+            let mut c = Automation::constant(0.0);
+            c.add(keyframe(0, 0.0, interpolation));
+            c.add(keyframe(100, 1.0, Interpolation::Linear));
+            c
+        };
+        let eases = [
+            Interpolation::EaseInQuad,
+            Interpolation::EaseOutQuad,
+            Interpolation::EaseInCubic,
+            Interpolation::EaseOutCubic,
+        ];
+        for ease in eases {
+            let c = curve(ease);
+            assert_eq!(c.sample(0), 0.0, "{ease:?} at 0");
+            assert_eq!(c.sample(100), 1.0, "{ease:?} at 1");
+        }
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-5;
+        assert!(close(curve(Interpolation::EaseInQuad).sample(50), 0.25)); // 0.5^2
+        assert!(close(curve(Interpolation::EaseOutQuad).sample(50), 0.75)); // 0.5*(2-0.5)
+        assert!(close(curve(Interpolation::EaseInCubic).sample(50), 0.125)); // 0.5^3
+        assert!(close(curve(Interpolation::EaseOutCubic).sample(50), 0.875)); // 1-0.5^3
     }
 }
