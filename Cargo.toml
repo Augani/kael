@@ -18,6 +18,7 @@ members = [
     "crates/kael_release",
     "crates/kael_secrets",
     "crates/kael_render_graph",
+    "crates/kael_gpu_budget",
     "crates/kael_engines",
     "crates/collections",
     "crates/derive_refineable",

@@ -3871,6 +3871,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kael_gpu_budget"
+version = "0.1.2"
+dependencies = [
+ "ash",
+ "metal",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "kael_http_client"
 version = "0.1.2"
 dependencies = [

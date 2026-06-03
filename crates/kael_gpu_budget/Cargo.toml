@@ -1,0 +1,53 @@
+[package]
+edition.workspace = true
+name = "kael_gpu_budget"
+rust-version.workspace = true
+homepage.workspace = true
+version.workspace = true
+publish = true
+description = "Cross-platform GPU memory budget query (Metal / DXGI / Vulkan) for Kael"
+keywords = ["gpu", "memory", "vram", "kael"]
+categories = ["rendering::graphics-api"]
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[lib]
+name = "kael_gpu_budget"
+path = "src/lib.rs"
+doctest = false
+
+[target.'cfg(target_os = "macos")'.dependencies.metal]
+version = "0.29"
+
+[target.'cfg(target_os = "windows")'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+]
+
+[target.'cfg(target_os = "linux")'.dependencies.ash]
+version = "0.38"
+
+[lints.clippy]
+dbg_macro = "deny"
+declare_interior_mutable_const = "deny"
+disallowed_methods = "deny"
+large_enum_variant = "allow"
+let_underscore_future = "allow"
+nonminimal_bool = "allow"
+redundant_clone = "deny"
+single_range_in_vec_init = "allow"
+todo = "deny"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[lints.clippy.style]
+level = "allow"
+priority = -1
+
+[lints.rust.unexpected_cfgs]
+level = "allow"
+priority = 0
