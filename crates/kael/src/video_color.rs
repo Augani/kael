@@ -620,6 +620,50 @@ pub fn bradford_adaptation_matrix(source_white: [f32; 2], dest_white: [f32; 2]) 
     mat3_mul(bradford_inverse, mat3_mul(scale, BRADFORD))
 }
 
+/// CIE xy chromaticity of a Planckian (black-body) radiator at `kelvin`, via the Kim et
+/// al. cubic approximation of the Planckian locus. Input is clamped to 1667–25000 K.
+/// This converts a color temperature to the white point used for white balance.
+pub fn planckian_locus_xy(kelvin: f32) -> [f32; 2] {
+    let temp = kelvin.clamp(1667.0, 25000.0);
+    let inv = 1.0 / temp;
+    let inv2 = inv * inv;
+    let inv3 = inv2 * inv;
+    let x = if temp <= 4000.0 {
+        -0.266_123_9e9 * inv3 - 0.234_358_9e6 * inv2 + 0.877_695_6e3 * inv + 0.179_910
+    } else {
+        -3.025_846_9e9 * inv3 + 2.107_037_9e6 * inv2 + 0.222_634_7e3 * inv + 0.240_390
+    };
+    let x2 = x * x;
+    let x3 = x2 * x;
+    let y = if temp <= 2222.0 {
+        -1.106_381_4 * x3 - 1.348_110_2 * x2 + 2.185_558_3 * x - 0.202_196_83
+    } else if temp <= 4000.0 {
+        -0.954_947_6 * x3 - 1.374_185_9 * x2 + 2.091_370_2 * x - 0.167_488_67
+    } else {
+        3.081_758_0 * x3 - 5.873_386_7 * x2 + 3.751_130_0 * x - 0.370_014_83
+    };
+    [x, y]
+}
+
+/// A linear-RGB white-balance matrix that adapts content shot under `source_kelvin` to
+/// look correct under `target_kelvin`, in the given `primaries` — e.g. tungsten 3200 K
+/// to daylight 5600 K. Composes RGB→XYZ, a Bradford adaptation between the two color
+/// temperatures, and XYZ→RGB.
+pub fn white_balance_matrix(
+    primaries: ColorPrimaries,
+    source_kelvin: f32,
+    target_kelvin: f32,
+) -> Mat3 {
+    let adapt = bradford_adaptation_matrix(
+        planckian_locus_xy(source_kelvin),
+        planckian_locus_xy(target_kelvin),
+    );
+    mat3_mul(
+        xyz_to_rgb_matrix(primaries),
+        mat3_mul(adapt, rgb_to_xyz_matrix(primaries)),
+    )
+}
+
 /// A deterministic per-pixel color transform for rendering and export.
 ///
 /// Applies, in order: decode the input transfer function to linear light, convert
@@ -849,6 +893,44 @@ mod primaries_tests {
         assert!(
             close(adapted[2], target[2], 1e-4),
             "Z {adapted:?} vs {target:?}"
+        );
+    }
+
+    #[test]
+    fn planckian_locus_approximates_known_color_temperatures() {
+        // ~6504 K is the D65 daylight point.
+        let d65 = planckian_locus_xy(6504.0);
+        assert!(close(d65[0], 0.3127, 0.01), "6504K x = {}", d65[0]);
+        assert!(close(d65[1], 0.3290, 0.01), "6504K y = {}", d65[1]);
+        // Warmer (lower K) shifts toward orange — larger x.
+        let warm = planckian_locus_xy(3000.0);
+        assert!(
+            warm[0] > d65[0],
+            "3000K {warm:?} should be warmer than 6504K {d65:?}"
+        );
+        // Input is clamped to the valid range.
+        assert_eq!(planckian_locus_xy(1000.0), planckian_locus_xy(1667.0));
+    }
+
+    #[test]
+    fn white_balance_matrix_is_identity_for_equal_temperatures() {
+        let matrix = white_balance_matrix(ColorPrimaries::Bt709, 5000.0, 5000.0);
+        for i in 0..3 {
+            for j in 0..3 {
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert!(
+                    close(matrix[i][j], expected, 1e-4),
+                    "[{i}][{j}] = {}",
+                    matrix[i][j]
+                );
+            }
+        }
+        // A real tungsten->daylight balance is not the identity.
+        let shift = white_balance_matrix(ColorPrimaries::Bt709, 3200.0, 5600.0);
+        let neutral = mat3_vec(shift, [0.5, 0.5, 0.5]);
+        assert!(
+            (neutral[0] - 0.5).abs() > 1e-3 || (neutral[2] - 0.5).abs() > 1e-3,
+            "3200->5600 should change a neutral: {neutral:?}"
         );
     }
 }
