@@ -535,6 +535,7 @@ mod tests {
             track_type: TrackType::Video,
             clips,
             enabled: true,
+            gain: 1.0,
         }
     }
 

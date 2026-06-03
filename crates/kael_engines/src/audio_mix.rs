@@ -61,7 +61,7 @@ pub fn mix_range(
             };
             if let Some(samples) = provider.samples(&clip.source, source_frame, spf) {
                 for (offset, sample) in samples.iter().take(spf).enumerate() {
-                    output[base + offset] += sample;
+                    output[base + offset] += *sample * track.gain;
                 }
             }
         }
@@ -518,6 +518,7 @@ mod tests {
             track_type,
             clips,
             enabled: true,
+            gain: 1.0,
         }
     }
 
@@ -568,6 +569,18 @@ mod tests {
         let out = mix_range(&tl, 0..1, 48_000, &ConstProvider { value: 0.5 }).unwrap();
         // The muted second track contributes nothing: only 0.5 remains.
         assert!(out.iter().all(|sample| (sample - 0.5).abs() < 1e-6));
+    }
+
+    #[test]
+    fn per_track_gain_scales_its_contribution() {
+        let mut tl = timeline(
+            vec![track(TrackType::Audio, vec![clip("a", 0, 4, 0)])],
+            30.0,
+        );
+        tl.tracks[0].gain = 0.5;
+        let out = mix_range(&tl, 0..1, 48_000, &ConstProvider { value: 0.8 }).unwrap();
+        // The track fader at 0.5 halves the 0.8 source to 0.4.
+        assert!(out.iter().all(|sample| (sample - 0.4).abs() < 1e-6));
     }
 
     #[test]

@@ -408,6 +408,7 @@ mod tests {
                 name: "v1".to_string(),
                 track_type: TrackType::Video,
                 enabled: true,
+                gain: 1.0,
                 clips: vec![TimelineClip {
                     id: "title".to_string(),
                     source: "color:0,1,0,1".to_string(),

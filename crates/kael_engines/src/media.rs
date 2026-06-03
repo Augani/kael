@@ -158,10 +158,17 @@ pub struct TimelineTrack {
     /// disabled track is hidden (video) or muted (audio).
     #[serde(default = "default_track_enabled")]
     pub enabled: bool,
+    /// Linear mix gain for audio tracks — the track fader (defaults to unity).
+    #[serde(default = "default_track_gain")]
+    pub gain: f32,
 }
 
 fn default_track_enabled() -> bool {
     true
+}
+
+fn default_track_gain() -> f32 {
+    1.0
 }
 
 /// An error from a timeline edit operation.
@@ -1066,6 +1073,7 @@ mod tests {
             track_type,
             clips,
             enabled: true,
+            gain: 1.0,
         }
     }
 

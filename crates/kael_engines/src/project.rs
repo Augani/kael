@@ -169,6 +169,7 @@ mod tests {
                 name: "Video".to_string(),
                 track_type: TrackType::Video,
                 enabled: true,
+                gain: 1.0,
                 clips: vec![TimelineClip {
                     id: "a".to_string(),
                     source: "a.mov".to_string(),
@@ -343,6 +344,7 @@ mod tests {
             track_type: TrackType::Video,
             clips,
             enabled: true,
+            gain: 1.0,
         }
     }
 
