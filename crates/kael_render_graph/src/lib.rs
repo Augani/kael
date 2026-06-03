@@ -1821,6 +1821,75 @@ pub mod reference {
         })
     }
 
+    /// A two-input matte op: `inputs[0]` is the source and `inputs[1]` the matte. The
+    /// source's alpha is multiplied by the matte's Rec.709 luminance (clamped to `0..=1`),
+    /// so white matte regions keep the source and black regions knock it out — the
+    /// masks/mattes primitive, where a *separate* image gates the source (unlike the
+    /// self-keying of [`luma_key`]/[`chroma_key`]). Color is preserved; a size mismatch is a
+    /// no-op.
+    pub fn luma_matte() -> PassOp<'static> {
+        Box::new(|inputs, output| {
+            let (Some(source), Some(matte)) = (inputs.first(), inputs.get(1)) else {
+                return;
+            };
+            if source.width != output.width
+                || source.height != output.height
+                || matte.width != source.width
+                || matte.height != source.height
+            {
+                return;
+            }
+            for ((output_pixel, source_pixel), matte_pixel) in output
+                .pixels
+                .iter_mut()
+                .zip(&source.pixels)
+                .zip(&matte.pixels)
+            {
+                let luma =
+                    (0.2126 * matte_pixel[0] + 0.7152 * matte_pixel[1] + 0.0722 * matte_pixel[2])
+                        .clamp(0.0, 1.0);
+                *output_pixel = [
+                    source_pixel[0],
+                    source_pixel[1],
+                    source_pixel[2],
+                    source_pixel[3] * luma,
+                ];
+            }
+        })
+    }
+
+    /// A two-input matte op like [`luma_matte`], but the source's alpha is multiplied by the
+    /// matte's alpha channel (clamped to `0..=1`) rather than its luminance — for gating by
+    /// a rendered shape or pre-keyed matte's coverage. Color is preserved; a size mismatch is
+    /// a no-op.
+    pub fn alpha_matte() -> PassOp<'static> {
+        Box::new(|inputs, output| {
+            let (Some(source), Some(matte)) = (inputs.first(), inputs.get(1)) else {
+                return;
+            };
+            if source.width != output.width
+                || source.height != output.height
+                || matte.width != source.width
+                || matte.height != source.height
+            {
+                return;
+            }
+            for ((output_pixel, source_pixel), matte_pixel) in output
+                .pixels
+                .iter_mut()
+                .zip(&source.pixels)
+                .zip(&matte.pixels)
+            {
+                *output_pixel = [
+                    source_pixel[0],
+                    source_pixel[1],
+                    source_pixel[2],
+                    source_pixel[3] * matte_pixel[3].clamp(0.0, 1.0),
+                ];
+            }
+        })
+    }
+
     /// A single-input op converting straight (non-premultiplied) alpha to premultiplied:
     /// each color channel is multiplied by alpha.
     pub fn premultiply() -> PassOp<'static> {
@@ -2745,6 +2814,44 @@ pub mod reference {
             assert_eq!(out.pixel(2, 0)[3], 1.0);
             // Color channels are preserved for kept pixels.
             assert_eq!(&out.pixel(2, 0)[0..3], &[1.0, 0.0, 0.0]);
+        }
+
+        #[test]
+        fn luma_matte_scales_alpha_by_matte_luminance() {
+            let source = Image::filled(2, 2, [0.2, 0.4, 0.8, 1.0]);
+            let apply = |matte: &Image| {
+                let mut out = Image::new(2, 2);
+                luma_matte()(&[&source, matte], &mut out);
+                out.pixel(0, 0)
+            };
+            // White keeps the source, black knocks it out, gray halves the alpha.
+            assert!((apply(&Image::filled(2, 2, [1.0, 1.0, 1.0, 1.0]))[3] - 1.0).abs() < 1e-6);
+            assert!(apply(&Image::filled(2, 2, [0.0, 0.0, 0.0, 1.0]))[3] < 1e-6);
+            let masked = apply(&Image::filled(2, 2, [0.5, 0.5, 0.5, 1.0]));
+            assert!((masked[3] - 0.5).abs() < 1e-6);
+            // Color is preserved.
+            assert!((masked[0] - 0.2).abs() < 1e-6 && (masked[2] - 0.8).abs() < 1e-6);
+        }
+
+        #[test]
+        fn alpha_matte_scales_alpha_by_matte_alpha() {
+            let source = Image::filled(1, 1, [0.5, 0.5, 0.5, 0.8]);
+            let matte = Image::filled(1, 1, [0.0, 0.0, 0.0, 0.5]);
+            let mut out = Image::new(1, 1);
+            alpha_matte()(&[&source, &matte], &mut out);
+            // 0.8 * 0.5 = 0.4; color preserved.
+            assert!((out.pixel(0, 0)[3] - 0.4).abs() < 1e-6);
+            assert!((out.pixel(0, 0)[0] - 0.5).abs() < 1e-6);
+        }
+
+        #[test]
+        fn matte_size_mismatch_is_a_noop() {
+            let source = Image::filled(2, 2, [1.0, 1.0, 1.0, 1.0]);
+            let matte = Image::filled(1, 1, [1.0, 1.0, 1.0, 1.0]);
+            let mut out = Image::new(2, 2);
+            luma_matte()(&[&source, &matte], &mut out);
+            // The op returns early, leaving the cleared (transparent) output.
+            assert!(out.pixels.iter().all(|pixel| pixel[3] == 0.0));
         }
 
         #[test]
