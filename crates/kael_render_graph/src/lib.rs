@@ -1547,6 +1547,24 @@ pub mod reference {
         })
     }
 
+    /// A single-input op that inverts `inputs[0]`'s color (negative): each RGB channel
+    /// becomes `1 - channel`. Alpha passes through.
+    pub fn invert() -> PassOp<'static> {
+        Box::new(|inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            for (output_pixel, source_pixel) in output.pixels.iter_mut().zip(&source.pixels) {
+                *output_pixel = [
+                    1.0 - source_pixel[0],
+                    1.0 - source_pixel[1],
+                    1.0 - source_pixel[2],
+                    source_pixel[3],
+                ];
+            }
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -2057,6 +2075,27 @@ pub mod reference {
             let mut one = Image::new(1, 1);
             posterize(1)(&[&source], &mut one);
             assert_eq!(one.pixel(0, 0), two.pixel(0, 0));
+        }
+
+        #[test]
+        fn invert_negates_color_keeps_alpha() {
+            let mut source = Image::new(1, 1);
+            source.pixels = vec![[0.2, 0.5, 0.8, 0.5]];
+            let mut out = Image::new(1, 1);
+            invert()(&[&source], &mut out);
+            let pixel = out.pixel(0, 0);
+            assert!(
+                (pixel[0] - 0.8).abs() < 1e-6
+                    && (pixel[1] - 0.5).abs() < 1e-6
+                    && (pixel[2] - 0.2).abs() < 1e-6
+            );
+            assert_eq!(pixel[3], 0.5);
+            // Inverting twice restores the original.
+            let mut back = Image::new(1, 1);
+            invert()(&[&out], &mut back);
+            for channel in 0..3 {
+                assert!((back.pixel(0, 0)[channel] - source.pixels[0][channel]).abs() < 1e-6);
+            }
         }
     }
 }
