@@ -704,7 +704,7 @@ mod tests {
 pub mod reference {
     use std::collections::HashMap;
 
-    use anyhow::{Result, anyhow};
+    use anyhow::{anyhow, Result};
 
     use super::{CompiledGraph, PassId, RenderGraph, ResourceId};
 
@@ -820,6 +820,87 @@ pub mod reference {
         }
     }
 
+    /// Separable blend modes for compositing one layer over another.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum BlendMode {
+        /// Source-over (no color blending).
+        Normal,
+        /// Multiplies layer colors (darkens).
+        Multiply,
+        /// Inverse-multiplies (lightens).
+        Screen,
+        /// Clamped additive (linear dodge).
+        Add,
+    }
+
+    impl BlendMode {
+        fn apply(self, backdrop: f32, source: f32) -> f32 {
+            match self {
+                Self::Normal => source,
+                Self::Multiply => backdrop * source,
+                Self::Screen => backdrop + source - backdrop * source,
+                Self::Add => (backdrop + source).min(1.0),
+            }
+        }
+    }
+
+    /// A pass op compositing `inputs[0]` (top) over `inputs[1]` (bottom) with the
+    /// given blend `mode`, per the W3C compositing-and-blending model.
+    pub fn blend(mode: BlendMode) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            if inputs.len() < 2 {
+                return;
+            }
+            let (top, bottom) = (inputs[0], inputs[1]);
+            for (index, pixel) in output.pixels.iter_mut().enumerate() {
+                let s = top.pixels[index];
+                let b = bottom.pixels[index];
+                let (a_s, a_b) = (s[3], b[3]);
+                let out_a = a_s + a_b * (1.0 - a_s);
+                let mut out = [0.0f32; 4];
+                out[3] = out_a;
+                for channel in 0..3 {
+                    let blended = mode.apply(b[channel], s[channel]);
+                    let premultiplied = a_s * (1.0 - a_b) * s[channel]
+                        + a_s * a_b * blended
+                        + a_b * (1.0 - a_s) * b[channel];
+                    out[channel] = if out_a <= f32::EPSILON {
+                        0.0
+                    } else {
+                        premultiplied / out_a
+                    };
+                }
+                *pixel = out;
+            }
+        })
+    }
+
+    /// A pass op that translates `inputs[0]` by `(dx, dy)` pixels (nearest, with
+    /// transparent fill outside the source).
+    pub fn translate(dx: i32, dy: i32) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            let (width, height) = (output.width as i32, output.height as i32);
+            for y in 0..height {
+                for x in 0..width {
+                    let (sx, sy) = (x - dx, y - dy);
+                    let value = if sx >= 0
+                        && sx < source.width as i32
+                        && sy >= 0
+                        && sy < source.height as i32
+                    {
+                        source.pixels[(sy as u32 * source.width + sx as u32) as usize]
+                    } else {
+                        [0.0; 4]
+                    };
+                    output.pixels[(y as u32 * output.width + x as u32) as usize] = value;
+                }
+            }
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -860,6 +941,29 @@ pub mod reference {
             let compiled = graph.compile().unwrap();
             let result = execute(&graph, &compiled, 1, 1, &HashMap::new(), &HashMap::new());
             assert!(result.is_err());
+        }
+
+        #[test]
+        fn blend_modes_combine_layers() {
+            let gray = Image::filled(1, 1, [0.5, 0.5, 0.5, 1.0]);
+            let run = |mode| {
+                let mut out = Image::new(1, 1);
+                blend(mode)(&[&gray, &gray], &mut out);
+                out.pixel(0, 0)[0]
+            };
+            assert!((run(BlendMode::Normal) - 0.5).abs() < 1e-6);
+            assert!((run(BlendMode::Multiply) - 0.25).abs() < 1e-6);
+            assert!((run(BlendMode::Screen) - 0.75).abs() < 1e-6);
+            assert!((run(BlendMode::Add) - 1.0).abs() < 1e-6);
+        }
+
+        #[test]
+        fn translate_shifts_pixels() {
+            let source = Image::filled(2, 2, [1.0, 0.0, 0.0, 1.0]);
+            let mut out = Image::new(2, 2);
+            translate(1, 0)(&[&source], &mut out);
+            assert_eq!(out.pixel(0, 0), [0.0, 0.0, 0.0, 0.0]);
+            assert_eq!(out.pixel(1, 0), [1.0, 0.0, 0.0, 1.0]);
         }
     }
 }
