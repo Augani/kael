@@ -1327,6 +1327,44 @@ pub mod reference {
         })
     }
 
+    /// A single-input op applying a 3x3 convolution `kernel` to `inputs[0]` (edge-clamped)
+    /// — the general filter primitive behind sharpen, emboss, and edge detection. Alpha
+    /// passes through; RGB results are clamped to `0..=1`.
+    pub fn convolve_3x3(kernel: [[f32; 3]; 3]) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            if source.width != output.width || source.height != output.height {
+                return;
+            }
+            let (width, height) = (output.width as i32, output.height as i32);
+            for y in 0..height {
+                for x in 0..width {
+                    let mut acc = [0.0f32; 3];
+                    for (ky, row) in kernel.iter().enumerate() {
+                        for (kx, weight) in row.iter().enumerate() {
+                            let sx = (x + kx as i32 - 1).clamp(0, width - 1);
+                            let sy = (y + ky as i32 - 1).clamp(0, height - 1);
+                            let pixel = source.pixels[(sy * width + sx) as usize];
+                            for channel in 0..3 {
+                                acc[channel] += weight * pixel[channel];
+                            }
+                        }
+                    }
+                    let index = (y * width + x) as usize;
+                    let alpha = source.pixels[index][3];
+                    output.pixels[index] = [
+                        acc[0].clamp(0.0, 1.0),
+                        acc[1].clamp(0.0, 1.0),
+                        acc[2].clamp(0.0, 1.0),
+                        alpha,
+                    ];
+                }
+            }
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -1660,6 +1698,57 @@ pub mod reference {
             assert_eq!(restored.pixel(0, 0), [1.0, 0.5, 0.0, 0.5]);
             // Fully transparent stays zero (no divide by zero).
             assert_eq!(restored.pixel(1, 0), [0.0, 0.0, 0.0, 0.0]);
+        }
+
+        #[test]
+        fn convolve_identity_is_passthrough() {
+            let identity = [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0]];
+            let mut source = Image::new(2, 2);
+            source.pixels = vec![
+                [0.2, 0.4, 0.6, 1.0],
+                [0.1, 0.2, 0.3, 1.0],
+                [0.9, 0.8, 0.7, 1.0],
+                [0.5, 0.5, 0.5, 1.0],
+            ];
+            let mut out = Image::new(2, 2);
+            convolve_3x3(identity)(&[&source], &mut out);
+            for (got, want) in out.pixels.iter().zip(&source.pixels) {
+                for channel in 0..3 {
+                    assert!(
+                        (got[channel] - want[channel]).abs() < 1e-6,
+                        "{got:?} vs {want:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn convolve_sharpen_preserves_solids() {
+            // A sum-to-one sharpen kernel leaves a flat region unchanged.
+            let sharpen = [[0.0, -1.0, 0.0], [-1.0, 5.0, -1.0], [0.0, -1.0, 0.0]];
+            let solid = Image::filled(3, 3, [0.5, 0.5, 0.5, 1.0]);
+            let mut out = Image::new(3, 3);
+            convolve_3x3(sharpen)(&[&solid], &mut out);
+            assert!(out.pixels.iter().all(|p| (p[0] - 0.5).abs() < 1e-6));
+        }
+
+        #[test]
+        fn convolve_box_kernel_averages_neighborhood() {
+            let box_kernel = [[1.0 / 9.0; 3]; 3];
+            let mut source = Image::new(3, 1);
+            source.pixels = vec![
+                [0.0, 0.0, 0.0, 1.0],
+                [0.9, 0.9, 0.9, 1.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ];
+            let mut out = Image::new(3, 1);
+            convolve_3x3(box_kernel)(&[&source], &mut out);
+            // Center: 3 (vertically-clamped) rows of (0 + 0.9 + 0) / 9 = 0.3.
+            assert!(
+                (out.pixel(1, 0)[0] - 0.3).abs() < 1e-6,
+                "{:?}",
+                out.pixel(1, 0)
+            );
         }
     }
 }
