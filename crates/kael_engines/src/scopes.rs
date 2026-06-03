@@ -134,6 +134,58 @@ pub fn waveform(image: &Image) -> Waveform {
     }
 }
 
+/// An RGB parade: three per-channel column distributions (red, green, blue) shown side by
+/// side — the grading scope for checking white balance and per-channel clipping, unlike the
+/// single-channel luma [`Waveform`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Parade {
+    /// Number of columns (image width).
+    pub width: u32,
+    /// Red-channel counts indexed `column * 256 + level`.
+    pub red: Vec<u32>,
+    /// Green-channel counts indexed `column * 256 + level`.
+    pub green: Vec<u32>,
+    /// Blue-channel counts indexed `column * 256 + level`.
+    pub blue: Vec<u32>,
+}
+
+impl Parade {
+    /// The count of pixels in `column` whose `channel` (0 = red, 1 = green, else blue) sits
+    /// at `level`.
+    pub fn at(&self, channel: usize, column: u32, level: u8) -> u32 {
+        let plane = match channel {
+            0 => &self.red,
+            1 => &self.green,
+            _ => &self.blue,
+        };
+        plane[column as usize * 256 + level as usize]
+    }
+}
+
+/// Compute the [`Parade`] of `image` — a per-RGB-channel horizontal distribution.
+pub fn parade(image: &Image) -> Parade {
+    let width = image.width as usize;
+    let mut red = vec![0u32; width * 256];
+    let mut green = vec![0u32; width * 256];
+    let mut blue = vec![0u32; width * 256];
+    let level = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as usize;
+    for y in 0..image.height {
+        for x in 0..image.width {
+            let pixel = image.pixel(x, y);
+            let column = x as usize * 256;
+            red[column + level(pixel[0])] += 1;
+            green[column + level(pixel[1])] += 1;
+            blue[column + level(pixel[2])] += 1;
+        }
+    }
+    Parade {
+        width: image.width,
+        red,
+        green,
+        blue,
+    }
+}
+
 /// A vectorscope: a 2-D chroma histogram. Neutral colors land at the center; saturated
 /// colors spread outward by hue. Cells are indexed `cr_cell * size + cb_cell`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -273,6 +325,33 @@ mod tests {
         assert_eq!(scope.at(2, 255), 2);
         // Nothing elsewhere in those columns.
         assert_eq!(scope.at(0, 255), 0);
+    }
+
+    #[test]
+    fn parade_separates_rgb_channels_per_column() {
+        // One pixel with a distinct value per channel.
+        let mut image = Image::new(1, 1);
+        image.pixels = vec![[1.0, 0.5, 0.0, 1.0]];
+        let scope = parade(&image);
+        assert_eq!(scope.width, 1);
+        // Red at 255, green at round(0.5*255)=128, blue at 0.
+        assert_eq!(scope.at(0, 0, 255), 1);
+        assert_eq!(scope.at(1, 0, 128), 1);
+        assert_eq!(scope.at(2, 0, 0), 1);
+        // Channels don't bleed into each other's levels.
+        assert_eq!(scope.at(0, 0, 0), 0);
+        assert_eq!(scope.at(2, 0, 255), 0);
+    }
+
+    #[test]
+    fn parade_counts_every_pixel_in_a_column() {
+        // Two rows, one column; each channel accumulates both rows at its level.
+        let image = Image::filled(1, 2, [0.25, 0.25, 0.25, 1.0]);
+        let scope = parade(&image);
+        let level = (0.25_f32 * 255.0).round() as u8; // 64
+        assert_eq!(scope.at(0, 0, level), 2);
+        assert_eq!(scope.at(1, 0, level), 2);
+        assert_eq!(scope.at(2, 0, level), 2);
     }
 
     #[test]
