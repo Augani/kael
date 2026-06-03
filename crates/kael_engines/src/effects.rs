@@ -11,6 +11,8 @@ use kael_render_graph::reference::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::automation::Automation;
+
 /// A single serializable image effect applied to a clip before compositing.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ClipEffect {
@@ -146,6 +148,128 @@ impl EffectStack {
     }
 }
 
+/// A [`ClipEffect`] whose scalar parameters are [`Automation`] curves rather than
+/// constants — a keyframed effect (P2-C), built on the existing automation core.
+/// [`resolve`](AnimatedEffect::resolve) samples every curve at a time to produce the
+/// concrete [`ClipEffect`] for that moment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AnimatedEffect {
+    /// Keyframed Gaussian blur radius.
+    GaussianBlur {
+        /// Blur standard deviation over time.
+        sigma: Automation,
+    },
+    /// Keyframed exposure.
+    Exposure {
+        /// Stops over time.
+        stops: Automation,
+    },
+    /// Keyframed gamma.
+    Gamma {
+        /// Gamma power over time.
+        power: Automation,
+    },
+    /// Keyframed saturation.
+    Saturation {
+        /// Saturation multiplier over time.
+        amount: Automation,
+    },
+    /// Keyframed white balance.
+    WhiteBalance {
+        /// Warm/cool axis over time.
+        temperature: Automation,
+        /// Green/magenta axis over time.
+        tint: Automation,
+    },
+    /// Keyframed vignette.
+    Vignette {
+        /// Darkening strength over time.
+        amount: Automation,
+        /// Radius over time.
+        radius: Automation,
+        /// Falloff width over time.
+        softness: Automation,
+    },
+    /// Keyframed solarize threshold.
+    Solarize {
+        /// Fold threshold over time.
+        threshold: Automation,
+    },
+}
+
+impl AnimatedEffect {
+    /// Sample every parameter curve at `time_ms` to produce the concrete effect.
+    pub fn resolve(&self, time_ms: u64) -> ClipEffect {
+        match self {
+            AnimatedEffect::GaussianBlur { sigma } => ClipEffect::GaussianBlur {
+                sigma: sigma.sample(time_ms),
+            },
+            AnimatedEffect::Exposure { stops } => ClipEffect::Exposure {
+                stops: stops.sample(time_ms),
+            },
+            AnimatedEffect::Gamma { power } => ClipEffect::Gamma {
+                power: power.sample(time_ms),
+            },
+            AnimatedEffect::Saturation { amount } => ClipEffect::Saturation {
+                amount: amount.sample(time_ms),
+            },
+            AnimatedEffect::WhiteBalance { temperature, tint } => ClipEffect::WhiteBalance {
+                temperature: temperature.sample(time_ms),
+                tint: tint.sample(time_ms),
+            },
+            AnimatedEffect::Vignette {
+                amount,
+                radius,
+                softness,
+            } => ClipEffect::Vignette {
+                amount: amount.sample(time_ms),
+                radius: radius.sample(time_ms),
+                softness: softness.sample(time_ms),
+            },
+            AnimatedEffect::Solarize { threshold } => ClipEffect::Solarize {
+                threshold: threshold.sample(time_ms),
+            },
+        }
+    }
+}
+
+/// An ordered stack of [`AnimatedEffect`]s — the keyframed counterpart of [`EffectStack`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AnimatedEffectStack {
+    /// The animated effects, applied in order once resolved.
+    pub effects: Vec<AnimatedEffect>,
+}
+
+impl AnimatedEffectStack {
+    /// An empty stack.
+    pub fn new() -> Self {
+        Self {
+            effects: Vec::new(),
+        }
+    }
+
+    /// Whether the stack has no effects.
+    pub fn is_empty(&self) -> bool {
+        self.effects.is_empty()
+    }
+
+    /// The number of effects.
+    pub fn len(&self) -> usize {
+        self.effects.len()
+    }
+
+    /// Resolve every animated effect at `time_ms` into a concrete [`EffectStack`].
+    pub fn resolve(&self, time_ms: u64) -> EffectStack {
+        EffectStack {
+            effects: self
+                .effects
+                .iter()
+                .map(|effect| effect.resolve(time_ms))
+                .collect(),
+        }
+    }
+}
+
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
@@ -160,6 +284,7 @@ fn fnv_mix(mut hash: u64, value: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::automation::{Interpolation, Keyframe};
     use kael_render_graph::reference::Image;
 
     #[test]
@@ -246,5 +371,68 @@ mod tests {
         };
         assert_ne!(forward.param_hash(), reversed.param_hash());
         assert_ne!(forward.param_hash(), EffectStack::new().param_hash());
+    }
+
+    #[test]
+    fn animated_effect_resolves_keyframed_curve() {
+        let mut stops = Automation::constant(0.0);
+        stops.add(Keyframe {
+            time_ms: 0,
+            value: 0.0,
+            interpolation: Interpolation::Linear,
+        });
+        stops.add(Keyframe {
+            time_ms: 1000,
+            value: 2.0,
+            interpolation: Interpolation::Linear,
+        });
+        let effect = AnimatedEffect::Exposure { stops };
+
+        let stops_at = |time_ms| match effect.resolve(time_ms) {
+            ClipEffect::Exposure { stops } => stops,
+            other => panic!("expected exposure, got {other:?}"),
+        };
+        assert!((stops_at(0) - 0.0).abs() < 1e-6);
+        assert!((stops_at(500) - 1.0).abs() < 1e-6);
+        assert!((stops_at(1000) - 2.0).abs() < 1e-6);
+        // The curve holds the last keyframe past its end.
+        assert!((stops_at(5000) - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn animated_effect_stack_resolves_to_a_static_stack() {
+        let stack = AnimatedEffectStack {
+            effects: vec![
+                AnimatedEffect::Exposure {
+                    stops: Automation::constant(1.0),
+                },
+                AnimatedEffect::GaussianBlur {
+                    sigma: Automation::constant(2.0),
+                },
+            ],
+        };
+        assert_eq!(stack.len(), 2);
+        let resolved = stack.resolve(250);
+        assert_eq!(
+            resolved.effects,
+            vec![
+                ClipEffect::Exposure { stops: 1.0 },
+                ClipEffect::GaussianBlur { sigma: 2.0 },
+            ]
+        );
+    }
+
+    #[test]
+    fn animated_effect_serde_round_trips() {
+        let mut amount = Automation::constant(0.5);
+        amount.add(Keyframe {
+            time_ms: 100,
+            value: 1.0,
+            interpolation: Interpolation::Smooth,
+        });
+        let effect = AnimatedEffect::Saturation { amount };
+        let json = serde_json::to_string(&effect).unwrap();
+        let restored: AnimatedEffect = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, effect);
     }
 }
