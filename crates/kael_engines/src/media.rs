@@ -308,6 +308,14 @@ impl TimelineTrack {
         Ok(removed)
     }
 
+    /// Remove the clip with the given id, leaving a gap where it was — the non-rippling
+    /// "lift" edit. Later clips keep their positions (contrast [`TimelineTrack::ripple_delete`],
+    /// which closes the gap). Returns the removed clip.
+    pub fn lift(&mut self, id: &str) -> Result<TimelineClip, TimelineEditError> {
+        let index = self.clip_index(id)?;
+        Ok(self.clips.remove(index))
+    }
+
     /// Slip the clip's source window by `delta` (both in and out), leaving its
     /// track position and duration unchanged.
     pub fn slip(&mut self, id: &str, delta: i64) -> Result<(), TimelineEditError> {
@@ -1246,6 +1254,23 @@ mod tests {
         let c = track.clips.iter().find(|clip| clip.id == "c").unwrap();
         assert_eq!(c.track_offset, 50);
         assert!(!track.has_overlap());
+    }
+
+    #[test]
+    fn lift_leaves_a_gap() {
+        let mut track = edit_track(vec![
+            sample_clip("a", 0, 50, 0),
+            sample_clip("b", 0, 50, 50),
+            sample_clip("c", 0, 50, 100),
+        ]);
+        let lifted = track.lift("b").unwrap();
+        assert_eq!(lifted.id, "b");
+        assert_eq!(track.clips.len(), 2);
+        // Unlike ripple_delete, the later clip stays put and a gap remains.
+        let c = track.clips.iter().find(|clip| clip.id == "c").unwrap();
+        assert_eq!(c.track_offset, 100);
+        assert_eq!(track.gaps(), vec![(50, 100)]);
+        assert!(track.lift("missing").is_err());
     }
 
     #[test]
