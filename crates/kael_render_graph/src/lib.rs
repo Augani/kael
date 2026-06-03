@@ -1235,6 +1235,30 @@ pub mod reference {
         })
     }
 
+    /// A single-input op that keys out (sets alpha to 0) pixels of `inputs[0]` whose
+    /// Rec.709 luma is below `threshold` — a simple luma key for masking dark areas.
+    /// Color channels are preserved; brighter pixels keep their alpha.
+    pub fn luma_key(threshold: f32) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            if source.width != output.width || source.height != output.height {
+                return;
+            }
+            for (output_pixel, source_pixel) in output.pixels.iter_mut().zip(&source.pixels) {
+                let luma =
+                    0.2126 * source_pixel[0] + 0.7152 * source_pixel[1] + 0.0722 * source_pixel[2];
+                let alpha = if luma < threshold {
+                    0.0
+                } else {
+                    source_pixel[3]
+                };
+                *output_pixel = [source_pixel[0], source_pixel[1], source_pixel[2], alpha];
+            }
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -1515,6 +1539,24 @@ pub mod reference {
                 red[1] > red[0] && red[2] > red[1] && red[3] > red[2],
                 "{red:?}"
             );
+        }
+
+        #[test]
+        fn luma_key_masks_dark_pixels_and_keeps_color() {
+            let mut source = Image::new(3, 1);
+            source.pixels = vec![
+                [0.0, 0.0, 0.0, 1.0],    // black, luma 0 -> keyed
+                [0.25, 0.25, 0.25, 1.0], // dark gray, luma 0.25 -> keyed
+                [1.0, 1.0, 1.0, 1.0],    // white, luma 1 -> kept
+            ];
+            let mut out = Image::new(3, 1);
+            luma_key(0.5)(&[&source], &mut out);
+            assert_eq!(out.pixel(0, 0)[3], 0.0);
+            assert_eq!(out.pixel(1, 0)[3], 0.0);
+            assert_eq!(out.pixel(2, 0)[3], 1.0);
+            // Color channels are preserved; only alpha changes.
+            assert_eq!(out.pixel(2, 0), [1.0, 1.0, 1.0, 1.0]);
+            assert_eq!(&out.pixel(0, 0)[0..3], &[0.0, 0.0, 0.0]);
         }
     }
 }
