@@ -1659,6 +1659,61 @@ pub mod reference {
         })
     }
 
+    fn morphology(radius: u32, take_max: bool) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            if source.width != output.width || source.height != output.height {
+                return;
+            }
+            if radius == 0 {
+                output.pixels.copy_from_slice(&source.pixels);
+                return;
+            }
+            let radius = radius as i32;
+            let (width, height) = (source.width as i32, source.height as i32);
+            for y in 0..height {
+                for x in 0..width {
+                    let mut accumulator = if take_max {
+                        [f32::NEG_INFINITY; 4]
+                    } else {
+                        [f32::INFINITY; 4]
+                    };
+                    for dy in -radius..=radius {
+                        for dx in -radius..=radius {
+                            let sx = (x + dx).clamp(0, width - 1);
+                            let sy = (y + dy).clamp(0, height - 1);
+                            let pixel = source.pixels[(sy * width + sx) as usize];
+                            for channel in 0..4 {
+                                accumulator[channel] = if take_max {
+                                    accumulator[channel].max(pixel[channel])
+                                } else {
+                                    accumulator[channel].min(pixel[channel])
+                                };
+                            }
+                        }
+                    }
+                    output.pixels[(y * width + x) as usize] = accumulator;
+                }
+            }
+        })
+    }
+
+    /// A single-input morphological dilation of `inputs[0]`: each channel becomes the
+    /// maximum over its `(2*radius+1)²` edge-clamped neighborhood, growing bright regions
+    /// and alpha mattes. A `radius` of 0 is the identity.
+    pub fn dilate(radius: u32) -> PassOp<'static> {
+        morphology(radius, true)
+    }
+
+    /// A single-input morphological erosion of `inputs[0]`: each channel becomes the
+    /// minimum over its `(2*radius+1)²` edge-clamped neighborhood, shrinking bright regions
+    /// and alpha mattes. A `radius` of 0 is the identity.
+    pub fn erode(radius: u32) -> PassOp<'static> {
+        morphology(radius, false)
+    }
+
     /// A single-input op that keys out (sets alpha to 0) pixels of `inputs[0]` whose
     /// Rec.709 luma is below `threshold` — a simple luma key for masking dark areas.
     /// Color channels are preserved; brighter pixels keep their alpha.
@@ -2979,6 +3034,49 @@ pub mod reference {
                     "{pixel:?}"
                 );
             }
+        }
+
+        #[test]
+        fn dilate_and_erode_radius_zero_is_identity() {
+            let mut source = Image::new(3, 3);
+            source.pixels[4] = [0.8, 0.2, 0.5, 0.7];
+            let mut grown = Image::new(3, 3);
+            dilate(0)(&[&source], &mut grown);
+            assert_eq!(grown.pixels, source.pixels);
+            let mut shrunk = Image::new(3, 3);
+            erode(0)(&[&source], &mut shrunk);
+            assert_eq!(shrunk.pixels, source.pixels);
+        }
+
+        #[test]
+        fn dilate_grows_a_bright_speck() {
+            let mut source = Image::filled(5, 5, [0.0, 0.0, 0.0, 1.0]);
+            source.pixels[2 * 5 + 2] = [1.0, 1.0, 1.0, 1.0];
+            let mut out = Image::new(5, 5);
+            dilate(1)(&[&source], &mut out);
+            // The single speck grows to fill its whole 3x3 neighborhood...
+            assert!((out.pixel(2, 2)[0] - 1.0).abs() < 1e-6);
+            assert!((out.pixel(1, 1)[0] - 1.0).abs() < 1e-6);
+            assert!((out.pixel(3, 3)[0] - 1.0).abs() < 1e-6);
+            // ...but not beyond it.
+            assert!(out.pixel(0, 0)[0] < 1e-6);
+        }
+
+        #[test]
+        fn erode_shrinks_a_bright_block() {
+            // A 3x3 bright block (x,y in 1..4) on a dark field.
+            let mut source = Image::filled(5, 5, [0.0, 0.0, 0.0, 1.0]);
+            for y in 1..4 {
+                for x in 1..4 {
+                    source.pixels[y * 5 + x] = [1.0, 1.0, 1.0, 1.0];
+                }
+            }
+            let mut out = Image::new(5, 5);
+            erode(1)(&[&source], &mut out);
+            // Only the block's center, whose whole neighborhood is bright, survives.
+            assert!((out.pixel(2, 2)[0] - 1.0).abs() < 1e-6);
+            assert!(out.pixel(1, 1)[0] < 1e-6);
+            assert!(out.pixel(3, 3)[0] < 1e-6);
         }
 
         #[test]
