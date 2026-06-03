@@ -1347,6 +1347,48 @@ mod tests {
     }
 
     #[test]
+    fn test_sanitize_package_filename_stays_a_single_path_component() {
+        use std::path::{Component, Path};
+
+        let adversarial = [
+            "https://example.com/releases/kael-1.2.3.dmg",
+            "https://example.com/kael.dmg?token=secret#frag",
+            "https://example.com/../../etc/passwd",
+            "https://example.com/foo/..",
+            "https://example.com/a\\b\\evil.exe",
+            "https://example.com/",
+            "https://example.com/???",
+            "file:///etc/shadow",
+            "../../../../root/.ssh/authorized_keys",
+            "",
+            ".",
+            "..",
+            "/absolute/evil",
+        ];
+
+        for url in adversarial {
+            let name = sanitize_package_filename(url);
+            assert!(!name.is_empty(), "empty name for {url:?}");
+            assert!(
+                !name.contains('/') && !name.contains('\\'),
+                "separator survived for {url:?}: {name:?}"
+            );
+            assert_ne!(name, "..", "traversal token survived for {url:?}");
+
+            let components: Vec<_> = Path::new(&name).components().collect();
+            assert_eq!(
+                components.len(),
+                1,
+                "{url:?} -> {name:?} is not exactly one path component"
+            );
+            assert!(
+                matches!(components[0], Component::Normal(_)),
+                "{url:?} -> {name:?} is not a normal path component"
+            );
+        }
+    }
+
+    #[test]
     fn test_download_update_rejects_tampered_before_ready() {
         use http_client::{AsyncBody, FakeHttpClient, Response};
 
