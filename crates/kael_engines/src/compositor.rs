@@ -7,7 +7,9 @@
 //! decoder in production, a synthetic generator in tests — so the full timeline→pixels
 //! path is exercised without a decoder.
 
-use kael_render_graph::reference::{blend, Image};
+use std::collections::HashMap;
+
+use kael_render_graph::reference::{blend, BlendMode, Image, PassOp};
 use kael_render_graph::{PassDesc, PassId, RenderGraph, ResourceDesc, ResourceId};
 
 use crate::media::Timeline;
@@ -160,6 +162,73 @@ fn blend_param(blend_mode: u8, opacity: f32) -> u64 {
     fnv1a(&bytes)
 }
 
+/// Build the executable ops for `fg` so it can be run by
+/// [`execute_cached`](kael_render_graph::reference::execute_cached) (or
+/// [`execute`](kael_render_graph::reference::execute)).
+///
+/// Each source pass becomes an op writing the layer's decoded image (fetched from
+/// `provider`); each composite pass applies the clip's opacity and blends the layer over
+/// the accumulator. The background pass is intentionally left without an op so it clears to
+/// transparent. Running the result yields the same image as [`composite_frame`], so the
+/// graph form is the preview==export oracle with per-layer caching. A layer whose frame the
+/// provider cannot supply (or supplies at the wrong size) stays transparent, matching
+/// `composite_frame`'s skip behavior.
+pub fn frame_graph_ops(
+    frame_graph: &FrameGraph,
+    timeline: &Timeline,
+    frame: u64,
+    width: u32,
+    height: u32,
+    provider: &dyn FrameProvider,
+) -> HashMap<PassId, PassOp<'static>> {
+    let mut ops: HashMap<PassId, PassOp<'static>> = HashMap::new();
+    for (layer, request) in frame_graph
+        .layers
+        .iter()
+        .zip(timeline.frame_requests(frame))
+    {
+        let image = provider
+            .frame(&request.source, request.source_frame, width, height)
+            .filter(|fetched| fetched.width == width && fetched.height == height);
+        ops.insert(layer.source, source_op(image));
+
+        let opacity = request.opacity.clamp(0.0, 1.0);
+        ops.insert(
+            layer.composite,
+            composite_op(request.blend_mode.to_render_graph(), opacity),
+        );
+    }
+    ops
+}
+
+fn source_op(image: Option<Image>) -> PassOp<'static> {
+    Box::new(move |_inputs, output| {
+        if let Some(image) = &image {
+            if image.pixels.len() == output.pixels.len() {
+                output.pixels.copy_from_slice(&image.pixels);
+            }
+        }
+    })
+}
+
+fn composite_op(mode: BlendMode, opacity: f32) -> PassOp<'static> {
+    let blend_op = blend(mode);
+    Box::new(move |inputs, output| {
+        if inputs.len() != 2 {
+            return;
+        }
+        // The composite pass reads `[accumulator, layer]`; the reference `blend` expects
+        // `[top, backdrop]`, so the layer is fed first with its opacity applied.
+        let mut layer = inputs[1].clone();
+        if opacity < 1.0 {
+            for pixel in layer.pixels.iter_mut() {
+                pixel[3] *= opacity;
+            }
+        }
+        blend_op(&[&layer, inputs[0]], output);
+    })
+}
+
 /// A [`FrameProvider`] serving a single decoded still image per source — a photo, freeze
 /// frame, or title card. The concrete uncompressed-video provider, mirroring the WAV
 /// audio provider. Returns the image when the requested size matches its own.
@@ -308,6 +377,67 @@ mod tests {
         // Deterministic at a fixed frame; invalidated as the source frame advances.
         assert_eq!(key_at(10), key_at(10));
         assert_ne!(key_at(10), key_at(20));
+    }
+
+    #[test]
+    fn frame_graph_execution_matches_composite_frame() {
+        let mut timeline = Timeline {
+            tracks: vec![
+                track("v1", vec![clip("a", "red", 0, 30, 0)]),
+                track("v2", vec![clip("b", "blue", 0, 30, 0)]),
+            ],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        // Exercise opacity + a non-trivial blend mode on the top layer.
+        timeline.tracks[1].clips[0].opacity = 0.5;
+        timeline.tracks[1].clips[0].blend_mode = ClipBlendMode::Multiply;
+
+        let provider = provider(&[
+            ("red", [1.0, 0.0, 0.0, 1.0]),
+            ("blue", [0.0, 0.0, 1.0, 1.0]),
+        ]);
+        let direct = composite_frame(&timeline, 10, 4, 4, &provider);
+
+        let fg = build_frame_graph(&timeline, 10);
+        let compiled = fg.graph.compile().unwrap();
+        let ops = frame_graph_ops(&fg, &timeline, 10, 4, 4, &provider);
+        let mut cache = HashMap::new();
+        let (images, _) = kael_render_graph::reference::execute_cached(
+            &fg.graph,
+            &compiled,
+            4,
+            4,
+            &HashMap::new(),
+            &ops,
+            &mut cache,
+        )
+        .unwrap();
+
+        assert_eq!(images[&fg.output].pixels, direct.pixels);
+    }
+
+    #[test]
+    fn frame_graph_ops_cover_source_and_composite_passes() {
+        let timeline = Timeline {
+            tracks: vec![
+                track("v1", vec![clip("a", "red", 0, 30, 0)]),
+                track("v2", vec![clip("b", "blue", 0, 30, 0)]),
+            ],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        let provider = provider(&[
+            ("red", [1.0, 0.0, 0.0, 1.0]),
+            ("blue", [0.0, 0.0, 1.0, 1.0]),
+        ]);
+        let fg = build_frame_graph(&timeline, 10);
+        let ops = frame_graph_ops(&fg, &timeline, 10, 4, 4, &provider);
+        for layer in &fg.layers {
+            assert!(ops.contains_key(&layer.source));
+            assert!(ops.contains_key(&layer.composite));
+        }
+        assert_eq!(ops.len(), fg.layers.len() * 2);
     }
 
     #[test]
