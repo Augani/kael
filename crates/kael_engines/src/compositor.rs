@@ -27,11 +27,13 @@ pub trait FrameProvider {
 ///
 /// Each track's active clip is fetched from `provider`, its effect stack is applied, and the
 /// layers are stacked in track-declaration order (the first track is the bottom layer),
-/// honoring the clip's opacity and blend mode. Tracks with no active clip — or whose source
-/// frame the provider cannot supply, or whose supplied image is the wrong size — are skipped.
-/// The result is transparent where nothing is active. This matches the graph form built by
-/// [`build_frame_graph`] (run via [`render_frames`]), so it remains the preview==export
-/// oracle.
+/// honoring the clip's opacity and blend mode. Two clips overlapping on a track crossfade as
+/// one transition layer (see [`render_transition`]). Tracks with no active clip — or whose
+/// source frame the provider cannot supply, or whose supplied image is the wrong size — are
+/// skipped. The result is transparent where nothing is active. For timelines without clip
+/// overlaps this matches the graph form built by [`build_frame_graph`] (run via
+/// [`render_frames`]), so it remains the preview==export oracle there; the graph path does
+/// not yet emit transition passes.
 pub fn composite_frame(
     timeline: &Timeline,
     frame: u64,
@@ -40,23 +42,48 @@ pub fn composite_frame(
     provider: &dyn FrameProvider,
 ) -> Image {
     let mut output = Image::new(width, height);
-    for request in timeline.frame_requests(frame) {
-        let Some(layer) = provider.frame(&request.source, request.source_frame, width, height)
-        else {
-            continue;
-        };
-        if layer.width != width || layer.height != height {
+    for (index, track) in timeline.tracks.iter().enumerate() {
+        if !track.enabled {
             continue;
         }
-        let mut layer = request.effects.apply(&layer);
-        let opacity = request.opacity.clamp(0.0, 1.0);
-        if opacity < 1.0 {
-            for pixel in layer.pixels.iter_mut() {
-                pixel[3] *= opacity;
+        // Two overlapping clips on a track crossfade as one transition layer; otherwise the
+        // track contributes its single active clip. The single-clip path mirrors
+        // `frame_requests` exactly, so timelines without overlaps composite identically.
+        let (layer, mode) = if let Some(transition) =
+            render_transition(timeline, index, frame, width, height, provider)
+        {
+            (transition, BlendMode::Normal)
+        } else {
+            let Some((clip, source_frame)) = track
+                .clips
+                .iter()
+                .find_map(|clip| clip.source_frame_at(frame).map(|sf| (clip, sf)))
+            else {
+                continue;
+            };
+            let Some(image) = provider.frame(&clip.source, source_frame, width, height) else {
+                continue;
+            };
+            if image.width != width || image.height != height {
+                continue;
             }
-        }
+            let clip_local = frame.saturating_sub(clip.track_offset);
+            let time_ms = if timeline.frame_rate > 0.0 {
+                (clip_local as f64 / timeline.frame_rate * 1000.0) as u64
+            } else {
+                0
+            };
+            let mut layer = clip.effects.resolve(time_ms).apply(&image);
+            let opacity = clip.opacity.clamp(0.0, 1.0);
+            if opacity < 1.0 {
+                for pixel in layer.pixels.iter_mut() {
+                    pixel[3] *= opacity;
+                }
+            }
+            (layer, clip.blend_mode.to_render_graph())
+        };
         let mut next = Image::new(width, height);
-        blend(request.blend_mode.to_render_graph())(&[&layer, &output], &mut next);
+        blend(mode)(&[&layer, &output], &mut next);
         output = next;
     }
     output
@@ -772,6 +799,34 @@ mod tests {
 
         // No overlap at frame 10 -> no transition.
         assert!(render_transition(&timeline, 0, 10, 1, 1, &provider).is_none());
+    }
+
+    #[test]
+    fn composite_frame_crossfades_a_transition() {
+        let timeline = Timeline {
+            tracks: vec![track(
+                "v1",
+                vec![clip("a", "red", 0, 30, 0), clip("b", "blue", 0, 30, 20)],
+            )],
+            frame_rate: 30.0,
+            duration_frames: 50,
+        };
+        let provider = provider(&[
+            ("red", [1.0, 0.0, 0.0, 1.0]),
+            ("blue", [0.0, 0.0, 1.0, 1.0]),
+        ]);
+
+        // Outside the overlap the single active clip composites as before.
+        assert_eq!(
+            composite_frame(&timeline, 10, 1, 1, &provider).pixel(0, 0),
+            [1.0, 0.0, 0.0, 1.0]
+        );
+        // Inside the overlap (frame 25) the two clips crossfade -> half red, half blue.
+        let mid = composite_frame(&timeline, 25, 1, 1, &provider).pixel(0, 0);
+        assert!(
+            (mid[0] - 0.5).abs() < 1e-6 && (mid[2] - 0.5).abs() < 1e-6,
+            "{mid:?}"
+        );
     }
 
     #[test]
