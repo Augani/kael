@@ -1727,6 +1727,54 @@ pub mod reference {
         })
     }
 
+    /// A single-input tone-curve op applying a piecewise-linear transfer function to each
+    /// RGB channel of `inputs[0]` — the "Curves" adjustment. `control_points` are `[x, y]`
+    /// pairs (input → output) that are clamped to `0..=1`, sorted by `x`, and deduplicated;
+    /// inputs below the first / above the last point clamp to that point's `y`. Fewer than
+    /// two distinct points is the identity, so `[[0,0],[1,1]]` (or an empty list) passes
+    /// through. Alpha is unchanged.
+    pub fn tone_curve(control_points: Vec<[f32; 2]>) -> PassOp<'static> {
+        let mut points: Vec<[f32; 2]> = control_points
+            .into_iter()
+            .filter(|point| point[0].is_finite() && point[1].is_finite())
+            .map(|point| [point[0].clamp(0.0, 1.0), point[1].clamp(0.0, 1.0)])
+            .collect();
+        points.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        points.dedup_by(|a, b| a[0] == b[0]);
+
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            let apply = |value: f32| -> f32 {
+                if points.len() < 2 {
+                    return value;
+                }
+                let clamped = value.clamp(0.0, 1.0);
+                if clamped <= points[0][0] {
+                    return points[0][1];
+                }
+                let last = points[points.len() - 1];
+                if clamped >= last[0] {
+                    return last[1];
+                }
+                let upper = points.partition_point(|point| point[0] <= clamped);
+                let [x0, y0] = points[upper - 1];
+                let [x1, y1] = points[upper];
+                let t = (clamped - x0) / (x1 - x0);
+                y0 + t * (y1 - y0)
+            };
+            for (output_pixel, source_pixel) in output.pixels.iter_mut().zip(&source.pixels) {
+                *output_pixel = [
+                    apply(source_pixel[0]),
+                    apply(source_pixel[1]),
+                    apply(source_pixel[2]),
+                    source_pixel[3],
+                ];
+            }
+        })
+    }
+
     /// A single-input op that posterizes `inputs[0]` to `levels` discrete steps per RGB
     /// channel (clamped to at least 2) — the stylize/banding effect. Alpha passes through.
     pub fn posterize(levels: u32) -> PassOp<'static> {
@@ -2465,6 +2513,62 @@ pub mod reference {
             let mut green = Image::new(1, 1);
             temperature_tint(0.0, -2.0)(&[&gray], &mut green);
             assert!((green.pixel(0, 0)[1] - 1.0).abs() < 1e-6);
+        }
+
+        #[test]
+        fn tone_curve_identity_and_degenerate_inputs_pass_through() {
+            let source = Image::filled(2, 2, [0.2, 0.55, 0.9, 0.5]);
+
+            for curve in [vec![[0.0, 0.0], [1.0, 1.0]], vec![], vec![[0.3, 0.9]]] {
+                let mut out = Image::new(2, 2);
+                tone_curve(curve)(&[&source], &mut out);
+                for (got, want) in out.pixels.iter().zip(&source.pixels) {
+                    for channel in 0..4 {
+                        assert!(
+                            (got[channel] - want[channel]).abs() < 1e-6,
+                            "{got:?} vs {want:?}"
+                        );
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn tone_curve_inverts_and_interpolates_linearly() {
+            let mut source = Image::new(4, 1);
+            source.pixels = vec![
+                [0.0, 0.0, 0.0, 1.0],
+                [0.25, 0.25, 0.25, 1.0],
+                [0.5, 0.5, 0.5, 1.0],
+                [1.0, 1.0, 1.0, 1.0],
+            ];
+            let mut out = Image::new(4, 1);
+            tone_curve(vec![[0.0, 1.0], [1.0, 0.0]])(&[&source], &mut out);
+            let expected = [1.0, 0.75, 0.5, 0.0];
+            for (x, want) in expected.iter().enumerate() {
+                assert!(
+                    (out.pixel(x as u32, 0)[0] - want).abs() < 1e-6,
+                    "{}",
+                    out.pixel(x as u32, 0)[0]
+                );
+            }
+        }
+
+        #[test]
+        fn tone_curve_sorts_points_and_clamps_to_endpoints() {
+            let mut source = Image::new(3, 1);
+            source.pixels = vec![
+                [0.1, 0.1, 0.1, 0.5],
+                [0.5, 0.5, 0.5, 0.5],
+                [0.9, 0.9, 0.9, 0.5],
+            ];
+            // Deliberately unordered; below 0.25 -> 0, above 0.75 -> 1, midpoint -> 0.5.
+            let mut out = Image::new(3, 1);
+            tone_curve(vec![[0.75, 1.0], [0.25, 0.0]])(&[&source], &mut out);
+            assert!((out.pixel(0, 0)[0] - 0.0).abs() < 1e-6);
+            assert!((out.pixel(1, 0)[0] - 0.5).abs() < 1e-6);
+            assert!((out.pixel(2, 0)[0] - 1.0).abs() < 1e-6);
+            assert_eq!(out.pixel(1, 0)[3], 0.5);
         }
 
         #[test]
