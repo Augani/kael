@@ -165,6 +165,106 @@ impl Easing {
             Self::Custom(callback) => callback(delta).clamp(0.0, 1.0),
         }
     }
+
+    /// Sample this easing at `delta` in `0..=1` (public for media keyframes).
+    pub fn ease(&self, delta: f32) -> f32 {
+        self.sample(delta)
+    }
+}
+
+/// How to interpolate from one media keyframe toward the next.
+#[derive(Clone)]
+pub enum KeyframeInterpolation {
+    /// Hold the value until the next keyframe (step).
+    Hold,
+    /// Interpolate with the given easing curve (includes `CubicBezier` handles).
+    Eased(Easing),
+}
+
+/// A single media keyframe: a value at a time, with the curve used to reach the
+/// following keyframe.
+#[derive(Clone)]
+pub struct MediaKeyframe {
+    /// Keyframe time, in seconds.
+    pub time: f64,
+    /// Keyframe value.
+    pub value: f32,
+    /// Interpolation toward the following keyframe.
+    pub interpolation: KeyframeInterpolation,
+}
+
+/// A keyframed scalar track sampled by the render/playback clock.
+///
+/// Generalizes the UI [`Keyframes`] machinery to media use — transform, opacity,
+/// effect parameters, audio automation — reusing [`Easing`] (including
+/// `CubicBezier` handles) for interpolation.
+#[derive(Clone, Default)]
+pub struct KeyframeTrack {
+    keys: Vec<MediaKeyframe>,
+}
+
+impl KeyframeTrack {
+    /// An empty track.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Insert a keyframe (kept sorted by time) and return the track.
+    pub fn with_key(mut self, time: f64, value: f32, interpolation: KeyframeInterpolation) -> Self {
+        self.insert(MediaKeyframe {
+            time,
+            value,
+            interpolation,
+        });
+        self
+    }
+
+    /// Insert a keyframe, keeping the track sorted by time.
+    pub fn insert(&mut self, key: MediaKeyframe) {
+        let index = self
+            .keys
+            .partition_point(|existing| existing.time <= key.time);
+        self.keys.insert(index, key);
+    }
+
+    /// Number of keyframes.
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    /// Whether the track has no keyframes.
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
+    /// Sample the track at `time` (seconds). Returns `default` for an empty
+    /// track; clamps to the first/last value outside the keyframe range.
+    pub fn sample(&self, time: f64, default: f32) -> f32 {
+        let Some(first) = self.keys.first() else {
+            return default;
+        };
+        if time <= first.time {
+            return first.value;
+        }
+        let last = &self.keys[self.keys.len() - 1];
+        if time >= last.time {
+            return last.value;
+        }
+        let upper = self.keys.partition_point(|key| key.time <= time);
+        let (k0, k1) = (&self.keys[upper - 1], &self.keys[upper]);
+        match &k0.interpolation {
+            KeyframeInterpolation::Hold => k0.value,
+            KeyframeInterpolation::Eased(easing) => {
+                let span = (k1.time - k0.time) as f32;
+                let t = if span <= f32::EPSILON {
+                    0.0
+                } else {
+                    ((time - k0.time) as f32 / span).clamp(0.0, 1.0)
+                };
+                k0.value + (k1.value - k0.value) * easing.ease(t)
+            }
+        }
+    }
 }
 
 /// Repeat behavior for explicit animations.
@@ -498,5 +598,83 @@ mod tests {
 
         assert!(!animation.sample(Duration::from_millis(150)).finished);
         assert!(animation.sample(Duration::from_millis(250)).finished);
+    }
+}
+
+#[cfg(test)]
+mod media_keyframe_tests {
+    use super::*;
+
+    #[test]
+    fn empty_track_returns_default() {
+        let track = KeyframeTrack::new();
+        assert_eq!(track.sample(1.0, 42.0), 42.0);
+        assert!(track.is_empty());
+    }
+
+    #[test]
+    fn single_key_is_constant() {
+        let track = KeyframeTrack::new().with_key(1.0, 5.0, KeyframeInterpolation::Hold);
+        assert_eq!(track.sample(0.0, 0.0), 5.0);
+        assert_eq!(track.sample(2.0, 0.0), 5.0);
+    }
+
+    #[test]
+    fn linear_interpolates_between_keys() {
+        let track = KeyframeTrack::new()
+            .with_key(0.0, 0.0, KeyframeInterpolation::Eased(Easing::Linear))
+            .with_key(1.0, 10.0, KeyframeInterpolation::Hold);
+        assert!((track.sample(0.5, 0.0) - 5.0).abs() < 1e-5);
+        assert!((track.sample(0.25, 0.0) - 2.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn hold_steps_until_next_key() {
+        let track = KeyframeTrack::new()
+            .with_key(0.0, 1.0, KeyframeInterpolation::Hold)
+            .with_key(1.0, 9.0, KeyframeInterpolation::Hold);
+        assert_eq!(track.sample(0.5, 0.0), 1.0);
+        assert_eq!(track.sample(0.99, 0.0), 1.0);
+        assert_eq!(track.sample(1.0, 0.0), 9.0);
+    }
+
+    #[test]
+    fn easing_differs_from_linear() {
+        let eased = KeyframeTrack::new()
+            .with_key(0.0, 0.0, KeyframeInterpolation::Eased(Easing::EaseIn))
+            .with_key(1.0, 10.0, KeyframeInterpolation::Hold);
+        assert!(eased.sample(0.5, 0.0) < 5.0);
+    }
+
+    #[test]
+    fn clamps_outside_range() {
+        let track = KeyframeTrack::new()
+            .with_key(1.0, 2.0, KeyframeInterpolation::Eased(Easing::Linear))
+            .with_key(3.0, 8.0, KeyframeInterpolation::Hold);
+        assert_eq!(track.sample(-5.0, 0.0), 2.0);
+        assert_eq!(track.sample(100.0, 0.0), 8.0);
+    }
+
+    #[test]
+    fn out_of_order_insertion_stays_sorted() {
+        let mut track = KeyframeTrack::new();
+        track.insert(MediaKeyframe {
+            time: 2.0,
+            value: 20.0,
+            interpolation: KeyframeInterpolation::Hold,
+        });
+        track.insert(MediaKeyframe {
+            time: 0.0,
+            value: 0.0,
+            interpolation: KeyframeInterpolation::Eased(Easing::Linear),
+        });
+        track.insert(MediaKeyframe {
+            time: 1.0,
+            value: 10.0,
+            interpolation: KeyframeInterpolation::Eased(Easing::Linear),
+        });
+        assert!((track.sample(0.5, 0.0) - 5.0).abs() < 1e-5);
+        assert!((track.sample(1.5, 0.0) - 15.0).abs() < 1e-5);
+        assert_eq!(track.len(), 3);
     }
 }
