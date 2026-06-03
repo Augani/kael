@@ -10,8 +10,8 @@
 //! The [`Mixer`] core is deterministic and device-free, so it is fully unit
 //! tested; [`AudioEngine`] wires it to a real `cpal` output stream.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
@@ -327,6 +327,25 @@ impl Mixer {
 
         self.clock.advance(frames as u64);
     }
+
+    /// Render mixed audio offline (faster than real time) into a new interleaved
+    /// buffer, processing `chunk_frames` at a time and stopping once all voices
+    /// have ended or `max_frames` is reached. The primitive for export mixdown.
+    pub fn render_offline(&mut self, max_frames: usize, chunk_frames: usize) -> Vec<f32> {
+        let channels = self.channels as usize;
+        let chunk_frames = chunk_frames.max(1);
+        let mut output = Vec::with_capacity(max_frames.saturating_mul(channels));
+        let mut scratch = vec![0.0f32; chunk_frames * channels];
+        let mut rendered = 0;
+        while rendered < max_frames && self.active_voices() > 0 {
+            let frames = chunk_frames.min(max_frames - rendered);
+            let needed = frames * channels;
+            self.process(&mut scratch[..needed]);
+            output.extend_from_slice(&scratch[..needed]);
+            rendered += frames;
+        }
+        output
+    }
 }
 
 /// Linearly resample interleaved `input` from `from_rate` to `to_rate`.
@@ -548,6 +567,21 @@ mod tests {
 
         assert!((out[0] - 0.5).abs() < 1e-6);
         assert_eq!(out[63 * 2], 0.0);
+    }
+
+    #[test]
+    fn offline_render_mixes_until_voices_end() {
+        let mut mixer = Mixer::new(48_000, 2);
+        mixer.insert_voice(1, constant_source(0.5, 128, 2), 1.0);
+        mixer.insert_voice(2, constant_source(0.25, 128, 2), 1.0);
+
+        let output = mixer.render_offline(10_000, 64);
+        assert!(output.len() >= 128 * 2);
+        assert!(
+            output[..128 * 2].iter().all(|&s| (s - 0.75).abs() < 1e-6),
+            "first 128 frames should be the 0.75 mix"
+        );
+        assert_eq!(mixer.active_voices(), 0);
     }
 
     #[test]
