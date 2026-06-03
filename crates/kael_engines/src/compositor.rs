@@ -56,6 +56,43 @@ pub fn composite_frame(
     output
 }
 
+/// A [`FrameProvider`] serving a single decoded still image per source — a photo, freeze
+/// frame, or title card. The concrete uncompressed-video provider, mirroring the WAV
+/// audio provider. Returns the image when the requested size matches its own.
+#[derive(Debug, Default)]
+pub struct StillImageProvider {
+    images: std::collections::HashMap<String, Image>,
+}
+
+impl StillImageProvider {
+    /// An empty provider.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Decode a binary PPM and register it under `source`. Returns `false` if the bytes
+    /// are not a decodable PPM.
+    pub fn add_ppm(&mut self, source: impl Into<String>, ppm_bytes: &[u8]) -> bool {
+        let Some(image) = crate::export::decode_ppm(ppm_bytes) else {
+            return false;
+        };
+        self.images.insert(source.into(), image);
+        true
+    }
+
+    /// Register an already-decoded image under `source`.
+    pub fn add_image(&mut self, source: impl Into<String>, image: Image) {
+        self.images.insert(source.into(), image);
+    }
+}
+
+impl FrameProvider for StillImageProvider {
+    fn frame(&self, source: &str, _source_frame: u64, width: u32, height: u32) -> Option<Image> {
+        let image = self.images.get(source)?;
+        (image.width == width && image.height == height).then(|| image.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +281,27 @@ mod tests {
             (pixel[0] - 0.25).abs() < 1e-5,
             "multiply -> 0.25, got {}",
             pixel[0]
+        );
+    }
+
+    #[test]
+    fn still_image_provider_decodes_ppm_into_the_composite() {
+        use crate::export::encode_ppm;
+        use kael_render_graph::reference::Image;
+        let ppm = encode_ppm(&Image::filled(2, 2, [1.0, 0.0, 0.0, 1.0]));
+        let mut still = StillImageProvider::new();
+        assert!(still.add_ppm("photo.ppm", &ppm));
+        assert!(!still.add_ppm("bad", b"not ppm"));
+
+        let timeline = Timeline {
+            tracks: vec![track("v1", vec![clip("a", "photo.ppm", 0, 30, 0)])],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        let pixel = composite_frame(&timeline, 10, 2, 2, &still).pixel(0, 0);
+        assert!(
+            (pixel[0] - 1.0).abs() < 1e-6 && pixel[1].abs() < 1e-6 && pixel[2].abs() < 1e-6,
+            "decoded red still: {pixel:?}"
         );
     }
 }
