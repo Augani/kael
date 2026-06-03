@@ -60,6 +60,36 @@ pub fn encode_ppm(image: &Image) -> Vec<u8> {
     bytes
 }
 
+/// Encode interleaved `samples` as a 16-bit PCM WAV (RIFF/WAVE) file — the dependency-free
+/// audio export target, the [`mix_range`](crate::audio_mix::mix_range) counterpart to
+/// [`encode_ppm`]. Float samples are clamped to `-1.0..=1.0` and quantized to `i16`.
+pub fn encode_wav_pcm16(samples: &[f32], sample_rate: u32, channels: u16) -> Vec<u8> {
+    let bits_per_sample: u16 = 16;
+    let block_align = channels * (bits_per_sample / 8);
+    let byte_rate = sample_rate * block_align as u32;
+    let data_size = (samples.len() * 2) as u32;
+
+    let mut bytes = Vec::with_capacity(44 + data_size as usize);
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36 + data_size).to_le_bytes());
+    bytes.extend_from_slice(b"WAVE");
+    bytes.extend_from_slice(b"fmt ");
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    bytes.extend_from_slice(&channels.to_le_bytes());
+    bytes.extend_from_slice(&sample_rate.to_le_bytes());
+    bytes.extend_from_slice(&byte_rate.to_le_bytes());
+    bytes.extend_from_slice(&block_align.to_le_bytes());
+    bytes.extend_from_slice(&bits_per_sample.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&data_size.to_le_bytes());
+    for &sample in samples {
+        let quantized = (sample.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+        bytes.extend_from_slice(&quantized.to_le_bytes());
+    }
+    bytes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,5 +223,27 @@ mod tests {
             // 2x2 red frame: every pixel is 255,0,0.
             assert!(file.ends_with(&[255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0]));
         }
+    }
+
+    #[test]
+    fn encode_wav_pcm16_writes_riff_header_and_quantized_samples() {
+        let wav = encode_wav_pcm16(&[0.0, 1.0, -1.0], 48_000, 1);
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(&wav[12..16], b"fmt ");
+        assert_eq!(&wav[36..40], b"data");
+        // 44-byte header + 3 samples * 2 bytes.
+        assert_eq!(wav.len(), 50);
+        assert_eq!(u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]), 6);
+        // fmt fields: channels = 1, sample rate = 48000.
+        assert_eq!(u16::from_le_bytes([wav[22], wav[23]]), 1);
+        assert_eq!(
+            u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]),
+            48_000
+        );
+        // Samples: 0 -> 0, 1.0 -> 32767, -1.0 -> -32767.
+        assert_eq!(i16::from_le_bytes([wav[44], wav[45]]), 0);
+        assert_eq!(i16::from_le_bytes([wav[46], wav[47]]), 32767);
+        assert_eq!(i16::from_le_bytes([wav[48], wav[49]]), -32767);
     }
 }
