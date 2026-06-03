@@ -445,6 +445,46 @@ impl FrameProvider for StillImageProvider {
     }
 }
 
+/// A [`FrameProvider`] that resolves a clip whose `source` names a registered sub-timeline by
+/// recursively compositing that timeline — nested / compound clips (V5/P2-A). A compound
+/// clip's source frame indexes into the nested timeline. Sources not registered as nested
+/// fall through to the base provider, which also supplies the nested timelines' leaf clips
+/// (so nesting is one level deep; deeper nesting composes by wrapping providers).
+pub struct NestedTimelineProvider<'a> {
+    base: &'a dyn FrameProvider,
+    nested: std::collections::HashMap<String, &'a Timeline>,
+}
+
+impl<'a> NestedTimelineProvider<'a> {
+    /// Create a provider over `base` with no nested timelines.
+    pub fn new(base: &'a dyn FrameProvider) -> Self {
+        Self {
+            base,
+            nested: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Register `timeline` as the nested sequence for the clip source `source`.
+    pub fn add(&mut self, source: impl Into<String>, timeline: &'a Timeline) {
+        self.nested.insert(source.into(), timeline);
+    }
+}
+
+impl FrameProvider for NestedTimelineProvider<'_> {
+    fn frame(&self, source: &str, source_frame: u64, width: u32, height: u32) -> Option<Image> {
+        match self.nested.get(source) {
+            Some(timeline) => Some(composite_frame(
+                timeline,
+                source_frame,
+                width,
+                height,
+                self.base,
+            )),
+            None => self.base.frame(source, source_frame, width, height),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1127,6 +1167,41 @@ mod tests {
         assert!(
             (pixel[0] - 1.0).abs() < 1e-6 && pixel[1].abs() < 1e-6 && pixel[2].abs() < 1e-6,
             "decoded red still: {pixel:?}"
+        );
+    }
+
+    #[test]
+    fn nested_timeline_provider_composites_a_compound_clip() {
+        let leaf = provider(&[("red", [1.0, 0.0, 0.0, 1.0])]);
+        // The nested sequence: a single red clip.
+        let nested = Timeline {
+            tracks: vec![track("inner", vec![clip("a", "red", 0, 30, 0)])],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        let mut nested_provider = NestedTimelineProvider::new(&leaf);
+        nested_provider.add("seq", &nested);
+
+        // The parent references the nested sequence as a clip source: it composites through.
+        let parent = Timeline {
+            tracks: vec![track("outer", vec![clip("b", "seq", 0, 30, 0)])],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        assert_eq!(
+            composite_frame(&parent, 10, 1, 1, &nested_provider).pixel(0, 0),
+            [1.0, 0.0, 0.0, 1.0]
+        );
+
+        // A non-nested source falls through to the base provider.
+        let direct = Timeline {
+            tracks: vec![track("outer", vec![clip("c", "red", 0, 30, 0)])],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        assert_eq!(
+            composite_frame(&direct, 10, 1, 1, &nested_provider).pixel(0, 0),
+            [1.0, 0.0, 0.0, 1.0]
         );
     }
 }
