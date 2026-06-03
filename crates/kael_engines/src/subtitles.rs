@@ -66,6 +66,31 @@ impl SubtitleTrack {
         }
         out
     }
+
+    /// Serialize to a WebVTT document.
+    pub fn to_webvtt(&self) -> String {
+        let mut out = String::from("WEBVTT\n\n");
+        for cue in &self.cues {
+            out.push_str(&format!(
+                "{} --> {}\n",
+                format_timestamp_sep(cue.start_ms, '.'),
+                format_timestamp_sep(cue.end_ms, '.')
+            ));
+            out.push_str(&cue.text);
+            out.push_str("\n\n");
+        }
+        out
+    }
+
+    /// Shift every cue by `delta_ms` (negative moves earlier, clamped at zero) to
+    /// re-sync the track. Cues are re-sorted afterwards.
+    pub fn shift(&mut self, delta_ms: i64) {
+        for cue in &mut self.cues {
+            cue.start_ms = (cue.start_ms as i64 + delta_ms).max(0) as u64;
+            cue.end_ms = (cue.end_ms as i64 + delta_ms).max(0) as u64;
+        }
+        self.cues.sort_by_key(|cue| (cue.start_ms, cue.end_ms));
+    }
 }
 
 /// Parse a SubRip document into cues (unsorted, malformed blocks skipped).
@@ -171,11 +196,15 @@ fn parse_timestamp(text: &str) -> Option<u64> {
 }
 
 fn format_timestamp(ms: u64) -> String {
+    format_timestamp_sep(ms, ',')
+}
+
+fn format_timestamp_sep(ms: u64, separator: char) -> String {
     let hours = ms / 3_600_000;
     let minutes = (ms % 3_600_000) / 60_000;
     let seconds = (ms % 60_000) / 1_000;
     let millis = ms % 1_000;
-    format!("{hours:02}:{minutes:02}:{seconds:02},{millis:03}")
+    format!("{hours:02}:{minutes:02}:{seconds:02}{separator}{millis:03}")
 }
 
 #[cfg(test)]
@@ -275,5 +304,27 @@ mod tests {
         assert_eq!(parse_timestamp("00:00:01,500"), Some(1500));
         assert_eq!(parse_timestamp("00:00:01.500"), Some(1500));
         assert_eq!(parse_timestamp("01:30.250"), Some(90_250));
+    }
+
+    #[test]
+    fn webvtt_round_trips_through_serialization() {
+        let track = SubtitleTrack::from_srt(SAMPLE);
+        let vtt = track.to_webvtt();
+        assert!(vtt.starts_with("WEBVTT\n\n"));
+        assert!(vtt.contains("00:00:01.000 --> 00:00:04.000"));
+        assert_eq!(SubtitleTrack::from_webvtt(&vtt), track);
+    }
+
+    #[test]
+    fn shift_resyncs_cue_timing() {
+        let mut track = SubtitleTrack::from_srt(SAMPLE);
+        track.shift(500);
+        assert_eq!(track.cues()[0].start_ms, 1500);
+        assert_eq!(track.cues()[0].end_ms, 4500);
+
+        // Negative shift clamps at zero.
+        track.shift(-100_000);
+        assert_eq!(track.cues()[0].start_ms, 0);
+        assert_eq!(track.cues()[0].end_ms, 0);
     }
 }
