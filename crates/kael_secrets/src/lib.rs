@@ -115,16 +115,101 @@ mod keychain {
 #[cfg(target_os = "macos")]
 pub use keychain::KeychainSecretStore;
 
+#[cfg(target_os = "windows")]
+mod windows_backend {
+    use super::{Result, SecretStore};
+    use anyhow::anyhow;
+    use windows::Win32::Foundation::ERROR_NOT_FOUND;
+    use windows::Win32::Security::Credentials::{
+        CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW, CredFree,
+        CredReadW, CredWriteW,
+    };
+    use windows::core::{PCWSTR, PWSTR};
+
+    /// A [`SecretStore`] backed by the Windows Credential Manager (generic credentials).
+    pub struct CredentialStore;
+
+    fn target_name(service: &str, account: &str) -> Vec<u16> {
+        format!("{service}/{account}")
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect()
+    }
+
+    impl SecretStore for CredentialStore {
+        fn set_secret(&self, service: &str, account: &str, secret: &[u8]) -> Result<()> {
+            let mut name = target_name(service, account);
+            let mut blob = secret.to_vec();
+            let credential = CREDENTIALW {
+                Type: CRED_TYPE_GENERIC,
+                TargetName: PWSTR(name.as_mut_ptr()),
+                CredentialBlobSize: blob.len() as u32,
+                CredentialBlob: blob.as_mut_ptr(),
+                Persist: CRED_PERSIST_LOCAL_MACHINE,
+                ..Default::default()
+            };
+            unsafe {
+                CredWriteW(&credential, 0)
+                    .map_err(|error| anyhow!("credential write failed: {error}"))
+            }
+        }
+
+        fn get_secret(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>> {
+            let name = target_name(service, account);
+            let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
+            unsafe {
+                match CredReadW(
+                    PCWSTR(name.as_ptr()),
+                    CRED_TYPE_GENERIC,
+                    None,
+                    &mut credential,
+                ) {
+                    Ok(()) => {
+                        let cred = &*credential;
+                        let bytes = std::slice::from_raw_parts(
+                            cred.CredentialBlob,
+                            cred.CredentialBlobSize as usize,
+                        )
+                        .to_vec();
+                        CredFree(credential as *const core::ffi::c_void);
+                        Ok(Some(bytes))
+                    }
+                    Err(error) if error.code() == ERROR_NOT_FOUND.to_hresult() => Ok(None),
+                    Err(error) => Err(anyhow!("credential read failed: {error}")),
+                }
+            }
+        }
+
+        fn delete_secret(&self, service: &str, account: &str) -> Result<()> {
+            let name = target_name(service, account);
+            unsafe {
+                match CredDeleteW(PCWSTR(name.as_ptr()), CRED_TYPE_GENERIC, None) {
+                    Ok(()) => Ok(()),
+                    Err(error) if error.code() == ERROR_NOT_FOUND.to_hresult() => Ok(()),
+                    Err(error) => Err(anyhow!("credential delete failed: {error}")),
+                }
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub use windows_backend::CredentialStore;
+
 /// Return the best available [`SecretStore`] for the current platform.
 ///
-/// On macOS this is the system Keychain; elsewhere it is currently the
-/// in-process [`MemorySecretStore`] until a native backend is wired.
+/// macOS uses the system Keychain and Windows the Credential Manager; other
+/// platforms fall back to the in-process [`MemorySecretStore`].
 pub fn default_store() -> Box<dyn SecretStore> {
     #[cfg(target_os = "macos")]
     {
         Box::new(KeychainSecretStore)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        Box::new(CredentialStore)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         Box::new(MemorySecretStore::new())
     }

@@ -3999,6 +3999,7 @@ dependencies = [
  "anyhow",
  "parking_lot",
  "security-framework",
+ "windows 0.62.2",
 ]
 
 [[package]]
