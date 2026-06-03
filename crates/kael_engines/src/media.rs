@@ -107,6 +107,31 @@ fn offset_by(value: u64, delta: i64) -> Result<u64, TimelineEditError> {
     }
 }
 
+fn subtract_track_range(clip: &TimelineClip, start: u64, end: u64) -> Vec<TimelineClip> {
+    let clip_start = clip.track_offset;
+    let clip_end = clip.track_end();
+    if clip_end <= start || clip_start >= end {
+        return vec![clip.clone()];
+    }
+    let has_left = clip_start < start;
+    let mut pieces = Vec::new();
+    if has_left {
+        let mut left = clip.clone();
+        left.end_frame = clip.start_frame + (start - clip_start);
+        pieces.push(left);
+    }
+    if clip_end > end {
+        let mut right = clip.clone();
+        right.start_frame = clip.start_frame + (end - clip_start);
+        right.track_offset = end;
+        if has_left {
+            right.id = format!("{}-r", clip.id);
+        }
+        pieces.push(right);
+    }
+    pieces
+}
+
 impl TimelineClip {
     /// The clip's duration in frames.
     pub fn duration(&self) -> u64 {
@@ -278,6 +303,32 @@ impl TimelineTrack {
             },
         );
         Ok(new_id)
+    }
+
+    /// Insert `clip` at its `track_offset`, rippling clips at or after that
+    /// position right by the clip's duration (no overwrite).
+    pub fn insert_clip(&mut self, clip: TimelineClip) {
+        let at = clip.track_offset;
+        let shift = clip.duration();
+        for existing in &mut self.clips {
+            if existing.track_offset >= at {
+                existing.track_offset += shift;
+            }
+        }
+        self.clips.push(clip);
+    }
+
+    /// Place `clip` at its track span, overwriting overlapping content: clips it
+    /// fully covers are removed, partially-overlapped clips are trimmed, and a
+    /// clip it lands inside is split around it.
+    pub fn overwrite_clip(&mut self, clip: TimelineClip) {
+        let (start, end) = (clip.track_offset, clip.track_end());
+        let mut next = Vec::new();
+        for existing in std::mem::take(&mut self.clips) {
+            next.extend(subtract_track_range(&existing, start, end));
+        }
+        next.push(clip);
+        self.clips = next;
     }
 
     /// Empty ranges between consecutive clips, in track order.
@@ -912,5 +963,50 @@ mod tests {
             sample_clip("b", 0, 50, 30),
         ]);
         assert!(overlapping.has_overlap());
+    }
+
+    #[test]
+    fn insert_clip_ripples_later_clips() {
+        let mut track = edit_track(vec![
+            sample_clip("a", 0, 50, 0),
+            sample_clip("b", 0, 50, 50),
+        ]);
+        track.insert_clip(sample_clip("c", 0, 20, 50));
+        let b = track.clips.iter().find(|clip| clip.id == "b").unwrap();
+        assert_eq!(b.track_offset, 70);
+        let a = track.clips.iter().find(|clip| clip.id == "a").unwrap();
+        assert_eq!(a.track_offset, 0);
+        assert!(!track.has_overlap());
+        assert!(track.gaps().is_empty());
+    }
+
+    #[test]
+    fn overwrite_clip_splits_covered_clip() {
+        let mut track = edit_track(vec![sample_clip("a", 0, 100, 0)]);
+        track.overwrite_clip(sample_clip("c", 200, 220, 20));
+        assert!(!track.has_overlap());
+        let left = track.clips.iter().find(|clip| clip.id == "a").unwrap();
+        assert_eq!((left.track_offset, left.track_end()), (0, 20));
+        let right = track.clips.iter().find(|clip| clip.id == "a-r").unwrap();
+        assert_eq!(
+            (right.track_offset, right.track_end(), right.start_frame),
+            (40, 100, 40)
+        );
+        assert!(track.clips.iter().any(|clip| clip.id == "c"));
+    }
+
+    #[test]
+    fn overwrite_clip_trims_partial_overlap_and_drops_covered() {
+        let mut track = edit_track(vec![
+            sample_clip("a", 0, 50, 0),
+            sample_clip("b", 0, 50, 50),
+        ]);
+        // covers all of `a` from 40 and all of `b` up to 60.
+        track.overwrite_clip(sample_clip("c", 0, 20, 40));
+        assert!(!track.has_overlap());
+        let a = track.clips.iter().find(|clip| clip.id == "a").unwrap();
+        assert_eq!(a.track_end(), 40);
+        let b = track.clips.iter().find(|clip| clip.id == "b").unwrap();
+        assert_eq!(b.track_offset, 60);
     }
 }
