@@ -360,6 +360,17 @@ impl Timeline {
             })
             .collect()
     }
+
+    /// Recompute `duration_frames` from the furthest clip end across all tracks.
+    pub fn recompute_duration(&mut self) {
+        self.duration_frames = self
+            .tracks
+            .iter()
+            .flat_map(|track| track.clips.iter())
+            .map(|clip| clip.track_end())
+            .max()
+            .unwrap_or(0);
+    }
 }
 
 /// A request to generate a thumbnail from a media source.
