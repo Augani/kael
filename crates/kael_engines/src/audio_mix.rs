@@ -69,6 +69,62 @@ pub fn mix_range(
     Some(output)
 }
 
+/// An [`AudioProvider`] backed by decoded WAV sources, keyed by clip source path. Each
+/// source is decoded to mono once; a request returns the per-frame sample window (zero-
+/// padded past the end). The concrete uncompressed-audio provider for the mixdown.
+#[derive(Debug, Default)]
+pub struct WavAudioProvider {
+    sources: std::collections::HashMap<String, Vec<f32>>,
+}
+
+impl WavAudioProvider {
+    /// An empty provider.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Decode `wav_bytes` (PCM-16) and register it under `source` (downmixed to mono).
+    /// Returns `false` if the bytes are not a decodable WAV.
+    pub fn add_wav(&mut self, source: impl Into<String>, wav_bytes: &[u8]) -> bool {
+        let Some((samples, _rate, channels)) = crate::export::decode_wav_pcm16(wav_bytes) else {
+            return false;
+        };
+        self.sources
+            .insert(source.into(), downmix_to_mono(samples, channels));
+        true
+    }
+}
+
+fn downmix_to_mono(samples: Vec<f32>, channels: u16) -> Vec<f32> {
+    if channels <= 1 {
+        return samples;
+    }
+    let channels = channels as usize;
+    samples
+        .chunks(channels)
+        .map(|frame| frame.iter().sum::<f32>() / frame.len() as f32)
+        .collect()
+}
+
+impl AudioProvider for WavAudioProvider {
+    fn samples(
+        &self,
+        source: &str,
+        source_frame: u64,
+        samples_per_frame: usize,
+    ) -> Option<Vec<f32>> {
+        let mono = self.sources.get(source)?;
+        let start = source_frame as usize * samples_per_frame;
+        let mut window = vec![0.0f32; samples_per_frame];
+        for (offset, slot) in window.iter_mut().enumerate() {
+            if let Some(&sample) = mono.get(start + offset) {
+                *slot = sample;
+            }
+        }
+        Some(window)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +240,23 @@ mod tests {
         );
         let run = || mix_range(&tl, 0..5, 48_000, &ConstProvider { value: 0.3 }).unwrap();
         assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn wav_provider_decodes_and_feeds_the_mixdown() {
+        use crate::export::encode_wav_pcm16;
+        // Two frames of constant 0.5 at 48k/30fps (1600 samples/frame).
+        let wav = encode_wav_pcm16(&vec![0.5f32; 3200], 48_000, 1);
+        let mut provider = WavAudioProvider::new();
+        assert!(provider.add_wav("clip.wav", &wav));
+        assert!(!provider.add_wav("bad", b"not a wav"));
+
+        let tl = timeline(
+            vec![track(TrackType::Audio, vec![clip("clip.wav", 0, 4, 0)])],
+            30.0,
+        );
+        let out = mix_range(&tl, 0..2, 48_000, &provider).unwrap();
+        assert_eq!(out.len(), 3200);
+        assert!(out.iter().all(|&s| (s - 0.5).abs() < 1e-3), "decoded ~0.5");
     }
 }
