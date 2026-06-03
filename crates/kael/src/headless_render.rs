@@ -170,6 +170,27 @@ impl HeadlessRenderer {
 
         anyhow::bail!("RGBA16Float rendering is only available on the GPU backend")
     }
+
+    /// Run a built-in GPU compute kernel that doubles each input value, proving
+    /// the compute-pipeline path end-to-end. Available only on the GPU backend.
+    pub fn run_compute_doubler(&self, data: &[f32]) -> Result<Vec<f32>> {
+        #[cfg(target_os = "macos")]
+        if let Some(renderer) = self.metal.as_ref() {
+            const KERNEL: &str = concat!(
+                "#include <metal_stdlib>\n",
+                "using namespace metal;\n",
+                "kernel void double_values(device float* data [[buffer(0)]],\n",
+                "                          uint id [[thread_position_in_grid]]) {\n",
+                "    data[id] = data[id] * 2.0;\n",
+                "}\n",
+            );
+            let mut buffer = data.to_vec();
+            renderer.run_compute_kernel(KERNEL, "double_values", &mut buffer)?;
+            return Ok(buffer);
+        }
+        let _ = data;
+        anyhow::bail!("compute is only available on the GPU backend")
+    }
 }
 
 fn build_benchmark_scene(width: u32, height: u32, complexity: usize) -> Scene {
@@ -251,6 +272,18 @@ mod tests {
                 let again = renderer.render_frame_rgba16f(16).unwrap();
                 assert_eq!(frame.checksum, again.checksum);
             }
+            Err(_) => assert_eq!(renderer.backend(), HeadlessBackend::CpuOnly),
+        }
+    }
+
+    #[test]
+    fn compute_doubler_runs_on_gpu_or_is_unsupported() {
+        let renderer = match HeadlessRenderer::new(8, 8) {
+            Ok(renderer) => renderer,
+            Err(_) => return,
+        };
+        match renderer.run_compute_doubler(&[1.0, 2.0, 3.0, 4.0]) {
+            Ok(output) => assert_eq!(output, vec![2.0, 4.0, 6.0, 8.0]),
             Err(_) => assert_eq!(renderer.backend(), HeadlessBackend::CpuOnly),
         }
     }

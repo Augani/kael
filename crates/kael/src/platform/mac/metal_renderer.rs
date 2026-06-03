@@ -905,6 +905,70 @@ impl MetalRenderer {
         })
     }
 
+    pub(crate) fn run_compute_kernel(
+        &self,
+        source: &str,
+        entry: &str,
+        data: &mut [f32],
+    ) -> Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        let library = self
+            .device
+            .new_library_with_source(source, &metal::CompileOptions::new())
+            .map_err(|err| anyhow::anyhow!("failed to compile compute kernel: {err}"))?;
+        let function = library
+            .get_function(entry, None)
+            .map_err(|err| anyhow::anyhow!("compute entry '{entry}' not found: {err}"))?;
+        let pipeline = self
+            .device
+            .new_compute_pipeline_state_with_function(&function)
+            .map_err(|err| anyhow::anyhow!("failed to create compute pipeline: {err}"))?;
+
+        let byte_len = mem::size_of_val(data) as u64;
+        let buffer = self.device.new_buffer_with_data(
+            data.as_ptr() as *const c_void,
+            byte_len,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let command_queue = self.command_queue.clone();
+        let command_buffer = command_queue.new_command_buffer();
+        let encoder = command_buffer.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(&pipeline);
+        encoder.set_buffer(0, Some(&buffer), 0);
+
+        let count = data.len() as u64;
+        let threads_per_group = pipeline
+            .max_total_threads_per_threadgroup()
+            .min(count)
+            .max(1);
+        encoder.dispatch_threads(
+            metal::MTLSize {
+                width: count,
+                height: 1,
+                depth: 1,
+            },
+            metal::MTLSize {
+                width: threads_per_group,
+                height: 1,
+                depth: 1,
+            },
+        );
+        encoder.end_encoding();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        unsafe {
+            let contents = buffer.contents() as *const f32;
+            let slice = std::slice::from_raw_parts(contents, data.len());
+            data.copy_from_slice(slice);
+        }
+        Ok(())
+    }
+
     fn ensure_buffer_size(&mut self, scene: &Scene) {
         const ALIGN: usize = 256;
         let align_up = |size: usize| size.div_ceil(ALIGN) * ALIGN;
