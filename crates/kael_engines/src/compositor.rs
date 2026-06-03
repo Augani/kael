@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use kael_render_graph::reference::{blend, BlendMode, Image, PassOp};
+use kael_render_graph::reference::{blend, crossfade, BlendMode, Image, PassOp};
 use kael_render_graph::{PassDesc, PassId, RenderGraph, ResourceDesc, ResourceId};
 
 use crate::media::Timeline;
@@ -305,6 +305,45 @@ pub fn render_frames(
         rendered.push(image);
     }
     rendered
+}
+
+/// Render the crossfade transition on track `track_index` at `frame`, if two clips overlap
+/// there (per [`Timeline::transition_at`]). Each side is fetched from `provider`, has its
+/// (keyframed) effect stack applied at clip-local time, and the two are crossfaded by the
+/// overlap progress. Returns `None` when there is no transition or a side cannot be supplied.
+/// This renders a transition layer for the compositor to stack like any other.
+pub fn render_transition(
+    timeline: &Timeline,
+    track_index: usize,
+    frame: u64,
+    width: u32,
+    height: u32,
+    provider: &dyn FrameProvider,
+) -> Option<Image> {
+    let transition = timeline.transition_at(track_index, frame)?;
+    let track = timeline.tracks.get(track_index)?;
+    let render_side = |clip_id: &str, source_frame: u64| -> Option<Image> {
+        let clip = track
+            .clips
+            .iter()
+            .find(|candidate| candidate.id == clip_id)?;
+        let image = provider.frame(&clip.source, source_frame, width, height)?;
+        if image.width != width || image.height != height {
+            return None;
+        }
+        let clip_local = frame.saturating_sub(clip.track_offset);
+        let time_ms = if timeline.frame_rate > 0.0 {
+            (clip_local as f64 / timeline.frame_rate * 1000.0) as u64
+        } else {
+            0
+        };
+        Some(clip.effects.resolve(time_ms).apply(&image))
+    };
+    let outgoing = render_side(&transition.outgoing, transition.outgoing_source_frame)?;
+    let incoming = render_side(&transition.incoming, transition.incoming_source_frame)?;
+    let mut output = Image::new(width, height);
+    crossfade(transition.progress)(&[&outgoing, &incoming], &mut output);
+    Some(output)
 }
 
 /// A [`FrameProvider`] serving a single decoded still image per source — a photo, freeze
@@ -692,6 +731,47 @@ mod tests {
         assert!((value_at(30) - 0.6).abs() < 1e-4, "{}", value_at(30));
         // The ramp is monotonic in between.
         assert!(value_at(0) < value_at(15) && value_at(15) < value_at(30));
+    }
+
+    #[test]
+    fn render_transition_crossfades_overlapping_clips() {
+        // "a" [0,30) red and "b" [20,50) blue overlap on [20,30).
+        let timeline = Timeline {
+            tracks: vec![track(
+                "v1",
+                vec![clip("a", "red", 0, 30, 0), clip("b", "blue", 0, 30, 20)],
+            )],
+            frame_rate: 30.0,
+            duration_frames: 50,
+        };
+        let provider = provider(&[
+            ("red", [1.0, 0.0, 0.0, 1.0]),
+            ("blue", [0.0, 0.0, 1.0, 1.0]),
+        ]);
+
+        // Midway (frame 25, progress 0.5): half red, half blue.
+        let mid = render_transition(&timeline, 0, 25, 1, 1, &provider).unwrap();
+        let pixel = mid.pixel(0, 0);
+        assert!((pixel[0] - 0.5).abs() < 1e-6 && (pixel[2] - 0.5).abs() < 1e-6);
+
+        // Overlap start is fully outgoing (red); near the end mostly incoming (blue).
+        assert!(
+            (render_transition(&timeline, 0, 20, 1, 1, &provider)
+                .unwrap()
+                .pixel(0, 0)[0]
+                - 1.0)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            render_transition(&timeline, 0, 29, 1, 1, &provider)
+                .unwrap()
+                .pixel(0, 0)[2]
+                > 0.8
+        );
+
+        // No overlap at frame 10 -> no transition.
+        assert!(render_transition(&timeline, 0, 10, 1, 1, &provider).is_none());
     }
 
     #[test]
