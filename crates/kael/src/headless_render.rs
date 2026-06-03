@@ -39,6 +39,19 @@ pub struct RenderedFrame {
     pub gpu: bool,
 }
 
+/// One frame rendered into an `RGBA16Float` off-screen target (linear, ≥16-bit).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HdrFrame {
+    /// Frame width in device pixels.
+    pub width: u32,
+    /// Frame height in device pixels.
+    pub height: u32,
+    /// Peak channel value across the frame; may exceed `1.0` (HDR headroom).
+    pub peak: f32,
+    /// Stable checksum of the decoded float pixels.
+    pub checksum: u64,
+}
+
 /// A windowless renderer used by benchmarks and golden-image tests.
 ///
 /// Construct once, then call [`HeadlessRenderer::render_frame`] repeatedly to
@@ -127,6 +140,36 @@ impl HeadlessRenderer {
             gpu: false,
         })
     }
+
+    /// Render a procedural scene into an `RGBA16Float` off-screen target (the
+    /// linear ≥16-bit working format), returning peak/checksum stats. Available
+    /// only on the GPU backend.
+    pub fn render_frame_rgba16f(&mut self, complexity: usize) -> Result<HdrFrame> {
+        #[cfg(target_os = "macos")]
+        if let Some(renderer) = self.metal.as_mut() {
+            let scene = build_benchmark_scene(self.width, self.height, complexity);
+            let viewport = size(
+                DevicePixels(self.width as i32),
+                DevicePixels(self.height as i32),
+            );
+            let readback = renderer.render_quads_to_f16(&scene, viewport)?;
+            let mut peak = 0.0f32;
+            let mut checksum = 0xcbf2_9ce4_8422_2325u64;
+            for &value in &readback.rgba {
+                peak = peak.max(value);
+                checksum ^= value.to_bits() as u64;
+                checksum = checksum.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            return Ok(HdrFrame {
+                width: readback.width,
+                height: readback.height,
+                peak,
+                checksum,
+            });
+        }
+
+        anyhow::bail!("RGBA16Float rendering is only available on the GPU backend")
+    }
 }
 
 fn build_benchmark_scene(width: u32, height: u32, complexity: usize) -> Scene {
@@ -192,6 +235,23 @@ mod tests {
         match renderer.backend() {
             HeadlessBackend::Gpu => assert!(first.gpu),
             HeadlessBackend::CpuOnly => assert!(!first.gpu),
+        }
+    }
+
+    #[test]
+    fn rgba16f_frame_is_deterministic_or_unsupported() {
+        let mut renderer = match HeadlessRenderer::new(32, 32) {
+            Ok(renderer) => renderer,
+            Err(_) => return,
+        };
+        match renderer.render_frame_rgba16f(16) {
+            Ok(frame) => {
+                assert_eq!((frame.width, frame.height), (32, 32));
+                assert!(frame.peak > 0.0);
+                let again = renderer.render_frame_rgba16f(16).unwrap();
+                assert_eq!(frame.checksum, again.checksum);
+            }
+            Err(_) => assert_eq!(renderer.backend(), HeadlessBackend::CpuOnly),
         }
     }
 }

@@ -134,6 +134,7 @@ pub(crate) struct MetalRenderer {
     path_sprites_pipeline_state: metal::RenderPipelineState,
     shadows_pipeline_state: metal::RenderPipelineState,
     quads_pipeline_state: metal::RenderPipelineState,
+    quads_pipeline_state_rgba16f: metal::RenderPipelineState,
     blur_horizontal_pipeline_state: metal::RenderPipelineState,
     blur_composite_pipeline_state: metal::RenderPipelineState,
     underlines_pipeline_state: metal::RenderPipelineState,
@@ -259,6 +260,14 @@ impl MetalRenderer {
             "quad_fragment",
             RENDER_TARGET_PIXEL_FORMAT,
         );
+        let quads_pipeline_state_rgba16f = build_pipeline_state(
+            &device,
+            &library,
+            "quads_rgba16f",
+            "quad_vertex",
+            "quad_fragment",
+            metal::MTLPixelFormat::RGBA16Float,
+        );
         let blur_horizontal_pipeline_state = build_pipeline_state(
             &device,
             &library,
@@ -322,6 +331,7 @@ impl MetalRenderer {
             path_sprites_pipeline_state,
             shadows_pipeline_state,
             quads_pipeline_state,
+            quads_pipeline_state_rgba16f,
             blur_horizontal_pipeline_state,
             blur_composite_pipeline_state,
             underlines_pipeline_state,
@@ -747,6 +757,151 @@ impl MetalRenderer {
             width: width as u32,
             height: height as u32,
             bgra,
+        })
+    }
+
+    pub(crate) fn render_quads_to_f16(
+        &mut self,
+        scene: &Scene,
+        viewport_size: Size<DevicePixels>,
+    ) -> Result<OffscreenReadbackF16> {
+        let width = viewport_size.width.0.max(0) as u64;
+        let height = viewport_size.height.0.max(0) as u64;
+        if width == 0 || height == 0 {
+            anyhow::bail!("offscreen render requires a non-zero viewport");
+        }
+
+        let descriptor = metal::TextureDescriptor::new();
+        descriptor.set_width(width);
+        descriptor.set_height(height);
+        descriptor.set_pixel_format(metal::MTLPixelFormat::RGBA16Float);
+        descriptor
+            .set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
+        let target = self.device.new_texture(&descriptor);
+
+        self.ensure_buffer_size(scene);
+        let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
+        let command_queue = self.command_queue.clone();
+        let command_buffer = command_queue.new_command_buffer();
+        let alpha = if self.layer.is_opaque() { 1.0 } else { 0.0 };
+
+        let command_encoder = new_texture_command_encoder(
+            command_buffer,
+            &target,
+            viewport_size,
+            metal::MTLLoadAction::Clear,
+            alpha,
+        );
+
+        let quads: &[Quad] = &scene.quads;
+        let mut instance_offset = 0usize;
+        let mut overflow = false;
+        if !quads.is_empty() {
+            align_offset(&mut instance_offset);
+            let quad_bytes_len = mem::size_of_val(quads);
+            if instance_offset + quad_bytes_len > instance_buffer.size {
+                overflow = true;
+            } else {
+                command_encoder.set_render_pipeline_state(&self.quads_pipeline_state_rgba16f);
+                command_encoder.set_vertex_buffer(
+                    QuadInputIndex::Vertices as u64,
+                    Some(&self.unit_vertices),
+                    0,
+                );
+                command_encoder.set_vertex_buffer(
+                    QuadInputIndex::Quads as u64,
+                    Some(&instance_buffer.metal_buffer),
+                    instance_offset as u64,
+                );
+                command_encoder.set_fragment_buffer(
+                    QuadInputIndex::Quads as u64,
+                    Some(&instance_buffer.metal_buffer),
+                    instance_offset as u64,
+                );
+                command_encoder.set_vertex_bytes(
+                    QuadInputIndex::ViewportSize as u64,
+                    mem::size_of_val(&viewport_size) as u64,
+                    &viewport_size as *const Size<DevicePixels> as *const _,
+                );
+                let buffer_contents = unsafe {
+                    (instance_buffer.metal_buffer.contents() as *mut u8).add(instance_offset)
+                };
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        quads.as_ptr() as *const u8,
+                        buffer_contents,
+                        quad_bytes_len,
+                    );
+                }
+                command_encoder.draw_primitives_instanced(
+                    metal::MTLPrimitiveType::Triangle,
+                    0,
+                    6,
+                    quads.len() as u64,
+                );
+                instance_offset += quad_bytes_len;
+            }
+        }
+        command_encoder.end_encoding();
+
+        instance_buffer.metal_buffer.did_modify_range(NSRange {
+            location: 0,
+            length: instance_offset as u64,
+        });
+
+        let bytes_per_row = align_up_256(width * 8);
+        let buffer_len = bytes_per_row * height;
+        let staging = self
+            .device
+            .new_buffer(buffer_len, MTLResourceOptions::StorageModeShared);
+
+        let blit = command_buffer.new_blit_command_encoder();
+        blit.copy_from_texture_to_buffer(
+            &target,
+            0,
+            0,
+            metal::MTLOrigin { x: 0, y: 0, z: 0 },
+            metal::MTLSize {
+                width,
+                height,
+                depth: 1,
+            },
+            &staging,
+            0,
+            bytes_per_row,
+            buffer_len,
+            metal::MTLBlitOption::empty(),
+        );
+        blit.end_encoding();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+        self.instance_buffer_pool.lock().release(instance_buffer);
+
+        if overflow {
+            anyhow::bail!("quads exceeded instance buffer capacity during RGBA16F render");
+        }
+
+        let row_stride = bytes_per_row as usize;
+        let mut rgba = vec![0.0f32; (width * 4 * height) as usize];
+        unsafe {
+            let contents = staging.contents() as *const u8;
+            let src = std::slice::from_raw_parts(contents, buffer_len as usize);
+            for y in 0..height as usize {
+                let row = y * row_stride;
+                for x in 0..width as usize {
+                    for channel in 0..4 {
+                        let byte_index = row + (x * 8) + (channel * 2);
+                        let bits = u16::from_le_bytes([src[byte_index], src[byte_index + 1]]);
+                        rgba[(y * width as usize + x) * 4 + channel] = f16_to_f32(bits);
+                    }
+                }
+            }
+        }
+
+        Ok(OffscreenReadbackF16 {
+            width: width as u32,
+            height: height as u32,
+            rgba,
         })
     }
 
@@ -1790,6 +1945,31 @@ fn align_up_256(value: u64) -> u64 {
     (value + 255) & !255
 }
 
+/// Pixels read back from an off-screen `RGBA16Float` render, decoded to `f32`,
+/// tightly packed `[r, g, b, a]` per pixel. Values may exceed `1.0` (HDR).
+pub(crate) struct OffscreenReadbackF16 {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<f32>,
+}
+
+fn f16_to_f32(bits: u16) -> f32 {
+    let sign = if (bits >> 15) & 1 == 1 { -1.0 } else { 1.0 };
+    let exponent = (bits >> 10) & 0x1f;
+    let mantissa = bits & 0x3ff;
+    match exponent {
+        0 => sign * (mantissa as f32) * 2.0f32.powi(-24),
+        0x1f => {
+            if mantissa == 0 {
+                sign * f32::INFINITY
+            } else {
+                f32::NAN
+            }
+        }
+        _ => sign * (1.0 + mantissa as f32 / 1024.0) * 2.0f32.powi(exponent as i32 - 15),
+    }
+}
+
 pub(crate) fn metal_is_available() -> bool {
     !metal::Device::all().is_empty()
 }
@@ -2129,5 +2309,44 @@ mod offscreen_tests {
             r > 150 && r > g && r > b,
             "red quad should dominate the center pixel: r={r} g={g} b={b}"
         );
+    }
+
+    #[test]
+    fn offscreen_rgba16f_renders_quad_to_float() {
+        let Some(mut renderer) = headless() else {
+            return;
+        };
+        let mut scene = Scene::default();
+        scene.insert_primitive(full_viewport_quad(16.0, hsla(0.0, 1.0, 0.5, 1.0)));
+        scene.finish();
+        let frame = renderer
+            .render_quads_to_f16(&scene, size(DevicePixels(16), DevicePixels(16)))
+            .unwrap();
+        assert_eq!((frame.width, frame.height), (16, 16));
+        assert_eq!(frame.rgba.len(), 16 * 16 * 4);
+
+        let center = ((8 * 16) + 8) * 4;
+        let (r, g, b, a) = (
+            frame.rgba[center],
+            frame.rgba[center + 1],
+            frame.rgba[center + 2],
+            frame.rgba[center + 3],
+        );
+        assert!(a > 0.78, "alpha should be near-opaque as float, got {a}");
+        assert!(r > 0.6, "red channel should be high as float, got r={r}");
+        assert!(r > g && r > b, "red should dominate: r={r} g={g} b={b}");
+    }
+
+    #[test]
+    fn offscreen_rgba16f_empty_is_transparent() {
+        let Some(mut renderer) = headless() else {
+            return;
+        };
+        let mut scene = Scene::default();
+        scene.finish();
+        let frame = renderer
+            .render_quads_to_f16(&scene, size(DevicePixels(8), DevicePixels(8)))
+            .unwrap();
+        assert!(frame.rgba.iter().all(|&value| value == 0.0));
     }
 }
