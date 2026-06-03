@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::effects::EffectStack;
+use crate::effects::{AnimatedEffectStack, EffectStack};
 use crate::playback::Timebase;
 use crate::timecode::Timecode;
 
@@ -63,9 +63,10 @@ pub struct TimelineClip {
     /// How this clip composites over lower tracks (defaults to source-over).
     #[serde(default)]
     pub blend_mode: ClipBlendMode,
-    /// The ordered effect stack applied to the clip before compositing (defaults to empty).
+    /// The clip's (optionally keyframed) effect stack, resolved per frame and applied
+    /// before compositing (defaults to empty).
     #[serde(default)]
-    pub effects: EffectStack,
+    pub effects: AnimatedEffectStack,
 }
 
 fn default_clip_opacity() -> f32 {
@@ -581,6 +582,14 @@ impl Timeline {
                 .iter()
                 .find_map(|clip| clip.source_frame_at(frame).map(|sf| (clip, sf)))
             {
+                // Keyframed effects are authored against clip-local time, so resolve the
+                // animation at this frame's offset within the clip before compositing.
+                let clip_local = frame.saturating_sub(clip.track_offset);
+                let time_ms = if self.frame_rate > 0.0 {
+                    (clip_local as f64 / self.frame_rate * 1000.0) as u64
+                } else {
+                    0
+                };
                 requests.push(TrackFrameRequest {
                     track_id: track.id.clone(),
                     clip_id: clip.id.clone(),
@@ -588,7 +597,7 @@ impl Timeline {
                     source_frame,
                     opacity: clip.opacity,
                     blend_mode: clip.blend_mode,
-                    effects: clip.effects.clone(),
+                    effects: clip.effects.resolve(time_ms),
                 });
             }
         }

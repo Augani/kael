@@ -270,6 +270,55 @@ impl AnimatedEffectStack {
     }
 }
 
+impl From<ClipEffect> for AnimatedEffect {
+    /// Lift a static effect into a keyframed one whose parameters are constant curves.
+    fn from(effect: ClipEffect) -> Self {
+        match effect {
+            ClipEffect::GaussianBlur { sigma } => AnimatedEffect::GaussianBlur {
+                sigma: Automation::constant(sigma),
+            },
+            ClipEffect::Exposure { stops } => AnimatedEffect::Exposure {
+                stops: Automation::constant(stops),
+            },
+            ClipEffect::Gamma { power } => AnimatedEffect::Gamma {
+                power: Automation::constant(power),
+            },
+            ClipEffect::Saturation { amount } => AnimatedEffect::Saturation {
+                amount: Automation::constant(amount),
+            },
+            ClipEffect::WhiteBalance { temperature, tint } => AnimatedEffect::WhiteBalance {
+                temperature: Automation::constant(temperature),
+                tint: Automation::constant(tint),
+            },
+            ClipEffect::Vignette {
+                amount,
+                radius,
+                softness,
+            } => AnimatedEffect::Vignette {
+                amount: Automation::constant(amount),
+                radius: Automation::constant(radius),
+                softness: Automation::constant(softness),
+            },
+            ClipEffect::Solarize { threshold } => AnimatedEffect::Solarize {
+                threshold: Automation::constant(threshold),
+            },
+        }
+    }
+}
+
+impl From<EffectStack> for AnimatedEffectStack {
+    /// Lift a static stack into a keyframed one with constant-curve parameters.
+    fn from(stack: EffectStack) -> Self {
+        AnimatedEffectStack {
+            effects: stack
+                .effects
+                .into_iter()
+                .map(AnimatedEffect::from)
+                .collect(),
+        }
+    }
+}
+
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 

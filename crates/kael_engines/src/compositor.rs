@@ -347,7 +347,8 @@ impl FrameProvider for StillImageProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::effects::{ClipEffect, EffectStack};
+    use crate::automation::{Automation, Interpolation, Keyframe};
+    use crate::effects::{AnimatedEffect, AnimatedEffectStack, ClipEffect, EffectStack};
     use crate::media::{ClipBlendMode, TimelineClip, TimelineTrack, TrackType};
     use std::collections::HashMap;
 
@@ -473,7 +474,8 @@ mod tests {
         // so the equivalence covers the source -> effects -> opacity -> blend path.
         timeline.tracks[1].clips[0].effects = EffectStack {
             effects: vec![ClipEffect::Exposure { stops: -1.0 }],
-        };
+        }
+        .into();
         timeline.tracks[1].clips[0].opacity = 0.5;
         timeline.tracks[1].clips[0].blend_mode = ClipBlendMode::Multiply;
 
@@ -536,7 +538,8 @@ mod tests {
                 ClipEffect::Exposure { stops: 1.0 },
                 ClipEffect::Gamma { power: 2.0 },
             ],
-        };
+        }
+        .into();
         let fg = build_frame_graph(&timeline, 10);
         assert_eq!(fg.layers[0].effects.len(), 2);
 
@@ -558,7 +561,8 @@ mod tests {
         };
         timeline.tracks[0].clips[0].effects = EffectStack {
             effects: vec![ClipEffect::Exposure { stops: 1.0 }],
-        };
+        }
+        .into();
         let provider = provider(&[("gray", [0.3, 0.3, 0.3, 1.0])]);
 
         let fg = build_frame_graph(&timeline, 10);
@@ -617,7 +621,8 @@ mod tests {
         };
         timeline.tracks[0].clips[0].effects = EffectStack {
             effects: vec![ClipEffect::Exposure { stops: 1.0 }],
-        };
+        }
+        .into();
         let provider = provider(&[("gray", [0.3, 0.3, 0.3, 1.0])]);
 
         let frames = render_frames(&timeline, 0..3, 2, 2, &provider);
@@ -647,13 +652,46 @@ mod tests {
         // With an exposure effect, composite_frame (the export path) reflects it.
         timeline.tracks[0].clips[0].effects = EffectStack {
             effects: vec![ClipEffect::Exposure { stops: 1.0 }],
-        };
+        }
+        .into();
         let graded = composite_frame(&timeline, 10, 2, 2, &provider);
         assert!(
             (graded.pixel(0, 0)[0] - 0.6).abs() < 1e-6,
             "{:?}",
             graded.pixel(0, 0)
         );
+    }
+
+    #[test]
+    fn keyframed_clip_effect_animates_across_frames() {
+        let mut timeline = Timeline {
+            tracks: vec![track("v1", vec![clip("a", "gray", 0, 60, 0)])],
+            frame_rate: 30.0,
+            duration_frames: 60,
+        };
+        // Exposure ramps 0 -> +1 stop over the first second (clip-local), resolved per frame.
+        let mut stops = Automation::constant(0.0);
+        stops.add(Keyframe {
+            time_ms: 0,
+            value: 0.0,
+            interpolation: Interpolation::Linear,
+        });
+        stops.add(Keyframe {
+            time_ms: 1000,
+            value: 1.0,
+            interpolation: Interpolation::Linear,
+        });
+        timeline.tracks[0].clips[0].effects = AnimatedEffectStack {
+            effects: vec![AnimatedEffect::Exposure { stops }],
+        };
+        let provider = provider(&[("gray", [0.3, 0.3, 0.3, 1.0])]);
+
+        let value_at = |frame| composite_frame(&timeline, frame, 1, 1, &provider).pixel(0, 0)[0];
+        // Frame 0 (0 ms): exposure 0, unchanged. Frame 30 (1000 ms): +1 stop, doubled.
+        assert!((value_at(0) - 0.3).abs() < 1e-4, "{}", value_at(0));
+        assert!((value_at(30) - 0.6).abs() < 1e-4, "{}", value_at(30));
+        // The ramp is monotonic in between.
+        assert!(value_at(0) < value_at(15) && value_at(15) < value_at(30));
     }
 
     #[test]
