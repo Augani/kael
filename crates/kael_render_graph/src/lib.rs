@@ -1114,6 +1114,87 @@ pub mod reference {
         })
     }
 
+    fn sample_bilinear(image: &Image, u: f32, v: f32) -> [f32; 4] {
+        let max_x = image.width as i32 - 1;
+        let max_y = image.height as i32 - 1;
+        let x0 = u.floor() as i32;
+        let y0 = v.floor() as i32;
+        let (fx, fy) = (u - x0 as f32, v - y0 as f32);
+        let get = |x: i32, y: i32| {
+            let cx = x.clamp(0, max_x) as u32;
+            let cy = y.clamp(0, max_y) as u32;
+            image.pixels[(cy * image.width + cx) as usize]
+        };
+        let (c00, c10, c01, c11) = (
+            get(x0, y0),
+            get(x0 + 1, y0),
+            get(x0, y0 + 1),
+            get(x0 + 1, y0 + 1),
+        );
+        let mut out = [0.0f32; 4];
+        for channel in 0..4 {
+            let top = c00[channel] * (1.0 - fx) + c10[channel] * fx;
+            let bottom = c01[channel] * (1.0 - fx) + c11[channel] * fx;
+            out[channel] = top * (1.0 - fy) + bottom * fy;
+        }
+        out
+    }
+
+    /// A single-input op that bilinearly resizes `inputs[0]` to fill the output —
+    /// image scaling for fit-to-frame and proxy/preview resolution changes.
+    pub fn resample() -> PassOp<'static> {
+        Box::new(|inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            if source.width == 0 || source.height == 0 {
+                return;
+            }
+            for oy in 0..output.height {
+                for ox in 0..output.width {
+                    let u = (ox as f32 + 0.5) / output.width as f32 * source.width as f32 - 0.5;
+                    let v = (oy as f32 + 0.5) / output.height as f32 * source.height as f32 - 0.5;
+                    output.pixels[(oy * output.width + ox) as usize] =
+                        sample_bilinear(source, u, v);
+                }
+            }
+        })
+    }
+
+    /// A single-input op that bilinearly scales `inputs[0]` into the destination
+    /// rectangle `(dst_x, dst_y, dst_width, dst_height)` within the output, leaving the
+    /// rest transparent — the picture-in-picture / position-and-scale transform.
+    pub fn place(dst_x: i32, dst_y: i32, dst_width: u32, dst_height: u32) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            for oy in 0..output.height {
+                for ox in 0..output.width {
+                    let index = (oy * output.width + ox) as usize;
+                    let rel_x = ox as i32 - dst_x;
+                    let rel_y = oy as i32 - dst_y;
+                    let inside = dst_width > 0
+                        && dst_height > 0
+                        && source.width > 0
+                        && source.height > 0
+                        && rel_x >= 0
+                        && (rel_x as u32) < dst_width
+                        && rel_y >= 0
+                        && (rel_y as u32) < dst_height;
+                    output.pixels[index] = if inside {
+                        let u = (rel_x as f32 + 0.5) / dst_width as f32 * source.width as f32 - 0.5;
+                        let v =
+                            (rel_y as f32 + 0.5) / dst_height as f32 * source.height as f32 - 0.5;
+                        sample_bilinear(source, u, v)
+                    } else {
+                        [0.0; 4]
+                    };
+                }
+            }
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -1307,6 +1388,53 @@ pub mod reference {
             let half = run(0.5);
             assert_eq!(half.pixel(0, 0), [1.0, 0.0, 0.0, 1.0]);
             assert_eq!(half.pixel(3, 0), [0.0, 0.0, 1.0, 1.0]);
+        }
+
+        #[test]
+        fn resample_is_identity_at_same_size() {
+            let mut source = Image::new(2, 2);
+            source.pixels = vec![
+                [1.0, 0.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0, 1.0],
+                [0.0, 0.0, 1.0, 1.0],
+                [1.0, 1.0, 0.0, 1.0],
+            ];
+            let mut out = Image::new(2, 2);
+            resample()(&[&source], &mut out);
+            assert_eq!(out.pixels, source.pixels);
+        }
+
+        #[test]
+        fn resample_upscales_solid_color() {
+            let source = Image::filled(2, 2, [0.4, 0.6, 0.8, 1.0]);
+            let mut out = Image::new(8, 8);
+            resample()(&[&source], &mut out);
+            assert!(out.pixels.iter().all(|pixel| pixel
+                .iter()
+                .zip([0.4, 0.6, 0.8, 1.0])
+                .all(|(a, b)| (a - b).abs() < 1e-5)));
+        }
+
+        #[test]
+        fn place_fills_destination_rect_and_clears_outside() {
+            let source = Image::filled(1, 1, [1.0, 0.0, 0.0, 1.0]);
+            let mut out = Image::new(4, 4);
+            // Place the source into the top-left 2x2 quadrant.
+            place(0, 0, 2, 2)(&[&source], &mut out);
+            assert_eq!(out.pixel(0, 0), [1.0, 0.0, 0.0, 1.0]);
+            assert_eq!(out.pixel(1, 1), [1.0, 0.0, 0.0, 1.0]);
+            // Outside the 2x2 rect is transparent.
+            assert_eq!(out.pixel(2, 2), [0.0, 0.0, 0.0, 0.0]);
+            assert_eq!(out.pixel(3, 0), [0.0, 0.0, 0.0, 0.0]);
+        }
+
+        #[test]
+        fn place_respects_offset_position() {
+            let source = Image::filled(1, 1, [0.0, 1.0, 0.0, 1.0]);
+            let mut out = Image::new(4, 4);
+            place(2, 1, 1, 1)(&[&source], &mut out);
+            assert_eq!(out.pixel(2, 1), [0.0, 1.0, 0.0, 1.0]);
+            assert_eq!(out.pixel(0, 0), [0.0, 0.0, 0.0, 0.0]);
         }
     }
 }
