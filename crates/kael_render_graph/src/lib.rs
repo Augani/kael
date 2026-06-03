@@ -1565,6 +1565,46 @@ pub mod reference {
         })
     }
 
+    /// A single-input op that rotates hue by `radians` around the luminance axis, using
+    /// the W3C feColorMatrix hue-rotate matrix (identity at 0, luminance-preserving so
+    /// neutrals are unchanged). RGB results are clamped to `0..=1`; alpha passes through.
+    pub fn hue_rotate(radians: f32) -> PassOp<'static> {
+        let (sin, cos) = radians.sin_cos();
+        let matrix = [
+            [
+                0.213 + cos * 0.787 - sin * 0.213,
+                0.715 - cos * 0.715 - sin * 0.715,
+                0.072 - cos * 0.072 + sin * 0.928,
+            ],
+            [
+                0.213 - cos * 0.213 + sin * 0.143,
+                0.715 + cos * 0.285 + sin * 0.140,
+                0.072 - cos * 0.072 - sin * 0.283,
+            ],
+            [
+                0.213 - cos * 0.213 - sin * 0.787,
+                0.715 - cos * 0.715 + sin * 0.715,
+                0.072 + cos * 0.928 + sin * 0.072,
+            ],
+        ];
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            for (output_pixel, source_pixel) in output.pixels.iter_mut().zip(&source.pixels) {
+                let (r, g, b) = (source_pixel[0], source_pixel[1], source_pixel[2]);
+                let channel =
+                    |row: [f32; 3]| (row[0] * r + row[1] * g + row[2] * b).clamp(0.0, 1.0);
+                *output_pixel = [
+                    channel(matrix[0]),
+                    channel(matrix[1]),
+                    channel(matrix[2]),
+                    source_pixel[3],
+                ];
+            }
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -2096,6 +2136,38 @@ pub mod reference {
             for channel in 0..3 {
                 assert!((back.pixel(0, 0)[channel] - source.pixels[0][channel]).abs() < 1e-6);
             }
+        }
+
+        #[test]
+        fn hue_rotate_identity_at_zero_and_preserves_gray() {
+            let close = |a: f32, b: f32| (a - b).abs() < 1e-5;
+            let color = [0.8, 0.4, 0.2, 1.0];
+            let mut source = Image::new(1, 1);
+            source.pixels = vec![color];
+
+            // Angle 0 is the identity; alpha passes through.
+            let mut at_zero = Image::new(1, 1);
+            hue_rotate(0.0)(&[&source], &mut at_zero);
+            for channel in 0..3 {
+                assert!(close(at_zero.pixel(0, 0)[channel], color[channel]));
+            }
+            assert_eq!(at_zero.pixel(0, 0)[3], 1.0);
+
+            // A neutral gray is invariant under any rotation (luminance-preserving).
+            let gray = Image::filled(1, 1, [0.5, 0.5, 0.5, 1.0]);
+            let mut rotated_gray = Image::new(1, 1);
+            hue_rotate(2.0)(&[&gray], &mut rotated_gray);
+            for channel in 0..3 {
+                assert!(close(rotated_gray.pixel(0, 0)[channel], 0.5));
+            }
+
+            // A real rotation changes a saturated color.
+            let mut shifted = Image::new(1, 1);
+            hue_rotate(2.0)(&[&source], &mut shifted);
+            assert!(
+                (shifted.pixel(0, 0)[0] - color[0]).abs() > 1e-3
+                    || (shifted.pixel(0, 0)[1] - color[1]).abs() > 1e-3
+            );
         }
     }
 }
