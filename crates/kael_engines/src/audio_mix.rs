@@ -197,6 +197,31 @@ pub fn meter(samples: &[f32]) -> LevelMeter {
     }
 }
 
+/// Apply a linear fade-in over the first `samples` of `buffer` in place: the gain ramps
+/// from 0 to 1 (clamped to the buffer length).
+pub fn apply_fade_in(buffer: &mut [f32], samples: usize) {
+    let count = samples.min(buffer.len());
+    if count <= 1 {
+        return;
+    }
+    for (index, sample) in buffer.iter_mut().take(count).enumerate() {
+        *sample *= index as f32 / (count - 1) as f32;
+    }
+}
+
+/// Apply a linear fade-out over the last `samples` of `buffer` in place: the gain ramps
+/// from 1 down to 0 (clamped to the buffer length).
+pub fn apply_fade_out(buffer: &mut [f32], samples: usize) {
+    let length = buffer.len();
+    let count = samples.min(length);
+    if count <= 1 {
+        return;
+    }
+    for offset in 0..count {
+        buffer[length - 1 - offset] *= offset as f32 / (count - 1) as f32;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,5 +403,33 @@ mod tests {
 
         // Empty buffer reads as silence.
         assert_eq!(meter(&[]).peak_dbfs, SILENCE_DBFS);
+    }
+
+    #[test]
+    fn fades_ramp_the_buffer_edges() {
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-5;
+
+        let mut fade_in = vec![1.0f32; 4];
+        apply_fade_in(&mut fade_in, 4);
+        assert!(
+            close(fade_in[0], 0.0)
+                && close(fade_in[1], 1.0 / 3.0)
+                && close(fade_in[2], 2.0 / 3.0)
+                && close(fade_in[3], 1.0)
+        );
+
+        let mut fade_out = vec![1.0f32; 4];
+        apply_fade_out(&mut fade_out, 4);
+        assert!(
+            close(fade_out[0], 1.0)
+                && close(fade_out[1], 2.0 / 3.0)
+                && close(fade_out[2], 1.0 / 3.0)
+                && close(fade_out[3], 0.0)
+        );
+
+        // A fade longer than the buffer clamps to its length.
+        let mut short = vec![1.0f32; 2];
+        apply_fade_in(&mut short, 100);
+        assert!(close(short[0], 0.0) && close(short[1], 1.0));
     }
 }
