@@ -308,6 +308,15 @@ pub fn render_frames(
     let mut cache = HashMap::new();
     let mut rendered = Vec::new();
     for frame in frames {
+        // The graph path does not yet emit transition passes, so frames with a clip overlap
+        // are composited directly (still exact, just uncached); non-transition frames keep
+        // the cached graph path. This keeps render_frames == composite_frame for every frame.
+        let has_transition =
+            (0..timeline.tracks.len()).any(|index| timeline.transition_at(index, frame).is_some());
+        if has_transition {
+            rendered.push(composite_frame(timeline, frame, width, height, provider));
+            continue;
+        }
         let frame_graph = build_frame_graph(timeline, frame);
         let Ok(compiled) = frame_graph.graph.compile() else {
             rendered.push(Image::new(width, height));
@@ -827,6 +836,33 @@ mod tests {
             (mid[0] - 0.5).abs() < 1e-6 && (mid[2] - 0.5).abs() < 1e-6,
             "{mid:?}"
         );
+    }
+
+    #[test]
+    fn render_frames_matches_composite_frame_through_a_transition() {
+        let timeline = Timeline {
+            tracks: vec![track(
+                "v1",
+                vec![clip("a", "red", 0, 30, 0), clip("b", "blue", 0, 30, 20)],
+            )],
+            frame_rate: 30.0,
+            duration_frames: 50,
+        };
+        let provider = provider(&[
+            ("red", [1.0, 0.0, 0.0, 1.0]),
+            ("blue", [0.0, 0.0, 1.0, 1.0]),
+        ]);
+
+        // The range 18..32 spans the overlap [20,30); render_frames must equal
+        // composite_frame on every frame, transition frames included.
+        let frames = render_frames(&timeline, 18..32, 1, 1, &provider);
+        for (offset, frame) in (18..32u64).enumerate() {
+            assert_eq!(
+                frames[offset].pixels,
+                composite_frame(&timeline, frame, 1, 1, &provider).pixels,
+                "frame {frame}"
+            );
+        }
     }
 
     #[test]
