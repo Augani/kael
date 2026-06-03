@@ -277,6 +277,45 @@ pub enum AccessibilityValue {
 // Node
 // ---------------------------------------------------------------------------
 
+/// The screen-space rectangle of an accessibility node, in logical pixels.
+///
+/// Origin is the top-left corner; `width`/`height` extend right/down. This is the
+/// geometry an assistive technology needs to draw focus rings and hit-test, and it
+/// maps directly onto [`accesskit::Rect`] (a min/max-corner box).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AccessibilityRect {
+    /// Left edge (logical pixels from the window origin).
+    pub x: f64,
+    /// Top edge (logical pixels from the window origin).
+    pub y: f64,
+    /// Width in logical pixels.
+    pub width: f64,
+    /// Height in logical pixels.
+    pub height: f64,
+}
+
+impl AccessibilityRect {
+    /// Construct a rect from an origin and size.
+    pub fn new(x: f64, y: f64, width: f64, height: f64) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    /// Convert to an AccessKit min/max-corner rectangle.
+    pub fn to_accesskit(&self) -> accesskit::Rect {
+        accesskit::Rect {
+            x0: self.x,
+            y0: self.y,
+            x1: self.x + self.width,
+            y1: self.y + self.height,
+        }
+    }
+}
+
 /// A single node in the accessibility tree.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccessibilityNode {
@@ -294,6 +333,8 @@ pub struct AccessibilityNode {
     pub value: Option<AccessibilityValue>,
     /// Placeholder text for inputs.
     pub placeholder: Option<String>,
+    /// Screen-space bounds, once produced by layout.
+    pub bounds: Option<AccessibilityRect>,
     /// Actions that can be invoked on this element.
     pub actions: Vec<AccessibilityAction>,
     /// Child node identifiers.
@@ -313,17 +354,18 @@ impl AccessibilityNode {
             description: None,
             value: None,
             placeholder: None,
+            bounds: None,
             actions: Vec::new(),
             children: Vec::new(),
             parent: None,
         }
     }
 
-    /// Convert this node to an AccessKit node (P3-A spike, roadmap §9 action 12).
+    /// Convert this node to an AccessKit node (P3-A, roadmap §9 action 12).
     ///
-    /// Maps role, label, description, and child ids. Geometry (bounds) is **not**
-    /// yet emitted — wiring the layout system to produce a stable, geometry-bearing
-    /// incremental tree is the remaining deep P3-A work this spike exposes.
+    /// Maps role, label, description, child ids, and geometry. Bounds are emitted
+    /// when [`AccessibilityNode::bounds`] is populated; the remaining P3-A work is
+    /// the layout-side wiring that fills those bounds for every laid-out element.
     pub fn to_accesskit_node(&self) -> accesskit::Node {
         let mut node = accesskit::Node::new(self.role.to_accesskit());
         if let Some(label) = &self.label {
@@ -331,6 +373,9 @@ impl AccessibilityNode {
         }
         if let Some(description) = &self.description {
             node.set_description(description.as_str());
+        }
+        if let Some(bounds) = &self.bounds {
+            node.set_bounds(bounds.to_accesskit());
         }
         let children: Vec<accesskit::NodeId> = self
             .children
@@ -356,6 +401,12 @@ impl AccessibilityNode {
     /// Set the value for this node.
     pub fn with_value(mut self, value: AccessibilityValue) -> Self {
         self.value = Some(value);
+        self
+    }
+
+    /// Set the screen-space bounds for this node.
+    pub fn with_bounds(mut self, bounds: AccessibilityRect) -> Self {
+        self.bounds = Some(bounds);
         self
     }
 
@@ -539,6 +590,7 @@ impl AccessibilityAttributes {
             description: self.description.clone(),
             value: self.value.clone(),
             placeholder: self.placeholder.clone(),
+            bounds: None,
             actions: self.actions.clone(),
             children: Vec::new(),
             parent: None,
@@ -620,12 +672,11 @@ mod tests {
         tree.set_parent(button_id, tree.root);
 
         assert_eq!(tree.focused_node(), Some(button_id));
-        assert!(
-            tree.get(button_id)
-                .unwrap()
-                .states
-                .contains(AccessibilityState::FOCUSED)
-        );
+        assert!(tree
+            .get(button_id)
+            .unwrap()
+            .states
+            .contains(AccessibilityState::FOCUSED));
     }
 
     #[test]
@@ -777,5 +828,23 @@ mod accesskit_spike_tests {
         assert_eq!(ak.role(), accesskit::Role::Button);
         assert_eq!(ak.label(), Some("OK"));
         assert_eq!(ak.children(), [accesskit::NodeId(7)]);
+    }
+
+    #[test]
+    fn node_emits_geometry_when_bounds_present() {
+        let node = AccessibilityNode::new(AccessibilityRole::Button)
+            .with_bounds(AccessibilityRect::new(10.0, 20.0, 100.0, 40.0));
+        let ak = node.to_accesskit_node();
+        let rect = ak.bounds().expect("bounds should be emitted");
+        assert_eq!(rect.x0, 10.0);
+        assert_eq!(rect.y0, 20.0);
+        assert_eq!(rect.x1, 110.0);
+        assert_eq!(rect.y1, 60.0);
+    }
+
+    #[test]
+    fn node_omits_geometry_when_bounds_absent() {
+        let node = AccessibilityNode::new(AccessibilityRole::Button);
+        assert!(node.to_accesskit_node().bounds().is_none());
     }
 }
