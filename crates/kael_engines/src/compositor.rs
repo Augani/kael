@@ -258,6 +258,52 @@ fn composite_op(mode: BlendMode, opacity: f32) -> PassOp<'static> {
     })
 }
 
+/// Render `timeline` over `frames` into a sequence of composited images.
+///
+/// Drives [`build_frame_graph`] + [`frame_graph_ops`] +
+/// [`execute_cached`](kael_render_graph::reference::execute_cached) per frame, reusing one
+/// render-graph cache across the whole range so passes whose cache key is unchanged (e.g.
+/// the cleared background, or a still layer's source and effects) are not recomputed — V9
+/// dirty-subtree caching applied to a range render. Each output frame equals
+/// [`composite_frame`] for that frame when clips have no effects, and is the effect-applied
+/// composite otherwise. This is the offscreen, window-independent timeline render the export
+/// encoder consumes (P1-A) — the codec/mux stage is the only remaining gap.
+pub fn render_frames(
+    timeline: &Timeline,
+    frames: impl IntoIterator<Item = u64>,
+    width: u32,
+    height: u32,
+    provider: &dyn FrameProvider,
+) -> Vec<Image> {
+    let mut cache = HashMap::new();
+    let mut rendered = Vec::new();
+    for frame in frames {
+        let frame_graph = build_frame_graph(timeline, frame);
+        let Ok(compiled) = frame_graph.graph.compile() else {
+            rendered.push(Image::new(width, height));
+            continue;
+        };
+        let ops = frame_graph_ops(&frame_graph, timeline, frame, width, height, provider);
+        let image = match kael_render_graph::reference::execute_cached(
+            &frame_graph.graph,
+            &compiled,
+            width,
+            height,
+            &HashMap::new(),
+            &ops,
+            &mut cache,
+        ) {
+            Ok((images, _)) => images
+                .get(&frame_graph.output)
+                .cloned()
+                .unwrap_or_else(|| Image::new(width, height)),
+            Err(_) => Image::new(width, height),
+        };
+        rendered.push(image);
+    }
+    rendered
+}
+
 /// A [`FrameProvider`] serving a single decoded still image per source — a photo, freeze
 /// frame, or title card. The concrete uncompressed-video provider, mirroring the WAV
 /// audio provider. Returns the image when the requested size matches its own.
@@ -526,6 +572,56 @@ mod tests {
         // Exposure +1 doubles the source (0.3 -> 0.6) before it composites over transparent.
         let out = images[&fg.output].pixel(0, 0);
         assert!((out[0] - 0.6).abs() < 1e-6, "{out:?}");
+    }
+
+    #[test]
+    fn render_frames_matches_composite_frame_across_a_range() {
+        let timeline = Timeline {
+            tracks: vec![
+                track("v1", vec![clip("a", "red", 0, 30, 0)]),
+                // Starts later on the timeline, so early frames have one layer, later two.
+                track("v2", vec![clip("b", "blue", 5, 30, 10)]),
+            ],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        let provider = provider(&[
+            ("red", [1.0, 0.0, 0.0, 1.0]),
+            ("blue", [0.0, 0.0, 1.0, 0.5]),
+        ]);
+
+        let frames = render_frames(&timeline, 0..15, 4, 4, &provider);
+        assert_eq!(frames.len(), 15);
+        for frame in 0..15u64 {
+            let direct = composite_frame(&timeline, frame, 4, 4, &provider);
+            assert_eq!(
+                frames[frame as usize].pixels, direct.pixels,
+                "frame {frame}"
+            );
+        }
+    }
+
+    #[test]
+    fn render_frames_applies_clip_effects_every_frame() {
+        let mut timeline = Timeline {
+            tracks: vec![track("v1", vec![clip("a", "gray", 0, 30, 0)])],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        timeline.tracks[0].clips[0].effects = EffectStack {
+            effects: vec![ClipEffect::Exposure { stops: 1.0 }],
+        };
+        let provider = provider(&[("gray", [0.3, 0.3, 0.3, 1.0])]);
+
+        let frames = render_frames(&timeline, 0..3, 2, 2, &provider);
+        assert_eq!(frames.len(), 3);
+        for image in &frames {
+            assert!(
+                (image.pixel(0, 0)[0] - 0.6).abs() < 1e-6,
+                "{:?}",
+                image.pixel(0, 0)
+            );
+        }
     }
 
     #[test]
