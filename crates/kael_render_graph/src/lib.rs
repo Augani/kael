@@ -2401,6 +2401,29 @@ pub mod reference {
         })
     }
 
+    /// A single-input duotone op that maps each pixel's Rec.709 luminance onto the gradient
+    /// from `shadow` (luma 0) to `highlight` (luma 1) — the two-tone stylization. Alpha is
+    /// preserved.
+    pub fn duotone(shadow: [f32; 3], highlight: [f32; 3]) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            for (output_pixel, source_pixel) in output.pixels.iter_mut().zip(&source.pixels) {
+                let luma = (0.2126 * source_pixel[0]
+                    + 0.7152 * source_pixel[1]
+                    + 0.0722 * source_pixel[2])
+                    .clamp(0.0, 1.0);
+                *output_pixel = [
+                    shadow[0] + (highlight[0] - shadow[0]) * luma,
+                    shadow[1] + (highlight[1] - shadow[1]) * luma,
+                    shadow[2] + (highlight[2] - shadow[2]) * luma,
+                    source_pixel[3],
+                ];
+            }
+        })
+    }
+
     /// A single-input op that rotates hue by `radians` around the luminance axis, using
     /// the W3C feColorMatrix hue-rotate matrix (identity at 0, luminance-preserving so
     /// neutrals are unchanged). RGB results are clamped to `0..=1`; alpha passes through.
@@ -3861,6 +3884,32 @@ pub mod reference {
             for channel in 0..3 {
                 assert!((back.pixel(0, 0)[channel] - source.pixels[0][channel]).abs() < 1e-6);
             }
+        }
+
+        #[test]
+        fn duotone_maps_luma_across_the_two_tones() {
+            // Black, mid-gray, white through a blue->yellow duotone.
+            let mut source = Image::new(3, 1);
+            source.pixels = vec![
+                [0.0, 0.0, 0.0, 1.0],
+                [0.5, 0.5, 0.5, 0.5],
+                [1.0, 1.0, 1.0, 1.0],
+            ];
+            let shadow = [0.0, 0.0, 1.0];
+            let highlight = [1.0, 1.0, 0.0];
+            let mut out = Image::new(3, 1);
+            duotone(shadow, highlight)(&[&source], &mut out);
+
+            // Luma 0 -> shadow; luma 1 -> highlight; luma 0.5 -> the midpoint. Alpha kept.
+            assert_eq!(&out.pixel(0, 0)[0..3], &shadow);
+            assert_eq!(&out.pixel(2, 0)[0..3], &highlight);
+            let mid = out.pixel(1, 0);
+            assert!(
+                (mid[0] - 0.5).abs() < 1e-6
+                    && (mid[1] - 0.5).abs() < 1e-6
+                    && (mid[2] - 0.5).abs() < 1e-6
+            );
+            assert_eq!(mid[3], 0.5);
         }
 
         #[test]
