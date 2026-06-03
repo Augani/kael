@@ -1431,6 +1431,44 @@ pub mod reference {
         })
     }
 
+    /// A single-input op that mirrors `inputs[0]` left-to-right.
+    pub fn flip_horizontal() -> PassOp<'static> {
+        Box::new(|inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            if source.width != output.width || source.height != output.height {
+                return;
+            }
+            let width = output.width;
+            for y in 0..output.height {
+                for x in 0..width {
+                    output.pixels[(y * width + x) as usize] =
+                        source.pixels[(y * width + (width - 1 - x)) as usize];
+                }
+            }
+        })
+    }
+
+    /// A single-input op that mirrors `inputs[0]` top-to-bottom.
+    pub fn flip_vertical() -> PassOp<'static> {
+        Box::new(|inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            if source.width != output.width || source.height != output.height {
+                return;
+            }
+            let (width, height) = (output.width, output.height);
+            for y in 0..height {
+                for x in 0..width {
+                    output.pixels[(y * width + x) as usize] =
+                        source.pixels[((height - 1 - y) * width + x) as usize];
+                }
+            }
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -1858,6 +1896,30 @@ pub mod reference {
             let mut rooted = Image::new(1, 1);
             gamma(0.5)(&[&source], &mut rooted);
             assert!((rooted.pixel(0, 0)[0] - 0.5).abs() < 1e-6);
+        }
+
+        #[test]
+        fn flips_mirror_the_image() {
+            let red = [1.0, 0.0, 0.0, 1.0];
+            let green = [0.0, 1.0, 0.0, 1.0];
+            let blue = [0.0, 0.0, 1.0, 1.0];
+
+            // Horizontal flip reverses columns; flipping twice is the identity.
+            let mut source = Image::new(3, 1);
+            source.pixels = vec![red, green, blue];
+            let mut flipped = Image::new(3, 1);
+            flip_horizontal()(&[&source], &mut flipped);
+            assert_eq!(flipped.pixels, vec![blue, green, red]);
+            let mut twice = Image::new(3, 1);
+            flip_horizontal()(&[&flipped], &mut twice);
+            assert_eq!(twice.pixels, source.pixels);
+
+            // Vertical flip reverses rows.
+            let mut column = Image::new(1, 3);
+            column.pixels = vec![red, green, blue];
+            let mut flipped_v = Image::new(1, 3);
+            flip_vertical()(&[&column], &mut flipped_v);
+            assert_eq!(flipped_v.pixels, vec![blue, green, red]);
         }
     }
 }
