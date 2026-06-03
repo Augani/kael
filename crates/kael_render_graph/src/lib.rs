@@ -1564,6 +1564,58 @@ pub mod reference {
         })
     }
 
+    /// A single-input pixelate / mosaic of `inputs[0]`: the image is divided into
+    /// `block_size` × `block_size` blocks and each block is replaced by the average of its
+    /// pixels (all four channels, with partial edge blocks averaged over their in-bounds
+    /// pixels). A `block_size` of 0 or 1 is the identity.
+    pub fn pixelate(block_size: u32) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            if source.width != output.width || source.height != output.height {
+                return;
+            }
+            if block_size <= 1 {
+                output.pixels.copy_from_slice(&source.pixels);
+                return;
+            }
+            let (width, height) = (source.width, source.height);
+            let mut block_y = 0;
+            while block_y < height {
+                let mut block_x = 0;
+                while block_x < width {
+                    let x_end = (block_x + block_size).min(width);
+                    let y_end = (block_y + block_size).min(height);
+                    let mut sum = [0.0f32; 4];
+                    let mut count = 0.0f32;
+                    for y in block_y..y_end {
+                        for x in block_x..x_end {
+                            let pixel = source.pixels[(y * width + x) as usize];
+                            for channel in 0..4 {
+                                sum[channel] += pixel[channel];
+                            }
+                            count += 1.0;
+                        }
+                    }
+                    let average = [
+                        sum[0] / count,
+                        sum[1] / count,
+                        sum[2] / count,
+                        sum[3] / count,
+                    ];
+                    for y in block_y..y_end {
+                        for x in block_x..x_end {
+                            output.pixels[(y * width + x) as usize] = average;
+                        }
+                    }
+                    block_x += block_size;
+                }
+                block_y += block_size;
+            }
+        })
+    }
+
     /// A single-input op that keys out (sets alpha to 0) pixels of `inputs[0]` whose
     /// Rec.709 luma is below `threshold` — a simple luma key for masking dark areas.
     /// Color channels are preserved; brighter pixels keep their alpha.
@@ -2784,6 +2836,58 @@ pub mod reference {
             let mut zeroed = Image::new(5, 5);
             sobel_edges(0.0)(&[&source], &mut zeroed);
             assert!(zeroed.pixel(2, 2)[0] < 1e-6);
+        }
+
+        #[test]
+        fn pixelate_block_size_one_or_flat_is_unchanged() {
+            let mut varied = Image::new(3, 3);
+            varied.pixels[4] = [0.8, 0.2, 0.5, 1.0];
+            varied.pixels[7] = [0.1, 0.9, 0.3, 0.6];
+            let mut out = Image::new(3, 3);
+            pixelate(1)(&[&varied], &mut out);
+            assert_eq!(out.pixels, varied.pixels);
+
+            let flat = Image::filled(4, 4, [0.3, 0.6, 0.9, 1.0]);
+            let mut flat_out = Image::new(4, 4);
+            pixelate(2)(&[&flat], &mut flat_out);
+            assert_eq!(flat_out.pixels, flat.pixels);
+        }
+
+        #[test]
+        fn pixelate_replaces_each_block_with_its_average() {
+            // One block covering the whole 2x2: one white + three black -> 0.25 gray.
+            let mut source = Image::new(2, 2);
+            source.pixels = vec![
+                [1.0, 1.0, 1.0, 1.0],
+                [0.0, 0.0, 0.0, 1.0],
+                [0.0, 0.0, 0.0, 1.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ];
+            let mut out = Image::new(2, 2);
+            pixelate(2)(&[&source], &mut out);
+            for pixel in &out.pixels {
+                assert!((pixel[0] - 0.25).abs() < 1e-6);
+                assert!((pixel[1] - 0.25).abs() < 1e-6);
+                assert!((pixel[2] - 0.25).abs() < 1e-6);
+                assert!((pixel[3] - 1.0).abs() < 1e-6);
+            }
+        }
+
+        #[test]
+        fn pixelate_handles_partial_edge_blocks() {
+            // 3x1 with block_size 2: block [0,2) averages (0.0, 0.4)->0.2; block [2,3)
+            // is a single pixel left intact.
+            let mut source = Image::new(3, 1);
+            source.pixels = vec![
+                [0.0, 0.0, 0.0, 1.0],
+                [0.4, 0.4, 0.4, 1.0],
+                [0.9, 0.9, 0.9, 1.0],
+            ];
+            let mut out = Image::new(3, 1);
+            pixelate(2)(&[&source], &mut out);
+            assert!((out.pixel(0, 0)[0] - 0.2).abs() < 1e-6);
+            assert!((out.pixel(1, 0)[0] - 0.2).abs() < 1e-6);
+            assert!((out.pixel(2, 0)[0] - 0.9).abs() < 1e-6);
         }
 
         #[test]
