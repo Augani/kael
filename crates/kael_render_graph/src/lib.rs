@@ -901,6 +901,50 @@ pub mod reference {
         })
     }
 
+    /// A two-input transition op: linear crossfade (dissolve) from `inputs[0]`
+    /// to `inputs[1]` by `mix` in `0..=1` (0 = first, 1 = second).
+    pub fn crossfade(mix: f32) -> PassOp<'static> {
+        let mix = mix.clamp(0.0, 1.0);
+        Box::new(move |inputs, output| {
+            if inputs.len() < 2 {
+                return;
+            }
+            let (from, to) = (inputs[0], inputs[1]);
+            for (index, pixel) in output.pixels.iter_mut().enumerate() {
+                let a = from.pixels[index];
+                let b = to.pixels[index];
+                let mut out = [0.0f32; 4];
+                for channel in 0..4 {
+                    out[channel] = a[channel] * (1.0 - mix) + b[channel] * mix;
+                }
+                *pixel = out;
+            }
+        })
+    }
+
+    /// A two-input transition op: a hard horizontal wipe revealing `inputs[1]`
+    /// from the left over `inputs[0]` as `progress` goes `0..=1`.
+    pub fn wipe_horizontal(progress: f32) -> PassOp<'static> {
+        let progress = progress.clamp(0.0, 1.0);
+        Box::new(move |inputs, output| {
+            if inputs.len() < 2 {
+                return;
+            }
+            let (from, to) = (inputs[0], inputs[1]);
+            let boundary = (progress * output.width as f32) as u32;
+            for y in 0..output.height {
+                for x in 0..output.width {
+                    let index = (y * output.width + x) as usize;
+                    output.pixels[index] = if x < boundary {
+                        to.pixels[index]
+                    } else {
+                        from.pixels[index]
+                    };
+                }
+            }
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -964,6 +1008,33 @@ pub mod reference {
             translate(1, 0)(&[&source], &mut out);
             assert_eq!(out.pixel(0, 0), [0.0, 0.0, 0.0, 0.0]);
             assert_eq!(out.pixel(1, 0), [1.0, 0.0, 0.0, 1.0]);
+        }
+
+        #[test]
+        fn crossfade_dissolves_between_inputs() {
+            let red = Image::filled(1, 1, [1.0, 0.0, 0.0, 1.0]);
+            let blue = Image::filled(1, 1, [0.0, 0.0, 1.0, 1.0]);
+            let mut out = Image::new(1, 1);
+
+            crossfade(0.0)(&[&red, &blue], &mut out);
+            assert_eq!(out.pixel(0, 0), [1.0, 0.0, 0.0, 1.0]);
+            crossfade(1.0)(&[&red, &blue], &mut out);
+            assert_eq!(out.pixel(0, 0), [0.0, 0.0, 1.0, 1.0]);
+            crossfade(0.5)(&[&red, &blue], &mut out);
+            let mid = out.pixel(0, 0);
+            assert!((mid[0] - 0.5).abs() < 1e-6 && (mid[2] - 0.5).abs() < 1e-6);
+        }
+
+        #[test]
+        fn wipe_reveals_second_input_from_left() {
+            let red = Image::filled(4, 1, [1.0, 0.0, 0.0, 1.0]);
+            let blue = Image::filled(4, 1, [0.0, 0.0, 1.0, 1.0]);
+            let mut out = Image::new(4, 1);
+            wipe_horizontal(0.5)(&[&red, &blue], &mut out);
+            assert_eq!(out.pixel(0, 0), [0.0, 0.0, 1.0, 1.0]);
+            assert_eq!(out.pixel(1, 0), [0.0, 0.0, 1.0, 1.0]);
+            assert_eq!(out.pixel(2, 0), [1.0, 0.0, 0.0, 1.0]);
+            assert_eq!(out.pixel(3, 0), [1.0, 0.0, 0.0, 1.0]);
         }
     }
 }
