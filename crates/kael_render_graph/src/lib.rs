@@ -1526,6 +1526,44 @@ pub mod reference {
         })
     }
 
+    /// A single-input Sobel edge detector on `inputs[0]`: the Rec.709 luma gradient
+    /// magnitude `sqrt(gx*gx + gy*gy)` (from the 3x3 Sobel operators, edge-clamped) is
+    /// scaled by `scale`, clamped to `0..=1`, and written as a grayscale edge map. Flat
+    /// regions map to black and `scale` 0 yields black; source alpha is preserved.
+    pub fn sobel_edges(scale: f32) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            if source.width != output.width || source.height != output.height {
+                return;
+            }
+            let (width, height) = (source.width as i32, source.height as i32);
+            let luma = |x: i32, y: i32| -> f32 {
+                let cx = x.clamp(0, width - 1) as u32;
+                let cy = y.clamp(0, height - 1) as u32;
+                let pixel = source.pixels[(cy * source.width + cx) as usize];
+                0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2]
+            };
+            for y in 0..height {
+                for x in 0..width {
+                    let gx = -luma(x - 1, y - 1) + luma(x + 1, y - 1) - 2.0 * luma(x - 1, y)
+                        + 2.0 * luma(x + 1, y)
+                        - luma(x - 1, y + 1)
+                        + luma(x + 1, y + 1);
+                    let gy = -luma(x - 1, y - 1) - 2.0 * luma(x, y - 1) - luma(x + 1, y - 1)
+                        + luma(x - 1, y + 1)
+                        + 2.0 * luma(x, y + 1)
+                        + luma(x + 1, y + 1);
+                    let magnitude = ((gx * gx + gy * gy).sqrt() * scale).clamp(0.0, 1.0);
+                    let index = (y as u32 * source.width + x as u32) as usize;
+                    output.pixels[index] =
+                        [magnitude, magnitude, magnitude, source.pixels[index][3]];
+                }
+            }
+        })
+    }
+
     /// A single-input op that keys out (sets alpha to 0) pixels of `inputs[0]` whose
     /// Rec.709 luma is below `threshold` — a simple luma key for masking dark areas.
     /// Color channels are preserved; brighter pixels keep their alpha.
@@ -2619,6 +2657,42 @@ pub mod reference {
             assert!(corner < edge);
             // Alpha survives the darkening.
             assert_eq!(out.pixel(0, 0)[3], 1.0);
+        }
+
+        #[test]
+        fn sobel_edges_flat_region_is_black() {
+            let source = Image::filled(4, 4, [0.5, 0.5, 0.5, 1.0]);
+            let mut out = Image::new(4, 4);
+            sobel_edges(1.0)(&[&source], &mut out);
+            for pixel in &out.pixels {
+                assert!(
+                    pixel[0] < 1e-6 && pixel[1] < 1e-6 && pixel[2] < 1e-6,
+                    "{pixel:?}"
+                );
+                assert_eq!(pixel[3], 1.0);
+            }
+        }
+
+        #[test]
+        fn sobel_edges_fire_at_a_vertical_boundary() {
+            let mut source = Image::filled(5, 5, [0.0, 0.0, 0.0, 1.0]);
+            for y in 0..5 {
+                for x in 2..5 {
+                    source.pixels[y * 5 + x] = [1.0, 1.0, 1.0, 1.0];
+                }
+            }
+            let mut out = Image::new(5, 5);
+            sobel_edges(1.0)(&[&source], &mut out);
+            // Strong response straddling the dark/bright boundary, none in the flat areas.
+            assert!(out.pixel(0, 2)[0] < 1e-6);
+            assert!(out.pixel(2, 2)[0] > 0.5);
+            assert!(out.pixel(4, 2)[0] < 1e-6);
+            assert_eq!(out.pixel(2, 2)[3], 1.0);
+
+            // Zero scale suppresses all edges.
+            let mut zeroed = Image::new(5, 5);
+            sobel_edges(0.0)(&[&source], &mut zeroed);
+            assert!(zeroed.pixel(2, 2)[0] < 1e-6);
         }
 
         #[test]
