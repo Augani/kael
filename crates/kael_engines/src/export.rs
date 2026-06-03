@@ -90,6 +90,57 @@ pub fn encode_wav_pcm16(samples: &[f32], sample_rate: u32, channels: u16) -> Vec
     bytes
 }
 
+/// Decode a 16-bit PCM WAV file into `(samples, sample_rate, channels)` — the decode
+/// counterpart to [`encode_wav_pcm16`] and a concrete uncompressed [`AudioProvider`]
+/// source. Walks the RIFF chunks, requiring a PCM `fmt ` chunk and a `data` chunk.
+/// Returns `None` on malformed input or an unsupported format.
+pub fn decode_wav_pcm16(bytes: &[u8]) -> Option<(Vec<f32>, u32, u16)> {
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return None;
+    }
+    let mut offset = 12;
+    let mut format: Option<(u16, u32)> = None;
+    let mut samples: Option<Vec<f32>> = None;
+    while offset + 8 <= bytes.len() {
+        let id = &bytes[offset..offset + 4];
+        let size = u32::from_le_bytes([
+            bytes[offset + 4],
+            bytes[offset + 5],
+            bytes[offset + 6],
+            bytes[offset + 7],
+        ]) as usize;
+        let body_start = offset + 8;
+        let body_end = body_start.checked_add(size)?;
+        if body_end > bytes.len() {
+            return None;
+        }
+        let body = &bytes[body_start..body_end];
+        if id == b"fmt " {
+            if body.len() < 16 {
+                return None;
+            }
+            let audio_format = u16::from_le_bytes([body[0], body[1]]);
+            let channels = u16::from_le_bytes([body[2], body[3]]);
+            let sample_rate = u32::from_le_bytes([body[4], body[5], body[6], body[7]]);
+            let bits = u16::from_le_bytes([body[14], body[15]]);
+            if audio_format != 1 || bits != 16 {
+                return None;
+            }
+            format = Some((channels, sample_rate));
+        } else if id == b"data" {
+            samples = Some(
+                body.chunks_exact(2)
+                    .map(|pair| i16::from_le_bytes([pair[0], pair[1]]) as f32 / 32767.0)
+                    .collect(),
+            );
+        }
+        // RIFF chunks are word-aligned: skip a pad byte after an odd-sized chunk.
+        offset = body_end + (size & 1);
+    }
+    let (channels, sample_rate) = format?;
+    Some((samples?, sample_rate, channels))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,5 +296,24 @@ mod tests {
         assert_eq!(i16::from_le_bytes([wav[44], wav[45]]), 0);
         assert_eq!(i16::from_le_bytes([wav[46], wav[47]]), 32767);
         assert_eq!(i16::from_le_bytes([wav[48], wav[49]]), -32767);
+    }
+
+    #[test]
+    fn wav_pcm16_round_trips_through_encode_decode() {
+        let samples = vec![0.0, 0.5, -0.5, 1.0, -1.0];
+        let wav = encode_wav_pcm16(&samples, 44_100, 2);
+        let (decoded, sample_rate, channels) = decode_wav_pcm16(&wav).unwrap();
+        assert_eq!(sample_rate, 44_100);
+        assert_eq!(channels, 2);
+        assert_eq!(decoded.len(), samples.len());
+        for (decoded_sample, original) in decoded.iter().zip(&samples) {
+            assert!(
+                (decoded_sample - original).abs() < 1e-4,
+                "{decoded_sample} vs {original}"
+            );
+        }
+        // Malformed input is rejected.
+        assert!(decode_wav_pcm16(b"not a wav file at all").is_none());
+        assert!(decode_wav_pcm16(&wav[..10]).is_none());
     }
 }
