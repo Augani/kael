@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use kael_render_graph::reference::Image;
 
+use crate::audio_mix::{mix_range, AudioProvider};
 use crate::compositor::{composite_frame, FrameProvider};
 use crate::media::Timeline;
 
@@ -195,6 +196,40 @@ pub fn decode_wav_pcm16(bytes: &[u8]) -> Option<(Vec<f32>, u32, u16)> {
     }
     let (channels, sample_rate) = format?;
     Some((samples?, sample_rate, channels))
+}
+
+/// A fully exported timeline segment: one PPM video frame per timeline frame plus a single
+/// WAV audio track.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportedTimeline {
+    /// PPM (P6) bytes, one per frame in the rendered range.
+    pub frames: Vec<Vec<u8>>,
+    /// The mixed audio track as a mono PCM-16 WAV.
+    pub audio: Vec<u8>,
+}
+
+/// Render a timeline `range` to uncompressed PPM video frames and a WAV audio track — the
+/// top-level export, composing [`composite_frame`] + [`encode_ppm`] for each frame and
+/// [`mix_range`] + [`encode_wav_pcm16`] for audio. Deterministic given the same inputs.
+#[allow(clippy::too_many_arguments)]
+pub fn export_timeline(
+    timeline: &Timeline,
+    range: Range<u64>,
+    width: u32,
+    height: u32,
+    sample_rate: u32,
+    video: &dyn FrameProvider,
+    audio: &dyn AudioProvider,
+) -> ExportedTimeline {
+    let frames = range
+        .clone()
+        .map(|frame| encode_ppm(&composite_frame(timeline, frame, width, height, video)))
+        .collect();
+    let samples = mix_range(timeline, range, sample_rate, audio).unwrap_or_default();
+    ExportedTimeline {
+        frames,
+        audio: encode_wav_pcm16(&samples, sample_rate, 1),
+    }
 }
 
 #[cfg(test)]
@@ -393,5 +428,49 @@ mod tests {
         // Malformed input is rejected.
         assert!(decode_wav_pcm16(b"not a wav file at all").is_none());
         assert!(decode_wav_pcm16(&wav[..10]).is_none());
+    }
+
+    #[test]
+    fn export_timeline_produces_ppm_frames_and_wav_audio() {
+        use crate::audio_mix::WavAudioProvider;
+
+        let timeline = Timeline {
+            tracks: vec![TimelineTrack {
+                id: "v1".to_string(),
+                name: "v1".to_string(),
+                track_type: TrackType::Video,
+                clips: vec![clip("a", "color:0,1,0,1", 0, 30, 0)],
+            }],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        let exported = export_timeline(
+            &timeline,
+            0..2,
+            2,
+            2,
+            48_000,
+            &GeneratorProvider,
+            &WavAudioProvider::new(),
+        );
+
+        // Two green PPM frames.
+        assert_eq!(exported.frames.len(), 2);
+        for frame in &exported.frames {
+            assert!(frame.starts_with(b"P6\n2 2\n255\n"));
+            assert!(frame.ends_with(&[0, 255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0]));
+        }
+        // WAV audio: RIFF/WAVE header, 2 frames * 1600 samples * 2 bytes = 6400 data bytes.
+        assert!(exported.audio.starts_with(b"RIFF"));
+        assert_eq!(&exported.audio[8..12], b"WAVE");
+        assert_eq!(
+            u32::from_le_bytes([
+                exported.audio[40],
+                exported.audio[41],
+                exported.audio[42],
+                exported.audio[43]
+            ]),
+            6400
+        );
     }
 }
