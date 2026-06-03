@@ -1961,6 +1961,31 @@ pub mod reference {
         })
     }
 
+    /// A single-input channel mixer applying a 3x3 `matrix` to the RGB of `inputs[0]`:
+    /// `out[c] = sum(matrix[c][k] * in[k])` over the input R/G/B, clamped to `0..=1`. Row
+    /// `c` holds the weights producing output channel `c`, so the identity matrix
+    /// `[[1,0,0],[0,1,0],[0,0,1]]` passes through and three equal luma-weighted rows
+    /// convert to grayscale. Alpha is unchanged.
+    pub fn channel_mixer(matrix: [[f32; 3]; 3]) -> PassOp<'static> {
+        Box::new(move |inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            for (output_pixel, source_pixel) in output.pixels.iter_mut().zip(&source.pixels) {
+                let mix = |row: [f32; 3]| {
+                    (row[0] * source_pixel[0] + row[1] * source_pixel[1] + row[2] * source_pixel[2])
+                        .clamp(0.0, 1.0)
+                };
+                *output_pixel = [
+                    mix(matrix[0]),
+                    mix(matrix[1]),
+                    mix(matrix[2]),
+                    source_pixel[3],
+                ];
+            }
+        })
+    }
+
     /// A single-input op that posterizes `inputs[0]` to `levels` discrete steps per RGB
     /// channel (clamped to at least 2) — the stylize/banding effect. Alpha passes through.
     pub fn posterize(levels: u32) -> PassOp<'static> {
@@ -2907,6 +2932,53 @@ pub mod reference {
             assert!((out.pixel(1, 0)[0] - 0.5).abs() < 1e-6);
             assert!((out.pixel(2, 0)[0] - 1.0).abs() < 1e-6);
             assert_eq!(out.pixel(1, 0)[3], 0.5);
+        }
+
+        #[test]
+        fn channel_mixer_identity_passes_through() {
+            let source = Image::filled(2, 2, [0.8, 0.5, 0.2, 0.6]);
+            let mut out = Image::new(2, 2);
+            channel_mixer([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])(
+                &[&source],
+                &mut out,
+            );
+            assert_eq!(out.pixels, source.pixels);
+        }
+
+        #[test]
+        fn channel_mixer_to_grayscale_equalizes_channels() {
+            let source = Image::filled(1, 1, [0.8, 0.5, 0.2, 1.0]);
+            let luma_row = [0.2126, 0.7152, 0.0722];
+            let mut out = Image::new(1, 1);
+            channel_mixer([luma_row, luma_row, luma_row])(&[&source], &mut out);
+            let expected = 0.2126 * 0.8 + 0.7152 * 0.5 + 0.0722 * 0.2;
+            let pixel = out.pixel(0, 0);
+            assert!((pixel[0] - expected).abs() < 1e-6);
+            assert!((pixel[0] - pixel[1]).abs() < 1e-6 && (pixel[1] - pixel[2]).abs() < 1e-6);
+        }
+
+        #[test]
+        fn channel_mixer_swaps_channels_and_clamps() {
+            let source = Image::filled(1, 1, [0.8, 0.5, 0.2, 0.4]);
+
+            // Swap red and green.
+            let mut swapped = Image::new(1, 1);
+            channel_mixer([[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])(
+                &[&source],
+                &mut swapped,
+            );
+            assert!((swapped.pixel(0, 0)[0] - 0.5).abs() < 1e-6);
+            assert!((swapped.pixel(0, 0)[1] - 0.8).abs() < 1e-6);
+            assert!((swapped.pixel(0, 0)[2] - 0.2).abs() < 1e-6);
+            assert_eq!(swapped.pixel(0, 0)[3], 0.4);
+
+            // A row summing past 1 clamps to the display ceiling.
+            let mut hot = Image::new(1, 1);
+            channel_mixer([[2.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])(
+                &[&source],
+                &mut hot,
+            );
+            assert!((hot.pixel(0, 0)[0] - 1.0).abs() < 1e-6);
         }
 
         #[test]
