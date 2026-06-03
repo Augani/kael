@@ -5,6 +5,7 @@
 pub mod audio_mix;
 pub mod canvas;
 pub mod compositor;
+pub mod crash_report;
 pub mod dashboard;
 pub mod export;
 pub mod generators;
