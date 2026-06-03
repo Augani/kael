@@ -1469,6 +1469,42 @@ pub mod reference {
         })
     }
 
+    /// A single-input op that fits `inputs[0]` into the output preserving its aspect ratio,
+    /// centered, with transparent bars (letterbox / pillarbox) — for placing content of a
+    /// different resolution or aspect on the output frame.
+    pub fn letterbox() -> PassOp<'static> {
+        Box::new(|inputs, output| {
+            let Some(source) = inputs.first() else {
+                return;
+            };
+            if source.width == 0 || source.height == 0 {
+                return;
+            }
+            let (out_w, out_h) = (output.width as f32, output.height as f32);
+            let (src_w, src_h) = (source.width as f32, source.height as f32);
+            let scale = (out_w / src_w).min(out_h / src_h);
+            let fit_w = src_w * scale;
+            let fit_h = src_h * scale;
+            let offset_x = (out_w - fit_w) / 2.0;
+            let offset_y = (out_h - fit_h) / 2.0;
+            for y in 0..output.height {
+                for x in 0..output.width {
+                    let fit_x = x as f32 + 0.5 - offset_x;
+                    let fit_y = y as f32 + 0.5 - offset_y;
+                    let index = (y * output.width + x) as usize;
+                    output.pixels[index] =
+                        if fit_x >= 0.0 && fit_x < fit_w && fit_y >= 0.0 && fit_y < fit_h {
+                            let u = fit_x / fit_w * src_w - 0.5;
+                            let v = fit_y / fit_h * src_h - 0.5;
+                            sample_bilinear(source, u, v)
+                        } else {
+                            [0.0; 4]
+                        };
+                }
+            }
+        })
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -1920,6 +1956,18 @@ pub mod reference {
             let mut flipped_v = Image::new(1, 3);
             flip_vertical()(&[&column], &mut flipped_v);
             assert_eq!(flipped_v.pixels, vec![blue, green, red]);
+        }
+
+        #[test]
+        fn letterbox_pillarboxes_a_square_into_a_wide_frame() {
+            // A 2x2 source into a 4x2 output fits into columns 1-2; columns 0 and 3 are bars.
+            let source = Image::filled(2, 2, [1.0, 1.0, 1.0, 1.0]);
+            let mut out = Image::new(4, 2);
+            letterbox()(&[&source], &mut out);
+            assert_eq!(out.pixel(0, 0), [0.0, 0.0, 0.0, 0.0]);
+            assert_eq!(out.pixel(3, 0), [0.0, 0.0, 0.0, 0.0]);
+            assert_eq!(out.pixel(1, 0), [1.0, 1.0, 1.0, 1.0]);
+            assert_eq!(out.pixel(2, 1), [1.0, 1.0, 1.0, 1.0]);
         }
     }
 }
