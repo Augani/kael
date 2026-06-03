@@ -17,5 +17,6 @@ pub mod markers;
 pub mod media;
 pub mod playback;
 pub mod project;
+pub mod scopes;
 pub mod subtitles;
 pub mod undo;
