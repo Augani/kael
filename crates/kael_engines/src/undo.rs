@@ -1,7 +1,7 @@
 //! Document-scale transactional undo/redo history.
 //!
-//! A snapshot-based history over any cloneable document state (e.g. a
-//! [`Project`](crate::project::Project)): each committed transaction can be
+//! A snapshot-based history over any cloneable document state (e.g. a project
+//! document): each committed transaction can be
 //! undone and redone, history is bounded, and rapid edits can be coalesced into
 //! the current transaction so a drag doesn't flood the stack.
 

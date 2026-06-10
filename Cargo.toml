@@ -20,6 +20,7 @@ members = [
     "crates/kael_render_graph",
     "crates/kael_gpu_budget",
     "crates/kael_engines",
+    "crates/kael_media_engines",
     "crates/kael_ui",
     "crates/collections",
     "crates/derive_refineable",

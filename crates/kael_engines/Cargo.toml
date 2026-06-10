@@ -6,8 +6,8 @@ homepage.workspace = true
 version.workspace = true
 edition.workspace = true
 publish = true
-description = "Specialized workload engines for the Kael UI framework"
-keywords = ["search", "timeline", "indexing", "kael"]
+description = "General-purpose workload engines (Unicode text, undo, crash reporting, app data models) for the Kael UI framework"
+keywords = ["search", "unicode", "indexing", "kael"]
 categories = ["text-processing"]
 readme = "README.md"
 repository.workspace = true
@@ -18,7 +18,3 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 regex = "1"
-
-[dependencies.kael_render_graph]
-path = "../kael_render_graph"
-package = "kael_render_graph"

@@ -14,6 +14,7 @@ CRATES=(
   kael_icons
   kael_semantic_version
   kael_sum_tree
+  kael_secrets
   kael_net
   kael_notifications
   kael_pdf
@@ -21,7 +22,10 @@ CRATES=(
   kael_share
   kael_storage
   kael_cache
+  kael_render_graph
+  kael_gpu_budget
   kael_engines
+  kael_media_engines
   kael_media_sys
   kael-media
   # Tier 1: direct dependencies on tier 0 crates

@@ -1,5 +1,43 @@
 # kael Production Roadmap
-## From promising prototype to a framework that ships a CapCut-class video editor and any high-load cross-platform desktop app
+## From promising prototype to a production framework for any cross-platform desktop application
+
+---
+
+## 0. Direction — read this first
+
+**Kael is a general-purpose desktop application framework.** That is the
+product, and this roadmap is read through that lens. See [VISION.md](VISION.md)
+for the full statement of direction.
+
+This document was originally drafted with a video editor as the headline goal,
+and it retains a deep, source-verified audit of what a professional NLE would
+demand from the framework. That audit remains valuable — a video editor is the
+single most demanding workload a desktop framework can host, and it is kept as
+our stress-test lens — but the *priority ordering* is now explicitly:
+
+1. **Lens A (general-app production gates) is the primary track.** Accessibility,
+   packaging/signing, update integrity, crash reporting, and text correctness
+   (Phase P3, plus the P-hotfix) block every serious app and come first.
+2. **The GPU substrate work (P0-A/B/C/E) is re-scoped as public framework API.**
+   Offscreen render targets, custom shaders, compute pipelines, the render
+   graph, and GPU memory budgeting are the most-requested general capabilities
+   in the GPUI ecosystem — they ship as documented, app-facing features for
+   *all* applications, with the media stack as just one consumer.
+3. **Lens B (the video-editor bar) is the optional media track.** The
+   media-specific workstreams (P0-F/G/H, P1, P2, P4) continue as the layered,
+   feature-gated `kael-media`/`kael_audio`/`kael_engines` stack — subordinate
+   to, and never blocking, tracks 1 and 2. Nothing media-specific lands in the
+   core `kael` crate.
+
+Several items below have landed since this audit was written — among them the
+auto-updater signature/hash verification (P-hotfix), radial and conic gradients
+in the core styling API, the `kael_render_graph` and `kael_gpu_budget` crates,
+`kael_secrets`, UAX#9 BiDi, and UAX#14 line breaking. Treat line-level claims as
+a snapshot of the audit date; the architecture and sequencing analysis stands.
+
+The design proposal for the public render-target/pass/custom-shader API
+(actions 6–7 in §9, re-scoped as public framework API) lives at
+[docs/design/0001-render-targets-and-custom-shaders.md](docs/design/0001-render-targets-and-custom-shaders.md).
 
 ---
 

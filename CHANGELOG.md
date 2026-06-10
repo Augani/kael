@@ -9,7 +9,41 @@ stabilised — minor version bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **Kael is re-centered as a general-purpose desktop application
+  framework.** The project drifted toward being a video-editor toolkit;
+  this release corrects course. The new [VISION.md](VISION.md) states the
+  mission, the layering rule that keeps the core domain-neutral, the
+  `adabraka-gpui` → Kael naming history, and the project's relationship
+  to Zed/upstream GPUI. `PRODUCTION_ROADMAP.md` is retitled and re-read
+  through the general-app lens: production gates (accessibility,
+  packaging, update integrity, text correctness) come first, the GPU
+  substrate (render targets, custom shaders, render graph) ships as
+  public framework API, and the video-editor bar is the optional media
+  track.
+- **BREAKING (`kael_engines`): the 15 media/NLE modules moved to the new
+  `kael_media_engines` crate.** `kael_engines` now contains only
+  domain-neutral engines: `bidi` (UAX#9), `linebreak` (UAX#14), `undo`,
+  `crash_report`, and the `canvas`/`dashboard`/`ide` data models. Code
+  using `kael_engines::{media, compositor, effects, export, transform,
+  automation, audio_mix, generators, project, markers, playback,
+  timecode, scopes, subtitles, frame_cache}` should depend on
+  `kael_media_engines` and update the crate prefix — module contents are
+  unchanged. `kael_engines` no longer depends on `kael_render_graph`.
+
 ### Added
+
+- **New crate: `kael_media_engines`** — the optional media/NLE leaf
+  stack (timeline, compositing, audio mix, export), split out of
+  `kael_engines` so that crate stays domain-neutral.
+- **Design proposal 0001: public render targets, passes, and custom
+  shaders**
+  ([docs/design/0001-render-targets-and-custom-shaders.md](docs/design/0001-render-targets-and-custom-shaders.md))
+  — the API contract for app-allocatable typed render targets (incl.
+  `Rgba16Float`), WGSL shader registration via `naga`, fragment +
+  compute passes, and an executor for the `kael_render_graph` DAG,
+  staged Metal-first with golden-image tests.
 
 - **New crate: `kael_ui` — a complete shadcn-inspired component library
   built into the Kael workspace.** This is the continuation of
