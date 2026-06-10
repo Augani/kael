@@ -65,6 +65,7 @@
 //! - **Consistency**: All components automatically use theme tokens
 //!
 
+#[allow(clippy::module_inception)]
 mod theme;
 mod tokens;
 

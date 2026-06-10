@@ -9,7 +9,50 @@ stabilised — minor version bumps may include breaking changes.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-10
+
+### Added
+
+- **Custom themes for `kael_ui`** — `Theme::custom(tokens)` plus
+  `ThemeVariant::Custom` let an app brand itself by starting from any of
+  the 18 preset token sets and overriding fields with struct-update
+  syntax. New `custom_theme_demo` example shows the full customization
+  stack (brand theme, live switching, per-component `Styled` overrides).
+- **Live theme switching** — `kael_ui::install_theme` now refreshes every
+  open window, so calling it again at runtime restyles the app
+  immediately.
+- **Real template apps** — the three `templates/` members were stub
+  windows; they are now complete kael_ui applications to copy from:
+  `dashboard-app` (sidebar, stat cards with sparklines, line/bar charts,
+  data table), `messaging-app` (conversation list, chat bubbles,
+  composer), and `workspace-app` (file tree, tabbed syntax-highlighted
+  editor, toolbar, status bar).
+- **CI now verifies the UI surface on all three platforms** —
+  `verify-kael.sh`/`.ps1` lint (`clippy -D warnings`), unit-test, and
+  type-check `kael_ui`, all 140+ examples, and the three template apps on
+  macOS, Windows, and Linux.
+
 ### Changed
+
+- **`kael_ui::prelude` is self-sufficient** — it now re-exports the Kael
+  essentials (`div`, `px`, `Application`, `Render`, `Result`,
+  `AssetSource`, `ClickEvent`, geometry types, …), so an app needs only
+  `use kael_ui::prelude::*;`. Mixing it with `use kael::*;` is no longer
+  needed or recommended: the dual-glob pattern made `Button`, `Theme`,
+  `Select`, and friends ambiguous between the core legacy widgets and the
+  component library (rustc and rust-analyzer resolved them differently).
+  All examples migrated.
+- `kael_ui` is clippy-clean under `-D warnings`; `ValidationRules`
+  callback fields changed from `Arc` to `Rc` (they are UI-thread-only,
+  and the stored closures were never `Send`).
+
+### Fixed
+
+- `Input` no longer overwrites a placeholder configured on its
+  `InputState` with an empty string when the element-level placeholder is
+  unset.
+- `AnimatedSwitch` now implements `Styled`, accepting user style
+  overrides like every other component.
 
 - **Kael is re-centered as a general-purpose desktop application
   framework.** The project drifted toward being a video-editor toolkit;

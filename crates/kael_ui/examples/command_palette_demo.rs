@@ -1,4 +1,4 @@
-use kael::{prelude::FluentBuilder as _, *};
+use kael::*;
 use kael_ui::{
     components::button::{Button, ButtonVariant},
     components::icon_source::IconSource,

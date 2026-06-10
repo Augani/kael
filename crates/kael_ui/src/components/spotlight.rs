@@ -4,6 +4,12 @@ pub struct SpotlightState {
     mouse_pos: Option<Point<Pixels>>,
 }
 
+impl Default for SpotlightState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SpotlightState {
     pub fn new() -> Self {
         Self { mouse_pos: None }

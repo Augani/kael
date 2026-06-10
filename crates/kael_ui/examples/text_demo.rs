@@ -1,4 +1,5 @@
-use kael::{prelude::FluentBuilder as _, *};
+use kael::*;
+use kael_ui::components::text::label;
 use kael_ui::{
     components::{scrollable::scrollable_vertical, text::*},
     theme::{install_theme, use_theme, Theme},

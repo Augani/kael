@@ -1,4 +1,4 @@
-use kael::{prelude::FluentBuilder as _, *};
+use kael::*;
 use kael_ui::{
     components::{
         alert::Alert,

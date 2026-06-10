@@ -42,6 +42,8 @@ pub enum ThemeVariant {
     SkyBlue,
     /// Cherry Blossom - Pink and magenta spring colors
     CherryBlossom,
+    /// A user-defined theme built from custom [`ThemeTokens`]
+    Custom,
 }
 
 impl ThemeVariant {
@@ -65,6 +67,7 @@ impl ThemeVariant {
             Self::PeachyKeen => "Peachy Keen",
             Self::SkyBlue => "Sky Blue",
             Self::CherryBlossom => "Cherry Blossom",
+            Self::Custom => "Custom",
         }
     }
 }
@@ -186,6 +189,26 @@ impl Theme {
         }
     }
 
+    /// Build a theme from user-defined tokens, so an app can match its own brand.
+    ///
+    /// Start from any preset's tokens and override what you need with struct
+    /// update syntax:
+    ///
+    /// ```rust,ignore
+    /// let brand = Theme::custom(ThemeTokens {
+    ///     primary: hsla(262.0 / 360.0, 0.83, 0.58, 1.0),
+    ///     radius_md: px(10.0),
+    ///     ..ThemeTokens::dark()
+    /// });
+    /// install_theme(cx, brand);
+    /// ```
+    pub fn custom(tokens: ThemeTokens) -> Self {
+        Self {
+            variant: ThemeVariant::Custom,
+            tokens,
+        }
+    }
+
     pub fn all() -> Vec<Theme> {
         vec![
             Self::dark(),
@@ -214,10 +237,14 @@ static THEME_STATE: Lazy<std::sync::Mutex<Theme>> =
     Lazy::new(|| std::sync::Mutex::new(Theme::dark()));
 
 /// Install a theme globally for the app. Call early during app startup.
-pub fn install_theme(_cx: &mut App, theme: Theme) {
+///
+/// Calling this again at runtime switches the theme live: every open window
+/// is refreshed so components re-read the new tokens on their next render.
+pub fn install_theme(cx: &mut App, theme: Theme) {
     if let Ok(mut state) = THEME_STATE.lock() {
         *state = theme;
     }
+    cx.refresh_windows();
 }
 
 /// Access the current theme tokens.

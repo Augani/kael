@@ -36,7 +36,7 @@ impl ConfettiState {
             colors: DEFAULT_CONFETTI_COLORS
                 .iter()
                 .map(|&c| {
-                    let color: Rgba = rgb(c).into();
+                    let color: Rgba = rgb(c);
                     Hsla::from(color)
                 })
                 .collect(),

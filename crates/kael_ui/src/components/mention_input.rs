@@ -294,7 +294,7 @@ impl MentionInputState {
                 || text_before
                     .chars()
                     .nth(trigger_pos.saturating_sub(1))
-                    .map_or(true, |c| c.is_whitespace());
+                    .is_none_or(|c| c.is_whitespace());
 
             if !has_space && at_word_boundary {
                 if !self.dropdown_open || self.trigger_start != Some(trigger_pos) {

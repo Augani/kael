@@ -1,4 +1,3 @@
-use kael::*;
 use kael_ui::{
     components::carousel::{
         Carousel, CarouselSize, CarouselSlide, CarouselState, CarouselTransition,

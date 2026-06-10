@@ -72,7 +72,7 @@ fn format_with_separator(value: i64, separator: Option<char>) -> Vec<DigitOrSepa
         result.push(DigitOrSeparator::Digit(digit));
         if let Some(sep) = separator {
             let remaining = len - 1 - i;
-            if remaining > 0 && remaining % 3 == 0 {
+            if remaining > 0 && remaining.is_multiple_of(3) {
                 result.push(DigitOrSeparator::Separator(sep));
             }
         }

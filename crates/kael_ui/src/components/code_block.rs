@@ -181,7 +181,7 @@ impl RenderOnce for CodeBlock {
     }
 }
 
-fn tokenize<'a>(line: &'a str, is_rust: bool) -> Vec<(TokenKind, &'a str)> {
+fn tokenize(line: &str, is_rust: bool) -> Vec<(TokenKind, &str)> {
     let mut tokens = Vec::new();
     let bytes = line.as_bytes();
     let len = bytes.len();

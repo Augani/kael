@@ -154,6 +154,12 @@ pub struct SVGRenderer {
     style: StyleRefinement,
 }
 
+impl Default for SVGRenderer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SVGRenderer {
     pub fn new() -> Self {
         Self {

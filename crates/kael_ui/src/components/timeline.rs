@@ -742,7 +742,7 @@ impl RenderOnce for Timeline {
 
                 match self.orientation {
                     TimelineOrientation::Vertical => {
-                        let item_position = item.position.unwrap_or_else(|| {
+                        let item_position = item.position.unwrap_or({
                             if self.alternating {
                                 if i % 2 == 0 {
                                     TimelineItemPosition::Left

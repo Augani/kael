@@ -21,6 +21,7 @@ pub struct AnimatedSwitch {
     previous: Option<(usize, AnyElement)>,
     transition: AnimatedSwitchTransition,
     duration: Duration,
+    style: StyleRefinement,
 }
 
 impl AnimatedSwitch {
@@ -32,6 +33,7 @@ impl AnimatedSwitch {
             previous: None,
             transition: AnimatedSwitchTransition::default(),
             duration: Duration::from_millis(300),
+            style: StyleRefinement::default(),
         }
     }
 
@@ -61,6 +63,12 @@ impl AnimatedSwitch {
     }
 }
 
+impl Styled for AnimatedSwitch {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
 impl RenderOnce for AnimatedSwitch {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let active_child = self
@@ -72,8 +80,10 @@ impl RenderOnce for AnimatedSwitch {
         let transition = self.transition;
         let duration = self.duration;
         let id = self.id;
+        let user_style = self.style;
 
         let mut container = div().relative().size_full().overflow_hidden();
+        container.style().refine(&user_style);
 
         if let Some((prev_key, prev_content)) = self.previous {
             let exit_id = ElementId::Name(format!("{}-exit-{}", id, prev_key).into());

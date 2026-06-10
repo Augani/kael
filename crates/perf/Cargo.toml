@@ -24,7 +24,7 @@ path = "src/main.rs"
 [dependencies.collections]
 path = "../collections"
 package = "kael_collections"
-version = "0.1.0"
+version = "0.2.0"
 
 [dependencies.serde]
 version = "1.0.221"

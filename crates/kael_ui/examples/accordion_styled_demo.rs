@@ -1,4 +1,3 @@
-use kael::*;
 use kael_ui::{
     components::scrollable::scrollable_vertical, display::accordion::Accordion, prelude::*,
 };
@@ -68,7 +67,7 @@ impl AccordionStyledDemo {
 }
 
 impl Render for AccordionStyledDemo {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let theme = use_theme();
 
         div()

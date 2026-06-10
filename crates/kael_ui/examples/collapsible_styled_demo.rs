@@ -1,4 +1,3 @@
-use kael::*;
 use kael_ui::{
     components::{collapsible::Collapsible, scrollable::scrollable_vertical},
     prelude::*,
@@ -69,7 +68,7 @@ impl CollapsibleStyledDemo {
 }
 
 impl Render for CollapsibleStyledDemo {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let theme = use_theme();
 
         div()

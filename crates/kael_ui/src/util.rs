@@ -24,8 +24,10 @@ use kael::{Pixels, Point, ScrollHandle, Size};
 /// Extension trait for Axis
 pub trait AxisExt {
     /// Returns true if the axis is horizontal
+    #[allow(clippy::wrong_self_convention)]
     fn is_horizontal(self) -> bool;
     /// Returns true if the axis is vertical
+    #[allow(clippy::wrong_self_convention)]
     fn is_vertical(self) -> bool;
 }
 
@@ -44,6 +46,7 @@ pub trait PixelsExt {
     /// Convert to f32
     fn as_f32(&self) -> f32;
     /// Convert to f64
+    #[allow(clippy::wrong_self_convention)]
     fn as_f64(self) -> f64;
 }
 

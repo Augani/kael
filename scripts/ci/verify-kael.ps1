@@ -73,6 +73,12 @@ switch ($Mode) {
         # suites run fully on Windows, verifying the cross-platform logic at runtime.
         Invoke-Step cargo clippy --package kael_engines --package kael_media_engines --package kael_render_graph --lib '--' '-D' warnings
         Invoke-Step cargo test --package kael_engines --package kael_media_engines --package kael_render_graph --lib
+        # Component library: lint, compile tests (compile-only on Windows,
+        # matching the kael policy above), and type-check examples + templates.
+        Invoke-Step cargo clippy --package kael_ui --lib '--' '-D' warnings
+        Invoke-Step cargo test --package kael_ui --lib --no-run
+        Invoke-Step cargo check --package kael_ui --examples
+        Invoke-Step cargo check --package dashboard-app --package messaging-app --package workspace-app
         Invoke-Step cargo check --package kael --lib --features 'platform-foundation'
         Invoke-Step cargo check --package kael --lib --features 'document'
         Invoke-Step cargo check --package kael --lib --features 'pdf'

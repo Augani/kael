@@ -1,4 +1,3 @@
-use kael::*;
 use kael_ui::{
     charts::chart::Axis as ChartAxis, components::scrollable::scrollable_vertical, prelude::*,
 };

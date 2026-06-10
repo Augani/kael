@@ -11,7 +11,6 @@ use crate::layout::{HStack, VStack};
 use crate::theme::use_theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 pub fn init(cx: &mut App) {
@@ -443,7 +442,9 @@ impl RenderOnce for Input {
 
         self.state.update(cx, |state, cx| {
             state.disabled = self.disabled;
-            state.placeholder = self.placeholder.clone();
+            if !self.placeholder.is_empty() {
+                state.placeholder = self.placeholder.clone();
+            }
 
             // If password flag is enabled, ensure password input type is set.
             // Do not force `masked` here so user interactions can toggle it.
@@ -465,23 +466,24 @@ impl RenderOnce for Input {
             if let Some(mut rules) = self.validation_rules.clone() {
                 if let Some(ref custom_validator) = self.custom_validator {
                     let validator = custom_validator.clone();
-                    rules.custom_validator = Some(Arc::new(move |value| match validator(value) {
-                        Ok(()) => Ok(()),
-                        Err(msg) => Err(ValidationError {
-                            message: msg.into(),
-                            field_name: None,
-                        }),
-                    }));
+                    rules.custom_validator =
+                        Some(std::rc::Rc::new(move |value| match validator(value) {
+                            Ok(()) => Ok(()),
+                            Err(msg) => Err(ValidationError {
+                                message: msg.into(),
+                                field_name: None,
+                            }),
+                        }));
                 }
 
                 if let Some(ref custom_filter) = self.custom_filter {
                     let filter = custom_filter.clone();
-                    rules.custom_filter = Some(Arc::new(move |input| filter(input)));
+                    rules.custom_filter = Some(std::rc::Rc::new(move |input| filter(input)));
                 }
 
                 if let Some(ref custom_formatter) = self.custom_formatter {
                     let formatter = custom_formatter.clone();
-                    rules.custom_formatter = Some(Arc::new(move |input| formatter(input)));
+                    rules.custom_formatter = Some(std::rc::Rc::new(move |input| formatter(input)));
                 }
 
                 state.validation_rules = rules;
@@ -493,23 +495,24 @@ impl RenderOnce for Input {
 
                 if let Some(ref custom_validator) = self.custom_validator {
                     let validator = custom_validator.clone();
-                    rules.custom_validator = Some(Arc::new(move |value| match validator(value) {
-                        Ok(()) => Ok(()),
-                        Err(msg) => Err(ValidationError {
-                            message: msg.into(),
-                            field_name: None,
-                        }),
-                    }));
+                    rules.custom_validator =
+                        Some(std::rc::Rc::new(move |value| match validator(value) {
+                            Ok(()) => Ok(()),
+                            Err(msg) => Err(ValidationError {
+                                message: msg.into(),
+                                field_name: None,
+                            }),
+                        }));
                 }
 
                 if let Some(ref custom_filter) = self.custom_filter {
                     let filter = custom_filter.clone();
-                    rules.custom_filter = Some(Arc::new(move |input| filter(input)));
+                    rules.custom_filter = Some(std::rc::Rc::new(move |input| filter(input)));
                 }
 
                 if let Some(ref custom_formatter) = self.custom_formatter {
                     let formatter = custom_formatter.clone();
-                    rules.custom_formatter = Some(Arc::new(move |input| formatter(input)));
+                    rules.custom_formatter = Some(std::rc::Rc::new(move |input| formatter(input)));
                 }
 
                 state.validation_rules = rules;

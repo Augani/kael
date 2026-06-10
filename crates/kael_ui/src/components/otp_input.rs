@@ -40,30 +40,20 @@ pub enum OTPInputEvent {
     Blur,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OTPInputSize {
     Sm,
+    #[default]
     Md,
     Lg,
 }
 
-impl Default for OTPInputSize {
-    fn default() -> Self {
-        Self::Md
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OTPInputState {
+    #[default]
     Default,
     Error,
     Success,
-}
-
-impl Default for OTPInputState {
-    fn default() -> Self {
-        Self::Default
-    }
 }
 
 pub struct OTPState {
@@ -418,7 +408,7 @@ impl RenderOnce for OTPInput {
         let state = otp_state.state;
         let masked = self.masked || otp_state.masked;
         let disabled = self.disabled || otp_state.disabled;
-        let focus_handles: Vec<FocusHandle> = otp_state.focus_handles.iter().cloned().collect();
+        let focus_handles: Vec<FocusHandle> = otp_state.focus_handles.to_vec();
 
         self.state.update(cx, |state, _| {
             state.disabled = disabled;

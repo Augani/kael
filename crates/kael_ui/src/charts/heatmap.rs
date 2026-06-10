@@ -25,6 +25,12 @@ pub struct Heatmap {
     style: StyleRefinement,
 }
 
+impl Default for Heatmap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Heatmap {
     pub fn new() -> Self {
         Self {

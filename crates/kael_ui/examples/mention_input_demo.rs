@@ -1,4 +1,3 @@
-use kael::{prelude::FluentBuilder, *};
 use kael_ui::components::scrollable::scrollable_vertical;
 use kael_ui::prelude::*;
 use std::path::PathBuf;

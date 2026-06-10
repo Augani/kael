@@ -13,7 +13,7 @@ use crate::theme::use_theme;
 use kael::{prelude::*, *};
 use once_cell::sync::Lazy;
 use std::ops::Range;
-use std::sync::Arc;
+use std::rc::Rc;
 use unicode_segmentation::*;
 
 static EMAIL_REGEX: Lazy<regex::Regex> = Lazy::new(|| {
@@ -89,11 +89,11 @@ pub struct ValidationRules {
     /// Regex pattern to match
     pub pattern: Option<String>,
     /// Custom validation function
-    pub custom_validator: Option<Arc<dyn Fn(&str) -> Result<(), ValidationError>>>,
+    pub custom_validator: Option<Rc<dyn Fn(&str) -> Result<(), ValidationError>>>,
     /// Custom filter function for input
-    pub custom_filter: Option<Arc<dyn Fn(&str) -> String>>,
+    pub custom_filter: Option<Rc<dyn Fn(&str) -> String>>,
     /// Custom formatter function for display
-    pub custom_formatter: Option<Arc<dyn Fn(&str) -> String>>,
+    pub custom_formatter: Option<Rc<dyn Fn(&str) -> String>>,
     /// Whether the field is required
     pub required: bool,
 }
@@ -574,19 +574,19 @@ impl InputState {
         let day = parts[1].parse::<u32>().unwrap_or(0);
         let year = parts[2].parse::<u32>().unwrap_or(0);
 
-        if month < 1 || month > 12 {
+        if !(1..=12).contains(&month) {
             return Err(ValidationError {
                 message: "Invalid month".into(),
                 field_name: self.aria_label.clone(),
             });
         }
-        if day < 1 || day > 31 {
+        if !(1..=31).contains(&day) {
             return Err(ValidationError {
                 message: "Invalid day".into(),
                 field_name: self.aria_label.clone(),
             });
         }
-        if year < 1900 || year > 2100 {
+        if !(1900..=2100).contains(&year) {
             return Err(ValidationError {
                 message: "Invalid year".into(),
                 field_name: self.aria_label.clone(),

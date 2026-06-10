@@ -198,9 +198,7 @@ impl RenderOnce for ToggleGroup {
             .rounded(theme.tokens.radius_md)
             .children(self.items.into_iter().map(move |item| {
                 let is_selected = match variant {
-                    ToggleGroupVariant::Single => {
-                        current_value.as_ref().map_or(false, |v| v == &item.value)
-                    }
+                    ToggleGroupVariant::Single => current_value.as_ref() == Some(&item.value),
                     ToggleGroupVariant::Multiple => current_values.contains(&item.value),
                 };
                 let is_disabled = disabled || item.disabled;

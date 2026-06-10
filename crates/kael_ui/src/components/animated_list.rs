@@ -194,11 +194,7 @@ impl RenderOnce for AnimatedList {
         let elements: Vec<AnyElement> = visible
             .into_iter()
             .filter_map(|(key, entering, exiting)| {
-                let child = if exiting {
-                    children_by_key.remove(&key)
-                } else {
-                    children_by_key.remove(&key)
-                };
+                let child = children_by_key.remove(&key);
 
                 child.map(|element| {
                     if entering {

@@ -1,4 +1,3 @@
-use kael::*;
 use kael_ui::{
     components::{pagination::Pagination, scrollable::scrollable_vertical},
     prelude::*,

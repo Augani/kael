@@ -1,4 +1,3 @@
-use kael::*;
 use kael_ui::{
     components::progress::SpinnerType, components::scrollable::scrollable_vertical, prelude::*,
 };

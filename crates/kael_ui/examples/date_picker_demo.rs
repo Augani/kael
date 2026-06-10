@@ -1,4 +1,3 @@
-use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     components::{date_picker::DateSelectionMode, scrollable::scrollable_vertical},
     prelude::*,

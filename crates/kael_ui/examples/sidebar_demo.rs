@@ -26,7 +26,7 @@ impl SidebarDemo {
 }
 
 impl Render for SidebarDemo {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = use_theme();
 
         h_resizable("sidebar-layout", self.sidebar_resizable_state.clone())

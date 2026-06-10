@@ -471,8 +471,7 @@ impl RenderOnce for Calendar {
                                         current_month.month,
                                         day,
                                     );
-                                    let is_selected =
-                                        selected_date.map_or(false, |sel| sel == date);
+                                    let is_selected = selected_date == Some(date);
 
                                     // Check if date is disabled
                                     let is_disabled = is_date_disabled_for_days
@@ -488,8 +487,7 @@ impl RenderOnce for Calendar {
                                         .unwrap_or(false);
 
                                     // Check if date is the range start (first click in range mode)
-                                    let is_range_start =
-                                        range_start_for_week.map_or(false, |start| start == date);
+                                    let is_range_start = range_start_for_week == Some(date);
 
                                     // Check if date is a range endpoint
                                     let is_range_endpoint = range_for_week

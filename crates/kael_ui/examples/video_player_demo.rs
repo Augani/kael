@@ -1,4 +1,3 @@
-use kael::*;
 use kael_ui::prelude::*;
 use std::path::PathBuf;
 use std::time::Duration;

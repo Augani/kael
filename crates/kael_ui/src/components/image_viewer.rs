@@ -45,18 +45,13 @@ impl ImageItem {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum ImageViewerSize {
     Auto,
+    #[default]
     Contain,
     Cover,
     Custom(f32),
-}
-
-impl Default for ImageViewerSize {
-    fn default() -> Self {
-        Self::Contain
-    }
 }
 
 const MIN_ZOOM: f32 = 0.1;

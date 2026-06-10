@@ -1,4 +1,3 @@
-use kael::*;
 use kael_ui::{
     components::{
         resizable::{h_resizable, resizable_panel, ResizableState},

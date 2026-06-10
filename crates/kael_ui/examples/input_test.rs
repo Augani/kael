@@ -1,5 +1,5 @@
-use kael::{prelude::*, *};
 use kael_ui::components::input::{self, Input, InputSize, InputState, InputVariant};
+use kael_ui::prelude::*;
 
 struct InputTestApp {
     input_state: Entity<InputState>,
@@ -121,7 +121,7 @@ fn main() {
                 })),
                 ..Default::default()
             },
-            |window, cx| cx.new(|cx| InputTestApp::new(cx)),
+            |_window, cx| cx.new(|cx| InputTestApp::new(cx)),
         )
         .unwrap();
     });

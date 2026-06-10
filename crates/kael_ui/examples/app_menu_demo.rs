@@ -1,4 +1,4 @@
-use kael::{prelude::FluentBuilder as _, *};
+use kael::*;
 use kael_ui::{layout::VStack, navigation::app_menu::*, theme::use_theme};
 
 // Define all the actions our app will use

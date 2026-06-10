@@ -167,7 +167,10 @@ impl Render for ShowcaseApp {
                             .items_center()
                             .gap(px(12.0))
                             .child(h1("kael_ui"))
-                            .child(Badge::new("v0.3").variant(BadgeVariant::Default)),
+                            .child(
+                                Badge::new(concat!("v", env!("CARGO_PKG_VERSION")))
+                                    .variant(BadgeVariant::Default),
+                            ),
                     )
                     .child(muted(
                         "85+ components for beautiful GPUI desktop applications",
@@ -328,7 +331,7 @@ impl ShowcaseApp {
                             div()
                                 .flex()
                                 .gap(px(24.0))
-                                .child(body("Breaking: kael_ui v0.3 released with 85+ components"))
+                                .child(body("kael_ui ships 100+ themable components in-tree"))
                                 .child(
                                     div().text_color(hsla(0.55, 0.8, 0.6, 1.0)).child(
                                         "New: Transforms, Gradients, Blend Modes in GPUI fork",

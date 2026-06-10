@@ -142,7 +142,7 @@ impl Element for VirtualList {
                 size_layout = window.with_element_state(
                     global_id.unwrap(),
                     |state: Option<ItemSizeLayout>, _window| {
-                        let mut state = state.unwrap_or(ItemSizeLayout::default());
+                        let mut state = state.unwrap_or_default();
 
                         let gap = style
                             .gap
@@ -191,14 +191,14 @@ impl Element for VirtualList {
                                         .sum::<f32>()),
                                     height: state
                                         .items_sizes
-                                        .get(0)
+                                        .first()
                                         .map_or(px(0.), |size| size.height),
                                 }
                             } else {
                                 Size {
                                     width: state
                                         .items_sizes
-                                        .get(0)
+                                        .first()
                                         .map_or(px(0.), |size| size.width),
                                     height: px(state
                                         .sizes

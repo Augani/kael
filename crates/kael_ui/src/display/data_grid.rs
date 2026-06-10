@@ -361,7 +361,7 @@ impl<T: 'static> RenderOnce for DataGrid<T> {
             for col_idx in 0..num_cols {
                 let is_editing = editing
                     .as_ref()
-                    .map_or(false, |p| p.row == row_idx && p.col == col_idx);
+                    .is_some_and(|p| p.row == row_idx && p.col == col_idx);
                 if is_editing {
                     row_cells.push(
                         div()
@@ -501,7 +501,7 @@ impl<T: 'static> RenderOnce for DataGrid<T> {
                         let width = col_infos[col_idx].width;
                         let is_editing = editing
                             .as_ref()
-                            .map_or(false, |p| p.row == row_idx && p.col == col_idx);
+                            .is_some_and(|p| p.row == row_idx && p.col == col_idx);
                         let is_editable = col_infos[col_idx].editable;
 
                         let mut cell = div()

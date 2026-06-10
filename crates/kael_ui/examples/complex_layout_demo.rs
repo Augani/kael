@@ -13,6 +13,7 @@
 //! - Programmatic scroll control
 
 use kael::*;
+use kael_ui::layout::Panel;
 use kael_ui::layout::*;
 
 fn main() {
@@ -37,6 +38,7 @@ struct ComplexLayoutDemo {
 
 #[derive(Clone)]
 struct Message {
+    #[allow(dead_code)]
     id: usize,
     author: SharedString,
     content: SharedString,

@@ -74,6 +74,12 @@ pub struct RadarChart {
     style: StyleRefinement,
 }
 
+impl Default for RadarChart {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RadarChart {
     pub fn new() -> Self {
         Self {

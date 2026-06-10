@@ -203,7 +203,7 @@ impl FileTypeFilter {
         Self::new(vec![], "All files")
     }
 
-    fn matches(&self, path: &PathBuf) -> bool {
+    fn matches(&self, path: &std::path::Path) -> bool {
         if self.extensions.is_empty() {
             return true;
         }
@@ -523,7 +523,6 @@ impl RenderOnce for FileUpload {
                     .on_click({
                         let state_entity = state_entity.clone();
                         let file_types = file_types.clone();
-                        let max_file_size = max_file_size;
                         move |_, window, cx| {
                             if disabled {
                                 return;

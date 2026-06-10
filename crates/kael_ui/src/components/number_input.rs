@@ -79,11 +79,11 @@ impl NumberInputState {
     }
 
     pub fn can_increment(&self) -> bool {
-        self.max.map_or(true, |max| self.value < max)
+        self.max.is_none_or(|max| self.value < max)
     }
 
     pub fn can_decrement(&self) -> bool {
-        self.min.map_or(true, |min| self.value > min)
+        self.min.is_none_or(|min| self.value > min)
     }
 
     fn clamp_value(&self, value: f64) -> f64 {

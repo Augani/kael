@@ -962,7 +962,7 @@ impl IntoElement for ScrollContainer {
 
     fn into_element(self) -> Self::Element {
         let id_to_use = self.custom_id.clone().unwrap_or(self.auto_id.clone());
-        let handle = self.scroll_handle.clone().unwrap_or_else(ScrollHandle::new);
+        let handle = self.scroll_handle.clone().unwrap_or_default();
 
         if !self.show_scrollbar {
             let mut scrollable = self.base.id(id_to_use);
@@ -986,7 +986,7 @@ impl IntoElement for ScrollContainer {
                 });
             }
 
-            return scrollable;
+            scrollable
         } else {
             let scrollbar_state = self.scrollbar_state.clone();
             scrollbar_state.init_visible();
@@ -1305,7 +1305,7 @@ impl IntoElement for MasonryGrid {
         let mut column_items: Vec<Vec<AnyElement>> =
             (0..self.columns).map(|_| Vec::new()).collect();
 
-        let gap_value: f32 = self.gap.map(|g| f32::from(g)).unwrap_or(0.0);
+        let gap_value: f32 = self.gap.map(f32::from).unwrap_or(0.0);
 
         for item in self.items {
             let min_column = column_heights
