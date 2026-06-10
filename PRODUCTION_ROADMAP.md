@@ -35,6 +35,10 @@ in the core styling API, the `kael_render_graph` and `kael_gpu_budget` crates,
 `kael_secrets`, UAX#9 BiDi, and UAX#14 line breaking. Treat line-level claims as
 a snapshot of the audit date; the architecture and sequencing analysis stands.
 
+The design proposal for the public render-target/pass/custom-shader API
+(actions 6–7 in §9, re-scoped as public framework API) lives at
+[docs/design/0001-render-targets-and-custom-shaders.md](docs/design/0001-render-targets-and-custom-shaders.md).
+
 ---
 
 ## 1. Executive summary

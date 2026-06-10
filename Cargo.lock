@@ -3960,7 +3960,6 @@ name = "kael_engines"
 version = "0.1.2"
 dependencies = [
  "anyhow",
- "kael_render_graph",
  "regex",
  "serde",
  "serde_json",
@@ -4011,6 +4010,16 @@ dependencies = [
 [[package]]
 name = "kael_icons"
 version = "0.1.2"
+
+[[package]]
+name = "kael_media_engines"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "kael_render_graph",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "kael_media_sys"

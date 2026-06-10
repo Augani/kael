@@ -158,9 +158,10 @@ crates/
 ├── collections/        # Optimized collection types
 ├── refineable/         # Style refinement system
 ├── util/               # Shared utilities
+├── kael_engines/       # General workload engines (BiDi, line breaking, undo, crash reports)
 ├── kael-media/         # Optional: media playback (feature = "media")
 ├── kael_audio/         # Optional: audio (feature = "audio")
-├── kael_engines/       # Optional: timeline/compositing engines for media apps
+├── kael_media_engines/ # Optional: timeline/compositing/export engines for media apps
 └── ...
 ```
 

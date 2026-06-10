@@ -71,8 +71,8 @@ switch ($Mode) {
         Invoke-Step cargo test --package kael --test extension_process --no-run
         # The engine crates are pure libraries (no GUI/GPU linkage), so their unit
         # suites run fully on Windows, verifying the cross-platform logic at runtime.
-        Invoke-Step cargo clippy --package kael_engines --package kael_render_graph --lib '--' '-D' warnings
-        Invoke-Step cargo test --package kael_engines --package kael_render_graph --lib
+        Invoke-Step cargo clippy --package kael_engines --package kael_media_engines --package kael_render_graph --lib '--' '-D' warnings
+        Invoke-Step cargo test --package kael_engines --package kael_media_engines --package kael_render_graph --lib
         Invoke-Step cargo check --package kael --lib --features 'platform-foundation'
         Invoke-Step cargo check --package kael --lib --features 'document'
         Invoke-Step cargo check --package kael --lib --features 'pdf'

@@ -23,8 +23,8 @@ case "$mode" in
     # Hardware-free engine crates: run their full unit suites on every OS so the
     # cross-platform NLE-core / compositor logic is verified at runtime, not just
     # cross-compiled.
-    run cargo clippy -p kael_engines -p kael_render_graph --lib -- -D warnings
-    run cargo test -p kael_engines -p kael_render_graph --lib
+    run cargo clippy -p kael_engines -p kael_media_engines -p kael_render_graph --lib -- -D warnings
+    run cargo test -p kael_engines -p kael_media_engines -p kael_render_graph --lib
     run cargo check -p kael --lib --features "platform-foundation"
     run cargo check -p kael --lib --features "document"
     run cargo check -p kael --lib --features "pdf"

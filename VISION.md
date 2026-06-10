@@ -25,9 +25,9 @@ The correction is not to delete that work. It is to put it back in its place:
   desktop application needs — rendering, text, input, accessibility, packaging,
   GPU extensibility — not around what a video editor needs.
 - **The media stack is an optional, layered consumer of the framework.** It lives
-  in separate crates (`kael-media`, `kael_audio`, `kael_engines`) behind opt-in
-  feature flags. The core `kael` crate compiles without any of it, and that stays
-  true by policy (see "The layering rule" below).
+  in separate crates (`kael-media`, `kael_audio`, `kael_media_engines`) behind
+  opt-in feature flags. The core `kael` crate compiles without any of it, and that
+  stays true by policy (see "The layering rule" below).
 - **Domain work must pay general dividends.** The video-editor push forced
   genuinely general infrastructure into existence — a GPU-agnostic render-graph
   crate (`kael_render_graph`), a GPU memory-budget API (`kael_gpu_budget`),
@@ -63,7 +63,7 @@ priorities precisely *because* they serve every application, not one domain:
 | Ask | Status in Kael |
 |---|---|
 | **Gradients beyond linear** | **Shipped.** `radial_gradient()` and `conic_gradient()` are in the core styling API today, alongside linear gradients. |
-| **Custom shaders** | **Committed, top of the GPU roadmap.** A public render-target + pass API with app-registered shaders (and compute pipelines) across Metal, DirectX 11, and Vulkan/Blade. This was originally scoped as internal plumbing for the media compositor; it is now scoped as a *public framework feature* — the media stack is just one consumer of it. See the roadmap, workstreams P0-A/P0-B/P0-C. |
+| **Custom shaders** | **Committed, top of the GPU roadmap.** A public render-target + pass API with app-registered shaders (and compute pipelines) across Metal, DirectX 11, and Vulkan/Blade. This was originally scoped as internal plumbing for the media compositor; it is now scoped as a *public framework feature* — the media stack is just one consumer of it. Design proposal: [docs/design/0001-render-targets-and-custom-shaders.md](docs/design/0001-render-targets-and-custom-shaders.md). |
 | **Offscreen render targets** | Same program as custom shaders (P0-A): app-allocatable typed render targets, including ≥16-bit float formats. |
 | **A component library that doesn't require a second dependency** | **Shipped.** `kael_ui` provides 100+ shadcn-inspired components, theming, icons, and fonts in-tree. |
 | **Production desktop-app table stakes** | In progress, prioritized ahead of all media work: accessibility (AccessKit), real signed installers, verified auto-update (signature + hash verification has landed), native crash reporting, BiDi/complex text. |
@@ -82,8 +82,10 @@ This is the policy that keeps Kael general:
    for arbitrary applications, documented, and exercised by at least one
    non-media example. Domain stacks consume the public API like any other app.
 3. **Domain stacks are leaf crates.** `kael-media`, `kael_audio`, and the NLE
-   engines in `kael_engines` are maintained, but they are siblings of *your*
-   application — not the framework's reason to exist.
+   engines in `kael_media_engines` are maintained, but they are siblings of
+   *your* application — not the framework's reason to exist. (The general
+   engines — BiDi, line breaking, undo, crash reporting — live in
+   `kael_engines`, which is domain-neutral.)
 
 Today the core already honors rule 1 (media and audio are optional dependencies
 behind feature flags). Rules 2 and 3 govern everything new.

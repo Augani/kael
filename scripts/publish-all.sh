@@ -21,7 +21,9 @@ CRATES=(
   kael_share
   kael_storage
   kael_cache
+  kael_render_graph
   kael_engines
+  kael_media_engines
   kael_media_sys
   kael-media
   # Tier 1: direct dependencies on tier 0 crates
