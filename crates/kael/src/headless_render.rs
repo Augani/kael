@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(feature = "macos-blade")))]
 use crate::DevicePixels;
 use crate::{
     Background, Bounds, ContentMask, ScaledPixels, Scene, TransformationMatrix, hsla, point, size,
@@ -61,7 +61,7 @@ pub struct HeadlessRenderer {
     width: u32,
     height: u32,
     backend: HeadlessBackend,
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", not(feature = "macos-blade")))]
     metal: Option<crate::metal_renderer::MetalRenderer>,
 }
 
@@ -75,7 +75,7 @@ impl HeadlessRenderer {
             anyhow::bail!("headless renderer requires non-zero dimensions");
         }
 
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", not(feature = "macos-blade")))]
         {
             use crate::metal_renderer::{MetalRenderer, metal_is_available};
             use parking_lot::Mutex;
@@ -96,7 +96,7 @@ impl HeadlessRenderer {
             width,
             height,
             backend: HeadlessBackend::CpuOnly,
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", not(feature = "macos-blade")))]
             metal: None,
         })
     }
@@ -119,7 +119,7 @@ impl HeadlessRenderer {
     pub fn render_frame(&mut self, complexity: usize) -> Result<RenderedFrame> {
         let scene = build_benchmark_scene(self.width, self.height, complexity);
 
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", not(feature = "macos-blade")))]
         if let Some(renderer) = self.metal.as_mut() {
             let viewport = size(
                 DevicePixels(self.width as i32),
@@ -146,7 +146,7 @@ impl HeadlessRenderer {
     /// linear ≥16-bit working format), returning peak/checksum stats. Available
     /// only on the GPU backend.
     pub fn render_frame_rgba16f(&mut self, complexity: usize) -> Result<HdrFrame> {
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", not(feature = "macos-blade")))]
         if let Some(renderer) = self.metal.as_mut() {
             let scene = build_benchmark_scene(self.width, self.height, complexity);
             let viewport = size(
@@ -176,7 +176,7 @@ impl HeadlessRenderer {
     /// Run a built-in GPU compute kernel that doubles each input value, proving
     /// the compute-pipeline path end-to-end. Available only on the GPU backend.
     pub fn run_compute_doubler(&self, data: &[f32]) -> Result<Vec<f32>> {
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", not(feature = "macos-blade")))]
         if let Some(renderer) = self.metal.as_ref() {
             const KERNEL: &str = concat!(
                 "#include <metal_stdlib>\n",
