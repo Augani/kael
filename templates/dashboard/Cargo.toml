@@ -6,3 +6,4 @@ publish = false
 
 [dependencies]
 kael = { path = "../../crates/kael" }
+kael_ui = { path = "../../crates/kael_ui" }

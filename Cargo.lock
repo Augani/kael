@@ -1714,6 +1714,7 @@ name = "dashboard-app"
 version = "0.1.0"
 dependencies = [
  "kael",
+ "kael_ui",
 ]
 
 [[package]]
