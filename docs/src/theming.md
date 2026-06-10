@@ -1,6 +1,15 @@
 # Theming
 
-Kael's theme system provides JSON/TOML-based theming with hot-reload support. The `Theme` type implements `Global`, making it available anywhere in your app.
+Kael has two theming layers:
+
+- **`kael_ui` themes** — the component library's design-token system: 18 shipped
+  presets, user-defined brand themes via `Theme::custom`, and live switching
+  with `install_theme`. If you build with kael_ui components, this is the one
+  you want — see [Component Library](component-library.md#custom-themes-and-live-switching).
+- **Core `kael::Theme`** — a lower-level, file-based palette for apps that use
+  the core framework directly without kael_ui. Documented below.
+
+Kael's core theme system provides JSON/TOML-based theming with hot-reload support. The `Theme` type implements `Global`, making it available anywhere in your app.
 
 ## Built-in themes
 

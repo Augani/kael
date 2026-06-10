@@ -14,16 +14,18 @@ kael_ui = "0.1"
 
 ## Setup
 
-Install a theme and initialize the library before opening windows:
+One import gives you everything — the components plus the Kael essentials
+(`div`, `px`, `Render`, `Application`, …). You do not need a separate
+`use kael::*;`, and mixing the two globs is discouraged because the names
+collide:
 
 ```rust,ignore
-use kael::*;
-use kael_ui::{prelude::*, theme};
+use kael_ui::prelude::*;
 
 fn main() {
     Application::new().run(|cx: &mut App| {
-        theme::install_theme(cx, theme::Theme::dark());
         kael_ui::init(cx);
+        install_theme(cx, Theme::dark());
 
         cx.open_window(WindowOptions::default(), |_, cx| {
             cx.new(|_| MyApp)
@@ -55,7 +57,58 @@ impl Render for MyApp {
 }
 ```
 
-Tokens follow shadcn/ui naming: `background`/`foreground`, `primary`, `secondary`, `muted`, `accent`, `destructive`, `border`, `card`, and so on, each with light and dark variants. Switch themes at runtime with `install_theme(cx, Theme::light())`.
+Tokens follow shadcn/ui naming: `background`/`foreground`, `primary`, `secondary`, `muted`, `accent`, `destructive`, `border`, `card`, and so on, each with light and dark variants.
+
+## Custom themes and live switching
+
+Eighteen presets ship in-tree (`Theme::dark()`, `Theme::light()`,
+`Theme::tokyo_night()`, `Theme::catppuccin_mocha()`, `Theme::nord()`, …), and
+you can brand your app with `Theme::custom`: start from any preset's tokens and
+override only what you need with struct-update syntax.
+
+```rust,ignore
+let brand = Theme::custom(ThemeTokens {
+    primary: hsla(262.0 / 360.0, 0.83, 0.58, 1.0),
+    primary_foreground: hsla(0.0, 0.0, 1.0, 1.0),
+    radius_md: px(10.0),
+    ..ThemeTokens::dark()
+});
+install_theme(cx, brand);
+```
+
+`install_theme` can be called again at any time — it refreshes every open
+window, so components re-read the new tokens immediately. Wiring a theme picker
+is just a button:
+
+```rust,ignore
+Button::new("theme-light", "Light").on_click(cx.listener(|_, _, _, cx| {
+    install_theme(cx, Theme::light());
+    cx.notify();
+}))
+```
+
+## Customizing individual components
+
+Every component implements Kael's `Styled` trait, so the entire Tailwind-like
+styling API works directly on it — this is the `className` of kael_ui. User
+styles are applied last and override the component's defaults:
+
+```rust,ignore
+Button::new("cta", "Get started")
+    .rounded(px(999.0))          // pill shape
+    .px(px(28.0))                // wider padding
+    .bg(rgb(0x8b5cf6))           // one-off brand color
+    .shadow_lg()
+
+Card::new()
+    .content(body("Hello"))
+    .w(px(360.0))
+    .border_2()
+    .border_color(rgb(0x10b981))
+```
+
+Use the theme for app-wide identity and `Styled` overrides for one-off
+adjustments. The [`custom_theme_demo`](https://github.com/Augani/kael/blob/main/crates/kael_ui/examples/custom_theme_demo.rs) example shows all three layers together.
 
 ## What's included
 
@@ -92,10 +145,20 @@ kael_ui::set_icon_base_path("assets/icons");
 More than 140 runnable demos live in [`crates/kael_ui/examples`](https://github.com/Augani/kael/tree/main/crates/kael_ui/examples):
 
 ```bash
-cargo run -p kael_ui --example button_demo
+cargo run -p kael_ui --example custom_theme_demo
+cargo run -p kael_ui --example components_showcase
 cargo run -p kael_ui --example data_table_styled_demo
 cargo run -p kael_ui --example command_palette_styled_demo
 cargo run -p kael_ui --example sidebar_styled_demo
-cargo run -p kael_ui --example pie_chart_demo
 cargo run -p kael_ui --example date_picker_demo
+```
+
+## Template apps
+
+Three complete starter applications live in [`templates/`](https://github.com/Augani/kael/tree/main/templates) — copy one as the skeleton of your own app:
+
+```bash
+cargo run -p dashboard-app    # analytics: sidebar, stat cards, charts, data table
+cargo run -p messaging-app    # chat: conversation list, message bubbles, composer
+cargo run -p workspace-app    # IDE shell: file tree, syntax-highlighted editor, status bar
 ```
