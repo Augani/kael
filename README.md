@@ -2,7 +2,9 @@
 
 A high-performance, GPU-accelerated UI framework for building native desktop applications in Rust.
 
-Built on top of [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) from [Zed Industries](https://zed.dev), extended with webviews, media playback, system tray, form controls, rich text, Lottie animations, blur effects, gesture recognition, theming, and more.
+> **Kael is a fork of [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui)** from [Zed Industries](https://zed.dev), previously distributed as the *adabraka GPUI fork* and since renamed to Kael. It is an independent project and is not affiliated with or endorsed by Zed Industries.
+
+Forked from GPUI and extended with webviews, media playback, system tray, form controls, rich text, Lottie animations, blur effects, gesture recognition, theming, and more.
 
 Kael targets macOS, Linux, and Windows with platform-native rendering backends (Metal, Vulkan/Blade, DirectX 11) and delivers 60fps with minimal CPU usage through dirty tracking and render-on-demand.
 
@@ -163,7 +165,7 @@ sudo dnf install wayland-devel libxkbcommon-devel vulkan-loader-devel \
 
 ## Acknowledgements
 
-Kael is built on [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), the UI framework created by [Zed Industries](https://zed.dev) for the Zed code editor. The original GPUI code is licensed under Apache-2.0.
+Kael began as a fork of [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), the UI framework created by [Zed Industries](https://zed.dev) for the Zed code editor, and was previously distributed as the *adabraka GPUI fork*. The original GPUI code is licensed under Apache-2.0. Kael is an independent project and is not affiliated with or endorsed by Zed Industries.
 
 ## License
 

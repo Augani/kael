@@ -5,6 +5,11 @@ A GPU-accelerated desktop UI framework for building native applications in Rust.
 Renders via Metal (macOS), DirectX 11 (Windows), and Vulkan (Linux). Apps are pure Rust with
 native performance and 120fps rendering through dirty tracking and render-on-demand.
 
+> **Kael is a fork of [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui)**, the UI
+> framework [Zed Industries](https://zed.dev) built for the Zed editor. It was previously distributed
+> as the *adabraka GPUI fork* and renamed to Kael. It is an independent project — not affiliated with,
+> maintained by, or endorsed by Zed Industries.
+
 ## Quick Start
 
 ```toml
@@ -75,7 +80,7 @@ fn main() {
 
 ## Acknowledgements
 
-Kael is built on top of [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), the GPU-accelerated UI framework originally created by [Zed Industries](https://zed.dev) for the Zed code editor. We are grateful for their foundational work. The original GPUI code is copyright 2022-2025 Zed Industries, Inc. and licensed under Apache-2.0.
+Kael began as a fork of [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), the GPU-accelerated UI framework originally created by [Zed Industries](https://zed.dev) for the Zed code editor — and was previously distributed as the *adabraka GPUI fork*. We are grateful for their foundational work. The original GPUI code is copyright 2022-2025 Zed Industries, Inc. and licensed under Apache-2.0. Kael is an independent project and is not affiliated with or endorsed by Zed Industries.
 
 ## License
 

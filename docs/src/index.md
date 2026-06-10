@@ -4,6 +4,8 @@
 
 Kael replaces Electron with a single Rust crate that gives you everything you need to build production desktop applications — IDEs, video editors, dashboards, design tools — with native GPU performance on macOS, Windows, and Linux.
 
+> **Kael is a fork of [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui)**, the UI framework [Zed Industries](https://zed.dev) built for the Zed editor. It was previously distributed as the *adabraka GPUI fork* and renamed to Kael. It is an independent project and is not affiliated with or endorsed by Zed Industries.
+
 ## What you get
 
 | Layer | What Kael provides |
@@ -81,4 +83,4 @@ Kael renders with the same sharpness as first-party platform apps:
 
 ## Acknowledgements
 
-Kael is built on top of [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), the GPU-accelerated UI framework originally created by [Zed Industries](https://zed.dev) for the Zed code editor. We are grateful for their foundational work which made Kael possible.
+Kael began as a fork of [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), the GPU-accelerated UI framework originally created by [Zed Industries](https://zed.dev) for the Zed code editor, and was previously distributed as the *adabraka GPUI fork*. We are grateful for their foundational work which made Kael possible. Kael is an independent project and is not affiliated with or endorsed by Zed Industries.
