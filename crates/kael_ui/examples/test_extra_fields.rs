@@ -1,7 +1,7 @@
 // Test if extra fields break scrolling
 
 use kael::{
-    div, prelude::*, px, rgb, size, AnyElement, App, Application, Bounds, Context, ElementId,
+    div, prelude::*, px, rgb, size, AnyElement, App, Application, Bounds, Context,
     Interactivity, ParentElement, ScrollHandle, Stateful, StatefulInteractiveElement,
     StyleRefinement, Styled, Window, WindowBounds, WindowOptions,
 };
@@ -56,6 +56,7 @@ enum TestDirection {
 // Test 2: Add Option<ScrollHandle> field AND direction with match
 struct Test2 {
     base: Stateful<kael::Div>,
+    #[allow(dead_code)]
     scroll_handle: Option<ScrollHandle>,
     direction: TestDirection,
 }

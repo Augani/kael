@@ -1,4 +1,3 @@
-use kael::*;
 use kael_ui::{
     components::countdown::{
         Countdown, CountdownFormat, CountdownSeparator, CountdownSize, CountdownState,

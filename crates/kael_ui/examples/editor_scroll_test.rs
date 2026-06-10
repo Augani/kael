@@ -15,7 +15,7 @@ impl EditorScrollTestApp {
 }
 
 impl Render for EditorScrollTestApp {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
             .size_full()

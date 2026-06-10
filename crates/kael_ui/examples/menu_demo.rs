@@ -1,4 +1,4 @@
-use kael::{prelude::FluentBuilder as _, *};
+use kael::*;
 use kael_ui::{
     components::icon_source::IconSource,
     layout::VStack,
@@ -40,7 +40,9 @@ struct MenuDemo {
     selected_option: String,
     checkbox_state: bool,
     radio_option: String,
+    #[allow(dead_code)]
     show_context_menu: bool,
+    #[allow(dead_code)]
     context_menu_position: Point<Pixels>,
 }
 

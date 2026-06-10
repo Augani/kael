@@ -1,5 +1,4 @@
 use kael::prelude::FluentBuilder as _;
-use kael::*;
 use kael_ui::{
     components::notification_center::{
         NotificationBell, NotificationCenter, NotificationCenterState, NotificationItem,

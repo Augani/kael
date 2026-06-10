@@ -1,4 +1,3 @@
-use kael::*;
 use kael_ui::{
     components::{
         keyboard_shortcuts::{KeyboardShortcuts, ShortcutItem},

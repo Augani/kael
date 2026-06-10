@@ -1,4 +1,3 @@
-use kael::*;
 use kael_ui::{
     components::input::{Input, InputState, InputVariant},
     components::scrollable::scrollable_vertical,

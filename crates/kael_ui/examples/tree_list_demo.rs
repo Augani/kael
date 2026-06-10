@@ -1,5 +1,4 @@
 use kael::prelude::FluentBuilder;
-use kael::*;
 use kael_ui::{
     components::{
         input::{init as init_input, Input, InputSize, InputState, InputVariant},
@@ -48,7 +47,9 @@ struct TreeListDemo {
 
     // List state
     selected_list_item: Option<String>,
+    #[allow(dead_code)]
     list_filter: String,
+    #[allow(dead_code)]
     list_search_input: Entity<InputState>,
 }
 

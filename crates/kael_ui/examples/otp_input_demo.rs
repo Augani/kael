@@ -1,4 +1,3 @@
-use kael::*;
 use kael_ui::prelude::*;
 
 struct OTPInputDemoApp {

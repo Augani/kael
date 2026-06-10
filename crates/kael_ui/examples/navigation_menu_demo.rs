@@ -1,5 +1,3 @@
-use kael::prelude::FluentBuilder;
-use kael::*;
 use kael_ui::{
     components::{
         navigation_menu::{NavigationMenu, NavigationMenuItem, NavigationMenuOrientation},

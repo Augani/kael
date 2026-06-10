@@ -1,4 +1,3 @@
-use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     components::button::{Button, ButtonVariant},
     overlays::bottom_sheet::{BottomSheet, BottomSheetSize},

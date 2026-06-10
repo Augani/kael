@@ -1,9 +1,9 @@
-use kael::{prelude::FluentBuilder as _, *};
+use kael::*;
 use kael_ui::{
     components::icon_source::IconSource,
     layout::VStack,
     navigation::toolbar::{
-        Toolbar, ToolbarButton, ToolbarButtonVariant, ToolbarGroup, ToolbarItem, ToolbarSize,
+        Toolbar, ToolbarButton, ToolbarButtonVariant, ToolbarGroup, ToolbarSize,
     },
     theme::use_theme,
 };

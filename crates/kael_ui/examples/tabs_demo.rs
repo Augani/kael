@@ -1,4 +1,3 @@
-use kael::*;
 use kael_ui::{
     components::{icon_source::IconSource, scrollable::scrollable_vertical},
     layout::{HStack, VStack},

@@ -1,7 +1,7 @@
-use kael::{prelude::FluentBuilder, *};
+use kael::*;
 use kael_ui::{
     components::{
-        input::{Input, InputSize, InputType, InputVariant},
+        input::Input,
         input_state::InputState,
         scrollable::scrollable_vertical,
     },
@@ -48,7 +48,7 @@ impl CustomInputApp {
 }
 
 impl Render for CustomInputApp {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let theme = kael_ui::theme::use_theme();
 
         VStack::new()

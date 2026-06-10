@@ -18,6 +18,7 @@ struct FocusTestApp {
     password: Entity<InputState>,
 
     // Track which input has focus
+    #[allow(dead_code)]
     current_focus_index: usize,
 }
 

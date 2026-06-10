@@ -1,4 +1,3 @@
-use kael::*;
 use kael_ui::prelude::*;
 
 fn main() {
@@ -18,6 +17,7 @@ fn main() {
 }
 
 struct DemoApp {
+    #[allow(dead_code)]
     theme: Theme,
     // Move ALL state to root view for interactive components to work
     click_count: usize,

@@ -4,7 +4,6 @@
 //! Note: Due to GPUI limitations with empty text rendering, this demo shows that
 //! the Styled trait is properly implemented and compiles successfully.
 
-use kael::*;
 use kael_ui::{components::text::Text, prelude::*};
 use std::path::PathBuf;
 

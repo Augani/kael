@@ -1,4 +1,3 @@
-use kael::*;
 use kael_ui::{
     components::scrollable::scrollable_vertical,
     navigation::tabs::{TabItem, TabPanel, TabVariant, Tabs},
@@ -62,6 +61,7 @@ fn main() {
 }
 
 struct TabsStyledDemo {
+    #[allow(dead_code)]
     selected_tab: usize,
 }
 

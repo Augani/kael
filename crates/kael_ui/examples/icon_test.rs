@@ -1,4 +1,3 @@
-use kael::*;
 use kael_ui::{components::icon::Icon, prelude::*};
 use std::path::PathBuf;
 
@@ -68,7 +67,7 @@ impl IconTestApp {
 }
 
 impl Render for IconTestApp {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let theme = use_theme();
 
         div()

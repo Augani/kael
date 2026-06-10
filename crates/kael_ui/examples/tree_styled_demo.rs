@@ -1,4 +1,3 @@
-use kael::*;
 use kael_ui::{
     components::scrollable::scrollable_vertical,
     navigation::tree::{TreeList, TreeNode},
@@ -62,7 +61,9 @@ fn main() {
 }
 
 struct TreeStyledDemo {
+    #[allow(dead_code)]
     selected_id: Option<String>,
+    #[allow(dead_code)]
     expanded_ids: Vec<String>,
 }
 

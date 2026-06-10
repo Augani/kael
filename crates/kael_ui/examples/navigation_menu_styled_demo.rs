@@ -1,4 +1,3 @@
-use kael::*;
 use kael_ui::{
     components::{
         navigation_menu::{NavigationMenu, NavigationMenuItem, NavigationMenuOrientation},

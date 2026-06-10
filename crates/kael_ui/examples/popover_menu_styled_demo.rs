@@ -1,4 +1,3 @@
-use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     overlays::popover_menu::{PopoverMenu, PopoverMenuItem},
     prelude::*,
@@ -64,6 +63,7 @@ struct PopoverMenuStyledDemoView {
     show_default: bool,
     show_custom_bg: bool,
     show_custom_border: bool,
+    #[allow(dead_code)]
     show_custom_size: bool,
     show_gradient: bool,
     show_compact: bool,
@@ -87,8 +87,8 @@ impl PopoverMenuStyledDemoView {
 }
 
 impl Render for PopoverMenuStyledDemoView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _theme = use_theme();
 
         div()
             .size_full()

@@ -14,6 +14,7 @@
 
 use kael::*;
 use kael_ui::layout::*;
+use kael_ui::layout::Panel;
 
 fn main() {
     Application::new().run(|cx: &mut App| {
@@ -37,6 +38,7 @@ struct ComplexLayoutDemo {
 
 #[derive(Clone)]
 struct Message {
+    #[allow(dead_code)]
     id: usize,
     author: SharedString,
     content: SharedString,

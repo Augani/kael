@@ -1,4 +1,3 @@
-use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     components::{
         drag_drop::{DragData, Draggable, DropZone, DropZoneStyle},
@@ -65,6 +64,7 @@ fn main() {
 
 #[derive(Clone, Debug)]
 struct Task {
+    #[allow(dead_code)]
     id: usize,
     title: String,
     priority: Priority,

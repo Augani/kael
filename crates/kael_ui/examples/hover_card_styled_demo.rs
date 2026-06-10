@@ -1,6 +1,5 @@
-use kael::{prelude::*, *};
 use kael_ui::{
-    overlays::hover_card::{HoverCard, HoverCardAlignment, HoverCardPosition},
+    overlays::hover_card::{HoverCard, HoverCardPosition},
     prelude::*,
 };
 use std::path::PathBuf;
