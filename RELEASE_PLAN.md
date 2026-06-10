@@ -2,7 +2,9 @@
 
 This is the step-by-step plan to publish the next version after the
 re-centering work (VISION.md, the `kael_engines` split, the roadmap reframe)
-lands on `main`. Execute it from a clean checkout of `main` after PR #6 merges.
+lands on `main`. PR #6 has merged; pre-flight steps 2–3 (version bump, dep-req
+sweep, changelog cut) are implemented by the release-prep PR that carries this
+revision — what remains after it merges is the publish-day section onward.
 
 ## Why 0.2.0 (not 0.1.3)
 

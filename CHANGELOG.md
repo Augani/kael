@@ -9,6 +9,8 @@ stabilised — minor version bumps may include breaking changes.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-10
+
 ### Changed
 
 - **Kael is re-centered as a general-purpose desktop application
@@ -119,4 +121,5 @@ captures everything landed on `main` between `0.1.1` and `0.1.2`.
 - `cargo fmt --all --check`, `cargo clippy -p kael`, and
   `cargo test -p kael --lib platform::mac` (9/9) all clean.
 
+[0.2.0]: https://github.com/Augani/kael/releases/tag/v0.2.0
 [0.1.2]: https://github.com/Augani/kael/releases/tag/v0.1.2
