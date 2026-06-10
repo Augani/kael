@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Since the workspace is currently at `0.x`, the public API is not yet
 stabilised — minor version bumps may include breaking changes.
 
+## [Unreleased]
+
+### Added
+
+- **New crate: `kael_ui` — a complete shadcn-inspired component library
+  built into the Kael workspace.** This is the continuation of
+  [adabraka-ui](https://github.com/Augani/adabraka-ui) (which depended
+  on the former adabraka GPUI fork, now Kael), ported in-tree so
+  applications no longer need to combine Kael with an external
+  component library. It ships 100+ components across seven modules:
+  `components` (buttons, inputs, selects, sliders, date/time/color
+  pickers, OTP input, file upload, tag input, rating, code editor with
+  tree-sitter highlighting, and more), `display` (tables, data grids,
+  cards, badges, accordions, markdown/HTML rendering), `navigation`
+  (sidebars, menus, tabs, breadcrumbs, toolbars, file trees, status
+  bars), `overlays` (dialogs, sheets, popovers, toasts, tooltips,
+  context menus, command palettes), `charts` (line, area, bar, pie,
+  donut, radar, gauge, heatmap, treemap, sparkline), `layout`
+  (`VStack`, `HStack`, `Grid`, `ScrollContainer`, responsive helpers),
+  and a shadcn-style `theme` system with light/dark design tokens.
+  Bundles 1,600+ Lucide icons, Inter and JetBrains Mono fonts, and
+  140+ runnable examples (`cargo run -p kael_ui --example button_demo`).
+- `canvas_with_prepaint()` is now public in `kael`, exposing the
+  non-overloaded form of `canvas()` for callers that want closure
+  parameter types to be inferred.
+
 ## [0.1.2] - 2026-05-28
 
 First release with a tracked CHANGELOG. Previous published version on

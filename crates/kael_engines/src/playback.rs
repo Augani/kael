@@ -559,7 +559,7 @@ mod tests {
         let mut clock = PlaybackClock::new(Timebase::THIRTY);
         clock.play(ms(0));
         let region = LoopRegion::new(ms(0), ms(1000)); // 30 frames @ 30 fps
-                                                       // 1.5s media -> looped 0.5s -> frame 15.
+        // 1.5s media -> looped 0.5s -> frame 15.
         assert_eq!(clock.current_frame_looped(ms(1500), &region), 15);
     }
 }

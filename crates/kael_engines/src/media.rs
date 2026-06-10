@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::automation::Automation;
 use crate::effects::{AnimatedEffectStack, EffectStack};
 use crate::playback::Timebase;
-use crate::transform::{AnimatedClipTransform, ClipTransform};
 use crate::timecode::Timecode;
+use crate::transform::{AnimatedClipTransform, ClipTransform};
 
 /// Metadata extracted from probing a media file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1118,7 +1118,11 @@ mod tests {
         assert_eq!(mid.len(), 2);
         assert_eq!((mid[0].clip_id.as_str(), mid[0].source_frame), ("b", 215));
         assert_eq!(
-            (mid[1].track_id.as_str(), mid[1].clip_id.as_str(), mid[1].source_frame),
+            (
+                mid[1].track_id.as_str(),
+                mid[1].clip_id.as_str(),
+                mid[1].source_frame
+            ),
             ("v2", "c", 505)
         );
 
@@ -1421,7 +1425,11 @@ mod tests {
         assert_eq!((head.track_offset, head.track_end()), (0, 10));
         let inserted = tl.tracks[0].clips.iter().find(|c| c.id == "ins").unwrap();
         assert_eq!(inserted.track_offset, 10);
-        let tail = tl.tracks[0].clips.iter().find(|c| c.id == "a-split").unwrap();
+        let tail = tl.tracks[0]
+            .clips
+            .iter()
+            .find(|c| c.id == "a-split")
+            .unwrap();
         assert_eq!(tail.track_offset, 15);
     }
 
@@ -1450,7 +1458,8 @@ mod tests {
             duration_frames: 30,
         };
         // Insert source [100,130) of "media" at timeline 10.
-        tl.three_point_insert(0, "ins", "media", 100, 130, 10).unwrap();
+        tl.three_point_insert(0, "ins", "media", 100, 130, 10)
+            .unwrap();
         let inserted = tl.tracks[0].clips.iter().find(|c| c.id == "ins").unwrap();
         assert_eq!(inserted.source, "media");
         assert_eq!(
@@ -1479,18 +1488,23 @@ mod tests {
             duration_frames: 60,
         };
         // Overwrite [10,30) on the track with a new source.
-        tl.three_point_overwrite(0, "ovr", "media", 0, 20, 10).unwrap();
+        tl.three_point_overwrite(0, "ovr", "media", 0, 20, 10)
+            .unwrap();
         let ovr = tl.tracks[0].clips.iter().find(|c| c.id == "ovr").unwrap();
         assert_eq!((ovr.track_offset, ovr.track_end()), (10, 30));
         // The original split around the overwrite into a head and a tail.
-        assert!(tl.tracks[0]
-            .clips
-            .iter()
-            .any(|c| c.track_offset == 0 && c.track_end() == 10));
-        assert!(tl.tracks[0]
-            .clips
-            .iter()
-            .any(|c| c.track_offset == 30 && c.track_end() == 60));
+        assert!(
+            tl.tracks[0]
+                .clips
+                .iter()
+                .any(|c| c.track_offset == 0 && c.track_end() == 10)
+        );
+        assert!(
+            tl.tracks[0]
+                .clips
+                .iter()
+                .any(|c| c.track_offset == 30 && c.track_end() == 60)
+        );
     }
 
     #[test]

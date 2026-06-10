@@ -672,11 +672,12 @@ mod tests {
         tree.set_parent(button_id, tree.root);
 
         assert_eq!(tree.focused_node(), Some(button_id));
-        assert!(tree
-            .get(button_id)
-            .unwrap()
-            .states
-            .contains(AccessibilityState::FOCUSED));
+        assert!(
+            tree.get(button_id)
+                .unwrap()
+                .states
+                .contains(AccessibilityState::FOCUSED)
+        );
     }
 
     #[test]

@@ -281,10 +281,12 @@ mod tests {
     #[test]
     fn solid_fills_uniformly() {
         let image = solid([0.2, 0.4, 0.6, 1.0], 3, 2);
-        assert!(image
-            .pixels
-            .iter()
-            .all(|pixel| *pixel == [0.2, 0.4, 0.6, 1.0]));
+        assert!(
+            image
+                .pixels
+                .iter()
+                .all(|pixel| *pixel == [0.2, 0.4, 0.6, 1.0])
+        );
     }
 
     #[test]
@@ -340,7 +342,7 @@ mod tests {
         assert_eq!(bars.pixel(1, 0), [0.75, 0.75, 0.0, 1.0]); // yellow
         assert_eq!(bars.pixel(2, 0), [0.0, 0.75, 0.75, 1.0]); // cyan
         assert_eq!(bars.pixel(6, 0), [0.0, 0.0, 0.75, 1.0]); // blue
-                                                             // Bars run the full height (same color down a column).
+        // Bars run the full height (same color down a column).
         assert_eq!(bars.pixel(3, 0), bars.pixel(3, 1));
     }
 
@@ -427,9 +429,10 @@ mod tests {
             duration_frames: 30,
         };
         let out = composite_frame(&timeline, 10, 2, 2, &GeneratorProvider);
-        assert!(out
-            .pixels
-            .iter()
-            .all(|pixel| *pixel == [0.0, 1.0, 0.0, 1.0]));
+        assert!(
+            out.pixels
+                .iter()
+                .all(|pixel| *pixel == [0.0, 1.0, 0.0, 1.0])
+        );
     }
 }

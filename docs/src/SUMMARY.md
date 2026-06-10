@@ -13,6 +13,7 @@
 
 # Widget Reference
 
+- [Component Library (kael_ui)](component-library.md)
 - [Form Controls](form-controls.md)
 - [Display & Feedback](display-and-feedback.md)
 - [Canvas & Graphics](graphics.md)

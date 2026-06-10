@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use kael_render_graph::reference::Image;
 
-use crate::audio_mix::{mix_range, AudioProvider};
-use crate::compositor::{composite_frame, FrameProvider};
+use crate::audio_mix::{AudioProvider, mix_range};
+use crate::compositor::{FrameProvider, composite_frame};
 use crate::media::Timeline;
 
 /// Receives each composited output frame of a render/export pass.

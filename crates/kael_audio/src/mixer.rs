@@ -10,8 +10,8 @@
 //! The [`Mixer`] core is deterministic and device-free, so it is fully unit
 //! tested; [`AudioEngine`] wires it to a real `cpal` output stream.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};

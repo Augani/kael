@@ -11,6 +11,7 @@ Kael renders via Metal (macOS), DirectX 11 (Windows), Vulkan (Linux). Apps are p
 - [Layout & Styling](https://augani.github.io/kael/layout-and-styling.html)
 - [Animations](https://augani.github.io/kael/animations.html)
 - [Canvas & Graphics](https://augani.github.io/kael/graphics.html)
+- [Component Library (kael_ui)](https://augani.github.io/kael/component-library.html)
 - [Form Controls](https://augani.github.io/kael/form-controls.html)
 - [Actions & Keybindings](https://augani.github.io/kael/actions-and-keybindings.html)
 - [Platform APIs](https://augani.github.io/kael/platform-apis.html)
@@ -97,6 +98,19 @@ All widgets: `widget_name(id, value, ...)` → `.on_change(|value, window, cx| {
 | canvas | `canvas(prepaint_fn, paint_fn)` | custom GPU drawing |
 | svg | `svg()` | `.path()`, `.size()`, `.text_color()` |
 | lottie | `lottie(source)` | `.autoplay()`, `.loop_forever()`, `.ping_pong()` |
+
+## Component library (kael_ui)
+
+Add `kael_ui = "0.1"` for 100+ shadcn-inspired components — no external component library needed. Initialize with `kael_ui::theme::install_theme(cx, Theme::dark())` and `kael_ui::init(cx)`.
+
+- **components** — Button, Input, Select, Combobox, Checkbox, Radio, Slider, DatePicker, TimePicker, ColorPicker, OtpInput, FileUpload, TagInput, Rating, Calendar, Carousel, code Editor (tree-sitter), and more
+- **display** — Table, DataTable, DataGrid, Card, Badge, Accordion, Markdown/HTML rendering
+- **navigation** — Sidebar, Menu, Tabs, Breadcrumbs, Toolbar, FileTree, StatusBar
+- **overlays** — Dialog, Sheet, Popover, Toast, Tooltip, ContextMenu, CommandPalette
+- **charts** — line, area, bar, pie, donut, radar, gauge, heatmap, treemap, sparkline
+- **layout** — VStack, HStack, Grid, ScrollContainer, responsive breakpoints
+- **theme** — shadcn-style design tokens, light/dark, `use_theme()` in render
+- Bundled: 1,600+ Lucide icons (`set_icon_base_path("assets/icons")`), Inter + JetBrains Mono fonts
 
 ## Layout (Tailwind-style on div)
 

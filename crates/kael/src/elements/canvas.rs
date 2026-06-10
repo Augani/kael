@@ -29,7 +29,12 @@ where
     arg1.into_canvas(arg2)
 }
 
-fn canvas_with_prepaint<T>(
+/// Construct a canvas element from explicit prepaint and paint closures.
+///
+/// This is the non-overloaded form of [`canvas`]. Prefer it when closure
+/// parameter types should be inferred (the overloaded [`canvas`] helper
+/// requires fully annotated closure signatures).
+pub fn canvas_with_prepaint<T>(
     prepaint: impl 'static + for<'a, 'b> FnOnce(Bounds<Pixels>, &'a mut Window, &'b mut App) -> T,
     paint: impl 'static + for<'a, 'b> FnOnce(Bounds<Pixels>, T, &'a mut Window, &'b mut App),
 ) -> Canvas<T> {

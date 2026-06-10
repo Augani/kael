@@ -41,6 +41,8 @@ CRATES=(
   kael-macros
   # Tier 7 (main crate)
   kael
+  # Tier 8: depends on the main crate
+  kael_ui
 )
 
 publish_crate() {

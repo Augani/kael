@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use kael_render_graph::reference::{blend, crossfade, BlendMode, Image, PassOp};
+use kael_render_graph::reference::{BlendMode, Image, PassOp, blend, crossfade};
 use kael_render_graph::{PassDesc, PassId, RenderGraph, ResourceDesc, ResourceId};
 
 use crate::media::Timeline;
@@ -706,9 +706,11 @@ mod tests {
             duration_frames: 30,
         };
         // No transform -> no transform pass.
-        assert!(build_frame_graph(&timeline, 10).layers[0]
-            .transform
-            .is_none());
+        assert!(
+            build_frame_graph(&timeline, 10).layers[0]
+                .transform
+                .is_none()
+        );
 
         // A non-identity transform -> a pass between the source and the composite.
         timeline.tracks[0].clips[0].transform = ClipTransform {
@@ -1027,10 +1029,11 @@ mod tests {
             2,
             &provider(&[("red", [1.0, 0.0, 0.0, 1.0])]),
         );
-        assert!(out
-            .pixels
-            .iter()
-            .all(|pixel| *pixel == [1.0, 0.0, 0.0, 1.0]));
+        assert!(
+            out.pixels
+                .iter()
+                .all(|pixel| *pixel == [1.0, 0.0, 0.0, 1.0])
+        );
     }
 
     #[test]

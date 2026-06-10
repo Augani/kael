@@ -32,6 +32,15 @@ Kael targets macOS, Linux, and Windows with platform-native rendering backends (
 - Gesture recognizers (pan, swipe, pinch)
 - Form controls: text input, checkbox, toggle, slider, radio, select, date picker
 
+**Component Library (`kael_ui`)**
+- 100+ shadcn-inspired components built in: buttons, inputs, dialogs, data tables, command palettes, charts, and more
+- Complete theme system with light/dark variants and semantic design tokens
+- Layout primitives (`VStack`, `HStack`, `Grid`, `ScrollContainer`) and responsive utilities
+- Professional animations: springs, easing presets, transitions, animated state
+- Multi-line code editor with tree-sitter syntax highlighting
+- 1,600+ bundled Lucide icons plus Inter / JetBrains Mono fonts
+- See [`crates/kael_ui`](crates/kael_ui) — no extra component library needed
+
 **Platform Integration**
 - System tray with menus
 - Global hotkeys
@@ -116,6 +125,15 @@ cargo run -p kael --example crispness_showcase
 cargo run -p kael --example native_comparison
 ```
 
+Component library examples (140+ available, see [`crates/kael_ui/examples`](crates/kael_ui/examples)):
+
+```bash
+cargo run -p kael_ui --example button_demo
+cargo run -p kael_ui --example data_table_styled_demo
+cargo run -p kael_ui --example command_palette_styled_demo
+cargo run -p kael_ui --example pie_chart_demo
+```
+
 ## Platform Support
 
 | Platform | Renderer | Status |
@@ -130,6 +148,7 @@ cargo run -p kael --example native_comparison
 ```
 crates/
 ├── kael/           # Core framework
+├── kael_ui/        # Component library (100+ shadcn-inspired components)
 ├── kael-macros/    # Proc macros (derive Render, Action, etc.)
 ├── kael-media/     # Media playback integration
 ├── collections/    # Optimized collection types
