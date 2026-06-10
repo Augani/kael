@@ -429,14 +429,11 @@ impl Stepper {
                     StepStatus::Pending
                 };
 
-                let is_accessible = if !linear {
-                    true
-                } else if index == 0 || index <= current_step {
-                    true
-                } else {
-                    index == current_step + 1
-                        || (index > 0 && completed_steps.contains(&(index - 1)))
-                };
+                let is_accessible = !linear
+                    || index == 0
+                    || index <= current_step
+                    || index == current_step + 1
+                    || (index > 0 && completed_steps.contains(&(index - 1)));
 
                 let is_last = index == steps_len - 1;
                 let on_change = self.on_step_change.clone();
@@ -535,14 +532,11 @@ impl Stepper {
                     StepStatus::Pending
                 };
 
-                let is_accessible = if !linear {
-                    true
-                } else if index == 0 || index <= current_step {
-                    true
-                } else {
-                    index == current_step + 1
-                        || (index > 0 && completed_steps.contains(&(index - 1)))
-                };
+                let is_accessible = !linear
+                    || index == 0
+                    || index <= current_step
+                    || index == current_step + 1
+                    || (index > 0 && completed_steps.contains(&(index - 1)));
 
                 let is_last = index == steps_len - 1;
                 let on_change = self.on_step_change.clone();

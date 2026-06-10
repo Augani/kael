@@ -44,6 +44,12 @@ pub struct ViewRouterState {
     duration: Duration,
 }
 
+impl Default for ViewRouterState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ViewRouterState {
     pub fn new() -> Self {
         Self {

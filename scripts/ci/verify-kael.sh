@@ -25,6 +25,12 @@ case "$mode" in
     # cross-compiled.
     run cargo clippy -p kael_engines -p kael_media_engines -p kael_render_graph --lib -- -D warnings
     run cargo test -p kael_engines -p kael_media_engines -p kael_render_graph --lib
+    # Component library: lint, unit-test, and type-check every example + template
+    # so the UI surface stays green on all three platforms.
+    run cargo clippy -p kael_ui --lib -- -D warnings
+    run cargo test -p kael_ui --lib
+    run cargo check -p kael_ui --examples
+    run cargo check -p dashboard-app -p messaging-app -p workspace-app
     run cargo check -p kael --lib --features "platform-foundation"
     run cargo check -p kael --lib --features "document"
     run cargo check -p kael --lib --features "pdf"

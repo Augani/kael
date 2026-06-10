@@ -1151,10 +1151,10 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                                                                 InputEvent::Enter => {
                                                                     this.save_edit(cx)
                                                                 }
-                                                                InputEvent::Blur => {
-                                                                    if !this.use_edit_dialog {
-                                                                        this.save_edit(cx);
-                                                                    }
+                                                                InputEvent::Blur
+                                                                    if !this.use_edit_dialog =>
+                                                                {
+                                                                    this.save_edit(cx);
                                                                 }
                                                                 _ => {}
                                                             }

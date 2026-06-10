@@ -272,13 +272,9 @@ impl RenderOnce for Rating {
             })
             .when(!self.read_only, |this| {
                 let state_for_leave = self.state.clone();
-                this.on_mouse_move(window.listener_for(
-                    &state_for_leave,
-                    move |state, _: &MouseMoveEvent, _, cx| {
-                        if state.hover_value.is_some() {}
-                        let _ = cx;
-                    },
-                ))
+                this.on_mouse_move(
+                    window.listener_for(&state_for_leave, move |_, _: &MouseMoveEvent, _, _| {}),
+                )
                 .on_mouse_up_out(
                     MouseButton::Left,
                     window.listener_for(&state_for_leave, move |state, _, _, cx| {

@@ -13,6 +13,12 @@ pub struct ExpandableCardState {
     animation_version: usize,
 }
 
+impl Default for ExpandableCardState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ExpandableCardState {
     pub fn new() -> Self {
         Self {

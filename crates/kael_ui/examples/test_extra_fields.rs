@@ -1,9 +1,9 @@
 // Test if extra fields break scrolling
 
 use kael::{
-    div, prelude::*, px, rgb, size, AnyElement, App, Application, Bounds, Context,
-    Interactivity, ParentElement, ScrollHandle, Stateful, StatefulInteractiveElement,
-    StyleRefinement, Styled, Window, WindowBounds, WindowOptions,
+    div, prelude::*, px, rgb, size, AnyElement, App, Application, Bounds, Context, Interactivity,
+    ParentElement, ScrollHandle, Stateful, StatefulInteractiveElement, StyleRefinement, Styled,
+    Window, WindowBounds, WindowOptions,
 };
 
 // Test 1: Single field (SHOULD WORK)

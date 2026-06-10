@@ -1,10 +1,6 @@
 use kael::*;
 use kael_ui::{
-    components::{
-        input::Input,
-        input_state::InputState,
-        scrollable::scrollable_vertical,
-    },
+    components::{input::Input, input_state::InputState, scrollable::scrollable_vertical},
     layout::VStack,
     theme::{install_theme, Theme},
 };

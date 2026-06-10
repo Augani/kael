@@ -42,6 +42,12 @@ pub struct DonutChart {
     style: StyleRefinement,
 }
 
+impl Default for DonutChart {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DonutChart {
     pub fn new() -> Self {
         Self {

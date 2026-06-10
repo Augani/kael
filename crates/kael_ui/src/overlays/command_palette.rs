@@ -150,7 +150,7 @@ impl CommandPaletteState {
                 .map(|cmd| (cmd.clone(), cmd.match_score(&query)))
                 .collect();
 
-            matches.sort_by(|a, b| b.1.cmp(&a.1));
+            matches.sort_by_key(|m| std::cmp::Reverse(m.1));
             self.filtered_commands = matches.into_iter().map(|(cmd, _)| cmd).collect();
         }
 
@@ -209,15 +209,12 @@ impl CommandPalette {
 
         cx.subscribe(&search_input, |this, _input, event, cx| {
             use crate::components::input_state::InputEvent;
-            match event {
-                InputEvent::Change => {
-                    let query = this.search_input.read(cx).content().to_string();
-                    this.state.update(cx, |state, _cx| {
-                        state.update_search(query);
-                    });
-                    cx.notify();
-                }
-                _ => {}
+            if let InputEvent::Change = event {
+                let query = this.search_input.read(cx).content().to_string();
+                this.state.update(cx, |state, _cx| {
+                    state.update_search(query);
+                });
+                cx.notify();
             }
         })
         .detach();

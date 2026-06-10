@@ -21,6 +21,12 @@ pub struct DrawerState {
     animation_version: usize,
 }
 
+impl Default for DrawerState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DrawerState {
     pub fn new() -> Self {
         Self {

@@ -161,6 +161,12 @@ pub struct AreaChart {
     style: StyleRefinement,
 }
 
+impl Default for AreaChart {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AreaChart {
     pub fn new() -> Self {
         Self {

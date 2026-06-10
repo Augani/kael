@@ -1,8 +1,8 @@
 // Absolute minimal test to debug ScrollContainer
 
 use kael::{
-    div, prelude::*, px, rgb, size, App, Application, Bounds, Context,
-    Window, WindowBounds, WindowOptions,
+    div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Window, WindowBounds,
+    WindowOptions,
 };
 
 struct MinimalTest {}

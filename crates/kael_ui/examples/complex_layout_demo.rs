@@ -13,8 +13,8 @@
 //! - Programmatic scroll control
 
 use kael::*;
-use kael_ui::layout::*;
 use kael_ui::layout::Panel;
+use kael_ui::layout::*;
 
 fn main() {
     Application::new().run(|cx: &mut App| {

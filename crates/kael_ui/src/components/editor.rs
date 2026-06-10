@@ -929,9 +929,7 @@ impl EditorState {
                 }
             }
 
-            if did_enter && tree_cursor.goto_first_child() {
-                did_enter = true;
-            } else if tree_cursor.goto_next_sibling() {
+            if (did_enter && tree_cursor.goto_first_child()) || tree_cursor.goto_next_sibling() {
                 did_enter = true;
             } else if tree_cursor.goto_parent() {
                 did_enter = false;
@@ -2079,7 +2077,7 @@ impl EditorState {
             return;
         }
         let char_idx = self.rope.byte_to_char(offset);
-        let next_char_byte = if char_idx + 1 <= self.rope.len_chars() {
+        let next_char_byte = if char_idx < self.rope.len_chars() {
             self.rope.char_to_byte(char_idx + 1)
         } else {
             self.rope.len_bytes()
@@ -2643,17 +2641,15 @@ impl EditorState {
                         let mut scrolled = false;
 
                         if mouse_y < viewport_top + edge_zone {
-                            let speed = ((viewport_top + edge_zone - mouse_y) / edge_zone)
-                                .max(0.5)
-                                .min(5.0);
+                            let speed =
+                                ((viewport_top + edge_zone - mouse_y) / edge_zone).clamp(0.5, 5.0);
                             let offset = state.scroll_handle.offset();
                             let new_y = (offset.y + line_height * speed).min(px(0.0));
                             state.scroll_handle.set_offset(point(offset.x, new_y));
                             scrolled = true;
                         } else if mouse_y > viewport_bottom - edge_zone {
                             let speed = ((mouse_y - (viewport_bottom - edge_zone)) / edge_zone)
-                                .max(0.5)
-                                .min(5.0);
+                                .clamp(0.5, 5.0);
                             let offset = state.scroll_handle.offset();
                             let max_offset = state.scroll_handle.max_offset().height;
                             let new_y = (offset.y - line_height * speed).max(-max_offset);
@@ -2704,11 +2700,12 @@ impl EditorState {
         let dl = self.display_lines();
         let click_line = dl.get(display_row).copied().unwrap_or(0);
 
-        if click_x >= gutter_width - px(16.0) && click_x <= gutter_width {
-            if self.fold_ranges.iter().any(|f| f.start_line == click_line) {
-                self.toggle_fold_at_line(click_line, cx);
-                return;
-            }
+        if click_x >= gutter_width - px(16.0)
+            && click_x <= gutter_width
+            && self.fold_ranges.iter().any(|f| f.start_line == click_line)
+        {
+            self.toggle_fold_at_line(click_line, cx);
+            return;
         }
 
         let pos = self.position_for_mouse(event.position, bounds, gutter_width, line_height);
@@ -3248,12 +3245,10 @@ impl Element for EditorElement {
             shaped_space.x_for_index(1)
         };
 
-        let cursor_indent = if tab_size > 0 {
+        let cursor_indent = {
             let cursor_line_text = self.state.read(cx).line_text(cursor.line);
             let cursor_leading = cursor_line_text.len() - cursor_line_text.trim_start().len();
-            cursor_leading / tab_size
-        } else {
-            0
+            cursor_leading.checked_div(tab_size).unwrap_or(0)
         };
 
         for display_row in first_visible_display_row..last_visible_display_row {
@@ -3262,11 +3257,7 @@ impl Element for EditorElement {
 
             let line_text = self.state.read(cx).line_text(line_idx);
             let leading_spaces = line_text.len() - line_text.trim_start().len();
-            let indent_levels = if tab_size > 0 {
-                leading_spaces / tab_size
-            } else {
-                0
-            };
+            let indent_levels = leading_spaces.checked_div(tab_size).unwrap_or(0);
 
             for level in 0..indent_levels {
                 let guide_x = bounds.left() + gutter_width + char_width * (level * tab_size) as f32

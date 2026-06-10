@@ -91,7 +91,7 @@ impl Responsive {
         let width = f32::from(viewport.width);
         let current = Breakpoint::from_width(width);
 
-        self.builders.sort_by(|a, b| b.0.cmp(&a.0));
+        self.builders.sort_by_key(|b| std::cmp::Reverse(b.0));
 
         for (breakpoint, builder) in self.builders {
             if current >= breakpoint {

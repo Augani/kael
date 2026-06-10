@@ -115,15 +115,13 @@ fn thread() -> Vec<Message> {
         Message {
             from_me: true,
             author: "You",
-            body:
-                "Just saw it — Theme::custom with struct update syntax is exactly what we needed.",
+            body: "Just saw it — Theme::custom with struct update syntax is exactly what we needed.",
             time: "9:44 AM",
         },
         Message {
             from_me: false,
             author: "Maya Chen",
-            body:
-                "And install_theme refreshing every window makes the theme picker feel instant. 🚀",
+            body: "And install_theme refreshing every window makes the theme picker feel instant. 🚀",
             time: "9:45 AM",
         },
         Message {

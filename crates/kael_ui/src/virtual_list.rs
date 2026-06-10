@@ -412,7 +412,7 @@ struct ChunkedExtents<P: ItemExtentProvider> {
 
 impl<P: ItemExtentProvider> ChunkedExtents<P> {
     fn new(provider: P, item_count: usize) -> Self {
-        let chunk_count = (item_count + CHUNK_SIZE - 1) / CHUNK_SIZE;
+        let chunk_count = item_count.div_ceil(CHUNK_SIZE);
         Self {
             provider,
             item_count,

@@ -38,16 +38,16 @@ impl HotkeyValue {
     pub fn format_display(&self) -> String {
         let mut result = String::new();
         if self.modifiers.control {
-            result.push_str("⌃");
+            result.push('⌃');
         }
         if self.modifiers.alt {
-            result.push_str("⌥");
+            result.push('⌥');
         }
         if self.modifiers.shift {
-            result.push_str("⇧");
+            result.push('⇧');
         }
         if self.modifiers.platform {
-            result.push_str("⌘");
+            result.push('⌘');
         }
         result.push_str(&self.format_key());
         result

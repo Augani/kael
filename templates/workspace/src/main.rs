@@ -151,19 +151,21 @@ impl WorkspaceApp {
 
     fn file_tree(&self, cx: &mut Context<Self>) -> impl IntoElement {
         FileTree::new()
-            .nodes(vec![FileNode::directory("/project")
-                .with_name("kael-app")
-                .with_children(vec![
-                    FileNode::directory("/project/src").with_children(vec![
-                        FileNode::file("/project/src/main.rs"),
-                        FileNode::file("/project/src/theme.rs"),
-                        FileNode::file("/project/src/views.rs"),
+            .nodes(vec![
+                FileNode::directory("/project")
+                    .with_name("kael-app")
+                    .with_children(vec![
+                        FileNode::directory("/project/src").with_children(vec![
+                            FileNode::file("/project/src/main.rs"),
+                            FileNode::file("/project/src/theme.rs"),
+                            FileNode::file("/project/src/views.rs"),
+                        ]),
+                        FileNode::directory("/project/assets")
+                            .with_children(vec![FileNode::file("/project/assets/logo.svg")]),
+                        FileNode::file("/project/Cargo.toml"),
+                        FileNode::file("/project/README.md"),
                     ]),
-                    FileNode::directory("/project/assets")
-                        .with_children(vec![FileNode::file("/project/assets/logo.svg")]),
-                    FileNode::file("/project/Cargo.toml"),
-                    FileNode::file("/project/README.md"),
-                ])])
+            ])
             .expanded_paths(vec![
                 PathBuf::from("/project"),
                 PathBuf::from("/project/src"),

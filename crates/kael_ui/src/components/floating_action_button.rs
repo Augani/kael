@@ -18,6 +18,12 @@ pub struct FABState {
     animation_version: usize,
 }
 
+impl Default for FABState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FABState {
     pub fn new() -> Self {
         Self {

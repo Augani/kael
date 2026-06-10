@@ -165,7 +165,7 @@ struct FlatFileNode {
     level: usize,
 }
 
-fn sort_file_nodes(nodes: &mut Vec<FileNode>) {
+fn sort_file_nodes(nodes: &mut [FileNode]) {
     nodes.sort_by(|a, b| match (a.is_directory(), b.is_directory()) {
         (true, false) => std::cmp::Ordering::Less,
         (false, true) => std::cmp::Ordering::Greater,

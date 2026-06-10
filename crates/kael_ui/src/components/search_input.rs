@@ -154,8 +154,8 @@ impl SearchInput {
 
         let state_clone = state.clone();
         let input_entity = state.read(cx).input.clone();
-        cx.subscribe(&input_entity, move |_this, _input, event, cx| match event {
-            InputEvent::Change => {
+        cx.subscribe(&input_entity, move |_this, _input, event, cx| {
+            if let InputEvent::Change = event {
                 let query = state_clone.read(cx).input.read(cx).content().to_string();
                 let handler = state_clone.read(cx).on_search.clone();
                 if let Some(handler) = handler {
@@ -164,7 +164,6 @@ impl SearchInput {
                     });
                 }
             }
-            _ => {}
         })
         .detach();
 

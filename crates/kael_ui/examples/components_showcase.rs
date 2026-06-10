@@ -167,7 +167,10 @@ impl Render for ShowcaseApp {
                             .items_center()
                             .gap(px(12.0))
                             .child(h1("kael_ui"))
-                            .child(Badge::new(concat!("v", env!("CARGO_PKG_VERSION"))).variant(BadgeVariant::Default)),
+                            .child(
+                                Badge::new(concat!("v", env!("CARGO_PKG_VERSION")))
+                                    .variant(BadgeVariant::Default),
+                            ),
                     )
                     .child(muted(
                         "85+ components for beautiful GPUI desktop applications",

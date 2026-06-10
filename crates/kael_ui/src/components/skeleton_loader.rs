@@ -11,6 +11,12 @@ pub struct SkeletonLoaderState {
     transition_version: usize,
 }
 
+impl Default for SkeletonLoaderState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SkeletonLoaderState {
     pub fn new() -> Self {
         Self {

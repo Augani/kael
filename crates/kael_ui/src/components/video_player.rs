@@ -3,32 +3,22 @@ use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum VideoPlaybackState {
+    #[default]
     Stopped,
     Playing,
     Paused,
     Buffering,
 }
 
-impl Default for VideoPlaybackState {
-    fn default() -> Self {
-        Self::Stopped
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum VideoPlayerSize {
     Sm,
+    #[default]
     Md,
     Lg,
     Full,
-}
-
-impl Default for VideoPlayerSize {
-    fn default() -> Self {
-        Self::Md
-    }
 }
 
 impl VideoPlayerSize {
@@ -60,21 +50,16 @@ impl VideoPlayerSize {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum VideoPlaybackSpeed {
     Quarter,
     Half,
     ThreeQuarter,
+    #[default]
     Normal,
     OneAndQuarter,
     OneAndHalf,
     Double,
-}
-
-impl Default for VideoPlaybackSpeed {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 impl VideoPlaybackSpeed {
@@ -828,7 +813,7 @@ impl RenderOnce for VideoPlayer {
                         .left_0()
                         .right_0()
                         .h(controls_height + px(40.0))
-                        .bg(Hsla::from(kael::black()).opacity(0.7))
+                        .bg(kael::black().opacity(0.7))
                         .flex()
                         .flex_col()
                         .justify_end()

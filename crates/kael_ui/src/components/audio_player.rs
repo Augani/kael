@@ -14,18 +14,13 @@ pub enum AudioPlayerSize {
     Full,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum PlaybackSpeed {
     Half,
+    #[default]
     Normal,
     OneAndHalf,
     Double,
-}
-
-impl Default for PlaybackSpeed {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 impl PlaybackSpeed {

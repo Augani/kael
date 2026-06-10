@@ -350,7 +350,7 @@ impl RenderOnce for CircularProgress {
                                         .border(stroke_w)
                                         .border_color(stroke_color)
                                         .rounded(px(9999.0))
-                                        .opacity((value * 0.7 + 0.3) as f32),
+                                        .opacity(value * 0.7 + 0.3),
                                 )
                                 .into_any_element(),
                             (None, SpinnerType::Dot) => {

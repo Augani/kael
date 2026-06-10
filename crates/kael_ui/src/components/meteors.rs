@@ -146,7 +146,7 @@ impl RenderOnce for Meteors {
             let meteor_x = start_x_pct + pos * cos_a;
             let meteor_y = -0.1 + pos * (-sin_a);
 
-            if meteor_y > 1.3 || meteor_x < -0.5 || meteor_x > 1.5 {
+            if meteor_y > 1.3 || !(-0.5..=1.5).contains(&meteor_x) {
                 continue;
             }
 

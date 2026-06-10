@@ -271,9 +271,7 @@ impl RenderOnce for Sparkline {
             .fill_color
             .unwrap_or_else(|| effective_line_color.opacity(0.2));
 
-        let effective_min_max_color = self
-            .min_max_color
-            .unwrap_or_else(|| theme.tokens.foreground);
+        let effective_min_max_color = self.min_max_color.unwrap_or(theme.tokens.foreground);
 
         let trend = if self.show_trend {
             Some(compute_trend(&self.data))
