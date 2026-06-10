@@ -4736,6 +4736,7 @@ name = "messaging-app"
 version = "0.1.0"
 dependencies = [
  "kael",
+ "kael_ui",
 ]
 
 [[package]]
@@ -10037,6 +10038,7 @@ name = "workspace-app"
 version = "0.1.0"
 dependencies = [
  "kael",
+ "kael_ui",
 ]
 
 [[package]]
