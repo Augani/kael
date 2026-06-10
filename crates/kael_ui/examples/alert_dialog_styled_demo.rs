@@ -1,5 +1,5 @@
-use kael_ui::{overlays::alert_dialog::AlertDialog, prelude::*};
 use kael::*;
+use kael_ui::{overlays::alert_dialog::AlertDialog, prelude::*};
 use std::path::PathBuf;
 
 struct Assets {

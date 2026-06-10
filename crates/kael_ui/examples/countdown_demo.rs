@@ -1,3 +1,4 @@
+use kael::*;
 use kael_ui::{
     components::countdown::{
         Countdown, CountdownFormat, CountdownSeparator, CountdownSize, CountdownState,
@@ -5,7 +6,6 @@ use kael_ui::{
     components::scrollable::scrollable_vertical,
     prelude::*,
 };
-use kael::*;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 

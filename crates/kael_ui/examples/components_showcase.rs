@@ -1,3 +1,4 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     charts::donut_chart::DonutChart,
     charts::gauge::Gauge,
@@ -29,7 +30,6 @@ use kael_ui::{
     display::badge::{Badge, BadgeVariant},
     theme::{install_theme, use_theme, Theme},
 };
-use kael::{prelude::FluentBuilder as _, *};
 use std::time::Duration;
 
 struct ShowcaseApp {
@@ -328,9 +328,7 @@ impl ShowcaseApp {
                             div()
                                 .flex()
                                 .gap(px(24.0))
-                                .child(body(
-                                    "Breaking: kael_ui v0.3 released with 85+ components",
-                                ))
+                                .child(body("Breaking: kael_ui v0.3 released with 85+ components"))
                                 .child(
                                     div().text_color(hsla(0.55, 0.8, 0.6, 1.0)).child(
                                         "New: Transforms, Gradients, Blend Modes in GPUI fork",
@@ -956,12 +954,10 @@ impl ShowcaseApp {
                                 col()
                                     .items_center()
                                     .child(
-                                        QRCodeComponent::new(
-                                            "https://github.com/augani/kael_ui",
-                                        )
-                                        .size(px(150.0))
-                                        .fg_color(theme.tokens.foreground)
-                                        .bg_color(theme.tokens.card),
+                                        QRCodeComponent::new("https://github.com/augani/kael_ui")
+                                            .size(px(150.0))
+                                            .fg_color(theme.tokens.foreground)
+                                            .bg_color(theme.tokens.card),
                                     )
                                     .child(demo_label("GitHub Repo", theme)),
                             )

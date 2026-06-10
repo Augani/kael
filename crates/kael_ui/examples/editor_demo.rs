@@ -1,3 +1,4 @@
+use kael::*;
 use kael_ui::{
     components::{
         button::{Button, ButtonVariant},
@@ -6,7 +7,6 @@ use kael_ui::{
     },
     theme::{install_theme, use_theme, Theme},
 };
-use kael::*;
 
 struct EditorDemo {
     editor_state: Entity<EditorState>,

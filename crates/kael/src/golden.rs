@@ -7,7 +7,7 @@
 //! over 8-bit, 4-channel byte buffers (the format the off-screen readback produces),
 //! so it runs identically on every platform.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 /// How much a rendered frame may differ from its golden reference and still pass.
 ///

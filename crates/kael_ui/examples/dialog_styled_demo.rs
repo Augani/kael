@@ -1,8 +1,8 @@
+use kael::*;
 use kael_ui::{
     overlays::dialog::{Dialog, DialogSize},
     prelude::*,
 };
-use kael::*;
 use std::path::PathBuf;
 
 struct Assets {

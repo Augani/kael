@@ -1,8 +1,8 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     components::{date_picker::DateSelectionMode, scrollable::scrollable_vertical},
     prelude::*,
 };
-use kael::{prelude::FluentBuilder as _, *};
 use std::path::PathBuf;
 
 struct Assets {

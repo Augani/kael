@@ -267,7 +267,12 @@ impl OTPState {
             return;
         }
 
-        if let Some(text) = cx.read_from_clipboard().ok().flatten().and_then(|item| item.text()) {
+        if let Some(text) = cx
+            .read_from_clipboard()
+            .ok()
+            .flatten()
+            .and_then(|item| item.text())
+        {
             let digits: String = text.chars().filter(|c| c.is_ascii_digit()).collect();
             self.set_value(&digits, cx);
         }

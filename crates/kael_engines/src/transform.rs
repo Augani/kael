@@ -5,7 +5,7 @@
 //! `place` op, so it composes with the effect stack and the compositor like any other
 //! clip-applied step.
 
-use kael_render_graph::reference::{place, rotate, Image, PassOp};
+use kael_render_graph::reference::{Image, PassOp, place, rotate};
 use serde::{Deserialize, Serialize};
 
 use crate::automation::Automation;

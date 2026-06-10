@@ -1,3 +1,4 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     components::{
         drag_drop::{DragData, Draggable, DropZone, DropZoneStyle},
@@ -5,7 +6,6 @@ use kael_ui::{
     },
     prelude::*,
 };
-use kael::{prelude::FluentBuilder as _, *};
 use std::path::PathBuf;
 
 struct Assets {

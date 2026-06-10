@@ -1,8 +1,8 @@
+use kael::*;
 use kael_ui::{
     components::input::InputVariant, components::scrollable::scrollable_vertical,
     components::textarea::Textarea, prelude::*,
 };
-use kael::*;
 use std::path::PathBuf;
 
 struct Assets {

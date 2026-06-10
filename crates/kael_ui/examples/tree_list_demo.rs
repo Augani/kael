@@ -1,3 +1,5 @@
+use kael::prelude::FluentBuilder;
+use kael::*;
 use kael_ui::{
     components::{
         input::{init as init_input, Input, InputSize, InputState, InputVariant},
@@ -7,8 +9,6 @@ use kael_ui::{
     navigation::tree::{List, ListItem, TreeList, TreeNode},
     prelude::*,
 };
-use kael::prelude::FluentBuilder;
-use kael::*;
 use std::path::PathBuf;
 
 struct Assets {

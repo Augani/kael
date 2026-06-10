@@ -1,9 +1,9 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     layout::VStack,
     navigation::file_tree::{FileNode, FileTree},
     theme::{install_theme, use_theme, Theme},
 };
-use kael::{prelude::FluentBuilder as _, *};
 use std::path::PathBuf;
 
 struct FileTreeDemo {

@@ -1,9 +1,9 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     components::number_input::{NumberInput, NumberInputSize, NumberInputState},
     layout::VStack,
     theme::{install_theme, use_theme, Theme},
 };
-use kael::{prelude::FluentBuilder as _, *};
 
 struct NumberInputDemo {
     basic: Entity<NumberInputState>,

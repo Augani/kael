@@ -1,3 +1,4 @@
+use kael::*;
 use kael_ui::{
     animations::easings,
     components::{
@@ -15,7 +16,6 @@ use kael_ui::{
     prelude::*,
     responsive::{current_breakpoint, responsive_value, Breakpoint},
 };
-use kael::*;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;

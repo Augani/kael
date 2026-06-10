@@ -768,7 +768,12 @@ impl InputState {
     }
 
     pub fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().ok().flatten().and_then(|item| item.text()) {
+        if let Some(text) = cx
+            .read_from_clipboard()
+            .ok()
+            .flatten()
+            .and_then(|item| item.text())
+        {
             let filtered_text = self.filter_input(&text.replace("\n", " "));
             self.replace_text_in_range(None, &filtered_text, window, cx);
         }

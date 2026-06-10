@@ -17,7 +17,7 @@
 
 use std::collections::VecDeque;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 /// Handle to a resource declared in a [`RenderGraph`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -634,9 +634,11 @@ mod tests {
         assert_eq!(frame.first_pass_order, 0);
         assert_eq!(frame.last_pass_order, 1);
         // `frame` and `composited` overlap (effect touches both), so they cannot alias.
-        assert!(!compiled
-            .non_overlapping(chain.frame)
-            .contains(&chain.composited));
+        assert!(
+            !compiled
+                .non_overlapping(chain.frame)
+                .contains(&chain.composited)
+        );
     }
 
     #[test]
@@ -645,16 +647,20 @@ mod tests {
         let compiled = chain.graph.compile().unwrap();
         let barriers = compiled.barriers();
 
-        assert!(barriers
-            .iter()
-            .any(|barrier| barrier.resource == chain.frame
-                && barrier.after == chain.decode
-                && barrier.before == chain.effect));
-        assert!(barriers
-            .iter()
-            .any(|barrier| barrier.resource == chain.composited
-                && barrier.after == chain.effect
-                && barrier.before == chain.present));
+        assert!(
+            barriers
+                .iter()
+                .any(|barrier| barrier.resource == chain.frame
+                    && barrier.after == chain.decode
+                    && barrier.before == chain.effect)
+        );
+        assert!(
+            barriers
+                .iter()
+                .any(|barrier| barrier.resource == chain.composited
+                    && barrier.after == chain.effect
+                    && barrier.before == chain.present)
+        );
     }
 
     #[test]
@@ -704,7 +710,7 @@ mod tests {
 pub mod reference {
     use std::collections::HashMap;
 
-    use anyhow::{anyhow, Result};
+    use anyhow::{Result, anyhow};
 
     use super::{CompiledGraph, PassId, RenderGraph, ResourceId};
 
@@ -2771,10 +2777,12 @@ pub mod reference {
             let source = Image::filled(2, 2, [0.4, 0.6, 0.8, 1.0]);
             let mut out = Image::new(8, 8);
             resample()(&[&source], &mut out);
-            assert!(out.pixels.iter().all(|pixel| pixel
-                .iter()
-                .zip([0.4, 0.6, 0.8, 1.0])
-                .all(|(a, b)| (a - b).abs() < 1e-5)));
+            assert!(out.pixels.iter().all(|pixel| {
+                pixel
+                    .iter()
+                    .zip([0.4, 0.6, 0.8, 1.0])
+                    .all(|(a, b)| (a - b).abs() < 1e-5)
+            }));
         }
 
         #[test]

@@ -1,8 +1,8 @@
+use kael::*;
 use kael_ui::{
     overlays::command_palette::{Command, CommandPalette},
     prelude::*,
 };
-use kael::*;
 use std::path::PathBuf;
 
 struct Assets {

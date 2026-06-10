@@ -1,9 +1,9 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     components::tag_input::{TagInput, TagInputState},
     layout::VStack,
     theme::{install_theme, use_theme, Theme},
 };
-use kael::{prelude::FluentBuilder as _, *};
 
 struct TagInputDemo {
     basic_tags: Entity<TagInputState>,

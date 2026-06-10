@@ -1,3 +1,4 @@
+use kael::*;
 use kael_ui::{
     components::{
         scrollable::scrollable_vertical,
@@ -6,7 +7,6 @@ use kael_ui::{
     },
     theme::{install_theme, use_theme, Theme},
 };
-use kael::*;
 
 struct TimelineDemo;
 

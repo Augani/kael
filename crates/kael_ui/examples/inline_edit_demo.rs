@@ -1,3 +1,4 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     components::inline_edit::{
         init as init_inline_edit, InlineEdit, InlineEditState, InlineEditTrigger,
@@ -5,7 +6,6 @@ use kael_ui::{
     layout::VStack,
     theme::{install_theme, use_theme, Theme},
 };
-use kael::{prelude::FluentBuilder as _, *};
 
 struct InlineEditDemo {
     basic_edit: Entity<InlineEditState>,

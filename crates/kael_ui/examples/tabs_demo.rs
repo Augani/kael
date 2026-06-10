@@ -1,3 +1,4 @@
+use kael::*;
 use kael_ui::{
     components::{icon_source::IconSource, scrollable::scrollable_vertical},
     layout::{HStack, VStack},
@@ -5,7 +6,6 @@ use kael_ui::{
     navigation::tabs::{init_tabs, TabItem, TabPanel, TabVariant, Tabs},
     prelude::*,
 };
-use kael::*;
 use std::path::PathBuf;
 
 struct Assets {

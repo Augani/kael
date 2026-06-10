@@ -1,7 +1,7 @@
 //! Test example for the scroll component
 
-use kael_ui::components::scrollable::scrollable_vertical;
 use kael::*;
+use kael_ui::components::scrollable::scrollable_vertical;
 
 struct ScrollTestApp;
 

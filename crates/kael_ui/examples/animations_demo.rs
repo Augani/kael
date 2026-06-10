@@ -1,3 +1,4 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     animations::{self, durations, presets, pulse_opacity, pulse_scale, shake_offset},
     components::{
@@ -7,7 +8,6 @@ use kael_ui::{
     },
     theme::{install_theme, use_theme, Theme},
 };
-use kael::{prelude::FluentBuilder as _, *};
 use std::time::Duration;
 
 struct AnimationsDemo {

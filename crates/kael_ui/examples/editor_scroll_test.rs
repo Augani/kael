@@ -1,7 +1,7 @@
 //! Test example for editor with scrollbars
 
-use kael_ui::components::editor::{Editor, EditorState};
 use kael::*;
+use kael_ui::components::editor::{Editor, EditorState};
 
 struct EditorScrollTestApp {
     editor: Entity<EditorState>,

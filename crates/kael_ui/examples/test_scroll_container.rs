@@ -1,10 +1,10 @@
 // Direct test of ScrollContainer vs raw GPUI
 
-use kael_ui::prelude::*;
 use kael::{
     div, prelude::*, px, rgb, size, App, Application, Bounds, Context, FontWeight, Window,
     WindowBounds, WindowOptions,
 };
+use kael_ui::prelude::*;
 
 struct TestScrollContainer {}
 

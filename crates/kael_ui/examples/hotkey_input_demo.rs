@@ -1,9 +1,9 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     components::hotkey_input::{HotkeyInput, HotkeyInputState, HotkeyValue},
     layout::VStack,
     theme::{install_theme, use_theme, Theme},
 };
-use kael::{prelude::FluentBuilder as _, *};
 
 struct HotkeyInputDemo {
     basic_hotkey: Entity<HotkeyInputState>,

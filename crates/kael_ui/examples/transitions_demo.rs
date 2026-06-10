@@ -1,9 +1,9 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     components::button::{Button, ButtonVariant},
     theme::use_theme,
     transitions::Transition,
 };
-use kael::{prelude::FluentBuilder as _, *};
 
 actions!(transitions_demo, [Quit]);
 

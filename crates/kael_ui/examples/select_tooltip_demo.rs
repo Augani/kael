@@ -1,3 +1,4 @@
+use kael::*;
 use kael_ui::{
     components::{
         button::{Button, ButtonSize, ButtonVariant},
@@ -12,7 +13,6 @@ use kael_ui::{
     layout::{Grid, HStack, Justify, VStack},
     theme::{install_theme, use_theme, Theme},
 };
-use kael::*;
 use std::path::PathBuf;
 
 struct Assets {

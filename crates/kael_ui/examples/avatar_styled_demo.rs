@@ -1,3 +1,4 @@
+use kael::*;
 use kael_ui::{
     components::{
         avatar::{Avatar, AvatarSize},
@@ -5,7 +6,6 @@ use kael_ui::{
     },
     prelude::*,
 };
-use kael::*;
 use std::path::PathBuf;
 
 struct Assets {

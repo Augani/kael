@@ -12,8 +12,8 @@
 //! - Card-style panels
 //! - Programmatic scroll control
 
-use kael_ui::layout::*;
 use kael::*;
+use kael_ui::layout::*;
 
 fn main() {
     Application::new().run(|cx: &mut App| {

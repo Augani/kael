@@ -1,9 +1,9 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     components::scrollable::scrollable_vertical,
     overlays::context_menu::{ContextMenu, ContextMenuItem},
     prelude::*,
 };
-use kael::{prelude::FluentBuilder as _, *};
 use std::path::PathBuf;
 use std::rc::Rc;
 

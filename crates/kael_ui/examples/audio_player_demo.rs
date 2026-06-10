@@ -1,5 +1,5 @@
-use kael_ui::{components::scrollable::scrollable_vertical, prelude::*};
 use kael::*;
+use kael_ui::{components::scrollable::scrollable_vertical, prelude::*};
 use std::path::PathBuf;
 use std::time::Duration;
 

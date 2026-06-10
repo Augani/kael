@@ -1,5 +1,5 @@
-use kael_ui::{components::icon::Icon, prelude::*};
 use kael::*;
+use kael_ui::{components::icon::Icon, prelude::*};
 use std::path::PathBuf;
 
 struct Assets {

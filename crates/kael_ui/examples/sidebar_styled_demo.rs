@@ -1,9 +1,9 @@
+use kael::*;
 use kael_ui::{
     components::{icon_source::IconSource, scrollable::scrollable_vertical},
     navigation::sidebar::{Sidebar, SidebarItem, SidebarPosition, SidebarVariant},
     prelude::*,
 };
-use kael::*;
 use std::path::PathBuf;
 
 struct Assets {

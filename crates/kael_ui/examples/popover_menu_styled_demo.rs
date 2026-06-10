@@ -1,8 +1,8 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     overlays::popover_menu::{PopoverMenu, PopoverMenuItem},
     prelude::*,
 };
-use kael::{prelude::FluentBuilder as _, *};
 use std::path::PathBuf;
 
 struct Assets {

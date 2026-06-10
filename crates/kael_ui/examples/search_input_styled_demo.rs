@@ -1,9 +1,9 @@
+use kael::*;
 use kael_ui::{
     components::search_input::{SearchFilter, SearchInput},
     layout::VStack,
     theme::use_theme,
 };
-use kael::*;
 use std::path::PathBuf;
 
 struct Assets {

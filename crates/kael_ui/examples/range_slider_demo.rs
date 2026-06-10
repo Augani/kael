@@ -1,10 +1,10 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     components::range_slider::{RangeSlider, RangeSliderState},
     components::slider::SliderSize,
     layout::VStack,
     theme::{install_theme, use_theme, Theme},
 };
-use kael::{prelude::FluentBuilder as _, *};
 
 struct RangeSliderDemo {
     price_slider: Entity<RangeSliderState>,

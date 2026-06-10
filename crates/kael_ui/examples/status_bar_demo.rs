@@ -1,3 +1,4 @@
+use kael::*;
 use kael_ui::{
     components::badge::BadgeVariant,
     components::icon_source::IconSource,
@@ -5,7 +6,6 @@ use kael_ui::{
     navigation::status_bar::{StatusBar, StatusItem},
     theme::use_theme,
 };
-use kael::*;
 use std::path::PathBuf;
 
 struct Assets {

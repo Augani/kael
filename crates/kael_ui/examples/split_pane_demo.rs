@@ -1,9 +1,9 @@
+use kael::*;
 use kael_ui::{
     components::scrollable::scrollable_vertical,
     components::split_pane::{CollapsiblePane, SplitDirection, SplitPane, SplitPaneState},
     prelude::*,
 };
-use kael::*;
 use std::path::PathBuf;
 
 struct Assets {

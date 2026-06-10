@@ -110,7 +110,9 @@ impl RenderOnce for Marquee {
                 )
                 .with_animation(
                     "marquee-scroll",
-                    Animation::new(duration).repeat_forever().with_easing(kael::linear),
+                    Animation::new(duration)
+                        .repeat_forever()
+                        .with_easing(kael::linear),
                     move |el, delta| {
                         let offset = total_travel * delta;
                         match direction {

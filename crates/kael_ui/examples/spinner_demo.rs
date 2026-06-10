@@ -1,9 +1,9 @@
+use kael::*;
 use kael_ui::{
     components::spinner::{Spinner, SpinnerSize, SpinnerVariant},
     layout::VStack,
     theme::{install_theme, use_theme, Theme},
 };
-use kael::*;
 
 struct SpinnerDemo;
 

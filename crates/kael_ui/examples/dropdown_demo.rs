@@ -1,10 +1,10 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     components::dropdown::{Dropdown, DropdownAlign, DropdownItem, DropdownState},
     layout::VStack,
     prelude::Button,
     theme::{install_theme, use_theme, Theme},
 };
-use kael::{prelude::FluentBuilder as _, *};
 
 struct DropdownDemo {
     basic_dropdown: Entity<DropdownState>,

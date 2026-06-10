@@ -464,9 +464,11 @@ mod tests {
         let samples = vec![0.5f32; 100];
         let peaks = waveform_peaks(&samples, 1, 10);
         assert_eq!(peaks.len(), 10);
-        assert!(peaks
-            .iter()
-            .all(|peak| (peak.min - 0.5).abs() < 1e-6 && (peak.max - 0.5).abs() < 1e-6));
+        assert!(
+            peaks
+                .iter()
+                .all(|peak| (peak.min - 0.5).abs() < 1e-6 && (peak.max - 0.5).abs() < 1e-6)
+        );
         assert!(waveform_peaks(&[], 1, 4).is_empty());
         assert!(waveform_peaks(&samples, 1, 0).is_empty());
     }

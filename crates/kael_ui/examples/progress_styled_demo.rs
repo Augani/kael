@@ -1,7 +1,7 @@
+use kael::*;
 use kael_ui::{
     components::progress::SpinnerType, components::scrollable::scrollable_vertical, prelude::*,
 };
-use kael::*;
 use std::path::PathBuf;
 
 struct Assets {

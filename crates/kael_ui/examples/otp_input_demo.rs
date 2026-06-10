@@ -1,5 +1,5 @@
-use kael_ui::prelude::*;
 use kael::*;
+use kael_ui::prelude::*;
 
 struct OTPInputDemoApp {
     otp_state1: Entity<OTPState>,

@@ -1,5 +1,5 @@
-use kael_ui::{layout::VStack, navigation::app_menu::*, theme::use_theme};
 use kael::*;
+use kael_ui::{layout::VStack, navigation::app_menu::*, theme::use_theme};
 
 // Define all the actions our app will use
 actions!(

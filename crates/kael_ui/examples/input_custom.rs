@@ -1,3 +1,4 @@
+use kael::{prelude::FluentBuilder, *};
 use kael_ui::{
     components::{
         input::{Input, InputSize, InputType, InputVariant},
@@ -7,7 +8,6 @@ use kael_ui::{
     layout::VStack,
     theme::{install_theme, Theme},
 };
-use kael::{prelude::FluentBuilder, *};
 
 struct CustomInputApp {
     // Simple usage - just a basic input

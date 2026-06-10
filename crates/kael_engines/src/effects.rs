@@ -7,7 +7,7 @@
 //! model (V5 keyframe params, P2-B effect stacks, P4-C project format).
 
 use kael_render_graph::reference::{
-    exposure, gamma, gaussian_blur, saturation, solarize, temperature_tint, vignette, Image, PassOp,
+    Image, PassOp, exposure, gamma, gaussian_blur, saturation, solarize, temperature_tint, vignette,
 };
 use serde::{Deserialize, Serialize};
 

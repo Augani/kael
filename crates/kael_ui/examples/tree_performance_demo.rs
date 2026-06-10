@@ -1,10 +1,10 @@
+use kael::*;
 use kael_ui::{
     components::icon_source::IconSource,
     layout::VStack,
     navigation::tree::{TreeList, TreeNode},
     prelude::*,
 };
-use kael::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;

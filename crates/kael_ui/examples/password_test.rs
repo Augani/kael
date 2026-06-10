@@ -1,3 +1,4 @@
+use kael::*;
 use kael_ui::{
     components::{
         input::{Input, InputType, InputVariant},
@@ -6,7 +7,6 @@ use kael_ui::{
     layout::VStack,
     theme::{install_theme, Theme},
 };
-use kael::*;
 use std::path::PathBuf;
 
 struct Assets {

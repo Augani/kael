@@ -1,3 +1,4 @@
+use kael::*;
 use kael_ui::{
     components::{
         calendar::{Calendar, CalendarLocale, DateValue},
@@ -5,7 +6,6 @@ use kael_ui::{
     },
     prelude::*,
 };
-use kael::*;
 use std::path::PathBuf;
 
 struct Assets {

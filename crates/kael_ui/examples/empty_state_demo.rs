@@ -1,9 +1,9 @@
+use kael::*;
 use kael_ui::{
     components::empty_state::{EmptyState, EmptyStateSize},
     layout::VStack,
     theme::{install_theme, use_theme, Theme},
 };
-use kael::*;
 
 struct EmptyStateDemo;
 

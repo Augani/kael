@@ -1,9 +1,9 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     components::time_picker::{TimeFormat, TimePicker, TimePickerState, TimeValue},
     layout::VStack,
     theme::{install_theme, use_theme, Theme},
 };
-use kael::{prelude::FluentBuilder as _, *};
 
 struct TimePickerDemo {
     time_12h: Entity<TimePickerState>,

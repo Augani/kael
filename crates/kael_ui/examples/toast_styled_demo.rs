@@ -1,9 +1,9 @@
+use kael::*;
 use kael_ui::{
     components::scrollable::scrollable_vertical,
     overlays::toast::{ToastItem, ToastManager, ToastVariant},
     prelude::*,
 };
-use kael::*;
 use std::path::PathBuf;
 
 struct Assets {

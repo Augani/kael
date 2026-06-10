@@ -1,5 +1,5 @@
-use kael_ui::display::accordion::Accordion;
 use kael::*;
+use kael_ui::display::accordion::Accordion;
 use std::collections::HashSet;
 
 fn main() {

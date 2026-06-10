@@ -1,9 +1,9 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     components::keyboard_shortcuts::{KeyboardShortcuts, ShortcutCategory, ShortcutItem},
     layout::VStack,
     theme::use_theme,
 };
-use kael::{prelude::FluentBuilder as _, *};
 
 actions!(keyboard_shortcuts_demo, [Quit]);
 

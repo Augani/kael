@@ -1,5 +1,5 @@
-use kael_ui::prelude::*;
 use kael::*;
+use kael_ui::prelude::*;
 use std::sync::{Arc, Mutex};
 
 fn main() {

@@ -1,3 +1,4 @@
+use kael::{prelude::FluentBuilder, *};
 use kael_ui::{
     components::{
         button::{Button, ButtonSize, ButtonVariant},
@@ -8,7 +9,6 @@ use kael_ui::{
     layout::VStack,
     theme::{install_theme, Theme},
 };
-use kael::{prelude::FluentBuilder, *};
 use std::path::PathBuf;
 
 struct Assets {

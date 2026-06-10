@@ -1,3 +1,4 @@
+use kael::*;
 use kael_ui::{
     components::carousel::{
         Carousel, CarouselSize, CarouselSlide, CarouselState, CarouselTransition,
@@ -5,7 +6,6 @@ use kael_ui::{
     components::scrollable::scrollable_vertical,
     prelude::*,
 };
-use kael::*;
 use std::path::PathBuf;
 
 struct Assets {

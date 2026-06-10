@@ -1,10 +1,10 @@
 // Test horizontal scrolling using the ScrollContainer from our library
 
-use kael_ui::layout::ScrollContainer;
 use kael::{
     div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Window, WindowBounds,
     WindowOptions,
 };
+use kael_ui::layout::ScrollContainer;
 
 struct TestHorizontalScroll {}
 

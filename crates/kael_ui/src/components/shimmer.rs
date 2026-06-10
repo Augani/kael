@@ -44,7 +44,9 @@ impl RenderOnce for Shimmer {
                 ))
                 .with_animation(
                     "shimmer-sweep",
-                    Animation::new(duration).repeat_forever().with_easing(kael::linear),
+                    Animation::new(duration)
+                        .repeat_forever()
+                        .with_easing(kael::linear),
                     move |this, delta| {
                         let start = px(-200.0);
                         let end = px(600.0);

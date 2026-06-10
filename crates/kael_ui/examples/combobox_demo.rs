@@ -1,5 +1,5 @@
-use kael_ui::{components::scrollable::scrollable_vertical, prelude::*};
 use kael::{prelude::FluentBuilder, *};
+use kael_ui::{components::scrollable::scrollable_vertical, prelude::*};
 use std::path::PathBuf;
 
 struct Assets {

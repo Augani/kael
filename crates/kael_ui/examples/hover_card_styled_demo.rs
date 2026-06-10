@@ -1,8 +1,8 @@
+use kael::{prelude::*, *};
 use kael_ui::{
     overlays::hover_card::{HoverCard, HoverCardAlignment, HoverCardPosition},
     prelude::*,
 };
-use kael::{prelude::*, *};
 use std::path::PathBuf;
 
 struct Assets {

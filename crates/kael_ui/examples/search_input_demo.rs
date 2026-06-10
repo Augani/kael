@@ -1,9 +1,9 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     components::search_input::{SearchFilter, SearchInput, SearchInputState},
     layout::VStack,
     theme::use_theme,
 };
-use kael::{prelude::FluentBuilder as _, *};
 
 actions!(search_input_demo, [Quit]);
 

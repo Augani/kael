@@ -1,5 +1,5 @@
-use kael_ui::components::input::{self, Input, InputSize, InputState, InputVariant};
 use kael::{prelude::*, *};
+use kael_ui::components::input::{self, Input, InputSize, InputState, InputVariant};
 
 struct InputTestApp {
     input_state: Entity<InputState>,

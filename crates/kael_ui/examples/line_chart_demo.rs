@@ -1,9 +1,9 @@
+use kael::*;
 use kael_ui::{
     components::scrollable::scrollable_vertical,
     prelude::{LineChart, LineChartPoint, LineChartSeries},
     theme::{install_theme, use_theme, Theme},
 };
-use kael::*;
 
 struct LineChartDemo;
 

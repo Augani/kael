@@ -1,3 +1,4 @@
+use kael::*;
 use kael_ui::{
     components::{
         button::{Button, ButtonSize, ButtonVariant},
@@ -8,7 +9,6 @@ use kael_ui::{
     layout::{Align, HStack, Justify, VStack},
     theme::{install_theme, Theme},
 };
-use kael::*;
 
 struct InputDemoApp {
     // Interactive inputs

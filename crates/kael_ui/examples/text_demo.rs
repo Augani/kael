@@ -1,8 +1,8 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     components::{scrollable::scrollable_vertical, text::*},
     theme::{install_theme, use_theme, Theme},
 };
-use kael::{prelude::FluentBuilder as _, *};
 
 struct TextDemo;
 

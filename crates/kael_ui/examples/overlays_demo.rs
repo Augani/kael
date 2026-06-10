@@ -1,3 +1,4 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     components::button::{Button, ButtonVariant},
     layout::VStack,
@@ -6,7 +7,6 @@ use kael_ui::{
     overlays::toast::{ToastItem, ToastManager, ToastPosition, ToastVariant},
     theme::use_theme,
 };
-use kael::{prelude::FluentBuilder as _, *};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 actions!(overlays_demo, [Quit]);

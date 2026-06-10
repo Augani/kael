@@ -550,7 +550,7 @@ mod tests {
         assert_eq!(mirror_char('<'), '>');
         assert_eq!(mirror_char('\u{00AB}'), '\u{00BB}'); // « -> »
         assert_eq!(mirror_char('\u{2265}'), '\u{2264}'); // ≥ -> ≤
-                                                         // Mirroring is an involution.
+        // Mirroring is an involution.
         for ch in ['(', '[', '{', '<', '\u{00AB}', '\u{2039}', '\u{27E8}'] {
             assert_eq!(mirror_char(mirror_char(ch)), ch);
         }

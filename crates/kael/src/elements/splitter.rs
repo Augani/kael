@@ -1,13 +1,13 @@
 use super::local_history::{
-    ensure_local_undo_redo_bindings, local_undo_redo_key_context,
-    register_focused_action_handler_when, WindowValueHistory,
+    WindowValueHistory, ensure_local_undo_redo_bindings, local_undo_redo_key_context,
+    register_focused_action_handler_when,
 };
 use crate::{
-    fill, outline, point, px, relative, size, AccessibilityAction, AccessibilityAttributes,
-    AccessibilityRole, AccessibilityState, AccessibilityValue, App, BorderStyle, Bounds,
-    CursorStyle, DispatchPhase, Element, ElementId, GlobalElementId, Hitbox, HitboxBehavior,
-    InspectorElementId, Interactivity, IntoElement, KeyDownEvent, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Redo, Undo, Window,
+    AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
+    AccessibilityValue, App, BorderStyle, Bounds, CursorStyle, DispatchPhase, Element, ElementId,
+    GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, Interactivity, IntoElement,
+    KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, Redo, Undo, Window, fill, outline, point, px, relative, size,
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -593,7 +593,7 @@ fn splitter_fraction(value: Pixels, range: (Pixels, Pixels)) -> f64 {
     if span <= Pixels::ZERO {
         0.0
     } else {
-        ((value.0 - range.0 .0) / span.0).clamp(0.0, 1.0) as f64
+        ((value.0 - range.0.0) / span.0).clamp(0.0, 1.0) as f64
     }
 }
 
@@ -686,7 +686,7 @@ mod tests {
     use super::*;
     use crate::elements::div::InteractiveElement;
     use crate::{
-        div, Context, Modifiers, MouseButton, ParentElement, Render, Styled, TestAppContext,
+        Context, Modifiers, MouseButton, ParentElement, Render, Styled, TestAppContext, div,
     };
     use std::{cell::Cell, rc::Rc};
 

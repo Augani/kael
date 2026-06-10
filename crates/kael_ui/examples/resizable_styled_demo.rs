@@ -1,3 +1,4 @@
+use kael::*;
 use kael_ui::{
     components::{
         resizable::{h_resizable, resizable_panel, ResizableState},
@@ -5,7 +6,6 @@ use kael_ui::{
     },
     prelude::*,
 };
-use kael::*;
 use std::path::PathBuf;
 
 struct Assets {

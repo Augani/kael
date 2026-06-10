@@ -1,3 +1,4 @@
+use kael::*;
 use kael_ui::{
     components::{
         input::{Input, InputType, InputVariant},
@@ -7,7 +8,6 @@ use kael_ui::{
     layout::{HStack, VStack},
     theme::{install_theme, Theme},
 };
-use kael::*;
 
 struct FocusTestApp {
     // Form inputs to test tab navigation

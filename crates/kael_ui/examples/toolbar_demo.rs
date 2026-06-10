@@ -1,3 +1,4 @@
+use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::{
     components::icon_source::IconSource,
     layout::VStack,
@@ -6,7 +7,6 @@ use kael_ui::{
     },
     theme::use_theme,
 };
-use kael::{prelude::FluentBuilder as _, *};
 use std::path::PathBuf;
 
 struct Assets {

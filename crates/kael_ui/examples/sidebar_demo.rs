@@ -1,3 +1,4 @@
+use kael::*;
 use kael_ui::{
     components::{
         icon_source::IconSource,
@@ -7,7 +8,6 @@ use kael_ui::{
     navigation::sidebar::{Sidebar, SidebarItem, SidebarPosition, SidebarVariant},
     theme::use_theme,
 };
-use kael::*;
 
 struct SidebarDemo {
     selected_sidebar_item: Option<String>,

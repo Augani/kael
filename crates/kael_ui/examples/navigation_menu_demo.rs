@@ -1,3 +1,5 @@
+use kael::prelude::FluentBuilder;
+use kael::*;
 use kael_ui::{
     components::{
         navigation_menu::{NavigationMenu, NavigationMenuItem, NavigationMenuOrientation},
@@ -6,8 +8,6 @@ use kael_ui::{
     layout::{HStack, VStack},
     prelude::*,
 };
-use kael::prelude::FluentBuilder;
-use kael::*;
 use std::path::PathBuf;
 
 struct Assets {

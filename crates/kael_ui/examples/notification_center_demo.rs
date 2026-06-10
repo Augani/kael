@@ -1,3 +1,5 @@
+use kael::prelude::FluentBuilder as _;
+use kael::*;
 use kael_ui::{
     components::notification_center::{
         NotificationBell, NotificationCenter, NotificationCenterState, NotificationItem,
@@ -6,8 +8,6 @@ use kael_ui::{
     components::scrollable::scrollable_vertical,
     prelude::*,
 };
-use kael::prelude::FluentBuilder as _;
-use kael::*;
 use std::path::PathBuf;
 
 struct Assets {
