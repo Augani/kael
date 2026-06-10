@@ -48,11 +48,16 @@ jobs:
 
       - name: Build release binary
         shell: bash
-        run: cargo build --release -p xtask
+        run: cargo build --release -p dashboard-app
 
       - name: Run xtask bundle
         shell: bash
-        run: cargo run -p xtask -- bundle --output dist --binary target/release/xtask
+        run: |
+          binary="target/release/dashboard-app"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            binary="$binary.exe"
+          fi
+          cargo run -p xtask -- bundle --output dist --binary "$binary"
 
       - name: Run xtask sign
         if: env.SKIP_SIGN != 'true'
@@ -74,13 +79,33 @@ jobs:
             fi
           done
 
+      - name: Archive bundle directories
+        shell: bash
+        run: |
+          # Update feeds need downloadable, checksummable files; .app and
+          # .AppDir bundles are directories, so compress them first.
+          for dir in dist/*/; do
+            [ -d "$dir" ] || continue
+            name=$(basename "$dir")
+            stem="${name%%.*}"
+            case "$RUNNER_OS" in
+              macOS)
+                ditto -c -k --sequesterRsrc --keepParent "dist/$name" "dist/$stem-macos.zip"
+                ;;
+              *)
+                tar -czf "dist/$stem-linux.tar.gz" -C dist "$name"
+                ;;
+            esac
+            rm -rf "dist/$name"
+          done
+
       - name: Run xtask generate-update-metadata
         shell: bash
         run: |
           artifact_args=()
           while IFS= read -r -d '' artifact; do
             artifact_args+=(--artifact "$artifact")
-          done < <(find dist -mindepth 1 -maxdepth 1 ! -name update-feed.json -print0)
+          done < <(find dist -mindepth 1 -maxdepth 1 -type f ! -name update-feed.json -print0)
           if [ "${#artifact_args[@]}" -gt 0 ]; then
             cargo run -p xtask -- generate-update-metadata --output dist/update-feed.json "${artifact_args[@]}"
           fi
