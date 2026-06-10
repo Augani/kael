@@ -21,4 +21,4 @@ anyhow = "1"
 [dependencies.kael_render_graph]
 path = "../kael_render_graph"
 package = "kael_render_graph"
-version = "0.1.2"
+version = "0.2.0"

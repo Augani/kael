@@ -24,7 +24,7 @@ path = "src/lib.rs"
 
 [dependencies]
 # Core framework
-kael = { path = "../kael", version = "0.1.2" }
+kael = { path = "../kael", version = "0.2.0" }
 smallvec = "1.13.2"
 once_cell = "1.19"
 

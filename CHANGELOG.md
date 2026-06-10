@@ -9,6 +9,8 @@ stabilised — minor version bumps may include breaking changes.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-10
+
 ### Added
 
 - **Custom themes for `kael_ui`** — `Theme::custom(tokens)` plus

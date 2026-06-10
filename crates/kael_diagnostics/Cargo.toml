@@ -24,7 +24,7 @@ version = "1.0.86"
 [dependencies.http_client]
 path = "../http_client"
 package = "kael_http_client"
-version = "0.1.0"
+version = "0.2.0"
 
 [dependencies.serde]
 version = "1.0.221"
