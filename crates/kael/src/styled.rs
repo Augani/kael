@@ -1,9 +1,9 @@
 use crate::{
-    self as kael, AbsoluteLength, AlignContent, AlignItems, BlendMode, BorderStyle, CursorStyle,
-    DefiniteLength, Display, Fill, FlexDirection, FlexWrap, Font, FontStyle, FontWeight,
-    GridPlacement, Hsla, JustifyContent, Length, Pixels, SharedString, StrikethroughStyle,
-    StyleRefinement, TextAlign, TextOverflow, TextShadow, TextStyleRefinement, UnderlineStyle,
-    WhiteSpace, point, px, relative, rems,
+    self as kael, point, px, relative, rems, AbsoluteLength, AlignContent, AlignItems, BlendMode,
+    BorderStyle, CursorStyle, DefiniteLength, Display, Fill, FlexDirection, FlexWrap, Font,
+    FontStyle, FontWeight, GridPlacement, Hsla, JustifyContent, Length, Pixels, SharedString,
+    StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow, TextShadow, TextStyleRefinement,
+    UnderlineStyle, WhiteSpace,
 };
 pub use kael_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
@@ -803,6 +803,48 @@ pub trait Styled: Sized {
     /// Default is center (0.5, 0.5).
     fn transform_origin(mut self, x: f32, y: f32) -> Self {
         self.style().transform_origin = Some(point(x, y));
+        self
+    }
+
+    /// Sets a translation transform along both axes, in pixels.
+    fn translate(mut self, x: impl Into<Pixels>, y: impl Into<Pixels>) -> Self {
+        self.style().translate = Some(point(x.into(), y.into()));
+        self
+    }
+
+    /// Sets a horizontal translation transform, in pixels.
+    fn translate_x(mut self, x: impl Into<Pixels>) -> Self {
+        let current_y = self
+            .style()
+            .translate
+            .map(|translate| translate.y)
+            .unwrap_or_default();
+        self.style().translate = Some(point(x.into(), current_y));
+        self
+    }
+
+    /// Sets a vertical translation transform, in pixels.
+    fn translate_y(mut self, y: impl Into<Pixels>) -> Self {
+        let current_x = self
+            .style()
+            .translate
+            .map(|translate| translate.x)
+            .unwrap_or_default();
+        self.style().translate = Some(point(current_x, y.into()));
+        self
+    }
+
+    /// Sets a skew transform along the x axis, in degrees.
+    fn skew_x(mut self, angle_degrees: f32) -> Self {
+        let current_y = self.style().skew.map(|skew| skew.y).unwrap_or(0.0);
+        self.style().skew = Some(point(angle_degrees.to_radians(), current_y));
+        self
+    }
+
+    /// Sets a skew transform along the y axis, in degrees.
+    fn skew_y(mut self, angle_degrees: f32) -> Self {
+        let current_x = self.style().skew.map(|skew| skew.x).unwrap_or(0.0);
+        self.style().skew = Some(point(current_x, angle_degrees.to_radians()));
         self
     }
 

@@ -5,8 +5,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, DevicePixels, Edges, Hsla,
-    Pixels, Point, Radians, ScaledPixels, Size, bounds_tree::BoundsTree, point,
+    bounds_tree::BoundsTree, point, AtlasTextureId, AtlasTile, Background, Bounds, ContentMask,
+    Corners, DevicePixels, Edges, Hsla, Pixels, Point, Radians, ScaledPixels, Size,
 };
 use std::{
     fmt::Debug,
@@ -761,6 +761,14 @@ impl TransformationMatrix {
         })
     }
 
+    /// Skew along each axis by the given angles in radians, around the origin
+    pub fn skew(self, x_radians: f32, y_radians: f32) -> Self {
+        self.compose(Self {
+            rotation_scale: [[1.0, x_radians.tan()], [y_radians.tan(), 1.0]],
+            translation: [0.0, 0.0],
+        })
+    }
+
     /// Perform matrix multiplication with another transformation
     /// to produce a new transformation that is the result of
     /// applying both transformations: first, `other`, then `self`.
@@ -1124,11 +1132,9 @@ mod tests {
         match batches.next() {
             Some(PrimitiveBatch::BlurRects(blur_rects)) => {
                 assert_eq!(blur_rects.len(), 2);
-                assert!(
-                    blur_rects
-                        .iter()
-                        .all(|blur_rect| blur_rect.order == scene.blur_rects[0].order)
-                );
+                assert!(blur_rects
+                    .iter()
+                    .all(|blur_rect| blur_rect.order == scene.blur_rects[0].order));
             }
             other => panic!("expected blur batch, got {other:?}"),
         }

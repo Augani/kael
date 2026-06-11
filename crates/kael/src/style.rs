@@ -287,6 +287,12 @@ pub struct Style {
     /// Transform origin as fraction of element size (0.0-1.0). Defaults to center (0.5, 0.5).
     pub transform_origin: Option<Point<f32>>,
 
+    /// Translation offset (x, y) in pixels, applied as a transform.
+    pub translate: Option<Point<Pixels>>,
+
+    /// Skew in radians along each axis.
+    pub skew: Option<Point<f32>>,
+
     /// The grid columns of this element
     /// Equivalent to the Tailwind `grid-cols-<number>`
     pub grid_cols: Option<u16>,
@@ -678,8 +684,21 @@ impl Style {
             .to_pixels(rem_size)
             .clamp_radii_for_quad_size(bounds.size);
 
-        let transform = self.compose_transform(bounds);
+        let transform = self.compose_transform(bounds, window.scale_factor());
+        window.with_element_transform(transform, |window| {
+            self.paint_within_transform(bounds, corner_radii, rem_size, window, cx, continuation)
+        });
+    }
 
+    fn paint_within_transform(
+        &self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        rem_size: Pixels,
+        window: &mut Window,
+        cx: &mut App,
+        continuation: impl FnOnce(&mut Window, &mut App),
+    ) {
         if let Some(backdrop_blur) = self.backdrop_blur.map(|radius| radius.to_pixels(rem_size))
             && backdrop_blur > Pixels::ZERO
         {
@@ -720,7 +739,6 @@ impl Style {
                 self.border_style,
             );
             bg_quad.continuous_corners = self.continuous_corners;
-            bg_quad.transform = transform;
             bg_quad.blend_mode = self.blend_mode.unwrap_or_default();
             window.paint_quad(bg_quad);
         }
@@ -760,7 +778,6 @@ impl Style {
                 self.border_style,
             );
             quad.continuous_corners = self.continuous_corners;
-            quad.transform = transform;
 
             window.with_content_mask(Some(ContentMask { bounds: top_bounds }), |window| {
                 window.paint_quad(quad.clone());
@@ -797,18 +814,31 @@ impl Style {
         }
     }
 
-    fn compose_transform(&self, bounds: Bounds<Pixels>) -> TransformationMatrix {
-        let has_transform = self.rotate.is_some() || self.scale.is_some();
+    fn compose_transform(
+        &self,
+        bounds: Bounds<Pixels>,
+        scale_factor: f32,
+    ) -> Option<TransformationMatrix> {
+        let has_transform = self.rotate.is_some()
+            || self.scale.is_some()
+            || self.translate.is_some()
+            || self.skew.is_some();
         if !has_transform {
-            return TransformationMatrix::unit();
+            return None;
         }
 
         let origin_frac = self.transform_origin.unwrap_or(Point { x: 0.5, y: 0.5 });
-        let cx = bounds.origin.x.0 + bounds.size.width.0 * origin_frac.x;
-        let cy = bounds.origin.y.0 + bounds.size.height.0 * origin_frac.y;
+        let cx = (bounds.origin.x.0 + bounds.size.width.0 * origin_frac.x) * scale_factor;
+        let cy = (bounds.origin.y.0 + bounds.size.height.0 * origin_frac.y) * scale_factor;
 
         let mut t = TransformationMatrix::unit();
 
+        if let Some(translate) = self.translate {
+            t = t.translate(Point {
+                x: crate::ScaledPixels(translate.x.0 * scale_factor),
+                y: crate::ScaledPixels(translate.y.0 * scale_factor),
+            });
+        }
         if let Some(scale) = self.scale {
             t = t.scale(crate::Size {
                 width: scale.x,
@@ -817,6 +847,9 @@ impl Style {
         }
         if let Some(rotate) = self.rotate {
             t = t.rotate(Radians(rotate));
+        }
+        if let Some(skew) = self.skew {
+            t = t.skew(skew.x, skew.y);
         }
 
         let neg_origin = TransformationMatrix {
@@ -827,7 +860,7 @@ impl Style {
             rotation_scale: [[1.0, 0.0], [0.0, 1.0]],
             translation: [cx, cy],
         };
-        pos_origin.compose(t.compose(neg_origin))
+        Some(pos_origin.compose(t.compose(neg_origin)))
     }
 
     fn is_border_visible(&self) -> bool {
@@ -885,6 +918,8 @@ impl Default for Style {
             rotate: None,
             scale: None,
             transform_origin: None,
+            translate: None,
+            skew: None,
             grid_rows: None,
             grid_cols: None,
             grid_location: None,
@@ -1420,6 +1455,55 @@ mod tests {
     use super::*;
 
     use util_macros::perf;
+
+    #[test]
+    fn compose_transform_scales_origin_and_translation_to_device_pixels() {
+        let bounds = Bounds {
+            origin: point(px(100.), px(50.)),
+            size: crate::size(px(200.), px(100.)),
+        };
+
+        let mut style = Style::default();
+        style.rotate = Some(std::f32::consts::PI);
+        let transform = style
+            .compose_transform(bounds, 2.0)
+            .expect("rotation should produce a transform");
+        let center = transform.apply(point(px(400.), px(200.)));
+        assert!((center.x.0 - 400.).abs() < 0.01);
+        assert!((center.y.0 - 200.).abs() < 0.01);
+        let corner = transform.apply(point(px(200.), px(100.)));
+        assert!((corner.x.0 - 600.).abs() < 0.01);
+        assert!((corner.y.0 - 300.).abs() < 0.01);
+
+        let mut style = Style::default();
+        style.translate = Some(point(px(10.), px(-5.)));
+        let transform = style
+            .compose_transform(bounds, 2.0)
+            .expect("translation should produce a transform");
+        let moved = transform.apply(point(px(0.), px(0.)));
+        assert!((moved.x.0 - 20.).abs() < 0.01);
+        assert!((moved.y.0 + 10.).abs() < 0.01);
+
+        assert!(Style::default().compose_transform(bounds, 2.0).is_none());
+    }
+
+    #[test]
+    fn compose_transform_applies_skew() {
+        let bounds = Bounds {
+            origin: point(px(0.), px(0.)),
+            size: crate::size(px(100.), px(100.)),
+        };
+
+        let mut style = Style::default();
+        style.skew = Some(point(std::f32::consts::FRAC_PI_4, 0.0));
+        style.transform_origin = Some(point(0.0, 0.0));
+        let transform = style
+            .compose_transform(bounds, 1.0)
+            .expect("skew should produce a transform");
+        let sheared = transform.apply(point(px(0.), px(100.)));
+        assert!((sheared.x.0 - 100.).abs() < 0.01);
+        assert!((sheared.y.0 - 100.).abs() < 0.01);
+    }
 
     #[perf]
     fn test_basic_highlight_style_combination() {

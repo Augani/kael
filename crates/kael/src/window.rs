@@ -849,6 +849,7 @@ pub struct Window {
     pub(crate) rendered_entity_stack: SmallVec<[EntityId; 16]>,
     pub(crate) element_offset_stack: SmallVec<[Point<Pixels>; 16]>,
     pub(crate) element_opacity: f32,
+    pub(crate) element_transform: TransformationMatrix,
     pub(crate) content_mask_stack: SmallVec<[ContentMask<Pixels>; 16]>,
     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
     pub(crate) image_cache_stack: SmallVec<[AnyImageCache; 4]>,
@@ -1272,6 +1273,7 @@ impl Window {
             element_offset_stack: SmallVec::new(),
             content_mask_stack: SmallVec::new(),
             element_opacity: 1.0,
+            element_transform: TransformationMatrix::unit(),
             requested_autoscroll: None,
             rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
             next_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
@@ -2802,6 +2804,40 @@ impl Window {
         result
     }
 
+    /// Compose a transformation onto the current element transform for the duration of
+    /// the given closure. Primitives painted inside inherit the composed transform:
+    /// quads, paths, SVGs, and text follow it. Box shadows, backdrop blurs, underlines,
+    /// images, emoji, and video surfaces do not yet transform. The transformation is
+    /// expressed in scaled (device) pixels. Hitboxes are unaffected.
+    ///
+    /// This method should only be called during the paint phase of element drawing.
+    pub fn with_element_transform<R>(
+        &mut self,
+        transform: Option<TransformationMatrix>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint();
+
+        let Some(transform) = transform else {
+            return f(self);
+        };
+
+        let previous_transform = self.element_transform;
+        self.element_transform = previous_transform.compose(transform);
+        let result = f(self);
+        self.element_transform = previous_transform;
+        result
+    }
+
+    /// Obtain the current composed element transform in scaled (device) pixels.
+    ///
+    /// This method should only be called during the paint phase of element drawing.
+    #[inline]
+    pub fn element_transform(&self) -> TransformationMatrix {
+        self.invalidator.debug_assert_paint();
+        self.element_transform
+    }
+
     /// Perform prepaint on child elements in a "retryable" manner, so that any side effects
     /// of prepaints can be discarded before prepainting again. This is used to support autoscroll
     /// where we need to prepaint children to detect the autoscroll bounds, then adjust the
@@ -3276,7 +3312,7 @@ impl Window {
             border_widths: quad.border_widths.scale_and_snap_widths(scale_factor),
             border_style: quad.border_style,
             continuous_corners: if quad.continuous_corners { 1 } else { 0 },
-            transform: quad.transform,
+            transform: self.element_transform.compose(quad.transform),
             blend_mode: quad.blend_mode as u32,
         });
     }
@@ -3293,6 +3329,15 @@ impl Window {
         path.content_mask = content_mask;
         let color: Background = color.into();
         path.color = color.opacity(opacity);
+        let transform = self.element_transform;
+        let path = if transform == TransformationMatrix::unit() {
+            path
+        } else {
+            let mut logical_transform = transform;
+            logical_transform.translation[0] /= scale_factor;
+            logical_transform.translation[1] /= scale_factor;
+            path.transformed(logical_transform)
+        };
         self.next_frame
             .scene
             .insert_primitive(path.scale(scale_factor));
@@ -3403,6 +3448,7 @@ impl Window {
     ) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
+        let transformation = self.element_transform.compose(transformation);
         let element_opacity = self.element_opacity();
         let scale_factor = self.scale_factor();
         let glyph_origin = origin.scale(scale_factor);
@@ -3568,6 +3614,7 @@ impl Window {
     ) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
+        let transformation = self.element_transform.compose(transformation);
         let element_opacity = self.element_opacity();
         let scale_factor = self.scale_factor();
 
