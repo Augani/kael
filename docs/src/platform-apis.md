@@ -451,6 +451,13 @@ let mut reporter = CrashReporter {
 reporter.install_hook();
 ```
 
+The panic hook above only captures Rust panics. To also capture native crashes
+(segfaults, aborts, illegal instructions, and FFI/GPU-driver crashes) and submit
+prior crashes on the next launch with user consent, use the `kael_diagnostics`
+reporter and its `install_native()` / `check_and_submit_pending()` APIs. See
+[Crash Reporting](crash-reporting.md) for installation, consent, the per-platform
+capture matrix, and symbolication guidance.
+
 ## App Lifecycle
 
 Launch at login and update the dock/taskbar:

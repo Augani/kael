@@ -27,6 +27,7 @@
 # Platform
 
 - [Platform APIs](platform-apis.md)
+- [Crash Reporting](crash-reporting.md)
 - [Examples Gallery](examples.md)
 
 # Advanced

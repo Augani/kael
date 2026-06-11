@@ -18,6 +18,16 @@ name = "kael_diagnostics"
 path = "src/lib.rs"
 doctest = false
 
+[features]
+# Builds the crash_helper test binary. Off by default so the published crate
+# ships only the library; the native_crash integration test enables it.
+_crash_test_helper = []
+
+[[bin]]
+name = "crash_helper"
+path = "src/bin/crash_helper.rs"
+required-features = ["_crash_test_helper"]
+
 [dependencies.anyhow]
 version = "1.0.86"
 
@@ -33,8 +43,28 @@ features = ["derive"]
 [dependencies.serde_json]
 version = "1.0.144"
 
+[target.'cfg(unix)'.dependencies.libc]
+version = "0.2"
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.59"
+features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Kernel",
+    "Win32_Security",
+]
+
 [dev-dependencies.tempfile]
 version = "3.20.0"
+
+[dev-dependencies.pollster]
+version = "0.2"
+
+[target.'cfg(unix)'.dev-dependencies.libc]
+version = "0.2"
 
 [lints.clippy]
 dbg_macro = "deny"
