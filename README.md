@@ -35,7 +35,7 @@ Kael targets macOS, Linux, and Windows with platform-native rendering backends (
 
 **Component Library (`kael_ui`)**
 - 100+ shadcn-inspired components built in: buttons, inputs, dialogs, data tables, command palettes, charts, and more
-- Complete theme system with light/dark variants and semantic design tokens
+- 18 built-in themes plus user-defined brand themes (`Theme::custom`) with live theme switching and semantic design tokens
 - Layout primitives (`VStack`, `HStack`, `Grid`, `ScrollContainer`) and responsive utilities
 - Professional animations: springs, easing presets, transitions, animated state
 - Multi-line code editor with tree-sitter syntax highlighting
@@ -74,7 +74,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-kael = "0.1"
+kael = "0.2"
 ```
 
 ```rust
@@ -129,10 +129,18 @@ cargo run -p kael --example native_comparison
 Component library examples (140+ available, see [`crates/kael_ui/examples`](crates/kael_ui/examples)):
 
 ```bash
-cargo run -p kael_ui --example button_demo
+cargo run -p kael_ui --example custom_theme_demo
 cargo run -p kael_ui --example data_table_styled_demo
 cargo run -p kael_ui --example command_palette_styled_demo
 cargo run -p kael_ui --example pie_chart_demo
+```
+
+Starter templates — three complete applications in [`templates/`](templates) to copy as the skeleton of your own app:
+
+```bash
+cargo run -p dashboard-app    # analytics: sidebar, stat cards, charts, data table
+cargo run -p messaging-app    # chat: conversation list, message bubbles, composer
+cargo run -p workspace-app    # IDE shell: file tree, syntax-highlighted editor, status bar
 ```
 
 ## Platform Support

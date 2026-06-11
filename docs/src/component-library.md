@@ -8,8 +8,8 @@ Kael ships a complete, shadcn-inspired component library: **`kael_ui`**. It prov
 
 ```toml
 [dependencies]
-kael = "0.1"
-kael_ui = "0.1"
+kael = "0.2"
+kael_ui = "0.2"
 ```
 
 ## Setup

@@ -6,7 +6,7 @@ A comprehensive, professional UI component library for [Kael](https://github.com
 
 ## Features
 
-- **Complete theme system** — built-in light/dark themes with shadcn-style semantic color tokens
+- **Complete theme system** — 18 built-in themes with shadcn-style semantic color tokens, user-defined brand themes via `Theme::custom`, and live theme switching
 - **100+ components** — buttons, inputs, dialogs, data tables, charts, command palettes, and more
 - **Responsive layout** — flexible layout utilities (`VStack`, `HStack`, `Grid`, `ScrollContainer`)
 - **Professional animations** — smooth transitions with cubic-bezier easing and spring physics
@@ -19,21 +19,22 @@ A comprehensive, professional UI component library for [Kael](https://github.com
 
 ```toml
 [dependencies]
-kael = "0.1"
-kael_ui = "0.1"
+kael = "0.2"
+kael_ui = "0.2"
 ```
 
 ## Quick Start
 
+One import gives you the components plus the Kael essentials — no separate
+`use kael::*;` needed:
+
 ```rust,ignore
-use kael::*;
-use kael_ui::{prelude::*, theme};
+use kael_ui::prelude::*;
 
 fn main() {
     Application::new().run(|cx: &mut App| {
-        // Install a theme and initialize the component library
-        theme::install_theme(cx, theme::Theme::dark());
         kael_ui::init(cx);
+        install_theme(cx, Theme::dark());
 
         cx.open_window(WindowOptions::default(), |_, cx| {
             cx.new(|_| MyApp)
@@ -80,6 +81,24 @@ Components use [Lucide](https://lucide.dev/) icons resolved from a configurable 
 ```rust,ignore
 kael_ui::set_icon_base_path("assets/icons");
 ```
+
+The icon SVGs are not bundled in the published crate (to keep it small) — copy the ones you use from the repository into your app's asset directory.
+
+## Custom themes
+
+Start from any preset's tokens and override what your brand needs; calling
+`install_theme` again restyles every open window immediately:
+
+```rust,ignore
+install_theme(cx, Theme::custom(ThemeTokens {
+    primary: hsla(262.0 / 360.0, 0.83, 0.58, 1.0),
+    radius_md: px(10.0),
+    ..ThemeTokens::dark()
+}));
+```
+
+Individual components accept the full `Styled` API as one-off overrides:
+`Button::new("cta", "Get started").rounded(px(999.0)).px(px(28.0))`.
 
 ## Feature Flags
 

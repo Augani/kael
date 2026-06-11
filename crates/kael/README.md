@@ -14,7 +14,7 @@ native performance and 120fps rendering through dirty tracking and render-on-dem
 
 ```toml
 [dependencies]
-kael = "0.1"
+kael = "0.2"
 ```
 
 ```rust

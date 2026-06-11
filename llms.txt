@@ -23,7 +23,7 @@ Kael renders via Metal (macOS), DirectX 11 (Windows), Vulkan (Linux). Apps are p
 
 ```toml
 [dependencies]
-kael = "0.1"
+kael = "0.2"
 ```
 
 ```rust
@@ -101,7 +101,7 @@ All widgets: `widget_name(id, value, ...)` → `.on_change(|value, window, cx| {
 
 ## Component library (kael_ui)
 
-Add `kael_ui = "0.1"` for 100+ shadcn-inspired components — no external component library needed. Initialize with `kael_ui::theme::install_theme(cx, Theme::dark())` and `kael_ui::init(cx)`.
+Add `kael_ui = "0.2"` for 100+ shadcn-inspired components — no external component library needed. Import everything with a single `use kael_ui::prelude::*;` (do not also glob-import `kael::*`; the prelude re-exports the essentials). Initialize with `kael_ui::init(cx)` then `install_theme(cx, Theme::dark())` — 18 presets, or brand your app with `Theme::custom(ThemeTokens { primary, ..ThemeTokens::dark() })`; re-installing a theme restyles all open windows live.
 
 - **components** — Button, Input, Select, Combobox, Checkbox, Radio, Slider, DatePicker, TimePicker, ColorPicker, OtpInput, FileUpload, TagInput, Rating, Calendar, Carousel, code Editor (tree-sitter), and more
 - **display** — Table, DataTable, DataGrid, Card, Badge, Accordion, Markdown/HTML rendering

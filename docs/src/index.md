@@ -23,7 +23,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-kael = "0.1"
+kael = "0.2"
 ```
 
 Write your first app:

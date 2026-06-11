@@ -30,7 +30,7 @@ Add Kael to `Cargo.toml`:
 
 ```toml
 [dependencies]
-kael = "0.1"
+kael = "0.2"
 ```
 
 ## Your first window
