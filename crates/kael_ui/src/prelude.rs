@@ -173,10 +173,6 @@ pub use crate::overlays::toast::{ToastItem, ToastManager, ToastPosition, ToastVa
 pub use crate::theme::{install_theme, use_theme, Theme, ThemeTokens, ThemeVariant};
 
 pub use crate::content_transition::{ContentTransition, ContentTransitionState};
-pub use crate::gestures::{
-    GestureDetector, GestureEvent, LongPressGesture, PanGesture, SwipeDirection, SwipeGesture,
-    TapGesture,
-};
 pub use crate::responsive::{
     current_breakpoint, responsive_columns, responsive_value, Breakpoint, Responsive,
 };

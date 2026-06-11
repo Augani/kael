@@ -61,7 +61,6 @@ pub mod charts;
 pub mod components;
 pub mod content_transition;
 pub mod display;
-pub mod gestures;
 pub mod kael_ext;
 pub mod layout;
 pub mod navigation;

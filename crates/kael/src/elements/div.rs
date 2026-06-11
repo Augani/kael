@@ -25,13 +25,13 @@ use crate::{
     Bounds, BoxShadow, ClickEvent, Context, Corners, CursorStyle, DispatchPhase, Element,
     ElementId, Entity, Fill, FocusHandle, GestureRecognizer, Global, GlobalElementId, Hitbox,
     HitboxBehavior, HitboxId, Hsla, InspectorElementId, IntoElement, IsZero, KeyContext,
-    KeyDownEvent, KeyUpEvent, KeyboardButton, KeyboardClickEvent, LayoutId, MagnifyEvent,
-    ModifiersChangedEvent, MouseButton, MouseClickEvent, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Overflow, PanGesture, PanGestureEvent, PanState, ParentElement, PinchGesture,
-    PinchGestureEvent, Pixels, Point, Render, Rgba, ScaledPixels, ScrollDelta, ScrollWheelEvent,
-    SharedString, Size, Style, StyleRefinement, Styled, SwipeDirection, SwipeGesture,
-    SwipeGestureEvent, Task, TooltipId, TouchPhase, TransformationMatrix, Visibility, Window,
-    WindowControlArea, point, px, size,
+    KeyDownEvent, KeyUpEvent, KeyboardButton, KeyboardClickEvent, LayoutId, LongPressGesture,
+    LongPressGestureEvent, MagnifyEvent, ModifiersChangedEvent, MouseButton, MouseClickEvent,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Overflow, PanGesture, PanGestureEvent, PanState,
+    ParentElement, PinchGesture, PinchGestureEvent, Pixels, Point, Render, Rgba, ScaledPixels,
+    ScrollDelta, ScrollWheelEvent, SharedString, Size, Style, StyleRefinement, Styled,
+    SwipeDirection, SwipeGesture, SwipeGestureEvent, TapGesture, TapGestureEvent, Task, TooltipId,
+    TouchPhase, TransformationMatrix, Visibility, Window, WindowControlArea, point, px, size,
 };
 use collections::HashMap;
 use refineable::Refineable;
@@ -788,6 +788,19 @@ impl Interactivity {
         listener: impl Fn(&PinchGestureEvent, &mut Window, &mut App) + 'static,
     ) {
         self.pinch_listeners.push(Box::new(listener));
+    }
+
+    /// Bind the given callback to tap gestures for this element.
+    pub fn on_tap(&mut self, listener: impl Fn(&TapGestureEvent, &mut Window, &mut App) + 'static) {
+        self.tap_listeners.push(Box::new(listener));
+    }
+
+    /// Bind the given callback to long-press gestures for this element.
+    pub fn on_long_press(
+        &mut self,
+        listener: impl Fn(&LongPressGestureEvent, &mut Window, &mut App) + 'static,
+    ) {
+        self.long_press_listeners.push(Box::new(listener));
     }
 
     /// Bind the given callback to an action dispatch during the capture phase
@@ -1837,6 +1850,30 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Bind the given callback to tap gestures for this element.
+    fn on_tap(
+        mut self,
+        listener: impl Fn(&TapGestureEvent, &mut Window, &mut App) + 'static,
+    ) -> Self
+    where
+        Self: Sized,
+    {
+        self.interactivity().on_tap(listener);
+        self
+    }
+
+    /// Bind the given callback to long-press gestures for this element.
+    fn on_long_press(
+        mut self,
+        listener: impl Fn(&LongPressGestureEvent, &mut Window, &mut App) + 'static,
+    ) -> Self
+    where
+        Self: Sized,
+    {
+        self.interactivity().on_long_press(listener);
+        self
+    }
+
     /// Use the given content to construct a tooltip when the mouse hovers over this element.
     /// String-like values render the default tooltip bubble, while closures can build a custom tooltip view.
     /// The fluent API equivalent to [`Interactivity::tooltip`]
@@ -1937,6 +1974,11 @@ pub(crate) type PanListener = Box<dyn Fn(&PanGestureEvent, &mut Window, &mut App
 pub(crate) type SwipeListener = Box<dyn Fn(&SwipeGestureEvent, &mut Window, &mut App) + 'static>;
 
 pub(crate) type PinchListener = Box<dyn Fn(&PinchGestureEvent, &mut Window, &mut App) + 'static>;
+
+pub(crate) type TapListener = Box<dyn Fn(&TapGestureEvent, &mut Window, &mut App) + 'static>;
+
+pub(crate) type LongPressListener =
+    Box<dyn Fn(&LongPressGestureEvent, &mut Window, &mut App) + 'static>;
 
 pub(crate) type ClickListener = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
@@ -2439,6 +2481,8 @@ pub struct Interactivity {
     pub(crate) pan_listeners: Vec<PanListener>,
     pub(crate) swipe_listeners: Vec<(SwipeDirection, SwipeListener)>,
     pub(crate) pinch_listeners: Vec<PinchListener>,
+    pub(crate) tap_listeners: Vec<TapListener>,
+    pub(crate) long_press_listeners: Vec<LongPressListener>,
     pub(crate) key_down_listeners: Vec<KeyDownListener>,
     pub(crate) key_up_listeners: Vec<KeyUpListener>,
     pub(crate) modifiers_changed_listeners: Vec<ModifiersChangedListener>,
@@ -2658,6 +2702,8 @@ impl Interactivity {
             || !self.pan_listeners.is_empty()
             || !self.swipe_listeners.is_empty()
             || !self.pinch_listeners.is_empty()
+            || !self.tap_listeners.is_empty()
+            || !self.long_press_listeners.is_empty()
             || self.drag_listener.is_some()
             || !self.drop_listeners.is_empty()
             || self.tooltip_builder.is_some()
@@ -3512,13 +3558,22 @@ impl Interactivity {
             self.pan_listeners.clear();
             self.swipe_listeners.clear();
             self.pinch_listeners.clear();
+            self.tap_listeners.clear();
+            self.long_press_listeners.clear();
             return;
         };
 
         let pan_listeners = Rc::new(mem::take(&mut self.pan_listeners));
         let swipe_listeners = Rc::new(mem::take(&mut self.swipe_listeners));
         let pinch_listeners = Rc::new(mem::take(&mut self.pinch_listeners));
-        if pan_listeners.is_empty() && swipe_listeners.is_empty() && pinch_listeners.is_empty() {
+        let tap_listeners = Rc::new(mem::take(&mut self.tap_listeners));
+        let long_press_listeners = Rc::new(mem::take(&mut self.long_press_listeners));
+        if pan_listeners.is_empty()
+            && swipe_listeners.is_empty()
+            && pinch_listeners.is_empty()
+            && tap_listeners.is_empty()
+            && long_press_listeners.is_empty()
+        {
             return;
         }
 
@@ -3611,6 +3666,75 @@ impl Interactivity {
                                 cx.stop_propagation();
                             }
                         }
+                    }
+                }
+            });
+        }
+
+        if !tap_listeners.is_empty() || !long_press_listeners.is_empty() {
+            window.on_mouse_event({
+                let gesture_state = gesture_state.clone();
+                let hitbox = hitbox.clone();
+                move |event: &MouseDownEvent, phase, window, _cx| {
+                    if phase == DispatchPhase::Bubble
+                        && event.button == MouseButton::Left
+                        && hitbox.is_hovered(window)
+                    {
+                        let mut state = gesture_state.borrow_mut();
+                        state
+                            .tap
+                            .on_event(&crate::PlatformInput::MouseDown(event.clone()));
+                        state
+                            .long_press
+                            .on_event(&crate::PlatformInput::MouseDown(event.clone()));
+                    }
+                }
+            });
+
+            window.on_mouse_event({
+                let gesture_state = gesture_state.clone();
+                move |event: &MouseMoveEvent, phase, _window, _cx| {
+                    if phase != DispatchPhase::Bubble {
+                        return;
+                    }
+                    let mut state = gesture_state.borrow_mut();
+                    state
+                        .tap
+                        .on_event(&crate::PlatformInput::MouseMove(event.clone()));
+                    state
+                        .long_press
+                        .on_event(&crate::PlatformInput::MouseMove(event.clone()));
+                }
+            });
+
+            window.on_mouse_event({
+                let gesture_state = gesture_state.clone();
+                let tap_listeners = tap_listeners.clone();
+                let long_press_listeners = long_press_listeners.clone();
+                move |event: &MouseUpEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
+                        return;
+                    }
+
+                    let long_press_event = gesture_state
+                        .borrow_mut()
+                        .long_press
+                        .on_event(&crate::PlatformInput::MouseUp(event.clone()));
+                    let tap_event = gesture_state
+                        .borrow_mut()
+                        .tap
+                        .on_event(&crate::PlatformInput::MouseUp(event.clone()));
+
+                    if let Some(long_press_event) = long_press_event {
+                        for listener in long_press_listeners.iter() {
+                            listener(&long_press_event, window, cx);
+                        }
+                        cx.stop_propagation();
+                    } else if let Some(tap_event) = tap_event {
+                        for listener in tap_listeners.iter() {
+                            listener(&tap_event, window, cx);
+                        }
+                        cx.stop_propagation();
                     }
                 }
             });
@@ -4188,6 +4312,8 @@ pub(crate) struct AutoScrollbarState {
 pub(crate) struct ElementGestureState {
     pan: PanGesture,
     pinch: PinchGesture,
+    tap: TapGesture,
+    long_press: LongPressGesture,
 }
 
 /// Whether or not the element or a group that contains it is clicked by the mouse.
