@@ -758,6 +758,15 @@ pub(crate) trait PlatformTextSystem: Send + Sync {
         params: &RenderGlyphParams,
         raster_bounds: Bounds<DevicePixels>,
     ) -> Result<(Size<DevicePixels>, Vec<u8>)>;
+
+    /// Whether this backend can rasterize glyphs with per-channel (LCD RGB)
+    /// subpixel coverage. Backends that only produce grayscale alpha masks
+    /// return `false`, in which case the renderer falls back to grayscale
+    /// antialiasing for text.
+    fn supports_subpixel_glyphs(&self) -> bool {
+        false
+    }
+
     fn layout_line(&self, text: &str, font_size: Pixels, runs: &[FontRun]) -> LineLayout;
 
     /// Layout text with additional OpenType font features applied.

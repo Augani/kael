@@ -1531,7 +1531,10 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
 
     if (sprite.sprite_kind == 1u) {
         float4 tint = hsla_to_rgba(sprite.color);
-        float3 coverage = sample.rgb;
+        float3 coverage = float3(
+            apply_contrast_and_gamma_correction(sample.r, tint.rgb, grayscale_enhanced_contrast, gamma_ratios),
+            apply_contrast_and_gamma_correction(sample.g, tint.rgb, grayscale_enhanced_contrast, gamma_ratios),
+            apply_contrast_and_gamma_correction(sample.b, tint.rgb, grayscale_enhanced_contrast, gamma_ratios));
         float coverage_alpha = max(max(coverage.r, coverage.g), coverage.b);
         float shape_alpha = sprite.opacity * saturate(0.5 - distance) * rounded_clip;
         float alpha = tint.a * coverage_alpha * shape_alpha;

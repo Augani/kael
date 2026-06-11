@@ -326,6 +326,10 @@ impl TextSystem {
         self.platform_text_system
             .rasterize_glyph(params, raster_bounds)
     }
+
+    pub(crate) fn supports_subpixel_glyphs(&self) -> bool {
+        self.platform_text_system.supports_subpixel_glyphs()
+    }
 }
 
 /// The GPUI text layout subsystem.

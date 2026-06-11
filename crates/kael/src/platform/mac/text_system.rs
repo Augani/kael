@@ -215,6 +215,10 @@ impl PlatformTextSystem for MacTextSystem {
         self.0.read().rasterize_glyph(glyph_id, raster_bounds)
     }
 
+    fn supports_subpixel_glyphs(&self) -> bool {
+        true
+    }
+
     fn layout_line(&self, text: &str, font_size: Pixels, font_runs: &[FontRun]) -> LineLayout {
         self.0.write().layout_line(text, font_size, font_runs)
     }
