@@ -1,31 +1,32 @@
 use kael::{prelude::FluentBuilder as _, *};
 use std::time::Duration;
 
-use crate::gestures::{GestureDetector, GestureEvent};
 use crate::spring::{SpringPoint, SpringPreset};
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(8);
 
 pub struct DraggableSpringState {
     offset: SpringPoint,
-    detector: GestureDetector,
+    pan: PanGesture,
     snap_points: Vec<Point<f32>>,
     is_dragging: bool,
     animating: bool,
     drag_origin: Point<f32>,
     grab_offset: Point<f32>,
+    release_velocity: Point<f32>,
 }
 
 impl DraggableSpringState {
     pub fn new(_cx: &mut Context<Self>) -> Self {
         Self {
             offset: SpringPoint::with_preset(0.0, 0.0, SpringPreset::Snappy),
-            detector: GestureDetector::new(),
+            pan: PanGesture::new(),
             snap_points: Vec::new(),
             is_dragging: false,
             animating: false,
             drag_origin: Point::default(),
             grab_offset: Point::default(),
+            release_velocity: Point::default(),
         }
     }
 
@@ -46,45 +47,60 @@ impl DraggableSpringState {
         self.is_dragging
     }
 
-    fn on_mouse_down(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        self.detector.on_mouse_down(position);
+    fn on_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.pan.reset();
+        self.pan.on_event(&PlatformInput::MouseDown(event.clone()));
         self.offset.stop();
         self.is_dragging = true;
+        self.release_velocity = Point::default();
         self.drag_origin = point(f32::from(position.x), f32::from(position.y));
         let current = self.offset.value();
         self.grab_offset = point(current.0, current.1);
         cx.notify();
     }
 
-    fn on_mouse_move(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+    fn on_mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
         if !self.is_dragging {
             return;
         }
 
-        for event in self.detector.on_mouse_move(position) {
-            if let GestureEvent::PanUpdate(_) | GestureEvent::PanStart(_) = event {
-                let pointer = point(f32::from(position.x), f32::from(position.y));
-                let next_x = self.grab_offset.x + (pointer.x - self.drag_origin.x);
-                let next_y = self.grab_offset.y + (pointer.y - self.drag_origin.y);
-                self.offset.set_value(next_x, next_y);
-                cx.notify();
-            }
+        if let Some(pan_event) = self.pan.on_event(&PlatformInput::MouseMove(event.clone())) {
+            self.release_velocity = point(
+                f32::from(pan_event.velocity.x),
+                f32::from(pan_event.velocity.y),
+            );
+            let pointer = point(f32::from(position.x), f32::from(position.y));
+            let next_x = self.grab_offset.x + (pointer.x - self.drag_origin.x);
+            let next_y = self.grab_offset.y + (pointer.y - self.drag_origin.y);
+            self.offset.set_value(next_x, next_y);
+            cx.notify();
         }
     }
 
-    fn on_mouse_up(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+    fn on_mouse_up(&mut self, event: &MouseUpEvent, cx: &mut Context<Self>) {
         if !self.is_dragging {
             return;
         }
 
         self.is_dragging = false;
-        let mut release_velocity = point(0.0, 0.0);
 
-        for event in self.detector.on_mouse_up(position) {
-            if let GestureEvent::PanEnd(pan) = event {
-                release_velocity = point(f32::from(pan.velocity.x), f32::from(pan.velocity.y));
-            }
+        if let Some(pan_event) = self.pan.on_event(&PlatformInput::MouseUp(event.clone())) {
+            self.release_velocity = point(
+                f32::from(pan_event.velocity.x),
+                f32::from(pan_event.velocity.y),
+            );
         }
+        let release_velocity = self.release_velocity;
 
         let current = self.offset.value();
         let target = self.nearest_snap(point(current.0, current.1));
@@ -226,20 +242,20 @@ impl RenderOnce for DraggableSpring {
             .on_mouse_down(
                 MouseButton::Left,
                 window.listener_for(&down_state, |state, event: &MouseDownEvent, _window, cx| {
-                    state.on_mouse_down(event.position, cx);
+                    state.on_mouse_down(event, event.position, cx);
                     cx.stop_propagation();
                 }),
             )
             .on_mouse_move(window.listener_for(
                 &move_state,
                 |state, event: &MouseMoveEvent, _window, cx| {
-                    state.on_mouse_move(event.position, cx);
+                    state.on_mouse_move(event, event.position, cx);
                 },
             ))
             .on_mouse_up(
                 MouseButton::Left,
                 window.listener_for(&up_state, |state, event: &MouseUpEvent, _window, cx| {
-                    state.on_mouse_up(event.position, cx);
+                    state.on_mouse_up(event, cx);
                 }),
             )
             .map(|this: Stateful<Div>| {

@@ -129,7 +129,6 @@ pub use crate::components::video_player::{
     init_video_player, VideoPlaybackSpeed, VideoPlaybackState, VideoPlayer, VideoPlayerSize,
     VideoPlayerState,
 };
-pub use crate::components::view_router::{PageTransition, ViewRouter, ViewRouterState};
 pub use crate::display::accordion::{Accordion, AccordionItem};
 pub use crate::display::badge::{Badge, BadgeVariant};
 pub use crate::display::card::Card;
@@ -173,10 +172,6 @@ pub use crate::overlays::toast::{ToastItem, ToastManager, ToastPosition, ToastVa
 pub use crate::theme::{install_theme, use_theme, Theme, ThemeTokens, ThemeVariant};
 
 pub use crate::content_transition::{ContentTransition, ContentTransitionState};
-pub use crate::gestures::{
-    GestureDetector, GestureEvent, LongPressGesture, PanGesture, SwipeDirection, SwipeGesture,
-    TapGesture,
-};
 pub use crate::responsive::{
     current_breakpoint, responsive_columns, responsive_value, Breakpoint, Responsive,
 };

@@ -1,4 +1,7 @@
-use std::{collections::VecDeque, time::Instant};
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 
 use crate::{
     MagnifyEvent, Modifiers, MouseButton, Pixels, PlatformInput, Point, ScrollDelta,
@@ -11,6 +14,9 @@ const DEFAULT_SWIPE_THRESHOLD: f32 = 48.0;
 const DEFAULT_SWIPE_VELOCITY_THRESHOLD: f32 = 400.0;
 const PINCH_LINE_DELTA_SCALE: f32 = 0.075;
 const PINCH_PIXEL_DELTA_SCALE: f32 = 1.0 / 240.0;
+const DEFAULT_TAP_SLOP: f32 = 5.0;
+const DEFAULT_DOUBLE_TAP_INTERVAL: Duration = Duration::from_millis(300);
+const DEFAULT_LONG_PRESS_DURATION: Duration = Duration::from_millis(500);
 
 /// A stateful recognizer that emits higher-level gesture events from platform input.
 pub trait GestureRecognizer {
@@ -535,11 +541,283 @@ fn zoom_modifiers_active(modifiers: Modifiers) -> bool {
     modifiers.control || modifiers.platform
 }
 
+/// Data produced by a tap gesture recognizer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TapGestureEvent {
+    /// The position where the tap was released.
+    pub position: Point<Pixels>,
+    /// The number of consecutive taps recognized, starting at 1.
+    pub count: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PendingTap {
+    start_position: Point<Pixels>,
+    moved_beyond_slop: bool,
+}
+
+/// Recognizes single and repeated tap gestures from pointer input.
+///
+/// A tap is a press and release where the pointer never travels beyond the
+/// configured slop radius. Consecutive taps within [`TapGesture::double_tap_interval`]
+/// increment the reported count, enabling double- and triple-tap detection.
+#[derive(Clone, Debug)]
+pub struct TapGesture {
+    slop: Pixels,
+    double_tap_interval: Duration,
+    pending: Option<PendingTap>,
+    count: u32,
+    last_release: Option<Instant>,
+}
+
+impl Default for TapGesture {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TapGesture {
+    /// Create a new tap recognizer.
+    pub fn new() -> Self {
+        Self {
+            slop: px(DEFAULT_TAP_SLOP),
+            double_tap_interval: DEFAULT_DOUBLE_TAP_INTERVAL,
+            pending: None,
+            count: 0,
+            last_release: None,
+        }
+    }
+
+    /// Set the maximum pointer travel that still resolves as a tap.
+    pub fn slop(mut self, slop: impl Into<Pixels>) -> Self {
+        self.slop = slop.into();
+        self
+    }
+
+    /// Set the maximum interval between taps that still increments the tap count.
+    pub fn double_tap_interval(mut self, interval: Duration) -> Self {
+        self.double_tap_interval = interval;
+        self
+    }
+
+    fn begin(&mut self, position: Point<Pixels>) {
+        self.pending = Some(PendingTap {
+            start_position: position,
+            moved_beyond_slop: false,
+        });
+    }
+
+    fn update(&mut self, position: Point<Pixels>) {
+        if let Some(pending) = self.pending.as_mut() {
+            let travel = (position - pending.start_position).magnitude();
+            if travel >= f64::from(f32::from(self.slop)) {
+                pending.moved_beyond_slop = true;
+            }
+        }
+    }
+
+    fn end(&mut self, position: Point<Pixels>) -> Option<TapGestureEvent> {
+        let pending = self.pending.take()?;
+        if pending.moved_beyond_slop {
+            self.count = 0;
+            self.last_release = None;
+            return None;
+        }
+
+        let now = Instant::now();
+        let is_repeat = self
+            .last_release
+            .is_some_and(|last| now.duration_since(last) <= self.double_tap_interval);
+        self.count = if is_repeat { self.count + 1 } else { 1 };
+        self.last_release = Some(now);
+
+        Some(TapGestureEvent {
+            position,
+            count: self.count,
+        })
+    }
+}
+
+impl GestureRecognizer for TapGesture {
+    type Event = TapGestureEvent;
+
+    fn on_event(&mut self, event: &PlatformInput) -> Option<Self::Event> {
+        match event {
+            PlatformInput::MouseDown(event) if event.button == MouseButton::Left => {
+                self.begin(event.position);
+                None
+            }
+            PlatformInput::MouseMove(event) => {
+                self.update(event.position);
+                None
+            }
+            PlatformInput::MouseUp(event) if event.button == MouseButton::Left => {
+                self.end(event.position)
+            }
+            PlatformInput::MouseExited(_) => {
+                self.pending = None;
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.pending = None;
+        self.count = 0;
+        self.last_release = None;
+    }
+}
+
+/// Data produced by a long-press gesture recognizer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LongPressGestureEvent {
+    /// The position where the press began.
+    pub position: Point<Pixels>,
+    /// How long the pointer was held before the gesture resolved.
+    pub duration: Duration,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ActiveLongPress {
+    start_position: Point<Pixels>,
+    started: Instant,
+    moved_beyond_slop: bool,
+    fired: bool,
+}
+
+/// Recognizes long-press gestures from pointer input.
+///
+/// A long press resolves when the pointer is held in place beyond
+/// [`LongPressGesture::duration`]. Because the recognizer is event-driven, it
+/// can only fire from incoming platform input; use [`LongPressGesture::poll`]
+/// from a timer to resolve the gesture while the pointer is held stationary.
+#[derive(Clone, Debug)]
+pub struct LongPressGesture {
+    duration: Duration,
+    slop: Pixels,
+    active: Option<ActiveLongPress>,
+}
+
+impl Default for LongPressGesture {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LongPressGesture {
+    /// Create a new long-press recognizer.
+    pub fn new() -> Self {
+        Self {
+            duration: DEFAULT_LONG_PRESS_DURATION,
+            slop: px(DEFAULT_TAP_SLOP),
+            active: None,
+        }
+    }
+
+    /// Set how long the pointer must be held before the gesture resolves.
+    pub fn duration(mut self, duration: Duration) -> Self {
+        self.duration = duration;
+        self
+    }
+
+    /// Set the maximum pointer travel that still resolves as a long press.
+    pub fn slop(mut self, slop: impl Into<Pixels>) -> Self {
+        self.slop = slop.into();
+        self
+    }
+
+    /// Returns whether the recognizer is currently tracking a held pointer.
+    pub fn is_active(&self) -> bool {
+        self.active.is_some()
+    }
+
+    /// Resolve the gesture from elapsed time while the pointer is held.
+    ///
+    /// Call this from a timer to fire the long press without further pointer
+    /// input. Returns `Some` exactly once per held press.
+    pub fn poll(&mut self) -> Option<LongPressGestureEvent> {
+        let active = self.active.as_mut()?;
+        if active.fired || active.moved_beyond_slop {
+            return None;
+        }
+        let elapsed = active.started.elapsed();
+        if elapsed < self.duration {
+            return None;
+        }
+        active.fired = true;
+        Some(LongPressGestureEvent {
+            position: active.start_position,
+            duration: elapsed,
+        })
+    }
+
+    fn begin(&mut self, position: Point<Pixels>) {
+        self.active = Some(ActiveLongPress {
+            start_position: position,
+            started: Instant::now(),
+            moved_beyond_slop: false,
+            fired: false,
+        });
+    }
+
+    fn update(&mut self, position: Point<Pixels>) {
+        if let Some(active) = self.active.as_mut() {
+            let travel = (position - active.start_position).magnitude();
+            if travel >= f64::from(f32::from(self.slop)) {
+                active.moved_beyond_slop = true;
+            }
+        }
+    }
+
+    fn end(&mut self) -> Option<LongPressGestureEvent> {
+        let active = self.active.take()?;
+        if active.fired || active.moved_beyond_slop {
+            return None;
+        }
+        let elapsed = active.started.elapsed();
+        if elapsed < self.duration {
+            return None;
+        }
+        Some(LongPressGestureEvent {
+            position: active.start_position,
+            duration: elapsed,
+        })
+    }
+}
+
+impl GestureRecognizer for LongPressGesture {
+    type Event = LongPressGestureEvent;
+
+    fn on_event(&mut self, event: &PlatformInput) -> Option<Self::Event> {
+        match event {
+            PlatformInput::MouseDown(event) if event.button == MouseButton::Left => {
+                self.begin(event.position);
+                None
+            }
+            PlatformInput::MouseMove(event) => {
+                self.update(event.position);
+                None
+            }
+            PlatformInput::MouseUp(event) if event.button == MouseButton::Left => self.end(),
+            PlatformInput::MouseExited(_) => {
+                self.active = None;
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.active = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        GestureRecognizer, PanGesture, PanState, PinchGesture, PinchState, SwipeDirection,
-        SwipeGesture, VelocityTracker,
+        GestureRecognizer, LongPressGesture, PanGesture, PanState, PinchGesture, PinchState,
+        SwipeDirection, SwipeGesture, TapGesture, VelocityTracker,
     };
     use crate::{
         MagnifyEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
@@ -640,5 +918,98 @@ mod tests {
             .expect("expected pan to begin");
 
         assert_eq!(began.state, PanState::Began);
+    }
+
+    fn mouse_down(position: super::Point<super::Pixels>) -> PlatformInput {
+        PlatformInput::MouseDown(MouseDownEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        })
+    }
+
+    fn mouse_move(position: super::Point<super::Pixels>) -> PlatformInput {
+        PlatformInput::MouseMove(MouseMoveEvent {
+            pressed_button: Some(MouseButton::Left),
+            position,
+            modifiers: Modifiers::default(),
+        })
+    }
+
+    fn mouse_up(position: super::Point<super::Pixels>) -> PlatformInput {
+        PlatformInput::MouseUp(MouseUpEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Modifiers::default(),
+            click_count: 1,
+        })
+    }
+
+    #[test]
+    fn tap_recognizer_resolves_stationary_press() {
+        let mut tap = TapGesture::new();
+        tap.on_event(&mouse_down(point(px(10.0), px(10.0))));
+        let event = tap
+            .on_event(&mouse_up(point(px(11.0), px(11.0))))
+            .expect("expected tap to resolve");
+        assert_eq!(event.count, 1);
+    }
+
+    #[test]
+    fn tap_recognizer_rejects_press_that_moves_beyond_slop() {
+        let mut tap = TapGesture::new();
+        tap.on_event(&mouse_down(point(px(0.0), px(0.0))));
+        tap.on_event(&mouse_move(point(px(40.0), px(0.0))));
+        assert!(tap.on_event(&mouse_up(point(px(40.0), px(0.0)))).is_none());
+    }
+
+    #[test]
+    fn tap_recognizer_counts_consecutive_taps() {
+        let mut tap = TapGesture::new();
+        tap.on_event(&mouse_down(point(px(5.0), px(5.0))));
+        let first = tap
+            .on_event(&mouse_up(point(px(5.0), px(5.0))))
+            .expect("first tap");
+        assert_eq!(first.count, 1);
+
+        tap.on_event(&mouse_down(point(px(5.0), px(5.0))));
+        let second = tap
+            .on_event(&mouse_up(point(px(5.0), px(5.0))))
+            .expect("second tap");
+        assert_eq!(second.count, 2);
+    }
+
+    #[test]
+    fn long_press_recognizer_fires_after_duration_on_release() {
+        let mut long_press = LongPressGesture::new().duration(Duration::from_millis(0));
+        long_press.on_event(&mouse_down(point(px(8.0), px(8.0))));
+        let event = long_press
+            .on_event(&mouse_up(point(px(8.0), px(8.0))))
+            .expect("expected long press to resolve");
+        assert_eq!(event.position, point(px(8.0), px(8.0)));
+    }
+
+    #[test]
+    fn long_press_recognizer_polls_while_held() {
+        let mut long_press = LongPressGesture::new().duration(Duration::from_millis(0));
+        long_press.on_event(&mouse_down(point(px(8.0), px(8.0))));
+        let event = long_press.poll().expect("expected poll to resolve");
+        assert_eq!(event.position, point(px(8.0), px(8.0)));
+        assert!(long_press.poll().is_none());
+    }
+
+    #[test]
+    fn long_press_recognizer_rejects_movement_beyond_slop() {
+        let mut long_press = LongPressGesture::new().duration(Duration::from_millis(0));
+        long_press.on_event(&mouse_down(point(px(0.0), px(0.0))));
+        long_press.on_event(&mouse_move(point(px(40.0), px(0.0))));
+        assert!(long_press.poll().is_none());
+        assert!(
+            long_press
+                .on_event(&mouse_up(point(px(40.0), px(0.0))))
+                .is_none()
+        );
     }
 }
