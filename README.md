@@ -8,6 +8,10 @@ Where upstream GPUI prioritizes APIs that serve the Zed editor, Kael is the home
 
 Kael targets macOS, Linux, and Windows with platform-native rendering backends (Metal, Vulkan/Blade, DirectX 11) and delivers 60fps with minimal CPU usage through dirty tracking and render-on-demand.
 
+![Kael 0.3 smooth UI — implicit transitions, FLIP layout, subtree rotation, color filters, gradient borders, and content blur, all self-animating](docs/assets/smooth-ui-0_3.gif)
+
+> The 0.3 "smooth UI" release: implicit style transitions, FLIP layout animation, subtree transforms, color filters, gradient borders, and content-blur effect layers. Run it with `cargo run -p kael --features runtime_shaders --example showcase_0_3`.
+
 ## Features
 
 **Rendering & Graphics**
