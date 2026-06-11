@@ -23,6 +23,7 @@ use wayland_protocols::{
     xdg::shell::client::xdg_toplevel::XdgToplevel,
 };
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur;
+use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 use crate::platform::linux::webview::{self as linux_webview, LinuxWebViewHost};
 use crate::platform::tab_manager::{TabManagerState, WindowTabManager};
@@ -87,7 +88,12 @@ struct InProgressConfigure {
 }
 
 pub struct WaylandWindowState {
-    xdg_surface: xdg_surface::XdgSurface,
+    /// `None` for [`WindowKind::Overlay`] windows backed by a wlr-layer-shell surface,
+    /// whose role is a layer surface rather than an xdg-toplevel.
+    xdg_surface: Option<xdg_surface::XdgSurface>,
+    /// Present only for overlay windows on compositors that implement wlr-layer-shell.
+    /// Mutually exclusive with `xdg_surface`/`toplevel`: a wl_surface may hold only one role.
+    layer_surface: Option<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
     acknowledged_first_configure: bool,
     frame_callback_active: bool,
     frame_callback_requested: bool,
@@ -96,7 +102,8 @@ pub struct WaylandWindowState {
     app_id: Option<String>,
     appearance: WindowAppearance,
     blur: Option<org_kde_kwin_blur::OrgKdeKwinBlur>,
-    toplevel: xdg_toplevel::XdgToplevel,
+    /// `None` for overlay windows backed by a layer surface.
+    toplevel: Option<xdg_toplevel::XdgToplevel>,
     viewport: Option<wp_viewport::WpViewport>,
     outputs: HashMap<ObjectId, Output>,
     display: Option<(ObjectId, Output)>,
@@ -133,11 +140,13 @@ pub struct WaylandWindowStatePtr {
 }
 
 impl WaylandWindowState {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         handle: AnyWindowHandle,
         surface: wl_surface::WlSurface,
-        xdg_surface: xdg_surface::XdgSurface,
-        toplevel: xdg_toplevel::XdgToplevel,
+        xdg_surface: Option<xdg_surface::XdgSurface>,
+        toplevel: Option<xdg_toplevel::XdgToplevel>,
+        layer_surface: Option<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1>,
         decoration: Option<zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1>,
         appearance: WindowAppearance,
         viewport: Option<wp_viewport::WpViewport>,
@@ -170,6 +179,7 @@ impl WaylandWindowState {
 
         Ok(Self {
             xdg_surface,
+            layer_surface,
             acknowledged_first_configure: false,
             frame_callback_active: false,
             frame_callback_requested: false,
@@ -286,11 +296,18 @@ impl Drop for WaylandWindow {
         if let Some(blur) = &state.blur {
             blur.release();
         }
-        state.toplevel.destroy();
+        if let Some(toplevel) = &state.toplevel {
+            toplevel.destroy();
+        }
         if let Some(viewport) = &state.viewport {
             viewport.destroy();
         }
-        state.xdg_surface.destroy();
+        if let Some(layer_surface) = &state.layer_surface {
+            layer_surface.destroy();
+        }
+        if let Some(xdg_surface) = &state.xdg_surface {
+            xdg_surface.destroy();
+        }
         state.surface.destroy();
 
         let state_ptr = self.0.clone();
@@ -326,37 +343,83 @@ impl WaylandWindow {
         tab_manager_state: Arc<Mutex<TabManagerState>>,
     ) -> anyhow::Result<(Self, ObjectId)> {
         let surface = globals.compositor.create_surface(&globals.qh, ());
-        let xdg_surface = globals
-            .wm_base
-            .get_xdg_surface(&surface, &globals.qh, surface.id());
-        let toplevel = xdg_surface.get_toplevel(&globals.qh, surface.id());
 
-        if let Some(parent) = parent.as_ref() {
-            toplevel.set_parent(Some(parent));
-        }
+        // An overlay window is given a wlr-layer-shell surface on the overlay layer so it
+        // renders above all other surfaces, including fullscreen ones. The role is mutually
+        // exclusive with xdg-toplevel, so we create one or the other for a given wl_surface.
+        let use_layer_shell = params.kind == WindowKind::Overlay && globals.layer_shell.is_some();
 
-        if params.kind == WindowKind::Overlay {
-            log::warn!(
-                "Wayland: WindowKind::Overlay does not support true always-on-top. \
-                 Always-on-top requires compositor support (e.g. wlr-layer-shell protocol)."
+        let (xdg_surface, toplevel, layer_surface, decoration) = if use_layer_shell {
+            let layer_shell = globals
+                .layer_shell
+                .as_ref()
+                .expect("layer_shell presence checked by use_layer_shell");
+            let layer_surface = layer_shell.get_layer_surface(
+                &surface,
+                None,
+                zwlr_layer_shell_v1::Layer::Overlay,
+                "kael-overlay".to_owned(),
+                &globals.qh,
+                surface.id(),
             );
-        }
 
-        if let Some(size) = params.window_min_size {
-            toplevel.set_min_size(size.width.0 as i32, size.height.0 as i32);
-        }
+            // Defaults preserve the previous overlay behaviour: a free-floating, explicitly
+            // sized surface that does not reserve screen space. Anchoring is left empty so the
+            // compositor positions the surface, and the exclusive zone is 0 (no reservation).
+            let dp_size = params
+                .bounds
+                .size
+                .to_device_pixels(1.0)
+                .map(|value| value.0.max(1) as u32);
+            layer_surface.set_size(dp_size.width, dp_size.height);
+            layer_surface.set_anchor(zwlr_layer_surface_v1::Anchor::empty());
+            layer_surface.set_exclusive_zone(0);
+            // `OnDemand` keyboard interactivity was introduced in version 4 of the protocol;
+            // sending it to an older compositor is a protocol error. Older versions fall back
+            // to the protocol default (`None`, i.e. the overlay does not take keyboard focus).
+            if layer_surface.version() >= 4 {
+                layer_surface.set_keyboard_interactivity(
+                    zwlr_layer_surface_v1::KeyboardInteractivity::OnDemand,
+                );
+            }
+
+            (None, None, Some(layer_surface), None)
+        } else {
+            let xdg_surface = globals
+                .wm_base
+                .get_xdg_surface(&surface, &globals.qh, surface.id());
+            let toplevel = xdg_surface.get_toplevel(&globals.qh, surface.id());
+
+            if let Some(parent) = parent.as_ref() {
+                toplevel.set_parent(Some(parent));
+            }
+
+            if params.kind == WindowKind::Overlay {
+                log::warn!(
+                    "Wayland: WindowKind::Overlay requested but the compositor does not \
+                     implement wlr-layer-shell; falling back to a regular window. True \
+                     always-on-top (above fullscreen) is unavailable on this compositor."
+                );
+            }
+
+            if let Some(size) = params.window_min_size {
+                toplevel.set_min_size(size.width.0 as i32, size.height.0 as i32);
+            }
+
+            // Attempt to set up window decorations based on the requested configuration
+            let decoration = globals
+                .decoration_manager
+                .as_ref()
+                .map(|decoration_manager| {
+                    decoration_manager.get_toplevel_decoration(&toplevel, &globals.qh, surface.id())
+                });
+
+            (Some(xdg_surface), Some(toplevel), None, decoration)
+        };
 
         if let Some(fractional_scale_manager) = globals.fractional_scale_manager.as_ref() {
             fractional_scale_manager.get_fractional_scale(&surface, &globals.qh, surface.id());
         }
-
-        // Attempt to set up window decorations based on the requested configuration
-        let decoration = globals
-            .decoration_manager
-            .as_ref()
-            .map(|decoration_manager| {
-                decoration_manager.get_toplevel_decoration(&toplevel, &globals.qh, surface.id())
-            });
 
         let viewport = globals
             .viewporter
@@ -371,6 +434,7 @@ impl WaylandWindow {
                 surface.clone(),
                 xdg_surface,
                 toplevel,
+                layer_surface,
                 decoration,
                 appearance,
                 viewport,
@@ -403,7 +467,7 @@ impl WaylandWindowStatePtr {
         self.state.borrow().surface.clone()
     }
 
-    pub fn toplevel(&self) -> xdg_toplevel::XdgToplevel {
+    pub fn toplevel(&self) -> Option<xdg_toplevel::XdgToplevel> {
         self.state.borrow().toplevel.clone()
     }
 
@@ -480,7 +544,10 @@ impl WaylandWindowStatePtr {
                 }
             }
             let mut state = self.state.borrow_mut();
-            state.xdg_surface.ack_configure(serial);
+            let Some(xdg_surface) = state.xdg_surface.clone() else {
+                return;
+            };
+            xdg_surface.ack_configure(serial);
 
             let window_geometry = inset_by_tiling(
                 state.bounds.map_origin(|_| px(0.0)),
@@ -490,7 +557,7 @@ impl WaylandWindowStatePtr {
             .map(|v| v.0 as i32)
             .map_size(|v| if v <= 0 { 1 } else { v });
 
-            state.xdg_surface.set_window_geometry(
+            xdg_surface.set_window_geometry(
                 window_geometry.origin.x,
                 window_geometry.origin.y,
                 window_geometry.size.width,
@@ -503,6 +570,54 @@ impl WaylandWindowStatePtr {
                 drop(state);
                 self.frame();
             }
+        }
+    }
+
+    /// Handles configure/closed events for [`WindowKind::Overlay`] windows backed by a
+    /// wlr-layer-shell surface. The layer-shell configure cycle is simpler than xdg's:
+    /// the compositor proposes a size, we acknowledge the serial, resize to the proposed
+    /// (or our requested) size, and drive the first frame. Returns `true` when the
+    /// compositor has closed the surface and the window should be torn down.
+    pub fn handle_layer_surface_event(&self, event: zwlr_layer_surface_v1::Event) -> bool {
+        match event {
+            zwlr_layer_surface_v1::Event::Configure {
+                serial,
+                width,
+                height,
+            } => {
+                let mut state = self.state.borrow_mut();
+                let Some(layer_surface) = state.layer_surface.clone() else {
+                    return false;
+                };
+                layer_surface.ack_configure(serial);
+
+                // A zero dimension means "pick your own size"; keep the requested bounds.
+                let new_size = if width > 0 && height > 0 {
+                    Some(size(px(width as f32), px(height as f32)))
+                } else {
+                    None
+                };
+                if let Some(new_size) = new_size {
+                    state.window_bounds = Bounds {
+                        origin: Point::default(),
+                        size: new_size,
+                    };
+                }
+
+                let request_frame_callback = !state.acknowledged_first_configure;
+                state.acknowledged_first_configure = true;
+                drop(state);
+
+                if let Some(new_size) = new_size {
+                    self.resize(new_size);
+                }
+                if request_frame_callback {
+                    self.frame();
+                }
+                false
+            }
+            zwlr_layer_surface_v1::Event::Closed => true,
+            _ => false,
         }
     }
 
@@ -910,12 +1025,19 @@ impl PlatformWindow for WaylandWindow {
         let state_ptr = self.0.clone();
         let dp_size = size.to_device_pixels(self.scale_factor());
 
-        state.xdg_surface.set_window_geometry(
-            state.bounds.origin.x.0 as i32,
-            state.bounds.origin.y.0 as i32,
-            dp_size.width.0,
-            dp_size.height.0,
-        );
+        if let Some(xdg_surface) = state.xdg_surface.as_ref() {
+            xdg_surface.set_window_geometry(
+                state.bounds.origin.x.0 as i32,
+                state.bounds.origin.y.0 as i32,
+                dp_size.width.0,
+                dp_size.height.0,
+            );
+        } else if let Some(layer_surface) = state.layer_surface.as_ref() {
+            layer_surface.set_size(
+                dp_size.width.0.max(1) as u32,
+                dp_size.height.0.max(1) as u32,
+            );
+        }
 
         state
             .globals
@@ -939,6 +1061,7 @@ impl PlatformWindow for WaylandWindow {
                 id: id.clone(),
                 name: display.name.clone(),
                 bounds: display.bounds.to_pixels(state.scale),
+                refresh_mhz: display.refresh_mhz,
             }) as Rc<dyn PlatformDisplay>
         })
     }
@@ -1005,14 +1128,18 @@ impl PlatformWindow for WaylandWindow {
 
     fn set_title(&mut self, title: &str) {
         let state = self.borrow();
-        state.toplevel.set_title(title.to_string());
+        if let Some(toplevel) = state.toplevel.as_ref() {
+            toplevel.set_title(title.to_string());
+        }
         // Keep the tab manager's title in sync for tabbed_windows() results.
         state.tab_manager.set_title(title.to_owned().into());
     }
 
     fn set_app_id(&mut self, app_id: &str) {
         let mut state = self.borrow_mut();
-        state.toplevel.set_app_id(app_id.to_owned());
+        if let Some(toplevel) = state.toplevel.as_ref() {
+            toplevel.set_app_id(app_id.to_owned());
+        }
         state.app_id = Some(app_id.to_owned());
     }
 
@@ -1039,24 +1166,32 @@ impl PlatformWindow for WaylandWindow {
     }
 
     fn minimize(&self) {
-        self.borrow().toplevel.set_minimized();
+        if let Some(toplevel) = self.borrow().toplevel.as_ref() {
+            toplevel.set_minimized();
+        }
     }
 
     fn zoom(&self) {
         let state = self.borrow();
+        let Some(toplevel) = state.toplevel.as_ref() else {
+            return;
+        };
         if !state.maximized {
-            state.toplevel.set_maximized();
+            toplevel.set_maximized();
         } else {
-            state.toplevel.unset_maximized();
+            toplevel.unset_maximized();
         }
     }
 
     fn toggle_fullscreen(&self) {
         let mut state = self.borrow_mut();
+        let Some(toplevel) = state.toplevel.clone() else {
+            return;
+        };
         if !state.fullscreen {
-            state.toplevel.set_fullscreen(None);
+            toplevel.set_fullscreen(None);
         } else {
-            state.toplevel.unset_fullscreen();
+            toplevel.unset_fullscreen();
         }
     }
 
@@ -1128,8 +1263,11 @@ impl PlatformWindow for WaylandWindow {
 
     fn show_window_menu(&self, position: Point<Pixels>) {
         let state = self.borrow();
+        let Some(toplevel) = state.toplevel.as_ref() else {
+            return;
+        };
         let serial = state.client.get_serial(SerialKind::MousePress);
-        state.toplevel.show_window_menu(
+        toplevel.show_window_menu(
             &state.globals.seat,
             serial,
             position.x.0 as i32,
@@ -1139,13 +1277,19 @@ impl PlatformWindow for WaylandWindow {
 
     fn start_window_move(&self) {
         let state = self.borrow();
+        let Some(toplevel) = state.toplevel.as_ref() else {
+            return;
+        };
         let serial = state.client.get_serial(SerialKind::MousePress);
-        state.toplevel._move(&state.globals.seat, serial);
+        toplevel._move(&state.globals.seat, serial);
     }
 
     fn start_window_resize(&self, edge: crate::ResizeEdge) {
         let state = self.borrow();
-        state.toplevel.resize(
+        let Some(toplevel) = state.toplevel.as_ref() else {
+            return;
+        };
+        toplevel.resize(
             &state.globals.seat,
             state.client.get_serial(SerialKind::MousePress),
             edge.to_xdg(),

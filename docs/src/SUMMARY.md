@@ -1,6 +1,7 @@
 # Summary
 
 [Introduction](index.md)
+[Choosing Kael](why-kael.md)
 
 # Guides
 

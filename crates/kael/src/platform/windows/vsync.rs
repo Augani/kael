@@ -21,7 +21,16 @@ static QPC_TICKS_PER_SECOND: LazyLock<u64> = LazyLock::new(|| {
 
 const VSYNC_INTERVAL_THRESHOLD: Duration = Duration::from_millis(1);
 const DEFAULT_VSYNC_INTERVAL: Duration = Duration::from_micros(16_666); // ~60Hz
-/// Re-query the DWM interval every N frames to detect monitor refresh rate changes.
+/// Re-query the DWM interval every N frames to detect monitor refresh rate changes
+/// (e.g. a window dragged from a 60Hz to a 144Hz display, or a mode switch). The
+/// interval is also re-queried on every fallback (slept) frame, so a stale interval
+/// self-corrects within at most one cadence window.
+///
+/// The wait itself is already event-driven: `DwmFlush` blocks on the compositor's
+/// vblank rather than spinning. `DCompositionWaitForCompositorClock` was evaluated as
+/// an alternative but would require restructuring the vsync thread (it waits on a
+/// composition-clock handle with its own cancellation semantics) for no pacing benefit
+/// over `DwmFlush`, so it is intentionally not used here.
 const INTERVAL_REFRESH_CADENCE: u32 = 120;
 
 pub(crate) struct VSyncProvider {

@@ -194,6 +194,13 @@ impl PlatformDisplay for WindowsDisplay {
     fn bounds(&self) -> Bounds<Pixels> {
         self.bounds
     }
+
+    fn refresh_rate(&self) -> Option<f32> {
+        // DWM composition timing reflects the refresh rate of the display driving
+        // composition; on multi-monitor setups it tracks the active composition clock
+        // rather than a specific monitor.
+        super::vsync::get_display_refresh_rate_hz()
+    }
 }
 
 fn available_monitors() -> SmallVec<[HMONITOR; 4]> {

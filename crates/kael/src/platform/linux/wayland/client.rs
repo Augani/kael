@@ -62,6 +62,7 @@ use wayland_protocols::xdg::decoration::zv1::client::{
 };
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 use wayland_protocols_plasma::blur::client::{org_kde_kwin_blur, org_kde_kwin_blur_manager};
+use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 use xkbcommon::xkb::ffi::XKB_KEYMAP_FORMAT_TEXT_V1;
 use xkbcommon::xkb::{self, KEYMAP_COMPILE_NO_FLAGS, Keycode};
 
@@ -118,6 +119,11 @@ pub struct Globals {
     pub decoration_manager: Option<zxdg_decoration_manager_v1::ZxdgDecorationManagerV1>,
     pub blur_manager: Option<org_kde_kwin_blur_manager::OrgKdeKwinBlurManager>,
     pub text_input_manager: Option<zwp_text_input_manager_v3::ZwpTextInputManagerV3>,
+    /// wlr-layer-shell, used to place [`WindowKind::Overlay`] windows on the overlay
+    /// layer (always-on-top, above fullscreen surfaces). `None` when the compositor
+    /// does not implement the protocol (e.g. GNOME/Mutter), in which case overlay
+    /// windows fall back to a regular xdg-toplevel.
+    pub layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
     pub executor: ForegroundExecutor,
 }
 
@@ -155,6 +161,7 @@ impl Globals {
             decoration_manager: globals.bind(&qh, 1..=1, ()).ok(),
             blur_manager: globals.bind(&qh, 1..=1, ()).ok(),
             text_input_manager: globals.bind(&qh, 1..=1, ()).ok(),
+            layer_shell: globals.bind(&qh, 1..=4, ()).ok(),
             executor,
             qh,
         }
@@ -761,6 +768,7 @@ impl LinuxClient for WaylandClient {
                     id: id.clone(),
                     name: output.name.clone(),
                     bounds: output.bounds.to_pixels(output.scale as f32),
+                    refresh_mhz: output.refresh_mhz,
                 }) as Rc<dyn PlatformDisplay>
             })
             .collect()
@@ -777,6 +785,7 @@ impl LinuxClient for WaylandClient {
                         id: object_id.clone(),
                         name: output.name.clone(),
                         bounds: output.bounds.to_pixels(output.scale as f32),
+                        refresh_mhz: output.refresh_mhz,
                     }) as Rc<dyn PlatformDisplay>
                 })
             })
@@ -817,7 +826,7 @@ impl LinuxClient for WaylandClient {
                     .windows
                     .values()
                     .find(|window| window.handle() == parent_handle)
-                    .map(|window| window.toplevel());
+                    .and_then(|window| window.toplevel());
                 if parent.is_none() {
                     log::warn!(
                         "Wayland: unable to resolve explicit parent window {:?}",
@@ -831,7 +840,7 @@ impl LinuxClient for WaylandClient {
                     state
                         .keyboard_focused_window
                         .as_ref()
-                        .map(|window| window.toplevel())
+                        .and_then(|window| window.toplevel())
                 } else {
                     None
                 }
@@ -1170,6 +1179,7 @@ delegate_noop!(WaylandClientStatePtr: ignore zwp_text_input_manager_v3::ZwpTextI
 delegate_noop!(WaylandClientStatePtr: ignore org_kde_kwin_blur::OrgKdeKwinBlur);
 delegate_noop!(WaylandClientStatePtr: ignore wp_viewporter::WpViewporter);
 delegate_noop!(WaylandClientStatePtr: ignore wp_viewport::WpViewport);
+delegate_noop!(WaylandClientStatePtr: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
 
 impl Dispatch<WlCallback, ObjectId> for WaylandClientStatePtr {
     fn event(
@@ -1285,6 +1295,28 @@ impl Dispatch<xdg_surface::XdgSurface, ObjectId> for WaylandClientStatePtr {
         };
         drop(state);
         window.handle_xdg_surface_event(event);
+    }
+}
+
+impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ObjectId> for WaylandClientStatePtr {
+    fn event(
+        state: &mut Self,
+        _: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        surface_id: &ObjectId,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let client = state.get_client();
+        let mut state = client.borrow_mut();
+        let Some(window) = get_window(&mut state, surface_id) else {
+            return;
+        };
+        drop(state);
+        let should_close = window.handle_layer_surface_event(event);
+        if should_close {
+            window.close();
+        }
     }
 }
 

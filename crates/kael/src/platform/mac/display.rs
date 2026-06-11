@@ -2,7 +2,7 @@ use crate::{Bounds, DisplayId, Pixels, PlatformDisplay, px, size};
 use anyhow::Result;
 use core_foundation::uuid::{CFUUIDGetUUIDBytes, CFUUIDRef};
 use core_graphics::display::{
-    CGDirectDisplayID, CGDisplayBounds, CGGetActiveDisplayList, CGMainDisplayID,
+    CGDirectDisplayID, CGDisplay, CGDisplayBounds, CGGetActiveDisplayList, CGMainDisplayID,
 };
 use uuid::Uuid;
 
@@ -96,5 +96,12 @@ impl PlatformDisplay for MacDisplay {
                 size: size(px(cg.size.width as f32), px(cg.size.height as f32)),
             }
         }
+    }
+
+    fn refresh_rate(&self) -> Option<f32> {
+        // `CGDisplayModeGetRefreshRate` reports 0.0 for displays that do not advertise a
+        // fixed rate (notably some built-in panels), so a zero is treated as "unknown".
+        let rate = CGDisplay::new(self.0).display_mode()?.refresh_rate();
+        if rate > 0.0 { Some(rate as f32) } else { None }
     }
 }

@@ -47,6 +47,12 @@ pub enum PlatformFeature {
     HardenedRuntime,
     /// Sandboxed execution.
     Sandboxing,
+    /// Always-on-top / overlay windows that render above other windows,
+    /// including fullscreen surfaces.
+    AlwaysOnTopWindows,
+    /// Native window tabbing (grouping windows into a single tabbed window,
+    /// tab bar, tab overview, merge-all-windows). A macOS AppKit feature.
+    WindowTabbing,
 }
 
 /// The level of support for a platform feature.
@@ -184,6 +190,12 @@ impl CapabilityReport {
         self.add(PlatformFeature::AutoUpdate, SupportLevel::Full, None);
         self.add(PlatformFeature::HardenedRuntime, SupportLevel::Full, None);
         self.add(PlatformFeature::Sandboxing, SupportLevel::Full, None);
+        self.add(
+            PlatformFeature::AlwaysOnTopWindows,
+            SupportLevel::Full,
+            Some("NSWindow screen-saver/floating window levels"),
+        );
+        self.add(PlatformFeature::WindowTabbing, SupportLevel::Full, None);
     }
 
     #[cfg(target_os = "windows")]
@@ -257,6 +269,16 @@ impl CapabilityReport {
             PlatformFeature::Sandboxing,
             SupportLevel::Partial,
             Some("MSIX sandbox only"),
+        );
+        self.add(
+            PlatformFeature::AlwaysOnTopWindows,
+            SupportLevel::Full,
+            Some("HWND_TOPMOST z-order"),
+        );
+        self.add(
+            PlatformFeature::WindowTabbing,
+            SupportLevel::Unsupported,
+            Some("No native window tabbing; tabbing_identifier is ignored"),
         );
     }
 
@@ -357,6 +379,21 @@ impl CapabilityReport {
             PlatformFeature::Sandboxing,
             SupportLevel::Partial,
             Some("Flatpak/Snap sandbox"),
+        );
+        self.add(
+            PlatformFeature::AlwaysOnTopWindows,
+            SupportLevel::Partial,
+            Some(
+                "X11: _NET_WM_STATE_ABOVE. Wayland: overlay windows use the wlr-layer-shell \
+                 protocol (overlay layer) when the compositor implements it (wlroots-based \
+                 compositors, KDE Plasma); compositors without it (e.g. GNOME/Mutter) fall \
+                 back to a regular window with no always-on-top guarantee.",
+            ),
+        );
+        self.add(
+            PlatformFeature::WindowTabbing,
+            SupportLevel::Unsupported,
+            Some("No native window tabbing; tabbing_identifier is ignored"),
         );
     }
 
