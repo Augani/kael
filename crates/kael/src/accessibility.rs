@@ -1123,4 +1123,73 @@ mod accesskit_spike_tests {
             Some(AccessibilityAction::Increment)
         );
     }
+
+    #[test]
+    fn form_like_tree_maps_roles_values_and_states() {
+        let root = AccessibilityNode::new(AccessibilityRole::Window);
+        let root_id = root.id;
+        let mut tree = AccessibilityTree::new(root);
+
+        let text = AccessibilityNode::new(AccessibilityRole::TextInput)
+            .with_value(AccessibilityValue::Text("Control room".into()));
+        let text_id = text.id;
+        tree.insert(text);
+        tree.set_parent(text_id, root_id);
+
+        let checkbox = AccessibilityNode::new(AccessibilityRole::CheckBox)
+            .with_label("Enable notifications")
+            .with_states(AccessibilityState::CHECKED);
+        let checkbox_id = checkbox.id;
+        tree.insert(checkbox);
+        tree.set_parent(checkbox_id, root_id);
+
+        let slider = AccessibilityNode::new(AccessibilityRole::Slider).with_value(
+            AccessibilityValue::Range {
+                current: 65.0,
+                min: 0.0,
+                max: 100.0,
+                step: Some(1.0),
+            },
+        );
+        let slider_id = slider.id;
+        tree.insert(slider);
+        tree.set_parent(slider_id, root_id);
+
+        let button = AccessibilityNode::new(AccessibilityRole::Button)
+            .with_label("Review delivery reset")
+            .with_actions(vec![AccessibilityAction::Click, AccessibilityAction::Focus]);
+        let button_id = button.id;
+        tree.insert(button);
+        tree.set_parent(button_id, root_id);
+
+        let update = tree.to_accesskit_tree_update(Some("form_controls"), Some("Kael"), None);
+        let lookup = |id: AccessibilityId| {
+            update
+                .nodes
+                .iter()
+                .find(|(nid, _)| *nid == accesskit::NodeId(id.0))
+                .map(|(_, node)| node)
+                .expect("node emitted")
+        };
+
+        assert_eq!(lookup(text_id).role(), accesskit::Role::TextInput);
+        assert_eq!(lookup(text_id).value(), Some("Control room"));
+
+        let cb = lookup(checkbox_id);
+        assert_eq!(cb.role(), accesskit::Role::CheckBox);
+        assert_eq!(cb.label(), Some("Enable notifications"));
+        assert_eq!(cb.toggled(), Some(accesskit::Toggled::True));
+
+        let sl = lookup(slider_id);
+        assert_eq!(sl.role(), accesskit::Role::Slider);
+        assert_eq!(sl.numeric_value(), Some(65.0));
+        assert_eq!(sl.max_numeric_value(), Some(100.0));
+
+        let btn = lookup(button_id);
+        assert_eq!(btn.role(), accesskit::Role::Button);
+        assert!(btn.supports_action(accesskit::Action::Click));
+
+        let root_children = lookup(root_id).children().len();
+        assert_eq!(root_children, 4);
+    }
 }
