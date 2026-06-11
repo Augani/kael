@@ -2689,6 +2689,7 @@ impl Window {
                 tile: cached_surface.tile.clone(),
                 sprite_kind: POLYCHROME_SPRITE_KIND_PREMULTIPLIED,
                 color: transparent_black(),
+                transformation: self.element_transform,
             });
     }
 
@@ -3592,6 +3593,7 @@ impl Window {
                         tile,
                         sprite_kind: POLYCHROME_SPRITE_KIND_SUBPIXEL_TEXT,
                         color: color.opacity(element_opacity),
+                        transformation,
                     });
                 }
                 GlyphRasterMode::Grayscale => {
@@ -3681,6 +3683,7 @@ impl Window {
                 opacity,
                 sprite_kind: POLYCHROME_SPRITE_KIND_COLOR,
                 color: transparent_black(),
+                transformation: self.element_transform,
             });
         }
         Ok(())
@@ -3857,6 +3860,7 @@ impl Window {
             opacity,
             sprite_kind: POLYCHROME_SPRITE_KIND_COLOR,
             color: transparent_black(),
+            transformation: self.element_transform,
         });
         Ok(())
     }

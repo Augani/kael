@@ -928,6 +928,7 @@ pub(crate) struct PolychromeSprite {
     pub rounded_clip_bounds: Bounds<ScaledPixels>,
     pub rounded_clip_radii: Corners<ScaledPixels>,
     pub color_filter: ColorFilter,
+    pub transformation: TransformationMatrix,
 }
 
 impl From<PolychromeSprite> for Primitive {

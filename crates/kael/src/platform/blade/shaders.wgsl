@@ -1504,6 +1504,7 @@ struct PolychromeSprite {
     rounded_clip_bounds: Bounds,
     rounded_clip_radii: Corners,
     color_filter: ColorFilter,
+    transformation: TransformationMatrix,
 }
 var<storage, read> b_poly_sprites: array<PolychromeSprite>;
 
@@ -1520,10 +1521,10 @@ fn vs_poly_sprite(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index
     let sprite = b_poly_sprites[instance_id];
 
     var out = PolySpriteVarying();
-    out.position = to_device_position(unit_vertex, sprite.bounds);
+    out.position = to_device_position_transformed(unit_vertex, sprite.bounds, sprite.transformation);
     out.tile_position = to_tile_position(unit_vertex, sprite.tile);
     out.sprite_id = instance_id;
-    out.clip_distances = distance_from_clip_rect(unit_vertex, sprite.bounds, sprite.content_mask);
+    out.clip_distances = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds, sprite.content_mask, sprite.transformation);
     return out;
 }
 
@@ -1537,7 +1538,8 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
 
     let sprite = b_poly_sprites[input.sprite_id];
     let rounded_clip = rounded_clip_factor(input.position.xy, sprite.rounded_clip_bounds, sprite.rounded_clip_radii);
-    let distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
+    let local_position = apply_inverse_transform(input.position.xy, sprite.transformation);
+    let distance = quad_sdf(local_position, sprite.bounds, sprite.corner_radii);
     if (sprite.sprite_kind == 1u) {
         let tint = hsla_to_rgba(sprite.color);
         let coverage = sample.rgb;
