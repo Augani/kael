@@ -6,8 +6,8 @@
 
 #[cfg(target_os = "linux")]
 mod linux_tests {
-    use crate::platform::linux::accessibility::*;
     use crate::PermissionStatus;
+    use crate::platform::linux::accessibility::*;
 
     #[test]
     fn test_accessibility_status_is_granted() {
