@@ -241,3 +241,5 @@ pub use crate::components::waveform::Waveform;
 pub use crate::charts::treemap::{TreeMap, TreeMapNode};
 
 pub use crate::http::{init_http, init_http_with_user_agent};
+
+pub use crate::query::{Generation, Loadable, QueryCache, QueryState};

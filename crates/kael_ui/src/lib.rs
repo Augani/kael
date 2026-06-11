@@ -89,6 +89,9 @@ pub mod icon_config;
 /// HTTP client for remote image loading
 pub mod http;
 
+/// Async data-loading state and query helpers
+pub mod query;
+
 // Re-export commonly used icon configuration functions
 pub use icon_config::set_icon_base_path;
 
