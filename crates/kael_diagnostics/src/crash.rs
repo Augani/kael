@@ -165,6 +165,20 @@ impl CrashReporter {
         &self.reports_dir
     }
 
+    /// Overrides the directory used for crash report and native artifact
+    /// storage. Must be called before [`install_native`](Self::install_native).
+    pub fn set_reports_dir(&mut self, reports_dir: impl Into<PathBuf>) -> Result<()> {
+        let reports_dir = reports_dir.into();
+        fs::create_dir_all(&reports_dir).with_context(|| {
+            format!(
+                "failed to create crash reports directory: {}",
+                reports_dir.display()
+            )
+        })?;
+        self.reports_dir = reports_dir;
+        Ok(())
+    }
+
     /// Sets the endpoint used for deferred crash report submission.
     pub fn set_endpoint(&mut self, endpoint: impl Into<String>) {
         self.endpoint = Some(endpoint.into());

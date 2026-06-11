@@ -18,6 +18,16 @@ name = "kael_diagnostics"
 path = "src/lib.rs"
 doctest = false
 
+[features]
+# Builds the crash_helper test binary. Off by default so the published crate
+# ships only the library; the native_crash integration test enables it.
+_crash_test_helper = []
+
+[[bin]]
+name = "crash_helper"
+path = "src/bin/crash_helper.rs"
+required-features = ["_crash_test_helper"]
+
 [dependencies.anyhow]
 version = "1.0.86"
 
@@ -49,6 +59,9 @@ features = [
 version = "3.20.0"
 
 [dev-dependencies.pollster]
+version = "0.2"
+
+[target.'cfg(unix)'.dev-dependencies.libc]
 version = "0.2"
 
 [lints.clippy]
