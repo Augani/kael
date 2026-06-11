@@ -5,16 +5,26 @@
 - **Rust** 1.85+ (edition 2024) — [install via rustup](https://rustup.rs/)
 - **Platform dependencies:**
 
-**macOS:** Xcode command line tools
+**macOS:** the default build precompiles Metal shaders, which requires the **full Xcode application** — the standalone Command Line Tools do **not** include the Metal compiler. With only Command Line Tools installed, the build fails with `xcrun: error: unable to find utility "metal"`.
+
 ```bash
-xcode-select --install
+# Install Xcode from the App Store, then point the toolchain at it:
+sudo xcode-select -s /Applications/Xcode.app
 ```
+
+Alternatively, skip the full-Xcode requirement entirely by compiling shaders at app launch — recommended for development:
+
+```bash
+cargo run --features kael/runtime_shaders
+```
+
+Use `runtime_shaders` for day-to-day development; build with full Xcode for release builds.
 
 **Linux (Ubuntu/Debian):**
 ```bash
 sudo apt-get install -y \
-  libxkbcommon-dev libwayland-dev libxcb1-dev \
-  libvulkan-dev libfontconfig1-dev
+  libwayland-dev libxkbcommon-dev libvulkan-dev \
+  libwebkit2gtk-4.1-dev libgtk-3-dev libdbus-1-dev libnotify-dev
 ```
 
 **Windows:** Visual Studio Build Tools with C++ workload
