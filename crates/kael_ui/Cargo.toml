@@ -100,6 +100,9 @@ editor-languages = [
     "tree-sitter-sequel",
 ]
 
+[dev-dependencies]
+kael = { path = "../kael", version = "0.3.0", features = ["test-support"] }
+
 [[example]]
 name = "markdown_demo"
 path = "examples/markdown_demo.rs"

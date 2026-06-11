@@ -38,6 +38,11 @@
 - [Multi-Process & IPC](advanced/multi-process.md)
 - [Security & Permissions](advanced/security.md)
 
+# Developer Tools
+
+- [Inspector & Frame Stats](devtools.md)
+- [Testing](testing.md)
+
 ---
 
 [For LLMs](llms.md)

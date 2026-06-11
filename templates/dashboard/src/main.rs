@@ -9,6 +9,9 @@ use kael_ui::navigation::sidebar::{Sidebar, SidebarItem, SidebarVariant};
 use kael_ui::prelude::*;
 use std::path::PathBuf;
 
+#[cfg(debug_assertions)]
+actions!(dashboard, [ToggleInspector]);
+
 struct Assets {
     base: PathBuf,
 }
@@ -88,6 +91,12 @@ fn main() {
             kael_ui::init(cx);
             kael_ui::set_icon_base_path("assets/icons");
             install_theme(cx, Theme::dark());
+
+            #[cfg(debug_assertions)]
+            {
+                kael_ui::devtools::install_inspector(cx);
+                cx.bind_keys([KeyBinding::new("cmd-alt-i", ToggleInspector, None)]);
+            }
 
             cx.open_window(
                 WindowOptions {
@@ -420,12 +429,19 @@ impl Render for DashboardApp {
             )),
         );
 
-        div()
+        let root = div()
             .size_full()
             .flex()
             .bg(tokens.background)
             .text_color(tokens.foreground)
             .child(sidebar)
-            .child(main)
+            .child(main);
+
+        #[cfg(debug_assertions)]
+        let root = root.on_action(|_: &ToggleInspector, window, cx| {
+            window.toggle_inspector(cx);
+        });
+
+        root
     }
 }
