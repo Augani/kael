@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- **Rust** 1.85+ (edition 2024) — [install via rustup](https://rustup.rs/)
+- **Rust** 1.87+ (edition 2024) — [install via rustup](https://rustup.rs/)
 - **Platform dependencies:**
 
 **macOS:** the default build precompiles Metal shaders, which requires the **full Xcode application** — the standalone Command Line Tools do **not** include the Metal compiler. With only Command Line Tools installed, the build fails with `xcrun: error: unable to find utility "metal"`.
@@ -40,7 +40,7 @@ Add Kael to `Cargo.toml`:
 
 ```toml
 [dependencies]
-kael = "0.2"
+kael = "0.3"
 ```
 
 ## Your first window
