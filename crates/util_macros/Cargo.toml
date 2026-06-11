@@ -25,7 +25,7 @@ proc-macro = true
 [dependencies.perf]
 path = "../perf"
 package = "kael_perf"
-version = "0.2.0"
+version = "0.3.0"
 optional = true
 
 [dependencies.quote]

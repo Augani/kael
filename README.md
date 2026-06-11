@@ -74,7 +74,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-kael = "0.2"
+kael = "0.3"
 ```
 
 ```rust

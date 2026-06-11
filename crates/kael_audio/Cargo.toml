@@ -30,7 +30,7 @@ version = "0.4"
 [dependencies.kael_media]
 path = "../kael-media"
 package = "kael-media"
-version = "0.2.0"
+version = "0.3.0"
 
 [dependencies.parking_lot]
 version = "0.12.1"

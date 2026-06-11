@@ -19,8 +19,8 @@ A comprehensive, professional UI component library for [Kael](https://github.com
 
 ```toml
 [dependencies]
-kael = "0.2"
-kael_ui = "0.2"
+kael = "0.3"
+kael_ui = "0.3"
 ```
 
 ## Quick Start
