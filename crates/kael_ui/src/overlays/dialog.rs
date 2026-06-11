@@ -354,9 +354,9 @@ impl Render for Dialog {
                             }),
                         move |el, delta| {
                             if dismissing {
-                                el.opacity(1.0 - delta).mt(px(8.0 * delta))
+                                el.opacity(1.0 - delta).scale(1.0 - 0.04 * delta)
                             } else {
-                                el.opacity(delta).mt(px(12.0 * (1.0 - delta)))
+                                el.opacity(delta).scale(0.96 + 0.04 * delta)
                             }
                         },
                     ),
