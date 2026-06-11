@@ -7,8 +7,7 @@ pub use crate::animate::{
     bounce_in as animate_bounce_in, fade_in as animate_fade_in, fade_out as animate_fade_out,
     scale_in as animate_scale_in, slide_down as animate_slide_down,
     slide_in_left as animate_slide_in_left, slide_in_right as animate_slide_in_right,
-    slide_up as animate_slide_up, AnimationPreset, AnimationRepeat, KeyframeAnimation,
-    StaggerConfig, Transition,
+    slide_up as animate_slide_up, AnimationPreset, StaggerConfig, Transition,
 };
 pub use crate::animations::{lerp_color, lerp_f32, lerp_pixels, lerp_shadow, lerp_shadows};
 pub use crate::charts::bar_chart::{
