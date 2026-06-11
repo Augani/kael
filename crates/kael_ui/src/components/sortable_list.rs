@@ -75,6 +75,16 @@ impl<T: Clone + 'static> SortableListState<T> {
     }
 }
 
+/// A data-driven convenience sortable list over an in-memory `Vec<T>`.
+///
+/// Items live in a [`SortableListState`] and are laid out in a plain flex
+/// container, which keeps the API ergonomic for small, fully materialized
+/// collections that fit comfortably on screen. Drag reordering routes its index
+/// math through core's shared [`kael::reorder_target`] / [`kael::apply_reorder`]
+/// helpers so a drop resolves to the same move as the low-level, virtualized
+/// `kael::SortableList` delegate. For large or lazily-supplied lists that need
+/// virtualization, per-item move constraints, or drag auto-scroll, use that
+/// delegate-based `kael::SortableList` instead.
 #[derive(IntoElement)]
 pub struct SortableList<T: Clone + 'static> {
     state: Entity<SortableListState<T>>,
@@ -174,31 +184,20 @@ impl<T: Clone + 'static> RenderOnce for SortableList<T> {
                 .on_drop(move |dragged: &SortableItemDrag, window, cx| {
                     let from = dragged.index;
                     let to = idx;
-                    if from == to {
-                        state_drop.update(cx, |s, ctx| {
-                            s.dragging_index = None;
-                            s.hover_index = None;
-                            ctx.notify();
-                        });
-                        return;
-                    }
 
-                    state_drop.update(cx, |s, ctx| {
-                        let mut reordered = s.items.clone();
-                        if from < reordered.len() {
-                            let moved = reordered.remove(from);
-                            let insert_at = to.min(reordered.len());
-                            reordered.insert(insert_at, moved);
-                            s.items = reordered;
-                        }
+                    let changed = state_drop.update(cx, |s, ctx| {
+                        let changed = kael::apply_reorder(&mut s.items, from, to);
                         s.dragging_index = None;
                         s.hover_index = None;
                         ctx.notify();
+                        changed
                     });
 
-                    if let Some(ref callback) = on_reorder {
-                        let reordered_items = state_drop.read(cx).items.clone();
-                        callback(reordered_items, window, cx);
+                    if changed {
+                        if let Some(ref callback) = on_reorder {
+                            let reordered_items = state_drop.read(cx).items.clone();
+                            callback(reordered_items, window, cx);
+                        }
                     }
                 })
                 .when(is_dragging, |d| d.opacity(0.5));

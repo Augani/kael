@@ -7,10 +7,68 @@ use std::rc::Rc;
 
 const DEFAULT_OVERDRAW_PX: f32 = 200.0;
 const DEFAULT_ESTIMATED_ITEM_HEIGHT_PX: f32 = 44.0;
-const AUTO_SCROLL_THRESHOLD_PX: f32 = 36.0;
-const AUTO_SCROLL_STEP_PX: f32 = 18.0;
 const INSERTION_INDICATOR_HEIGHT_PX: f32 = 2.0;
 const INSERTION_GAP_PX: f32 = 10.0;
+
+/// Distance to auto-scroll when dragging near an edge, in pixels per frame.
+pub const AUTO_SCROLL_STEP_PX: f32 = 18.0;
+/// Edge band, in pixels, within which a drag triggers auto-scrolling.
+pub const AUTO_SCROLL_THRESHOLD_PX: f32 = 36.0;
+
+/// Translates a drag from a source item to an insertion slot into the final
+/// `(from, to)` index pair, or `None` when the move is a no-op or out of range.
+///
+/// An insertion slot sits *between* items (`0..=len`); when the slot is past the
+/// source the target shifts down by one to account for the source being lifted
+/// out first. This is the canonical reorder index math shared by every sortable
+/// list so virtualized (delegate) and data-driven lists agree on what a drop
+/// means.
+pub fn reorder_target(
+    source_index: usize,
+    insertion_index: usize,
+    item_count: usize,
+) -> Option<(usize, usize)> {
+    if source_index >= item_count || insertion_index > item_count {
+        return None;
+    }
+
+    let target_index = if insertion_index > source_index {
+        insertion_index.saturating_sub(1)
+    } else {
+        insertion_index
+    };
+
+    (target_index != source_index).then_some((source_index, target_index))
+}
+
+/// Moves the item at `from` to `to` within `items`, clamping `to` into range.
+///
+/// Returns whether the vector changed. Both core's delegate-based list and
+/// higher-level data-driven lists route their reorder through this primitive so
+/// the move semantics never drift apart.
+pub fn apply_reorder<T>(items: &mut Vec<T>, from: usize, to: usize) -> bool {
+    if from >= items.len() || from == to {
+        return false;
+    }
+    let moved = items.remove(from);
+    let insert_at = to.min(items.len());
+    items.insert(insert_at, moved);
+    true
+}
+
+/// Returns the per-frame auto-scroll distance for a drag at `position` within
+/// `bounds`: negative near the top edge, positive near the bottom, zero in the
+/// middle. Shared so every sortable list auto-scrolls with the same feel.
+pub fn auto_scroll_distance(position: Point<Pixels>, bounds: Bounds<Pixels>) -> Pixels {
+    let threshold = px(AUTO_SCROLL_THRESHOLD_PX);
+    if position.y <= bounds.top() + threshold {
+        -px(AUTO_SCROLL_STEP_PX)
+    } else if position.y >= bounds.bottom() - threshold {
+        px(AUTO_SCROLL_STEP_PX)
+    } else {
+        Pixels::ZERO
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SortableDragPayload {
@@ -25,19 +83,7 @@ struct DragSnapshot {
 }
 
 fn drag_reorder_target(drag: &DragSnapshot, item_count: usize) -> Option<(usize, usize)> {
-    let source_index = drag.source_index?;
-    let insertion_index = drag.insertion_index?;
-    if source_index >= item_count || insertion_index > item_count {
-        return None;
-    }
-
-    let target_index = if insertion_index > source_index {
-        insertion_index.saturating_sub(1)
-    } else {
-        insertion_index
-    };
-
-    (target_index != source_index).then_some((source_index, target_index))
+    reorder_target(drag.source_index?, drag.insertion_index?, item_count)
 }
 
 struct SortableListElementState {
@@ -231,7 +277,16 @@ pub trait SortableDelegate: 'static {
     fn did_reorder(&self, from: usize, to: usize, window: &mut Window, cx: &mut App);
 }
 
-/// A list component that supports reordering its own items via drag and drop.
+/// A low-level, delegate-driven list that supports reordering its own items via
+/// drag and drop.
+///
+/// This is the foundational sortable: items are supplied lazily through a
+/// [`SortableDelegate`] and laid out by a virtualized [`ListState`], so it
+/// scales to large lists, supports per-item move constraints
+/// ([`SortableDelegate::can_move`]), drag auto-scroll, and insertion indicators.
+/// For a data-driven convenience layer over an in-memory `Vec`, prefer the
+/// higher-level `kael_ui` `SortableList`, which delegates its reorder math to
+/// the shared [`reorder_target`] / [`apply_reorder`] helpers in this module.
 pub struct SortableList<D> {
     element_id: ElementId,
     delegate: Rc<D>,
@@ -541,23 +596,58 @@ where
     }
 }
 
-fn auto_scroll_distance(position: Point<Pixels>, bounds: Bounds<Pixels>) -> Pixels {
-    let threshold = px(AUTO_SCROLL_THRESHOLD_PX);
-    if position.y <= bounds.top() + threshold {
-        -px(AUTO_SCROLL_STEP_PX)
-    } else if position.y >= bounds.bottom() - threshold {
-        px(AUTO_SCROLL_STEP_PX)
-    } else {
-        Pixels::ZERO
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{SortableDelegate, SortableDragPayload, SortableListElementState};
+    use super::{
+        AUTO_SCROLL_STEP_PX, SortableDelegate, SortableDragPayload, SortableListElementState,
+        apply_reorder, auto_scroll_distance, reorder_target,
+    };
     use crate::{
         AnyElement, App, Bounds, IntoElement, ListAlignment, Pixels, Window, div, point, px,
     };
+
+    #[test]
+    fn reorder_target_shifts_when_inserting_past_source() {
+        assert_eq!(reorder_target(0, 3, 4), Some((0, 2)));
+        assert_eq!(reorder_target(3, 0, 4), Some((3, 0)));
+        assert_eq!(reorder_target(1, 1, 4), None);
+        assert_eq!(reorder_target(1, 2, 4), None);
+        assert_eq!(reorder_target(0, 5, 4), None);
+        assert_eq!(reorder_target(9, 0, 4), None);
+    }
+
+    #[test]
+    fn apply_reorder_moves_and_clamps() {
+        let mut items = vec![0, 1, 2, 3];
+        assert!(apply_reorder(&mut items, 0, 2));
+        assert_eq!(items, vec![1, 2, 0, 3]);
+
+        let mut clamp = vec![0, 1, 2];
+        assert!(apply_reorder(&mut clamp, 0, 99));
+        assert_eq!(clamp, vec![1, 2, 0]);
+
+        let mut noop = vec![0, 1, 2];
+        assert!(!apply_reorder(&mut noop, 1, 1));
+        assert!(!apply_reorder(&mut noop, 9, 0));
+        assert_eq!(noop, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn auto_scroll_distance_triggers_only_near_edges() {
+        let bounds = Bounds::from_corners(point(px(0.0), px(0.0)), point(px(100.0), px(300.0)));
+        assert_eq!(
+            auto_scroll_distance(point(px(50.0), px(10.0)), bounds),
+            -px(AUTO_SCROLL_STEP_PX)
+        );
+        assert_eq!(
+            auto_scroll_distance(point(px(50.0), px(290.0)), bounds),
+            px(AUTO_SCROLL_STEP_PX)
+        );
+        assert_eq!(
+            auto_scroll_distance(point(px(50.0), px(150.0)), bounds),
+            Pixels::ZERO
+        );
+    }
 
     struct AllowMoves;
 
