@@ -36,10 +36,6 @@ regex = "1.10"
 smol = "2.0.2"
 futures = "0.3"
 
-# HTTP client for remote images (optional)
-isahc = { version = "1.7", optional = true }
-bytes = "1.0"
-
 # QR code generation
 qrcode = "0.14"
 
@@ -85,7 +81,7 @@ rodio = { version = "0.19", optional = true }
 
 [features]
 default = ["http"]
-http = ["isahc"]
+http = []
 markdown = ["pulldown-cmark"]
 html-render = ["html5ever", "markup5ever_rcdom"]
 audio = ["rodio"]
