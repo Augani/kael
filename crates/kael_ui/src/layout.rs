@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::panic::Location;
 use std::rc::Rc;
 use std::sync::atomic::AtomicUsize;
+use std::time::Instant;
 
 static SCROLL_CONTAINER_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -576,6 +577,7 @@ struct PhysicsScrollInner {
     scroll_target: Option<ScrollAnimTarget>,
     animating: bool,
     generation: u64,
+    last_tick: Option<Instant>,
 }
 
 struct ScrollAnimTarget {
@@ -603,6 +605,7 @@ impl PhysicsScrollState {
                 scroll_target: None,
                 animating: false,
                 generation: 0,
+                last_tick: None,
             })),
         }
     }
@@ -647,6 +650,7 @@ impl PhysicsScrollState {
             animate_x: false,
         });
         inner.animating = true;
+        inner.last_tick = None;
         inner.generation += 1;
         let gen = inner.generation;
         drop(inner);
@@ -669,6 +673,7 @@ impl PhysicsScrollState {
             animate_x: true,
         });
         inner.animating = true;
+        inner.last_tick = None;
         inner.generation += 1;
         let gen = inner.generation;
         drop(inner);
@@ -706,6 +711,7 @@ impl PhysicsScrollState {
         inner.physics_x.set_position(-f32::from(offset.x));
 
         inner.animating = true;
+        inner.last_tick = None;
         drop(inner);
 
         drive_physics_frame(self.clone(), handle.clone(), gen, window);
@@ -721,6 +727,7 @@ impl PhysicsScrollState {
         inner.physics_x.stop();
         inner.scroll_target = None;
         inner.animating = false;
+        inner.last_tick = None;
     }
 }
 
@@ -738,7 +745,12 @@ fn drive_physics_frame(
             return;
         }
 
-        let dt = 1.0 / 60.0;
+        let now = Instant::now();
+        let dt = match inner.last_tick {
+            Some(last) => (now.duration_since(last).as_secs_f32()).clamp(0.001, 0.05),
+            None => 1.0 / 60.0,
+        };
+        inner.last_tick = Some(now);
         let active;
 
         let target_result = if let Some(ref mut target) = inner.scroll_target {
@@ -799,6 +811,7 @@ fn drive_physics_frame(
             drive_physics_frame(state_c.clone(), handle_c.clone(), generation, window);
         } else {
             inner.animating = false;
+            inner.last_tick = None;
         }
     });
 }
