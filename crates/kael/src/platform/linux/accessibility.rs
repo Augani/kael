@@ -25,6 +25,9 @@ use crate::PermissionStatus;
 const TOOLKIT_NAME: &str = "Kael";
 const TOOLKIT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+type SharedUpdate = Arc<Mutex<Option<TreeUpdate>>>;
+type PendingActions = Arc<Mutex<Vec<ActionRequest>>>;
+
 struct InitialTreeHandler {
     latest: SharedUpdate,
 }
@@ -56,9 +59,7 @@ impl DeactivationHandler for NoopDeactivationHandler {
 /// The root AT-SPI2 accessible object for a GPUI window, backed by AccessKit.
 ///
 /// Wraps an [`accesskit_unix::Adapter`] and feeds it [`TreeUpdate`]s built from
-/// the shared [`crate::AccessibilityTree`]. The legacy element-tracking fields
-/// are retained as a lightweight mirror so the existing introspection API
-/// (`child_count`, `focused_element_id`, …) keeps working.
+/// the shared [`crate::AccessibilityTree`].
 pub struct AtSpiAccessibleRoot {
     app_name: String,
     adapter: RefCell<Adapter>,
