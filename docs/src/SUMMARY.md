@@ -11,6 +11,7 @@
 - [Layout & Styling](layout-and-styling.md)
 - [Animations](animations.md)
 - [Navigation](navigation.md)
+- [Authoring Components](authoring-components.md)
 - [Theming](theming.md)
 - [Accessibility](accessibility.md)
 

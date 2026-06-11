@@ -1,7 +1,7 @@
 use kael::{prelude::FluentBuilder as _, *};
 use std::time::Duration;
 
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 pub struct TypeWriterState {
     full_text: SharedString,
@@ -152,7 +152,7 @@ impl Styled for TypeWriter {
 
 impl RenderOnce for TypeWriter {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+        let foreground = Theme::of(cx).tokens.foreground;
         let state = self.state.read(cx);
         let text = String::from(state.visible_text());
         let is_typing = state.is_typing();
@@ -161,7 +161,7 @@ impl RenderOnce for TypeWriter {
         self.base
             .flex()
             .flex_row()
-            .text_color(theme.tokens.foreground)
+            .text_color(foreground)
             .child(text)
             .when(
                 self.show_cursor && (is_typing || !state.is_complete()),

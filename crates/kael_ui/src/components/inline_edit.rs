@@ -857,6 +857,7 @@ impl RenderOnce for InlineEdit {
                 .font_family(theme.tokens.font_family.clone())
                 .text_color(text_color)
                 .rounded(theme.tokens.radius_md)
+                .transition(theme.tokens.transition_fast)
                 .when(!self.disabled, |d| {
                     d.cursor_pointer()
                         .hover(|s| {

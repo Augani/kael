@@ -751,6 +751,7 @@ impl RenderOnce for VideoPlayer {
                                 .items_center()
                                 .justify_center()
                                 .cursor(CursorStyle::PointingHand)
+                                .transition(theme.tokens.transition_fast)
                                 .hover(|style| style.bg(kael::black().opacity(0.8)))
                                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                     let is_playing_now = state_play.read(cx).is_playing();
@@ -933,6 +934,7 @@ impl RenderOnce for VideoPlayer {
                                                 .items_center()
                                                 .justify_center()
                                                 .cursor(CursorStyle::PointingHand)
+                                                .transition(theme.tokens.transition_fast)
                                                 .hover(|style| style.bg(kael::white().opacity(0.2)))
                                                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                                     cx.update_entity(&state_skip_back, |state, cx| {
@@ -959,6 +961,7 @@ impl RenderOnce for VideoPlayer {
                                                 .items_center()
                                                 .justify_center()
                                                 .cursor(CursorStyle::PointingHand)
+                                                .transition(theme.tokens.transition_fast)
                                                 .hover(|style| style.opacity(0.9))
                                                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                                     let is_playing_now = state_play_btn.read(cx).is_playing();
@@ -987,6 +990,7 @@ impl RenderOnce for VideoPlayer {
                                                 .items_center()
                                                 .justify_center()
                                                 .cursor(CursorStyle::PointingHand)
+                                                .transition(theme.tokens.transition_fast)
                                                 .hover(|style| style.bg(kael::white().opacity(0.2)))
                                                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                                     cx.update_entity(&state_skip_forward, |state, cx| {
@@ -1031,6 +1035,7 @@ impl RenderOnce for VideoPlayer {
                                                         .items_center()
                                                         .justify_center()
                                                         .cursor(CursorStyle::PointingHand)
+                                                        .transition(theme.tokens.transition_fast)
                                                         .hover(|style| style.bg(kael::white().opacity(0.2)))
                                                         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                                             cx.update_entity(&state_volume_icon, |state, cx| state.toggle_mute(cx));
@@ -1182,6 +1187,7 @@ impl RenderOnce for VideoPlayer {
                                                                             })
                                                                             .font_family(theme.tokens.font_family.clone())
                                                                             .cursor(CursorStyle::PointingHand)
+                                                                            .transition(theme.tokens.transition_fast)
                                                                             .hover(|style| style.bg(theme.tokens.accent))
                                                                             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                                                                 cx.update_entity(&state_item, |state, cx| {
@@ -1207,6 +1213,7 @@ impl RenderOnce for VideoPlayer {
                                                 .items_center()
                                                 .justify_center()
                                                 .cursor(CursorStyle::PointingHand)
+                                                .transition(theme.tokens.transition_fast)
                                                 .hover(|style| style.bg(kael::white().opacity(0.2)))
                                                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                                     cx.update_entity(&state_fullscreen, |state, cx| state.toggle_fullscreen(cx));

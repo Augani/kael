@@ -1,6 +1,6 @@
 //! Text component - Typography with theming and semantic variants.
 
-use crate::theme::use_theme;
+use crate::theme::{use_theme, Theme};
 use kael::{prelude::FluentBuilder as _, *};
 
 /// Text variants for semantic typography
@@ -219,8 +219,8 @@ impl Styled for Text {
 }
 
 impl RenderOnce for Text {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let tokens = &Theme::of(cx).tokens;
 
         let size = self.effective_size();
         let weight = self.effective_weight();
@@ -229,12 +229,12 @@ impl RenderOnce for Text {
         let font_family = if let Some(font) = self.font {
             font
         } else if self.variant.is_mono() {
-            theme.tokens.font_mono.clone()
+            tokens.font_mono.clone()
         } else {
-            theme.tokens.font_family.clone()
+            tokens.font_family.clone()
         };
 
-        let text_color = self.color.unwrap_or(theme.tokens.foreground);
+        let text_color = self.color.unwrap_or(tokens.foreground);
 
         let mut base = div();
         *base.style() = self.style;

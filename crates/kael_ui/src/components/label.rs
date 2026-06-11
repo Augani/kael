@@ -1,6 +1,6 @@
 //! Label component - Form labels with accessibility support.
 
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 
 /// Form label component with accessibility support
@@ -67,8 +67,12 @@ impl Styled for Label {
 }
 
 impl RenderOnce for Label {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let tokens = &Theme::of(cx).tokens;
+        let font_family = tokens.font_family.clone();
+        let muted_foreground = tokens.muted_foreground;
+        let foreground = tokens.foreground;
+        let destructive = tokens.destructive;
         let user_style = self.style;
 
         div()
@@ -81,25 +85,25 @@ impl RenderOnce for Label {
                     .items_center()
                     .gap(px(4.0))
                     .text_sm()
-                    .font_family(theme.tokens.font_family.clone())
+                    .font_family(font_family.clone())
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(if self.disabled {
-                        theme.tokens.muted_foreground
+                        muted_foreground
                     } else {
-                        theme.tokens.foreground
+                        foreground
                     })
                     .line_height(relative(1.0))
                     .child(self.text)
                     .when(self.required, |this| {
-                        this.child(div().text_color(theme.tokens.destructive).child("*"))
+                        this.child(div().text_color(destructive).child("*"))
                     }),
             )
             .when_some(self.helper_text, |this, helper| {
                 this.child(
                     div()
                         .text_xs()
-                        .font_family(theme.tokens.font_family.clone())
-                        .text_color(theme.tokens.muted_foreground)
+                        .font_family(font_family.clone())
+                        .text_color(muted_foreground)
                         .line_height(relative(1.25))
                         .child(helper),
                 )

@@ -1,6 +1,6 @@
 //! Card with 3D tilt illusion based on cursor position using asymmetric shadows.
 
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use smallvec::smallvec;
 
@@ -72,7 +72,9 @@ impl ParentElement for TiltCard {
 
 impl RenderOnce for TiltCard {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+        let tokens = &Theme::of(cx).tokens;
+        let card = tokens.card;
+        let border = tokens.border;
         let user_style = self.style;
         let state = self.state.read(cx);
 
@@ -115,9 +117,9 @@ impl RenderOnce for TiltCard {
             .id(self.id)
             .overflow_hidden()
             .rounded(px(8.0))
-            .bg(theme.tokens.card)
+            .bg(card)
             .border_1()
-            .border_color(theme.tokens.border)
+            .border_color(border)
             .shadow(smallvec![shadow])
             .children(self.children)
             .on_mouse_move(move |event: &MouseMoveEvent, _window, cx| {

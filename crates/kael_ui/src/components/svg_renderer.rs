@@ -2,7 +2,7 @@
 
 use kael::{prelude::FluentBuilder as _, *};
 
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 #[derive(Clone)]
 enum SvgCommand {
@@ -224,11 +224,11 @@ fn transform_point(
 }
 
 impl RenderOnce for SVGRenderer {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let foreground = Theme::of(cx).tokens.foreground;
         let user_style = self.style;
 
-        let fill_color = self.fill_color.unwrap_or(theme.tokens.foreground);
+        let fill_color = self.fill_color.unwrap_or(foreground);
         let commands = parse_svg_path(&self.path_data);
 
         let paint_data = SvgPaintData {

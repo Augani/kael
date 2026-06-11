@@ -4,9 +4,11 @@ use crate::theme::use_theme;
 use kael::{prelude::FluentBuilder as _, *};
 
 pub struct Card {
+    id: Option<ElementId>,
     header: Option<AnyElement>,
     content: Option<AnyElement>,
     footer: Option<AnyElement>,
+    hoverable: bool,
     style: StyleRefinement,
 }
 
@@ -19,11 +21,23 @@ impl Default for Card {
 impl Card {
     pub fn new() -> Self {
         Self {
+            id: None,
             header: None,
             content: None,
             footer: None,
+            hoverable: false,
             style: StyleRefinement::default(),
         }
+    }
+
+    /// Opt into a subtle lift on hover: the card steps up one shadow level and
+    /// rises a single pixel. The eased transition needs a stable [`ElementId`],
+    /// so the id is supplied here. Off by default, leaving existing cards
+    /// untouched.
+    pub fn hoverable(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = Some(id.into());
+        self.hoverable = true;
+        self
     }
 
     pub fn header(mut self, header: impl IntoElement) -> Self {
@@ -49,13 +63,15 @@ impl Styled for Card {
 }
 
 impl IntoElement for Card {
-    type Element = Div;
+    type Element = AnyElement;
 
     fn into_element(self) -> Self::Element {
         let theme = use_theme();
         let user_style = self.style;
 
         let shadow_sm = theme.tokens.shadow_sm.clone();
+        let shadow_md = theme.tokens.shadow_md.clone();
+        let transition_base = theme.tokens.transition_base;
 
         let mut base = div()
             .bg(theme.tokens.card)
@@ -91,10 +107,19 @@ impl IntoElement for Card {
             );
         }
 
-        base.map(|this| {
+        base = base.map(|this| {
             let mut div = this;
             div.style().refine(&user_style);
             div
-        })
+        });
+
+        match self.id {
+            Some(id) if self.hoverable => base
+                .id(id)
+                .transition(transition_base)
+                .hover(move |style| style.shadow(shadow_md.to_vec()).translate_y(px(-1.0)))
+                .into_any_element(),
+            _ => base.into_any_element(),
+        }
     }
 }

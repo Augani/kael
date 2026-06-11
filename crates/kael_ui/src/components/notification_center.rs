@@ -317,6 +317,7 @@ impl RenderOnce for NotificationCenter {
                                     theme.tokens.accent.opacity(0.3)
                                 })
                                 .cursor(CursorStyle::PointingHand)
+                                .transition(theme.tokens.transition_fast)
                                 .hover(|style| style.bg(theme.tokens.accent))
                                 .on_mouse_down(MouseButton::Left, {
                                     let id = id.clone();
@@ -560,6 +561,7 @@ impl RenderOnce for NotificationBell {
             .justify_center()
             .rounded(theme.tokens.radius_md)
             .cursor(CursorStyle::PointingHand)
+            .transition(theme.tokens.transition_fast)
             .hover(|style| style.bg(theme.tokens.accent))
             .map(|mut this| {
                 this.style().refine(&user_style);

@@ -428,6 +428,7 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
             } else {
                 CursorStyle::PointingHand
             })
+            .transition(theme.tokens.transition_fast)
             .when(!self.disabled, |div: Stateful<Div>| {
                 div.hover(|mut style| {
                     style.border_color = Some(theme.tokens.ring);

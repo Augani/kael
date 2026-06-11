@@ -1,5 +1,5 @@
 use crate::components::icon::{Icon, IconSize as IconSizeEnum};
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::*, *};
 use std::rc::Rc;
 
@@ -203,7 +203,11 @@ impl Styled for Rating {
 
 impl RenderOnce for Rating {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+        let tokens = &Theme::of(cx).tokens;
+        let muted_foreground = tokens.muted_foreground;
+        let radius_sm = tokens.radius_sm;
+        let focus_ring = tokens.focus_ring_light();
+
         let state = self.state.read(cx);
         let focus_handle = state.focus_handle(cx);
         let is_focused = focus_handle.is_focused(window);
@@ -215,11 +219,8 @@ impl RenderOnce for Rating {
         let gap = self.size.gap();
 
         let active_color = self.active_color.unwrap_or(hsla(0.12, 0.9, 0.55, 1.0));
-        let inactive_color = self
-            .inactive_color
-            .unwrap_or(theme.tokens.muted_foreground.opacity(0.4));
+        let inactive_color = self.inactive_color.unwrap_or(muted_foreground.opacity(0.4));
 
-        let focus_ring = theme.tokens.focus_ring_light();
         let user_style = self.style.clone();
 
         div()
@@ -230,7 +231,7 @@ impl RenderOnce for Rating {
                 this.track_focus(&focus_handle.tab_index(0).tab_stop(true))
             })
             .when(is_focused && !self.read_only, |this| {
-                this.rounded(theme.tokens.radius_sm)
+                this.rounded(radius_sm)
                     .shadow(smallvec::smallvec![focus_ring])
             })
             .when(!self.read_only, |this| {

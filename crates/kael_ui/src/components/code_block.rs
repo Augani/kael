@@ -115,6 +115,7 @@ impl RenderOnce for CodeBlock {
                 .text_color(theme.tokens.muted_foreground)
                 .text_size(px(11.0))
                 .cursor_pointer()
+                .transition(theme.tokens.transition_fast)
                 .hover(|s| s.bg(theme.tokens.muted))
                 .active(|s| s.opacity(0.7))
                 .child("Copy")

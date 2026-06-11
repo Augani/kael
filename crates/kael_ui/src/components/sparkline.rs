@@ -1,4 +1,4 @@
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 
 const DEFAULT_LINE_COLOR: u32 = 0x3b82f6;
@@ -255,8 +255,10 @@ impl Styled for Sparkline {
 }
 
 impl RenderOnce for Sparkline {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let tokens = &Theme::of(cx).tokens;
+        let foreground = tokens.foreground;
+        let muted_foreground = tokens.muted_foreground;
         let (width, height) = self.get_dimensions();
         let trend_color = self.get_trend_color();
 
@@ -271,7 +273,7 @@ impl RenderOnce for Sparkline {
             .fill_color
             .unwrap_or_else(|| effective_line_color.opacity(0.2));
 
-        let effective_min_max_color = self.min_max_color.unwrap_or(theme.tokens.foreground);
+        let effective_min_max_color = self.min_max_color.unwrap_or(foreground);
 
         let trend = if self.show_trend {
             Some(compute_trend(&self.data))
@@ -295,7 +297,7 @@ impl RenderOnce for Sparkline {
             let (icon_char, color) = match t {
                 SparklineTrend::Up => ("↑", rgb(TREND_UP_COLOR).into()),
                 SparklineTrend::Down => ("↓", rgb(TREND_DOWN_COLOR).into()),
-                SparklineTrend::Neutral => ("→", theme.tokens.muted_foreground),
+                SparklineTrend::Neutral => ("→", muted_foreground),
             };
             (icon_char, color)
         });

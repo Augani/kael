@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::animations::{durations, easings};
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 #[derive(Clone)]
 struct SegmentedNavItem {
@@ -142,7 +142,6 @@ impl Styled for SegmentedNav {
 
 impl RenderOnce for SegmentedNav {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
         let user_style = self.style;
         let state = self.state.read(cx);
         let active_id = state.active.clone();
@@ -155,6 +154,14 @@ impl RenderOnce for SegmentedNav {
             state.items = self.items.clone();
         });
 
+        let tokens = &Theme::of(cx).tokens;
+        let muted = tokens.muted;
+        let radius_md = tokens.radius_md;
+        let radius_sm = tokens.radius_sm;
+        let background = tokens.background;
+        let foreground = tokens.foreground;
+        let muted_foreground = tokens.muted_foreground;
+
         let item_fraction = if item_count > 0 {
             1.0 / item_count as f32
         } else {
@@ -166,8 +173,8 @@ impl RenderOnce for SegmentedNav {
             .flex()
             .items_center()
             .relative()
-            .bg(theme.tokens.muted)
-            .rounded(theme.tokens.radius_md)
+            .bg(muted)
+            .rounded(radius_md)
             .p(px(4.0))
             .h(self.nav_size.height())
             .when(active_index.is_some(), |this| {
@@ -178,8 +185,8 @@ impl RenderOnce for SegmentedNav {
                         .absolute()
                         .top(px(4.0))
                         .bottom(px(4.0))
-                        .rounded(theme.tokens.radius_sm)
-                        .bg(theme.tokens.background)
+                        .rounded(radius_sm)
+                        .bg(background)
                         .shadow(smallvec::smallvec![BoxShadow {
                             color: hsla(0.0, 0.0, 0.0, 0.08),
                             offset: point(px(0.0), px(1.0)),
@@ -224,9 +231,9 @@ impl RenderOnce for SegmentedNav {
                         FontWeight::NORMAL
                     })
                     .text_color(if is_active {
-                        theme.tokens.foreground
+                        foreground
                     } else {
-                        theme.tokens.muted_foreground
+                        muted_foreground
                     })
                     .cursor_pointer()
                     .on_mouse_down(MouseButton::Left, move |_, window, cx| {

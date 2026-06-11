@@ -1,6 +1,6 @@
 //! Skeleton component - Loading placeholder with pulsing animation effect.
 
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::time::Duration;
 
@@ -40,24 +40,26 @@ impl Skeleton {
 }
 
 impl RenderOnce for Skeleton {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let tokens = &Theme::of(cx).tokens;
+        let muted = tokens.muted;
+        let radius_md = tokens.radius_md;
 
         let base_color = if self.secondary {
-            theme.tokens.muted.opacity(0.5)
+            muted.opacity(0.5)
         } else {
-            theme.tokens.muted
+            muted
         };
 
         self.base
             .when(self.variant == SkeletonVariant::Text, |this| {
-                this.w_full().h(px(16.0)).rounded(theme.tokens.radius_md)
+                this.w_full().h(px(16.0)).rounded(radius_md)
             })
             .when(self.variant == SkeletonVariant::Circle, |this| {
                 this.rounded_full()
             })
             .when(self.variant == SkeletonVariant::Rect, |this| {
-                this.rounded(theme.tokens.radius_md)
+                this.rounded(radius_md)
             })
             .bg(base_color)
             .with_animation(
