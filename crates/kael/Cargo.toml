@@ -62,9 +62,13 @@ test-support = [
     "rand",
     "util/test-support",
     "http_client/test-support",
-    "wayland",
-    "x11",
 ]
+# Enables a real Linux windowing backend (Wayland + X11) alongside test-support.
+# `test-support` itself is headless and platform-agnostic: the TestPlatform mocks
+# the windowing layer, so macOS/Windows test builds no longer pull the Linux
+# windowing crates. Linux CI that exercises real-window rendering under tests can
+# opt in with `--features test-support,test-support-linux-windowing`.
+test-support-linux-windowing = ["test-support", "wayland", "x11"]
 wayland = [
     "blade-graphics",
     "blade-macros",

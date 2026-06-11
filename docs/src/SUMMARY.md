@@ -40,6 +40,7 @@
 # Developer Tools
 
 - [Inspector & Frame Stats](devtools.md)
+- [Testing](testing.md)
 
 ---
 
