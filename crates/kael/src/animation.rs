@@ -134,15 +134,6 @@ pub enum Easing {
     EaseInOut,
     /// A cubic Bezier curve with CSS-style control points.
     CubicBezier(f32, f32, f32, f32),
-    /// A damped spring curve.
-    Spring {
-        /// Spring stiffness.
-        stiffness: f32,
-        /// Damping factor.
-        damping: f32,
-        /// Effective mass.
-        mass: f32,
-    },
     /// A custom easing callback.
     Custom(Rc<dyn Fn(f32) -> f32>),
 }
@@ -157,11 +148,6 @@ impl Easing {
             Self::EaseOut => easing::ease_out(delta),
             Self::EaseInOut => easing::ease_in_out(delta),
             Self::CubicBezier(x1, y1, x2, y2) => cubic_bezier(*x1, *y1, *x2, *y2, delta),
-            Self::Spring {
-                stiffness,
-                damping,
-                mass,
-            } => spring(*stiffness, *damping, *mass, delta),
             Self::Custom(callback) => callback(delta).clamp(0.0, 1.0),
         }
     }
@@ -496,15 +482,6 @@ fn cubic_bezier_axis(p1: f32, p2: f32, t: f32) -> f32 {
     3.0 * inverse_t * inverse_t * t * p1 + 3.0 * inverse_t * t * t * p2 + t * t * t
 }
 
-fn spring(stiffness: f32, damping: f32, mass: f32, delta: f32) -> f32 {
-    let stiffness = stiffness.max(f32::EPSILON);
-    let damping = damping.max(0.0);
-    let mass = mass.max(f32::EPSILON);
-    let angular_frequency = (stiffness / mass).sqrt();
-    let decay = (-damping * delta).exp();
-    (1.0 - decay * (angular_frequency * delta).cos()).clamp(0.0, 1.0)
-}
-
 /// Common easing helpers.
 pub mod easing {
     use std::f32::consts::PI;
@@ -565,7 +542,7 @@ pub mod easing {
 
 #[cfg(test)]
 mod tests {
-    use super::{Animation, AnimationSequence, Repeat, keyframes};
+    use super::{keyframes, Animation, AnimationSequence, Repeat};
     use crate::animation::StyledKeyframe;
     use std::time::Duration;
 
