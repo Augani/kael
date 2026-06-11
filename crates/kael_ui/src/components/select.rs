@@ -315,6 +315,7 @@ impl<T: Clone + 'static> Render for Select<T> {
             })
             .text_size(px(14.0))
             .font_family(theme.tokens.font_family.clone())
+            .transition(theme.tokens.transition_fast)
             .cursor(if self.disabled {
                 CursorStyle::Arrow
             } else {

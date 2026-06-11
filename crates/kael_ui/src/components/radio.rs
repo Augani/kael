@@ -157,6 +157,7 @@ impl RenderOnce for Radio {
             .rounded(theme.tokens.radius_md)
             .child(
                 div()
+                    .id(ElementId::Name(format!("{}-circle", self.id).into()))
                     .relative()
                     .size(px(16.0))
                     .flex_shrink_0()
@@ -164,6 +165,7 @@ impl RenderOnce for Radio {
                     .border_1()
                     .border_color(border_color)
                     .bg(bg)
+                    .transition(theme.tokens.transition_fast)
                     .when(!self.disabled, |this| {
                         this.shadow(smallvec::smallvec![shadow_xs])
                     })

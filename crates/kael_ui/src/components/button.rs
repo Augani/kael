@@ -273,6 +273,7 @@ impl RenderOnce for Button {
             .rounded(theme.tokens.radius_md)
             .text_color(fg)
             .bg(bg)
+            .transition(theme.tokens.transition_fast)
             .when(has_shadow, |this| {
                 this.shadow(smallvec::smallvec![theme.tokens.shadow_xs])
             })
@@ -301,7 +302,7 @@ impl RenderOnce for Button {
                             hover_style
                         }
                     })
-                    .active(|style| style.opacity(0.9))
+                    .active(|style| style.opacity(0.92).scale(0.97))
             })
             .map(|this| {
                 let mut div = this;

@@ -743,10 +743,12 @@ impl RenderOnce for Input {
                             .when(show_clear, |h| {
                                 h.child(
                                     div()
+                                        .id(("input-clear", self.state.entity_id()))
                                         .px(px(4.0))
                                         .py(px(4.0))
                                         .rounded(px(4.0))
                                         .cursor_pointer()
+                                        .transition(theme.tokens.transition_fast)
                                         .hover(|style| style.bg(theme.tokens.muted))
                                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                             state_for_clear.update(cx, |state, cx| {
@@ -760,10 +762,12 @@ impl RenderOnce for Input {
                             .when(self.password, |h| {
                                 h.child(
                                     div()
+                                        .id(("input-reveal", self.state.entity_id()))
                                         .px(px(4.0))
                                         .py(px(4.0))
                                         .rounded(px(4.0))
                                         .cursor_pointer()
+                                        .transition(theme.tokens.transition_fast)
                                         .hover(|style| style.bg(theme.tokens.muted))
                                         .on_mouse_down(MouseButton::Left, {
                                             let state = state_for_password.clone();
