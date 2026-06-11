@@ -18,7 +18,8 @@ pub mod reporter;
 pub use anyhow::Result;
 pub use breadcrumb::{Breadcrumb, BreadcrumbBuffer, Level};
 pub use crash::{
-    CrashReport, CrashReporter, OsInfo, capture_crash_report, collect_os_info, write_crash_report,
+    CrashConsent, CrashReport, CrashReporter, OsInfo, PriorCrashSummary, capture_crash_report,
+    collect_os_info, write_crash_report,
 };
 pub use metrics::{MetricsRegistry, Span, TraceEvent, TracePhase, Tracer, Transaction};
 pub use native::{NativeContext, NativeSignal, PendingNativeCrash};

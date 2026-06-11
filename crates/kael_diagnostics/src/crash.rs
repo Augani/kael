@@ -56,6 +56,60 @@ pub struct CrashReport {
     pub breadcrumbs: Vec<Breadcrumb>,
 }
 
+/// User-consent policy governing crash report submission, mirroring the
+/// release `UpdatePolicy` style. The reporter never submits anything unless
+/// the application has opted in.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct CrashConsent {
+    /// Whether the application may submit collected crash reports at all.
+    pub submit_enabled: bool,
+}
+
+impl CrashConsent {
+    /// Consent granted: collected reports may be submitted.
+    pub const fn granted() -> Self {
+        Self {
+            submit_enabled: true,
+        }
+    }
+
+    /// Consent withheld (the default): reports are retained on disk but never
+    /// submitted.
+    pub const fn withheld() -> Self {
+        Self {
+            submit_enabled: false,
+        }
+    }
+}
+
+impl Default for CrashConsent {
+    fn default() -> Self {
+        Self::withheld()
+    }
+}
+
+/// Summary of prior crashes detected at startup by
+/// [`CrashReporter::check_and_submit_pending`].
+#[derive(Debug, Clone, Default)]
+pub struct PriorCrashSummary {
+    /// Number of native crashes with a decoded signal record.
+    pub native_crashes: usize,
+    /// Number of prior sessions that exited uncleanly without a native record.
+    pub unclean_exits: usize,
+    /// Whether reports were submitted (requires consent and a configured
+    /// endpoint + HTTP client).
+    pub submitted: bool,
+    /// Human-readable one-line summaries of each detected crash.
+    pub messages: Vec<String>,
+}
+
+impl PriorCrashSummary {
+    /// Whether any prior crash or unclean exit was detected.
+    pub fn detected_any(&self) -> bool {
+        self.native_crashes > 0 || self.unclean_exits > 0
+    }
+}
+
 /// A crash reporter that captures Rust panics and persists reports to disk.
 pub struct CrashReporter {
     reports_dir: PathBuf,
@@ -301,6 +355,91 @@ impl CrashReporter {
 
         Ok(())
     }
+
+    /// Detects native crashes and unclean exits left by previous runs, converts
+    /// them into JSON crash reports in the report directory, and (only when
+    /// `consent` permits) submits all pending reports through the existing HTTP
+    /// path.
+    ///
+    /// Always returns a [`PriorCrashSummary`] describing what was found, even
+    /// when consent is withheld or no endpoint is configured; in those cases
+    /// reports are converted and retained on disk but not submitted.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # async fn run() -> anyhow::Result<()> {
+    /// use kael_diagnostics::{BreadcrumbBuffer, CrashConsent, CrashReporter};
+    ///
+    /// let mut reporter = CrashReporter::new("com.example.app", BreadcrumbBuffer::new(64))?;
+    /// reporter.set_release("1.2.3");
+    /// reporter.install_native()?;
+    ///
+    /// // On the next launch, surface and (with consent) submit prior crashes.
+    /// let summary = reporter
+    ///     .check_and_submit_pending(CrashConsent::granted())
+    ///     .await?;
+    /// if summary.detected_any() {
+    ///     for message in &summary.messages {
+    ///         eprintln!("prior crash: {message}");
+    ///     }
+    /// }
+    ///
+    /// // ... run the app; on orderly shutdown:
+    /// reporter.mark_clean_exit();
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn check_and_submit_pending(
+        &self,
+        consent: CrashConsent,
+    ) -> Result<PriorCrashSummary> {
+        let mut summary = PriorCrashSummary::default();
+
+        for crash in self.pending_native_crashes()? {
+            let message = crash.summary();
+            summary.messages.push(message.clone());
+            if crash.has_native_record() {
+                summary.native_crashes += 1;
+            } else {
+                summary.unclean_exits += 1;
+            }
+
+            let mut report = self.report_from_native(&crash);
+            let should_keep = self
+                .before_send
+                .as_ref()
+                .map(|before_send| before_send(&mut report))
+                .unwrap_or(true);
+
+            if should_keep {
+                let _ = write_crash_report(&self.reports_dir, &report);
+            }
+            native::clear_crash(&crash);
+        }
+
+        if consent.submit_enabled && self.endpoint.is_some() && self.http_client.is_some() {
+            self.submit_pending_reports().await?;
+            summary.submitted = true;
+        }
+
+        Ok(summary)
+    }
+
+    fn report_from_native(&self, crash: &PendingNativeCrash) -> CrashReport {
+        let mut os_info = collect_os_info();
+        os_info.name = crash.context.os.clone();
+        os_info.arch = crash.context.arch.clone();
+
+        CrashReport {
+            message: crash.summary(),
+            backtrace: crash.backtrace_text(),
+            os_info,
+            app_version: crash.context.app_version.clone(),
+            environment: crash.context.environment.clone(),
+            breadcrumbs: Vec::new(),
+        }
+    }
 }
 
 /// Captures a crash report from panic information.
@@ -418,9 +557,36 @@ mod tests {
 
     use tempfile::tempdir;
 
+    use std::path::Path;
+
     use crate::breadcrumb::{Breadcrumb, BreadcrumbBuffer, Level};
 
-    use super::{CrashReport, CrashReporter, collect_os_info, write_crash_report};
+    use super::{CrashConsent, CrashReport, CrashReporter, collect_os_info, write_crash_report};
+
+    fn reporter_in(directory: &Path) -> CrashReporter {
+        CrashReporter {
+            reports_dir: directory.to_path_buf(),
+            endpoint: None,
+            http_client: None,
+            previous_hook: None,
+            before_send: None,
+            breadcrumbs: BreadcrumbBuffer::new(8),
+            release: Some("9.9.9".to_string()),
+            environment: Some("test".to_string()),
+            session_id: crate::native::new_session_id(),
+            native_installed: false,
+        }
+    }
+
+    fn write_native_artifacts(directory: &Path, session: &str, dump: Option<&str>) {
+        let meta = format!(
+            r#"{{"session_id":"{session}","app_version":"1.0.0","environment":"prod","os":"macos","arch":"aarch64","pid":1234,"started_at_ms":0}}"#
+        );
+        std::fs::write(directory.join(format!("{session}.crashmeta.json")), meta).unwrap();
+        if let Some(dump) = dump {
+            std::fs::write(directory.join(format!("{session}.crashdump")), dump).unwrap();
+        }
+    }
 
     #[test]
     fn round_trips_crash_report_json() {
@@ -456,21 +622,85 @@ mod tests {
         std::fs::write(directory.path().join("crash_report_2.json"), b"{}").unwrap();
         std::fs::write(directory.path().join("ignored.txt"), b"ignore").unwrap();
 
-        let reporter = CrashReporter {
-            reports_dir: directory.path().to_path_buf(),
-            endpoint: None,
-            http_client: None,
-            previous_hook: None,
-            before_send: None,
-            breadcrumbs: BreadcrumbBuffer::new(8),
-            release: None,
-            environment: None,
-            session_id: crate::native::new_session_id(),
-            native_installed: false,
-        };
+        let reporter = reporter_in(directory.path());
 
         let pending = reporter.pending_reports().unwrap();
         assert_eq!(pending.len(), 2);
+    }
+
+    #[test]
+    fn marker_protocol_distinguishes_crash_from_unclean_exit() {
+        let directory = tempdir().unwrap();
+        write_native_artifacts(
+            directory.path(),
+            "sessioncrash",
+            Some("signal=11\ncode=1\naddress=0x10\nframe=0x4001\nframe=0x4002\n"),
+        );
+        write_native_artifacts(directory.path(), "sessionunclean", None);
+
+        let reporter = reporter_in(directory.path());
+        let pending = reporter.pending_native_crashes().unwrap();
+        assert_eq!(pending.len(), 2);
+
+        let crash = pending
+            .iter()
+            .find(|crash| crash.context.session_id == "sessioncrash")
+            .unwrap();
+        assert!(crash.has_native_record());
+        assert!(crash.summary().contains("SIGSEGV"));
+
+        let unclean = pending
+            .iter()
+            .find(|crash| crash.context.session_id == "sessionunclean")
+            .unwrap();
+        assert!(!unclean.has_native_record());
+        assert!(unclean.summary().contains("unclean exit"));
+    }
+
+    #[test]
+    fn check_and_submit_converts_native_crash_and_retains_without_consent() {
+        let directory = tempdir().unwrap();
+        write_native_artifacts(
+            directory.path(),
+            "abc123",
+            Some("signal=11\naddress=0xdead\nframe=0x1000\n"),
+        );
+
+        let reporter = reporter_in(directory.path());
+        let summary = pollster::block_on(
+            reporter.check_and_submit_pending(CrashConsent::withheld()),
+        )
+        .unwrap();
+
+        assert_eq!(summary.native_crashes, 1);
+        assert_eq!(summary.unclean_exits, 0);
+        assert!(!summary.submitted);
+        assert!(summary.detected_any());
+
+        let json_reports = reporter.pending_reports().unwrap();
+        assert_eq!(json_reports.len(), 1);
+        let report: CrashReport =
+            serde_json::from_str(&std::fs::read_to_string(&json_reports[0]).unwrap()).unwrap();
+        assert!(report.message.contains("SIGSEGV"));
+        assert_eq!(report.app_version.as_deref(), Some("1.0.0"));
+        assert!(report.backtrace.contains("0x1000"));
+
+        assert!(
+            reporter.pending_native_crashes().unwrap().is_empty(),
+            "native artifacts should be cleared after conversion"
+        );
+    }
+
+    #[test]
+    fn check_and_submit_reports_no_prior_crash_on_clean_dir() {
+        let directory = tempdir().unwrap();
+        let reporter = reporter_in(directory.path());
+        let summary = pollster::block_on(
+            reporter.check_and_submit_pending(CrashConsent::granted()),
+        )
+        .unwrap();
+        assert!(!summary.detected_any());
+        assert!(!summary.submitted);
     }
 
     #[test]
