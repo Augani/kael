@@ -28,9 +28,9 @@ use crate::{
     KeyboardButton, KeyboardClickEvent, LayoutId, MagnifyEvent, ModifiersChangedEvent, MouseButton,
     MouseClickEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Overflow, PanGesture,
     PanGestureEvent, PanState, ParentElement, PinchGesture, PinchGestureEvent, Pixels, Point,
-    Render, Rgba, ScrollDelta, ScrollWheelEvent, SharedString, Size, Style, StyleRefinement,
-    Styled, SwipeDirection, SwipeGesture, SwipeGestureEvent, Task, TooltipId, TouchPhase,
-    Visibility, Window, WindowControlArea, point, px, size,
+    Render, Rgba, ScaledPixels, ScrollDelta, ScrollWheelEvent, SharedString, Size, Style,
+    StyleRefinement, Styled, SwipeDirection, SwipeGesture, SwipeGestureEvent, Task, TooltipId,
+    TouchPhase, TransformationMatrix, Visibility, Window, WindowControlArea, point, px, size,
 };
 use collections::HashMap;
 use refineable::Refineable;
@@ -309,6 +309,85 @@ fn interpolate_hsla(from: Hsla, to: Hsla, progress: f32) -> Hsla {
         a: interpolate_f32(from.a, to.a, progress),
     }
     .into()
+}
+
+#[derive(Default)]
+pub(crate) struct FlipLayoutState {
+    prev_origin: Option<Point<Pixels>>,
+    animation: Option<FlipAnimation>,
+}
+
+struct FlipAnimation {
+    offset: Point<Pixels>,
+    started_at: std::time::Instant,
+}
+
+impl FlipLayoutState {
+    fn resolve(
+        &mut self,
+        origin: Point<Pixels>,
+        now: std::time::Instant,
+        animations_enabled: bool,
+        config: &TransitionConfig,
+    ) -> (Option<Point<Pixels>>, bool) {
+        let prev_origin = self.prev_origin.replace(origin);
+
+        if !animations_enabled || config.duration.is_zero() {
+            self.animation = None;
+            return (None, false);
+        }
+
+        if let Some(prev_origin) = prev_origin
+            && prev_origin != origin
+        {
+            let current_offset = self
+                .current_offset(now, config)
+                .unwrap_or(Point::default());
+            let offset = current_offset + (prev_origin - origin);
+            if offset != Point::default() {
+                self.animation = Some(FlipAnimation {
+                    offset,
+                    started_at: now,
+                });
+            }
+        }
+
+        match self.current_offset(now, config) {
+            Some(offset) => (Some(offset), true),
+            None => {
+                self.animation = None;
+                (None, false)
+            }
+        }
+    }
+
+    fn current_offset(
+        &self,
+        now: std::time::Instant,
+        config: &TransitionConfig,
+    ) -> Option<Point<Pixels>> {
+        let animation = self.animation.as_ref()?;
+        let progress = (now.duration_since(animation.started_at).as_secs_f32()
+            / config.duration.as_secs_f32())
+        .clamp(0.0, 1.0);
+        if progress >= 1.0 {
+            return None;
+        }
+        let eased = match &config.easing {
+            Some(easing) => easing.ease(progress),
+            None => ease_out_progress(progress),
+        };
+        let remaining = 1.0 - eased;
+        let offset = Point {
+            x: px(animation.offset.x.0 * remaining),
+            y: px(animation.offset.y.0 * remaining),
+        };
+        if offset.x.0.abs() < 0.05 && offset.y.0.abs() < 0.05 {
+            None
+        } else {
+            Some(offset)
+        }
+    }
 }
 
 fn optional_backgrounds_can_interpolate(from: Option<Background>, to: Option<Background>) -> bool {
@@ -1165,6 +1244,30 @@ pub trait InteractiveElement: Sized {
     /// Animate keyed style changes with an explicit duration and easing curve.
     fn transition_with(mut self, duration: Duration, easing: crate::animation::Easing) -> Self {
         self.interactivity().implicit_transition = Some(TransitionConfig {
+            duration,
+            easing: Some(easing),
+        });
+        self
+    }
+
+    /// Animate this element's position when layout moves it (FLIP). When the
+    /// element's painted origin changes between frames, it glides from the old
+    /// position to the new one over `duration` instead of snapping.
+    ///
+    /// Requires a stable [`ElementId`]. Avoid enabling this on children of
+    /// containers that scroll while the animation runs; scrolling moves the
+    /// element and restarts the glide.
+    fn animate_layout(mut self, duration: Duration) -> Self {
+        self.interactivity().layout_animation = Some(TransitionConfig {
+            duration,
+            easing: None,
+        });
+        self
+    }
+
+    /// Animate layout position changes with an explicit duration and easing curve.
+    fn animate_layout_with(mut self, duration: Duration, easing: crate::animation::Easing) -> Self {
+        self.interactivity().layout_animation = Some(TransitionConfig {
             duration,
             easing: Some(easing),
         });
@@ -2387,6 +2490,7 @@ pub struct Interactivity {
     pub(crate) scroll_elastic_state: Option<Rc<RefCell<ScrollElasticState>>>,
     pub(crate) group: Option<SharedString>,
     pub(crate) implicit_transition: Option<TransitionConfig>,
+    pub(crate) layout_animation: Option<TransitionConfig>,
     /// The base style of the element, before any modifications are applied
     /// by focus, active, etc.
     pub base_style: Box<StyleRefinement>,
@@ -2848,12 +2952,18 @@ impl Interactivity {
                     window.next_frame.tab_stops.insert(focus_handle);
                 }
 
+                let flip_transform =
+                    self.resolve_flip_transform(element_state.as_mut(), bounds, window);
+                window.with_element_transform(flip_transform, |window| {
                 window.with_element_opacity(style.opacity, |window| {
                     style.paint(bounds, window, cx, |window: &mut Window, cx: &mut App| {
                         window.with_text_style(style.text_style().cloned(), |window| {
                             window.with_content_mask(
                                 style.overflow_mask(bounds, window.rem_size()),
                                 |window| {
+                                    window.with_rounded_clip(
+                                        style.rounded_overflow_clip(bounds, window.rem_size()),
+                                        |window| {
                                     window.with_tab_group(tab_group, |window| {
                                         if let Some(hitbox) = hitbox {
                                             #[cfg(debug_assertions)]
@@ -2913,6 +3023,8 @@ impl Interactivity {
                                             }
                                         }
                                     })
+                                        },
+                                    )
                                 },
                             );
                             if let Some(element_state) = element_state.as_mut() {
@@ -2926,6 +3038,7 @@ impl Interactivity {
                             }
                         });
                     });
+                });
                 });
 
                 ((), element_state)
@@ -4043,6 +4156,36 @@ impl Interactivity {
         style
     }
 
+    fn resolve_flip_transform(
+        &self,
+        element_state: Option<&mut InteractiveElementState>,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+    ) -> Option<TransformationMatrix> {
+        let config = self.layout_animation.as_ref()?;
+        let element_state = element_state?;
+        let flip_state = element_state
+            .flip_state
+            .get_or_insert_with(Default::default)
+            .clone();
+        let mut flip_state = flip_state.borrow_mut();
+        let (offset, needs_frame) = flip_state.resolve(
+            bounds.origin,
+            std::time::Instant::now(),
+            window.animations_enabled(),
+            config,
+        );
+        if needs_frame {
+            window.request_animation_frame();
+        }
+        let offset = offset?;
+        let scale_factor = window.scale_factor();
+        Some(TransformationMatrix::unit().translate(Point {
+            x: ScaledPixels(offset.x.0 * scale_factor),
+            y: ScaledPixels(offset.y.0 * scale_factor),
+        }))
+    }
+
     fn animate_style(
         &self,
         global_id: Option<&GlobalElementId>,
@@ -4082,6 +4225,7 @@ pub struct InteractiveElementState {
     pub(crate) active_tooltip: Option<Rc<RefCell<Option<ActiveTooltip>>>>,
     pub(crate) active_context_menu: Option<Rc<RefCell<Option<AnyTooltip>>>>,
     pub(crate) auto_scrollbar_state: Option<Rc<RefCell<AutoScrollbarState>>>,
+    pub(crate) flip_state: Option<Rc<RefCell<FlipLayoutState>>>,
     pub(crate) prev_bounds: Option<Bounds<Pixels>>,
 }
 
@@ -5737,6 +5881,56 @@ mod test {
         assert!(ImplicitVisualStyle::from(&resolved) == ImplicitVisualStyle::from(&to_style));
         assert!(!needs_animation_frame);
         assert!(state.active_transition.is_none());
+    }
+
+    #[test]
+    fn flip_layout_state_glides_between_origins() {
+        let mut state = super::FlipLayoutState::default();
+        let config = TransitionConfig {
+            duration: Duration::from_millis(200),
+            easing: Some(crate::animation::Easing::Linear),
+        };
+        let start = Instant::now();
+
+        let (offset, needs_frame) = state.resolve(point(px(0.), px(0.)), start, true, &config);
+        assert!(offset.is_none());
+        assert!(!needs_frame);
+
+        let (offset, needs_frame) = state.resolve(point(px(100.), px(40.)), start, true, &config);
+        let offset = offset.expect("expected flip offset after move");
+        assert!((offset.x.0 + 100.).abs() < 0.01);
+        assert!((offset.y.0 + 40.).abs() < 0.01);
+        assert!(needs_frame);
+
+        let (offset, _) = state.resolve(
+            point(px(100.), px(40.)),
+            start + Duration::from_millis(100),
+            true,
+            &config,
+        );
+        let offset = offset.expect("expected mid-flight offset");
+        assert!((offset.x.0 + 50.).abs() < 1.0);
+
+        let (offset, needs_frame) = state.resolve(
+            point(px(100.), px(40.)),
+            start + Duration::from_millis(250),
+            true,
+            &config,
+        );
+        assert!(offset.is_none());
+        assert!(!needs_frame);
+    }
+
+    #[test]
+    fn flip_layout_state_snaps_when_animations_disabled() {
+        let mut state = super::FlipLayoutState::default();
+        let config = TransitionConfig::default();
+        let start = Instant::now();
+
+        let _ = state.resolve(point(px(0.), px(0.)), start, false, &config);
+        let (offset, needs_frame) = state.resolve(point(px(50.), px(0.)), start, false, &config);
+        assert!(offset.is_none());
+        assert!(!needs_frame);
     }
 
     #[test]
