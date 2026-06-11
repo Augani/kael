@@ -952,7 +952,8 @@ float4 blur_along_axis(float2 position, BlurPass blur, float2 axis) {
 }
 
 float4 composite_blur(float4 blurred, BlurPass blur) {
-    float3 grayscale = float3(dot(blurred.rgb, float3(0.2126, 0.7152, 0.0722)));
+    float luma = dot(blurred.rgb, float3(0.2126, 0.7152, 0.0722));
+    float3 grayscale = float3(luma, luma, luma);
     float4 tint = hsla_to_rgba(blur.tint);
     float3 saturated = lerp(grayscale, blurred.rgb, blur.saturation);
     float alpha = tint.a + blurred.a * (1.0 - tint.a);
