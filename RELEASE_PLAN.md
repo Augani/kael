@@ -22,6 +22,47 @@ the general-purpose layering.
 - Everything already in `[Unreleased]` in CHANGELOG.md (including `kael_ui`,
   which has not yet been published — 0.2.0 is its first crates.io release).
 
+## Packaging artifacts
+
+`cargo run -p xtask -- bundle --output dist --binary <release-binary>`
+produces real, installable artifacts per host. The packaging logic lives in
+`xtask/src/bundle.rs`; signing/notarization metadata is read from
+`kael.dist.toml`.
+
+| Host    | Artifacts                                   | Requires installed                          |
+| ------- | ------------------------------------------- | ------------------------------------------- |
+| macOS   | `.app` bundle, `.dmg` (codesigned + stapled when configured) | `hdiutil`, `codesign`, `xcrun notarytool`/`stapler` (Xcode CLT); an Apple Developer cert for signing |
+| Windows | staged dir + `.wxs`, **`.msi`** (signed when configured) | **WiX v4** CLI (`wix`); `signtool` (Windows SDK) for signing |
+| Linux   | `.AppDir`, **`.deb`**, **`.AppImage`**       | nothing for the `.deb`; `appimagetool` for the AppImage |
+
+What is real vs. tool-gated:
+
+- **macOS `.dmg`** — built unconditionally on a macOS host. Code-signing
+  needs `signing.macos_certificate`; notarization needs `KAEL_NOTARY_PROFILE`
+  to name a stored `notarytool` keychain profile. Without those it produces an
+  unsigned image.
+- **Windows `.msi`** — after emitting the `.wxs`, xtask locates the WiX v4
+  CLI (the `WIX` env var, or `wix`/`wix.exe` on `PATH`) and runs
+  `wix build <wxs> -o <name>.msi`. There is **no candle/light (WiX v3)
+  fallback** by design. If WiX is not installed the step is skipped with a
+  warning and only the `.wxs` source remains, so MSI builds must run on a
+  **Windows runner with WiX v4**. The `.msi` is signed with `signtool` when
+  `signing.windows_certificate` is set.
+- **Linux `.deb`** — assembled **directly in Rust** (an `ar` archive of
+  `debian-binary` + `control.tar.gz` + `data.tar.gz`), so it builds on **any
+  host including macOS and CI** with no `dpkg-deb` or system tooling. The
+  `control` file is generated from `kael.dist.toml` (`copyright` →
+  `Maintainer`, `file_description` → `Description`, first `linux_categories`
+  entry → `Section`).
+- **Linux `.AppImage`** — built from the `.AppDir` via `appimagetool` when it
+  is on `PATH`; skipped with a warning otherwise. Full AppImage assembly
+  therefore needs a **Linux runner with `appimagetool`** (FUSE or
+  `APPIMAGE_EXTRACT_AND_RUN=1`). Optional update-information can be embedded by
+  setting `KAEL_APPIMAGE_UPDATE_INFO` (passed as `appimagetool -u`).
+
+The `--dry-run` flag prints the planned outputs (including the would-be `.msi`,
+`.deb`, and `.AppImage` paths) without invoking any external tool.
+
 ## Pre-flight checklist
 
 1. **Branch state:** PR #6 merged to `main`; CI fully green on `main`

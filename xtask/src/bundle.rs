@@ -1,7 +1,6 @@
 use anyhow::{Context as _, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "macos")]
 use std::process::Command;
 
 use crate::DistConfig;
@@ -311,7 +310,158 @@ fn bundle_windows(
     }
 
     println!("Windows bundle created: {}", bundle_dir.display());
-    Ok(vec![bundle_dir])
+
+    let mut artifacts = vec![bundle_dir.clone()];
+
+    let msi_path = output.join(format!("{app_name}.msi"));
+    if options.dry_run {
+        println!("dry-run: would build MSI at {}", msi_path.display());
+        return Ok(artifacts);
+    }
+
+    match find_wix() {
+        Some(wix) => {
+            let built = build_msi(&wix, &wix_path, &msi_path)?;
+            println!("Windows .msi created: {}", built.display());
+
+            if let Some(signing) = config.signing.as_ref()
+                && let Some(certificate) = signing.windows_certificate.as_deref()
+            {
+                sign_msi(
+                    &built,
+                    certificate,
+                    signing.windows_certificate_password.as_deref(),
+                )?;
+                println!("signed {}", built.display());
+            } else {
+                println!(
+                    "note: no signing.windows_certificate configured — producing an unsigned .msi"
+                );
+            }
+
+            artifacts.push(built);
+        }
+        None => {
+            eprintln!(
+                "warning: WiX v4 toolset not found (set WIX or add `wix` to PATH); \
+                 skipping .msi build. Source written to {}",
+                wix_path.display()
+            );
+        }
+    }
+
+    Ok(artifacts)
+}
+
+/// Locate the WiX v4 CLI (`wix`), mirroring the `fxc` locator in
+/// `crates/kael/build.rs`: honour the `WIX` environment variable first, then
+/// fall back to a `where`/`which` lookup on `PATH`. Returns `None` when WiX is
+/// not installed so callers can skip MSI builds with a warning.
+fn find_wix() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("WIX")
+        && !path.is_empty()
+    {
+        let candidate = PathBuf::from(&path);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        for nested in ["wix", "wix.exe", "bin/wix", "bin/wix.exe"] {
+            let joined = candidate.join(nested);
+            if joined.is_file() {
+                return Some(joined);
+            }
+        }
+    }
+
+    let locator = if cfg!(target_os = "windows") {
+        "where.exe"
+    } else {
+        "which"
+    };
+    let query = if cfg!(target_os = "windows") {
+        "wix.exe"
+    } else {
+        "wix"
+    };
+    if let Ok(output) = Command::new(locator).arg(query).output()
+        && output.status.success()
+    {
+        let found = String::from_utf8_lossy(&output.stdout);
+        if let Some(first) = found.lines().next() {
+            let trimmed = first.trim();
+            if !trimmed.is_empty() {
+                return Some(PathBuf::from(trimmed));
+            }
+        }
+    }
+
+    None
+}
+
+/// Build the argument vector for `wix build <wxs> -o <out>.msi` (WiX v4 CLI).
+///
+/// Split out so the command construction can be unit-tested without invoking
+/// the toolset (which is not present on non-Windows hosts).
+fn wix_build_args(wxs: &Path, msi: &Path) -> Vec<String> {
+    vec![
+        "build".to_string(),
+        wxs.to_string_lossy().into_owned(),
+        "-o".to_string(),
+        msi.to_string_lossy().into_owned(),
+    ]
+}
+
+/// Compile a `.wxs` source into an `.msi` using the WiX v4 `wix build` command.
+///
+/// WiX v4 only — there is no candle/light (WiX v3) fallback by design.
+fn build_msi(wix: &Path, wxs: &Path, msi: &Path) -> Result<PathBuf> {
+    let status = Command::new(wix)
+        .args(wix_build_args(wxs, msi))
+        .status()
+        .with_context(|| format!("failed to run {}", wix.display()))?;
+    if !status.success() {
+        bail!("wix build failed with status {status}");
+    }
+    if !msi.exists() {
+        bail!(
+            "wix build reported success but {} was not produced",
+            msi.display()
+        );
+    }
+    Ok(msi.to_path_buf())
+}
+
+/// Build the `signtool sign` argument vector for an `.msi`, matching the
+/// existing Windows signing step in `sign.rs`.
+fn signtool_args(certificate: &Path, password: Option<&str>, artifact: &Path) -> Vec<String> {
+    let mut args = vec![
+        "sign".to_string(),
+        "/f".to_string(),
+        certificate.to_string_lossy().into_owned(),
+        "/p".to_string(),
+        password.unwrap_or("").to_string(),
+        "/tr".to_string(),
+        "http://timestamp.digicert.com".to_string(),
+        "/td".to_string(),
+        "sha256".to_string(),
+        "/fd".to_string(),
+        "sha256".to_string(),
+    ];
+    args.push(artifact.to_string_lossy().into_owned());
+    args
+}
+
+/// Sign an `.msi` with the configured Windows code-signing certificate via
+/// `signtool` (the same tool the standalone `sign` command uses).
+fn sign_msi(msi: &Path, certificate: &Path, password: Option<&str>) -> Result<()> {
+    let status = Command::new("signtool")
+        .args(signtool_args(certificate, password, msi))
+        .status()
+        .with_context(|| "failed to run signtool — is it installed?")?;
+    if !status.success() {
+        bail!("signtool exited with status {status}");
+    }
+    Ok(())
 }
 
 fn bundle_linux(
@@ -377,7 +527,237 @@ fn bundle_linux(
     }
 
     println!("Linux AppDir created: {}", app_dir.display());
-    Ok(vec![app_dir])
+
+    let mut artifacts = vec![app_dir.clone()];
+
+    if options.dry_run {
+        println!(
+            "dry-run: would build .deb at {}",
+            output
+                .join(format!("{app_name}_{}_amd64.deb", config.version))
+                .display()
+        );
+        println!("dry-run: would build AppImage from {}", app_dir.display());
+        return Ok(artifacts);
+    }
+
+    let deb_path = output.join(format!("{app_name}_{}_amd64.deb", config.version));
+    build_deb(config, &app_name, binary, &deb_path).context("failed to build .deb package")?;
+    println!("Linux .deb created: {}", deb_path.display());
+    artifacts.push(deb_path);
+
+    let appimage_path = output.join(format!("{app_name}-{}-x86_64.AppImage", config.version));
+    match find_appimagetool() {
+        Some(tool) => {
+            let built = build_appimage(&tool, &app_dir, &appimage_path)?;
+            println!("Linux AppImage created: {}", built.display());
+            artifacts.push(built);
+        }
+        None => {
+            eprintln!(
+                "warning: appimagetool not found on PATH; skipping AppImage build. \
+                 The AppDir at {} is ready to package on a Linux host with appimagetool.",
+                app_dir.display()
+            );
+        }
+    }
+
+    Ok(artifacts)
+}
+
+/// Locate `appimagetool` on `PATH`. Returns `None` (so the caller can
+/// skip-with-warning) when it is not installed — it is Linux-only tooling.
+fn find_appimagetool() -> Option<PathBuf> {
+    let locator = if cfg!(target_os = "windows") {
+        "where.exe"
+    } else {
+        "which"
+    };
+    if let Ok(output) = Command::new(locator).arg("appimagetool").output()
+        && output.status.success()
+    {
+        let found = String::from_utf8_lossy(&output.stdout);
+        if let Some(first) = found.lines().next() {
+            let trimmed = first.trim();
+            if !trimmed.is_empty() {
+                return Some(PathBuf::from(trimmed));
+            }
+        }
+    }
+    None
+}
+
+/// Run `appimagetool <AppDir> <output>.AppImage`. Update-information embedding
+/// (the `-u` flag) is supported via the optional `KAEL_APPIMAGE_UPDATE_INFO`
+/// environment variable but is not required.
+fn build_appimage(tool: &Path, app_dir: &Path, output: &Path) -> Result<PathBuf> {
+    let mut cmd = Command::new(tool);
+    if let Ok(update_info) = std::env::var("KAEL_APPIMAGE_UPDATE_INFO")
+        && !update_info.is_empty()
+    {
+        cmd.arg("-u").arg(update_info);
+    }
+    cmd.arg(app_dir).arg(output);
+    let status = cmd
+        .status()
+        .with_context(|| format!("failed to run {}", tool.display()))?;
+    if !status.success() {
+        bail!("appimagetool failed with status {status}");
+    }
+    if !output.exists() {
+        bail!(
+            "appimagetool reported success but {} was not produced",
+            output.display()
+        );
+    }
+    Ok(output.to_path_buf())
+}
+
+/// Generate a Debian `control` file from the dist metadata.
+///
+/// `installed_size` is in kibibytes per Debian policy (§5.6.20).
+fn generate_deb_control(config: &DistConfig, package: &str, installed_size_kib: u64) -> String {
+    let maintainer = config
+        .bundle
+        .copyright
+        .as_deref()
+        .unwrap_or(&config.name)
+        .to_string();
+    let description = config
+        .bundle
+        .file_description
+        .as_deref()
+        .unwrap_or(&config.name);
+    let section = config
+        .bundle
+        .linux_categories
+        .as_ref()
+        .and_then(|categories| categories.first())
+        .map(|category| category.to_lowercase())
+        .unwrap_or_else(|| "utils".to_string());
+
+    format!(
+        "Package: {package}\n\
+         Version: {version}\n\
+         Section: {section}\n\
+         Priority: optional\n\
+         Architecture: amd64\n\
+         Maintainer: {maintainer}\n\
+         Installed-Size: {installed_size_kib}\n\
+         Description: {description}\n",
+        version = config.version,
+    )
+}
+
+/// Build a `.deb` package directly in Rust — an `ar` archive of
+/// `debian-binary`, `control.tar.gz`, and `data.tar.gz` — so packaging works
+/// on any host (macOS, CI) without `dpkg-deb` or other system tooling.
+fn build_deb(
+    config: &DistConfig,
+    package: &str,
+    binary: Option<&Path>,
+    output: &Path,
+) -> Result<PathBuf> {
+    let data_tar = build_deb_data_tar(config, package, binary)?;
+    let installed_size_kib = data_tar.len().div_ceil(1024) as u64;
+    let control = generate_deb_control(config, package, installed_size_kib);
+    let control_tar = build_deb_control_tar(&control)?;
+
+    let members: [(&str, &[u8]); 3] = [
+        ("debian-binary", b"2.0\n"),
+        ("control.tar.gz", &control_tar),
+        ("data.tar.gz", &data_tar),
+    ];
+
+    let mut archive = Vec::new();
+    write_ar_archive(&mut archive, &members);
+    fs::write(output, &archive)
+        .with_context(|| format!("failed to write .deb to {}", output.display()))?;
+    Ok(output.to_path_buf())
+}
+
+/// Build the gzip-compressed `data.tar.gz` payload: the installed file tree
+/// rooted at `/`. Lays down `usr/bin/<pkg>` and `usr/share/applications/<pkg>.desktop`.
+fn build_deb_data_tar(
+    config: &DistConfig,
+    package: &str,
+    binary: Option<&Path>,
+) -> Result<Vec<u8>> {
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+
+    let mut builder = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
+
+    if let Some(binary) = binary {
+        let bytes = fs::read(binary)
+            .with_context(|| format!("failed to read binary {}", binary.display()))?;
+        let mut header = tar::Header::new_gnu();
+        header.set_path(format!("usr/bin/{package}"))?;
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o755);
+        header.set_mtime(0);
+        header.set_cksum();
+        builder.append(&header, bytes.as_slice())?;
+    }
+
+    let desktop = generate_desktop_entry(config);
+    let desktop_bytes = desktop.into_bytes();
+    let mut header = tar::Header::new_gnu();
+    header.set_path(format!("usr/share/applications/{package}.desktop"))?;
+    header.set_size(desktop_bytes.len() as u64);
+    header.set_mode(0o644);
+    header.set_mtime(0);
+    header.set_cksum();
+    builder.append(&header, desktop_bytes.as_slice())?;
+
+    let encoder = builder.into_inner()?;
+    encoder.finish().context("failed to finish data.tar.gz")
+}
+
+/// Build the gzip-compressed `control.tar.gz`: a tarball containing the single
+/// `./control` file describing the package.
+fn build_deb_control_tar(control: &str) -> Result<Vec<u8>> {
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+
+    let mut builder = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
+    let bytes = control.as_bytes();
+    let mut header = tar::Header::new_gnu();
+    header.set_path("./control")?;
+    header.set_size(bytes.len() as u64);
+    header.set_mode(0o644);
+    header.set_mtime(0);
+    header.set_cksum();
+    builder.append(&header, bytes)?;
+
+    let encoder = builder.into_inner()?;
+    encoder.finish().context("failed to finish control.tar.gz")
+}
+
+/// Write a Unix `ar` "common" format archive (the container `.deb` uses).
+///
+/// Layout: the magic `!<arch>\n`, then per member a 60-byte ASCII header
+/// (name, mtime, uid, gid, mode, size, terminator) followed by the data,
+/// padded to an even byte boundary. ~30 lines, no external `ar` crate needed.
+fn write_ar_archive(out: &mut Vec<u8>, members: &[(&str, &[u8])]) {
+    out.extend_from_slice(b"!<arch>\n");
+    for (name, data) in members {
+        let header = format!(
+            "{name:<16}{mtime:<12}{uid:<6}{gid:<6}{mode:<8}{size:<10}`\n",
+            name = name,
+            mtime = 0,
+            uid = 0,
+            gid = 0,
+            mode = "100644",
+            size = data.len(),
+        );
+        debug_assert_eq!(header.len(), 60, "ar header must be 60 bytes");
+        out.extend_from_slice(header.as_bytes());
+        out.extend_from_slice(data);
+        if data.len() % 2 == 1 {
+            out.push(b'\n');
+        }
+    }
 }
 
 fn copy_required_asset(source: &Path, destination: &Path) -> Result<()> {
@@ -602,6 +982,273 @@ mod tests {
         assert_eq!(
             xml_escape("a & b <c> \"d\" 'e'"),
             "a &amp; b &lt;c&gt; &quot;d&quot; &apos;e&apos;"
+        );
+    }
+
+    #[test]
+    fn wix_build_args_target_msi_output() {
+        let args = wix_build_args(Path::new("dist/Kael/Kael.wxs"), Path::new("dist/Kael.msi"));
+        assert_eq!(
+            args,
+            vec![
+                "build".to_string(),
+                "dist/Kael/Kael.wxs".to_string(),
+                "-o".to_string(),
+                "dist/Kael.msi".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn signtool_args_include_certificate_password_and_timestamp() {
+        let args = signtool_args(
+            Path::new("certs/code.pfx"),
+            Some("hunter2"),
+            Path::new("dist/Kael.msi"),
+        );
+        assert_eq!(args[0], "sign");
+        assert_eq!(args[1], "/f");
+        assert_eq!(args[2], "certs/code.pfx");
+        assert_eq!(args[3], "/p");
+        assert_eq!(args[4], "hunter2");
+        assert!(args.iter().any(|a| a == "/fd"));
+        assert!(args.iter().any(|a| a == "sha256"));
+        assert!(args.iter().any(|a| a == "http://timestamp.digicert.com"));
+        assert_eq!(args.last().unwrap(), "dist/Kael.msi");
+    }
+
+    #[test]
+    fn signtool_args_default_to_empty_password() {
+        let args = signtool_args(
+            Path::new("certs/code.pfx"),
+            None,
+            Path::new("dist/Kael.msi"),
+        );
+        assert_eq!(args[4], "");
+    }
+
+    fn linux_config() -> DistConfig {
+        DistConfig {
+            app_id: "com.kael.demo".to_string(),
+            name: "Kael Demo".to_string(),
+            version: "1.2.3".to_string(),
+            icons: crate::IconSet {
+                macos: None,
+                windows: None,
+                linux: None,
+            },
+            bundle: crate::BundleMetadata {
+                copyright: Some("Augustus Otu <dev@kael.dev>".to_string()),
+                category: None,
+                minimum_system_version: None,
+                file_description: Some("A GPU-accelerated framework".to_string()),
+                linux_categories: Some(vec!["Development".to_string(), "Utility".to_string()]),
+            },
+            signing: None,
+            updater: None,
+        }
+    }
+
+    #[test]
+    fn desktop_entry_is_freedesktop_compliant() {
+        let desktop = generate_desktop_entry(&linux_config());
+        assert!(desktop.starts_with("[Desktop Entry]\n"));
+        assert!(desktop.contains("Name=Kael Demo\n"));
+        assert!(desktop.contains("Exec=kael-demo\n"));
+        assert!(desktop.contains("Type=Application\n"));
+        assert!(desktop.contains("Categories=Development;Utility\n"));
+    }
+
+    #[test]
+    fn deb_control_contains_required_fields() {
+        let control = generate_deb_control(&linux_config(), "kael-demo", 512);
+        assert!(control.contains("Package: kael-demo\n"));
+        assert!(control.contains("Version: 1.2.3\n"));
+        assert!(control.contains("Architecture: amd64\n"));
+        assert!(control.contains("Maintainer: Augustus Otu <dev@kael.dev>\n"));
+        assert!(control.contains("Installed-Size: 512\n"));
+        assert!(control.contains("Section: development\n"));
+        assert!(control.contains("Priority: optional\n"));
+        assert!(control.contains("Description: A GPU-accelerated framework\n"));
+        assert!(control.ends_with('\n'));
+    }
+
+    #[test]
+    fn deb_control_falls_back_to_name_when_no_metadata() {
+        let mut config = linux_config();
+        config.bundle.copyright = None;
+        config.bundle.file_description = None;
+        config.bundle.linux_categories = None;
+        let control = generate_deb_control(&config, "kael-demo", 0);
+        assert!(control.contains("Maintainer: Kael Demo\n"));
+        assert!(control.contains("Description: Kael Demo\n"));
+        assert!(control.contains("Section: utils\n"));
+    }
+
+    #[test]
+    fn ar_archive_has_magic_and_padded_members() {
+        let mut out = Vec::new();
+        let members: [(&str, &[u8]); 2] = [("debian-binary", b"2.0\n"), ("odd", b"abc")];
+        write_ar_archive(&mut out, &members);
+
+        assert_eq!(&out[0..8], b"!<arch>\n");
+        let header1 = &out[8..68];
+        assert_eq!(header1.len(), 60);
+        assert!(header1.starts_with(b"debian-binary"));
+        assert_eq!(&header1[58..60], b"`\n");
+
+        let data1_start = 68;
+        assert_eq!(&out[data1_start..data1_start + 4], b"2.0\n");
+
+        let header2_start = data1_start + 4;
+        let header2 = &out[header2_start..header2_start + 60];
+        assert!(header2.starts_with(b"odd"));
+        let data2_start = header2_start + 60;
+        assert_eq!(&out[data2_start..data2_start + 3], b"abc");
+        assert_eq!(out[data2_start + 3], b'\n');
+    }
+
+    #[test]
+    fn deb_round_trips_through_ar_and_tar() {
+        use flate2::read::GzDecoder;
+
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("kael-demo");
+        fs::write(&binary, b"\x7fELF fake binary contents").unwrap();
+        let deb = dir.path().join("kael-demo_1.2.3_amd64.deb");
+
+        build_deb(&linux_config(), "kael-demo", Some(&binary), &deb).unwrap();
+
+        let bytes = fs::read(&deb).unwrap();
+        assert_eq!(&bytes[0..8], b"!<arch>\n");
+
+        let members = parse_ar(&bytes);
+        let names: Vec<&str> = members.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["debian-binary", "control.tar.gz", "data.tar.gz"]
+        );
+        assert_eq!(members[0].1, b"2.0\n");
+
+        let control_tar = members.iter().find(|(n, _)| n == "control.tar.gz").unwrap();
+        let mut control_archive = tar::Archive::new(GzDecoder::new(control_tar.1.as_slice()));
+        let mut control_contents = String::new();
+        let mut saw_control = false;
+        for entry in control_archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let path = entry.path().unwrap().to_string_lossy().into_owned();
+            if path.ends_with("control") {
+                saw_control = true;
+                use std::io::Read as _;
+                entry.read_to_string(&mut control_contents).unwrap();
+            }
+        }
+        assert!(saw_control, "control.tar.gz must contain a control file");
+        assert!(control_contents.contains("Package: kael-demo\n"));
+        assert!(control_contents.contains("Version: 1.2.3\n"));
+
+        let data_tar = members.iter().find(|(n, _)| n == "data.tar.gz").unwrap();
+        let mut data_archive = tar::Archive::new(GzDecoder::new(data_tar.1.as_slice()));
+        let mut data_paths = Vec::new();
+        let mut binary_mode = None;
+        for entry in data_archive.entries().unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path().unwrap().to_string_lossy().into_owned();
+            if path == "usr/bin/kael-demo" {
+                binary_mode = Some(entry.header().mode().unwrap());
+            }
+            data_paths.push(path);
+        }
+        assert!(data_paths.iter().any(|p| p == "usr/bin/kael-demo"));
+        assert!(
+            data_paths
+                .iter()
+                .any(|p| p == "usr/share/applications/kael-demo.desktop")
+        );
+        assert_eq!(binary_mode, Some(0o755));
+    }
+
+    fn parse_ar(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
+        let mut members = Vec::new();
+        let mut offset = 8;
+        while offset + 60 <= bytes.len() {
+            let header = &bytes[offset..offset + 60];
+            let name = String::from_utf8_lossy(&header[0..16]).trim().to_string();
+            let size: usize = String::from_utf8_lossy(&header[48..58])
+                .trim()
+                .parse()
+                .unwrap();
+            let data_start = offset + 60;
+            let data = bytes[data_start..data_start + size].to_vec();
+            members.push((name, data));
+            offset = data_start + size;
+            if size % 2 == 1 {
+                offset += 1;
+            }
+        }
+        members
+    }
+
+    #[test]
+    fn linux_bundle_pipeline_smoke() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("dist");
+        let binary = dir.path().join("kael-demo");
+        fs::write(&binary, b"\x7fELF dummy binary for smoke test").unwrap();
+
+        let config = linux_config();
+        let options = BundleOptions {
+            dry_run: false,
+            binary: Some(binary.clone()),
+        };
+
+        let artifacts = bundle_linux(&config, &output, Some(binary.as_path()), &options).unwrap();
+
+        let app_dir = output.join("kael-demo.AppDir");
+        assert!(app_dir.is_dir(), "AppDir must be created");
+        assert!(app_dir.join("AppRun").is_file(), "AppRun must exist");
+        assert!(
+            app_dir.join("kael-demo.desktop").is_file(),
+            ".desktop must exist"
+        );
+        assert!(
+            app_dir.join("usr/bin/kael-demo").is_file(),
+            "binary must be staged in the AppDir"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(app_dir.join("AppRun"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o111, 0o111, "AppRun must be executable");
+        }
+
+        let deb = output.join("kael-demo_1.2.3_amd64.deb");
+        assert!(deb.is_file(), ".deb must be produced on any host");
+
+        let bytes = fs::read(&deb).unwrap();
+        assert_eq!(
+            &bytes[0..8],
+            b"!<arch>\n",
+            ".deb must be a valid ar archive"
+        );
+        let members = parse_ar(&bytes);
+        let names: Vec<&str> = members.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["debian-binary", "control.tar.gz", "data.tar.gz"]
+        );
+
+        assert!(
+            artifacts.contains(&app_dir),
+            "AppDir should be reported as an artifact"
+        );
+        assert!(
+            artifacts.contains(&deb),
+            ".deb should be reported as an artifact"
         );
     }
 }
