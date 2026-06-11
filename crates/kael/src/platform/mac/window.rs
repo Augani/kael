@@ -3314,7 +3314,8 @@ extern "C" fn window_did_change_key_status(this: id, selector: Sel, _: id) {
     let window_state = unsafe { get_window_state(this) };
     let mut lock = window_state.lock();
     let is_active = unsafe { lock.native_window.isKeyWindow() == YES };
-    lock.accessibility_provider.update_view_focus_state(is_active);
+    lock.accessibility_provider
+        .update_view_focus_state(is_active);
 
     // When opening a pop-up while the application isn't active, Cocoa sends a spurious
     // `windowDidBecomeKey` message to the previous key window even though that window

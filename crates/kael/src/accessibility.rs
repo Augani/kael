@@ -845,11 +845,12 @@ mod tests {
         tree.set_parent(button_id, tree.root);
 
         assert_eq!(tree.focused_node(), Some(button_id));
-        assert!(tree
-            .get(button_id)
-            .unwrap()
-            .states
-            .contains(AccessibilityState::FOCUSED));
+        assert!(
+            tree.get(button_id)
+                .unwrap()
+                .states
+                .contains(AccessibilityState::FOCUSED)
+        );
     }
 
     #[test]
@@ -1071,10 +1072,12 @@ mod accesskit_spike_tests {
             .map(|(_, node)| node)
             .expect("root emitted");
         assert_eq!(root_node.children(), [accesskit::NodeId(button_id.0)]);
-        assert!(update
-            .nodes
-            .iter()
-            .any(|(id, _)| *id == accesskit::NodeId(button_id.0)));
+        assert!(
+            update
+                .nodes
+                .iter()
+                .any(|(id, _)| *id == accesskit::NodeId(button_id.0))
+        );
     }
 
     #[test]
@@ -1095,14 +1098,18 @@ mod accesskit_spike_tests {
         tree.set_parent(child_id, hidden_id);
 
         let update = tree.to_accesskit_tree_update(None, None, None);
-        assert!(!update
-            .nodes
-            .iter()
-            .any(|(id, _)| *id == accesskit::NodeId(hidden_id.0)));
-        assert!(!update
-            .nodes
-            .iter()
-            .any(|(id, _)| *id == accesskit::NodeId(child_id.0)));
+        assert!(
+            !update
+                .nodes
+                .iter()
+                .any(|(id, _)| *id == accesskit::NodeId(hidden_id.0))
+        );
+        assert!(
+            !update
+                .nodes
+                .iter()
+                .any(|(id, _)| *id == accesskit::NodeId(child_id.0))
+        );
         let root_node = update
             .nodes
             .iter()
