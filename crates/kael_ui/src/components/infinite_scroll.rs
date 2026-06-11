@@ -2,7 +2,7 @@ use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
 use crate::components::spinner::Spinner;
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum LoadingState {
@@ -142,7 +142,7 @@ impl Styled for InfiniteScroll {
 
 impl RenderOnce for InfiniteScroll {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let user_style = self.style;
         let (loading_state, scroll_handle) = {
             let s = self.state.read(cx);

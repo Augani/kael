@@ -1,4 +1,4 @@
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::time::Duration;
 
@@ -54,7 +54,7 @@ impl CopyButton {
 
 impl RenderOnce for CopyButton {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let copied = self.state.read(cx).copied;
         let state = self.state.clone();
         let user_style = self.style;

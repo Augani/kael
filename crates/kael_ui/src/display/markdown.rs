@@ -7,7 +7,7 @@ use crate::display::rich_text::LinkClickHandler;
 #[cfg(feature = "markdown")]
 use crate::display::rich_text::{render_blocks, ListItem, RichBlock, RichInline, TableAlignment};
 #[cfg(feature = "markdown")]
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 #[derive(IntoElement)]
 pub struct Markdown {
@@ -82,7 +82,7 @@ fn inlines_to_plain_text(inlines: &[RichInline]) -> String {
 #[cfg(feature = "markdown")]
 impl RenderOnce for Markdown {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let base_size = self.base_font_size.unwrap_or(px(14.0));
 
         let blocks = parse_markdown_with_urls(&self.source);

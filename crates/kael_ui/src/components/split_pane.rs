@@ -1,4 +1,4 @@
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
@@ -261,7 +261,7 @@ impl Styled for SplitPane {
 
 impl RenderOnce for SplitPane {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let state = self.state.read(cx);
         let direction = self.direction.unwrap_or(state.direction);
         let ratio = state.ratio;

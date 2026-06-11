@@ -1,6 +1,6 @@
 use crate::components::icon::Icon;
 use crate::components::icon_source::IconSource;
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
@@ -150,9 +150,9 @@ impl Styled for Alert {
 }
 
 impl RenderOnce for Alert {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
-        let (bg_color, border_color, accent_color) = self.get_colors(&theme);
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
+        let (bg_color, border_color, accent_color) = self.get_colors(theme);
         let user_style = self.style;
 
         let icon_source = self

@@ -1,6 +1,10 @@
 //! Toolbar component with icon buttons and grouping.
 
-use crate::{components::icon::Icon, components::icon_source::IconSource, theme::use_theme};
+use crate::{
+    components::icon::Icon,
+    components::icon_source::IconSource,
+    theme::{use_theme, Theme},
+};
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
@@ -179,8 +183,8 @@ impl Styled for Toolbar {
 }
 
 impl Render for Toolbar {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let button_size = self.size.button_size();
         let icon_size = self.size.icon_size();
         let user_style = self.style.clone();

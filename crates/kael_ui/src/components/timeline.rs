@@ -1,6 +1,6 @@
 use crate::components::icon::Icon;
 use crate::components::icon_source::IconSource;
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
@@ -725,8 +725,8 @@ impl Styled for Timeline {
 }
 
 impl RenderOnce for Timeline {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let items = self.items.clone();
         let items_len = items.len();
         let user_style = self.style.clone();
@@ -756,19 +756,19 @@ impl RenderOnce for Timeline {
 
                         match self.layout {
                             TimelineLayout::Left => {
-                                self.render_vertical_left_item(item, i, is_last, &theme)
+                                self.render_vertical_left_item(item, i, is_last, theme)
                             }
                             TimelineLayout::Right => {
-                                self.render_vertical_right_item(item, i, is_last, &theme)
+                                self.render_vertical_right_item(item, i, is_last, theme)
                             }
                             TimelineLayout::Center => {
                                 let on_left = item_position == TimelineItemPosition::Left;
-                                self.render_vertical_center_item(item, i, is_last, &theme, on_left)
+                                self.render_vertical_center_item(item, i, is_last, theme, on_left)
                             }
                         }
                     }
                     TimelineOrientation::Horizontal => {
-                        self.render_horizontal_item(item, i, is_last, &theme)
+                        self.render_horizontal_item(item, i, is_last, theme)
                     }
                 }
             }))

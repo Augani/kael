@@ -5,7 +5,7 @@ use std::time::Duration;
 use std::{cell::RefCell, rc::Rc};
 
 use crate::animations::easings;
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 const POPOVER_MARGIN: Pixels = px(8.0);
 const CONTEXT: &str = "Popover";
@@ -45,7 +45,7 @@ impl Focusable for PopoverContent {
 
 impl Render for PopoverContent {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let dismissing = self.dismissing;
 
         div()

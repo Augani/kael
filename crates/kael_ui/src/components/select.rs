@@ -3,7 +3,7 @@
 use crate::components::icon::Icon;
 use crate::components::icon_source::IconSource;
 use crate::components::scrollable::scrollable_vertical;
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::*, *};
 
 actions!(select, [SelectUp, SelectDown, SelectConfirm, SelectCancel]);
@@ -273,7 +273,7 @@ impl<T: Clone + 'static> Styled for Select<T> {
 
 impl<T: Clone + 'static> Render for Select<T> {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let user_style = self.style.clone();
 
         let display_text = self

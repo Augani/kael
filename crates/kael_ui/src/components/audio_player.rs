@@ -1,5 +1,5 @@
 use crate::icon_config::resolve_icon_path;
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::*, *};
 #[cfg(feature = "audio")]
 use std::io::BufReader;
@@ -499,7 +499,7 @@ impl Styled for AudioPlayer {
 
 impl RenderOnce for AudioPlayer {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let state = self.state.read(cx);
         let is_playing = state.is_playing;
         let is_muted = state.is_muted;
@@ -544,7 +544,7 @@ impl RenderOnce for AudioPlayer {
                 })
                 .child(self.render_play_button(
                     window,
-                    &theme,
+                    theme,
                     play_icon,
                     is_playing,
                     button_size,
@@ -552,7 +552,7 @@ impl RenderOnce for AudioPlayer {
                 ))
                 .child(self.render_progress_bar(
                     window,
-                    &theme,
+                    theme,
                     progress_percentage,
                     track_height,
                     thumb_size,
@@ -597,7 +597,7 @@ impl RenderOnce for AudioPlayer {
                         .w_full()
                         .child(self.render_progress_bar(
                             window,
-                            &theme,
+                            theme,
                             progress_percentage,
                             track_height,
                             thumb_size,
@@ -623,7 +623,7 @@ impl RenderOnce for AudioPlayer {
                         .child(div().flex().items_center().gap(px(8.0)).child(
                             self.render_play_button(
                                 window,
-                                &theme,
+                                theme,
                                 play_icon,
                                 is_playing,
                                 button_size,
@@ -635,17 +635,17 @@ impl RenderOnce for AudioPlayer {
                                 .flex()
                                 .items_center()
                                 .gap(px(8.0))
-                                .child(self.render_speed_button(window, &theme, playback_speed))
+                                .child(self.render_speed_button(window, theme, playback_speed))
                                 .child(self.render_mute_button(
                                     window,
-                                    &theme,
+                                    theme,
                                     volume_icon,
                                     px(28.0),
                                     px(14.0),
                                 ))
                                 .child(self.render_volume_slider(
                                     window,
-                                    &theme,
+                                    theme,
                                     volume,
                                     px(80.0),
                                     px(4.0),

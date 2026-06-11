@@ -4,7 +4,7 @@ use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 #[derive(IntoElement)]
 pub struct Pagination {
@@ -124,8 +124,8 @@ enum PageItem {
 }
 
 impl RenderOnce for Pagination {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let current_page = self.current_page;
         let total_pages = self.total_pages;
         let page_range = self.get_page_range();

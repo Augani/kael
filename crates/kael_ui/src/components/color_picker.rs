@@ -2,7 +2,7 @@
 
 use crate::components::text::{Text, TextVariant};
 use crate::overlays::popover::{Popover, PopoverContent};
-use crate::theme::use_theme;
+use crate::theme::{use_theme, Theme};
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
@@ -199,7 +199,7 @@ impl Styled for ColorPicker {
 
 impl RenderOnce for ColorPicker {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let state = self.state.clone();
         let color = state.read(cx).selected_color();
         let _show_alpha = self.show_alpha;

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crate::animations::easings;
 use crate::components::icon::Icon;
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ToastVariant {
@@ -173,7 +173,7 @@ impl ToastManager {
 
 impl Render for ToastManager {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
 
         if self.toasts.is_empty() {
             return div().into_any_element();

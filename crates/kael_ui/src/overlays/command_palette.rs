@@ -9,7 +9,7 @@ use crate::{
         scrollable::scrollable_vertical,
         text::{body, caption, label_small},
     },
-    theme::use_theme,
+    theme::Theme,
 };
 use kael::{prelude::FluentBuilder as _, InteractiveElement, *};
 use std::rc::Rc;
@@ -251,7 +251,7 @@ impl Focusable for CommandPalette {
 
 impl Render for CommandPalette {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let state = self.state.read(cx);
         let filtered = state.filtered_commands();
         let selected_idx = state.selected_index();
@@ -389,8 +389,8 @@ impl Render for CommandPalette {
     }
 }
 
-fn render_command_item(command: Command, selected: bool, _cx: &App) -> impl IntoElement {
-    let theme = use_theme();
+fn render_command_item(command: Command, selected: bool, cx: &App) -> impl IntoElement {
+    let theme = Theme::of(cx);
 
     div()
         .flex()

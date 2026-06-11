@@ -4,7 +4,7 @@ use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 actions!(alert_dialog, [AlertDialogCancel]);
 
@@ -108,7 +108,7 @@ impl Styled for AlertDialog {
 
 impl Render for AlertDialog {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let user_style = self.style.clone();
         let title = self.title.clone();
         let description = self.description.clone();

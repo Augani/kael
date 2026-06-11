@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::components::icon::Icon;
 use crate::components::icon_source::IconSource;
 use crate::components::text::{Text, TextVariant};
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum NavigationMenuOrientation {
@@ -144,8 +144,8 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> Styled for NavigationMenu<T> {
 }
 
 impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for NavigationMenu<T> {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let orientation = self.orientation;
 
         let expanded_set: HashSet<T> = self.expanded_ids.into_iter().collect();
@@ -168,7 +168,7 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for NavigationMenu<T
                 render_menu_item(
                     item,
                     orientation,
-                    &theme,
+                    theme,
                     0,
                     &expanded_set,
                     &selected_id,

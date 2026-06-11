@@ -1,4 +1,4 @@
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 
 const CHART_COLORS: [u32; 8] = [
@@ -957,8 +957,8 @@ impl Styled for BarChart {
 }
 
 impl RenderOnce for BarChart {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let user_style = self.style.clone();
 
         let is_single = self.series.is_empty();
@@ -966,12 +966,12 @@ impl RenderOnce for BarChart {
         let is_stacked = self.mode == BarChartMode::Stacked;
 
         let content = match (is_single, is_vertical, is_stacked) {
-            (true, true, _) => self.render_single_vertical(&theme),
-            (true, false, _) => self.render_single_horizontal(&theme),
-            (false, true, false) => self.render_multi_vertical_grouped(&theme),
-            (false, true, true) => self.render_multi_vertical_stacked(&theme),
-            (false, false, false) => self.render_multi_horizontal_grouped(&theme),
-            (false, false, true) => self.render_multi_horizontal_stacked(&theme),
+            (true, true, _) => self.render_single_vertical(theme),
+            (true, false, _) => self.render_single_horizontal(theme),
+            (false, true, false) => self.render_multi_vertical_grouped(theme),
+            (false, true, true) => self.render_multi_vertical_stacked(theme),
+            (false, false, false) => self.render_multi_horizontal_grouped(theme),
+            (false, false, true) => self.render_multi_horizontal_stacked(theme),
         };
 
         content.map(|this| {

@@ -1,7 +1,7 @@
 //! Popover menu component with positioned menu items.
 
 use crate::components::icon::Icon;
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::prelude::FluentBuilder;
 use kael::*;
 use std::rc::Rc;
@@ -78,8 +78,8 @@ impl Styled for PopoverMenu {
 }
 
 impl RenderOnce for PopoverMenu {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let on_close_backdrop = self.on_close.clone();
         let user_style = self.style;
 

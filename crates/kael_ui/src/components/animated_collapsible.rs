@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::animations::easings;
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 #[derive(IntoElement)]
 pub struct AnimatedCollapsible {
@@ -85,8 +85,8 @@ impl Styled for AnimatedCollapsible {
 }
 
 impl RenderOnce for AnimatedCollapsible {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let user_style = self.style;
         let is_open = self.is_open;
         let disabled = self.disabled;

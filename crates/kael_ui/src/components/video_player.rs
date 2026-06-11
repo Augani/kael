@@ -1,4 +1,4 @@
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -529,7 +529,7 @@ impl Styled for VideoPlayer {
 
 impl RenderOnce for VideoPlayer {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let state = self.state.read(cx);
         let focus_handle = state.focus_handle(cx);
 

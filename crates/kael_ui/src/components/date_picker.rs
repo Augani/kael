@@ -7,7 +7,7 @@ use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::calendar::{Calendar, CalendarLocale, DateRange, DateValue};
 use crate::components::icon::Icon;
 use crate::overlays::popover::{Popover, PopoverContent};
-use crate::theme::use_theme;
+use crate::theme::{use_theme, Theme};
 
 /// Date format options
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -329,7 +329,7 @@ impl Styled for DatePicker {
 
 impl RenderOnce for DatePicker {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let state_entity = self.state.clone();
         let state = self.state.read(cx);
 

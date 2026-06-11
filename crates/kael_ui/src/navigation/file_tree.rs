@@ -1,6 +1,6 @@
 use crate::components::icon::Icon;
 use crate::components::icon_source::IconSource;
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -328,8 +328,8 @@ impl Styled for FileTree {
 }
 
 impl RenderOnce for FileTree {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let user_style = self.style;
 
         let expanded_set: HashSet<PathBuf> = self.expanded_paths.into_iter().collect();
@@ -360,7 +360,7 @@ impl RenderOnce for FileTree {
                 let node = flat_node.node;
                 let path = node.path.clone();
 
-                let icon_color = node.file_icon_color(&theme);
+                let icon_color = node.file_icon_color(theme);
                 let node_icon = node.file_icon(is_expanded);
 
                 div()

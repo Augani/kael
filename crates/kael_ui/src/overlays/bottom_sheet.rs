@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use crate::animations::presets;
 use crate::components::text::{Text, TextVariant};
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum BottomSheetSize {
@@ -129,8 +129,8 @@ impl Styled for BottomSheet {
 }
 
 impl RenderOnce for BottomSheet {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let has_header =
             self.title.is_some() || self.description.is_some() || self.actions.is_some();
         let sheet_height = self.get_sheet_height();

@@ -1,6 +1,6 @@
 use crate::components::icon::Icon;
 use crate::components::spinner::{Spinner, SpinnerSize, SpinnerVariant};
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -366,7 +366,7 @@ impl Styled for FileUpload {
 
 impl RenderOnce for FileUpload {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let state = self.state.read(cx);
         let is_dragging = state.is_dragging;
         let is_uploading = state.is_uploading;

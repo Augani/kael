@@ -1,6 +1,6 @@
 //! Squarified treemap chart for hierarchical data visualization.
 
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 
 const CHART_COLORS: [u32; 8] = [
@@ -324,8 +324,8 @@ impl Styled for TreeMap {
 }
 
 impl RenderOnce for TreeMap {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let user_style = self.style;
         let data = self.data;
         let color_scale = self.color_scale;

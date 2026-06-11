@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::animations::easings;
 use crate::components::progress::{ProgressSize, ProgressVariant};
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 #[derive(IntoElement)]
 pub struct AnimatedProgress {
@@ -69,8 +69,8 @@ impl Styled for AnimatedProgress {
 }
 
 impl RenderOnce for AnimatedProgress {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
 
         let height = match self.size {
             ProgressSize::Sm => px(4.0),

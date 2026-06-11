@@ -6,7 +6,7 @@ use crate::{
         icon_source::IconSource,
         text::{body, caption},
     },
-    theme::use_theme,
+    theme::{use_theme, Theme},
 };
 use kael::{prelude::FluentBuilder as _, InteractiveElement, *};
 use std::rc::Rc;
@@ -154,8 +154,8 @@ impl Styled for Menu {
 }
 
 impl RenderOnce for Menu {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let user_style = self.style;
 
         div()
@@ -302,7 +302,7 @@ impl MenuBar {
 
 impl Render for MenuBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
 
         div()
             .flex()
@@ -355,8 +355,8 @@ impl ContextMenu {
 }
 
 impl RenderOnce for ContextMenu {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
 
         anchored()
             .snap_to_window_with_margin(px(8.0))

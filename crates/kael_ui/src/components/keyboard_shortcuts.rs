@@ -1,6 +1,6 @@
 //! Keyboard shortcuts manager component with categorized shortcuts and platform-specific key display.
 
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 
 #[derive(Clone, Debug)]
@@ -108,8 +108,8 @@ impl Styled for KeyboardShortcuts {
 }
 
 impl Render for KeyboardShortcuts {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let user_style = self.style.clone();
 
         div()

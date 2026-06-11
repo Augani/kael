@@ -3,7 +3,7 @@ use crate::components::empty_state::EmptyState;
 use crate::components::icon::Icon;
 use crate::components::icon_source::IconSource;
 use crate::components::scrollable::scrollable_vertical;
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
@@ -217,7 +217,7 @@ impl Styled for NotificationCenter {
 
 impl RenderOnce for NotificationCenter {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let user_style = self.style;
         let state = self.state.read(cx);
         let notifications = state.notifications().to_vec();
@@ -301,7 +301,7 @@ impl RenderOnce for NotificationCenter {
                             let notification_clone = notification.clone();
                             let is_read = notification.read;
                             let variant = notification.variant;
-                            let variant_color = variant.color(&theme);
+                            let variant_color = variant.color(theme);
 
                             div()
                                 .id(id.clone())
@@ -546,7 +546,7 @@ impl Styled for NotificationBell {
 
 impl RenderOnce for NotificationBell {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let user_style = self.style;
         let unread_count = self.state.read(cx).unread_count();
         let on_click = self.on_click.clone();

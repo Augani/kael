@@ -1,4 +1,4 @@
-use crate::theme::use_theme;
+use crate::theme::Theme;
 /// Interactive text input state management with validation and accessibility
 ///
 /// Industry-standard input component with:
@@ -1197,7 +1197,7 @@ impl kael::Element for InputTextElement {
             )
         };
         let style = window.text_style();
-        let theme = use_theme();
+        let theme = Theme::of(cx);
 
         let (display_text, text_color) = if content.is_empty() {
             (input.placeholder.clone(), theme.tokens.muted_foreground)

@@ -9,7 +9,7 @@ use kael::{
     ScrollWheelEvent, Size, Style, Window,
 };
 
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 pub(crate) const WIDTH: Pixels = px(12.0);
 const MIN_THUMB_SIZE: f32 = 48.;
@@ -290,9 +290,9 @@ impl Element for Scrollbar {
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
         window: &mut Window,
-        _cx: &mut App,
+        cx: &mut App,
     ) -> Self::PrepaintState {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
 
         let hitbox = window.with_content_mask(Some(ContentMask { bounds }), |window| {
             window.insert_hitbox(bounds, HitboxBehavior::Normal)
@@ -372,16 +372,16 @@ impl Element for Scrollbar {
             let (thumb_bg, track_bg, thumb_width, inset, radius) =
                 if is_dragged || is_hovered_on_thumb {
                     (
-                        self.get_hover_thumb_color(&theme),
-                        self.get_track_color(&theme),
+                        self.get_hover_thumb_color(theme),
+                        self.get_track_color(theme),
                         THUMB_ACTIVE_WIDTH,
                         THUMB_ACTIVE_INSET,
                         THUMB_ACTIVE_RADIUS,
                     )
                 } else {
                     (
-                        self.get_thumb_color(&theme),
-                        self.get_track_color(&theme),
+                        self.get_thumb_color(theme),
+                        self.get_track_color(theme),
                         THUMB_WIDTH,
                         THUMB_INSET,
                         THUMB_RADIUS,

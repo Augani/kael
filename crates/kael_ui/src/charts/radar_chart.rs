@@ -1,4 +1,4 @@
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 
 const CHART_COLORS: [u32; 8] = [
@@ -146,8 +146,8 @@ fn angle_for_axis(index: usize, total: usize) -> f32 {
 }
 
 impl RenderOnce for RadarChart {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let user_style = self.style;
         let chart_size = self.size.to_pixels();
         let show_legend = self.show_legend && self.datasets.len() > 1;
