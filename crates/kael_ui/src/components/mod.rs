@@ -112,7 +112,6 @@ pub mod skeleton_loader;
 pub mod svg_renderer;
 pub mod tilt_card;
 
-pub mod canvas_component;
 pub mod confetti;
 pub mod draggable_spring;
 pub mod particle_emitter;

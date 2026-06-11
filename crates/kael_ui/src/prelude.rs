@@ -10,7 +10,6 @@ pub use crate::animate::{
     slide_up as animate_slide_up, AnimationPreset, AnimationRepeat, KeyframeAnimation,
     StaggerConfig, Transition,
 };
-pub use crate::animated_state::AnimatedInteraction;
 pub use crate::animations::{lerp_color, lerp_f32, lerp_pixels, lerp_shadow, lerp_shadows};
 pub use crate::charts::bar_chart::{
     BarChart, BarChartData, BarChartMode, BarChartOrientation, BarChartSeries,
@@ -174,7 +173,6 @@ pub use crate::overlays::sheet::{Sheet, SheetSide, SheetSize};
 pub use crate::overlays::toast::{ToastItem, ToastManager, ToastPosition, ToastVariant};
 pub use crate::theme::{install_theme, use_theme, Theme, ThemeTokens, ThemeVariant};
 
-pub use crate::animation_coordinator::AnimationCoordinator;
 pub use crate::content_transition::{ContentTransition, ContentTransitionState};
 pub use crate::gestures::{
     GestureDetector, GestureEvent, LongPressGesture, PanGesture, SwipeDirection, SwipeGesture,
@@ -219,7 +217,6 @@ pub use crate::charts::radar_chart::{RadarChart, RadarChartSize, RadarDataset};
 
 pub use crate::components::animated_list::{AnimatedList, AnimatedListState};
 pub use crate::components::aurora::Aurora;
-pub use crate::components::canvas_component::CanvasComponent;
 pub use crate::components::confetti::{Confetti, ConfettiState};
 pub use crate::components::crop_area::{CropArea, CropAreaState, DragHandle};
 pub use crate::components::dock::{Dock, DockState};

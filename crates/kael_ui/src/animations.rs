@@ -662,53 +662,53 @@ pub fn spring_bounce(delta: f32, amplitude: f32) -> f32 {
     amplitude * decay * oscillation
 }
 
+/// Clamped scalar interpolation.
+///
+/// Prefer the canonical [`kael::interpolate::interpolate_f32`], which does not
+/// clamp `t`; this shim clamps to `0..=1` and delegates.
 pub fn lerp_f32(from: f32, to: f32, t: f32) -> f32 {
-    from + (to - from) * t.clamp(0.0, 1.0)
+    kael::interpolate::interpolate_f32(from, to, t.clamp(0.0, 1.0))
 }
 
+/// Clamped length interpolation.
+///
+/// Prefer the canonical [`kael::interpolate::interpolate_pixels`]; this shim
+/// clamps `t` to `0..=1` and delegates.
 pub fn lerp_pixels(from: Pixels, to: Pixels, t: f32) -> Pixels {
-    let t = t.clamp(0.0, 1.0);
-    px(f32::from(from) + (f32::from(to) - f32::from(from)) * t)
+    kael::interpolate::interpolate_pixels(from, to, t.clamp(0.0, 1.0))
 }
 
+/// Clamped HSL-space color interpolation.
+///
+/// Blends each HSL channel directly. For perceptual linear-RGB blending use
+/// the canonical [`kael::interpolate::interpolate_hsla`].
 pub fn lerp_color(from: Hsla, to: Hsla, t: f32) -> Hsla {
     let t = t.clamp(0.0, 1.0);
     Hsla {
-        h: from.h + (to.h - from.h) * t,
-        s: from.s + (to.s - from.s) * t,
-        l: from.l + (to.l - from.l) * t,
-        a: from.a + (to.a - from.a) * t,
+        h: kael::interpolate::interpolate_f32(from.h, to.h, t),
+        s: kael::interpolate::interpolate_f32(from.s, to.s, t),
+        l: kael::interpolate::interpolate_f32(from.l, to.l, t),
+        a: kael::interpolate::interpolate_f32(from.a, to.a, t),
     }
 }
 
+/// Clamped box-shadow interpolation.
+///
+/// Prefer the canonical [`kael::interpolate::interpolate_shadow`]; this shim
+/// clamps `t` to `0..=1` and delegates.
 pub fn lerp_shadow(from: &BoxShadow, to: &BoxShadow, t: f32) -> BoxShadow {
-    let t = t.clamp(0.0, 1.0);
-    BoxShadow {
-        color: lerp_color(from.color, to.color, t),
-        offset: point(
-            lerp_pixels(from.offset.x, to.offset.x, t),
-            lerp_pixels(from.offset.y, to.offset.y, t),
-        ),
-        blur_radius: lerp_pixels(from.blur_radius, to.blur_radius, t),
-        spread_radius: lerp_pixels(from.spread_radius, to.spread_radius, t),
-        inset: false,
-    }
+    kael::interpolate::interpolate_shadow(from, to, t.clamp(0.0, 1.0))
 }
 
+/// Clamped box-shadow stack interpolation.
+///
+/// Prefer the canonical [`kael::interpolate::interpolate_shadows`]; this shim
+/// clamps `t` to `0..=1` and delegates.
 pub fn lerp_shadows(from: &[BoxShadow], to: &[BoxShadow], t: f32) -> SmallVec<[BoxShadow; 2]> {
-    let max_len = from.len().max(to.len());
-    let mut result = SmallVec::new();
-    let empty = BoxShadow {
-        color: hsla(0.0, 0.0, 0.0, 0.0),
-        offset: point(px(0.0), px(0.0)),
-        blur_radius: px(0.0),
-        spread_radius: px(0.0),
-        inset: false,
-    };
-    for i in 0..max_len {
-        let f = from.get(i).unwrap_or(&empty);
-        let t_shadow = to.get(i).unwrap_or(&empty);
-        result.push(lerp_shadow(f, t_shadow, t));
-    }
-    result
+    let t = t.clamp(0.0, 1.0);
+    let from: SmallVec<[BoxShadow; 1]> = from.iter().cloned().collect();
+    let to: SmallVec<[BoxShadow; 1]> = to.iter().cloned().collect();
+    kael::interpolate::interpolate_shadows(&from, &to, t)
+        .into_iter()
+        .collect()
 }

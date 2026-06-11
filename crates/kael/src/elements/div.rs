@@ -15,6 +15,7 @@
 //! and Tailwind-like styling that you can use to build your own custom elements. Div is
 //! constructed by combining these two systems into an all-in-one element.
 
+use crate::interpolate::{interpolate_f32, interpolate_hsla, interpolate_shadows};
 use crate::scroll_elasticity::{
     advance_scroll_elasticity, apply_scroll_delta_axis, rubber_band_scroll_enabled,
 };
@@ -278,10 +279,6 @@ fn ease_out_progress(progress: f32) -> f32 {
     1.0 - (1.0 - progress).powi(5)
 }
 
-fn interpolate_f32(from: f32, to: f32, progress: f32) -> f32 {
-    from + (to - from) * progress
-}
-
 fn normalize_f32(value: f32, default: f32) -> Option<f32> {
     ((value - default).abs() > 0.0001).then_some(value)
 }
@@ -297,18 +294,6 @@ fn interpolate_optional_hsla(from: Option<Hsla>, to: Option<Hsla>, progress: f32
         (Some(from), None) => Some(interpolate_hsla(from, from.alpha(0.0), progress)),
         (None, Some(to)) => Some(interpolate_hsla(to.alpha(0.0), to, progress)),
     }
-}
-
-fn interpolate_hsla(from: Hsla, to: Hsla, progress: f32) -> Hsla {
-    let from = Rgba::from(from);
-    let to = Rgba::from(to);
-    Rgba {
-        r: interpolate_f32(from.r, to.r, progress),
-        g: interpolate_f32(from.g, to.g, progress),
-        b: interpolate_f32(from.b, to.b, progress),
-        a: interpolate_f32(from.a, to.a, progress),
-    }
-    .into()
 }
 
 #[derive(Default)]
@@ -489,63 +474,6 @@ fn interpolate_corners(
         bottom_right: interpolate_absolute_length(from.bottom_right, to.bottom_right, progress),
         bottom_left: interpolate_absolute_length(from.bottom_left, to.bottom_left, progress),
     }
-}
-
-fn transparent_shadow_like(shadow: &BoxShadow) -> BoxShadow {
-    BoxShadow {
-        color: shadow.color.alpha(0.0),
-        ..shadow.clone()
-    }
-}
-
-fn interpolate_shadow(from: &BoxShadow, to: &BoxShadow, progress: f32) -> BoxShadow {
-    if from.inset != to.inset {
-        return to.clone();
-    }
-    BoxShadow {
-        color: interpolate_hsla(from.color, to.color, progress),
-        offset: point(
-            px(interpolate_f32(from.offset.x.0, to.offset.x.0, progress)),
-            px(interpolate_f32(from.offset.y.0, to.offset.y.0, progress)),
-        ),
-        blur_radius: px(interpolate_f32(
-            from.blur_radius.0,
-            to.blur_radius.0,
-            progress,
-        )),
-        spread_radius: px(interpolate_f32(
-            from.spread_radius.0,
-            to.spread_radius.0,
-            progress,
-        )),
-        inset: to.inset,
-    }
-}
-
-fn interpolate_shadows(
-    from: &SmallVec<[BoxShadow; 1]>,
-    to: &SmallVec<[BoxShadow; 1]>,
-    progress: f32,
-) -> SmallVec<[BoxShadow; 1]> {
-    let len = from.len().max(to.len());
-    (0..len)
-        .filter_map(|ix| {
-            let from_shadow = from
-                .get(ix)
-                .cloned()
-                .or_else(|| to.get(ix).map(transparent_shadow_like));
-            let to_shadow = to
-                .get(ix)
-                .cloned()
-                .or_else(|| from.get(ix).map(transparent_shadow_like));
-            match (from_shadow, to_shadow) {
-                (Some(from_shadow), Some(to_shadow)) => {
-                    Some(interpolate_shadow(&from_shadow, &to_shadow, progress))
-                }
-                _ => None,
-            }
-        })
-        .collect()
 }
 
 /// The styling information for a given group.
