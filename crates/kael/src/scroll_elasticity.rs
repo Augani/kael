@@ -1,3 +1,14 @@
+//! Rubber-band scroll elasticity: the canonical overscroll feel shared across
+//! the framework.
+//!
+//! When content is dragged past its scroll bounds, the boundary motion is
+//! integrated into a signed overscroll amount with progressive damping
+//! ([`add_scroll_elasticity`]) and, once released, decays back to zero with a
+//! frame-rate-independent exponential ([`advance_scroll_elasticity`]). Using
+//! these functions everywhere guarantees the rubber-band stretch and snap-back
+//! curve are identical in core div scroll and in higher-level scroll
+//! containers.
+
 use crate::Pixels;
 #[cfg(any(target_os = "macos", test))]
 use crate::ScrollDelta;
@@ -18,11 +29,19 @@ pub(crate) fn rubber_band_scroll_enabled(event: &ScrollWheelEvent) -> bool {
     }
 }
 
-pub(crate) fn pixels_have_same_sign(left: Pixels, right: Pixels) -> bool {
+/// Returns whether both values are non-zero and point in the same direction.
+pub fn pixels_have_same_sign(left: Pixels, right: Pixels) -> bool {
     (left > Pixels::ZERO && right > Pixels::ZERO) || (left < Pixels::ZERO && right < Pixels::ZERO)
 }
 
-pub(crate) fn consume_scroll_elasticity(overscroll: &mut Pixels, delta: Pixels) -> Pixels {
+/// Consumes scroll `delta` against an existing `overscroll` before it reaches
+/// the content.
+///
+/// When the content is already stretched past a boundary, a reverse scroll
+/// first un-stretches the rubber band rather than scrolling the content. The
+/// returned value is the remaining delta (if any) that should be applied to the
+/// content offset once the overscroll has been neutralized.
+pub fn consume_scroll_elasticity(overscroll: &mut Pixels, delta: Pixels) -> Pixels {
     if overscroll.is_zero() || pixels_have_same_sign(*overscroll, delta) {
         return delta;
     }
@@ -37,7 +56,14 @@ pub(crate) fn consume_scroll_elasticity(overscroll: &mut Pixels, delta: Pixels) 
     }
 }
 
-pub(crate) fn add_scroll_elasticity(overscroll: Pixels, delta: Pixels) -> Pixels {
+/// Integrates boundary `delta` into the rubber-band `overscroll` with
+/// progressive damping.
+///
+/// The further the content is already stretched, the stiffer the band becomes:
+/// damping eases from `0.62` near the boundary down to `0.22` at the
+/// `128px` limit, and the result is clamped to that limit. This is the canonical
+/// stretch curve; share it so every scroll surface feels the same.
+pub fn add_scroll_elasticity(overscroll: Pixels, delta: Pixels) -> Pixels {
     const RUBBER_BAND_LIMIT: f32 = 128.0;
 
     let progress = (overscroll.abs().0 / RUBBER_BAND_LIMIT).clamp(0.0, 1.0);
@@ -46,7 +72,14 @@ pub(crate) fn add_scroll_elasticity(overscroll: Pixels, delta: Pixels) -> Pixels
     (overscroll + delta * damping).clamp(-limit, limit)
 }
 
-pub(crate) fn advance_scroll_elasticity(
+/// Advances the rubber-band `overscroll` one frame toward zero.
+///
+/// Decay is a frame-rate-independent exponential (`rate = 12.0`): `last_advance`
+/// tracks the previous wall-clock instant so the snap-back covers the same
+/// distance per unit time at 60Hz, 120Hz, or any frame cadence. Returns `true`
+/// while the band is still settling and `false` once it has snapped flush
+/// (within `0.25px`), at which point `last_advance` is reset.
+pub fn advance_scroll_elasticity(
     overscroll: &mut Pixels,
     last_advance: &mut Option<std::time::Instant>,
 ) -> bool {
@@ -74,7 +107,15 @@ pub(crate) fn advance_scroll_elasticity(
     !overscroll.is_zero()
 }
 
-pub(crate) fn apply_scroll_delta_axis(
+/// Applies a single-axis scroll `delta` to an `offset`, routing any motion past
+/// the bounds into rubber-band `overscroll`.
+///
+/// This is the full per-axis pipeline used by core scrolling: reverse deltas
+/// first [`consume_scroll_elasticity`], the offset is clamped to
+/// `[-max_offset, 0]`, and the portion that would exceed the boundary is fed
+/// into [`add_scroll_elasticity`]. With `rubber_band_enabled` false (or no
+/// scrollable range) the offset is hard-clamped and overscroll is cleared.
+pub fn apply_scroll_delta_axis(
     offset: &mut Pixels,
     overscroll: &mut Pixels,
     max_offset: Pixels,

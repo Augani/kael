@@ -84,7 +84,7 @@ pub mod runtime;
 mod scene;
 /// Scene graph primitives for canvas and creative applications.
 pub mod scene_graph;
-mod scroll_elasticity;
+pub mod scroll_elasticity;
 pub mod security;
 mod session_store;
 #[allow(dead_code)]
