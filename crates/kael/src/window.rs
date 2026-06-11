@@ -897,6 +897,10 @@ pub struct Window {
     pub(crate) accessibility_announcements: Vec<String>,
     #[cfg(any(feature = "inspector", debug_assertions))]
     inspector: Option<Entity<Inspector>>,
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    frame_timeline: crate::FrameTimeline,
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    frame_counter: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1324,6 +1328,10 @@ impl Window {
             image_cache_stack: SmallVec::new(),
             #[cfg(any(feature = "inspector", debug_assertions))]
             inspector: None,
+            #[cfg(any(feature = "inspector", debug_assertions))]
+            frame_timeline: crate::FrameTimeline::new(),
+            #[cfg(any(feature = "inspector", debug_assertions))]
+            frame_counter: 0,
         })
     }
 
@@ -1339,9 +1347,16 @@ impl Window {
     }
 }
 
+/// Outcome of dispatching a [`PlatformInput`] through [`Window::dispatch_event`].
+///
+/// Returned so callers that synthesize input (for example, app-level integration
+/// tests driving the window directly) can observe whether the event propagated
+/// or had its default behavior prevented.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct DispatchEventResult {
+pub struct DispatchEventResult {
+    /// Whether the event was allowed to continue propagating to other handlers.
     pub propagate: bool,
+    /// Whether a handler prevented the platform's default behavior for the event.
     pub default_prevented: bool,
 }
 
@@ -2222,6 +2237,8 @@ impl Window {
     /// the contents of the new `Scene`, use `present`.
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
+        #[cfg(any(feature = "inspector", debug_assertions))]
+        let frame_started_at = Instant::now();
         self.power_mode = cx.power_mode();
         self.invalidate_entities();
         cx.entities.clear_accessed();
@@ -2292,7 +2309,41 @@ impl Window {
         self.invalidator.set_phase(DrawPhase::None);
         self.needs_present.set(true);
 
+        #[cfg(any(feature = "inspector", debug_assertions))]
+        self.record_frame_timing(frame_started_at);
+
         ArenaClearNeeded
+    }
+
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    fn record_frame_timing(&mut self, frame_started_at: Instant) {
+        let duration_us = frame_started_at.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        let start_us = self
+            .last_frame_presented_at
+            .elapsed()
+            .as_micros()
+            .min(u64::MAX as u128) as u64;
+        let frame_number = self.frame_counter;
+        self.frame_counter = self.frame_counter.wrapping_add(1);
+        let element_count = self.rendered_frame.hitboxes.len() as u32;
+        self.frame_timeline.record(crate::FrameRecord {
+            frame_number,
+            start_us,
+            duration_us,
+            layout_us: 0,
+            paint_us: 0,
+            gpu_us: 0,
+            element_count,
+        });
+    }
+
+    /// Returns the frame timing timeline recorded for this window.
+    ///
+    /// Only available with the `inspector` feature or in debug builds. The timeline
+    /// is fed automatically at the end of each [`Window::draw`].
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub fn frame_timeline(&self) -> &crate::FrameTimeline {
+        &self.frame_timeline
     }
 
     fn record_entities_accessed(&mut self, cx: &mut App) {
