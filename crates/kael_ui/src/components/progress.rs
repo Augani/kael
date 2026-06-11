@@ -1,4 +1,4 @@
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 
 /// Progress bar variants
@@ -109,8 +109,14 @@ impl Styled for ProgressBar {
 }
 
 impl RenderOnce for ProgressBar {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let tokens = &Theme::of(cx).tokens;
+        let primary = tokens.primary;
+        let destructive = tokens.destructive;
+        let foreground = tokens.foreground;
+        let muted_foreground = tokens.muted_foreground;
+        let muted = tokens.muted;
+        let radius_lg = tokens.radius_lg;
         let user_style = self.style;
 
         let height = match self.size {
@@ -120,10 +126,10 @@ impl RenderOnce for ProgressBar {
         };
 
         let bar_color = match self.variant {
-            ProgressVariant::Default => theme.tokens.primary,
+            ProgressVariant::Default => primary,
             ProgressVariant::Success => rgb(0x22c55e).into(), // green-500
             ProgressVariant::Warning => rgb(0xf59e0b).into(), // amber-500
-            ProgressVariant::Destructive => theme.tokens.destructive,
+            ProgressVariant::Destructive => destructive,
         };
 
         let progress_width = if let Some(value) = self.value {
@@ -152,7 +158,7 @@ impl RenderOnce for ProgressBar {
                                     div()
                                         .text_sm()
                                         .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.tokens.foreground)
+                                        .text_color(foreground)
                                         .child(label),
                                 )
                             })
@@ -160,7 +166,7 @@ impl RenderOnce for ProgressBar {
                                 this.child(
                                     div()
                                         .text_sm()
-                                        .text_color(theme.tokens.muted_foreground)
+                                        .text_color(muted_foreground)
                                         .child(percentage_text.unwrap_or_default()),
                                 )
                             }),
@@ -172,8 +178,8 @@ impl RenderOnce for ProgressBar {
                     .relative()
                     .w_full()
                     .h(height)
-                    .rounded(theme.tokens.radius_lg)
-                    .bg(theme.tokens.muted)
+                    .rounded(radius_lg)
+                    .bg(muted)
                     .overflow_hidden()
                     .child(
                         div()
@@ -183,7 +189,7 @@ impl RenderOnce for ProgressBar {
                             .h_full()
                             .w(progress_width)
                             .bg(bar_color)
-                            .rounded(theme.tokens.radius_lg)
+                            .rounded(radius_lg)
                             .map(|this| {
                                 if self.value.is_none() {
                                     this.with_animation(
@@ -275,15 +281,18 @@ impl Styled for CircularProgress {
 }
 
 impl RenderOnce for CircularProgress {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let tokens = &Theme::of(cx).tokens;
+        let primary = tokens.primary;
+        let destructive = tokens.destructive;
+        let muted = tokens.muted;
         let user_style = self.style;
 
         let stroke_color = match self.variant {
-            ProgressVariant::Default => theme.tokens.primary,
+            ProgressVariant::Default => primary,
             ProgressVariant::Success => rgb(0x22c55e).into(),
             ProgressVariant::Warning => rgb(0xf59e0b).into(),
-            ProgressVariant::Destructive => theme.tokens.destructive,
+            ProgressVariant::Destructive => destructive,
         };
 
         div()
@@ -297,7 +306,7 @@ impl RenderOnce for CircularProgress {
                     .rounded(px(9999.0))
                     .relative()
                     .map(|container| {
-                        let track_color = theme.tokens.muted;
+                        let track_color = muted;
                         let stroke_w = self.stroke_width;
                         let container = container.child(
                             div()

@@ -1,6 +1,6 @@
 //! Separator component - Visual dividers for content sections.
 
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 
 /// Orientation of the separator
@@ -93,9 +93,12 @@ impl Styled for Separator {
 }
 
 impl RenderOnce for Separator {
-    fn render(self, _: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
-        let line_color = self.color.unwrap_or(theme.tokens.border);
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let tokens = &Theme::of(cx).tokens;
+        let border = tokens.border;
+        let background = tokens.background;
+        let muted_foreground = tokens.muted_foreground;
+        let line_color = self.color.unwrap_or(border);
         let user_style = self.style;
 
         div()
@@ -129,8 +132,8 @@ impl RenderOnce for Separator {
                         .px(px(8.0))
                         .py(px(4.0))
                         .text_xs()
-                        .bg(theme.tokens.background)
-                        .text_color(theme.tokens.muted_foreground)
+                        .bg(background)
+                        .text_color(muted_foreground)
                         .child(label),
                 )
             })

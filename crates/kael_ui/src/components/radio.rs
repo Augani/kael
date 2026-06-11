@@ -25,7 +25,7 @@
 //! - RadioGroup automatically manages checked state
 //!
 
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
@@ -107,7 +107,6 @@ impl Styled for Radio {
 
 impl RenderOnce for Radio {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
         let user_style = self.style;
 
         let focus_handle = window
@@ -116,10 +115,23 @@ impl RenderOnce for Radio {
             .clone();
         let is_focused = focus_handle.is_focused(window);
 
+        let tokens = &Theme::of(cx).tokens;
+        let primary = tokens.primary;
+        let input = tokens.input;
+        let background = tokens.background;
+        let primary_foreground = tokens.primary_foreground;
+        let muted_foreground = tokens.muted_foreground;
+        let foreground = tokens.foreground;
+        let font_family = tokens.font_family.clone();
+        let radius_md = tokens.radius_md;
+        let transition_fast = tokens.transition_fast;
+        let shadow_xs = tokens.shadow_xs.clone();
+        let focus_ring = tokens.focus_ring_light();
+
         let (border_color, bg, dot_opacity) = if self.checked {
-            (theme.tokens.primary, theme.tokens.primary, 1.0)
+            (primary, primary, 1.0)
         } else {
-            (theme.tokens.input, theme.tokens.background, 0.0)
+            (input, background, 0.0)
         };
 
         let (border_color, bg) = if self.disabled {
@@ -127,9 +139,6 @@ impl RenderOnce for Radio {
         } else {
             (border_color, bg)
         };
-
-        let shadow_xs = theme.tokens.shadow_xs.clone();
-        let focus_ring = theme.tokens.focus_ring_light();
 
         self.base
             .when(!self.disabled, |this| {
@@ -139,16 +148,16 @@ impl RenderOnce for Radio {
             .gap(px(8.0))
             .items_center()
             .text_sm()
-            .font_family(theme.tokens.font_family.clone())
+            .font_family(font_family.clone())
             .text_color(if self.disabled {
-                theme.tokens.muted_foreground
+                muted_foreground
             } else {
-                theme.tokens.foreground
+                foreground
             })
             .when(is_focused && !self.disabled, |this| {
                 this.shadow(smallvec::smallvec![focus_ring])
             })
-            .rounded(theme.tokens.radius_md)
+            .rounded(radius_md)
             .child(
                 div()
                     .id(ElementId::Name(format!("{}-circle", self.id).into()))
@@ -159,7 +168,7 @@ impl RenderOnce for Radio {
                     .border_1()
                     .border_color(border_color)
                     .bg(bg)
-                    .transition(theme.tokens.transition_fast)
+                    .transition(transition_fast)
                     .when(!self.disabled, |this| this.shadow(shadow_xs.to_vec()))
                     .child(
                         div()
@@ -168,7 +177,7 @@ impl RenderOnce for Radio {
                             .left(px(3.0))
                             .size(px(8.0))
                             .rounded_full()
-                            .bg(theme.tokens.primary_foreground)
+                            .bg(primary_foreground)
                             .opacity(dot_opacity),
                     ),
             )

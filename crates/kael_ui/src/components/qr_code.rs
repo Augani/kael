@@ -4,7 +4,7 @@ use kael::{prelude::FluentBuilder as _, *};
 use qrcode::types::EcLevel;
 use qrcode::QrCode;
 
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 #[derive(Clone)]
 struct QRPaintData {
@@ -83,12 +83,14 @@ fn generate_modules(data: &str, ec_level: EcLevel) -> Vec<Vec<bool>> {
 }
 
 impl RenderOnce for QRCodeComponent {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let tokens = &Theme::of(cx).tokens;
+        let foreground = tokens.foreground;
+        let background = tokens.background;
         let user_style = self.style;
 
-        let fg = self.fg_color.unwrap_or(theme.tokens.foreground);
-        let bg = self.bg_color.unwrap_or(theme.tokens.background);
+        let fg = self.fg_color.unwrap_or(foreground);
+        let bg = self.bg_color.unwrap_or(background);
 
         let modules = generate_modules(&self.data, self.error_correction);
         let paint_data = QRPaintData {

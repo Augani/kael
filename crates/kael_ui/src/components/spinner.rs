@@ -1,4 +1,4 @@
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -77,17 +77,20 @@ impl Styled for Spinner {
 }
 
 impl RenderOnce for Spinner {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let tokens = &Theme::of(cx).tokens;
+        let muted = tokens.muted;
+        let muted_foreground = tokens.muted_foreground;
+        let font_family = tokens.font_family.clone();
         let user_style = self.style;
         let size_px = self.size.to_pixels();
         let stroke_width = size_px * 0.15;
 
         let color = match self.variant {
-            SpinnerVariant::Default => theme.tokens.foreground,
-            SpinnerVariant::Primary => theme.tokens.primary,
-            SpinnerVariant::Secondary => theme.tokens.secondary,
-            SpinnerVariant::Muted => theme.tokens.muted_foreground,
+            SpinnerVariant::Default => tokens.foreground,
+            SpinnerVariant::Primary => tokens.primary,
+            SpinnerVariant::Secondary => tokens.secondary,
+            SpinnerVariant::Muted => tokens.muted_foreground,
         };
 
         let center = size_px * 0.5;
@@ -113,7 +116,7 @@ impl RenderOnce for Spinner {
                             .absolute()
                             .inset_0()
                             .border(stroke_width)
-                            .border_color(theme.tokens.muted)
+                            .border_color(muted)
                             .rounded(px(9999.0)),
                     )
                     .child(
@@ -140,8 +143,8 @@ impl RenderOnce for Spinner {
                 d.child(
                     div()
                         .text_size(px(12.0))
-                        .text_color(theme.tokens.muted_foreground)
-                        .font_family(theme.tokens.font_family.clone())
+                        .text_color(muted_foreground)
+                        .font_family(font_family.clone())
                         .child(label),
                 )
             })
