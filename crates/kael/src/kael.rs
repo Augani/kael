@@ -35,6 +35,8 @@ mod cache;
 mod color;
 /// The default colors used by GPUI.
 pub mod colors;
+/// Memoized values with automatic entity-dependency tracking.
+pub mod computed;
 /// Command registry for registering named commands invokable from menus,
 /// keybindings, and a command palette.
 pub mod command_registry;
@@ -149,6 +151,7 @@ pub use background_jobs::*;
 pub use benchmark::*;
 pub use color::*;
 pub use command_registry::{CommandDescriptor, CommandPalette, PaletteCommandId};
+pub use computed::*;
 pub use crash_reporter::*;
 pub use ctor::ctor;
 pub use dev_tools::*;
