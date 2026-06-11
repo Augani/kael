@@ -564,8 +564,10 @@ struct Quad {
     Corners corner_radii;
     Edges border_widths;
     uint continuous_corners;
+    uint pad;
     TransformationMatrix transform;
     uint blend_mode;
+    uint pad2;
     Bounds rounded_clip_bounds;
     Corners rounded_clip_radii;
     ColorFilter color_filter;
@@ -1082,6 +1084,7 @@ struct Shadow {
     Bounds content_mask;
     Hsla color;
     uint inset;
+    uint pad;
     Bounds rounded_clip_bounds;
     Corners rounded_clip_radii;
     ColorFilter color_filter;
@@ -1208,7 +1211,7 @@ float4 path_rasterization_fragment(PathFragmentInput input): SV_Target {
     Bounds bounds = sprite.bounds;
 
     float alpha;
-    if (length(float2(dx.x, dy.x))) {
+    if (length(float2(dx.x, dy.x)) < 0.001) {
         alpha = 1.0;
     } else {
         float2 gradient = 2.0 * input.st_position.xx * float2(dx.x, dy.x) - float2(dx.y, dy.y);
@@ -1424,6 +1427,7 @@ struct PolychromeSprite {
     AtlasTile tile;
     uint sprite_kind;
     Hsla color;
+    uint pad3;
     Bounds rounded_clip_bounds;
     Corners rounded_clip_radii;
     ColorFilter color_filter;

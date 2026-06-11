@@ -5,8 +5,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, DevicePixels, Edges, Hsla,
-    Pixels, Point, Radians, ScaledPixels, Size, bounds_tree::BoundsTree, point,
+    bounds_tree::BoundsTree, point, AtlasTextureId, AtlasTile, Background, Bounds, ContentMask,
+    Corners, DevicePixels, Edges, Hsla, Pixels, Point, Radians, ScaledPixels, Size,
 };
 use std::{
     fmt::Debug,
@@ -599,8 +599,10 @@ pub(crate) struct Quad {
     pub corner_radii: Corners<ScaledPixels>,
     pub border_widths: Edges<ScaledPixels>,
     pub continuous_corners: u32,
+    pub pad: u32,
     pub transform: TransformationMatrix,
     pub blend_mode: u32,
+    pub pad2: u32,
     pub rounded_clip_bounds: Bounds<ScaledPixels>,
     pub rounded_clip_radii: Corners<ScaledPixels>,
     pub color_filter: ColorFilter,
@@ -643,6 +645,7 @@ pub(crate) struct Shadow {
     pub content_mask: ContentMask<ScaledPixels>,
     pub color: Hsla,
     pub inset: u32,
+    pub pad: u32,
     pub rounded_clip_bounds: Bounds<ScaledPixels>,
     pub rounded_clip_radii: Corners<ScaledPixels>,
     pub color_filter: ColorFilter,
@@ -927,6 +930,7 @@ pub(crate) struct PolychromeSprite {
     pub tile: AtlasTile,
     pub sprite_kind: u32,
     pub color: Hsla,
+    pub pad3: u32,
     pub rounded_clip_bounds: Bounds<ScaledPixels>,
     pub rounded_clip_radii: Corners<ScaledPixels>,
     pub color_filter: ColorFilter,
@@ -1163,6 +1167,62 @@ impl PathVertex<Pixels> {
 mod tests {
     use super::*;
 
+    fn wgsl_struct_span(module: &naga::Module, struct_name: &str) -> usize {
+        let (_, ty) = module
+            .types
+            .iter()
+            .find(|(_, ty)| ty.name.as_deref() == Some(struct_name))
+            .unwrap_or_else(|| panic!("struct '{struct_name}' not found in shaders.wgsl"));
+        match ty.inner {
+            naga::TypeInner::Struct { span, .. } => span as usize,
+            _ => panic!("type '{struct_name}' is not a struct in shaders.wgsl"),
+        }
+    }
+
+    #[test]
+    fn gpu_primitive_structs_match_wgsl_layout() {
+        let source = include_str!("platform/blade/shaders.wgsl");
+        let module = naga::front::wgsl::parse_str(source)
+            .unwrap_or_else(|err| panic!("shaders.wgsl failed to parse: {err:?}"));
+
+        assert_eq!(
+            std::mem::size_of::<Quad>(),
+            wgsl_struct_span(&module, "Quad"),
+            "Quad layout diverges from shaders.wgsl"
+        );
+        assert_eq!(
+            std::mem::size_of::<Shadow>(),
+            wgsl_struct_span(&module, "Shadow"),
+            "Shadow layout diverges from shaders.wgsl"
+        );
+        assert_eq!(
+            std::mem::size_of::<Underline>(),
+            wgsl_struct_span(&module, "Underline"),
+            "Underline layout diverges from shaders.wgsl"
+        );
+        assert_eq!(
+            std::mem::size_of::<MonochromeSprite>(),
+            wgsl_struct_span(&module, "MonochromeSprite"),
+            "MonochromeSprite layout diverges from shaders.wgsl"
+        );
+        assert_eq!(
+            std::mem::size_of::<PolychromeSprite>(),
+            wgsl_struct_span(&module, "PolychromeSprite"),
+            "PolychromeSprite layout diverges from shaders.wgsl"
+        );
+        assert_eq!(
+            std::mem::size_of::<Background>(),
+            wgsl_struct_span(&module, "Background"),
+            "Background layout diverges from shaders.wgsl"
+        );
+
+        assert_eq!(std::mem::size_of::<Quad>() % 8, 0);
+        assert_eq!(std::mem::size_of::<Shadow>() % 8, 0);
+        assert_eq!(std::mem::size_of::<Underline>() % 8, 0);
+        assert_eq!(std::mem::size_of::<MonochromeSprite>() % 8, 0);
+        assert_eq!(std::mem::size_of::<PolychromeSprite>() % 8, 0);
+    }
+
     #[test]
     fn color_filter_identity_is_default() {
         assert_eq!(ColorFilter::default(), ColorFilter::identity());
@@ -1274,11 +1334,9 @@ mod tests {
         match batches.next() {
             Some(PrimitiveBatch::BlurRects(blur_rects)) => {
                 assert_eq!(blur_rects.len(), 2);
-                assert!(
-                    blur_rects
-                        .iter()
-                        .all(|blur_rect| blur_rect.order == scene.blur_rects[0].order)
-                );
+                assert!(blur_rects
+                    .iter()
+                    .all(|blur_rect| blur_rect.order == scene.blur_rects[0].order));
             }
             other => panic!("expected blur batch, got {other:?}"),
         }

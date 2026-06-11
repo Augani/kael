@@ -419,6 +419,10 @@ version = "1.2.0"
 [dev-dependencies.backtrace]
 version = "0.3"
 
+[dev-dependencies.naga]
+version = "25.0"
+features = ["wgsl-in"]
+
 [dev-dependencies.proptest]
 version = "1"
 

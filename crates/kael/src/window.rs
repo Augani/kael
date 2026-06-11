@@ -2690,6 +2690,7 @@ impl Window {
                 tile: cached_surface.tile.clone(),
                 sprite_kind: POLYCHROME_SPRITE_KIND_PREMULTIPLIED,
                 color: transparent_black(),
+                pad3: 0,
                 transformation: self.element_transform,
                 blur_radius: 0.0,
                 pad2: 0,
@@ -2727,6 +2728,7 @@ impl Window {
                     tile: cached_surface.tile.clone(),
                     sprite_kind: POLYCHROME_SPRITE_KIND_CONTENT_SHADOW,
                     color: shadow.color,
+                    pad3: 0,
                     transformation: self.element_transform,
                     blur_radius: shadow.blur_radius.scale(scale_factor).0,
                     pad2: 0,
@@ -2756,6 +2758,7 @@ impl Window {
                 tile: cached_surface.tile.clone(),
                 sprite_kind,
                 color: transparent_black(),
+                pad3: 0,
                 transformation: self.element_transform,
                 blur_radius,
                 pad2: 0,
@@ -3368,6 +3371,7 @@ impl Window {
                 },
                 color: shadow.color.opacity(opacity),
                 inset: shadow.inset as u32,
+                pad: 0,
             });
         }
     }
@@ -3454,6 +3458,8 @@ impl Window {
             continuous_corners: if quad.continuous_corners { 1 } else { 0 },
             transform: self.element_transform.compose(quad.transform),
             blend_mode: quad.blend_mode as u32,
+            pad: 0,
+            pad2: 0,
         });
     }
 
@@ -3662,6 +3668,7 @@ impl Window {
                         tile,
                         sprite_kind: POLYCHROME_SPRITE_KIND_SUBPIXEL_TEXT,
                         color: color.opacity(element_opacity),
+                        pad3: 0,
                         transformation,
                         blur_radius: 0.0,
                         pad2: 0,
@@ -3754,6 +3761,7 @@ impl Window {
                 opacity,
                 sprite_kind: POLYCHROME_SPRITE_KIND_COLOR,
                 color: transparent_black(),
+                pad3: 0,
                 transformation: self.element_transform,
                 blur_radius: 0.0,
                 pad2: 0,
@@ -3933,6 +3941,7 @@ impl Window {
             opacity,
             sprite_kind: POLYCHROME_SPRITE_KIND_COLOR,
             color: transparent_black(),
+            pad3: 0,
             transformation: self.element_transform,
             blur_radius: 0.0,
             pad2: 0,
