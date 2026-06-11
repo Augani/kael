@@ -61,6 +61,8 @@ mod icons;
 mod input;
 mod inspector;
 mod interactive;
+/// The canonical interpolation vocabulary shared across the framework.
+pub mod interpolate;
 pub mod ipc_transport;
 mod key_dispatch;
 mod keymap;
