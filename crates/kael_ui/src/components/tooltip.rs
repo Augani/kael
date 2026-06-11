@@ -1,4 +1,9 @@
-//! Tooltip component - Tooltip with hover and keyboard support.
+//! Tooltip component - sugar over the core `div().tooltip_element()` system.
+//!
+//! The core tooltip plumbing owns show/hide timing and positions the tooltip
+//! relative to the cursor (anchored to `AnyTooltip::mouse_position`, snapped to
+//! the window). This component layers the kael_ui theme, an entrance fade, and a
+//! familiar builder surface on top of that system rather than reimplementing it.
 
 use crate::animations::easings;
 use crate::theme::use_theme;
@@ -92,68 +97,50 @@ impl Styled for Tooltip {
 }
 
 impl IntoElement for Tooltip {
-    type Element = Div;
+    type Element = Stateful<Div>;
 
     fn into_element(self) -> Self::Element {
         let theme = use_theme();
-        let placement = self.placement;
+        let content = self.content;
         let user_style = self.style;
+        let max_width = self.max_width;
+        let fade = Animation::new(theme.tokens.duration_fast).with_easing(easings::ease_out_cubic);
 
-        // For now, we'll render a simplified version
-        // In a full implementation, you'd use a stateful component with timers
+        let _ = (self.placement, self.show_delay, self.hide_delay);
+
+        let trigger_id = ElementId::Name(format!("kael-tooltip-{content}").into());
+
         div()
+            .id(trigger_id)
             .relative()
-            .group("")
-            .when_some(self.child, |this: Div, child| this.child(child))
-            .when(!self.disabled, |this: Div| {
-                this.child(
-                    deferred(
-                        anchored()
-                            .snap_to_window_with_margin(px(8.0))
-                            .anchor(match placement {
-                                TooltipPlacement::Top => Corner::BottomLeft,
-                                TooltipPlacement::Bottom => Corner::TopLeft,
-                                TooltipPlacement::Left => Corner::TopRight,
-                                TooltipPlacement::Right => Corner::TopLeft,
-                            })
-                            .child(
-                                div()
-                                    .occlude()
-                                    .px(px(8.0))
-                                    .py(px(4.0))
-                                    .bg(theme.tokens.popover)
-                                    .text_color(theme.tokens.popover_foreground)
-                                    .border_1()
-                                    .border_color(theme.tokens.border)
-                                    .rounded(theme.tokens.radius_sm)
-                                    .shadow_md()
-                                    .text_size(px(12.0))
-                                    .font_family(theme.tokens.font_family.clone())
-                                    .whitespace_nowrap()
-                                    .when_some(self.max_width, |div, width| div.max_w(width))
-                                    .opacity(0.0)
-                                    .invisible()
-                                    .group_hover("", |mut style| {
-                                        style.opacity = Some(1.0);
-                                        style.visibility = Some(kael::Visibility::Visible);
-                                        style
-                                    })
-                                    .map(|this| {
-                                        let mut div = this;
-                                        div.style().refine(&user_style);
-                                        div
-                                    })
-                                    .child(self.content)
-                                    .with_animation(
-                                        "tooltip-fade-in",
-                                        Animation::new(theme.tokens.duration_fast)
-                                            .with_easing(easings::ease_out_cubic),
-                                        |el, delta| el.opacity(delta),
-                                    ),
-                            ),
-                    )
-                    .with_priority(1),
-                )
+            .when_some(self.child, |this, child| this.child(child))
+            .when(!self.disabled, move |this| {
+                let content = content.clone();
+                let user_style = user_style.clone();
+                let fade = fade.clone();
+                this.tooltip_element(move || {
+                    div()
+                        .px(px(8.0))
+                        .py(px(4.0))
+                        .bg(theme.tokens.popover)
+                        .text_color(theme.tokens.popover_foreground)
+                        .border_1()
+                        .border_color(theme.tokens.border)
+                        .rounded(theme.tokens.radius_sm)
+                        .shadow_md()
+                        .text_size(px(12.0))
+                        .font_family(theme.tokens.font_family.clone())
+                        .whitespace_nowrap()
+                        .when_some(max_width, |this, width| this.max_w(width))
+                        .map(|mut this| {
+                            this.style().refine(&user_style);
+                            this
+                        })
+                        .child(content.clone())
+                        .with_animation("tooltip-fade-in", fade.clone(), |el, delta| {
+                            el.opacity(delta)
+                        })
+                })
             })
     }
 }
