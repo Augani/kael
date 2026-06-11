@@ -850,6 +850,7 @@ pub struct Window {
     pub(crate) element_offset_stack: SmallVec<[Point<Pixels>; 16]>,
     pub(crate) element_opacity: f32,
     pub(crate) element_transform: TransformationMatrix,
+    pub(crate) rounded_clip: (Bounds<ScaledPixels>, Corners<ScaledPixels>),
     pub(crate) content_mask_stack: SmallVec<[ContentMask<Pixels>; 16]>,
     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
     pub(crate) image_cache_stack: SmallVec<[AnyImageCache; 4]>,
@@ -1274,6 +1275,7 @@ impl Window {
             content_mask_stack: SmallVec::new(),
             element_opacity: 1.0,
             element_transform: TransformationMatrix::unit(),
+            rounded_clip: (Bounds::default(), Corners::default()),
             requested_autoscroll: None,
             rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
             next_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
@@ -2672,6 +2674,8 @@ impl Window {
             .scene
             .insert_primitive(crate::PolychromeSprite {
                 order: 0,
+                rounded_clip_bounds: self.rounded_clip.0,
+                rounded_clip_radii: self.rounded_clip.1,
                 pad: 0,
                 grayscale: false,
                 opacity: 1.0,
@@ -2836,6 +2840,36 @@ impl Window {
     pub fn element_transform(&self) -> TransformationMatrix {
         self.invalidator.debug_assert_paint();
         self.element_transform
+    }
+
+    /// Clip primitives painted inside the given closure to a rounded rectangle.
+    /// Quads, sprites (text, icons, images), shadows, underlines, and backdrop
+    /// blurs honor the clip; paths and video surfaces do not yet. When rounded
+    /// clips nest, the innermost clip's corners win; rectangular clipping still
+    /// applies through the regular content mask. The clip is evaluated in screen
+    /// space and does not follow element transforms.
+    ///
+    /// This method should only be called during the paint phase of element drawing.
+    pub fn with_rounded_clip<R>(
+        &mut self,
+        clip: Option<(Bounds<Pixels>, Corners<Pixels>)>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint();
+
+        let Some((bounds, corner_radii)) = clip else {
+            return f(self);
+        };
+
+        let scale_factor = self.scale_factor();
+        let previous = self.rounded_clip;
+        self.rounded_clip = (
+            bounds.scale_and_snap(scale_factor),
+            corner_radii.scale_and_snap(scale_factor),
+        );
+        let result = f(self);
+        self.rounded_clip = previous;
+        result
     }
 
     /// Perform prepaint on child elements in a "retryable" manner, so that any side effects
@@ -3221,6 +3255,8 @@ impl Window {
 
             self.next_frame.scene.insert_primitive(Shadow {
                 order: 0,
+                rounded_clip_bounds: self.rounded_clip.0,
+                rounded_clip_radii: self.rounded_clip.1,
                 blur_radius: shadow.blur_radius.scale(scale_factor),
                 bounds: scaled_bounds,
                 corner_radii: corner_radii.scale_and_snap(scale_factor),
@@ -3273,6 +3309,8 @@ impl Window {
         let opacity = self.element_opacity();
         self.next_frame.scene.insert_primitive(crate::BlurRect {
             order: 0,
+            rounded_clip_bounds: self.rounded_clip.0,
+            rounded_clip_radii: self.rounded_clip.1,
             blur_radius: blur_radius.scale(scale_factor),
             bounds: bounds.scale_and_snap_conservative(scale_factor),
             content_mask: content_mask.scale(scale_factor),
@@ -3304,6 +3342,8 @@ impl Window {
         );
         self.next_frame.scene.insert_primitive(Quad {
             order: 0,
+            rounded_clip_bounds: self.rounded_clip.0,
+            rounded_clip_radii: self.rounded_clip.1,
             bounds: quad.bounds.scale_and_snap(scale_factor),
             content_mask: content_mask.scale(scale_factor),
             background: quad.background.opacity(opacity),
@@ -3369,6 +3409,8 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(Underline {
             order: 0,
+            rounded_clip_bounds: self.rounded_clip.0,
+            rounded_clip_radii: self.rounded_clip.1,
             pad: 0,
             bounds: bounds.scale_and_snap(scale_factor),
             content_mask: content_mask.scale(scale_factor),
@@ -3400,6 +3442,8 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(Underline {
             order: 0,
+            rounded_clip_bounds: self.rounded_clip.0,
+            rounded_clip_radii: self.rounded_clip.1,
             pad: 0,
             bounds: bounds.scale_and_snap(scale_factor),
             content_mask: content_mask.scale(scale_factor),
@@ -3504,6 +3548,8 @@ impl Window {
                 GlyphRasterMode::Subpixel => {
                     self.next_frame.scene.insert_primitive(PolychromeSprite {
                         order: 0,
+                        rounded_clip_bounds: self.rounded_clip.0,
+                        rounded_clip_radii: self.rounded_clip.1,
                         pad: 0,
                         grayscale: false,
                         opacity: 1.0,
@@ -3518,6 +3564,8 @@ impl Window {
                 GlyphRasterMode::Grayscale => {
                     self.next_frame.scene.insert_primitive(MonochromeSprite {
                         order: 0,
+                        rounded_clip_bounds: self.rounded_clip.0,
+                        rounded_clip_radii: self.rounded_clip.1,
                         pad: 0,
                         bounds,
                         content_mask,
@@ -3587,6 +3635,8 @@ impl Window {
 
             self.next_frame.scene.insert_primitive(PolychromeSprite {
                 order: 0,
+                rounded_clip_bounds: self.rounded_clip.0,
+                rounded_clip_radii: self.rounded_clip.1,
                 pad: 0,
                 grayscale: false,
                 bounds,
@@ -3652,6 +3702,8 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(MonochromeSprite {
             order: 0,
+            rounded_clip_bounds: self.rounded_clip.0,
+            rounded_clip_radii: self.rounded_clip.1,
             pad: 0,
             bounds: svg_bounds
                 .map_origin(|origin| origin.round())
@@ -3701,6 +3753,8 @@ impl Window {
         let content_mask = self.content_mask().scale(scale_factor);
         self.next_frame.scene.insert_primitive(MonochromeSprite {
             order: 0,
+            rounded_clip_bounds: self.rounded_clip.0,
+            rounded_clip_radii: self.rounded_clip.1,
             pad: 0,
             bounds: bounds
                 .map_origin(|origin| origin.floor())
@@ -3752,6 +3806,8 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(PolychromeSprite {
             order: 0,
+            rounded_clip_bounds: self.rounded_clip.0,
+            rounded_clip_radii: self.rounded_clip.1,
             pad: 0,
             grayscale,
             bounds: bounds

@@ -2530,6 +2530,8 @@ mod offscreen_tests {
         scene.insert_primitive(Underline {
             order: 0,
             pad: 0,
+            rounded_clip_bounds: Bounds::default(),
+            rounded_clip_radii: Corners::default(),
             bounds: Bounds {
                 origin: point(ScaledPixels(2.0), ScaledPixels(12.0)),
                 size: size(ScaledPixels(12.0), ScaledPixels(2.0)),

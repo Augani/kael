@@ -660,6 +660,29 @@ impl Style {
         }
     }
 
+    /// Get the rounded clip for this element style, based on the given bounds.
+    /// Returns `Some` only when overflow is hidden on both axes and the element
+    /// has a non-zero corner radius, so children clip to the rounded corners.
+    pub fn rounded_overflow_clip(
+        &self,
+        bounds: Bounds<Pixels>,
+        rem_size: Pixels,
+    ) -> Option<(Bounds<Pixels>, Corners<Pixels>)> {
+        if self.overflow.x == Overflow::Visible || self.overflow.y == Overflow::Visible {
+            return None;
+        }
+
+        let corner_radii = self
+            .corner_radii
+            .to_pixels(rem_size)
+            .clamp_radii_for_quad_size(bounds.size);
+        if corner_radii.max() <= Pixels::ZERO {
+            return None;
+        }
+
+        Some((bounds, corner_radii))
+    }
+
     /// Paints the background of an element styled with this style.
     pub fn paint(
         &self,

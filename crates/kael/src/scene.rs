@@ -601,6 +601,8 @@ pub(crate) struct Quad {
     pub continuous_corners: u32,
     pub transform: TransformationMatrix,
     pub blend_mode: u32,
+    pub rounded_clip_bounds: Bounds<ScaledPixels>,
+    pub rounded_clip_radii: Corners<ScaledPixels>,
 }
 
 impl From<Quad> for Primitive {
@@ -619,6 +621,8 @@ pub(crate) struct Underline {
     pub color: Hsla,
     pub thickness: ScaledPixels,
     pub wavy: u32,
+    pub rounded_clip_bounds: Bounds<ScaledPixels>,
+    pub rounded_clip_radii: Corners<ScaledPixels>,
 }
 
 impl From<Underline> for Primitive {
@@ -637,6 +641,8 @@ pub(crate) struct Shadow {
     pub content_mask: ContentMask<ScaledPixels>,
     pub color: Hsla,
     pub inset: u32,
+    pub rounded_clip_bounds: Bounds<ScaledPixels>,
+    pub rounded_clip_radii: Corners<ScaledPixels>,
 }
 
 impl From<Shadow> for Primitive {
@@ -655,6 +661,8 @@ pub(crate) struct BlurRect {
     pub corner_radii: Corners<ScaledPixels>,
     pub tint: Hsla,
     pub saturation: f32,
+    pub rounded_clip_bounds: Bounds<ScaledPixels>,
+    pub rounded_clip_radii: Corners<ScaledPixels>,
 }
 
 impl From<BlurRect> for Primitive {
@@ -833,6 +841,8 @@ pub(crate) struct MonochromeSprite {
     pub color: Hsla,
     pub tile: AtlasTile,
     pub transformation: TransformationMatrix,
+    pub rounded_clip_bounds: Bounds<ScaledPixels>,
+    pub rounded_clip_radii: Corners<ScaledPixels>,
 }
 
 impl From<MonochromeSprite> for Primitive {
@@ -858,6 +868,8 @@ pub(crate) struct PolychromeSprite {
     pub tile: AtlasTile,
     pub sprite_kind: u32,
     pub color: Hsla,
+    pub rounded_clip_bounds: Bounds<ScaledPixels>,
+    pub rounded_clip_radii: Corners<ScaledPixels>,
 }
 
 impl From<PolychromeSprite> for Primitive {
@@ -1091,6 +1103,8 @@ mod tests {
     fn test_blur_rect(bounds: Bounds<ScaledPixels>) -> BlurRect {
         BlurRect {
             order: 0,
+            rounded_clip_bounds: Bounds::default(),
+            rounded_clip_radii: Corners::default(),
             blur_radius: ScaledPixels(6.0),
             bounds,
             content_mask: ContentMask { bounds },
