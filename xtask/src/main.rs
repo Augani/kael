@@ -53,6 +53,8 @@ pub struct SigningConfig {
 pub struct UpdaterConfig {
     pub feed_url: String,
     pub public_key: Option<String>,
+    #[serde(default)]
+    pub channel: Option<String>,
 }
 
 impl DistConfig {
@@ -174,6 +176,11 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    GenerateUpdateKey,
+    VerifyUpdateFeed {
+        #[arg(long, default_value = "dist/update-feed.json")]
+        feed: PathBuf,
+    },
     Publish {
         #[arg(default_value = "kael.dist.toml")]
         config: PathBuf,
@@ -242,8 +249,32 @@ fn main() -> Result<()> {
         } => {
             let dist = DistConfig::load(&config)?;
             dist.validate()?;
-            let options = update_feed::FeedOptions { dry_run };
+            let signing_key = std::env::var("KAEL_UPDATE_SIGNING_KEY").ok();
+            let options = update_feed::FeedOptions {
+                dry_run,
+                signing_key,
+            };
             update_feed::run(&dist, &output, &artifact, &options)?;
+            Ok(())
+        }
+        Commands::GenerateUpdateKey => {
+            let (private_hex, public_hex) = kael_release::update::generate_keypair();
+            println!("ed25519 update keypair generated.");
+            println!();
+            println!("Private key (set as the KAEL_UPDATE_SIGNING_KEY repo secret):");
+            println!("  {private_hex}");
+            println!();
+            println!("Public key (embed in the client / kael.dist.toml updater.public_key):");
+            println!("  {public_hex}");
+            Ok(())
+        }
+        Commands::VerifyUpdateFeed { feed } => {
+            let signing_key = std::env::var("KAEL_UPDATE_SIGNING_KEY")
+                .ok()
+                .filter(|key| !key.trim().is_empty())
+                .context("KAEL_UPDATE_SIGNING_KEY must be set to verify a signed feed")?;
+            update_feed::verify(&feed, &signing_key)?;
+            println!("update feed signatures verified: {}", feed.display());
             Ok(())
         }
         Commands::Publish {
@@ -281,7 +312,10 @@ fn main() -> Result<()> {
             }
 
             let feed_output = output.join("update-feed.json");
-            let feed_options = update_feed::FeedOptions { dry_run: true };
+            let feed_options = update_feed::FeedOptions {
+                dry_run: true,
+                signing_key: std::env::var("KAEL_UPDATE_SIGNING_KEY").ok(),
+            };
             update_feed::run(&dist, &feed_output, &artifacts, &feed_options)?;
 
             let artifacts_ref: Vec<&Path> = artifacts.iter().map(|p| p.as_path()).collect();

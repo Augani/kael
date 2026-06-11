@@ -150,6 +150,53 @@ pub fn verify_manifest(
     key.verify(&payload, signature).is_ok()
 }
 
+/// Parses an ed25519 signing (private) key from a 64-character hex string.
+///
+/// The hex must encode exactly the 32-byte ed25519 secret seed, i.e. the value
+/// produced by [`SigningKey::to_bytes`]. This is the format expected for the
+/// `KAEL_UPDATE_SIGNING_KEY` environment variable consumed by the release feed
+/// signer.
+pub fn signing_key_from_hex(hex_key: &str) -> anyhow::Result<SigningKey> {
+    let bytes = hex::decode(hex_key.trim())
+        .map_err(|_| anyhow::anyhow!("ed25519 signing key is not valid hex"))?;
+    let seed: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
+        anyhow::anyhow!("ed25519 signing key must be exactly 32 bytes (64 hex chars)")
+    })?;
+    Ok(SigningKey::from_bytes(&seed))
+}
+
+/// Parses an ed25519 verifying (public) key from a 64-character hex string.
+pub fn verifying_key_from_hex(hex_key: &str) -> anyhow::Result<VerifyingKey> {
+    let bytes = hex::decode(hex_key.trim())
+        .map_err(|_| anyhow::anyhow!("ed25519 public key is not valid hex"))?;
+    let key: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
+        anyhow::anyhow!("ed25519 public key must be exactly 32 bytes (64 hex chars)")
+    })?;
+    VerifyingKey::from_bytes(&key).map_err(|_| anyhow::anyhow!("invalid ed25519 public key"))
+}
+
+/// Encodes a manifest [`Signature`] as standard base64.
+///
+/// This is the wire format the update client expects for the `signature` field
+/// of a feed entry.
+pub fn signature_to_base64(signature: &Signature) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(signature.to_bytes())
+}
+
+/// Generates a fresh ed25519 keypair, returning `(private_hex, public_hex)`.
+///
+/// The private hex is suitable for the `KAEL_UPDATE_SIGNING_KEY` secret; the
+/// public hex is embedded into the client so it can authenticate signed feeds.
+pub fn generate_keypair() -> (String, String) {
+    let signing_key = SigningKey::generate(&mut rand::thread_rng());
+    let verifying_key = signing_key.verifying_key();
+    (
+        hex::encode(signing_key.to_bytes()),
+        hex::encode(verifying_key.to_bytes()),
+    )
+}
+
 fn parse_semver(version: &str) -> Option<(u64, u64, u64)> {
     let parts: Vec<&str> = version.split('.').collect();
     if parts.len() != 3 {
@@ -347,6 +394,28 @@ mod tests {
             min_version: Some("1.5.0".into()),
         };
         assert!(!manifest.is_compatible_with("1.2.0"));
+    }
+
+    #[test]
+    fn signing_key_hex_roundtrips_and_signs() {
+        let (private_hex, public_hex) = generate_keypair();
+        let signing_key = signing_key_from_hex(&private_hex).unwrap();
+        let verifying_key = verifying_key_from_hex(&public_hex).unwrap();
+        assert_eq!(
+            signing_key.verifying_key().to_bytes(),
+            verifying_key.to_bytes()
+        );
+
+        let manifest = valid_manifest();
+        let signature = sign_manifest(&manifest, &signing_key);
+        assert!(verify_manifest(&manifest, &signature, &verifying_key));
+    }
+
+    #[test]
+    fn signing_key_from_hex_rejects_bad_input() {
+        assert!(signing_key_from_hex("zz").is_err());
+        assert!(signing_key_from_hex(&"a".repeat(10)).is_err());
+        assert!(verifying_key_from_hex("not-hex").is_err());
     }
 
     #[test]

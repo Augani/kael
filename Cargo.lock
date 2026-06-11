@@ -4094,10 +4094,13 @@ name = "kael_release"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "base64",
  "ed25519-dalek",
+ "hex",
  "rand 0.8.6",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -10263,9 +10266,11 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "clap 4.6.1",
  "flate2",
  "hex",
+ "kael_release",
  "serde",
  "serde_json",
  "sha2",

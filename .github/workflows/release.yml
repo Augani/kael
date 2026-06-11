@@ -101,6 +101,10 @@ jobs:
 
       - name: Run xtask generate-update-metadata
         shell: bash
+        env:
+          # Absent secret yields an empty string; the feed signer treats that as
+          # "no key" and emits an unsigned (dev) feed rather than failing.
+          KAEL_UPDATE_SIGNING_KEY: ${{ secrets.KAEL_UPDATE_SIGNING_KEY }}
         run: |
           artifact_args=()
           while IFS= read -r -d '' artifact; do
@@ -109,6 +113,18 @@ jobs:
           if [ "${#artifact_args[@]}" -gt 0 ]; then
             cargo run -p xtask -- generate-update-metadata --output dist/update-feed.json "${artifact_args[@]}"
           fi
+
+      - name: Verify signed update feed round-trips
+        if: ${{ secrets.KAEL_UPDATE_SIGNING_KEY != '' }}
+        shell: bash
+        env:
+          KAEL_UPDATE_SIGNING_KEY: ${{ secrets.KAEL_UPDATE_SIGNING_KEY }}
+        run: |
+          if [ ! -f dist/update-feed.json ]; then
+            echo "no update feed produced; skipping verification"
+            exit 0
+          fi
+          cargo run -p xtask -- verify-update-feed --feed dist/update-feed.json
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
