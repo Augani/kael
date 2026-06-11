@@ -479,7 +479,7 @@ optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.ashpd]
 version = "0.13"
-features = ["async-io", "file_chooser", "open_uri", "settings"]
+features = ["async-io", "file_chooser", "global_shortcuts", "open_uri", "settings"]
 optional = true
 default-features = false
 

@@ -1,4 +1,6 @@
 mod app_menu;
+/// Pure-logic core for the XDG GlobalShortcuts desktop portal used by Wayland global hotkeys.
+pub(crate) mod global_hotkey_portal;
 mod keyboard;
 mod keystroke;
 /// Cross-platform single instance enforcement using Unix domain sockets and Windows named mutexes.
