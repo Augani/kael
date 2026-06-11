@@ -231,6 +231,7 @@ impl RenderOnce for TagInput {
                                         .ml(px(2.0))
                                         .cursor_pointer()
                                         .rounded(px(2.0))
+                                        .transition(theme.tokens.transition_fast)
                                         .hover(|s| s.bg(theme.tokens.primary.opacity(0.2)))
                                         .text_size(px(12.0))
                                         .on_click(move |_, window, cx| {

@@ -680,6 +680,7 @@ impl AudioPlayer {
             .size(button_size)
             .rounded_full()
             .bg(theme.tokens.primary)
+            .transition(theme.tokens.transition_fast)
             .when(!disabled, |this| {
                 this.cursor(CursorStyle::PointingHand)
                     .hover(|style| style.bg(theme.tokens.primary.opacity(0.9)))
@@ -823,6 +824,7 @@ impl AudioPlayer {
             .justify_center()
             .size(button_size)
             .rounded(theme.tokens.radius_md)
+            .transition(theme.tokens.transition_fast)
             .when(!disabled, |this| {
                 this.cursor(CursorStyle::PointingHand)
                     .hover(|style| style.bg(theme.tokens.accent))
@@ -963,6 +965,7 @@ impl AudioPlayer {
             .text_size(px(12.0))
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.tokens.muted_foreground)
+            .transition(theme.tokens.transition_fast)
             .when(!disabled, |this| {
                 this.cursor(CursorStyle::PointingHand)
                     .hover(|style| style.bg(theme.tokens.accent))

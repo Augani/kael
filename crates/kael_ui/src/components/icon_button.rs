@@ -191,6 +191,7 @@ impl RenderOnce for IconButton {
             .justify_center()
             .size(self.size)
             .rounded(theme.tokens.radius_md)
+            .transition(theme.tokens.transition_fast)
             .when(!self.no_background, |this| {
                 this.bg(bg)
                     .when(self.variant == ButtonVariant::Outline, |this| {

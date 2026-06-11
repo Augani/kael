@@ -374,6 +374,7 @@ impl RenderOnce for FileTree {
                     .pl(indent + px(8.0))
                     .rounded(px(8.0))
                     .cursor_pointer()
+                    .transition(theme.tokens.transition_fast)
                     .bg(if is_selected {
                         theme.tokens.accent
                     } else {

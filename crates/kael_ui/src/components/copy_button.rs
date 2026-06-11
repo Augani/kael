@@ -70,6 +70,7 @@ impl RenderOnce for CopyButton {
             .cursor_pointer()
             .text_size(px(12.0))
             .text_color(theme.tokens.muted_foreground)
+            .transition(theme.tokens.transition_fast)
             .hover(|s| s.bg(theme.tokens.muted))
             .active(|s| s.opacity(0.7))
             .when(copied, |el| {

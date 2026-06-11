@@ -434,6 +434,7 @@ impl<T: 'static> RenderOnce for DataGrid<T> {
                     let col_id = info.id.clone();
                     let st = state_entity.clone();
                     base.cursor(CursorStyle::PointingHand)
+                        .transition(theme.tokens.transition_fast)
                         .hover(|s| s.bg(theme.tokens.muted.opacity(0.7)))
                         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                             st.update(cx, |s, scx| {
@@ -457,6 +458,7 @@ impl<T: 'static> RenderOnce for DataGrid<T> {
                             .w(px(4.0))
                             .h_full()
                             .cursor(CursorStyle::ResizeLeftRight)
+                            .transition(theme.tokens.transition_fast)
                             .hover(|s| s.bg(theme.tokens.primary.opacity(0.5)))
                             .on_mouse_down(
                                 MouseButton::Left,
