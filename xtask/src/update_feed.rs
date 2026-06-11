@@ -91,11 +91,27 @@ fn build_feed(config: &DistConfig, artifacts: &[PathBuf]) -> Result<UpdateFeed> 
 
 fn detect_platform(artifact: &Path) -> String {
     let name = artifact.to_string_lossy().to_lowercase();
-    if name.ends_with(".app") || name.contains("macos") || name.contains("darwin") {
+    if name.ends_with(".app")
+        || name.ends_with(".dmg")
+        || name.ends_with(".pkg")
+        || name.contains("macos")
+        || name.contains("darwin")
+    {
         "macos".to_string()
-    } else if name.ends_with(".exe") || name.contains("windows") || name.contains("win32") {
+    } else if name.ends_with(".exe")
+        || name.ends_with(".msi")
+        || name.ends_with(".msix")
+        || name.contains("windows")
+        || name.contains("win32")
+    {
         "windows".to_string()
-    } else if name.ends_with(".appimage") || name.ends_with(".appdir") || name.contains("linux") {
+    } else if name.ends_with(".appimage")
+        || name.ends_with(".appdir")
+        || name.ends_with(".deb")
+        || name.ends_with(".rpm")
+        || name.ends_with(".flatpak")
+        || name.contains("linux")
+    {
         "linux".to_string()
     } else {
         "unknown".to_string()
