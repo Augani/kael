@@ -681,10 +681,9 @@ mod tests {
         );
 
         let reporter = reporter_in(directory.path());
-        let summary = pollster::block_on(
-            reporter.check_and_submit_pending(CrashConsent::withheld()),
-        )
-        .unwrap();
+        let summary =
+            pollster::block_on(reporter.check_and_submit_pending(CrashConsent::withheld()))
+                .unwrap();
 
         assert_eq!(summary.native_crashes, 1);
         assert_eq!(summary.unclean_exits, 0);
@@ -709,10 +708,8 @@ mod tests {
     fn check_and_submit_reports_no_prior_crash_on_clean_dir() {
         let directory = tempdir().unwrap();
         let reporter = reporter_in(directory.path());
-        let summary = pollster::block_on(
-            reporter.check_and_submit_pending(CrashConsent::granted()),
-        )
-        .unwrap();
+        let summary =
+            pollster::block_on(reporter.check_and_submit_pending(CrashConsent::granted())).unwrap();
         assert!(!summary.detected_any());
         assert!(!summary.submitted);
     }

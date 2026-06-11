@@ -336,12 +336,12 @@ mod imp {
         os::fd::IntoRawFd as _,
         path::Path,
         sync::{
-            atomic::{AtomicI32, Ordering},
             Mutex,
+            atomic::{AtomicI32, Ordering},
         },
     };
 
-    use anyhow::{anyhow, Context as _, Result};
+    use anyhow::{Context as _, Result, anyhow};
 
     static DUMP_FD: AtomicI32 = AtomicI32::new(-1);
     static SESSION_ID: Mutex<Option<String>> = Mutex::new(None);
@@ -561,8 +561,8 @@ mod imp {
         os::windows::io::IntoRawHandle as _,
         path::Path,
         sync::{
-            atomic::{AtomicIsize, Ordering},
             Mutex,
+            atomic::{AtomicIsize, Ordering},
         },
     };
 
@@ -571,7 +571,7 @@ mod imp {
         Foundation::HANDLE,
         Storage::FileSystem::WriteFile,
         System::Diagnostics::Debug::{
-            RtlCaptureStackBackTrace, SetUnhandledExceptionFilter, EXCEPTION_POINTERS,
+            EXCEPTION_POINTERS, RtlCaptureStackBackTrace, SetUnhandledExceptionFilter,
         },
     };
 
@@ -720,8 +720,8 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_dump, new_session_id, parse_int, parse_uint, signal_name, NativeContext,
-        NativeSignal, PendingNativeCrash,
+        NativeContext, NativeSignal, PendingNativeCrash, decode_dump, new_session_id, parse_int,
+        parse_uint, signal_name,
     };
 
     #[test]
