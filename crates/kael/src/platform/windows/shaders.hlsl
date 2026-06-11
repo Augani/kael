@@ -84,6 +84,13 @@ struct TransformationMatrix {
     float2 translation;
 };
 
+struct ColorFilter {
+    float grayscale;
+    float saturate_amount;
+    float brightness;
+    float contrast;
+};
+
 static const float M_PI_F = 3.141592653f;
 static const float3 GRAYSCALE_FACTORS = float3(0.2126f, 0.7152f, 0.0722f);
 
@@ -322,6 +329,23 @@ float rounded_clip_factor(float2 position, Bounds clip_bounds, Corners clip_radi
     return saturate(0.5 - distance);
 }
 
+// Applies a color filter to a straight-alpha color, leaving alpha untouched.
+// Order: contrast around mid-gray, brightness, saturation, then grayscale.
+float4 apply_color_filter(float4 color, ColorFilter filter) {
+    if (filter.grayscale == 0.0 && filter.saturate_amount == 1.0 &&
+        filter.brightness == 1.0 && filter.contrast == 1.0) {
+        return color;
+    }
+    float3 rgb = color.rgb;
+    rgb = (rgb - 0.5) * filter.contrast + 0.5;
+    rgb = rgb * filter.brightness;
+    float luma = dot(rgb, GRAYSCALE_FACTORS);
+    rgb = lerp(float3(luma, luma, luma), rgb, filter.saturate_amount);
+    luma = dot(rgb, GRAYSCALE_FACTORS);
+    rgb = lerp(rgb, float3(luma, luma, luma), filter.grayscale);
+    return float4(rgb, color.a);
+}
+
 float squircle_sdf(float2 pt, Bounds bounds, Corners corner_radii) {
     float2 half_size = bounds.size / 2.0;
     float2 center = bounds.origin + half_size;
@@ -544,6 +568,7 @@ struct Quad {
     uint blend_mode;
     Bounds rounded_clip_bounds;
     Corners rounded_clip_radii;
+    ColorFilter color_filter;
 };
 
 struct QuadVertexOutput {
@@ -640,6 +665,7 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
         quad.border_widths.right == 0.0 &&
         quad.border_widths.bottom == 0.0 &&
         unrounded) {
+        background_color = apply_color_filter(background_color, quad.color_filter);
         return background_color * float4(1.0, 1.0, 1.0, rounded_clip);
     }
 
@@ -905,6 +931,7 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
                     saturate(antialias_threshold - inner_sdf));
     }
 
+    color = apply_color_filter(color, quad.color_filter);
     return color * float4(1.0, 1.0, 1.0, saturate(antialias_threshold - outer_sdf) * rounded_clip);
 }
 
@@ -1043,6 +1070,7 @@ struct Shadow {
     uint inset;
     Bounds rounded_clip_bounds;
     Corners rounded_clip_radii;
+    ColorFilter color_filter;
 };
 
 struct ShadowVertexOutput {
@@ -1113,7 +1141,8 @@ float4 shadow_fragment(ShadowFragmentInput input): SV_TARGET {
 
     alpha *= rounded_clip_factor(input.position.xy, shadow.rounded_clip_bounds, shadow.rounded_clip_radii);
 
-    return input.color * float4(1., 1., 1., alpha);
+    float4 shadow_color = apply_color_filter(input.color, shadow.color_filter);
+    return shadow_color * float4(1., 1., 1., alpha);
 }
 
 /*
@@ -1237,6 +1266,7 @@ struct Underline {
     uint wavy;
     Bounds rounded_clip_bounds;
     Corners rounded_clip_radii;
+    ColorFilter color_filter;
 };
 
 struct UnderlineVertexOutput {
@@ -1276,6 +1306,7 @@ float4 underline_fragment(UnderlineFragmentInput input): SV_Target {
 
     Underline underline = underlines[input.underline_id];
     float rounded_clip = rounded_clip_factor(input.position.xy, underline.rounded_clip_bounds, underline.rounded_clip_radii);
+    float4 underline_color = apply_color_filter(input.color, underline.color_filter);
     if (underline.wavy) {
         float half_thickness = underline.thickness * 0.5;
         float2 origin = underline.bounds.origin;
@@ -1292,9 +1323,9 @@ float4 underline_fragment(UnderlineFragmentInput input): SV_Target {
         float distance_from_bottom_border = distance_in_pixels + half_thickness;
         float alpha = saturate(
             0.5 - max(-distance_from_bottom_border, distance_from_top_border));
-        return input.color * float4(1., 1., 1., alpha * rounded_clip);
+        return underline_color * float4(1., 1., 1., alpha * rounded_clip);
     } else {
-        return input.color * float4(1., 1., 1., rounded_clip);
+        return underline_color * float4(1., 1., 1., rounded_clip);
     }
 }
 
@@ -1314,6 +1345,7 @@ struct MonochromeSprite {
     TransformationMatrix transformation;
     Bounds rounded_clip_bounds;
     Corners rounded_clip_radii;
+    ColorFilter color_filter;
 };
 
 struct MonochromeSpriteVertexOutput {
@@ -1357,7 +1389,8 @@ float4 monochrome_sprite_fragment(MonochromeSpriteFragmentInput input): SV_Targe
     float alpha_corrected = apply_contrast_and_gamma_correction(sample, input.color.rgb, grayscale_enhanced_contrast, gamma_ratios);
     MonochromeSprite sprite = mono_sprites[input.sprite_id];
     float rounded_clip = rounded_clip_factor(input.position.xy, sprite.rounded_clip_bounds, sprite.rounded_clip_radii);
-    return float4(input.color.rgb, input.color.a * alpha_corrected * rounded_clip);
+    float4 filtered = apply_color_filter(float4(input.color.rgb, input.color.a * alpha_corrected), sprite.color_filter);
+    return float4(filtered.rgb, filtered.a * rounded_clip);
 }
 
 /*
@@ -1379,6 +1412,7 @@ struct PolychromeSprite {
     Hsla color;
     Bounds rounded_clip_bounds;
     Corners rounded_clip_radii;
+    ColorFilter color_filter;
 };
 
 struct PolychromeSpriteVertexOutput {
@@ -1429,7 +1463,7 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
         }
 
         float3 rgb = tint.rgb * (coverage / coverage_alpha);
-        return float4(rgb, alpha);
+        return apply_color_filter(float4(rgb, alpha), sprite.color_filter);
     }
 
     if (sprite.sprite_kind == 2u) {
@@ -1439,7 +1473,7 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
             return float4(0.0, 0.0, 0.0, 0.0);
         }
 
-        return float4(sample.rgb / sample.a, alpha);
+        return apply_color_filter(float4(sample.rgb / sample.a, alpha), sprite.color_filter);
     }
 
     float4 color = sample;
@@ -1447,6 +1481,7 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
         float3 grayscale = dot(color.rgb, GRAYSCALE_FACTORS);
         color = float4(grayscale, sample.a);
     }
+    color = apply_color_filter(color, sprite.color_filter);
     color.a *= sprite.opacity * saturate(0.5 - distance) * rounded_clip;
     return color;
 }

@@ -1,7 +1,7 @@
 use crate::{
-    self as kael, point, px, relative, rems, AbsoluteLength, AlignContent, AlignItems, BlendMode,
-    BorderStyle, CursorStyle, DefiniteLength, Display, Fill, FlexDirection, FlexWrap, Font,
-    FontStyle, FontWeight, GridPlacement, Hsla, JustifyContent, Length, Pixels, SharedString,
+    self as kael, point, px, relative, rems, AbsoluteLength, AlignContent, AlignItems,
+    BlendMode, BorderStyle, CursorStyle, DefiniteLength, Display, Fill, FlexDirection, FlexWrap,
+    Font, FontStyle, FontWeight, GridPlacement, Hsla, JustifyContent, Length, Pixels, SharedString,
     StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow, TextShadow, TextStyleRefinement,
     UnderlineStyle, WhiteSpace,
 };
@@ -511,6 +511,7 @@ pub trait Styled: Sized {
         self
     }
 
+
     /// Returns a mutable reference to the text style that has been configured on this element.
     fn text_style(&mut self) -> &mut Option<TextStyleRefinement> {
         let style: &mut StyleRefinement = self.style();
@@ -845,6 +846,42 @@ pub trait Styled: Sized {
     fn skew_y(mut self, angle_degrees: f32) -> Self {
         let current_x = self.style().skew.map(|skew| skew.x).unwrap_or(0.0);
         self.style().skew = Some(point(current_x, angle_degrees.to_radians()));
+        self
+    }
+
+    /// Desaturates this element and its subtree toward luminance. `0.0` leaves color
+    /// untouched, `1.0` produces fully grayscale output.
+    fn grayscale(mut self, amount: f32) -> Self {
+        let mut filter = self.style().color_filter.unwrap_or_default();
+        filter.grayscale = amount;
+        self.style().color_filter = Some(filter);
+        self
+    }
+
+    /// Adjusts the color saturation of this element and its subtree. `1.0` leaves
+    /// saturation unchanged, `0.0` produces grayscale, values above `1.0` oversaturate.
+    fn saturate(mut self, amount: f32) -> Self {
+        let mut filter = self.style().color_filter.unwrap_or_default();
+        filter.saturate = amount;
+        self.style().color_filter = Some(filter);
+        self
+    }
+
+    /// Adjusts the brightness of this element and its subtree. `1.0` leaves brightness
+    /// unchanged, values below `1.0` darken and above `1.0` brighten.
+    fn brightness(mut self, amount: f32) -> Self {
+        let mut filter = self.style().color_filter.unwrap_or_default();
+        filter.brightness = amount;
+        self.style().color_filter = Some(filter);
+        self
+    }
+
+    /// Adjusts the contrast of this element and its subtree around mid-gray. `1.0` leaves
+    /// contrast unchanged, values below `1.0` reduce and above `1.0` increase contrast.
+    fn contrast(mut self, amount: f32) -> Self {
+        let mut filter = self.style().color_filter.unwrap_or_default();
+        filter.contrast = amount;
+        self.style().color_filter = Some(filter);
         self
     }
 

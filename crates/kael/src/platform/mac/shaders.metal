@@ -30,6 +30,7 @@ float quad_sdf(float2 point, Bounds_ScaledPixels bounds,
 float rounded_clip_factor(float2 position, Bounds_ScaledPixels clip_bounds,
                           Corners_ScaledPixels clip_radii);
 float2 apply_inverse_transform(float2 position, TransformationMatrix transformation);
+float4 apply_color_filter(float4 color, ColorFilter filter);
 float quad_sdf_impl(float2 center_to_point, float corner_radius);
 float squircle_sdf(float2 point, Bounds_ScaledPixels bounds,
                    Corners_ScaledPixels corner_radii);
@@ -143,6 +144,7 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
                               constant Quad *quads
                               [[buffer(QuadInputIndex_Quads)]]) {
   Quad quad = quads[input.quad_id];
+  ColorFilter color_filter = quad.color_filter;
   float rounded_clip = rounded_clip_factor(
       input.position.xy, quad.rounded_clip_bounds, quad.rounded_clip_radii);
   float2 local_position = apply_inverse_transform(input.position.xy, quad.transform);
@@ -162,6 +164,7 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
       quad.border_widths.right == 0.0 &&
       quad.border_widths.bottom == 0.0 &&
       unrounded) {
+    background_color = apply_color_filter(background_color, color_filter);
     return background_color * float4(1.0, 1.0, 1.0, rounded_clip);
   }
 
@@ -434,6 +437,7 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
                 saturate(antialias_threshold - inner_sdf));
   }
 
+  color = apply_color_filter(color, color_filter);
   return color * float4(1.0, 1.0, 1.0,
                         saturate(antialias_threshold - outer_sdf) * rounded_clip);
 }
@@ -700,7 +704,8 @@ fragment float4 shadow_fragment(ShadowFragmentInput input [[stage_in]],
   alpha *= rounded_clip_factor(input.position.xy, shadow.rounded_clip_bounds,
                                shadow.rounded_clip_radii);
 
-  return input.color * float4(1., 1., 1., alpha);
+  float4 shadow_color = apply_color_filter(input.color, shadow.color_filter);
+  return shadow_color * float4(1., 1., 1., alpha);
 }
 
 struct UnderlineVertexOutput {
@@ -745,6 +750,7 @@ fragment float4 underline_fragment(UnderlineFragmentInput input [[stage_in]],
   Underline underline = underlines[input.underline_id];
   float rounded_clip = rounded_clip_factor(
       input.position.xy, underline.rounded_clip_bounds, underline.rounded_clip_radii);
+  float4 underline_color = apply_color_filter(input.color, underline.color_filter);
   if (underline.wavy) {
     float half_thickness = underline.thickness * 0.5;
     float2 origin =
@@ -763,9 +769,9 @@ fragment float4 underline_fragment(UnderlineFragmentInput input [[stage_in]],
     float distance_from_bottom_border = distance_in_pixels + half_thickness;
     float alpha = saturate(
         0.5 - max(-distance_from_bottom_border, distance_from_top_border));
-    return input.color * float4(1., 1., 1., alpha * rounded_clip);
+    return underline_color * float4(1., 1., 1., alpha * rounded_clip);
   } else {
-    return input.color * float4(1., 1., 1., rounded_clip);
+    return underline_color * float4(1., 1., 1., rounded_clip);
   }
 }
 
@@ -824,6 +830,7 @@ fragment float4 monochrome_sprite_fragment(
   MonochromeSprite sprite = sprites[input.sprite_id];
   float4 color = input.color;
   color.a *= pow(sample.a, 0.85);
+  color = apply_color_filter(color, sprite.color_filter);
   color.a *= rounded_clip_factor(input.position.xy, sprite.rounded_clip_bounds,
                                  sprite.rounded_clip_radii);
   return color;
@@ -889,7 +896,7 @@ fragment float4 polychrome_sprite_fragment(
       return float4(0.0);
     }
     float3 rgb = tint.rgb * (coverage / coverage_alpha);
-    return float4(rgb, alpha);
+    return apply_color_filter(float4(rgb, alpha), sprite.color_filter);
   }
 
   if (sprite.sprite_kind == 2u) {
@@ -899,7 +906,7 @@ fragment float4 polychrome_sprite_fragment(
       return float4(0.0);
     }
 
-    return float4(sample.rgb / sample.a, alpha);
+    return apply_color_filter(float4(sample.rgb / sample.a, alpha), sprite.color_filter);
   }
 
   float4 color = sample;
@@ -909,6 +916,7 @@ fragment float4 polychrome_sprite_fragment(
     color.g = grayscale;
     color.b = grayscale;
   }
+  color = apply_color_filter(color, sprite.color_filter);
   color.a *= sprite.opacity * saturate(0.5 - distance) * rounded_clip;
   return color;
 }
@@ -1263,6 +1271,23 @@ float rounded_clip_factor(float2 position, Bounds_ScaledPixels clip_bounds,
   }
   float distance = quad_sdf(position, clip_bounds, clip_radii);
   return saturate(0.5 - distance);
+}
+
+// Applies a color filter to a straight-alpha color, leaving alpha untouched.
+// Order: contrast around mid-gray, brightness, saturation, then grayscale.
+float4 apply_color_filter(float4 color, ColorFilter filter) {
+  if (filter.grayscale == 0.0 && filter.saturate == 1.0 &&
+      filter.brightness == 1.0 && filter.contrast == 1.0) {
+    return color;
+  }
+  float3 rgb = color.rgb;
+  rgb = (rgb - 0.5) * filter.contrast + 0.5;
+  rgb = rgb * filter.brightness;
+  float luma = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+  rgb = mix(float3(luma), rgb, filter.saturate);
+  luma = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+  rgb = mix(rgb, float3(luma), filter.grayscale);
+  return float4(rgb, color.a);
 }
 
 // Signed distance of the point to the quad's border - positive outside the

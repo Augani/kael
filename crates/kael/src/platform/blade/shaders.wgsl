@@ -138,6 +138,13 @@ struct TransformationMatrix {
     translation: vec2<f32>,
 }
 
+struct ColorFilter {
+    grayscale: f32,
+    saturate: f32,
+    brightness: f32,
+    contrast: f32,
+}
+
 fn to_device_position_impl(position: vec2<f32>) -> vec4<f32> {
     let device_position = position / globals.viewport_size * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0);
     return vec4<f32>(device_position, 0.0, 1.0);
@@ -346,6 +353,23 @@ fn rounded_clip_factor(position: vec2<f32>, clip_bounds: Bounds, clip_radii: Cor
     }
     let distance = quad_sdf(position, clip_bounds, clip_radii);
     return saturate(0.5 - distance);
+}
+
+// Applies a color filter to a straight-alpha color, leaving alpha untouched.
+// Order: contrast around mid-gray, brightness, saturation, then grayscale.
+fn apply_color_filter(color: vec4<f32>, cf: ColorFilter) -> vec4<f32> {
+    if (cf.grayscale == 0.0 && cf.saturate == 1.0 &&
+        cf.brightness == 1.0 && cf.contrast == 1.0) {
+        return color;
+    }
+    var rgb = color.rgb;
+    rgb = (rgb - 0.5) * cf.contrast + 0.5;
+    rgb = rgb * cf.brightness;
+    var luma = dot(rgb, GRAYSCALE_FACTORS);
+    rgb = mix(vec3<f32>(luma), rgb, cf.saturate);
+    luma = dot(rgb, GRAYSCALE_FACTORS);
+    rgb = mix(rgb, vec3<f32>(luma), cf.grayscale);
+    return vec4<f32>(rgb, color.a);
 }
 
 // Signed distance of the point to the quad's border - positive outside the
@@ -562,6 +586,7 @@ struct Quad {
     blend_mode: u32,
     rounded_clip_bounds: Bounds,
     rounded_clip_radii: Corners,
+    color_filter: ColorFilter,
 }
 var<storage, read> b_quads: array<Quad>;
 
@@ -661,6 +686,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
             quad.border_widths.right == 0.0 &&
             quad.border_widths.bottom == 0.0 &&
             unrounded) {
+        background_color = apply_color_filter(background_color, quad.color_filter);
         return blend_color(background_color, rounded_clip);
     }
 
@@ -969,6 +995,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
                     saturate(antialias_threshold - inner_sdf));
     }
 
+    color = apply_color_filter(color, quad.color_filter);
     return blend_color(color, saturate(antialias_threshold - outer_sdf) * rounded_clip);
 }
 
@@ -1149,6 +1176,7 @@ struct Shadow {
     inset: u32,
     rounded_clip_bounds: Bounds,
     rounded_clip_radii: Corners,
+    color_filter: ColorFilter,
 }
 var<storage, read> b_shadows: array<Shadow>;
 
@@ -1213,7 +1241,8 @@ fn fs_shadow(input: ShadowVarying) -> @location(0) vec4<f32> {
 
     alpha *= rounded_clip_factor(input.position.xy, shadow.rounded_clip_bounds, shadow.rounded_clip_radii);
 
-    return blend_color(input.color, alpha);
+    let shadow_color = apply_color_filter(input.color, shadow.color_filter);
+    return blend_color(shadow_color, alpha);
 }
 
 // --- path rasterization --- //
@@ -1329,6 +1358,7 @@ struct Underline {
     wavy: u32,
     rounded_clip_bounds: Bounds,
     rounded_clip_radii: Corners,
+    color_filter: ColorFilter,
 }
 var<storage, read> b_underlines: array<Underline>;
 
@@ -1365,9 +1395,10 @@ fn fs_underline(input: UnderlineVarying) -> @location(0) vec4<f32> {
 
     let underline = b_underlines[input.underline_id];
     let rounded_clip = rounded_clip_factor(input.position.xy, underline.rounded_clip_bounds, underline.rounded_clip_radii);
+    let underline_color = apply_color_filter(input.color, underline.color_filter);
     if ((underline.wavy & 0xFFu) == 0u)
     {
-        return blend_color(input.color, input.color.a * rounded_clip);
+        return blend_color(underline_color, underline_color.a * rounded_clip);
     }
 
     let half_thickness = underline.thickness * 0.5;
@@ -1383,7 +1414,7 @@ fn fs_underline(input: UnderlineVarying) -> @location(0) vec4<f32> {
     let distance_from_top_border = distance_in_pixels - half_thickness;
     let distance_from_bottom_border = distance_in_pixels + half_thickness;
     let alpha = saturate(0.5 - max(-distance_from_bottom_border, distance_from_top_border));
-    return blend_color(input.color, alpha * input.color.a * rounded_clip);
+    return blend_color(underline_color, alpha * underline_color.a * rounded_clip);
 }
 
 // --- monochrome sprites --- //
@@ -1398,6 +1429,7 @@ struct MonochromeSprite {
     transformation: TransformationMatrix,
     rounded_clip_bounds: Bounds,
     rounded_clip_radii: Corners,
+    color_filter: ColorFilter,
 }
 var<storage, read> b_mono_sprites: array<MonochromeSprite>;
 
@@ -1436,9 +1468,10 @@ fn fs_mono_sprite(input: MonoSpriteVarying) -> @location(0) vec4<f32> {
 
     let sprite = b_mono_sprites[input.sprite_id];
     let rounded_clip = rounded_clip_factor(input.position.xy, sprite.rounded_clip_bounds, sprite.rounded_clip_radii);
+    let sprite_color = apply_color_filter(input.color, sprite.color_filter);
 
     // convert to srgb space as the rest of the code (output swapchain) expects that
-    return blend_color(input.color, alpha_corrected * rounded_clip);
+    return blend_color(sprite_color, alpha_corrected * rounded_clip);
 }
 
 // --- polychrome sprites --- //
@@ -1456,6 +1489,7 @@ struct PolychromeSprite {
     color: Hsla,
     rounded_clip_bounds: Bounds,
     rounded_clip_radii: Corners,
+    color_filter: ColorFilter,
 }
 var<storage, read> b_poly_sprites: array<PolychromeSprite>;
 
@@ -1499,11 +1533,12 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
         if (coverage_alpha <= 0.0 || alpha <= 0.0) {
             return vec4<f32>(0.0);
         }
+        let straight_rgb = apply_color_filter(vec4<f32>(tint.rgb * (coverage / coverage_alpha), alpha), sprite.color_filter).rgb;
         if (globals.premultiplied_alpha != 0u) {
-            return vec4<f32>(tint.rgb * coverage * tint.a * shape_alpha, alpha);
+            return vec4<f32>(straight_rgb * alpha, alpha);
         }
 
-        return vec4<f32>(tint.rgb * (coverage / coverage_alpha), alpha);
+        return vec4<f32>(straight_rgb, alpha);
     }
 
     if (sprite.sprite_kind == 2u) {
@@ -1512,11 +1547,12 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
         if (sample.a <= 0.0 || alpha <= 0.0) {
             return vec4<f32>(0.0);
         }
+        let straight_rgb = apply_color_filter(vec4<f32>(sample.rgb / sample.a, alpha), sprite.color_filter).rgb;
         if (globals.premultiplied_alpha != 0u) {
-            return sample * shape_alpha;
+            return vec4<f32>(straight_rgb * alpha, alpha);
         }
 
-        return vec4<f32>(sample.rgb / sample.a, alpha);
+        return vec4<f32>(straight_rgb, alpha);
     }
 
     var color = sample;
@@ -1524,6 +1560,7 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
         let grayscale = dot(color.rgb, GRAYSCALE_FACTORS);
         color = vec4<f32>(vec3<f32>(grayscale), sample.a);
     }
+    color = apply_color_filter(color, sprite.color_filter);
     return blend_color(color, sprite.opacity * saturate(0.5 - distance) * rounded_clip);
 }
 

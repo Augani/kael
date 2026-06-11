@@ -3,7 +3,8 @@ use crate::Inspector;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
     AsyncWindowContext, AvailableSpace, Background, BlendMode, BorderStyle, Bounds, BoxShadow,
-    Capslock, Context, Corners, CursorStyle, Decorations, DevicePixels, DispatchActionListener,
+    Capslock, ColorFilter, Context, Corners, CursorStyle, Decorations, DevicePixels,
+    DispatchActionListener,
     DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity, EntityId, EventEmitter,
     FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GlyphRasterMode, GpuSpecs, Hsla,
     InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
@@ -850,6 +851,7 @@ pub struct Window {
     pub(crate) element_offset_stack: SmallVec<[Point<Pixels>; 16]>,
     pub(crate) element_opacity: f32,
     pub(crate) element_transform: TransformationMatrix,
+    pub(crate) element_color_filter: ColorFilter,
     pub(crate) rounded_clip: (Bounds<ScaledPixels>, Corners<ScaledPixels>),
     pub(crate) content_mask_stack: SmallVec<[ContentMask<Pixels>; 16]>,
     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
@@ -1275,6 +1277,7 @@ impl Window {
             content_mask_stack: SmallVec::new(),
             element_opacity: 1.0,
             element_transform: TransformationMatrix::unit(),
+            element_color_filter: ColorFilter::identity(),
             rounded_clip: (Bounds::default(), Corners::default()),
             requested_autoscroll: None,
             rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
@@ -2676,6 +2679,7 @@ impl Window {
                 order: 0,
                 rounded_clip_bounds: self.rounded_clip.0,
                 rounded_clip_radii: self.rounded_clip.1,
+                color_filter: self.element_color_filter,
                 pad: 0,
                 grayscale: false,
                 opacity: 1.0,
@@ -2840,6 +2844,30 @@ impl Window {
     pub fn element_transform(&self) -> TransformationMatrix {
         self.invalidator.debug_assert_paint();
         self.element_transform
+    }
+
+    /// Compose a color filter onto the current element color filter for the duration of
+    /// the given closure. Primitives painted inside (quads, sprites, shadows, underlines)
+    /// inherit the composed filter, so a filter on a div applies to its whole subtree.
+    /// Multiplicative factors multiply; grayscale combines so that fully gray wins.
+    ///
+    /// This method should only be called during the paint phase of element drawing.
+    pub fn with_color_filter<R>(
+        &mut self,
+        color_filter: Option<ColorFilter>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint();
+
+        let Some(color_filter) = color_filter else {
+            return f(self);
+        };
+
+        let previous = self.element_color_filter;
+        self.element_color_filter = previous.compose(color_filter);
+        let result = f(self);
+        self.element_color_filter = previous;
+        result
     }
 
     /// Clip primitives painted inside the given closure to a rounded rectangle.
@@ -3257,6 +3285,7 @@ impl Window {
                 order: 0,
                 rounded_clip_bounds: self.rounded_clip.0,
                 rounded_clip_radii: self.rounded_clip.1,
+                color_filter: self.element_color_filter,
                 blur_radius: shadow.blur_radius.scale(scale_factor),
                 bounds: scaled_bounds,
                 corner_radii: corner_radii.scale_and_snap(scale_factor),
@@ -3344,6 +3373,7 @@ impl Window {
             order: 0,
             rounded_clip_bounds: self.rounded_clip.0,
             rounded_clip_radii: self.rounded_clip.1,
+            color_filter: self.element_color_filter,
             bounds: quad.bounds.scale_and_snap(scale_factor),
             content_mask: content_mask.scale(scale_factor),
             background: quad.background.opacity(opacity),
@@ -3411,6 +3441,7 @@ impl Window {
             order: 0,
             rounded_clip_bounds: self.rounded_clip.0,
             rounded_clip_radii: self.rounded_clip.1,
+            color_filter: self.element_color_filter,
             pad: 0,
             bounds: bounds.scale_and_snap(scale_factor),
             content_mask: content_mask.scale(scale_factor),
@@ -3444,6 +3475,7 @@ impl Window {
             order: 0,
             rounded_clip_bounds: self.rounded_clip.0,
             rounded_clip_radii: self.rounded_clip.1,
+            color_filter: self.element_color_filter,
             pad: 0,
             bounds: bounds.scale_and_snap(scale_factor),
             content_mask: content_mask.scale(scale_factor),
@@ -3550,6 +3582,7 @@ impl Window {
                         order: 0,
                         rounded_clip_bounds: self.rounded_clip.0,
                         rounded_clip_radii: self.rounded_clip.1,
+                        color_filter: self.element_color_filter,
                         pad: 0,
                         grayscale: false,
                         opacity: 1.0,
@@ -3566,6 +3599,7 @@ impl Window {
                         order: 0,
                         rounded_clip_bounds: self.rounded_clip.0,
                         rounded_clip_radii: self.rounded_clip.1,
+                        color_filter: self.element_color_filter,
                         pad: 0,
                         bounds,
                         content_mask,
@@ -3637,6 +3671,7 @@ impl Window {
                 order: 0,
                 rounded_clip_bounds: self.rounded_clip.0,
                 rounded_clip_radii: self.rounded_clip.1,
+                color_filter: self.element_color_filter,
                 pad: 0,
                 grayscale: false,
                 bounds,
@@ -3704,6 +3739,7 @@ impl Window {
             order: 0,
             rounded_clip_bounds: self.rounded_clip.0,
             rounded_clip_radii: self.rounded_clip.1,
+            color_filter: self.element_color_filter,
             pad: 0,
             bounds: svg_bounds
                 .map_origin(|origin| origin.round())
@@ -3755,6 +3791,7 @@ impl Window {
             order: 0,
             rounded_clip_bounds: self.rounded_clip.0,
             rounded_clip_radii: self.rounded_clip.1,
+            color_filter: self.element_color_filter,
             pad: 0,
             bounds: bounds
                 .map_origin(|origin| origin.floor())
@@ -3808,6 +3845,7 @@ impl Window {
             order: 0,
             rounded_clip_bounds: self.rounded_clip.0,
             rounded_clip_radii: self.rounded_clip.1,
+            color_filter: self.element_color_filter,
             pad: 0,
             grayscale,
             bounds: bounds

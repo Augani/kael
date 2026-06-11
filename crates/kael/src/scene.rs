@@ -603,6 +603,7 @@ pub(crate) struct Quad {
     pub blend_mode: u32,
     pub rounded_clip_bounds: Bounds<ScaledPixels>,
     pub rounded_clip_radii: Corners<ScaledPixels>,
+    pub color_filter: ColorFilter,
 }
 
 impl From<Quad> for Primitive {
@@ -623,6 +624,7 @@ pub(crate) struct Underline {
     pub wavy: u32,
     pub rounded_clip_bounds: Bounds<ScaledPixels>,
     pub rounded_clip_radii: Corners<ScaledPixels>,
+    pub color_filter: ColorFilter,
 }
 
 impl From<Underline> for Primitive {
@@ -643,6 +645,7 @@ pub(crate) struct Shadow {
     pub inset: u32,
     pub rounded_clip_bounds: Bounds<ScaledPixels>,
     pub rounded_clip_radii: Corners<ScaledPixels>,
+    pub color_filter: ColorFilter,
 }
 
 impl From<Shadow> for Primitive {
@@ -687,6 +690,59 @@ impl BlurRect {
             .intersect(&viewport_bounds)
             .map_origin(|origin| origin.floor())
             .map_size(|size| size.ceil())
+    }
+}
+
+/// A color filter applied to an element's painted output, composing across a subtree.
+///
+/// The identity filter leaves color untouched: `grayscale: 0.0`, `saturate: 1.0`,
+/// `brightness: 1.0`, `contrast: 1.0`. Filters are applied in the fragment shader in
+/// the order contrast, brightness, saturation, grayscale.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[repr(C)]
+pub struct ColorFilter {
+    /// Fraction of the color to desaturate toward luminance, in the range 0.0 to 1.0.
+    pub grayscale: f32,
+    /// Saturation multiplier; 1.0 leaves saturation unchanged, 0.0 produces grayscale.
+    pub saturate: f32,
+    /// Brightness multiplier applied to the rgb channels; 1.0 leaves brightness unchanged.
+    pub brightness: f32,
+    /// Contrast multiplier around mid-gray; 1.0 leaves contrast unchanged.
+    pub contrast: f32,
+}
+
+impl ColorFilter {
+    /// The identity color filter, which leaves color untouched.
+    pub const fn identity() -> Self {
+        Self {
+            grayscale: 0.0,
+            saturate: 1.0,
+            brightness: 1.0,
+            contrast: 1.0,
+        }
+    }
+
+    /// Compose this filter with another, producing a filter equivalent to applying
+    /// `self` and then `other`. Multiplicative factors multiply; grayscale combines so
+    /// that the result is fully gray when either input is.
+    pub fn compose(self, other: ColorFilter) -> ColorFilter {
+        ColorFilter {
+            grayscale: 1.0 - (1.0 - self.grayscale) * (1.0 - other.grayscale),
+            saturate: self.saturate * other.saturate,
+            brightness: self.brightness * other.brightness,
+            contrast: self.contrast * other.contrast,
+        }
+    }
+
+    /// Whether this filter is the identity filter and can be skipped.
+    pub fn is_identity(&self) -> bool {
+        *self == ColorFilter::identity()
+    }
+}
+
+impl Default for ColorFilter {
+    fn default() -> Self {
+        ColorFilter::identity()
     }
 }
 
@@ -843,6 +899,7 @@ pub(crate) struct MonochromeSprite {
     pub transformation: TransformationMatrix,
     pub rounded_clip_bounds: Bounds<ScaledPixels>,
     pub rounded_clip_radii: Corners<ScaledPixels>,
+    pub color_filter: ColorFilter,
 }
 
 impl From<MonochromeSprite> for Primitive {
@@ -870,6 +927,7 @@ pub(crate) struct PolychromeSprite {
     pub color: Hsla,
     pub rounded_clip_bounds: Bounds<ScaledPixels>,
     pub rounded_clip_radii: Corners<ScaledPixels>,
+    pub color_filter: ColorFilter,
 }
 
 impl From<PolychromeSprite> for Primitive {
@@ -1099,6 +1157,71 @@ impl PathVertex<Pixels> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn color_filter_identity_is_default() {
+        assert_eq!(ColorFilter::default(), ColorFilter::identity());
+        assert!(ColorFilter::identity().is_identity());
+        assert_eq!(
+            ColorFilter::identity(),
+            ColorFilter {
+                grayscale: 0.0,
+                saturate: 1.0,
+                brightness: 1.0,
+                contrast: 1.0,
+            }
+        );
+    }
+
+    #[test]
+    fn color_filter_compose_with_identity_is_unchanged() {
+        let filter = ColorFilter {
+            grayscale: 0.4,
+            saturate: 0.5,
+            brightness: 1.2,
+            contrast: 0.8,
+        };
+        for composed in [
+            filter.compose(ColorFilter::identity()),
+            ColorFilter::identity().compose(filter),
+        ] {
+            assert!((composed.grayscale - filter.grayscale).abs() < 1e-6);
+            assert!((composed.saturate - filter.saturate).abs() < 1e-6);
+            assert!((composed.brightness - filter.brightness).abs() < 1e-6);
+            assert!((composed.contrast - filter.contrast).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn color_filter_compose_multiplies_and_saturates_grayscale() {
+        let a = ColorFilter {
+            grayscale: 0.5,
+            saturate: 0.5,
+            brightness: 2.0,
+            contrast: 0.5,
+        };
+        let b = ColorFilter {
+            grayscale: 0.5,
+            saturate: 0.4,
+            brightness: 1.5,
+            contrast: 4.0,
+        };
+        let composed = a.compose(b);
+        assert!((composed.grayscale - 0.75).abs() < 1e-6);
+        assert!((composed.saturate - 0.2).abs() < 1e-6);
+        assert!((composed.brightness - 3.0).abs() < 1e-6);
+        assert!((composed.contrast - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn color_filter_compose_full_grayscale_stays_full() {
+        let full = ColorFilter {
+            grayscale: 1.0,
+            ..ColorFilter::identity()
+        };
+        let composed = full.compose(ColorFilter::identity());
+        assert!((composed.grayscale - 1.0).abs() < 1e-6);
+    }
 
     fn test_blur_rect(bounds: Bounds<ScaledPixels>) -> BlurRect {
         BlurRect {

@@ -7,8 +7,9 @@ use std::{
 use smallvec::SmallVec;
 
 use crate::{
-    AbsoluteLength, App, Background, BackgroundTag, BlendMode, BorderStyle, Bounds, ContentMask,
-    Corners, CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement,
+    AbsoluteLength, App, Background, BackgroundTag, BlendMode, BorderStyle, Bounds, ColorFilter,
+    ContentMask, Corners, CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges,
+    EdgesRefinement,
     Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Hsla, Length, Pixels,
     Point, PointRefinement, Radians, Rgba, SharedString, Size, SizeRefinement, Styled, TextRun,
     TransformationMatrix, Window, black, phi, point, quad, rems, size,
@@ -292,6 +293,9 @@ pub struct Style {
 
     /// Skew in radians along each axis.
     pub skew: Option<Point<f32>>,
+
+    /// A color filter applied to this element and its subtree.
+    pub color_filter: Option<ColorFilter>,
 
     /// The grid columns of this element
     /// Equivalent to the Tailwind `grid-cols-<number>`
@@ -708,8 +712,18 @@ impl Style {
             .clamp_radii_for_quad_size(bounds.size);
 
         let transform = self.compose_transform(bounds, window.scale_factor());
+        let color_filter = self.color_filter;
         window.with_element_transform(transform, |window| {
-            self.paint_within_transform(bounds, corner_radii, rem_size, window, cx, continuation)
+            window.with_color_filter(color_filter, |window| {
+                self.paint_within_transform(
+                    bounds,
+                    corner_radii,
+                    rem_size,
+                    window,
+                    cx,
+                    continuation,
+                )
+            })
         });
     }
 
@@ -943,6 +957,7 @@ impl Default for Style {
             transform_origin: None,
             translate: None,
             skew: None,
+            color_filter: None,
             grid_rows: None,
             grid_cols: None,
             grid_location: None,

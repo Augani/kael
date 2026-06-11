@@ -1,8 +1,8 @@
 use super::metal_atlas::MetalAtlas;
 use crate::{
-    AtlasTextureId, Background, BlurRect, Bounds, ContentMask, Corners, DevicePixels, Hsla,
-    MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
-    ScaledPixels, Scene, Shadow, Size, Surface, Underline, point, size,
+    point, size, AtlasTextureId, Background, BlurRect, Bounds, ContentMask, Corners, DevicePixels,
+    Hsla, MonochromeSprite, PaintSurface, Path, Point, PolychromeSprite, PrimitiveBatch, Quad,
+    ScaledPixels, Scene, Shadow, Size, Surface, Underline,
 };
 use anyhow::Result;
 use block::ConcreteBlock;
@@ -2067,7 +2067,7 @@ fn texture_covers(texture: Option<&metal::Texture>, size: Size<DevicePixels>) ->
 /// The biplanar surface format is full-range 8-bit, so range/bit-depth are fixed;
 /// only the matrix coefficients (BT.601 / BT.709 / BT.2020) vary by frame.
 fn surface_ycbcr_matrix(image_buffer: &core_video::pixel_buffer::CVPixelBuffer) -> [[f32; 4]; 4] {
-    use crate::video_color::{VideoColorRange, ycbcr_to_rgb_matrix};
+    use crate::video_color::{ycbcr_to_rgb_matrix, VideoColorRange};
     let coefficients = surface_matrix_coefficients(image_buffer);
     ycbcr_to_rgb_matrix(coefficients, VideoColorRange::Full, 8)
 }
@@ -2078,7 +2078,7 @@ fn surface_matrix_coefficients(
     use crate::video_color::VideoMatrixCoefficients;
     use core_video::buffer::CVBufferGetAttachment;
     use core_video::image_buffer::{
-        CVYCbCrMatrixGetIntegerCodePointForString, kCVImageBufferYCbCrMatrixKey,
+        kCVImageBufferYCbCrMatrixKey, CVYCbCrMatrixGetIntegerCodePointForString,
     };
 
     let value = unsafe {
@@ -2407,7 +2407,7 @@ impl BlurPass {
 #[cfg(test)]
 mod offscreen_tests {
     use super::*;
-    use crate::{TransformationMatrix, hsla};
+    use crate::{hsla, ColorFilter, TransformationMatrix};
 
     fn headless() -> Option<MetalRenderer> {
         if !metal_is_available() {
@@ -2540,6 +2540,7 @@ mod offscreen_tests {
             color: hsla(0.6, 1.0, 0.5, 1.0),
             thickness: ScaledPixels(2.0),
             wavy: 0,
+            color_filter: ColorFilter::identity(),
         });
         scene.finish();
 
@@ -2566,11 +2567,11 @@ mod offscreen_tests {
         use core_foundation::boolean::CFBoolean;
         use core_foundation::dictionary::CFDictionary;
         use core_foundation::string::CFString;
-        use core_video::buffer::{CVBufferSetAttachment, kCVAttachmentMode_ShouldPropagate};
+        use core_video::buffer::{kCVAttachmentMode_ShouldPropagate, CVBufferSetAttachment};
         use core_video::image_buffer::kCVImageBufferYCbCrMatrixKey;
         use core_video::pixel_buffer::{
-            CVPixelBuffer, kCVPixelBufferIOSurfacePropertiesKey,
-            kCVPixelBufferMetalCompatibilityKey,
+            kCVPixelBufferIOSurfacePropertiesKey, kCVPixelBufferMetalCompatibilityKey,
+            CVPixelBuffer,
         };
 
         let empty: CFDictionary<CFString, CFType> = CFDictionary::from_CFType_pairs(&[]);
@@ -2657,7 +2658,7 @@ mod offscreen_tests {
 
     #[test]
     fn offscreen_surface_uses_tagged_colorspace_matrix() {
-        use crate::video_color::{VideoColorRange, VideoMatrixCoefficients, convert_ycbcr};
+        use crate::video_color::{convert_ycbcr, VideoColorRange, VideoMatrixCoefficients};
         use core_video::image_buffer::{
             kCVImageBufferYCbCrMatrix_ITU_R_601_4, kCVImageBufferYCbCrMatrix_ITU_R_709_2,
         };
@@ -2713,7 +2714,7 @@ mod offscreen_tests {
 
     #[test]
     fn golden_diff_catches_render_determinism_and_differences() {
-        use crate::golden::{Tolerance, compare};
+        use crate::golden::{compare, Tolerance};
         let Some(mut renderer) = headless() else {
             return;
         };
