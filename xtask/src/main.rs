@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 mod bundle;
 mod notarize;
 mod publish;
+mod scaffold;
 mod sign;
 mod update_feed;
 
@@ -195,6 +196,17 @@ enum Commands {
         #[arg(default_value = "kael.dist.toml")]
         config: PathBuf,
     },
+    New {
+        name: String,
+        #[arg(long, default_value = "dashboard")]
+        template: String,
+        #[arg(long)]
+        app_id: Option<String>,
+        #[arg(long)]
+        target_dir: Option<PathBuf>,
+        #[arg(long)]
+        local_dev: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -326,6 +338,37 @@ fn main() -> Result<()> {
             publish::run(&artifacts_ref, &publish_options)?;
 
             println!("dry-run: full release pipeline completed successfully");
+            Ok(())
+        }
+        Commands::New {
+            name,
+            template,
+            app_id,
+            target_dir,
+            local_dev,
+        } => {
+            let template = scaffold::Template::parse(&template)?;
+            let target_dir = target_dir.unwrap_or_else(|| PathBuf::from(&name));
+            let templates_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .map(|root| root.join("templates"))
+                .context("locating templates directory")?;
+            let options = scaffold::ScaffoldOptions {
+                name,
+                template,
+                target_dir,
+                app_id,
+                local_dev,
+            };
+            let outcome = scaffold::run(&templates_root, &options)?;
+            println!(
+                "scaffolded '{}' ({}) into {}",
+                outcome.app_name,
+                outcome.crate_name,
+                outcome.target_dir.display()
+            );
+            println!("  app_id: {}", outcome.app_id);
+            println!("  next:   cd {} && cargo run", outcome.target_dir.display());
             Ok(())
         }
     }
