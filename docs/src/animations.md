@@ -1,6 +1,38 @@
 # Animations
 
-Kael drives animations from its render-on-demand loop: an animating element requests frames only while it is in flight, then the window returns to idle (0% CPU). There are two layers — explicit, time-driven animations you attach to any element, and the framework's built-in motion such as elastic scrolling.
+Kael drives animations from its render-on-demand loop: an animating element requests frames only while it is in flight, then the window returns to idle (0% CPU). There are three layers — implicit transitions that ease style changes automatically, explicit time-driven animations you attach to any element, and the framework's built-in motion such as elastic scrolling.
+
+## Implicit transitions
+
+The web's "soft" feel comes from `transition: all 150ms ease`; Kael's equivalent is `.transition(duration)` on any element with a stable id. Whenever the element's computed style changes — hover, active, focus, or a state-driven restyle — the change is interpolated instead of snapping:
+
+```rust
+use std::time::Duration;
+
+div()
+    .id("cta")
+    .bg(theme.tokens.primary)
+    .rounded(px(10.))
+    .transition(Duration::from_millis(150))
+    .hover(|style| style.bg(theme.tokens.accent).rounded(px(16.)))
+    .active(|style| style.scale(0.97))
+```
+
+Animated properties: background (including gradients with matching stop counts), border color, text color, opacity, corner radii, box shadows, rotation, and scale. `transition_with(duration, easing)` takes an explicit easing curve; transitions interrupt cleanly, retargeting from the current visual state. kael_ui's controls ship with this wired to the `transition_fast` theme token.
+
+## Layout (FLIP) animation
+
+`.animate_layout(duration)` makes a keyed element glide to its new position when layout moves it — list reorders, grid changes, sidebar toggles:
+
+```rust
+div().id(item.id).animate_layout(Duration::from_millis(350))
+```
+
+Avoid it on children of containers that scroll mid-animation; scrolling moves the element and restarts the glide. See `examples/soft_ui.rs`.
+
+## Springs and gestures
+
+For physics-driven motion, `kael_ui` provides `SpringValue`/`SpringPoint` (real spring integration with velocity, presets from `SpringPreset`) and `DraggableSpring`, a container you can drag and throw: on release, the pan gesture's velocity hands off to the spring, which settles to the nearest snap point. See `crates/kael_ui/examples/drag_spring.rs`.
 
 ## Animating an element
 
