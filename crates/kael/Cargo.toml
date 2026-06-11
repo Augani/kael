@@ -626,6 +626,9 @@ optional = true
 default-features = false
 package = "zed-scap"
 
+[target.'cfg(target_os = "macos")'.dependencies.accesskit_macos]
+version = "0.18.1"
+
 [target.'cfg(target_os = "macos")'.dependencies.block]
 version = "0.1"
 
