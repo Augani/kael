@@ -41,7 +41,7 @@ features = [
 [dependencies.collections]
 path = "../collections"
 package = "kael_collections"
-version = "0.2.0"
+version = "0.3.0"
 
 [dependencies.dirs]
 version = "4.0"
@@ -128,7 +128,7 @@ version = "2.6"
 path = "../util_macros"
 optional = true
 package = "kael_util_macros"
-version = "0.2.0"
+version = "0.3.0"
 
 [dependencies.walkdir]
 version = "2.5"
@@ -154,7 +154,7 @@ version = "0.9"
 [dev-dependencies.util_macros]
 path = "../util_macros"
 package = "kael_util_macros"
-version = "0.2.0"
+version = "0.3.0"
 
 [target."cfg(unix)".dependencies.command-fds]
 version = "0.3.1"

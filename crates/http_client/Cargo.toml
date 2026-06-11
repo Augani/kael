@@ -103,7 +103,7 @@ version = "2.2"
 [dependencies.util]
 path = "../util"
 package = "kael_util"
-version = "0.2.0"
+version = "0.3.0"
 
 
 [lints.clippy]

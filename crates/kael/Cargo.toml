@@ -148,12 +148,12 @@ version = "0.10"
 [dependencies.kael_release]
 path = "../kael_release"
 package = "kael_release"
-version = "0.2.0"
+version = "0.3.0"
 
 [dependencies.kael_gpu_budget]
 path = "../kael_gpu_budget"
 package = "kael_gpu_budget"
-version = "0.2.0"
+version = "0.3.0"
 
 [dependencies.accesskit]
 version = "0.17"
@@ -177,7 +177,7 @@ optional = true
 [dependencies.collections]
 path = "../collections"
 package = "kael_collections"
-version = "0.2.0"
+version = "0.3.0"
 
 [dependencies.ctor]
 version = "1"
@@ -198,66 +198,66 @@ version = "0.2"
 [dependencies.kael_macros]
 path = "../kael-macros"
 package = "kael-macros"
-version = "0.2.0"
+version = "0.3.0"
 
 [dependencies.kael_media]
 path = "../kael-media"
 package = "kael-media"
-version = "0.2.0"
+version = "0.3.0"
 optional = true
 
 [dependencies.kael_storage]
 path = "../kael_storage"
 package = "kael_storage"
-version = "0.2.0"
+version = "0.3.0"
 optional = true
 
 [dependencies.kael_icons]
 path = "../kael_icons"
 package = "kael_icons"
-version = "0.2.0"
+version = "0.3.0"
 optional = true
 
 [dependencies.kael_diagnostics]
 path = "../kael_diagnostics"
 package = "kael_diagnostics"
-version = "0.2.0"
+version = "0.3.0"
 optional = true
 
 [dependencies.kael_document]
 path = "../kael_document"
 package = "kael_document"
-version = "0.2.0"
+version = "0.3.0"
 optional = true
 
 [dependencies.kael_audio]
 path = "../kael_audio"
 package = "kael_audio"
-version = "0.2.0"
+version = "0.3.0"
 optional = true
 
 [dependencies.kael_pdf]
 path = "../kael_pdf"
 package = "kael_pdf"
-version = "0.2.0"
+version = "0.3.0"
 optional = true
 
 [dependencies.kael_notifications]
 path = "../kael_notifications"
 package = "kael_notifications"
-version = "0.2.0"
+version = "0.3.0"
 optional = true
 
 [dependencies.kael_share]
 path = "../kael_share"
 package = "kael_share"
-version = "0.2.0"
+version = "0.3.0"
 optional = true
 
 [dependencies.http_client]
 path = "../http_client"
 package = "kael_http_client"
-version = "0.2.0"
+version = "0.3.0"
 
 [dependencies.image]
 version = "0.25.1"
@@ -315,7 +315,7 @@ version = "0.6"
 [dependencies.refineable]
 path = "../refineable"
 package = "kael_refineable"
-version = "0.2.0"
+version = "0.3.0"
 
 [dependencies.resvg]
 version = "0.45.0"
@@ -339,7 +339,7 @@ version = "4.1"
 [dependencies.semantic_version]
 path = "../semantic_version"
 package = "kael_semantic_version"
-version = "0.2.0"
+version = "0.3.0"
 
 [dependencies.serde]
 version = "1.0.221"
@@ -378,7 +378,7 @@ features = ["derive"]
 [dependencies.sum_tree]
 path = "../sum_tree"
 package = "kael_sum_tree"
-version = "0.2.0"
+version = "0.3.0"
 
 [dependencies.taffy]
 version = "=0.9.0"
@@ -396,12 +396,12 @@ default-features = false
 [dependencies.util]
 path = "../util"
 package = "kael_util"
-version = "0.2.0"
+version = "0.3.0"
 
 [dependencies.util_macros]
 path = "../util_macros"
 package = "kael_util_macros"
-version = "0.2.0"
+version = "0.3.0"
 
 [dependencies.uuid]
 version = "1.1.2"
@@ -430,7 +430,7 @@ version = "1"
 path = "../collections"
 features = ["test-support"]
 package = "kael_collections"
-version = "0.2.0"
+version = "0.3.0"
 
 [dev-dependencies.env_logger]
 version = "0.11"
@@ -439,7 +439,7 @@ version = "0.11"
 path = "../http_client"
 features = ["test-support"]
 package = "kael_http_client"
-version = "0.2.0"
+version = "0.3.0"
 
 [dev-dependencies.lyon]
 version = "1.0"
@@ -459,7 +459,7 @@ version = "1.10"
 path = "../util"
 features = ["test-support"]
 package = "kael_util"
-version = "0.2.0"
+version = "0.3.0"
 
 [build-dependencies.resvg]
 version = "0.45.0"
@@ -666,7 +666,7 @@ features = [
 [target.'cfg(target_os = "macos")'.dependencies.media]
 path = "../media"
 package = "kael_media_sys"
-version = "0.2.0"
+version = "0.3.0"
 
 [target.'cfg(target_os = "macos")'.dependencies.metal]
 version = "0.29"

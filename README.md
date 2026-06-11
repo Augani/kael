@@ -8,6 +8,10 @@ Where upstream GPUI prioritizes APIs that serve the Zed editor, Kael is the home
 
 Kael targets macOS, Linux, and Windows with platform-native rendering backends (Metal, Vulkan/Blade, DirectX 11) and delivers 60fps with minimal CPU usage through dirty tracking and render-on-demand.
 
+![Kael 0.3 smooth UI — implicit transitions, FLIP layout, subtree rotation, color filters, gradient borders, and content blur, all self-animating](docs/assets/smooth-ui-0_3.gif)
+
+> The 0.3 "smooth UI" release: implicit style transitions, FLIP layout animation, subtree transforms, color filters, gradient borders, and content-blur effect layers. Run it with `cargo run -p kael --features runtime_shaders --example showcase_0_3`.
+
 ## Features
 
 **Rendering & Graphics**
@@ -16,6 +20,9 @@ Kael targets macOS, Linux, and Windows with platform-native rendering backends (
 - Cached surface rendering with dirty tracking (idle at 0% CPU)
 - Canvas drawing API with stroked/filled paths, shapes, transforms
 - Backdrop blur and frosted glass effects
+- Color filters: `grayscale`, `saturate`, `brightness`, `contrast` over a whole subtree
+- Gradient borders (`border_gradient`) accepting any linear, radial, or conic gradient
+- Effect layers (`effect_layer`) with content blur and silhouette-following drop shadows
 - Lottie animation playback with background frame rendering
 - SVG rendering and icon atlas system
 - Device-pixel snapping (`PixelSnapPolicy`) for crisp output at any DPI
@@ -27,8 +34,12 @@ Kael targets macOS, Linux, and Windows with platform-native rendering backends (
 - Rich text with inline elements, entities, and selection
 - Recycling lists for heterogeneous content
 - Uniform lists for same-height items
-- Implicit style transitions (opacity, scale, background, border)
+- Implicit style transitions on keyed elements (`transition`/`transition_with`) — interruptible easing of background, borders, color, opacity, radii, shadows, rotation, scale
+- Subtree transforms: `rotate`, `scale`, `translate`, and `skew` apply to an element's whole subtree (text, icons, images, children)
+- Rounded-corner clipping (`overflow_hidden` + corner radius) clips children on all three backends
+- FLIP layout animation (`animate_layout`) glides keyed elements to new positions
 - Explicit keyframe and spring animations
+- Spring physics (`SpringValue`/`SpringPoint`) and `DraggableSpring`, a throwable container with velocity hand-off and snap points
 - Elastic (rubber-band) scrolling
 - Gesture recognizers (pan, swipe, pinch)
 - Form controls: text input, checkbox, toggle, slider, radio, select, date picker
@@ -58,6 +69,8 @@ Kael targets macOS, Linux, and Windows with platform-native rendering backends (
 
 **Architecture**
 - Entity-based reactive state management
+- Derived state (`Computed<T>`/`cx.computed`) with dependency tracking and invalidation on notify
+- Async data helpers (`kael_ui::query`): `Loadable<T>`, `QueryState<T>` (loading/error lifecycle, debounce, refetch), and a TTL `QueryCache`
 - Multi-window support
 - In-window layer stack (modals, popovers, anchored layers)
 - Focus management and keyboard navigation
@@ -74,7 +87,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-kael = "0.2"
+kael = "0.3"
 ```
 
 ```rust
