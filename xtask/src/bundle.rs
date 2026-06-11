@@ -1,7 +1,6 @@
 use anyhow::{Context as _, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "macos")]
 use std::process::Command;
 
 use crate::DistConfig;
@@ -311,7 +310,158 @@ fn bundle_windows(
     }
 
     println!("Windows bundle created: {}", bundle_dir.display());
-    Ok(vec![bundle_dir])
+
+    let mut artifacts = vec![bundle_dir.clone()];
+
+    let msi_path = output.join(format!("{app_name}.msi"));
+    if options.dry_run {
+        println!("dry-run: would build MSI at {}", msi_path.display());
+        return Ok(artifacts);
+    }
+
+    match find_wix() {
+        Some(wix) => {
+            let built = build_msi(&wix, &wix_path, &msi_path)?;
+            println!("Windows .msi created: {}", built.display());
+
+            if let Some(signing) = config.signing.as_ref()
+                && let Some(certificate) = signing.windows_certificate.as_deref()
+            {
+                sign_msi(
+                    &built,
+                    certificate,
+                    signing.windows_certificate_password.as_deref(),
+                )?;
+                println!("signed {}", built.display());
+            } else {
+                println!(
+                    "note: no signing.windows_certificate configured — producing an unsigned .msi"
+                );
+            }
+
+            artifacts.push(built);
+        }
+        None => {
+            eprintln!(
+                "warning: WiX v4 toolset not found (set WIX or add `wix` to PATH); \
+                 skipping .msi build. Source written to {}",
+                wix_path.display()
+            );
+        }
+    }
+
+    Ok(artifacts)
+}
+
+/// Locate the WiX v4 CLI (`wix`), mirroring the `fxc` locator in
+/// `crates/kael/build.rs`: honour the `WIX` environment variable first, then
+/// fall back to a `where`/`which` lookup on `PATH`. Returns `None` when WiX is
+/// not installed so callers can skip MSI builds with a warning.
+fn find_wix() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("WIX")
+        && !path.is_empty()
+    {
+        let candidate = PathBuf::from(&path);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        for nested in ["wix", "wix.exe", "bin/wix", "bin/wix.exe"] {
+            let joined = candidate.join(nested);
+            if joined.is_file() {
+                return Some(joined);
+            }
+        }
+    }
+
+    let locator = if cfg!(target_os = "windows") {
+        "where.exe"
+    } else {
+        "which"
+    };
+    let query = if cfg!(target_os = "windows") {
+        "wix.exe"
+    } else {
+        "wix"
+    };
+    if let Ok(output) = Command::new(locator).arg(query).output()
+        && output.status.success()
+    {
+        let found = String::from_utf8_lossy(&output.stdout);
+        if let Some(first) = found.lines().next() {
+            let trimmed = first.trim();
+            if !trimmed.is_empty() {
+                return Some(PathBuf::from(trimmed));
+            }
+        }
+    }
+
+    None
+}
+
+/// Build the argument vector for `wix build <wxs> -o <out>.msi` (WiX v4 CLI).
+///
+/// Split out so the command construction can be unit-tested without invoking
+/// the toolset (which is not present on non-Windows hosts).
+fn wix_build_args(wxs: &Path, msi: &Path) -> Vec<String> {
+    vec![
+        "build".to_string(),
+        wxs.to_string_lossy().into_owned(),
+        "-o".to_string(),
+        msi.to_string_lossy().into_owned(),
+    ]
+}
+
+/// Compile a `.wxs` source into an `.msi` using the WiX v4 `wix build` command.
+///
+/// WiX v4 only — there is no candle/light (WiX v3) fallback by design.
+fn build_msi(wix: &Path, wxs: &Path, msi: &Path) -> Result<PathBuf> {
+    let status = Command::new(wix)
+        .args(wix_build_args(wxs, msi))
+        .status()
+        .with_context(|| format!("failed to run {}", wix.display()))?;
+    if !status.success() {
+        bail!("wix build failed with status {status}");
+    }
+    if !msi.exists() {
+        bail!(
+            "wix build reported success but {} was not produced",
+            msi.display()
+        );
+    }
+    Ok(msi.to_path_buf())
+}
+
+/// Build the `signtool sign` argument vector for an `.msi`, matching the
+/// existing Windows signing step in `sign.rs`.
+fn signtool_args(certificate: &Path, password: Option<&str>, artifact: &Path) -> Vec<String> {
+    let mut args = vec![
+        "sign".to_string(),
+        "/f".to_string(),
+        certificate.to_string_lossy().into_owned(),
+        "/p".to_string(),
+        password.unwrap_or("").to_string(),
+        "/tr".to_string(),
+        "http://timestamp.digicert.com".to_string(),
+        "/td".to_string(),
+        "sha256".to_string(),
+        "/fd".to_string(),
+        "sha256".to_string(),
+    ];
+    args.push(artifact.to_string_lossy().into_owned());
+    args
+}
+
+/// Sign an `.msi` with the configured Windows code-signing certificate via
+/// `signtool` (the same tool the standalone `sign` command uses).
+fn sign_msi(msi: &Path, certificate: &Path, password: Option<&str>) -> Result<()> {
+    let status = Command::new("signtool")
+        .args(signtool_args(certificate, password, msi))
+        .status()
+        .with_context(|| "failed to run signtool — is it installed?")?;
+    if !status.success() {
+        bail!("signtool exited with status {status}");
+    }
+    Ok(())
 }
 
 fn bundle_linux(
@@ -603,6 +753,48 @@ mod tests {
             xml_escape("a & b <c> \"d\" 'e'"),
             "a &amp; b &lt;c&gt; &quot;d&quot; &apos;e&apos;"
         );
+    }
+
+    #[test]
+    fn wix_build_args_target_msi_output() {
+        let args = wix_build_args(Path::new("dist/Kael/Kael.wxs"), Path::new("dist/Kael.msi"));
+        assert_eq!(
+            args,
+            vec![
+                "build".to_string(),
+                "dist/Kael/Kael.wxs".to_string(),
+                "-o".to_string(),
+                "dist/Kael.msi".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn signtool_args_include_certificate_password_and_timestamp() {
+        let args = signtool_args(
+            Path::new("certs/code.pfx"),
+            Some("hunter2"),
+            Path::new("dist/Kael.msi"),
+        );
+        assert_eq!(args[0], "sign");
+        assert_eq!(args[1], "/f");
+        assert_eq!(args[2], "certs/code.pfx");
+        assert_eq!(args[3], "/p");
+        assert_eq!(args[4], "hunter2");
+        assert!(args.iter().any(|a| a == "/fd"));
+        assert!(args.iter().any(|a| a == "sha256"));
+        assert!(args.iter().any(|a| a == "http://timestamp.digicert.com"));
+        assert_eq!(args.last().unwrap(), "dist/Kael.msi");
+    }
+
+    #[test]
+    fn signtool_args_default_to_empty_password() {
+        let args = signtool_args(
+            Path::new("certs/code.pfx"),
+            None,
+            Path::new("dist/Kael.msi"),
+        );
+        assert_eq!(args[4], "");
     }
 }
 
