@@ -50,6 +50,20 @@ jobs:
         shell: bash
         run: cargo build --release -p dashboard-app
 
+      - name: Install WiX v4 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: dotnet tool install --global wix --version 4.*
+
+      - name: Install appimagetool (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          curl -fsSL -o /usr/local/bin/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x /usr/local/bin/appimagetool
+          echo "APPIMAGE_EXTRACT_AND_RUN=1" >> "$GITHUB_ENV"
+
       - name: Run xtask bundle
         shell: bash
         run: |
