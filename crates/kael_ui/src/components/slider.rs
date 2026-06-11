@@ -305,7 +305,7 @@ impl Slider {
                             .border_2()
                             .border_color(theme.tokens.background)
                             .when(!self.disabled, |this| {
-                                this.shadow(smallvec::smallvec![theme.tokens.shadow_sm])
+                                this.shadow(theme.tokens.shadow_sm.to_vec())
                                     .cursor(CursorStyle::PointingHand)
                             })
                             .when(!self.disabled, |this| {
@@ -477,7 +477,7 @@ impl Slider {
                             .border_2()
                             .border_color(theme.tokens.background)
                             .when(!self.disabled, |this| {
-                                this.shadow(smallvec::smallvec![theme.tokens.shadow_sm])
+                                this.shadow(theme.tokens.shadow_sm.to_vec())
                                     .cursor(CursorStyle::PointingHand)
                             })
                             .when(!self.disabled, |this| {

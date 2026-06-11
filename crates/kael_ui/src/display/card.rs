@@ -55,20 +55,14 @@ impl IntoElement for Card {
         let theme = use_theme();
         let user_style = self.style;
 
-        let shadow_sm = BoxShadow {
-            offset: theme.tokens.shadow_sm.offset,
-            blur_radius: theme.tokens.shadow_sm.blur_radius,
-            spread_radius: theme.tokens.shadow_sm.spread_radius,
-            inset: false,
-            color: theme.tokens.shadow_sm.color,
-        };
+        let shadow_sm = theme.tokens.shadow_sm.clone();
 
         let mut base = div()
             .bg(theme.tokens.card)
             .border_1()
             .border_color(theme.tokens.border)
             .rounded(theme.tokens.radius_lg)
-            .shadow(smallvec::smallvec![shadow_sm])
+            .shadow(shadow_sm.to_vec())
             .overflow_hidden();
 
         if let Some(header) = self.header {

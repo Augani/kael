@@ -377,7 +377,7 @@ impl RangeSlider {
                             .when(!self.disabled, {
                                 let shadow = theme.tokens.shadow_sm.clone();
                                 move |this| {
-                                    this.shadow(smallvec::smallvec![shadow])
+                                    this.shadow(shadow.to_vec())
                                         .cursor(CursorStyle::PointingHand)
                                 }
                             })
@@ -423,7 +423,7 @@ impl RangeSlider {
                             .when(!self.disabled, {
                                 let shadow = theme.tokens.shadow_sm.clone();
                                 move |this| {
-                                    this.shadow(smallvec::smallvec![shadow])
+                                    this.shadow(shadow.to_vec())
                                         .cursor(CursorStyle::PointingHand)
                                 }
                             })
@@ -614,7 +614,7 @@ impl RangeSlider {
                             .when(!self.disabled, {
                                 let shadow = theme.tokens.shadow_sm.clone();
                                 move |this| {
-                                    this.shadow(smallvec::smallvec![shadow])
+                                    this.shadow(shadow.to_vec())
                                         .cursor(CursorStyle::PointingHand)
                                 }
                             })
@@ -660,7 +660,7 @@ impl RangeSlider {
                             .when(!self.disabled, {
                                 let shadow = theme.tokens.shadow_sm.clone();
                                 move |this| {
-                                    this.shadow(smallvec::smallvec![shadow])
+                                    this.shadow(shadow.to_vec())
                                         .cursor(CursorStyle::PointingHand)
                                 }
                             })
