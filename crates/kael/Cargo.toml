@@ -83,6 +83,7 @@ wayland = [
     "wayland-cursor",
     "wayland-protocols",
     "wayland-protocols-plasma",
+    "wayland-protocols-wlr",
     "filedescriptor",
     "xkbcommon",
     "open",
@@ -572,6 +573,11 @@ features = [
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.wayland-protocols-plasma]
+version = "0.2.0"
+features = ["client"]
+optional = true
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.wayland-protocols-wlr]
 version = "0.2.0"
 features = ["client"]
 optional = true
