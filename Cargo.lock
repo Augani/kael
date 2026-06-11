@@ -3936,9 +3936,11 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "kael_http_client",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

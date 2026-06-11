@@ -14,7 +14,10 @@ use std::{
 use anyhow::{Context as _, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
-use crate::breadcrumb::{Breadcrumb, BreadcrumbBuffer};
+use crate::{
+    breadcrumb::{Breadcrumb, BreadcrumbBuffer},
+    native::{self, NativeContext, PendingNativeCrash},
+};
 
 type PanicHook = dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static;
 type BeforeSend = dyn Fn(&mut CrashReport) -> bool + Sync + Send + 'static;
@@ -63,6 +66,8 @@ pub struct CrashReporter {
     breadcrumbs: BreadcrumbBuffer,
     release: Option<String>,
     environment: Option<String>,
+    session_id: String,
+    native_installed: bool,
 }
 
 impl std::fmt::Debug for CrashReporter {
@@ -96,6 +101,8 @@ impl CrashReporter {
             breadcrumbs,
             release: None,
             environment: None,
+            session_id: crate::native::new_session_id(),
+            native_installed: false,
         })
     }
 
@@ -165,6 +172,58 @@ impl CrashReporter {
             let _ = std::panic::take_hook();
             std::panic::set_hook(Box::new(move |info| previous(info)));
         }
+    }
+
+    /// Returns the identifier for the current process session.
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    /// Installs OS-level native crash handlers (opt-in).
+    ///
+    /// This complements [`install_hook`](Self::install_hook): the panic hook
+    /// only captures Rust panics, while native handlers capture hardware faults
+    /// (SIGSEGV/SIGBUS/SIGILL/SIGFPE), aborts (SIGABRT), and foreign-code
+    /// crashes. Pre-crash context (app version, environment, OS, session id) is
+    /// captured here, at install time, into a pre-opened artifact; the handler
+    /// itself only writes an async-signal-safe record.
+    ///
+    /// Returns `true` if handlers were installed by this call, `false` if they
+    /// were already installed in this process.
+    pub fn install_native(&mut self) -> Result<bool> {
+        let started_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default();
+
+        let context = NativeContext {
+            session_id: self.session_id.clone(),
+            app_version: self.release.clone(),
+            environment: self.environment.clone(),
+            os: std::env::consts::OS.to_string(),
+            arch: std::env::consts::ARCH.to_string(),
+            pid: std::process::id(),
+            started_at_ms,
+        };
+
+        let installed = native::install(&self.reports_dir, context)?;
+        self.native_installed = installed || self.native_installed;
+        Ok(installed)
+    }
+
+    /// Marks this session as a clean exit, removing the native crash marker so
+    /// the next launch does not treat this run as an unclean exit. Call during
+    /// orderly shutdown when native handlers are installed.
+    pub fn mark_clean_exit(&self) {
+        if self.native_installed {
+            native::mark_clean_exit(&self.reports_dir);
+        }
+    }
+
+    /// Decodes native crashes left by previous unclean exits without submitting
+    /// them. Each entry describes one prior session.
+    pub fn pending_native_crashes(&self) -> Result<Vec<PendingNativeCrash>> {
+        native::pending_crashes(&self.reports_dir)
     }
 
     /// Persists a crash report for a non-panic error.
@@ -406,6 +465,8 @@ mod tests {
             breadcrumbs: BreadcrumbBuffer::new(8),
             release: None,
             environment: None,
+            session_id: crate::native::new_session_id(),
+            native_installed: false,
         };
 
         let pending = reporter.pending_reports().unwrap();

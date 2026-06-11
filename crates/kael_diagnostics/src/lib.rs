@@ -8,6 +8,8 @@ pub mod breadcrumb;
 pub mod crash;
 /// Metrics and tracing services.
 pub mod metrics;
+/// Native (non-panic) crash capture via OS-level signal/exception handlers.
+pub mod native;
 /// Platform backends for diagnostics services.
 pub mod platform;
 /// Global diagnostics configuration and reporting facade.
@@ -19,6 +21,7 @@ pub use crash::{
     CrashReport, CrashReporter, OsInfo, capture_crash_report, collect_os_info, write_crash_report,
 };
 pub use metrics::{MetricsRegistry, Span, TraceEvent, TracePhase, Tracer, Transaction};
+pub use native::{NativeContext, NativeSignal, PendingNativeCrash};
 pub use reporter::{
     Diagnostics, DiagnosticsConfig, add_breadcrumb, capture_error, init, record_counter,
     record_gauge, record_histogram, start_transaction,
