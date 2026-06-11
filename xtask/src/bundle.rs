@@ -1188,6 +1188,69 @@ mod tests {
         }
         members
     }
+
+    #[test]
+    fn linux_bundle_pipeline_smoke() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("dist");
+        let binary = dir.path().join("kael-demo");
+        fs::write(&binary, b"\x7fELF dummy binary for smoke test").unwrap();
+
+        let config = linux_config();
+        let options = BundleOptions {
+            dry_run: false,
+            binary: Some(binary.clone()),
+        };
+
+        let artifacts = bundle_linux(&config, &output, Some(binary.as_path()), &options).unwrap();
+
+        let app_dir = output.join("kael-demo.AppDir");
+        assert!(app_dir.is_dir(), "AppDir must be created");
+        assert!(app_dir.join("AppRun").is_file(), "AppRun must exist");
+        assert!(
+            app_dir.join("kael-demo.desktop").is_file(),
+            ".desktop must exist"
+        );
+        assert!(
+            app_dir.join("usr/bin/kael-demo").is_file(),
+            "binary must be staged in the AppDir"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(app_dir.join("AppRun"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o111, 0o111, "AppRun must be executable");
+        }
+
+        let deb = output.join("kael-demo_1.2.3_amd64.deb");
+        assert!(deb.is_file(), ".deb must be produced on any host");
+
+        let bytes = fs::read(&deb).unwrap();
+        assert_eq!(
+            &bytes[0..8],
+            b"!<arch>\n",
+            ".deb must be a valid ar archive"
+        );
+        let members = parse_ar(&bytes);
+        let names: Vec<&str> = members.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["debian-binary", "control.tar.gz", "data.tar.gz"]
+        );
+
+        assert!(
+            artifacts.contains(&app_dir),
+            "AppDir should be reported as an artifact"
+        );
+        assert!(
+            artifacts.contains(&deb),
+            ".deb should be reported as an artifact"
+        );
+    }
 }
 
 #[cfg(test)]
