@@ -48,7 +48,10 @@ use crate::{
     SystemPowerEvent, Task, TextSystem, Theme, ThreatModel, TrayIconEvent, TrayMenuItem, Undo,
     Window, WindowAppearance, WindowHandle, WindowId, WindowInvalidator, WindowPosition,
     current_platform, hash, init_app_menus,
-    theme::{normalize_theme_path, retain_file_watcher, theme_file_event_matches_target},
+    theme::{
+        normalize_theme_path, register_theme_file_subscriber, retain_file_watcher,
+        theme_file_event_matches_target,
+    },
 };
 
 mod async_context;
@@ -2861,6 +2864,24 @@ impl App {
         Ok(())
     }
 
+    /// Registers a subscriber that is notified whenever a watched theme file
+    /// reloads, after the core [`Theme`] global has been updated.
+    ///
+    /// This is the pluggable sink that lets higher layers bridge the
+    /// file-facing [`Theme`] onto their own runtime representation. The
+    /// callback receives the freshly parsed [`Theme`] and a mutable [`App`],
+    /// and runs for every theme file watched through
+    /// [`App::observe_theme_file`]. The returned [`Subscription`] removes the
+    /// subscriber when dropped; call [`Subscription::detach`] to keep it active
+    /// for the lifetime of the app.
+    pub fn observe_theme_files(
+        &mut self,
+        callback: impl FnMut(&Theme, &mut App) + 'static,
+    ) -> Subscription {
+        Theme::init(self);
+        register_theme_file_subscriber(self, Box::new(callback))
+    }
+
     /// Initializes gpui's default theme-derived colors for the application.
     ///
     /// These colors can be accessed through `cx.default_colors()`.
@@ -2874,7 +2895,9 @@ fn apply_theme_file_change(
     theme_path: &Path,
     on_change: &mut dyn FnMut(Theme, &mut App),
 ) -> Result<()> {
-    on_change(Theme::from_path(theme_path)?, cx);
+    let theme = Theme::from_path(theme_path)?;
+    on_change(theme.clone(), cx);
+    crate::theme::notify_theme_file_subscribers(cx, &theme);
     cx.flush_effects();
     Ok(())
 }
