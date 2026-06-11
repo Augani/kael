@@ -9,6 +9,7 @@ mod date_picker;
 mod deferred;
 mod disclosure;
 mod div;
+mod effects;
 mod icon;
 mod image_cache;
 mod img;
@@ -53,6 +54,7 @@ pub use disclosure::*;
 /// Scroll bar primitives bound to scroll handles.
 pub mod scroll_bar;
 pub use div::*;
+pub use effects::*;
 pub use icon::*;
 pub use image_cache::*;
 pub use img::*;

@@ -10,6 +10,7 @@ use crate::{
     InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
     KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite,
     MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, POLYCHROME_SPRITE_KIND_COLOR,
+    POLYCHROME_SPRITE_KIND_CONTENT_BLURRED, POLYCHROME_SPRITE_KIND_CONTENT_SHADOW,
     POLYCHROME_SPRITE_KIND_PREMULTIPLIED, POLYCHROME_SPRITE_KIND_SUBPIXEL_TEXT, Path, Pixels,
     PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
     PolychromeSprite, PowerMode, PrintJob, ProgressBarState, PromptButton, PromptLevel, Quad,
@@ -2690,6 +2691,74 @@ impl Window {
                 sprite_kind: POLYCHROME_SPRITE_KIND_PREMULTIPLIED,
                 color: transparent_black(),
                 transformation: self.element_transform,
+                blur_radius: 0.0,
+                pad2: 0,
+            });
+    }
+
+    pub(crate) fn paint_effect_surface(
+        &mut self,
+        cached_surface: &crate::cache::CachedSurface,
+        content_blur: Pixels,
+        drop_shadow: Option<&BoxShadow>,
+    ) {
+        let scale_factor = self.scale_factor();
+        let content_mask = self.content_mask().scale(scale_factor);
+
+        if let Some(shadow) = drop_shadow {
+            let offset = shadow.offset.scale(scale_factor);
+            let shadow_bounds = Bounds {
+                origin: cached_surface.bounds.origin + offset,
+                size: cached_surface.bounds.size,
+            };
+            self.next_frame
+                .scene
+                .insert_primitive(crate::PolychromeSprite {
+                    order: 0,
+                    rounded_clip_bounds: self.rounded_clip.0,
+                    rounded_clip_radii: self.rounded_clip.1,
+                    color_filter: self.element_color_filter,
+                    pad: 0,
+                    grayscale: false,
+                    opacity: 1.0,
+                    bounds: shadow_bounds,
+                    content_mask: content_mask.clone(),
+                    corner_radii: Corners::default(),
+                    tile: cached_surface.tile.clone(),
+                    sprite_kind: POLYCHROME_SPRITE_KIND_CONTENT_SHADOW,
+                    color: shadow.color,
+                    transformation: self.element_transform,
+                    blur_radius: shadow.blur_radius.scale(scale_factor).0,
+                    pad2: 0,
+                });
+        }
+
+        let blur_radius = content_blur.scale(scale_factor).0;
+        let sprite_kind = if blur_radius > 0.0 {
+            POLYCHROME_SPRITE_KIND_CONTENT_BLURRED
+        } else {
+            POLYCHROME_SPRITE_KIND_PREMULTIPLIED
+        };
+
+        self.next_frame
+            .scene
+            .insert_primitive(crate::PolychromeSprite {
+                order: 0,
+                rounded_clip_bounds: self.rounded_clip.0,
+                rounded_clip_radii: self.rounded_clip.1,
+                color_filter: self.element_color_filter,
+                pad: 0,
+                grayscale: false,
+                opacity: 1.0,
+                bounds: cached_surface.bounds,
+                content_mask,
+                corner_radii: Corners::default(),
+                tile: cached_surface.tile.clone(),
+                sprite_kind,
+                color: transparent_black(),
+                transformation: self.element_transform,
+                blur_radius,
+                pad2: 0,
             });
     }
 
@@ -3594,6 +3663,8 @@ impl Window {
                         sprite_kind: POLYCHROME_SPRITE_KIND_SUBPIXEL_TEXT,
                         color: color.opacity(element_opacity),
                         transformation,
+                        blur_radius: 0.0,
+                        pad2: 0,
                     });
                 }
                 GlyphRasterMode::Grayscale => {
@@ -3684,6 +3755,8 @@ impl Window {
                 sprite_kind: POLYCHROME_SPRITE_KIND_COLOR,
                 color: transparent_black(),
                 transformation: self.element_transform,
+                blur_radius: 0.0,
+                pad2: 0,
             });
         }
         Ok(())
@@ -3861,6 +3934,8 @@ impl Window {
             sprite_kind: POLYCHROME_SPRITE_KIND_COLOR,
             color: transparent_black(),
             transformation: self.element_transform,
+            blur_radius: 0.0,
+            pad2: 0,
         });
         Ok(())
     }

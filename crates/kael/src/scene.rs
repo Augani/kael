@@ -911,6 +911,8 @@ impl From<MonochromeSprite> for Primitive {
 pub(crate) const POLYCHROME_SPRITE_KIND_COLOR: u32 = 0;
 pub(crate) const POLYCHROME_SPRITE_KIND_SUBPIXEL_TEXT: u32 = 1;
 pub(crate) const POLYCHROME_SPRITE_KIND_PREMULTIPLIED: u32 = 2;
+pub(crate) const POLYCHROME_SPRITE_KIND_CONTENT_BLURRED: u32 = 3;
+pub(crate) const POLYCHROME_SPRITE_KIND_CONTENT_SHADOW: u32 = 4;
 
 #[derive(Clone, Debug)]
 #[repr(C)]
@@ -929,6 +931,8 @@ pub(crate) struct PolychromeSprite {
     pub rounded_clip_radii: Corners<ScaledPixels>,
     pub color_filter: ColorFilter,
     pub transformation: TransformationMatrix,
+    pub blur_radius: f32,
+    pub pad2: u32,
 }
 
 impl From<PolychromeSprite> for Primitive {

@@ -1505,8 +1505,43 @@ struct PolychromeSprite {
     rounded_clip_radii: Corners,
     color_filter: ColorFilter,
     transformation: TransformationMatrix,
+    blur_radius: f32,
+    pad2: u32,
 }
 var<storage, read> b_poly_sprites: array<PolychromeSprite>;
+
+// Samples a content tile with a 5x5 gaussian-weighted grid, scaled by blur_radius,
+// clamping each tap inside the tile's uv rect (minus a half-texel inset) so neighboring
+// atlas tiles never bleed in. Returns a premultiplied color (rgb is premultiplied by a).
+fn sample_blurred_tile(tile_position: vec2<f32>, tile: AtlasTile, blur_radius: f32) -> vec4<f32> {
+    let atlas_size = vec2<f32>(textureDimensions(t_sprite, 0));
+    let tile_origin = vec2<f32>(tile.bounds.origin);
+    let tile_size = vec2<f32>(tile.bounds.size);
+    let texel = 1.0 / atlas_size;
+    let uv_min = (tile_origin + 0.5) / atlas_size;
+    let uv_max = (tile_origin + tile_size - 0.5) / atlas_size;
+
+    let sigma = max(blur_radius, 0.001);
+    let tap_extent = max(blur_radius, 0.0) / 2.0;
+
+    var accum = vec4<f32>(0.0);
+    var weight_sum = 0.0;
+    for (var j = -2; j <= 2; j = j + 1) {
+        for (var i = -2; i <= 2; i = i + 1) {
+            let dx = f32(i) * tap_extent;
+            let dy = f32(j) * tap_extent;
+            let weight = gaussian(dx, sigma) * gaussian(dy, sigma);
+            let uv = clamp(tile_position + texel * vec2<f32>(dx, dy), uv_min, uv_max);
+            accum = accum + textureSampleLevel(t_sprite, s_sprite, uv, 0.0) * weight;
+            weight_sum = weight_sum + weight;
+        }
+    }
+
+    if (weight_sum <= 0.0) {
+        return vec4<f32>(0.0);
+    }
+    return accum / weight_sum;
+}
 
 struct PolySpriteVarying {
     @builtin(position) position: vec4<f32>,
@@ -1540,6 +1575,35 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
     let rounded_clip = rounded_clip_factor(input.position.xy, sprite.rounded_clip_bounds, sprite.rounded_clip_radii);
     let local_position = apply_inverse_transform(input.position.xy, sprite.transformation);
     let distance = quad_sdf(local_position, sprite.bounds, sprite.corner_radii);
+    if (sprite.sprite_kind == 3u) {
+        let blurred = sample_blurred_tile(input.tile_position, sprite.tile, sprite.blur_radius);
+        let shape_alpha = sprite.opacity * saturate(0.5 - distance) * rounded_clip;
+        let alpha = blurred.a * shape_alpha;
+        if (blurred.a <= 0.0 || alpha <= 0.0) {
+            return vec4<f32>(0.0);
+        }
+        let straight_rgb = apply_color_filter(vec4<f32>(blurred.rgb / blurred.a, alpha), sprite.color_filter).rgb;
+        if (globals.premultiplied_alpha != 0u) {
+            return vec4<f32>(straight_rgb * alpha, alpha);
+        }
+        return vec4<f32>(straight_rgb, alpha);
+    }
+
+    if (sprite.sprite_kind == 4u) {
+        let blurred = sample_blurred_tile(input.tile_position, sprite.tile, sprite.blur_radius);
+        let tint = hsla_to_rgba(sprite.color);
+        let shape_alpha = sprite.opacity * saturate(0.5 - distance) * rounded_clip;
+        let alpha = tint.a * blurred.a * shape_alpha;
+        if (blurred.a <= 0.0 || alpha <= 0.0) {
+            return vec4<f32>(0.0);
+        }
+        let straight_rgb = apply_color_filter(vec4<f32>(tint.rgb, alpha), sprite.color_filter).rgb;
+        if (globals.premultiplied_alpha != 0u) {
+            return vec4<f32>(straight_rgb * alpha, alpha);
+        }
+        return vec4<f32>(straight_rgb, alpha);
+    }
+
     if (sprite.sprite_kind == 1u) {
         let tint = hsla_to_rgba(sprite.color);
         let coverage = sample.rgb;

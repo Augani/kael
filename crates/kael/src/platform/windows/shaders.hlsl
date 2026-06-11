@@ -1428,7 +1428,43 @@ struct PolychromeSprite {
     Corners rounded_clip_radii;
     ColorFilter color_filter;
     TransformationMatrix transformation;
+    float blur_radius;
+    uint pad2;
 };
+
+// Samples a content tile with a 5x5 gaussian-weighted grid, scaled by blur_radius,
+// clamping each tap inside the tile's uv rect (minus a half-texel inset) so neighboring
+// atlas tiles never bleed in. Returns a premultiplied color (rgb is premultiplied by a).
+float4 sample_blurred_tile(float2 tile_position, AtlasTile tile, float blur_radius) {
+    float2 atlas_size;
+    t_sprite.GetDimensions(atlas_size.x, atlas_size.y);
+    float2 tile_origin = float2(tile.bounds.origin);
+    float2 tile_size = float2(tile.bounds.size);
+    float2 texel = 1.0 / atlas_size;
+    float2 uv_min = (tile_origin + 0.5) / atlas_size;
+    float2 uv_max = (tile_origin + tile_size - 0.5) / atlas_size;
+
+    float sigma = max(blur_radius, 0.001);
+    float tap_extent = max(blur_radius, 0.0) / 2.0;
+
+    float4 accum = float4(0.0, 0.0, 0.0, 0.0);
+    float weight_sum = 0.0;
+    for (int j = -2; j <= 2; ++j) {
+        for (int i = -2; i <= 2; ++i) {
+            float dx = (float)i * tap_extent;
+            float dy = (float)j * tap_extent;
+            float weight = gaussian(dx, sigma) * gaussian(dy, sigma);
+            float2 uv = clamp(tile_position + texel * float2(dx, dy), uv_min, uv_max);
+            accum += t_sprite.SampleLevel(s_sprite, uv, 0.0) * weight;
+            weight_sum += weight;
+        }
+    }
+
+    if (weight_sum <= 0.0) {
+        return float4(0.0, 0.0, 0.0, 0.0);
+    }
+    return accum / weight_sum;
+}
 
 struct PolychromeSpriteVertexOutput {
     nointerpolation uint sprite_id: TEXCOORD0;
@@ -1467,6 +1503,27 @@ float4 polychrome_sprite_fragment(PolychromeSpriteFragmentInput input): SV_Targe
     float2 local_position = apply_inverse_transform(input.position.xy, sprite.transformation);
     float4 sample = t_sprite.Sample(s_sprite, input.tile_position);
     float distance = quad_sdf(local_position, sprite.bounds, sprite.corner_radii);
+
+    if (sprite.sprite_kind == 3u) {
+        float4 blurred = sample_blurred_tile(input.tile_position, sprite.tile, sprite.blur_radius);
+        float shape_alpha = sprite.opacity * saturate(0.5 - distance) * rounded_clip;
+        float alpha = blurred.a * shape_alpha;
+        if (blurred.a <= 0.0 || alpha <= 0.0) {
+            return float4(0.0, 0.0, 0.0, 0.0);
+        }
+        return apply_color_filter(float4(blurred.rgb / blurred.a, alpha), sprite.color_filter);
+    }
+
+    if (sprite.sprite_kind == 4u) {
+        float4 blurred = sample_blurred_tile(input.tile_position, sprite.tile, sprite.blur_radius);
+        float4 tint = hsla_to_rgba(sprite.color);
+        float shape_alpha = sprite.opacity * saturate(0.5 - distance) * rounded_clip;
+        float alpha = tint.a * blurred.a * shape_alpha;
+        if (blurred.a <= 0.0 || alpha <= 0.0) {
+            return float4(0.0, 0.0, 0.0, 0.0);
+        }
+        return apply_color_filter(float4(tint.rgb, alpha), sprite.color_filter);
+    }
 
     if (sprite.sprite_kind == 1u) {
         float4 tint = hsla_to_rgba(sprite.color);
