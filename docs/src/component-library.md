@@ -39,12 +39,14 @@ fn main() {
 
 ## Using the theme
 
-Every component reads from the active theme. Access it in your own render code with `use_theme()`:
+`install_theme` stores the active `Theme` in the app's global state, so the
+recommended way to read it is `Theme::get(cx)` (or the alias `Theme::of(cx)`),
+which borrows the theme out of `cx` with no per-render clone:
 
 ```rust,ignore
 impl Render for MyApp {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::of(cx);
         div()
             .bg(theme.tokens.background)
             .text_color(theme.tokens.foreground)
@@ -56,6 +58,10 @@ impl Render for MyApp {
     }
 }
 ```
+
+`use_theme()` is still available and returns an owned `Theme`; it is the legacy
+path (it clones the whole theme on every call and does not take a `cx`). Prefer
+`Theme::get(cx)` / `Theme::of(cx)` in new code.
 
 Tokens follow shadcn/ui naming: `background`/`foreground`, `primary`, `secondary`, `muted`, `accent`, `destructive`, `border`, `card`, and so on, each with light and dark variants.
 
