@@ -21,7 +21,8 @@ use crate::scroll_elasticity::{
 #[allow(unused_imports)]
 use crate::{
     AbsoluteLength, Action, AnyDrag, AnyElement, AnyTooltip, AnyView, App, AppContext, Background,
-    Bounds, ClickEvent, Context, CursorStyle, DispatchPhase, Element, ElementId, Entity, Fill,
+    Bounds, BoxShadow, ClickEvent, Context, Corners, CursorStyle, DispatchPhase, Element,
+    ElementId, Entity, Fill,
     FocusHandle, GestureRecognizer, Global, GlobalElementId, Hitbox, HitboxBehavior, HitboxId,
     Hsla, InspectorElementId, IntoElement, IsZero, KeyContext, KeyDownEvent, KeyUpEvent,
     KeyboardButton, KeyboardClickEvent, LayoutId, MagnifyEvent, ModifiersChangedEvent, MouseButton,
@@ -69,6 +70,9 @@ struct ImplicitVisualStyle {
     transform_origin: Point<f32>,
     background: Option<Background>,
     border_color: Option<Hsla>,
+    text_color: Option<Hsla>,
+    corner_radii: Corners<AbsoluteLength>,
+    box_shadow: SmallVec<[BoxShadow; 1]>,
 }
 
 impl From<&Style> for ImplicitVisualStyle {
@@ -80,6 +84,9 @@ impl From<&Style> for ImplicitVisualStyle {
             transform_origin: style.transform_origin.unwrap_or(Point { x: 0.5, y: 0.5 }),
             background: style.background.as_ref().and_then(Fill::color),
             border_color: style.border_color,
+            text_color: style.text.color,
+            corner_radii: style.corner_radii,
+            box_shadow: style.box_shadow.clone(),
         }
     }
 }
@@ -91,6 +98,9 @@ impl ImplicitVisualStyle {
             || self.scale != other.scale
             || self.transform_origin != other.transform_origin
             || self.border_color != other.border_color
+            || self.text_color != other.text_color
+            || self.corner_radii != other.corner_radii
+            || self.box_shadow != other.box_shadow
             || optional_backgrounds_can_interpolate(self.background, other.background)
                 && self.background != other.background
     }
@@ -117,6 +127,9 @@ impl ImplicitVisualStyle {
                 other.border_color,
                 progress,
             ),
+            text_color: interpolate_optional_hsla(self.text_color, other.text_color, progress),
+            corner_radii: interpolate_corners(&self.corner_radii, &other.corner_radii, progress),
+            box_shadow: interpolate_shadows(&self.box_shadow, &other.box_shadow, progress),
         }
     }
 
@@ -127,6 +140,30 @@ impl ImplicitVisualStyle {
         style.transform_origin = normalize_point(self.transform_origin, Point { x: 0.5, y: 0.5 });
         style.background = self.background.map(Fill::from);
         style.border_color = self.border_color;
+        style.text.color = self.text_color;
+        style.corner_radii = self.corner_radii;
+        style.box_shadow = self.box_shadow.clone();
+    }
+}
+
+/// Configuration for implicit style transitions on an element.
+///
+/// Controls how keyed style changes (hover, active, state-driven restyles) are
+/// animated. See [`InteractiveElement::transition`].
+#[derive(Clone)]
+pub struct TransitionConfig {
+    /// How long a property change takes to animate.
+    pub duration: Duration,
+    /// The easing curve. `None` uses a soft ease-out.
+    pub easing: Option<crate::animation::Easing>,
+}
+
+impl Default for TransitionConfig {
+    fn default() -> Self {
+        Self {
+            duration: IMPLICIT_STYLE_TRANSITION_DURATION,
+            easing: None,
+        }
     }
 }
 
@@ -134,18 +171,26 @@ struct ImplicitStyleTransition {
     from: ImplicitVisualStyle,
     to: ImplicitVisualStyle,
     started_at: std::time::Instant,
+    duration: Duration,
+    easing: Option<crate::animation::Easing>,
 }
 
 impl ImplicitStyleTransition {
     fn progress(&self, now: std::time::Instant) -> f32 {
-        (now.duration_since(self.started_at).as_secs_f32()
-            / IMPLICIT_STYLE_TRANSITION_DURATION.as_secs_f32())
-        .clamp(0.0, 1.0)
+        if self.duration.is_zero() {
+            return 1.0;
+        }
+        (now.duration_since(self.started_at).as_secs_f32() / self.duration.as_secs_f32())
+            .clamp(0.0, 1.0)
     }
 
     fn current_style(&self, now: std::time::Instant) -> ImplicitVisualStyle {
-        self.from
-            .interpolate(&self.to, ease_out_progress(self.progress(now)))
+        let progress = self.progress(now);
+        let eased = match &self.easing {
+            Some(easing) => easing.ease(progress),
+            None => ease_out_progress(progress),
+        };
+        self.from.interpolate(&self.to, eased)
     }
 }
 
@@ -156,11 +201,12 @@ struct ImplicitStyleAnimationState {
 }
 
 impl ImplicitStyleAnimationState {
-    fn animate(&mut self, style: Style, window: &mut Window) -> Style {
+    fn animate(&mut self, style: Style, config: &TransitionConfig, window: &mut Window) -> Style {
         let (style, needs_animation_frame) = self.resolve(
             style,
             std::time::Instant::now(),
             window.animations_enabled(),
+            config,
         );
         if needs_animation_frame {
             window.request_animation_frame();
@@ -173,6 +219,7 @@ impl ImplicitStyleAnimationState {
         style: Style,
         now: std::time::Instant,
         animations_enabled: bool,
+        config: &TransitionConfig,
     ) -> (Style, bool) {
         let target = ImplicitVisualStyle::from(&style);
 
@@ -193,6 +240,8 @@ impl ImplicitStyleAnimationState {
                         from: current,
                         to: target.clone(),
                         started_at: now,
+                        duration: config.duration,
+                        easing: config.easing.clone(),
                     });
                 } else {
                     self.active_transition = None;
@@ -334,6 +383,92 @@ fn transparent_background_like(background: Background) -> Background {
         percentage: transparent.colors[ix].percentage,
     });
     transparent
+}
+
+fn interpolate_absolute_length(
+    from: AbsoluteLength,
+    to: AbsoluteLength,
+    progress: f32,
+) -> AbsoluteLength {
+    match (from, to) {
+        (AbsoluteLength::Pixels(from), AbsoluteLength::Pixels(to)) => {
+            AbsoluteLength::Pixels(px(interpolate_f32(from.0, to.0, progress)))
+        }
+        (AbsoluteLength::Rems(from), AbsoluteLength::Rems(to)) => {
+            AbsoluteLength::Rems(crate::Rems(interpolate_f32(from.0, to.0, progress)))
+        }
+        (_, to) => to,
+    }
+}
+
+fn interpolate_corners(
+    from: &Corners<AbsoluteLength>,
+    to: &Corners<AbsoluteLength>,
+    progress: f32,
+) -> Corners<AbsoluteLength> {
+    Corners {
+        top_left: interpolate_absolute_length(from.top_left, to.top_left, progress),
+        top_right: interpolate_absolute_length(from.top_right, to.top_right, progress),
+        bottom_right: interpolate_absolute_length(from.bottom_right, to.bottom_right, progress),
+        bottom_left: interpolate_absolute_length(from.bottom_left, to.bottom_left, progress),
+    }
+}
+
+fn transparent_shadow_like(shadow: &BoxShadow) -> BoxShadow {
+    BoxShadow {
+        color: shadow.color.alpha(0.0),
+        ..shadow.clone()
+    }
+}
+
+fn interpolate_shadow(from: &BoxShadow, to: &BoxShadow, progress: f32) -> BoxShadow {
+    if from.inset != to.inset {
+        return to.clone();
+    }
+    BoxShadow {
+        color: interpolate_hsla(from.color, to.color, progress),
+        offset: point(
+            px(interpolate_f32(from.offset.x.0, to.offset.x.0, progress)),
+            px(interpolate_f32(from.offset.y.0, to.offset.y.0, progress)),
+        ),
+        blur_radius: px(interpolate_f32(
+            from.blur_radius.0,
+            to.blur_radius.0,
+            progress,
+        )),
+        spread_radius: px(interpolate_f32(
+            from.spread_radius.0,
+            to.spread_radius.0,
+            progress,
+        )),
+        inset: to.inset,
+    }
+}
+
+fn interpolate_shadows(
+    from: &SmallVec<[BoxShadow; 1]>,
+    to: &SmallVec<[BoxShadow; 1]>,
+    progress: f32,
+) -> SmallVec<[BoxShadow; 1]> {
+    let len = from.len().max(to.len());
+    (0..len)
+        .filter_map(|ix| {
+            let from_shadow = from
+                .get(ix)
+                .cloned()
+                .or_else(|| to.get(ix).map(transparent_shadow_like));
+            let to_shadow = to
+                .get(ix)
+                .cloned()
+                .or_else(|| from.get(ix).map(transparent_shadow_like));
+            match (from_shadow, to_shadow) {
+                (Some(from_shadow), Some(to_shadow)) => {
+                    Some(interpolate_shadow(&from_shadow, &to_shadow, progress))
+                }
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 /// The styling information for a given group.
@@ -1010,7 +1145,29 @@ pub trait InteractiveElement: Sized {
     /// Only elements with a stable [`ElementId`] can transition across frames. Unkeyed
     /// elements continue to snap to their new visual state.
     fn implicit_transitions(mut self) -> Self {
-        self.interactivity().implicit_style_transitions = true;
+        self.interactivity().implicit_transition = Some(TransitionConfig::default());
+        self
+    }
+
+    /// Animate keyed style changes (hover, active, state-driven restyles) over `duration`.
+    ///
+    /// Interpolates background, border color, text color, opacity, corner radii,
+    /// box shadows, rotation, and scale whenever the computed style changes.
+    /// Requires a stable [`ElementId`]; unkeyed elements snap.
+    fn transition(mut self, duration: Duration) -> Self {
+        self.interactivity().implicit_transition = Some(TransitionConfig {
+            duration,
+            easing: None,
+        });
+        self
+    }
+
+    /// Animate keyed style changes with an explicit duration and easing curve.
+    fn transition_with(mut self, duration: Duration, easing: crate::animation::Easing) -> Self {
+        self.interactivity().implicit_transition = Some(TransitionConfig {
+            duration,
+            easing: Some(easing),
+        });
         self
     }
 
@@ -2229,7 +2386,7 @@ pub struct Interactivity {
     pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
     pub(crate) scroll_elastic_state: Option<Rc<RefCell<ScrollElasticState>>>,
     pub(crate) group: Option<SharedString>,
-    pub(crate) implicit_style_transitions: bool,
+    pub(crate) implicit_transition: Option<TransitionConfig>,
     /// The base style of the element, before any modifications are applied
     /// by focus, active, etc.
     pub base_style: Box<StyleRefinement>,
@@ -3892,9 +4049,9 @@ impl Interactivity {
         style: Style,
         window: &mut Window,
     ) -> Style {
-        if !self.implicit_style_transitions {
+        let Some(config) = self.implicit_transition.clone() else {
             return style;
-        }
+        };
 
         window.with_optional_element_state::<ImplicitStyleAnimationState, _>(
             global_id,
@@ -3904,7 +4061,7 @@ impl Interactivity {
                 };
 
                 let mut animation_state = animation_state.unwrap_or_default();
-                let style = animation_state.animate(style, window);
+                let style = animation_state.animate(style, &config, window);
                 (style, Some(animation_state))
             },
         )
@@ -5286,7 +5443,10 @@ impl ScrollHandle {
 
 #[cfg(test)]
 mod test {
-    use super::{ImplicitStyleAnimationState, ImplicitVisualStyle, TOOLTIP_SHOW_DELAY};
+    use super::{
+        ImplicitStyleAnimationState, ImplicitVisualStyle, TOOLTIP_SHOW_DELAY, TransitionConfig,
+    };
+    use crate::{AbsoluteLength, BoxShadow};
     use crate::scroll_elasticity::{
         add_scroll_elasticity, advance_scroll_elasticity, apply_scroll_delta_axis,
     };
@@ -5516,11 +5676,12 @@ mod test {
     #[test]
     fn implicit_transitions_interpolate_hover_background() {
         let mut state = ImplicitStyleAnimationState::default();
+        let config = TransitionConfig::default();
         let start = Instant::now();
 
         let mut from_style = crate::Style::default();
         from_style.background = Some(crate::rgb(0xff0000).into());
-        let (initial, initial_needs_frame) = state.resolve(from_style, start, true);
+        let (initial, initial_needs_frame) = state.resolve(from_style, start, true, &config);
         let initial_color = Rgba::from(
             ImplicitVisualStyle::from(&initial)
                 .background
@@ -5533,7 +5694,8 @@ mod test {
 
         let mut to_style = crate::Style::default();
         to_style.background = Some(crate::rgb(0x0000ff).into());
-        let (first_frame, first_frame_needs_frame) = state.resolve(to_style.clone(), start, true);
+        let (first_frame, first_frame_needs_frame) =
+            state.resolve(to_style.clone(), start, true, &config);
         let first_frame_color = Rgba::from(
             ImplicitVisualStyle::from(&first_frame)
                 .background
@@ -5545,7 +5707,7 @@ mod test {
         assert!(first_frame_needs_frame);
 
         let (interpolated, interpolated_needs_frame) =
-            state.resolve(to_style, start + Duration::from_millis(75), true);
+            state.resolve(to_style, start + Duration::from_millis(75), true, &config);
         let interpolated_color = Rgba::from(
             ImplicitVisualStyle::from(&interpolated)
                 .background
@@ -5560,19 +5722,120 @@ mod test {
     #[test]
     fn implicit_transitions_snap_when_animations_are_disabled() {
         let mut state = ImplicitStyleAnimationState::default();
+        let config = TransitionConfig::default();
         let start = Instant::now();
 
         let mut from_style = crate::Style::default();
         from_style.background = Some(crate::rgb(0xff0000).into());
-        let _ = state.resolve(from_style, start, true);
+        let _ = state.resolve(from_style, start, true, &config);
 
         let mut to_style = crate::Style::default();
         to_style.background = Some(crate::rgb(0x0000ff).into());
-        let (resolved, needs_animation_frame) = state.resolve(to_style.clone(), start, false);
+        let (resolved, needs_animation_frame) =
+            state.resolve(to_style.clone(), start, false, &config);
 
         assert!(ImplicitVisualStyle::from(&resolved) == ImplicitVisualStyle::from(&to_style));
         assert!(!needs_animation_frame);
         assert!(state.active_transition.is_none());
+    }
+
+    #[test]
+    fn implicit_transitions_honor_custom_duration() {
+        let mut state = ImplicitStyleAnimationState::default();
+        let config = TransitionConfig {
+            duration: Duration::from_millis(600),
+            easing: None,
+        };
+        let start = Instant::now();
+
+        let mut from_style = crate::Style::default();
+        from_style.opacity = Some(0.0);
+        let _ = state.resolve(from_style, start, true, &config);
+
+        let mut to_style = crate::Style::default();
+        to_style.opacity = Some(1.0);
+        let _ = state.resolve(to_style.clone(), start, true, &config);
+
+        let (mid, mid_needs_frame) =
+            state.resolve(to_style.clone(), start + Duration::from_millis(300), true, &config);
+        let mid_opacity = mid.opacity.unwrap_or(1.0);
+        assert!(mid_opacity > 0.0 && mid_opacity < 1.0);
+        assert!(mid_needs_frame);
+
+        let (done, done_needs_frame) =
+            state.resolve(to_style, start + Duration::from_millis(700), true, &config);
+        assert!(done.opacity.is_none() || done.opacity == Some(1.0));
+        assert!(!done_needs_frame);
+    }
+
+    #[test]
+    fn implicit_transitions_use_linear_easing_when_configured() {
+        let mut state = ImplicitStyleAnimationState::default();
+        let config = TransitionConfig {
+            duration: Duration::from_millis(100),
+            easing: Some(crate::animation::Easing::Linear),
+        };
+        let start = Instant::now();
+
+        let mut from_style = crate::Style::default();
+        from_style.opacity = Some(0.0);
+        let _ = state.resolve(from_style, start, true, &config);
+
+        let mut to_style = crate::Style::default();
+        to_style.opacity = Some(1.0);
+        let _ = state.resolve(to_style.clone(), start, true, &config);
+
+        let (mid, _) =
+            state.resolve(to_style, start + Duration::from_millis(50), true, &config);
+        let mid_opacity = mid.opacity.expect("expected mid-transition opacity");
+        assert!((mid_opacity - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn implicit_transitions_interpolate_corner_radii_shadows_and_text_color() {
+        let mut state = ImplicitStyleAnimationState::default();
+        let config = TransitionConfig {
+            duration: Duration::from_millis(100),
+            easing: Some(crate::animation::Easing::Linear),
+        };
+        let start = Instant::now();
+
+        let mut from_style = crate::Style::default();
+        from_style.corner_radii.top_left = AbsoluteLength::Pixels(px(0.));
+        from_style.text.color = Some(crate::rgb(0x000000).into());
+        let _ = state.resolve(from_style, start, true, &config);
+
+        let mut to_style = crate::Style::default();
+        to_style.corner_radii.top_left = AbsoluteLength::Pixels(px(16.));
+        to_style.text.color = Some(crate::rgb(0xffffff).into());
+        to_style.box_shadow.push(BoxShadow {
+            color: crate::hsla(0., 0., 0., 0.4),
+            offset: point(px(0.), px(4.)),
+            blur_radius: px(8.),
+            spread_radius: px(0.),
+            inset: false,
+        });
+        let _ = state.resolve(to_style.clone(), start, true, &config);
+
+        let (mid, _) = state.resolve(
+            to_style,
+            start + Duration::from_millis(50),
+            true,
+            &config,
+        );
+
+        let AbsoluteLength::Pixels(mid_radius) = mid.corner_radii.top_left else {
+            panic!("expected pixel corner radius");
+        };
+        assert!((mid_radius.0 - 8.0).abs() < 0.5);
+
+        let mid_text = Rgba::from(mid.text.color.expect("expected mid text color"));
+        assert!(mid_text.r > 0.2 && mid_text.r < 0.8);
+
+        assert_eq!(mid.box_shadow.len(), 1);
+        let mid_shadow_alpha = Rgba::from(mid.box_shadow[0].color).a;
+        assert!(mid_shadow_alpha > 0.05 && mid_shadow_alpha < 0.35);
+        assert!((mid.box_shadow[0].blur_radius.0 - 8.0).abs() < 0.01);
     }
 
     #[kael::test]
