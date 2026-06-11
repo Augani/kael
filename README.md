@@ -199,6 +199,25 @@ cargo test -p kael
 cargo run -p kael --example hello_world
 ```
 
+### macOS toolchain
+
+The default macOS build precompiles Metal shaders at build time, which requires the **full Xcode application** — the standalone Command Line Tools (`xcode-select --install`) do **not** ship the Metal compiler. With only the Command Line Tools installed, the build fails with `xcrun: error: unable to find utility "metal"`.
+
+Pick one:
+
+```bash
+# Install Xcode from the App Store, then point the toolchain at it:
+sudo xcode-select -s /Applications/Xcode.app
+
+# OR compile shaders at app launch (recommended for development — no full Xcode needed):
+cargo run -p kael --example hello_world --features runtime_shaders
+
+# OR use the Blade rendering backend instead of Metal:
+cargo run -p kael --example hello_world --features macos-blade
+```
+
+Use `runtime_shaders` for day-to-day development; build with full Xcode for release builds.
+
 ### Linux Dependencies
 
 ```bash

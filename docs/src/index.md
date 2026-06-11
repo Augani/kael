@@ -12,7 +12,7 @@ Kael replaces Electron with a single Rust crate that gives you everything you ne
 |-------|-------------------|
 | **Widgets** | Button, TextInput, Checkbox, Toggle, RadioGroup, Slider, Select, DatePicker, Modal, Popover, Tabs, Disclosure, Progress, Toast, Splitter, and more |
 | **Layout** | GPU-accelerated flexbox via Taffy, responsive sizing, scroll containers |
-| **Rendering** | Metal (macOS), DirectX 11 (Windows), Vulkan (Linux) — 120fps, sRGB-correct, pixel-perfect |
+| **Rendering** | Metal (macOS), DirectX 11 (Windows), Vulkan (Linux) — 60fps (up to 120fps on ProMotion displays), sRGB-correct, pixel-perfect |
 | **State** | Reactive `Entity<T>` system with automatic re-rendering on change |
 | **Platform** | File dialogs, system tray, native menus, global hotkeys, notifications, clipboard, printing, auto-updates, session persistence |
 | **Advanced** | Plugin system (WASM sandboxed), multi-process IPC, accessibility, theming, gestures |
@@ -23,7 +23,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-kael = "0.2"
+kael = "0.3"
 ```
 
 Write your first app:

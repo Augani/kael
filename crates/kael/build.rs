@@ -356,10 +356,33 @@ mod macos {
             .unwrap();
 
         if !output.status.success() {
-            eprintln!(
-                "metal shader compilation failed:\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("unable to find utility") {
+                eprintln!(
+                    "\n\
+                    error: the Metal shader compiler is not available.\n\
+                    \n\
+                    Building kael for macOS with the default (precompiled) shaders requires the\n\
+                    FULL Xcode application. The standalone Command Line Tools do NOT include the\n\
+                    Metal compiler, so `xcrun metal` fails with \"unable to find utility\".\n\
+                    \n\
+                    To fix this, pick ONE of the following:\n\
+                    \n\
+                      1. Install Xcode from the App Store, then point the toolchain at it:\n\
+                             sudo xcode-select -s /Applications/Xcode.app\n\
+                    \n\
+                      2. Build with runtime shader compilation (compiles shaders at app launch;\n\
+                         ideal for development — no full Xcode required):\n\
+                             cargo build --features runtime_shaders\n\
+                    \n\
+                      3. Build with the Blade rendering backend instead of Metal:\n\
+                             cargo build --features macos-blade\n\
+                    \n\
+                    Underlying compiler error:\n{stderr}"
+                );
+            } else {
+                eprintln!("metal shader compilation failed:\n{stderr}");
+            }
             process::exit(1);
         }
 

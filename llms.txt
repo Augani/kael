@@ -2,7 +2,7 @@
 
 > GPU-accelerated UI framework for native desktop apps in Rust. Replaces Electron.
 
-Kael renders via Metal (macOS), DirectX 11 (Windows), Vulkan (Linux). Apps are pure Rust — no HTML, no CSS, no JavaScript. One binary, native performance, 120fps.
+Kael renders via Metal (macOS), DirectX 11 (Windows), Vulkan (Linux). Apps are pure Rust — no HTML, no CSS, no JavaScript. One binary, native performance, 60fps (up to 120fps on ProMotion displays).
 
 ## Docs
 
@@ -23,7 +23,7 @@ Kael renders via Metal (macOS), DirectX 11 (Windows), Vulkan (Linux). Apps are p
 
 ```toml
 [dependencies]
-kael = "0.2"
+kael = "0.3"
 ```
 
 ```rust
@@ -101,7 +101,7 @@ All widgets: `widget_name(id, value, ...)` → `.on_change(|value, window, cx| {
 
 ## Component library (kael_ui)
 
-Add `kael_ui = "0.2"` for 100+ shadcn-inspired components — no external component library needed. Import everything with a single `use kael_ui::prelude::*;` (do not also glob-import `kael::*`; the prelude re-exports the essentials). Initialize with `kael_ui::init(cx)` then `install_theme(cx, Theme::dark())` — 18 presets, or brand your app with `Theme::custom(ThemeTokens { primary, ..ThemeTokens::dark() })`; re-installing a theme restyles all open windows live.
+Add `kael_ui = "0.3"` for 100+ shadcn-inspired components — no external component library needed. Import everything with a single `use kael_ui::prelude::*;` (do not also glob-import `kael::*`; the prelude re-exports the essentials). Initialize with `kael_ui::init(cx)` then `install_theme(cx, Theme::dark())` — 18 presets, or brand your app with `Theme::custom(ThemeTokens { primary, ..ThemeTokens::dark() })`; re-installing a theme restyles all open windows live.
 
 - **components** — Button, Input, Select, Combobox, Checkbox, Radio, Slider, DatePicker, TimePicker, ColorPicker, OtpInput, FileUpload, TagInput, Rating, Calendar, Carousel, code Editor (tree-sitter), and more
 - **display** — Table, DataTable, DataGrid, Card, Badge, Accordion, Markdown/HTML rendering
