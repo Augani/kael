@@ -330,7 +330,7 @@ fn paint_particles(bounds: Bounds<Pixels>, data: &EmitterPaintData, window: &mut
             corner_radii: Corners::all(px(half)),
             background: particle.color.into(),
             border_widths: Edges::default(),
-            border_color: transparent_black(),
+            border_color: (transparent_black()).into(),
             border_style: BorderStyle::default(),
             continuous_corners: false,
             transform: Default::default(),

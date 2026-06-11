@@ -378,7 +378,7 @@ impl RenderOnce for TreeMap {
                                 corner_radii: Corners::all(px(3.0)),
                                 background: rect.color.into(),
                                 border_widths: Edges::all(px(1.0)),
-                                border_color,
+                                border_color: border_color.into(),
                                 border_style: BorderStyle::default(),
                                 continuous_corners: false,
                                 transform: Default::default(),

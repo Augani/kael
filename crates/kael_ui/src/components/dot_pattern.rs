@@ -109,7 +109,7 @@ impl RenderOnce for DotPattern {
                                     corner_radii: Corners::all(dot_size),
                                     background: dot_color.into(),
                                     border_widths: Edges::default(),
-                                    border_color: transparent_black(),
+                                    border_color: (transparent_black()).into(),
                                     border_style: BorderStyle::default(),
                                     continuous_corners: false,
                                     transform: Default::default(),

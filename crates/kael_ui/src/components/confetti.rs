@@ -273,7 +273,7 @@ fn paint_confetti(bounds: Bounds<Pixels>, data: &ConfettiPaintData, window: &mut
             corner_radii: Corners::all(px(1.0)),
             background: hsla(particle.color.h, particle.color.s, particle.color.l, alpha).into(),
             border_widths: Edges::default(),
-            border_color: transparent_black(),
+            border_color: (transparent_black()).into(),
             border_style: BorderStyle::default(),
             continuous_corners: false,
             transform: Default::default(),
