@@ -94,7 +94,7 @@ vertex QuadVertexOutput quad_vertex(uint unit_vertex_id [[vertex_id]],
       to_device_position_transformed(unit_vertex, quad.bounds, quad.transform, viewport_size);
   float4 clip_distance = distance_from_clip_rect_transformed(unit_vertex, quad.bounds,
                                                  quad.content_mask.bounds, quad.transform);
-  float4 border_color = hsla_to_rgba(quad.border_color);
+  float4 border_color = hsla_to_rgba(quad.border_color.solid);
 
   GradientColor gradient = prepare_fill_color(
     quad.background.tag,
@@ -254,7 +254,31 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
 
   float4 color = background_color;
   if (border_sdf < antialias_threshold) {
+    // Solid borders use the flat varying; gradient borders are evaluated here in
+    // local space from the quad's border background, mirroring the fill path.
     float4 border_color = input.border_color;
+    if (quad.border_color.tag != 0u) {
+      GradientColor border_gradient = prepare_fill_color(
+        quad.border_color.tag,
+        quad.border_color.color_space,
+        quad.border_color.solid,
+        quad.border_color.colors[0].color,
+        quad.border_color.colors[1].color,
+        quad.border_color.colors[2].color,
+        quad.border_color.colors[3].color,
+        quad.border_color.stop_count
+      );
+      border_color = fill_color(
+        quad.border_color,
+        local_position,
+        quad.bounds,
+        border_gradient.solid,
+        border_gradient.color0,
+        border_gradient.color1,
+        border_gradient.color2,
+        border_gradient.color3
+      );
+    }
 
     // Dashed border logic when border_style == 1
     if (quad.border_style == 1) {

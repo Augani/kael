@@ -1,5 +1,5 @@
 use crate::{
-    self as kael, point, px, relative, rems, AbsoluteLength, AlignContent, AlignItems,
+    self as kael, point, px, relative, rems, AbsoluteLength, AlignContent, AlignItems, Background,
     BlendMode, BorderStyle, CursorStyle, DefiniteLength, Display, Fill, FlexDirection, FlexWrap,
     Font, FontStyle, FontWeight, GridPlacement, Hsla, JustifyContent, Length, Pixels, SharedString,
     StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow, TextShadow, TextStyleRefinement,
@@ -511,6 +511,12 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Sets a gradient border for the element. When set, it takes precedence over
+    /// any solid border color at paint time. Combine with a `border_*` width method.
+    fn border_gradient(mut self, gradient: impl Into<Background>) -> Self {
+        self.style().border_gradient = Some(gradient.into());
+        self
+    }
 
     /// Returns a mutable reference to the text style that has been configured on this element.
     fn text_style(&mut self) -> &mut Option<TextStyleRefinement> {

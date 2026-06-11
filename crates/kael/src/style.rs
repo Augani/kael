@@ -244,6 +244,10 @@ pub struct Style {
     /// The border color of this element
     pub border_color: Option<Hsla>,
 
+    /// A gradient border for this element. When set, it takes precedence over
+    /// `border_color` at paint time.
+    pub border_gradient: Option<Background>,
+
     /// The border style of this element
     pub border_style: BorderStyle,
 
@@ -806,12 +810,15 @@ impl Style {
 
             let mut background = self.border_color.unwrap_or_default();
             background.a = 0.;
+            let border_paint = self
+                .border_gradient
+                .unwrap_or_else(|| self.border_color.unwrap_or_default().into());
             let mut quad = quad(
                 bounds,
                 corner_radii,
                 background,
                 border_widths,
-                self.border_color.unwrap_or_default(),
+                border_paint,
                 self.border_style,
             );
             quad.continuous_corners = self.continuous_corners;
@@ -901,9 +908,11 @@ impl Style {
     }
 
     fn is_border_visible(&self) -> bool {
-        self.border_color
+        let has_visible_color = self
+            .border_color
             .is_some_and(|color| !color.is_transparent())
-            && self.border_widths.any(|length| !length.is_zero())
+            || self.border_gradient.is_some();
+        has_visible_color && self.border_widths.any(|length| !length.is_zero())
     }
 }
 
@@ -942,6 +951,7 @@ impl Default for Style {
             flex_basis: Length::Auto,
             background: None,
             border_color: None,
+            border_gradient: None,
             border_style: BorderStyle::default(),
             corner_radii: Corners::default(),
             continuous_corners: true,

@@ -578,7 +578,7 @@ struct Quad {
     bounds: Bounds,
     content_mask: Bounds,
     background: Background,
-    border_color: Hsla,
+    border_color: Background,
     corner_radii: Corners,
     border_widths: Edges,
     continuous_corners: u32,
@@ -624,7 +624,7 @@ fn vs_quad(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) insta
     out.background_color1 = gradient.color1;
     out.background_color2 = gradient.color2;
     out.background_color3 = gradient.color3;
-    out.border_color = hsla_to_rgba(quad.border_color);
+    out.border_color = hsla_to_rgba(quad.border_color.solid);
     out.quad_id = instance_id;
     out.blend_mode = quad.blend_mode;
     out.clip_distances = distance_from_clip_rect_transformed(unit_vertex, quad.bounds, quad.content_mask, quad.transform);
@@ -792,7 +792,21 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
 
     var color = background_color;
     if (border_sdf < antialias_threshold) {
+        // Solid borders use the flat varying; gradient borders are evaluated here in
+        // local space from the quad's border background, mirroring the fill path.
         var border_color = input.border_color;
+        if (quad.border_color.tag != 0u) {
+            let border_gradient = prepare_gradient_color(
+                quad.border_color.tag,
+                quad.border_color.color_space,
+                quad.border_color.solid,
+                quad.border_color.colors,
+                quad.border_color.stop_count
+            );
+            border_color = gradient_color(quad.border_color, local_position, quad.bounds,
+                border_gradient.solid, border_gradient.color0, border_gradient.color1,
+                border_gradient.color2, border_gradient.color3);
+        }
 
         // Dashed border logic when border_style == 1
         if (quad.border_style == 1) {

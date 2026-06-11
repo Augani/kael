@@ -560,7 +560,7 @@ struct Quad {
     Bounds bounds;
     Bounds content_mask;
     Background background;
-    Hsla border_color;
+    Background border_color;
     Corners corner_radii;
     Edges border_widths;
     uint continuous_corners;
@@ -611,7 +611,7 @@ QuadVertexOutput quad_vertex(uint vertex_id: SV_VertexID, uint quad_id: SV_Insta
         quad.background.stop_count
     );
     float4 clip_distance = distance_from_clip_rect_transformed(unit_vertex, quad.bounds, quad.content_mask, quad.transform);
-    float4 border_color = hsla_to_rgba(quad.border_color);
+    float4 border_color = hsla_to_rgba(quad.border_color.solid);
 
     QuadVertexOutput output;
     output.position = device_position;
@@ -753,7 +753,21 @@ float4 quad_fragment(QuadFragmentInput input): SV_Target {
 
     float4 color = background_color;
     if (border_sdf < antialias_threshold) {
+        // Solid borders use the flat varying; gradient borders are evaluated here in
+        // local space from the quad's border background, mirroring the fill path.
         float4 border_color = input.border_color;
+        if (quad.border_color.tag != 0u) {
+            GradientColor border_gradient = prepare_gradient_color(
+                quad.border_color.tag,
+                quad.border_color.color_space,
+                quad.border_color.solid,
+                quad.border_color.colors,
+                quad.border_color.stop_count
+            );
+            border_color = gradient_color(quad.border_color, local_position, quad.bounds,
+                border_gradient.solid, border_gradient.color0, border_gradient.color1,
+                border_gradient.color2, border_gradient.color3);
+        }
         // Dashed border logic when border_style == 1
         if (quad.border_style == 1) {
             // Position along the perimeter in "dash space", where each dash
