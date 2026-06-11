@@ -653,13 +653,7 @@ impl RenderOnce for Input {
         }
         let shake_count = self.state.read(cx).shake_count;
 
-        let shadow_xs = BoxShadow {
-            offset: theme.tokens.shadow_xs.offset,
-            blur_radius: theme.tokens.shadow_xs.blur_radius,
-            spread_radius: theme.tokens.shadow_xs.spread_radius,
-            inset: false,
-            color: theme.tokens.shadow_xs.color,
-        };
+        let shadow_xs = theme.tokens.shadow_xs.clone();
         let focus_ring = theme.tokens.focus_ring_light();
         let error_ring_focused = theme.tokens.error_ring();
         let error_ring_unfocused = theme.tokens.error_ring();
@@ -715,7 +709,7 @@ impl RenderOnce for Input {
                             .text_size(font_size)
                             .font_family(theme.tokens.font_mono.clone())
                             .text_color(text_color)
-                            .shadow(smallvec::smallvec![shadow_xs])
+                            .shadow(shadow_xs.to_vec())
                             .when(!self.disabled, |h| h.cursor(kael::CursorStyle::IBeam))
                             .when(!self.disabled, |h| {
                                 h.hover(move |style| {
@@ -743,10 +737,12 @@ impl RenderOnce for Input {
                             .when(show_clear, |h| {
                                 h.child(
                                     div()
+                                        .id(("input-clear", self.state.entity_id()))
                                         .px(px(4.0))
                                         .py(px(4.0))
                                         .rounded(px(4.0))
                                         .cursor_pointer()
+                                        .transition(theme.tokens.transition_fast)
                                         .hover(|style| style.bg(theme.tokens.muted))
                                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                             state_for_clear.update(cx, |state, cx| {
@@ -760,10 +756,12 @@ impl RenderOnce for Input {
                             .when(self.password, |h| {
                                 h.child(
                                     div()
+                                        .id(("input-reveal", self.state.entity_id()))
                                         .px(px(4.0))
                                         .py(px(4.0))
                                         .rounded(px(4.0))
                                         .cursor_pointer()
+                                        .transition(theme.tokens.transition_fast)
                                         .hover(|style| style.bg(theme.tokens.muted))
                                         .on_mouse_down(MouseButton::Left, {
                                             let state = state_for_password.clone();

@@ -1,7 +1,64 @@
 use kael::*;
+use smallvec::{smallvec, SmallVec};
 use std::time::Duration;
 
 use crate::fonts::{UI_FONT_FAMILY, UI_MONO_FONT_FAMILY};
+
+pub type ShadowStack = SmallVec<[BoxShadow; 2]>;
+
+fn shadow_layer(offset_y: f32, blur: f32, spread: f32, alpha: f32) -> BoxShadow {
+    BoxShadow {
+        offset: point(px(0.0), px(offset_y)),
+        blur_radius: px(blur),
+        spread_radius: px(spread),
+        inset: false,
+        color: hsla(0.0, 0.0, 0.0, alpha),
+    }
+}
+
+fn shadows_light() -> [ShadowStack; 5] {
+    [
+        smallvec![shadow_layer(1.0, 2.0, 0.0, 0.05)],
+        smallvec![
+            shadow_layer(1.0, 3.0, 0.0, 0.10),
+            shadow_layer(1.0, 2.0, -1.0, 0.06),
+        ],
+        smallvec![
+            shadow_layer(4.0, 6.0, -1.0, 0.10),
+            shadow_layer(2.0, 4.0, -2.0, 0.06),
+        ],
+        smallvec![
+            shadow_layer(10.0, 15.0, -3.0, 0.10),
+            shadow_layer(4.0, 6.0, -4.0, 0.05),
+        ],
+        smallvec![
+            shadow_layer(20.0, 25.0, -5.0, 0.10),
+            shadow_layer(8.0, 10.0, -6.0, 0.04),
+        ],
+    ]
+}
+
+fn shadows_dark() -> [ShadowStack; 5] {
+    [
+        smallvec![shadow_layer(1.0, 2.0, 0.0, 0.45)],
+        smallvec![
+            shadow_layer(1.0, 3.0, 0.0, 0.55),
+            shadow_layer(1.0, 2.0, -1.0, 0.40),
+        ],
+        smallvec![
+            shadow_layer(4.0, 6.0, -1.0, 0.55),
+            shadow_layer(2.0, 4.0, -2.0, 0.40),
+        ],
+        smallvec![
+            shadow_layer(10.0, 15.0, -3.0, 0.50),
+            shadow_layer(4.0, 6.0, -4.0, 0.35),
+        ],
+        smallvec![
+            shadow_layer(20.0, 25.0, -5.0, 0.50),
+            shadow_layer(8.0, 10.0, -6.0, 0.35),
+        ],
+    ]
+}
 
 /// Shadcn-inspired semantic color and layout tokens
 #[derive(Clone, Debug)]
@@ -31,11 +88,11 @@ pub struct ThemeTokens {
     pub radius_lg: Pixels,
     pub radius_xl: Pixels,
 
-    pub shadow_xs: BoxShadow,
-    pub shadow_sm: BoxShadow,
-    pub shadow_md: BoxShadow,
-    pub shadow_lg: BoxShadow,
-    pub shadow_xl: BoxShadow,
+    pub shadow_xs: ShadowStack,
+    pub shadow_sm: ShadowStack,
+    pub shadow_md: ShadowStack,
+    pub shadow_lg: ShadowStack,
+    pub shadow_xl: ShadowStack,
 
     pub ring_offset: Pixels,
 
@@ -200,41 +257,11 @@ impl ThemeTokens {
             radius_lg: px(8.0),
             radius_xl: px(12.0),
 
-            shadow_xs: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(2.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.05),
-            },
-            shadow_sm: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.1),
-            },
-            shadow_md: BoxShadow {
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(6.0),
-                spread_radius: px(-1.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.1),
-            },
-            shadow_lg: BoxShadow {
-                offset: point(px(0.0), px(10.0)),
-                blur_radius: px(15.0),
-                spread_radius: px(-3.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.1),
-            },
-            shadow_xl: BoxShadow {
-                offset: point(px(0.0), px(20.0)),
-                blur_radius: px(25.0),
-                spread_radius: px(-5.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.1),
-            },
+            shadow_xs: shadows_light()[0].clone(),
+            shadow_sm: shadows_light()[1].clone(),
+            shadow_md: shadows_light()[2].clone(),
+            shadow_lg: shadows_light()[3].clone(),
+            shadow_xl: shadows_light()[4].clone(),
 
             ring_offset: px(2.0),
 
@@ -298,41 +325,11 @@ impl ThemeTokens {
             radius_lg: px(8.0),
             radius_xl: px(12.0),
 
-            shadow_xs: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(2.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.5),
-            },
-            shadow_sm: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.6),
-            },
-            shadow_md: BoxShadow {
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(6.0),
-                spread_radius: px(-1.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.7),
-            },
-            shadow_lg: BoxShadow {
-                offset: point(px(0.0), px(10.0)),
-                blur_radius: px(15.0),
-                spread_radius: px(-3.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.8),
-            },
-            shadow_xl: BoxShadow {
-                offset: point(px(0.0), px(20.0)),
-                blur_radius: px(25.0),
-                spread_radius: px(-5.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.9),
-            },
+            shadow_xs: shadows_dark()[0].clone(),
+            shadow_sm: shadows_dark()[1].clone(),
+            shadow_md: shadows_dark()[2].clone(),
+            shadow_lg: shadows_dark()[3].clone(),
+            shadow_xl: shadows_dark()[4].clone(),
 
             ring_offset: px(2.0),
 
@@ -396,41 +393,11 @@ impl ThemeTokens {
             radius_lg: px(8.0),
             radius_xl: px(12.0),
 
-            shadow_xs: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(2.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_sm: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.2),
-            },
-            shadow_md: BoxShadow {
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(6.0),
-                spread_radius: px(-1.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_lg: BoxShadow {
-                offset: point(px(0.0), px(10.0)),
-                blur_radius: px(15.0),
-                spread_radius: px(-3.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_xl: BoxShadow {
-                offset: point(px(0.0), px(20.0)),
-                blur_radius: px(25.0),
-                spread_radius: px(-5.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
+            shadow_xs: shadows_dark()[0].clone(),
+            shadow_sm: shadows_dark()[1].clone(),
+            shadow_md: shadows_dark()[2].clone(),
+            shadow_lg: shadows_dark()[3].clone(),
+            shadow_xl: shadows_dark()[4].clone(),
 
             ring_offset: px(2.0),
 
@@ -494,41 +461,11 @@ impl ThemeTokens {
             radius_lg: px(8.0),
             radius_xl: px(12.0),
 
-            shadow_xs: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(2.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_sm: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.2),
-            },
-            shadow_md: BoxShadow {
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(6.0),
-                spread_radius: px(-1.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_lg: BoxShadow {
-                offset: point(px(0.0), px(10.0)),
-                blur_radius: px(15.0),
-                spread_radius: px(-3.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_xl: BoxShadow {
-                offset: point(px(0.0), px(20.0)),
-                blur_radius: px(25.0),
-                spread_radius: px(-5.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
+            shadow_xs: shadows_dark()[0].clone(),
+            shadow_sm: shadows_dark()[1].clone(),
+            shadow_md: shadows_dark()[2].clone(),
+            shadow_lg: shadows_dark()[3].clone(),
+            shadow_xl: shadows_dark()[4].clone(),
 
             ring_offset: px(2.0),
 
@@ -592,41 +529,11 @@ impl ThemeTokens {
             radius_lg: px(8.0),
             radius_xl: px(12.0),
 
-            shadow_xs: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(2.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_sm: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.2),
-            },
-            shadow_md: BoxShadow {
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(6.0),
-                spread_radius: px(-1.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_lg: BoxShadow {
-                offset: point(px(0.0), px(10.0)),
-                blur_radius: px(15.0),
-                spread_radius: px(-3.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_xl: BoxShadow {
-                offset: point(px(0.0), px(20.0)),
-                blur_radius: px(25.0),
-                spread_radius: px(-5.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
+            shadow_xs: shadows_dark()[0].clone(),
+            shadow_sm: shadows_dark()[1].clone(),
+            shadow_md: shadows_dark()[2].clone(),
+            shadow_lg: shadows_dark()[3].clone(),
+            shadow_xl: shadows_dark()[4].clone(),
 
             ring_offset: px(2.0),
 
@@ -690,41 +597,11 @@ impl ThemeTokens {
             radius_lg: px(8.0),
             radius_xl: px(12.0),
 
-            shadow_xs: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(2.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_sm: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.2),
-            },
-            shadow_md: BoxShadow {
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(6.0),
-                spread_radius: px(-1.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_lg: BoxShadow {
-                offset: point(px(0.0), px(10.0)),
-                blur_radius: px(15.0),
-                spread_radius: px(-3.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_xl: BoxShadow {
-                offset: point(px(0.0), px(20.0)),
-                blur_radius: px(25.0),
-                spread_radius: px(-5.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
+            shadow_xs: shadows_dark()[0].clone(),
+            shadow_sm: shadows_dark()[1].clone(),
+            shadow_md: shadows_dark()[2].clone(),
+            shadow_lg: shadows_dark()[3].clone(),
+            shadow_xl: shadows_dark()[4].clone(),
 
             ring_offset: px(2.0),
 
@@ -788,41 +665,11 @@ impl ThemeTokens {
             radius_lg: px(8.0),
             radius_xl: px(12.0),
 
-            shadow_xs: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(2.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_sm: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.2),
-            },
-            shadow_md: BoxShadow {
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(6.0),
-                spread_radius: px(-1.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_lg: BoxShadow {
-                offset: point(px(0.0), px(10.0)),
-                blur_radius: px(15.0),
-                spread_radius: px(-3.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_xl: BoxShadow {
-                offset: point(px(0.0), px(20.0)),
-                blur_radius: px(25.0),
-                spread_radius: px(-5.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
+            shadow_xs: shadows_dark()[0].clone(),
+            shadow_sm: shadows_dark()[1].clone(),
+            shadow_md: shadows_dark()[2].clone(),
+            shadow_lg: shadows_dark()[3].clone(),
+            shadow_xl: shadows_dark()[4].clone(),
 
             ring_offset: px(2.0),
 
@@ -886,41 +733,11 @@ impl ThemeTokens {
             radius_lg: px(8.0),
             radius_xl: px(12.0),
 
-            shadow_xs: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(2.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_sm: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.2),
-            },
-            shadow_md: BoxShadow {
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(6.0),
-                spread_radius: px(-1.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_lg: BoxShadow {
-                offset: point(px(0.0), px(10.0)),
-                blur_radius: px(15.0),
-                spread_radius: px(-3.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_xl: BoxShadow {
-                offset: point(px(0.0), px(20.0)),
-                blur_radius: px(25.0),
-                spread_radius: px(-5.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
+            shadow_xs: shadows_dark()[0].clone(),
+            shadow_sm: shadows_dark()[1].clone(),
+            shadow_md: shadows_dark()[2].clone(),
+            shadow_lg: shadows_dark()[3].clone(),
+            shadow_xl: shadows_dark()[4].clone(),
 
             ring_offset: px(2.0),
 
@@ -984,41 +801,11 @@ impl ThemeTokens {
             radius_lg: px(8.0),
             radius_xl: px(12.0),
 
-            shadow_xs: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(2.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_sm: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.2),
-            },
-            shadow_md: BoxShadow {
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(6.0),
-                spread_radius: px(-1.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_lg: BoxShadow {
-                offset: point(px(0.0), px(10.0)),
-                blur_radius: px(15.0),
-                spread_radius: px(-3.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_xl: BoxShadow {
-                offset: point(px(0.0), px(20.0)),
-                blur_radius: px(25.0),
-                spread_radius: px(-5.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
+            shadow_xs: shadows_dark()[0].clone(),
+            shadow_sm: shadows_dark()[1].clone(),
+            shadow_md: shadows_dark()[2].clone(),
+            shadow_lg: shadows_dark()[3].clone(),
+            shadow_xl: shadows_dark()[4].clone(),
 
             ring_offset: px(2.0),
 
@@ -1082,41 +869,11 @@ impl ThemeTokens {
             radius_lg: px(8.0),
             radius_xl: px(12.0),
 
-            shadow_xs: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(2.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_sm: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.2),
-            },
-            shadow_md: BoxShadow {
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(6.0),
-                spread_radius: px(-1.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_lg: BoxShadow {
-                offset: point(px(0.0), px(10.0)),
-                blur_radius: px(15.0),
-                spread_radius: px(-3.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_xl: BoxShadow {
-                offset: point(px(0.0), px(20.0)),
-                blur_radius: px(25.0),
-                spread_radius: px(-5.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
+            shadow_xs: shadows_dark()[0].clone(),
+            shadow_sm: shadows_dark()[1].clone(),
+            shadow_md: shadows_dark()[2].clone(),
+            shadow_lg: shadows_dark()[3].clone(),
+            shadow_xl: shadows_dark()[4].clone(),
 
             ring_offset: px(2.0),
 
@@ -1180,41 +937,11 @@ impl ThemeTokens {
             radius_lg: px(8.0),
             radius_xl: px(12.0),
 
-            shadow_xs: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(2.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_sm: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.2),
-            },
-            shadow_md: BoxShadow {
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(6.0),
-                spread_radius: px(-1.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_lg: BoxShadow {
-                offset: point(px(0.0), px(10.0)),
-                blur_radius: px(15.0),
-                spread_radius: px(-3.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_xl: BoxShadow {
-                offset: point(px(0.0), px(20.0)),
-                blur_radius: px(25.0),
-                spread_radius: px(-5.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
+            shadow_xs: shadows_dark()[0].clone(),
+            shadow_sm: shadows_dark()[1].clone(),
+            shadow_md: shadows_dark()[2].clone(),
+            shadow_lg: shadows_dark()[3].clone(),
+            shadow_xl: shadows_dark()[4].clone(),
 
             ring_offset: px(2.0),
 
@@ -1278,41 +1005,11 @@ impl ThemeTokens {
             radius_lg: px(8.0),
             radius_xl: px(12.0),
 
-            shadow_xs: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(2.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_sm: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.2),
-            },
-            shadow_md: BoxShadow {
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(6.0),
-                spread_radius: px(-1.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_lg: BoxShadow {
-                offset: point(px(0.0), px(10.0)),
-                blur_radius: px(15.0),
-                spread_radius: px(-3.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_xl: BoxShadow {
-                offset: point(px(0.0), px(20.0)),
-                blur_radius: px(25.0),
-                spread_radius: px(-5.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
+            shadow_xs: shadows_dark()[0].clone(),
+            shadow_sm: shadows_dark()[1].clone(),
+            shadow_md: shadows_dark()[2].clone(),
+            shadow_lg: shadows_dark()[3].clone(),
+            shadow_xl: shadows_dark()[4].clone(),
 
             ring_offset: px(2.0),
 
@@ -1376,41 +1073,11 @@ impl ThemeTokens {
             radius_lg: px(12.0),
             radius_xl: px(12.0),
 
-            shadow_xs: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(2.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_sm: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.2),
-            },
-            shadow_md: BoxShadow {
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(6.0),
-                spread_radius: px(-1.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_lg: BoxShadow {
-                offset: point(px(0.0), px(10.0)),
-                blur_radius: px(15.0),
-                spread_radius: px(-3.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_xl: BoxShadow {
-                offset: point(px(0.0), px(20.0)),
-                blur_radius: px(25.0),
-                spread_radius: px(-5.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
+            shadow_xs: shadows_light()[0].clone(),
+            shadow_sm: shadows_light()[1].clone(),
+            shadow_md: shadows_light()[2].clone(),
+            shadow_lg: shadows_light()[3].clone(),
+            shadow_xl: shadows_light()[4].clone(),
 
             ring_offset: px(2.0),
 
@@ -1474,41 +1141,11 @@ impl ThemeTokens {
             radius_lg: px(12.0),
             radius_xl: px(12.0),
 
-            shadow_xs: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(2.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_sm: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.2),
-            },
-            shadow_md: BoxShadow {
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(6.0),
-                spread_radius: px(-1.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_lg: BoxShadow {
-                offset: point(px(0.0), px(10.0)),
-                blur_radius: px(15.0),
-                spread_radius: px(-3.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_xl: BoxShadow {
-                offset: point(px(0.0), px(20.0)),
-                blur_radius: px(25.0),
-                spread_radius: px(-5.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
+            shadow_xs: shadows_light()[0].clone(),
+            shadow_sm: shadows_light()[1].clone(),
+            shadow_md: shadows_light()[2].clone(),
+            shadow_lg: shadows_light()[3].clone(),
+            shadow_xl: shadows_light()[4].clone(),
 
             ring_offset: px(2.0),
 
@@ -1572,41 +1209,11 @@ impl ThemeTokens {
             radius_lg: px(12.0),
             radius_xl: px(12.0),
 
-            shadow_xs: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(2.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_sm: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.2),
-            },
-            shadow_md: BoxShadow {
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(6.0),
-                spread_radius: px(-1.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_lg: BoxShadow {
-                offset: point(px(0.0), px(10.0)),
-                blur_radius: px(15.0),
-                spread_radius: px(-3.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_xl: BoxShadow {
-                offset: point(px(0.0), px(20.0)),
-                blur_radius: px(25.0),
-                spread_radius: px(-5.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
+            shadow_xs: shadows_light()[0].clone(),
+            shadow_sm: shadows_light()[1].clone(),
+            shadow_md: shadows_light()[2].clone(),
+            shadow_lg: shadows_light()[3].clone(),
+            shadow_xl: shadows_light()[4].clone(),
 
             ring_offset: px(2.0),
 
@@ -1670,41 +1277,11 @@ impl ThemeTokens {
             radius_lg: px(12.0),
             radius_xl: px(12.0),
 
-            shadow_xs: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(2.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_sm: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.2),
-            },
-            shadow_md: BoxShadow {
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(6.0),
-                spread_radius: px(-1.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_lg: BoxShadow {
-                offset: point(px(0.0), px(10.0)),
-                blur_radius: px(15.0),
-                spread_radius: px(-3.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_xl: BoxShadow {
-                offset: point(px(0.0), px(20.0)),
-                blur_radius: px(25.0),
-                spread_radius: px(-5.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
+            shadow_xs: shadows_light()[0].clone(),
+            shadow_sm: shadows_light()[1].clone(),
+            shadow_md: shadows_light()[2].clone(),
+            shadow_lg: shadows_light()[3].clone(),
+            shadow_xl: shadows_light()[4].clone(),
 
             ring_offset: px(2.0),
 
@@ -1768,41 +1345,11 @@ impl ThemeTokens {
             radius_lg: px(12.0),
             radius_xl: px(12.0),
 
-            shadow_xs: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(2.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_sm: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.2),
-            },
-            shadow_md: BoxShadow {
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(6.0),
-                spread_radius: px(-1.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_lg: BoxShadow {
-                offset: point(px(0.0), px(10.0)),
-                blur_radius: px(15.0),
-                spread_radius: px(-3.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_xl: BoxShadow {
-                offset: point(px(0.0), px(20.0)),
-                blur_radius: px(25.0),
-                spread_radius: px(-5.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
+            shadow_xs: shadows_light()[0].clone(),
+            shadow_sm: shadows_light()[1].clone(),
+            shadow_md: shadows_light()[2].clone(),
+            shadow_lg: shadows_light()[3].clone(),
+            shadow_xl: shadows_light()[4].clone(),
 
             ring_offset: px(2.0),
 
@@ -1866,41 +1413,11 @@ impl ThemeTokens {
             radius_lg: px(12.0),
             radius_xl: px(12.0),
 
-            shadow_xs: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(2.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_sm: BoxShadow {
-                offset: point(px(0.0), px(1.0)),
-                blur_radius: px(3.0),
-                spread_radius: px(0.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.2),
-            },
-            shadow_md: BoxShadow {
-                offset: point(px(0.0), px(4.0)),
-                blur_radius: px(6.0),
-                spread_radius: px(-1.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_lg: BoxShadow {
-                offset: point(px(0.0), px(10.0)),
-                blur_radius: px(15.0),
-                spread_radius: px(-3.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
-            shadow_xl: BoxShadow {
-                offset: point(px(0.0), px(20.0)),
-                blur_radius: px(25.0),
-                spread_radius: px(-5.0),
-                inset: false,
-                color: hsla(0.0, 0.0, 0.0, 0.15),
-            },
+            shadow_xs: shadows_light()[0].clone(),
+            shadow_sm: shadows_light()[1].clone(),
+            shadow_md: shadows_light()[2].clone(),
+            shadow_lg: shadows_light()[3].clone(),
+            shadow_xl: shadows_light()[4].clone(),
 
             ring_offset: px(2.0),
 
@@ -2083,11 +1600,11 @@ impl ThemeTokens {
     pub fn elevation_shadow(&self, level: u8) -> Vec<BoxShadow> {
         match level {
             0 => vec![],
-            1 => vec![self.shadow_xs.clone()],
-            2 => vec![self.shadow_sm.clone()],
-            3 => vec![self.shadow_md.clone()],
-            4 => vec![self.shadow_lg.clone()],
-            _ => vec![self.shadow_xl.clone()],
+            1 => self.shadow_xs.to_vec(),
+            2 => self.shadow_sm.to_vec(),
+            3 => self.shadow_md.to_vec(),
+            4 => self.shadow_lg.to_vec(),
+            _ => self.shadow_xl.to_vec(),
         }
     }
 

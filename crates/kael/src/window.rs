@@ -3,18 +3,20 @@ use crate::Inspector;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
     AsyncWindowContext, AvailableSpace, Background, BlendMode, BorderStyle, Bounds, BoxShadow,
-    Capslock, Context, Corners, CursorStyle, Decorations, DevicePixels, DispatchActionListener,
-    DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity, EntityId, EventEmitter,
-    FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GlyphRasterMode, GpuSpecs, Hsla,
-    InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
-    KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite,
-    MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, POLYCHROME_SPRITE_KIND_COLOR,
-    POLYCHROME_SPRITE_KIND_PREMULTIPLIED, POLYCHROME_SPRITE_KIND_SUBPIXEL_TEXT, Path, Pixels,
-    PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
-    PolychromeSprite, PowerMode, PrintJob, ProgressBarState, PromptButton, PromptLevel, Quad,
-    Render, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge,
-    SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow,
-    SharedString, Size, StrikethroughStyle, Style, SubscriberSet, Subscription, SystemWindowTab,
+    Capslock, ColorFilter, Context, Corners, CursorStyle, Decorations, DevicePixels,
+    DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
+    EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId,
+    GlyphRasterMode, GpuSpecs, Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent,
+    KeyEvent, Keystroke, KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers,
+    ModifiersChangedEvent, MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent,
+    POLYCHROME_SPRITE_KIND_COLOR, POLYCHROME_SPRITE_KIND_CONTENT_BLURRED,
+    POLYCHROME_SPRITE_KIND_CONTENT_SHADOW, POLYCHROME_SPRITE_KIND_PREMULTIPLIED,
+    POLYCHROME_SPRITE_KIND_SUBPIXEL_TEXT, Path, Pixels, PlatformAtlas, PlatformDisplay,
+    PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, PowerMode,
+    PrintJob, ProgressBarState, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams,
+    RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
+    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
+    StrikethroughStyle, Style, SubscriberSet, Subscription, SystemWindowTab,
     SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextStyle, TextStyleRefinement,
     TransformationMatrix, Underline, UnderlineStyle, UndoRedoManager, WindowAppearance,
     WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations, WindowOptions,
@@ -849,6 +851,9 @@ pub struct Window {
     pub(crate) rendered_entity_stack: SmallVec<[EntityId; 16]>,
     pub(crate) element_offset_stack: SmallVec<[Point<Pixels>; 16]>,
     pub(crate) element_opacity: f32,
+    pub(crate) element_transform: TransformationMatrix,
+    pub(crate) element_color_filter: ColorFilter,
+    pub(crate) rounded_clip: (Bounds<ScaledPixels>, Corners<ScaledPixels>),
     pub(crate) content_mask_stack: SmallVec<[ContentMask<Pixels>; 16]>,
     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
     pub(crate) image_cache_stack: SmallVec<[AnyImageCache; 4]>,
@@ -1272,6 +1277,9 @@ impl Window {
             element_offset_stack: SmallVec::new(),
             content_mask_stack: SmallVec::new(),
             element_opacity: 1.0,
+            element_transform: TransformationMatrix::unit(),
+            element_color_filter: ColorFilter::identity(),
+            rounded_clip: (Bounds::default(), Corners::default()),
             requested_autoscroll: None,
             rendered_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
             next_frame: Frame::new(DispatchTree::new(cx.keymap.clone(), cx.actions.clone())),
@@ -2670,6 +2678,9 @@ impl Window {
             .scene
             .insert_primitive(crate::PolychromeSprite {
                 order: 0,
+                rounded_clip_bounds: self.rounded_clip.0,
+                rounded_clip_radii: self.rounded_clip.1,
+                color_filter: self.element_color_filter,
                 pad: 0,
                 grayscale: false,
                 opacity: 1.0,
@@ -2679,6 +2690,78 @@ impl Window {
                 tile: cached_surface.tile.clone(),
                 sprite_kind: POLYCHROME_SPRITE_KIND_PREMULTIPLIED,
                 color: transparent_black(),
+                pad3: 0,
+                transformation: self.element_transform,
+                blur_radius: 0.0,
+                pad2: 0,
+            });
+    }
+
+    pub(crate) fn paint_effect_surface(
+        &mut self,
+        cached_surface: &crate::cache::CachedSurface,
+        content_blur: Pixels,
+        drop_shadow: Option<&BoxShadow>,
+    ) {
+        let scale_factor = self.scale_factor();
+        let content_mask = self.content_mask().scale(scale_factor);
+
+        if let Some(shadow) = drop_shadow {
+            let offset = shadow.offset.scale(scale_factor);
+            let shadow_bounds = Bounds {
+                origin: cached_surface.bounds.origin + offset,
+                size: cached_surface.bounds.size,
+            };
+            self.next_frame
+                .scene
+                .insert_primitive(crate::PolychromeSprite {
+                    order: 0,
+                    rounded_clip_bounds: self.rounded_clip.0,
+                    rounded_clip_radii: self.rounded_clip.1,
+                    color_filter: self.element_color_filter,
+                    pad: 0,
+                    grayscale: false,
+                    opacity: 1.0,
+                    bounds: shadow_bounds,
+                    content_mask: content_mask.clone(),
+                    corner_radii: Corners::default(),
+                    tile: cached_surface.tile.clone(),
+                    sprite_kind: POLYCHROME_SPRITE_KIND_CONTENT_SHADOW,
+                    color: shadow.color,
+                    pad3: 0,
+                    transformation: self.element_transform,
+                    blur_radius: shadow.blur_radius.scale(scale_factor).0,
+                    pad2: 0,
+                });
+        }
+
+        let blur_radius = content_blur.scale(scale_factor).0;
+        let sprite_kind = if blur_radius > 0.0 {
+            POLYCHROME_SPRITE_KIND_CONTENT_BLURRED
+        } else {
+            POLYCHROME_SPRITE_KIND_PREMULTIPLIED
+        };
+
+        self.next_frame
+            .scene
+            .insert_primitive(crate::PolychromeSprite {
+                order: 0,
+                rounded_clip_bounds: self.rounded_clip.0,
+                rounded_clip_radii: self.rounded_clip.1,
+                color_filter: self.element_color_filter,
+                pad: 0,
+                grayscale: false,
+                opacity: 1.0,
+                bounds: cached_surface.bounds,
+                content_mask,
+                corner_radii: Corners::default(),
+                tile: cached_surface.tile.clone(),
+                sprite_kind,
+                color: transparent_black(),
+                pad3: 0,
+                transformation: self.element_transform,
+                blur_radius,
+                pad2: 0,
             });
     }
 
@@ -2799,6 +2882,94 @@ impl Window {
         self.element_opacity = previous_opacity * opacity;
         let result = f(self);
         self.element_opacity = previous_opacity;
+        result
+    }
+
+    /// Compose a transformation onto the current element transform for the duration of
+    /// the given closure. Primitives painted inside inherit the composed transform:
+    /// quads, paths, SVGs, and text follow it. Box shadows, backdrop blurs, underlines,
+    /// images, emoji, and video surfaces do not yet transform. The transformation is
+    /// expressed in scaled (device) pixels. Hitboxes are unaffected.
+    ///
+    /// This method should only be called during the paint phase of element drawing.
+    pub fn with_element_transform<R>(
+        &mut self,
+        transform: Option<TransformationMatrix>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint();
+
+        let Some(transform) = transform else {
+            return f(self);
+        };
+
+        let previous_transform = self.element_transform;
+        self.element_transform = previous_transform.compose(transform);
+        let result = f(self);
+        self.element_transform = previous_transform;
+        result
+    }
+
+    /// Obtain the current composed element transform in scaled (device) pixels.
+    ///
+    /// This method should only be called during the paint phase of element drawing.
+    #[inline]
+    pub fn element_transform(&self) -> TransformationMatrix {
+        self.invalidator.debug_assert_paint();
+        self.element_transform
+    }
+
+    /// Compose a color filter onto the current element color filter for the duration of
+    /// the given closure. Primitives painted inside (quads, sprites, shadows, underlines)
+    /// inherit the composed filter, so a filter on a div applies to its whole subtree.
+    /// Multiplicative factors multiply; grayscale combines so that fully gray wins.
+    ///
+    /// This method should only be called during the paint phase of element drawing.
+    pub fn with_color_filter<R>(
+        &mut self,
+        color_filter: Option<ColorFilter>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint();
+
+        let Some(color_filter) = color_filter else {
+            return f(self);
+        };
+
+        let previous = self.element_color_filter;
+        self.element_color_filter = previous.compose(color_filter);
+        let result = f(self);
+        self.element_color_filter = previous;
+        result
+    }
+
+    /// Clip primitives painted inside the given closure to a rounded rectangle.
+    /// Quads, sprites (text, icons, images), shadows, underlines, and backdrop
+    /// blurs honor the clip; paths and video surfaces do not yet. When rounded
+    /// clips nest, the innermost clip's corners win; rectangular clipping still
+    /// applies through the regular content mask. The clip is evaluated in screen
+    /// space and does not follow element transforms.
+    ///
+    /// This method should only be called during the paint phase of element drawing.
+    pub fn with_rounded_clip<R>(
+        &mut self,
+        clip: Option<(Bounds<Pixels>, Corners<Pixels>)>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint();
+
+        let Some((bounds, corner_radii)) = clip else {
+            return f(self);
+        };
+
+        let scale_factor = self.scale_factor();
+        let previous = self.rounded_clip;
+        self.rounded_clip = (
+            bounds.scale_and_snap(scale_factor),
+            corner_radii.scale_and_snap(scale_factor),
+        );
+        let result = f(self);
+        self.rounded_clip = previous;
         result
     }
 
@@ -3185,6 +3356,9 @@ impl Window {
 
             self.next_frame.scene.insert_primitive(Shadow {
                 order: 0,
+                rounded_clip_bounds: self.rounded_clip.0,
+                rounded_clip_radii: self.rounded_clip.1,
+                color_filter: self.element_color_filter,
                 blur_radius: shadow.blur_radius.scale(scale_factor),
                 bounds: scaled_bounds,
                 corner_radii: corner_radii.scale_and_snap(scale_factor),
@@ -3197,6 +3371,7 @@ impl Window {
                 },
                 color: shadow.color.opacity(opacity),
                 inset: shadow.inset as u32,
+                pad: 0,
             });
         }
     }
@@ -3237,6 +3412,8 @@ impl Window {
         let opacity = self.element_opacity();
         self.next_frame.scene.insert_primitive(crate::BlurRect {
             order: 0,
+            rounded_clip_bounds: self.rounded_clip.0,
+            rounded_clip_radii: self.rounded_clip.1,
             blur_radius: blur_radius.scale(scale_factor),
             bounds: bounds.scale_and_snap_conservative(scale_factor),
             content_mask: content_mask.scale(scale_factor),
@@ -3268,6 +3445,9 @@ impl Window {
         );
         self.next_frame.scene.insert_primitive(Quad {
             order: 0,
+            rounded_clip_bounds: self.rounded_clip.0,
+            rounded_clip_radii: self.rounded_clip.1,
+            color_filter: self.element_color_filter,
             bounds: quad.bounds.scale_and_snap(scale_factor),
             content_mask: content_mask.scale(scale_factor),
             background: quad.background.opacity(opacity),
@@ -3276,8 +3456,10 @@ impl Window {
             border_widths: quad.border_widths.scale_and_snap_widths(scale_factor),
             border_style: quad.border_style,
             continuous_corners: if quad.continuous_corners { 1 } else { 0 },
-            transform: quad.transform,
+            transform: self.element_transform.compose(quad.transform),
             blend_mode: quad.blend_mode as u32,
+            pad: 0,
+            pad2: 0,
         });
     }
 
@@ -3293,6 +3475,15 @@ impl Window {
         path.content_mask = content_mask;
         let color: Background = color.into();
         path.color = color.opacity(opacity);
+        let transform = self.element_transform;
+        let path = if transform == TransformationMatrix::unit() {
+            path
+        } else {
+            let mut logical_transform = transform;
+            logical_transform.translation[0] /= scale_factor;
+            logical_transform.translation[1] /= scale_factor;
+            path.transformed(logical_transform)
+        };
         self.next_frame
             .scene
             .insert_primitive(path.scale(scale_factor));
@@ -3324,6 +3515,9 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(Underline {
             order: 0,
+            rounded_clip_bounds: self.rounded_clip.0,
+            rounded_clip_radii: self.rounded_clip.1,
+            color_filter: self.element_color_filter,
             pad: 0,
             bounds: bounds.scale_and_snap(scale_factor),
             content_mask: content_mask.scale(scale_factor),
@@ -3355,6 +3549,9 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(Underline {
             order: 0,
+            rounded_clip_bounds: self.rounded_clip.0,
+            rounded_clip_radii: self.rounded_clip.1,
+            color_filter: self.element_color_filter,
             pad: 0,
             bounds: bounds.scale_and_snap(scale_factor),
             content_mask: content_mask.scale(scale_factor),
@@ -3403,6 +3600,7 @@ impl Window {
     ) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
+        let transformation = self.element_transform.compose(transformation);
         let element_opacity = self.element_opacity();
         let scale_factor = self.scale_factor();
         let glyph_origin = origin.scale(scale_factor);
@@ -3458,6 +3656,9 @@ impl Window {
                 GlyphRasterMode::Subpixel => {
                     self.next_frame.scene.insert_primitive(PolychromeSprite {
                         order: 0,
+                        rounded_clip_bounds: self.rounded_clip.0,
+                        rounded_clip_radii: self.rounded_clip.1,
+                        color_filter: self.element_color_filter,
                         pad: 0,
                         grayscale: false,
                         opacity: 1.0,
@@ -3467,11 +3668,18 @@ impl Window {
                         tile,
                         sprite_kind: POLYCHROME_SPRITE_KIND_SUBPIXEL_TEXT,
                         color: color.opacity(element_opacity),
+                        pad3: 0,
+                        transformation,
+                        blur_radius: 0.0,
+                        pad2: 0,
                     });
                 }
                 GlyphRasterMode::Grayscale => {
                     self.next_frame.scene.insert_primitive(MonochromeSprite {
                         order: 0,
+                        rounded_clip_bounds: self.rounded_clip.0,
+                        rounded_clip_radii: self.rounded_clip.1,
+                        color_filter: self.element_color_filter,
                         pad: 0,
                         bounds,
                         content_mask,
@@ -3541,6 +3749,9 @@ impl Window {
 
             self.next_frame.scene.insert_primitive(PolychromeSprite {
                 order: 0,
+                rounded_clip_bounds: self.rounded_clip.0,
+                rounded_clip_radii: self.rounded_clip.1,
+                color_filter: self.element_color_filter,
                 pad: 0,
                 grayscale: false,
                 bounds,
@@ -3550,6 +3761,10 @@ impl Window {
                 opacity,
                 sprite_kind: POLYCHROME_SPRITE_KIND_COLOR,
                 color: transparent_black(),
+                pad3: 0,
+                transformation: self.element_transform,
+                blur_radius: 0.0,
+                pad2: 0,
             });
         }
         Ok(())
@@ -3568,6 +3783,7 @@ impl Window {
     ) -> Result<()> {
         self.invalidator.debug_assert_paint();
 
+        let transformation = self.element_transform.compose(transformation);
         let element_opacity = self.element_opacity();
         let scale_factor = self.scale_factor();
 
@@ -3605,6 +3821,9 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(MonochromeSprite {
             order: 0,
+            rounded_clip_bounds: self.rounded_clip.0,
+            rounded_clip_radii: self.rounded_clip.1,
+            color_filter: self.element_color_filter,
             pad: 0,
             bounds: svg_bounds
                 .map_origin(|origin| origin.round())
@@ -3654,6 +3873,9 @@ impl Window {
         let content_mask = self.content_mask().scale(scale_factor);
         self.next_frame.scene.insert_primitive(MonochromeSprite {
             order: 0,
+            rounded_clip_bounds: self.rounded_clip.0,
+            rounded_clip_radii: self.rounded_clip.1,
+            color_filter: self.element_color_filter,
             pad: 0,
             bounds: bounds
                 .map_origin(|origin| origin.floor())
@@ -3705,6 +3927,9 @@ impl Window {
 
         self.next_frame.scene.insert_primitive(PolychromeSprite {
             order: 0,
+            rounded_clip_bounds: self.rounded_clip.0,
+            rounded_clip_radii: self.rounded_clip.1,
+            color_filter: self.element_color_filter,
             pad: 0,
             grayscale,
             bounds: bounds
@@ -3716,6 +3941,10 @@ impl Window {
             opacity,
             sprite_kind: POLYCHROME_SPRITE_KIND_COLOR,
             color: transparent_black(),
+            pad3: 0,
+            transformation: self.element_transform,
+            blur_radius: 0.0,
+            pad2: 0,
         });
         Ok(())
     }
@@ -5776,8 +6005,8 @@ pub struct PaintQuad {
     pub background: Background,
     /// The widths of the quad's borders.
     pub border_widths: Edges<Pixels>,
-    /// The color of the quad's borders.
-    pub border_color: Hsla,
+    /// The color of the quad's borders. Accepts a solid color or a gradient.
+    pub border_color: Background,
     /// The style of the quad's borders.
     pub border_style: BorderStyle,
     /// Whether to use continuous (squircle) corner rounding.
@@ -5805,8 +6034,8 @@ impl PaintQuad {
         }
     }
 
-    /// Sets the border color of the quad.
-    pub fn border_color(self, border_color: impl Into<Hsla>) -> Self {
+    /// Sets the border color of the quad. Accepts a solid color or a gradient.
+    pub fn border_color(self, border_color: impl Into<Background>) -> Self {
         PaintQuad {
             border_color: border_color.into(),
             ..self
@@ -5828,7 +6057,7 @@ pub fn quad(
     corner_radii: impl Into<Corners<Pixels>>,
     background: impl Into<Background>,
     border_widths: impl Into<Edges<Pixels>>,
-    border_color: impl Into<Hsla>,
+    border_color: impl Into<Background>,
     border_style: BorderStyle,
 ) -> PaintQuad {
     PaintQuad {
@@ -5851,7 +6080,7 @@ pub fn fill(bounds: impl Into<Bounds<Pixels>>, background: impl Into<Background>
         corner_radii: (0.).into(),
         background: background.into(),
         border_widths: (0.).into(),
-        border_color: transparent_black(),
+        border_color: transparent_black().into(),
         border_style: BorderStyle::default(),
         continuous_corners: true,
         transform: TransformationMatrix::unit(),
@@ -5862,7 +6091,7 @@ pub fn fill(bounds: impl Into<Bounds<Pixels>>, background: impl Into<Background>
 /// Creates a rectangle outline with the given bounds, border color, and a 1px border width
 pub fn outline(
     bounds: impl Into<Bounds<Pixels>>,
-    border_color: impl Into<Hsla>,
+    border_color: impl Into<Background>,
     border_style: BorderStyle,
 ) -> PaintQuad {
     PaintQuad {

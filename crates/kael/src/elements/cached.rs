@@ -1,10 +1,122 @@
 use crate::{
     AnyElement, App, Bounds, Element, ElementId, EntityId, GlobalElementId, InspectorElementId,
     IntoElement, LayoutId, Pixels, Window,
-    cache::{SubtreeCacheKey, SubtreeCacheState},
+    cache::{CachedSurface, SubtreeCacheKey, SubtreeCacheState},
 };
 use collections::FxHashSet;
 use std::mem;
+
+pub(crate) type CachedRequestLayoutState = (Option<AnyElement>, FxHashSet<EntityId>);
+
+pub(crate) fn cached_request_layout(
+    child: &mut Option<AnyElement>,
+    window: &mut Window,
+    cx: &mut App,
+) -> (LayoutId, CachedRequestLayoutState) {
+    let ((layout_id, element), accessed_entities) = cx.detect_accessed_entities(|cx| {
+        let mut element = child.take().unwrap();
+        let layout_id = element.request_layout(window, cx);
+        (layout_id, element)
+    });
+
+    (layout_id, (Some(element), accessed_entities))
+}
+
+pub(crate) fn cached_prepaint(
+    global_id: &GlobalElementId,
+    bounds: Bounds<Pixels>,
+    request_layout: &mut CachedRequestLayoutState,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<AnyElement> {
+    let cache_key = SubtreeCacheKey {
+        bounds,
+        content_mask: window.content_mask(),
+        global_generation: cx.global_generation(),
+        text_style: window.text_style(),
+    };
+    let caching_disabled = window.is_inspector_picking(cx);
+
+    window.with_element_state::<SubtreeCacheState, _>(global_id, |element_state, window| {
+        if !caching_disabled
+            && !window.refreshing
+            && let Some(mut element_state) = element_state
+            && element_state.is_reusable(&cache_key, cx)
+        {
+            let prepaint_start = window.prepaint_index();
+            window.reuse_prepaint(element_state.prepaint_range.clone());
+            cx.entities
+                .extend_accessed(&element_state.accessed_entities);
+            let prepaint_end = window.prepaint_index();
+            element_state.prepaint_range = prepaint_start..prepaint_end;
+            return (None, element_state);
+        }
+
+        let mut accessed_entities = mem::take(&mut request_layout.1);
+        let mut element = request_layout.0.take().unwrap();
+
+        let prepaint_start = window.prepaint_index();
+        let (_, prepaint_accessed_entities) = cx.detect_accessed_entities(|cx| {
+            element.prepaint(window, cx);
+        });
+        let prepaint_end = window.prepaint_index();
+
+        accessed_entities.extend(prepaint_accessed_entities);
+
+        (
+            Some(element),
+            SubtreeCacheState::new(
+                accessed_entities,
+                cache_key,
+                prepaint_start..prepaint_end,
+                cx,
+            ),
+        )
+    })
+}
+
+pub(crate) fn cached_paint(
+    global_id: &GlobalElementId,
+    bounds: Bounds<Pixels>,
+    prepaint: &mut Option<AnyElement>,
+    window: &mut Window,
+    cx: &mut App,
+    composite: impl FnOnce(&mut Window, &CachedSurface),
+) {
+    window.with_element_state::<SubtreeCacheState, _>(global_id, |element_state, window| {
+        let mut element_state = element_state.unwrap();
+        let paint_start = window.paint_index();
+
+        if let Some(element) = prepaint {
+            element.paint(window, cx);
+            let paint_end = window.paint_index();
+            let paint_scene_range = paint_start.scene_index..paint_end.scene_index;
+            element_state.paint_range = paint_start..paint_end;
+            element_state.prepare_surface(
+                global_id,
+                bounds,
+                window.scale_factor(),
+                window.sprite_atlas(),
+            );
+            if let Some(surface) = element_state.surface.as_ref() {
+                window.request_cached_surface_snapshot(paint_scene_range, surface);
+            }
+        } else if let Some(surface) = element_state.surface.as_ref() {
+            window.reuse_paint_without_scene(element_state.paint_range.clone());
+            composite(window, surface);
+
+            let paint_end = window.paint_index();
+            element_state.paint_range = paint_start..paint_end;
+        } else {
+            window.reuse_paint(element_state.paint_range.clone());
+
+            let paint_end = window.paint_index();
+            element_state.paint_range = paint_start..paint_end;
+        }
+
+        ((), element_state)
+    })
+}
 
 #[track_caller]
 /// Reuses a child subtree's previous prepaint and paint output until one of its tracked entities changes.
@@ -32,7 +144,7 @@ impl Cached {
 }
 
 impl Element for Cached {
-    type RequestLayoutState = (Option<AnyElement>, FxHashSet<EntityId>);
+    type RequestLayoutState = CachedRequestLayoutState;
     type PrepaintState = Option<AnyElement>;
 
     fn id(&self) -> Option<ElementId> {
@@ -54,13 +166,7 @@ impl Element for Cached {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        let ((layout_id, element), accessed_entities) = cx.detect_accessed_entities(|cx| {
-            let mut element = self.child.take().unwrap();
-            let layout_id = element.request_layout(window, cx);
-            (layout_id, element)
-        });
-
-        (layout_id, (Some(element), accessed_entities))
+        cached_request_layout(&mut self.child, window, cx)
     }
 
     fn prepaint(
@@ -72,53 +178,7 @@ impl Element for Cached {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
-        let cache_key = SubtreeCacheKey {
-            bounds,
-            content_mask: window.content_mask(),
-            global_generation: cx.global_generation(),
-            text_style: window.text_style(),
-        };
-        let caching_disabled = window.is_inspector_picking(cx);
-
-        window.with_element_state::<SubtreeCacheState, _>(
-            global_id.unwrap(),
-            |element_state, window| {
-                if !caching_disabled
-                    && !window.refreshing
-                    && let Some(mut element_state) = element_state
-                    && element_state.is_reusable(&cache_key, cx)
-                {
-                    let prepaint_start = window.prepaint_index();
-                    window.reuse_prepaint(element_state.prepaint_range.clone());
-                    cx.entities
-                        .extend_accessed(&element_state.accessed_entities);
-                    let prepaint_end = window.prepaint_index();
-                    element_state.prepaint_range = prepaint_start..prepaint_end;
-                    return (None, element_state);
-                }
-
-                let mut accessed_entities = mem::take(&mut request_layout.1);
-                let mut element = request_layout.0.take().unwrap();
-
-                let prepaint_start = window.prepaint_index();
-                let (_, prepaint_accessed_entities) = cx.detect_accessed_entities(|cx| {
-                    element.prepaint(window, cx);
-                });
-                let prepaint_end = window.prepaint_index();
-
-                accessed_entities.extend(prepaint_accessed_entities);
-
-                (
-                    Some(element),
-                    SubtreeCacheState::new(
-                        accessed_entities,
-                        cache_key,
-                        prepaint_start..prepaint_end,
-                        cx,
-                    ),
-                )
-            },
-        )
+        cached_prepaint(global_id.unwrap(), bounds, request_layout, window, cx)
     }
 
     fn paint(
@@ -131,41 +191,14 @@ impl Element for Cached {
         window: &mut Window,
         cx: &mut App,
     ) {
-        window.with_element_state::<SubtreeCacheState, _>(
+        cached_paint(
             global_id.unwrap(),
-            |element_state, window| {
-                let mut element_state = element_state.unwrap();
-                let paint_start = window.paint_index();
-
-                if let Some(element) = prepaint {
-                    element.paint(window, cx);
-                    let paint_end = window.paint_index();
-                    let paint_scene_range = paint_start.scene_index..paint_end.scene_index;
-                    element_state.paint_range = paint_start..paint_end;
-                    element_state.prepare_surface(
-                        global_id.unwrap(),
-                        bounds,
-                        window.scale_factor(),
-                        window.sprite_atlas(),
-                    );
-                    if let Some(surface) = element_state.surface.as_ref() {
-                        window.request_cached_surface_snapshot(paint_scene_range, surface);
-                    }
-                } else {
-                    if let Some(surface) = element_state.surface.as_ref() {
-                        window.reuse_paint_without_scene(element_state.paint_range.clone());
-                        window.paint_cached_surface(surface);
-                    } else {
-                        window.reuse_paint(element_state.paint_range.clone());
-                    }
-
-                    let paint_end = window.paint_index();
-                    element_state.paint_range = paint_start..paint_end;
-                }
-
-                ((), element_state)
-            },
-        )
+            bounds,
+            prepaint,
+            window,
+            cx,
+            |window, surface| window.paint_cached_surface(surface),
+        );
     }
 }
 

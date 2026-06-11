@@ -128,13 +128,7 @@ impl RenderOnce for Radio {
             (border_color, bg)
         };
 
-        let shadow_xs = BoxShadow {
-            offset: theme.tokens.shadow_xs.offset,
-            blur_radius: theme.tokens.shadow_xs.blur_radius,
-            spread_radius: theme.tokens.shadow_xs.spread_radius,
-            inset: false,
-            color: theme.tokens.shadow_xs.color,
-        };
+        let shadow_xs = theme.tokens.shadow_xs.clone();
         let focus_ring = theme.tokens.focus_ring_light();
 
         self.base
@@ -157,6 +151,7 @@ impl RenderOnce for Radio {
             .rounded(theme.tokens.radius_md)
             .child(
                 div()
+                    .id(ElementId::Name(format!("{}-circle", self.id).into()))
                     .relative()
                     .size(px(16.0))
                     .flex_shrink_0()
@@ -164,9 +159,8 @@ impl RenderOnce for Radio {
                     .border_1()
                     .border_color(border_color)
                     .bg(bg)
-                    .when(!self.disabled, |this| {
-                        this.shadow(smallvec::smallvec![shadow_xs])
-                    })
+                    .transition(theme.tokens.transition_fast)
+                    .when(!self.disabled, |this| this.shadow(shadow_xs.to_vec()))
                     .child(
                         div()
                             .absolute()

@@ -1,4 +1,10 @@
 //! ViewRouter - A view stack manager with animated page transitions for multi-screen desktop apps.
+//!
+//! Note: `kael::Navigator` (in the core crate) is the canonical navigation stack going
+//! forward — it adds restorable route mementos, route-change events, and custom
+//! transitions. `ViewRouter` is kept for existing apps and may be folded into
+//! `Navigator` before 1.0; prefer `Navigator` for new code. See the Navigation
+//! chapter in the docs for a comparison.
 
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;

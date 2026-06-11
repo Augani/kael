@@ -3,6 +3,7 @@
 
 use kael_ui::components::icon_source::IconSource;
 use kael_ui::components::input::{Input, InputSize, InputState};
+use kael_ui::components::input_state::InputEvent;
 use kael_ui::components::scrollable::scrollable_vertical;
 use kael_ui::navigation::sidebar::{Sidebar, SidebarItem, SidebarVariant};
 use kael_ui::prelude::*;
@@ -119,6 +120,26 @@ impl DashboardApp {
         let orders = cx.new(|cx| {
             DataTable::new(sample_orders(), Self::order_columns(), cx).sticky_header(true)
         });
+
+        cx.subscribe(&search, |this: &mut Self, search, event, cx| {
+            if !matches!(event, InputEvent::Change) {
+                return;
+            }
+            let query = search.read(cx).content().to_lowercase();
+            let filtered: Vec<Order> = sample_orders()
+                .into_iter()
+                .filter(|order| {
+                    query.is_empty()
+                        || order.customer.to_lowercase().contains(&query)
+                        || order.product.to_lowercase().contains(&query)
+                        || format!("#{}", order.id).contains(&query)
+                })
+                .collect();
+            this.orders
+                .update(cx, |table, cx| table.set_data(filtered, cx));
+        })
+        .detach();
+
         Self {
             search,
             orders,

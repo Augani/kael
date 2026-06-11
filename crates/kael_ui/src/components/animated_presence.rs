@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use crate::animations::{durations, easings, lerp_pixels};
 
+const EXIT_GRACE: Duration = Duration::from_millis(32);
+
 pub struct AnimatedPresenceState {
     is_visible: bool,
     is_animating_out: bool,
@@ -37,7 +39,7 @@ impl AnimatedPresenceState {
             self.version += 1;
             cx.notify();
 
-            let duration = self.exit_duration;
+            let duration = self.exit_duration + EXIT_GRACE;
             cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(duration).await;
                 _ = this.update(cx, |state, cx| {

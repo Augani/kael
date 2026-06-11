@@ -79,8 +79,9 @@ impl ScrollPhysics {
             return false;
         }
 
-        self.velocity *= self.deceleration;
-        self.position += self.velocity * dt * 60.0;
+        let frame_factor = dt * 60.0;
+        self.velocity *= self.deceleration.powf(frame_factor);
+        self.position += self.velocity * frame_factor;
 
         if self.overscroll_enabled {
             if self.position < self.min_bound {
@@ -139,5 +140,50 @@ impl ScrollPhysics {
 
     pub fn fling(&mut self, velocity: f32) {
         self.velocity = velocity;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fresh() -> ScrollPhysics {
+        ScrollPhysics::new().with_bounds(0.0, 10_000.0)
+    }
+
+    #[test]
+    fn tick_at_60hz_matches_legacy_per_frame_decay() {
+        let mut physics = fresh();
+        physics.fling(100.0);
+        physics.tick(1.0 / 60.0);
+        assert!((physics.velocity() - 100.0 * 0.95).abs() < 1e-3);
+    }
+
+    #[test]
+    fn decay_is_frame_rate_independent() {
+        let mut at_60 = fresh();
+        let mut at_120 = fresh();
+        at_60.fling(500.0);
+        at_120.fling(500.0);
+
+        for _ in 0..30 {
+            at_60.tick(1.0 / 60.0);
+        }
+        for _ in 0..60 {
+            at_120.tick(1.0 / 120.0);
+        }
+
+        assert!((at_60.velocity() - at_120.velocity()).abs() < 1e-2);
+        let position_span = at_60.position().max(at_120.position());
+        assert!((at_60.position() - at_120.position()).abs() < position_span * 0.05);
+    }
+
+    #[test]
+    fn dt_clamping_keeps_decay_bounded() {
+        let mut physics = fresh();
+        physics.fling(800.0);
+        let active = physics.tick(0.5);
+        assert!(physics.velocity().abs() <= 800.0);
+        assert!(active || physics.velocity().abs() <= 0.5);
     }
 }

@@ -1,9 +1,9 @@
 use crate::{
-    self as kael, AbsoluteLength, AlignContent, AlignItems, BlendMode, BorderStyle, CursorStyle,
-    DefiniteLength, Display, Fill, FlexDirection, FlexWrap, Font, FontStyle, FontWeight,
-    GridPlacement, Hsla, JustifyContent, Length, Pixels, SharedString, StrikethroughStyle,
-    StyleRefinement, TextAlign, TextOverflow, TextShadow, TextStyleRefinement, UnderlineStyle,
-    WhiteSpace, point, px, relative, rems,
+    self as kael, AbsoluteLength, AlignContent, AlignItems, Background, BlendMode, BorderStyle,
+    CursorStyle, DefiniteLength, Display, Fill, FlexDirection, FlexWrap, Font, FontStyle,
+    FontWeight, GridPlacement, Hsla, JustifyContent, Length, Pixels, SharedString,
+    StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow, TextShadow, TextStyleRefinement,
+    UnderlineStyle, WhiteSpace, point, px, relative, rems,
 };
 pub use kael_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
@@ -511,6 +511,13 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Sets a gradient border for the element. When set, it takes precedence over
+    /// any solid border color at paint time. Combine with a `border_*` width method.
+    fn border_gradient(mut self, gradient: impl Into<Background>) -> Self {
+        self.style().border_gradient = Some(gradient.into());
+        self
+    }
+
     /// Returns a mutable reference to the text style that has been configured on this element.
     fn text_style(&mut self) -> &mut Option<TextStyleRefinement> {
         let style: &mut StyleRefinement = self.style();
@@ -803,6 +810,84 @@ pub trait Styled: Sized {
     /// Default is center (0.5, 0.5).
     fn transform_origin(mut self, x: f32, y: f32) -> Self {
         self.style().transform_origin = Some(point(x, y));
+        self
+    }
+
+    /// Sets a translation transform along both axes, in pixels.
+    fn translate(mut self, x: impl Into<Pixels>, y: impl Into<Pixels>) -> Self {
+        self.style().translate = Some(point(x.into(), y.into()));
+        self
+    }
+
+    /// Sets a horizontal translation transform, in pixels.
+    fn translate_x(mut self, x: impl Into<Pixels>) -> Self {
+        let current_y = self
+            .style()
+            .translate
+            .map(|translate| translate.y)
+            .unwrap_or_default();
+        self.style().translate = Some(point(x.into(), current_y));
+        self
+    }
+
+    /// Sets a vertical translation transform, in pixels.
+    fn translate_y(mut self, y: impl Into<Pixels>) -> Self {
+        let current_x = self
+            .style()
+            .translate
+            .map(|translate| translate.x)
+            .unwrap_or_default();
+        self.style().translate = Some(point(current_x, y.into()));
+        self
+    }
+
+    /// Sets a skew transform along the x axis, in degrees.
+    fn skew_x(mut self, angle_degrees: f32) -> Self {
+        let current_y = self.style().skew.map(|skew| skew.y).unwrap_or(0.0);
+        self.style().skew = Some(point(angle_degrees.to_radians(), current_y));
+        self
+    }
+
+    /// Sets a skew transform along the y axis, in degrees.
+    fn skew_y(mut self, angle_degrees: f32) -> Self {
+        let current_x = self.style().skew.map(|skew| skew.x).unwrap_or(0.0);
+        self.style().skew = Some(point(current_x, angle_degrees.to_radians()));
+        self
+    }
+
+    /// Desaturates this element and its subtree toward luminance. `0.0` leaves color
+    /// untouched, `1.0` produces fully grayscale output.
+    fn grayscale(mut self, amount: f32) -> Self {
+        let mut filter = self.style().color_filter.unwrap_or_default();
+        filter.grayscale = amount;
+        self.style().color_filter = Some(filter);
+        self
+    }
+
+    /// Adjusts the color saturation of this element and its subtree. `1.0` leaves
+    /// saturation unchanged, `0.0` produces grayscale, values above `1.0` oversaturate.
+    fn saturate(mut self, amount: f32) -> Self {
+        let mut filter = self.style().color_filter.unwrap_or_default();
+        filter.saturate = amount;
+        self.style().color_filter = Some(filter);
+        self
+    }
+
+    /// Adjusts the brightness of this element and its subtree. `1.0` leaves brightness
+    /// unchanged, values below `1.0` darken and above `1.0` brighten.
+    fn brightness(mut self, amount: f32) -> Self {
+        let mut filter = self.style().color_filter.unwrap_or_default();
+        filter.brightness = amount;
+        self.style().color_filter = Some(filter);
+        self
+    }
+
+    /// Adjusts the contrast of this element and its subtree around mid-gray. `1.0` leaves
+    /// contrast unchanged, values below `1.0` reduce and above `1.0` increase contrast.
+    fn contrast(mut self, amount: f32) -> Self {
+        let mut filter = self.style().color_filter.unwrap_or_default();
+        filter.contrast = amount;
+        self.style().color_filter = Some(filter);
         self
     }
 

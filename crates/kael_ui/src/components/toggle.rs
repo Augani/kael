@@ -141,6 +141,7 @@ impl RenderOnce for Toggle {
             })
             .child(
                 div()
+                    .id(ElementId::Name(format!("{}-track", self.id).into()))
                     .w(bg_width)
                     .h(bg_height)
                     .rounded(radius)
@@ -149,6 +150,7 @@ impl RenderOnce for Toggle {
                     .bg(bg)
                     .border_2()
                     .border_color(kael::transparent_black())
+                    .transition(theme.tokens.transition_fast)
                     .when(is_focused && !self.disabled, |this| {
                         this.border_color(theme.tokens.ring)
                     })

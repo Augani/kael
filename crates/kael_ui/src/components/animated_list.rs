@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use crate::animations::{durations, easings, lerp_pixels};
 
+const EXIT_GRACE: Duration = Duration::from_millis(32);
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum ItemPhase {
     Entering,
@@ -101,8 +103,9 @@ impl AnimatedListState {
         let has_entering = !entering.is_empty();
 
         if has_exiting {
+            let unmount_after = exit_dur + EXIT_GRACE;
             cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(exit_dur).await;
+                cx.background_executor().timer(unmount_after).await;
                 _ = this.update(cx, |state, cx| {
                     state
                         .phases

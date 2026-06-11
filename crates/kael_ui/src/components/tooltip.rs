@@ -1,5 +1,6 @@
 //! Tooltip component - Tooltip with hover and keyboard support.
 
+use crate::animations::easings;
 use crate::theme::use_theme;
 use kael::{prelude::*, *};
 use std::time::Duration;
@@ -142,7 +143,13 @@ impl IntoElement for Tooltip {
                                         div.style().refine(&user_style);
                                         div
                                     })
-                                    .child(self.content),
+                                    .child(self.content)
+                                    .with_animation(
+                                        "tooltip-fade-in",
+                                        Animation::new(theme.tokens.duration_fast)
+                                            .with_easing(easings::ease_out_cubic),
+                                        |el, delta| el.opacity(delta),
+                                    ),
                             ),
                     )
                     .with_priority(1),

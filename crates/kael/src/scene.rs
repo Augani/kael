@@ -595,12 +595,17 @@ pub(crate) struct Quad {
     pub bounds: Bounds<ScaledPixels>,
     pub content_mask: ContentMask<ScaledPixels>,
     pub background: Background,
-    pub border_color: Hsla,
+    pub border_color: Background,
     pub corner_radii: Corners<ScaledPixels>,
     pub border_widths: Edges<ScaledPixels>,
     pub continuous_corners: u32,
+    pub pad: u32,
     pub transform: TransformationMatrix,
     pub blend_mode: u32,
+    pub pad2: u32,
+    pub rounded_clip_bounds: Bounds<ScaledPixels>,
+    pub rounded_clip_radii: Corners<ScaledPixels>,
+    pub color_filter: ColorFilter,
 }
 
 impl From<Quad> for Primitive {
@@ -619,6 +624,9 @@ pub(crate) struct Underline {
     pub color: Hsla,
     pub thickness: ScaledPixels,
     pub wavy: u32,
+    pub rounded_clip_bounds: Bounds<ScaledPixels>,
+    pub rounded_clip_radii: Corners<ScaledPixels>,
+    pub color_filter: ColorFilter,
 }
 
 impl From<Underline> for Primitive {
@@ -637,6 +645,10 @@ pub(crate) struct Shadow {
     pub content_mask: ContentMask<ScaledPixels>,
     pub color: Hsla,
     pub inset: u32,
+    pub pad: u32,
+    pub rounded_clip_bounds: Bounds<ScaledPixels>,
+    pub rounded_clip_radii: Corners<ScaledPixels>,
+    pub color_filter: ColorFilter,
 }
 
 impl From<Shadow> for Primitive {
@@ -655,6 +667,8 @@ pub(crate) struct BlurRect {
     pub corner_radii: Corners<ScaledPixels>,
     pub tint: Hsla,
     pub saturation: f32,
+    pub rounded_clip_bounds: Bounds<ScaledPixels>,
+    pub rounded_clip_radii: Corners<ScaledPixels>,
 }
 
 impl From<BlurRect> for Primitive {
@@ -679,6 +693,59 @@ impl BlurRect {
             .intersect(&viewport_bounds)
             .map_origin(|origin| origin.floor())
             .map_size(|size| size.ceil())
+    }
+}
+
+/// A color filter applied to an element's painted output, composing across a subtree.
+///
+/// The identity filter leaves color untouched: `grayscale: 0.0`, `saturate: 1.0`,
+/// `brightness: 1.0`, `contrast: 1.0`. Filters are applied in the fragment shader in
+/// the order contrast, brightness, saturation, grayscale.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[repr(C)]
+pub struct ColorFilter {
+    /// Fraction of the color to desaturate toward luminance, in the range 0.0 to 1.0.
+    pub grayscale: f32,
+    /// Saturation multiplier; 1.0 leaves saturation unchanged, 0.0 produces grayscale.
+    pub saturate: f32,
+    /// Brightness multiplier applied to the rgb channels; 1.0 leaves brightness unchanged.
+    pub brightness: f32,
+    /// Contrast multiplier around mid-gray; 1.0 leaves contrast unchanged.
+    pub contrast: f32,
+}
+
+impl ColorFilter {
+    /// The identity color filter, which leaves color untouched.
+    pub const fn identity() -> Self {
+        Self {
+            grayscale: 0.0,
+            saturate: 1.0,
+            brightness: 1.0,
+            contrast: 1.0,
+        }
+    }
+
+    /// Compose this filter with another, producing a filter equivalent to applying
+    /// `self` and then `other`. Multiplicative factors multiply; grayscale combines so
+    /// that the result is fully gray when either input is.
+    pub fn compose(self, other: ColorFilter) -> ColorFilter {
+        ColorFilter {
+            grayscale: 1.0 - (1.0 - self.grayscale) * (1.0 - other.grayscale),
+            saturate: self.saturate * other.saturate,
+            brightness: self.brightness * other.brightness,
+            contrast: self.contrast * other.contrast,
+        }
+    }
+
+    /// Whether this filter is the identity filter and can be skipped.
+    pub fn is_identity(&self) -> bool {
+        *self == ColorFilter::identity()
+    }
+}
+
+impl Default for ColorFilter {
+    fn default() -> Self {
+        ColorFilter::identity()
     }
 }
 
@@ -761,6 +828,14 @@ impl TransformationMatrix {
         })
     }
 
+    /// Skew along each axis by the given angles in radians, around the origin
+    pub fn skew(self, x_radians: f32, y_radians: f32) -> Self {
+        self.compose(Self {
+            rotation_scale: [[1.0, x_radians.tan()], [y_radians.tan(), 1.0]],
+            translation: [0.0, 0.0],
+        })
+    }
+
     /// Perform matrix multiplication with another transformation
     /// to produce a new transformation that is the result of
     /// applying both transformations: first, `other`, then `self`.
@@ -825,6 +900,9 @@ pub(crate) struct MonochromeSprite {
     pub color: Hsla,
     pub tile: AtlasTile,
     pub transformation: TransformationMatrix,
+    pub rounded_clip_bounds: Bounds<ScaledPixels>,
+    pub rounded_clip_radii: Corners<ScaledPixels>,
+    pub color_filter: ColorFilter,
 }
 
 impl From<MonochromeSprite> for Primitive {
@@ -836,6 +914,8 @@ impl From<MonochromeSprite> for Primitive {
 pub(crate) const POLYCHROME_SPRITE_KIND_COLOR: u32 = 0;
 pub(crate) const POLYCHROME_SPRITE_KIND_SUBPIXEL_TEXT: u32 = 1;
 pub(crate) const POLYCHROME_SPRITE_KIND_PREMULTIPLIED: u32 = 2;
+pub(crate) const POLYCHROME_SPRITE_KIND_CONTENT_BLURRED: u32 = 3;
+pub(crate) const POLYCHROME_SPRITE_KIND_CONTENT_SHADOW: u32 = 4;
 
 #[derive(Clone, Debug)]
 #[repr(C)]
@@ -850,6 +930,13 @@ pub(crate) struct PolychromeSprite {
     pub tile: AtlasTile,
     pub sprite_kind: u32,
     pub color: Hsla,
+    pub pad3: u32,
+    pub rounded_clip_bounds: Bounds<ScaledPixels>,
+    pub rounded_clip_radii: Corners<ScaledPixels>,
+    pub color_filter: ColorFilter,
+    pub transformation: TransformationMatrix,
+    pub blur_radius: f32,
+    pub pad2: u32,
 }
 
 impl From<PolychromeSprite> for Primitive {
@@ -1080,9 +1167,132 @@ impl PathVertex<Pixels> {
 mod tests {
     use super::*;
 
+    fn wgsl_struct_span(module: &naga::Module, struct_name: &str) -> usize {
+        let (_, ty) = module
+            .types
+            .iter()
+            .find(|(_, ty)| ty.name.as_deref() == Some(struct_name))
+            .unwrap_or_else(|| panic!("struct '{struct_name}' not found in shaders.wgsl"));
+        match ty.inner {
+            naga::TypeInner::Struct { span, .. } => span as usize,
+            _ => panic!("type '{struct_name}' is not a struct in shaders.wgsl"),
+        }
+    }
+
+    #[test]
+    fn gpu_primitive_structs_match_wgsl_layout() {
+        let source = include_str!("platform/blade/shaders.wgsl");
+        let module = naga::front::wgsl::parse_str(source)
+            .unwrap_or_else(|err| panic!("shaders.wgsl failed to parse: {err:?}"));
+
+        assert_eq!(
+            std::mem::size_of::<Quad>(),
+            wgsl_struct_span(&module, "Quad"),
+            "Quad layout diverges from shaders.wgsl"
+        );
+        assert_eq!(
+            std::mem::size_of::<Shadow>(),
+            wgsl_struct_span(&module, "Shadow"),
+            "Shadow layout diverges from shaders.wgsl"
+        );
+        assert_eq!(
+            std::mem::size_of::<Underline>(),
+            wgsl_struct_span(&module, "Underline"),
+            "Underline layout diverges from shaders.wgsl"
+        );
+        assert_eq!(
+            std::mem::size_of::<MonochromeSprite>(),
+            wgsl_struct_span(&module, "MonochromeSprite"),
+            "MonochromeSprite layout diverges from shaders.wgsl"
+        );
+        assert_eq!(
+            std::mem::size_of::<PolychromeSprite>(),
+            wgsl_struct_span(&module, "PolychromeSprite"),
+            "PolychromeSprite layout diverges from shaders.wgsl"
+        );
+        assert_eq!(
+            std::mem::size_of::<Background>(),
+            wgsl_struct_span(&module, "Background"),
+            "Background layout diverges from shaders.wgsl"
+        );
+
+        assert_eq!(std::mem::size_of::<Quad>() % 8, 0);
+        assert_eq!(std::mem::size_of::<Shadow>() % 8, 0);
+        assert_eq!(std::mem::size_of::<Underline>() % 8, 0);
+        assert_eq!(std::mem::size_of::<MonochromeSprite>() % 8, 0);
+        assert_eq!(std::mem::size_of::<PolychromeSprite>() % 8, 0);
+    }
+
+    #[test]
+    fn color_filter_identity_is_default() {
+        assert_eq!(ColorFilter::default(), ColorFilter::identity());
+        assert!(ColorFilter::identity().is_identity());
+        assert_eq!(
+            ColorFilter::identity(),
+            ColorFilter {
+                grayscale: 0.0,
+                saturate: 1.0,
+                brightness: 1.0,
+                contrast: 1.0,
+            }
+        );
+    }
+
+    #[test]
+    fn color_filter_compose_with_identity_is_unchanged() {
+        let filter = ColorFilter {
+            grayscale: 0.4,
+            saturate: 0.5,
+            brightness: 1.2,
+            contrast: 0.8,
+        };
+        for composed in [
+            filter.compose(ColorFilter::identity()),
+            ColorFilter::identity().compose(filter),
+        ] {
+            assert!((composed.grayscale - filter.grayscale).abs() < 1e-6);
+            assert!((composed.saturate - filter.saturate).abs() < 1e-6);
+            assert!((composed.brightness - filter.brightness).abs() < 1e-6);
+            assert!((composed.contrast - filter.contrast).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn color_filter_compose_multiplies_and_saturates_grayscale() {
+        let a = ColorFilter {
+            grayscale: 0.5,
+            saturate: 0.5,
+            brightness: 2.0,
+            contrast: 0.5,
+        };
+        let b = ColorFilter {
+            grayscale: 0.5,
+            saturate: 0.4,
+            brightness: 1.5,
+            contrast: 4.0,
+        };
+        let composed = a.compose(b);
+        assert!((composed.grayscale - 0.75).abs() < 1e-6);
+        assert!((composed.saturate - 0.2).abs() < 1e-6);
+        assert!((composed.brightness - 3.0).abs() < 1e-6);
+        assert!((composed.contrast - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn color_filter_compose_full_grayscale_stays_full() {
+        let full = ColorFilter {
+            grayscale: 1.0,
+            ..ColorFilter::identity()
+        };
+        let composed = full.compose(ColorFilter::identity());
+        assert!((composed.grayscale - 1.0).abs() < 1e-6);
+    }
+
     fn test_blur_rect(bounds: Bounds<ScaledPixels>) -> BlurRect {
         BlurRect {
             order: 0,
+            rounded_clip_bounds: Bounds::default(),
+            rounded_clip_radii: Corners::default(),
             blur_radius: ScaledPixels(6.0),
             bounds,
             content_mask: ContentMask { bounds },

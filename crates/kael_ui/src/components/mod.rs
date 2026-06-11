@@ -114,6 +114,7 @@ pub mod tilt_card;
 
 pub mod canvas_component;
 pub mod confetti;
+pub mod draggable_spring;
 pub mod particle_emitter;
 pub mod waveform;
 

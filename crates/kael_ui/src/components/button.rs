@@ -273,8 +273,9 @@ impl RenderOnce for Button {
             .rounded(theme.tokens.radius_md)
             .text_color(fg)
             .bg(bg)
+            .transition(theme.tokens.transition_fast)
             .when(has_shadow, |this| {
-                this.shadow(smallvec::smallvec![theme.tokens.shadow_xs])
+                this.shadow(theme.tokens.shadow_xs.to_vec())
             })
             .when(self.variant == ButtonVariant::Outline, |this| {
                 this.border_1().border_color(border)
@@ -291,17 +292,17 @@ impl RenderOnce for Button {
                 this.opacity(0.5).cursor(CursorStyle::Arrow)
             })
             .when(!self.disabled && !is_loading, |this| {
-                let shadow_sm = theme.tokens.shadow_sm;
+                let shadow_sm = theme.tokens.shadow_sm.clone();
                 this.cursor(CursorStyle::PointingHand)
                     .hover(move |style| {
                         let hover_style = style.bg(hover_bg).text_color(hover_fg);
                         if has_shadow {
-                            hover_style.shadow(smallvec::smallvec![shadow_sm])
+                            hover_style.shadow(shadow_sm.to_vec())
                         } else {
                             hover_style
                         }
                     })
-                    .active(|style| style.opacity(0.9))
+                    .active(|style| style.opacity(0.92).scale(0.97))
             })
             .map(|this| {
                 let mut div = this;

@@ -109,7 +109,7 @@ Add `kael_ui = "0.2"` for 100+ shadcn-inspired components — no external compon
 - **overlays** — Dialog, Sheet, Popover, Toast, Tooltip, ContextMenu, CommandPalette
 - **charts** — line, area, bar, pie, donut, radar, gauge, heatmap, treemap, sparkline
 - **layout** — VStack, HStack, Grid, ScrollContainer, responsive breakpoints
-- **theme** — shadcn-style design tokens, light/dark, `use_theme()` in render
+- **theme** — shadcn-style design tokens, light/dark; `Theme` is a `Global`, read it in render with `Theme::of(cx).tokens.*` (`use_theme()` is the legacy clone-per-call shim)
 - Bundled: 1,600+ Lucide icons (`set_icon_base_path("assets/icons")`), Inter + JetBrains Mono fonts
 
 ## Layout (Tailwind-style on div)

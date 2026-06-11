@@ -138,7 +138,7 @@ impl RenderOnce for Noise {
                                     corner_radii: Corners::all(px(0.0)),
                                     background: color.into(),
                                     border_widths: Edges::default(),
-                                    border_color: transparent_black(),
+                                    border_color: (transparent_black()).into(),
                                     border_style: BorderStyle::default(),
                                     continuous_corners: false,
                                     transform: Default::default(),

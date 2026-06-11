@@ -27,6 +27,10 @@ float quarter_ellipse_sdf(float2 point, float2 radii);
 float pick_corner_radius(float2 center_to_point, Corners_ScaledPixels corner_radii);
 float quad_sdf(float2 point, Bounds_ScaledPixels bounds,
                Corners_ScaledPixels corner_radii);
+float rounded_clip_factor(float2 position, Bounds_ScaledPixels clip_bounds,
+                          Corners_ScaledPixels clip_radii);
+float2 apply_inverse_transform(float2 position, TransformationMatrix transformation);
+float4 apply_color_filter(float4 color, ColorFilter filter);
 float quad_sdf_impl(float2 center_to_point, float corner_radius);
 float squircle_sdf(float2 point, Bounds_ScaledPixels bounds,
                    Corners_ScaledPixels corner_radii);
@@ -90,7 +94,7 @@ vertex QuadVertexOutput quad_vertex(uint unit_vertex_id [[vertex_id]],
       to_device_position_transformed(unit_vertex, quad.bounds, quad.transform, viewport_size);
   float4 clip_distance = distance_from_clip_rect_transformed(unit_vertex, quad.bounds,
                                                  quad.content_mask.bounds, quad.transform);
-  float4 border_color = hsla_to_rgba(quad.border_color);
+  float4 border_color = hsla_to_rgba(quad.border_color.solid);
 
   GradientColor gradient = prepare_fill_color(
     quad.background.tag,
@@ -140,7 +144,11 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
                               constant Quad *quads
                               [[buffer(QuadInputIndex_Quads)]]) {
   Quad quad = quads[input.quad_id];
-  float4 background_color = fill_color(quad.background, input.position.xy, quad.bounds,
+  ColorFilter color_filter = quad.color_filter;
+  float rounded_clip = rounded_clip_factor(
+      input.position.xy, quad.rounded_clip_bounds, quad.rounded_clip_radii);
+  float2 local_position = apply_inverse_transform(input.position.xy, quad.transform);
+  float4 background_color = fill_color(quad.background, local_position, quad.bounds,
     input.background_solid, input.background_color0, input.background_color1,
     input.background_color2, input.background_color3);
   background_color = apply_blend_mode(background_color, input.blend_mode);
@@ -156,12 +164,13 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
       quad.border_widths.right == 0.0 &&
       quad.border_widths.bottom == 0.0 &&
       unrounded) {
-    return background_color;
+    background_color = apply_color_filter(background_color, color_filter);
+    return background_color * float4(1.0, 1.0, 1.0, rounded_clip);
   }
 
   float2 size = float2(quad.bounds.size.width, quad.bounds.size.height);
   float2 half_size = size / 2.0;
-  float2 point = input.position.xy - float2(quad.bounds.origin.x, quad.bounds.origin.y);
+  float2 point = local_position - float2(quad.bounds.origin.x, quad.bounds.origin.y);
   float2 center_to_point = point - half_size;
 
   // Signed distance field threshold for inclusion of pixels. 0.5 is the
@@ -221,7 +230,7 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
 
   float outer_sdf;
   if (quad.continuous_corners == 1 && corner_radius > 0.0) {
-    outer_sdf = squircle_sdf(input.position.xy, quad.bounds, quad.corner_radii);
+    outer_sdf = squircle_sdf(local_position, quad.bounds, quad.corner_radii);
   } else {
     outer_sdf = quad_sdf_impl(corner_center_to_point, corner_radius);
   }
@@ -245,7 +254,31 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
 
   float4 color = background_color;
   if (border_sdf < antialias_threshold) {
+    // Solid borders use the flat varying; gradient borders are evaluated here in
+    // local space from the quad's border background, mirroring the fill path.
     float4 border_color = input.border_color;
+    if (quad.border_color.tag != 0u) {
+      GradientColor border_gradient = prepare_fill_color(
+        quad.border_color.tag,
+        quad.border_color.color_space,
+        quad.border_color.solid,
+        quad.border_color.colors[0].color,
+        quad.border_color.colors[1].color,
+        quad.border_color.colors[2].color,
+        quad.border_color.colors[3].color,
+        quad.border_color.stop_count
+      );
+      border_color = fill_color(
+        quad.border_color,
+        local_position,
+        quad.bounds,
+        border_gradient.solid,
+        border_gradient.color0,
+        border_gradient.color1,
+        border_gradient.color2,
+        border_gradient.color3
+      );
+    }
 
     // Dashed border logic when border_style == 1
     if (quad.border_style == 1) {
@@ -428,7 +461,9 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
                 saturate(antialias_threshold - inner_sdf));
   }
 
-  return color * float4(1.0, 1.0, 1.0, saturate(antialias_threshold - outer_sdf));
+  color = apply_color_filter(color, color_filter);
+  return color * float4(1.0, 1.0, 1.0,
+                        saturate(antialias_threshold - outer_sdf) * rounded_clip);
 }
 
 struct BlurVertexOutput {
@@ -690,7 +725,11 @@ fragment float4 shadow_fragment(ShadowFragmentInput input [[stage_in]],
     alpha = 1.0 - alpha;
   }
 
-  return input.color * float4(1., 1., 1., alpha);
+  alpha *= rounded_clip_factor(input.position.xy, shadow.rounded_clip_bounds,
+                               shadow.rounded_clip_radii);
+
+  float4 shadow_color = apply_color_filter(input.color, shadow.color_filter);
+  return shadow_color * float4(1., 1., 1., alpha);
 }
 
 struct UnderlineVertexOutput {
@@ -733,6 +772,9 @@ fragment float4 underline_fragment(UnderlineFragmentInput input [[stage_in]],
   const float WAVE_HEIGHT_RATIO = 0.8;
 
   Underline underline = underlines[input.underline_id];
+  float rounded_clip = rounded_clip_factor(
+      input.position.xy, underline.rounded_clip_bounds, underline.rounded_clip_radii);
+  float4 underline_color = apply_color_filter(input.color, underline.color_filter);
   if (underline.wavy) {
     float half_thickness = underline.thickness * 0.5;
     float2 origin =
@@ -751,9 +793,9 @@ fragment float4 underline_fragment(UnderlineFragmentInput input [[stage_in]],
     float distance_from_bottom_border = distance_in_pixels + half_thickness;
     float alpha = saturate(
         0.5 - max(-distance_from_bottom_border, distance_from_top_border));
-    return input.color * float4(1., 1., 1., alpha);
+    return underline_color * float4(1., 1., 1., alpha * rounded_clip);
   } else {
-    return input.color;
+    return underline_color * float4(1., 1., 1., rounded_clip);
   }
 }
 
@@ -761,6 +803,7 @@ struct MonochromeSpriteVertexOutput {
   float4 position [[position]];
   float2 tile_position;
   float4 color [[flat]];
+  uint sprite_id [[flat]];
   float4 clip_distance;
 };
 
@@ -768,6 +811,7 @@ struct MonochromeSpriteFragmentInput {
   float4 position [[position]];
   float2 tile_position;
   float4 color [[flat]];
+  uint sprite_id [[flat]];
   float4 clip_distance;
 };
 
@@ -791,6 +835,7 @@ vertex MonochromeSpriteVertexOutput monochrome_sprite_vertex(
       device_position,
       tile_position,
       color,
+      sprite_id,
       {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
 }
 
@@ -806,8 +851,12 @@ fragment float4 monochrome_sprite_fragment(
                                           min_filter::linear);
   float4 sample =
       atlas_texture.sample(atlas_texture_sampler, input.tile_position);
+  MonochromeSprite sprite = sprites[input.sprite_id];
   float4 color = input.color;
   color.a *= pow(sample.a, 0.85);
+  color = apply_color_filter(color, sprite.color_filter);
+  color.a *= rounded_clip_factor(input.position.xy, sprite.rounded_clip_bounds,
+                                 sprite.rounded_clip_radii);
   return color;
 }
 
@@ -836,9 +885,9 @@ vertex PolychromeSpriteVertexOutput polychrome_sprite_vertex(
   float2 unit_vertex = unit_vertices[unit_vertex_id];
   PolychromeSprite sprite = sprites[sprite_id];
   float4 device_position =
-      to_device_position(unit_vertex, sprite.bounds, viewport_size);
-  float4 clip_distance = distance_from_clip_rect(unit_vertex, sprite.bounds,
-                                                 sprite.content_mask.bounds);
+      to_device_position_transformed(unit_vertex, sprite.bounds, sprite.transformation, viewport_size);
+  float4 clip_distance = distance_from_clip_rect_transformed(unit_vertex, sprite.bounds,
+                                                 sprite.content_mask.bounds, sprite.transformation);
   float2 tile_position = to_tile_position(unit_vertex, sprite.tile, atlas_size);
   return PolychromeSpriteVertexOutput{
       device_position,
@@ -847,39 +896,102 @@ vertex PolychromeSpriteVertexOutput polychrome_sprite_vertex(
       {clip_distance.x, clip_distance.y, clip_distance.z, clip_distance.w}};
 }
 
+// Samples a content tile with a 5x5 gaussian-weighted grid, scaled by blur_radius,
+// clamping each tap inside the tile's uv rect (minus a half-texel inset) so neighboring
+// atlas tiles never bleed in. Returns a premultiplied color (rgb is premultiplied by a).
+float4 sample_blurred_tile(texture2d<float> atlas_texture, sampler atlas_sampler,
+                           float2 tile_position, AtlasTile tile, float blur_radius) {
+  float2 atlas_size =
+      float2(atlas_texture.get_width(), atlas_texture.get_height());
+  float2 tile_origin = float2(tile.bounds.origin.x, tile.bounds.origin.y);
+  float2 tile_size = float2(tile.bounds.size.width, tile.bounds.size.height);
+  float2 texel = 1.0 / atlas_size;
+  float2 uv_min = (tile_origin + 0.5) / atlas_size;
+  float2 uv_max = (tile_origin + tile_size - 0.5) / atlas_size;
+
+  float sigma = max(blur_radius, 0.001);
+  float tap_extent = max(blur_radius, 0.0) / 2.0;
+
+  float4 accum = float4(0.0);
+  float weight_sum = 0.0;
+  for (int j = -2; j <= 2; ++j) {
+    for (int i = -2; i <= 2; ++i) {
+      float dx = float(i) * tap_extent;
+      float dy = float(j) * tap_extent;
+      float weight = gaussian(dx, sigma) * gaussian(dy, sigma);
+      float2 uv = clamp(tile_position + texel * float2(dx, dy), uv_min, uv_max);
+      accum += atlas_texture.sample(atlas_sampler, uv) * weight;
+      weight_sum += weight;
+    }
+  }
+
+  if (weight_sum <= 0.0) {
+    return float4(0.0);
+  }
+  return accum / weight_sum;
+}
+
 fragment float4 polychrome_sprite_fragment(
     PolychromeSpriteFragmentInput input [[stage_in]],
     constant PolychromeSprite *sprites [[buffer(SpriteInputIndex_Sprites)]],
     texture2d<float> atlas_texture [[texture(SpriteInputIndex_AtlasTexture)]]) {
   PolychromeSprite sprite = sprites[input.sprite_id];
+  float rounded_clip = rounded_clip_factor(
+      input.position.xy, sprite.rounded_clip_bounds, sprite.rounded_clip_radii);
+  float2 local_position = apply_inverse_transform(input.position.xy, sprite.transformation);
   constexpr sampler atlas_texture_sampler(mag_filter::linear,
                                           min_filter::linear);
   float4 sample =
       atlas_texture.sample(atlas_texture_sampler, input.tile_position);
   float distance =
-      quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
+      quad_sdf(local_position, sprite.bounds, sprite.corner_radii);
+
+  if (sprite.sprite_kind == 3u) {
+    float4 blurred = sample_blurred_tile(atlas_texture, atlas_texture_sampler,
+                                         input.tile_position, sprite.tile,
+                                         sprite.blur_radius);
+    float shape_alpha = sprite.opacity * saturate(0.5 - distance) * rounded_clip;
+    float alpha = blurred.a * shape_alpha;
+    if (blurred.a <= 0.0 || alpha <= 0.0) {
+      return float4(0.0);
+    }
+    return apply_color_filter(float4(blurred.rgb / blurred.a, alpha), sprite.color_filter);
+  }
+
+  if (sprite.sprite_kind == 4u) {
+    float4 blurred = sample_blurred_tile(atlas_texture, atlas_texture_sampler,
+                                         input.tile_position, sprite.tile,
+                                         sprite.blur_radius);
+    float4 tint = hsla_to_rgba(sprite.color);
+    float shape_alpha = sprite.opacity * saturate(0.5 - distance) * rounded_clip;
+    float alpha = tint.a * blurred.a * shape_alpha;
+    if (blurred.a <= 0.0 || alpha <= 0.0) {
+      return float4(0.0);
+    }
+    return apply_color_filter(float4(tint.rgb, alpha), sprite.color_filter);
+  }
 
   if (sprite.sprite_kind == 1u) {
     float4 tint = hsla_to_rgba(sprite.color);
     float3 coverage = pow(sample.rgb, float3(0.85));
     float coverage_alpha = max(max(coverage.r, coverage.g), coverage.b);
-    float shape_alpha = sprite.opacity * saturate(0.5 - distance);
+    float shape_alpha = sprite.opacity * saturate(0.5 - distance) * rounded_clip;
     float alpha = tint.a * coverage_alpha * shape_alpha;
     if (coverage_alpha <= 0.0 || alpha <= 0.0) {
       return float4(0.0);
     }
     float3 rgb = tint.rgb * (coverage / coverage_alpha);
-    return float4(rgb, alpha);
+    return apply_color_filter(float4(rgb, alpha), sprite.color_filter);
   }
 
   if (sprite.sprite_kind == 2u) {
-    float shape_alpha = sprite.opacity * saturate(0.5 - distance);
+    float shape_alpha = sprite.opacity * saturate(0.5 - distance) * rounded_clip;
     float alpha = sample.a * shape_alpha;
     if (sample.a <= 0.0 || alpha <= 0.0) {
       return float4(0.0);
     }
 
-    return float4(sample.rgb / sample.a, alpha);
+    return apply_color_filter(float4(sample.rgb / sample.a, alpha), sprite.color_filter);
   }
 
   float4 color = sample;
@@ -889,7 +1001,8 @@ fragment float4 polychrome_sprite_fragment(
     color.g = grayscale;
     color.b = grayscale;
   }
-  color.a *= sprite.opacity * saturate(0.5 - distance);
+  color = apply_color_filter(color, sprite.color_filter);
+  color.a *= sprite.opacity * saturate(0.5 - distance) * rounded_clip;
   return color;
 }
 
@@ -1220,6 +1333,46 @@ float pick_corner_radius(float2 center_to_point, Corners_ScaledPixels corner_rad
       return corner_radii.bottom_right;
     }
   }
+}
+
+float2 apply_inverse_transform(float2 position, TransformationMatrix transformation) {
+  float a = transformation.rotation_scale[0][0];
+  float b = transformation.rotation_scale[0][1];
+  float c = transformation.rotation_scale[1][0];
+  float d = transformation.rotation_scale[1][1];
+  float det = a * d - b * c;
+  if (fabs(det) < 1e-6) {
+    return position;
+  }
+  float2 p = position - float2(transformation.translation[0], transformation.translation[1]);
+  return float2((d * p.x - b * p.y) / det, (-c * p.x + a * p.y) / det);
+}
+
+float rounded_clip_factor(float2 position, Bounds_ScaledPixels clip_bounds,
+                          Corners_ScaledPixels clip_radii) {
+  if (clip_radii.top_left <= 0.0 && clip_radii.top_right <= 0.0 &&
+      clip_radii.bottom_right <= 0.0 && clip_radii.bottom_left <= 0.0) {
+    return 1.0;
+  }
+  float distance = quad_sdf(position, clip_bounds, clip_radii);
+  return saturate(0.5 - distance);
+}
+
+// Applies a color filter to a straight-alpha color, leaving alpha untouched.
+// Order: contrast around mid-gray, brightness, saturation, then grayscale.
+float4 apply_color_filter(float4 color, ColorFilter filter) {
+  if (filter.grayscale == 0.0 && filter.saturate == 1.0 &&
+      filter.brightness == 1.0 && filter.contrast == 1.0) {
+    return color;
+  }
+  float3 rgb = color.rgb;
+  rgb = (rgb - 0.5) * filter.contrast + 0.5;
+  rgb = rgb * filter.brightness;
+  float luma = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+  rgb = mix(float3(luma), rgb, filter.saturate);
+  luma = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+  rgb = mix(rgb, float3(luma), filter.grayscale);
+  return float4(rgb, color.a);
 }
 
 // Signed distance of the point to the quad's border - positive outside the

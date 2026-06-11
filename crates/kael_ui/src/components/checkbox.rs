@@ -153,6 +153,7 @@ impl RenderOnce for Checkbox {
             .gap(px(8.0))
             .child(
                 div()
+                    .id(ElementId::Name(format!("{}-box", self.id).into()))
                     .size(size)
                     .flex()
                     .items_center()
@@ -161,6 +162,7 @@ impl RenderOnce for Checkbox {
                     .border_1()
                     .border_color(border)
                     .rounded(border_radius)
+                    .transition(theme.tokens.transition_fast)
                     .cursor(if self.disabled {
                         CursorStyle::Arrow
                     } else {

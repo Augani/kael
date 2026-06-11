@@ -2407,7 +2407,7 @@ impl BlurPass {
 #[cfg(test)]
 mod offscreen_tests {
     use super::*;
-    use crate::{TransformationMatrix, hsla};
+    use crate::{ColorFilter, TransformationMatrix, hsla};
 
     fn headless() -> Option<MetalRenderer> {
         if !metal_is_available() {
@@ -2530,6 +2530,8 @@ mod offscreen_tests {
         scene.insert_primitive(Underline {
             order: 0,
             pad: 0,
+            rounded_clip_bounds: Bounds::default(),
+            rounded_clip_radii: Corners::default(),
             bounds: Bounds {
                 origin: point(ScaledPixels(2.0), ScaledPixels(12.0)),
                 size: size(ScaledPixels(12.0), ScaledPixels(2.0)),
@@ -2538,6 +2540,7 @@ mod offscreen_tests {
             color: hsla(0.6, 1.0, 0.5, 1.0),
             thickness: ScaledPixels(2.0),
             wavy: 0,
+            color_filter: ColorFilter::identity(),
         });
         scene.finish();
 

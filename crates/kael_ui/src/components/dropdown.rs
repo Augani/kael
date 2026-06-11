@@ -239,6 +239,7 @@ impl RenderOnce for Dropdown {
                                 .text_size(px(14.0))
                                 .text_color(text_color)
                                 .font_family(theme.tokens.font_family.clone())
+                                .transition(theme.tokens.transition_fast)
                                 .when(!disabled, |d| {
                                     d.cursor_pointer().hover(move |s| s.bg(hover_bg))
                                 })

@@ -9,6 +9,70 @@ stabilised — minor version bumps may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Implicit style transitions** — `.transition(duration)` and
+  `.transition_with(duration, easing)` on any keyed element animate
+  changes to background (including gradients), border color, text color,
+  opacity, corner radii, box shadows, rotation, and scale. Hover, active,
+  focus, and state-driven restyles ease instead of snapping; transitions
+  are interruptible and retarget from the current visual state.
+- **Subtree transforms** — `rotate`, `scale`, new `translate`/
+  `translate_x`/`translate_y`, and new `skew_x`/`skew_y` on a `div` now
+  transform the element's whole subtree (text, icons, images, emoji, and
+  children), not just its own background quad.
+- **Rounded-corner clipping** — `overflow_hidden` combined with a corner
+  radius clips children to the rounded corners, on all three render
+  backends.
+- **FLIP layout animation** — `.animate_layout(duration)` makes a keyed
+  element glide to its new position when layout moves it.
+- **Color filters** — `grayscale()`, `saturate()`, `brightness()`, and
+  `contrast()` apply to an element's whole subtree.
+- **Gradient borders** — `border_gradient()` accepts any linear, radial,
+  or conic gradient.
+- **Content blur and drop shadows** — `effect_layer(child)` with
+  `.content_blur(px)` and `.drop_shadow(shadow)` renders a subtree to a
+  texture and composites it frosted and/or with a silhouette-following
+  shadow.
+- **Springs and gestures** — `SpringValue`/`SpringPoint` physics drivers
+  and `DraggableSpring`, a throwable container that hands pan-gesture
+  velocity to a spring with optional snap points.
+- **Derived state** — `Computed<T>` / `cx.computed` memoize values
+  derived from entities, with dependency tracking and invalidation on
+  notify.
+- **Async data helpers** — `kael_ui::query` ships `Loadable<T>`,
+  `QueryState<T>` (loading/error lifecycle, stale-response dropping,
+  debounce, refetch), and a TTL `QueryCache`.
+- **Layered soft shadows** — the `shadow_*` theme tokens are now
+  two-layer stacks (`ShadowStack`), with dark-theme alphas tamed.
+- New docs chapters: State Management, Async & Data Fetching, Navigation;
+  the Animations chapter covers transitions, FLIP, and springs.
+- New examples: `soft_ui`, `filters_gradients`, `content_effects`,
+  `drag_spring`, `async_query`.
+
+### Changed
+
+- kael_ui core controls (button, toggle, checkbox, radio, input,
+  dropdown, select, tooltip, dialog) ship with eased micro-interactions
+  by default, consuming the previously unused `transition_*` tokens.
+- The kael_ui theme is a kael `Global`: read it with `Theme::of(cx)`
+  (zero-clone). `use_theme()` still works as a compatibility shim.
+- `kael::Navigator` is the canonical navigation stack; kael_ui's
+  `ViewRouter` is kept for compatibility but considered legacy.
+- `PaintQuad::border_color` is now a `Background` (gradient-capable);
+  `Hsla` values convert via `Into`.
+
+### Fixed
+
+- Transform origins were not scaled to device pixels (wrong rotation
+  center on non-1x displays).
+- Rotated or skewed rounded quads rendered distorted corners and
+  gradients (fragment math now runs in local space).
+- kael_ui scroll physics assumed 60Hz (`dt = 1/60`); momentum is now
+  frame-rate correct on 120Hz displays.
+- `AnimatedPresence`/`AnimatedList` exit-unmount race that could remove
+  an element mid-exit-animation.
+
 ## [0.2.0] - 2026-06-10
 
 ### Added

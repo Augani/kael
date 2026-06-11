@@ -6,8 +6,11 @@
 
 - [Getting Started](getting-started.md)
 - [Core Concepts](core-concepts.md)
+- [State Management](state-management.md)
+- [Async & Data Fetching](async-data.md)
 - [Layout & Styling](layout-and-styling.md)
 - [Animations](animations.md)
+- [Navigation](navigation.md)
 - [Theming](theming.md)
 - [Accessibility](accessibility.md)
 

@@ -1,5 +1,6 @@
 use kael::*;
 use once_cell::sync::Lazy;
+use std::sync::Arc;
 
 use super::tokens::ThemeTokens;
 
@@ -233,24 +234,99 @@ impl Theme {
     }
 }
 
-static THEME_STATE: Lazy<std::sync::Mutex<Theme>> =
-    Lazy::new(|| std::sync::Mutex::new(Theme::dark()));
+impl Global for Theme {}
 
-/// Install a theme globally for the app. Call early during app startup.
-///
-/// Calling this again at runtime switches the theme live: every open window
-/// is refreshed so components re-read the new tokens on their next render.
-pub fn install_theme(cx: &mut App, theme: Theme) {
-    if let Ok(mut state) = THEME_STATE.lock() {
-        *state = theme;
+impl Theme {
+    /// Borrow the current theme from the app's global state.
+    ///
+    /// This is the zero-clone path: components should read tokens via
+    /// `Theme::get(cx).tokens.*` rather than cloning the whole theme each
+    /// render. Panics if no theme has been installed with [`install_theme`].
+    pub fn get(cx: &App) -> &Theme {
+        cx.global::<Theme>()
     }
-    cx.refresh_windows();
+
+    /// Borrow the current theme from the app's global state.
+    ///
+    /// Alias of [`Theme::get`] for call sites that read tokens via
+    /// `Theme::of(cx).tokens`.
+    pub fn of(cx: &App) -> &Theme {
+        Self::get(cx)
+    }
+
+    /// Borrow the current theme if one has been installed, without panicking.
+    pub fn try_get(cx: &App) -> Option<&Theme> {
+        cx.try_global::<Theme>()
+    }
 }
 
-/// Access the current theme tokens.
-pub fn use_theme() -> Theme {
+static THEME_STATE: Lazy<std::sync::Mutex<Arc<Theme>>> =
+    Lazy::new(|| std::sync::Mutex::new(Arc::new(Theme::dark())));
+
+fn sync_theme_mirror(theme: &Theme) -> Arc<Theme> {
+    let next = Arc::new(theme.clone());
+    if let Ok(mut state) = THEME_STATE.lock() {
+        *state = next.clone();
+    }
+    next
+}
+
+fn current_theme_mirror() -> Arc<Theme> {
     THEME_STATE
         .lock()
         .map(|guard| (*guard).clone())
-        .unwrap_or_else(|_| Theme::dark())
+        .unwrap_or_else(|_| Arc::new(Theme::dark()))
+}
+
+/// Install a theme globally for the app. Call early during app startup.
+///
+/// The theme is stored in the app's global state via `cx.set_global`, and read
+/// back through [`Theme::get`] / [`Theme::of`]. Calling this again at runtime
+/// switches the theme live: every open window is refreshed so components
+/// re-read the new tokens on their next render.
+pub fn install_theme(cx: &mut App, theme: Theme) {
+    sync_theme_mirror(&theme);
+    cx.set_global(theme);
+    cx.refresh_windows();
+}
+
+/// Access a clone of the current theme.
+///
+/// **Deprecated path.** This clones the whole theme on every call and reads
+/// from a process-global mirror rather than the app's global state. Prefer
+/// [`Theme::get`] / [`Theme::of`], which borrow the theme from `cx` without
+/// cloning. Retained as a shim so existing components keep compiling during
+/// the migration to the [`Global`] path; the `#[deprecated]` attribute is
+/// intentionally omitted so the in-progress callers do not emit warnings.
+pub fn use_theme() -> Theme {
+    (*current_theme_mirror()).clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn mirror_install_switch_and_custom_round_trip() {
+        sync_theme_mirror(&Theme::light());
+        assert_eq!(use_theme().variant, ThemeVariant::Light);
+
+        let first = sync_theme_mirror(&Theme::nord());
+        let mirrored = current_theme_mirror();
+        assert!(Arc::ptr_eq(&first, &mirrored));
+        assert_eq!(mirrored.variant, ThemeVariant::Nord);
+
+        let second = sync_theme_mirror(&Theme::dracula());
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert_eq!(current_theme_mirror().variant, ThemeVariant::Dracula);
+
+        let tokens = ThemeTokens {
+            radius_md: kael::px(13.0),
+            ..ThemeTokens::dark()
+        };
+        sync_theme_mirror(&Theme::custom(tokens));
+        let restored = use_theme();
+        assert_eq!(restored.variant, ThemeVariant::Custom);
+        assert_eq!(restored.tokens.radius_md, kael::px(13.0));
+    }
 }
