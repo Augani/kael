@@ -18,7 +18,7 @@ use futures::AsyncReadExt as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use kael_release::update::{UpdateChannel, UpdateManifest, verify_manifest};
+use kael_release::update::{UpdateChannel, UpdateManifest, UpdatePolicy, verify_manifest};
 use semantic_version::SemanticVersion;
 
 /// Configuration for the auto-updater.
@@ -114,6 +114,7 @@ pub struct AutoUpdater {
     verifying_key: Option<VerifyingKey>,
     update_channel: UpdateChannel,
     require_signature: bool,
+    policy: Option<UpdatePolicy>,
 }
 
 impl AutoUpdater {
@@ -135,6 +136,7 @@ impl AutoUpdater {
             verifying_key: None,
             update_channel: UpdateChannel::Stable,
             require_signature: true,
+            policy: None,
         }
     }
 
@@ -181,6 +183,25 @@ impl AutoUpdater {
     /// environments that guarantee package integrity by other means.
     pub fn set_require_signature(&mut self, require: bool) {
         self.require_signature = require;
+    }
+
+    /// Apply a [`UpdatePolicy`] from `kael_release`.
+    ///
+    /// This adopts the policy's channel and its `require_signed_feeds` setting
+    /// (mapped onto signature enforcement). The policy's auto-check/download/
+    /// install flags and check interval are surfaced via [`Self::policy`] for
+    /// the host application to drive scheduling; they do not change verification
+    /// behavior.
+    pub fn apply_policy(&mut self, policy: &UpdatePolicy) {
+        self.update_channel = policy.channel.clone();
+        self.require_signature = policy.require_signed_feeds;
+        self.config.check_interval = Duration::from_secs(policy.check_interval_secs);
+        self.policy = Some(policy.clone());
+    }
+
+    /// Returns the policy applied via [`Self::apply_policy`], if any.
+    pub fn policy(&self) -> Option<&UpdatePolicy> {
+        self.policy.as_ref()
     }
 
     /// Returns the current update status.
@@ -282,17 +303,26 @@ impl AutoUpdater {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok());
 
-        let mut bytes = Vec::new();
-        response
-            .body_mut()
-            .read_to_end(&mut bytes)
-            .await
-            .context("failed to read update package")?;
-
-        on_progress(DownloadProgress {
-            bytes_downloaded: bytes.len() as u64,
-            total_bytes,
-        });
+        let mut bytes: Vec<u8> = match total_bytes {
+            Some(total) => Vec::with_capacity(total.min(64 * 1024 * 1024) as usize),
+            None => Vec::new(),
+        };
+        let body = response.body_mut();
+        let mut chunk = [0u8; 64 * 1024];
+        loop {
+            let read = body
+                .read(&mut chunk)
+                .await
+                .context("failed to read update package")?;
+            if read == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&chunk[..read]);
+            on_progress(DownloadProgress {
+                bytes_downloaded: bytes.len() as u64,
+                total_bytes,
+            });
+        }
 
         if let Err(err) = self.verify_package(&update, &bytes) {
             self.downloaded_path = None;
@@ -486,21 +516,56 @@ struct JsonFeedItem {
     size_bytes: Option<u64>,
 }
 
+/// The platform-keyed update feed emitted by `xtask generate-update-metadata`
+/// (mirrors `xtask::update_feed::UpdateFeed`).
+#[derive(Debug, Deserialize)]
+struct PlatformFeed {
+    version: String,
+    #[serde(default)]
+    notes_url: Option<String>,
+    platforms: Vec<PlatformFeedEntry>,
+}
+
+/// One platform's entry in a [`PlatformFeed`].
+#[derive(Debug, Deserialize)]
+struct PlatformFeedEntry {
+    platform: String,
+    url: String,
+    #[serde(default)]
+    signature: Option<String>,
+    checksum: String,
+    #[serde(default)]
+    size_bytes: Option<u64>,
+}
+
 /// Parse a JSON update feed.
 ///
-/// Accepts either a JSON array of items or a single object with an `"items"`
-/// array.
+/// Accepts three shapes:
+/// - a JSON array of feed items,
+/// - an object with an `"items"` array, or
+/// - the platform-keyed feed produced by `xtask generate-update-metadata`
+///   (an object with `"version"` and a `"platforms"` array). For that shape the
+///   entry matching the running operating system is selected.
 fn parse_json_feed(body: &str) -> Result<Vec<UpdateInfo>> {
-    // Try array-of-items first
-    let items: Vec<JsonFeedItem> = if body.trim().starts_with('[') {
-        serde_json::from_str(body).context("failed to parse JSON update feed as array")?
+    let trimmed = body.trim();
+
+    if trimmed.starts_with('{') {
+        let value: serde_json::Value =
+            serde_json::from_str(trimmed).context("failed to parse JSON update feed as object")?;
+        if value.get("platforms").is_some() {
+            return parse_platform_feed(trimmed);
+        }
+    }
+
+    let items: Vec<JsonFeedItem> = if trimmed.starts_with('[') {
+        serde_json::from_str(trimmed).context("failed to parse JSON update feed as array")?
     } else {
         #[derive(Deserialize)]
         struct Wrapper {
             items: Vec<JsonFeedItem>,
         }
         let wrapper: Wrapper =
-            serde_json::from_str(body).context("failed to parse JSON update feed as object")?;
+            serde_json::from_str(trimmed).context("failed to parse JSON update feed as object")?;
         wrapper.items
     };
 
@@ -521,6 +586,44 @@ fn parse_json_feed(body: &str) -> Result<Vec<UpdateInfo>> {
             })
         })
         .collect()
+}
+
+/// The platform identifier matching the running operating system, as written
+/// by `xtask`'s `detect_platform`.
+fn current_platform_id() -> &'static str {
+    match std::env::consts::OS {
+        "macos" => "macos",
+        "windows" => "windows",
+        _ => "linux",
+    }
+}
+
+/// Map the [`PlatformFeed`] entry for the running OS into an [`UpdateInfo`].
+fn parse_platform_feed(body: &str) -> Result<Vec<UpdateInfo>> {
+    let feed: PlatformFeed =
+        serde_json::from_str(body).context("failed to parse platform update feed")?;
+    let version = feed
+        .version
+        .parse::<SemanticVersion>()
+        .context(format!("invalid version string: {}", feed.version))?;
+
+    let wanted = current_platform_id();
+    let Some(entry) = feed
+        .platforms
+        .into_iter()
+        .find(|entry| entry.platform.eq_ignore_ascii_case(wanted))
+    else {
+        return Ok(Vec::new());
+    };
+
+    Ok(vec![UpdateInfo {
+        version,
+        release_notes: feed.notes_url,
+        download_url: entry.url,
+        signature: entry.signature,
+        sha256: Some(entry.checksum),
+        size_bytes: entry.size_bytes,
+    }])
 }
 
 /// Parse a Sparkle appcast XML feed.
@@ -754,32 +857,48 @@ fn find_app_bundle_in(dir: &std::path::Path) -> Result<std::path::PathBuf> {
     bail!("no .app bundle found in {}", dir.display())
 }
 
-/// Replace the existing app bundle with the new one.
+/// Validate the code signature of `new_app`, then atomically swap it over
+/// `existing_app` with rollback on failure.
+///
+/// The new bundle is first copied into a staging location on the same volume as
+/// the live install so the swap can use an atomic `rename`. Verification uses
+/// `codesign --verify`; an invalid signature aborts before any swap occurs.
 #[cfg(target_os = "macos")]
 fn replace_app_bundle(new_app: &std::path::Path, existing_app: &std::path::Path) -> Result<()> {
-    let backup = existing_app.with_extension("app.bak");
-    if backup.exists() {
-        std::fs::remove_dir_all(&backup)?;
+    use kael_release::apply::{FsInstaller, SwapPlan, atomic_swap_with_rollback, verify_codesign};
+
+    verify_codesign(new_app).context("downloaded app bundle failed codesign verification")?;
+
+    let parent = existing_app
+        .parent()
+        .ok_or_else(|| anyhow!("could not determine parent directory of {existing_app:?}"))?;
+    let file_name = existing_app
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("Kael.app");
+
+    let staged = parent.join(format!(".{file_name}.staged"));
+    if staged.exists() {
+        std::fs::remove_dir_all(&staged)?;
     }
-    std::fs::rename(existing_app, &backup)
-        .context("failed to move existing app bundle to backup")?;
 
     let status = std::process::Command::new("cp")
-        .args([
-            "-R",
-            &new_app.to_string_lossy(),
-            &existing_app.to_string_lossy(),
-        ])
+        .args(["-R", &new_app.to_string_lossy(), &staged.to_string_lossy()])
         .status()
-        .context("failed to copy new app bundle")?;
-
+        .context("failed to stage new app bundle")?;
     if !status.success() {
-        // Attempt to restore backup
-        let _ = std::fs::rename(&backup, existing_app);
-        bail!("failed to copy new app bundle into place");
+        let _ = std::fs::remove_dir_all(&staged);
+        bail!("failed to stage new app bundle into place");
     }
 
-    let _ = std::fs::remove_dir_all(&backup);
+    let plan = SwapPlan {
+        live: existing_app.to_path_buf(),
+        staged,
+        backup: existing_app.with_extension("app.backup"),
+    };
+
+    atomic_swap_with_rollback(&FsInstaller, &plan)
+        .context("failed to swap new app bundle into place")?;
     Ok(())
 }
 
@@ -1138,6 +1257,156 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_platform_feed_selects_current_os() {
+        let feed = r#"{
+            "version": "4.2.0",
+            "channel": "stable",
+            "url": "https://dl.kael.dev/feed",
+            "notes_url": "https://dl.kael.dev/notes/4.2.0",
+            "pub_date": "2026-06-11T00:00:00Z",
+            "platforms": [
+                {
+                    "platform": "macos",
+                    "url": "https://dl.kael.dev/Kael-macos.zip",
+                    "signature": "c2ln",
+                    "checksum": "aa",
+                    "size_bytes": 1234
+                },
+                {
+                    "platform": "windows",
+                    "url": "https://dl.kael.dev/Kael.msi",
+                    "signature": "c2ln",
+                    "checksum": "bb",
+                    "size_bytes": 5678
+                },
+                {
+                    "platform": "linux",
+                    "url": "https://dl.kael.dev/Kael-linux.tar.gz",
+                    "signature": "c2ln",
+                    "checksum": "cc",
+                    "size_bytes": 9012
+                }
+            ]
+        }"#;
+
+        let updates = parse_update_feed(feed).unwrap();
+        assert_eq!(updates.len(), 1, "exactly one entry for the running OS");
+        let update = &updates[0];
+        assert_eq!(update.version, SemanticVersion::new(4, 2, 0));
+
+        let expected_url = match current_platform_id() {
+            "macos" => "https://dl.kael.dev/Kael-macos.zip",
+            "windows" => "https://dl.kael.dev/Kael.msi",
+            _ => "https://dl.kael.dev/Kael-linux.tar.gz",
+        };
+        assert_eq!(update.download_url, expected_url);
+        assert!(update.sha256.is_some());
+        assert!(update.size_bytes.is_some());
+        assert_eq!(
+            update.release_notes.as_deref(),
+            Some("https://dl.kael.dev/notes/4.2.0")
+        );
+    }
+
+    #[test]
+    fn test_platform_feed_without_current_os_yields_none() {
+        // A feed that only carries a platform the running OS never matches.
+        let bogus = if current_platform_id() == "linux" {
+            "windows"
+        } else {
+            "linux"
+        };
+        let feed = format!(
+            r#"{{
+                "version": "1.0.0",
+                "channel": "stable",
+                "url": "https://dl.kael.dev/feed",
+                "pub_date": "2026-06-11T00:00:00Z",
+                "platforms": [
+                    {{"platform": "{bogus}", "url": "https://dl.kael.dev/x", "checksum": "aa", "size_bytes": 1}}
+                ]
+            }}"#
+        );
+        let updates = parse_update_feed(&feed).unwrap();
+        assert!(updates.is_empty());
+    }
+
+    #[test]
+    fn test_platform_feed_version_comparison_filters_older() {
+        // check_for_updates filters by version; emulate the same comparison the
+        // updater performs against an older current version.
+        let feed = r#"{
+            "version": "2.0.0",
+            "channel": "stable",
+            "url": "https://dl.kael.dev/feed",
+            "pub_date": "2026-06-11T00:00:00Z",
+            "platforms": [
+                {"platform": "macos", "url": "https://dl.kael.dev/m", "checksum": "aa", "size_bytes": 1},
+                {"platform": "windows", "url": "https://dl.kael.dev/w", "checksum": "bb", "size_bytes": 1},
+                {"platform": "linux", "url": "https://dl.kael.dev/l", "checksum": "cc", "size_bytes": 1}
+            ]
+        }"#;
+        let updates = parse_update_feed(feed).unwrap();
+        let current = SemanticVersion::new(1, 0, 0);
+        let newer: Vec<_> = updates.iter().filter(|u| u.version > current).collect();
+        assert_eq!(newer.len(), 1);
+
+        let same_or_newer_current = SemanticVersion::new(2, 0, 0);
+        let none: Vec<_> = updates
+            .iter()
+            .filter(|u| u.version > same_or_newer_current)
+            .collect();
+        assert!(
+            none.is_empty(),
+            "equal version must not be offered as update"
+        );
+    }
+
+    #[test]
+    fn test_apply_policy_sets_channel_and_signature_requirement() {
+        let config = AutoUpdaterConfig {
+            feed_url: "https://example.com/feed".to_string(),
+            check_interval: Duration::from_secs(3600),
+            allow_prerelease: false,
+        };
+        let client = http_client::FakeHttpClient::with_200_response();
+        let mut updater = AutoUpdater::new(config, SemanticVersion::new(1, 0, 0), client);
+
+        let mut policy = UpdatePolicy::default_stable();
+        policy.channel = UpdateChannel::Beta;
+        policy.require_signed_feeds = false;
+        policy.check_interval_secs = 7200;
+        updater.apply_policy(&policy);
+
+        assert_eq!(updater.update_channel, UpdateChannel::Beta);
+        assert!(!updater.require_signature);
+        assert_eq!(updater.config().check_interval, Duration::from_secs(7200));
+        assert!(updater.policy().is_some());
+    }
+
+    #[test]
+    fn test_apply_policy_fails_closed_when_requiring_signed_feeds() {
+        let bytes = b"genuine update payload".to_vec();
+        let (_key, update) = signed_update_fixture(&bytes, UpdateChannel::Stable);
+        let config = AutoUpdaterConfig {
+            feed_url: "https://example.com/feed".to_string(),
+            check_interval: Duration::from_secs(3600),
+            allow_prerelease: false,
+        };
+        let client = http_client::FakeHttpClient::with_200_response();
+        let mut updater = AutoUpdater::new(config, SemanticVersion::new(1, 0, 0), client);
+
+        // Default policy requires signed feeds; with no public key configured,
+        // verification must fail closed.
+        updater.apply_policy(&UpdatePolicy::default_stable());
+        let err = updater.verify_package(&update, &bytes).unwrap_err();
+        assert!(
+            err.to_string().contains("no public key is configured"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn test_parse_unrecognized_format() {
         let result = parse_update_feed("this is not valid");
         assert!(result.is_err());
@@ -1489,6 +1758,62 @@ mod tests {
                 .to_string()
                 .contains("unsupported macOS package format")
         );
+    }
+
+    /// Exercise the real atomic apply path against a dummy `.app` bundle in a
+    /// tempdir, including rollback. Uses the shared kael_release apply machinery
+    /// directly so no `codesign`/`open`/`hdiutil` side effects are triggered.
+    #[test]
+    fn test_apply_swaps_dummy_app_bundle_in_tempdir() {
+        use kael_release::apply::{FsInstaller, SwapPlan, atomic_swap_with_rollback};
+
+        let root = std::env::temp_dir().join(format!("kael_apply_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let make_bundle = |path: &std::path::Path, marker: &str| {
+            let macos = path.join("Contents").join("MacOS");
+            std::fs::create_dir_all(&macos).unwrap();
+            std::fs::write(path.join("Contents").join("Info.plist"), marker).unwrap();
+            std::fs::write(macos.join("kael"), marker).unwrap();
+        };
+
+        let live = root.join("Kael.app");
+        let staged = root.join(".Kael.app.staged");
+        let backup = root.join("Kael.app.backup");
+        make_bundle(&live, "v1");
+        make_bundle(&staged, "v2");
+
+        let plan = SwapPlan {
+            live: live.clone(),
+            staged: staged.clone(),
+            backup: backup.clone(),
+        };
+        let state = atomic_swap_with_rollback(&FsInstaller, &plan).unwrap();
+        assert!(state.is_committed());
+        assert_eq!(
+            std::fs::read_to_string(live.join("Contents").join("Info.plist")).unwrap(),
+            "v2"
+        );
+        assert!(!backup.exists());
+        assert!(!staged.exists());
+
+        // Now drive a rollback: a staged path that does not exist forces the
+        // swap to fail, and the original bundle must be restored intact.
+        let missing = root.join(".missing.app.staged");
+        let plan = SwapPlan {
+            live: live.clone(),
+            staged: missing,
+            backup: root.join("Kael.app.backup2"),
+        };
+        let result = atomic_swap_with_rollback(&FsInstaller, &plan);
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_to_string(live.join("Contents").join("Info.plist")).unwrap(),
+            "v2",
+            "live bundle must be restored after a failed swap"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[cfg(target_os = "windows")]
