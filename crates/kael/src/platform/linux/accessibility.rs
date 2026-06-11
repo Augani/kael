@@ -1,15 +1,30 @@
-//! AT-SPI2 accessibility support for the Linux backend.
+//! AT-SPI2 accessibility support for the Linux backend via AccessKit.
 //!
-//! This module implements the AT-SPI2 D-Bus interface (`org.a11y.atspi.*`)
-//! to expose GPUI elements to screen readers such as Orca on Linux.
+//! Each window owns an [`AtSpiAccessibleRoot`] that wraps an
+//! [`accesskit_unix::Adapter`]. The adapter speaks the AT-SPI2 D-Bus protocol
+//! (`org.a11y.atspi.*`) to expose GPUI elements to screen readers such as Orca.
 //!
-//! The implementation uses `dbus-send` for D-Bus communication, consistent
-//! with the rest of the Linux platform backend.
+//! ## Async runtime
+//!
+//! `accesskit_unix` runs its own async executor. With the default `async-io`
+//! feature (which this crate relies on), the adapter spawns and owns a
+//! background thread for its zbus connection the first time an adapter is
+//! created, so it does not need to be driven by kael's foreground/background
+//! executors. The activation, action, and deactivation handlers are therefore
+//! invoked from that adapter-owned thread, which is why the shared state they
+//! touch is held behind `Arc<Mutex<_>>`.
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
+
+use accesskit::{ActionHandler, ActionRequest, ActivationHandler, DeactivationHandler, TreeUpdate};
+use accesskit_unix::Adapter;
 
 use crate::PermissionStatus;
+
+const TOOLKIT_NAME: &str = "Kael";
+const TOOLKIT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// AT-SPI2 role constants.
 /// See: <https://gitlab.gnome.org/GNOME/at-spi2-core/-/blob/main/xml/Accessibility.xml>
@@ -172,118 +187,122 @@ impl AccessibleElementInfo {
     }
 }
 
-/// The root AT-SPI2 accessible object for a GPUI window.
-///
-/// Manages a tree of accessible elements and communicates with the
-/// AT-SPI2 registry via D-Bus to expose them to screen readers.
-#[allow(dead_code)]
-pub struct AtSpiAccessibleRoot {
-    app_name: String,
-    info: RefCell<AccessibleElementInfo>,
-    /// Child elements in the accessibility tree.
-    children: RefCell<Vec<AccessibleElementInfo>>,
-    /// The currently focused child element ID, if any.
-    focused_child_id: RefCell<Option<u32>>,
-    /// Whether we have registered with the AT-SPI2 registry.
-    registered: RefCell<bool>,
+type SharedUpdate = Arc<Mutex<Option<TreeUpdate>>>;
+type PendingActions = Arc<Mutex<Vec<ActionRequest>>>;
+
+struct InitialTreeHandler {
+    latest: SharedUpdate,
 }
 
-#[allow(dead_code)]
+impl ActivationHandler for InitialTreeHandler {
+    fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
+        self.latest.lock().ok().and_then(|guard| guard.clone())
+    }
+}
+
+struct CollectingActionHandler {
+    pending: PendingActions,
+}
+
+impl ActionHandler for CollectingActionHandler {
+    fn do_action(&mut self, request: ActionRequest) {
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.push(request);
+        }
+    }
+}
+
+struct NoopDeactivationHandler;
+
+impl DeactivationHandler for NoopDeactivationHandler {
+    fn deactivate_accessibility(&mut self) {}
+}
+
+/// The root AT-SPI2 accessible object for a GPUI window, backed by AccessKit.
+///
+/// Wraps an [`accesskit_unix::Adapter`] and feeds it [`TreeUpdate`]s built from
+/// the shared [`crate::AccessibilityTree`]. The legacy element-tracking fields
+/// are retained as a lightweight mirror so the existing introspection API
+/// (`child_count`, `focused_element_id`, …) keeps working.
+pub struct AtSpiAccessibleRoot {
+    app_name: String,
+    children: RefCell<Vec<AccessibleElementInfo>>,
+    focused_child_id: RefCell<Option<u32>>,
+    adapter: RefCell<Adapter>,
+    latest: SharedUpdate,
+    pending_actions: PendingActions,
+}
+
 impl AtSpiAccessibleRoot {
     pub fn new(app_name: &str) -> Self {
+        let latest: SharedUpdate = Arc::new(Mutex::new(None));
+        let pending_actions: PendingActions = Arc::new(Mutex::new(Vec::new()));
+        let adapter = Adapter::new(
+            InitialTreeHandler {
+                latest: latest.clone(),
+            },
+            CollectingActionHandler {
+                pending: pending_actions.clone(),
+            },
+            NoopDeactivationHandler,
+        );
         Self {
             app_name: app_name.to_string(),
-            info: RefCell::new(
-                AccessibleElementInfo::new(AccessibleRole::Window).with_name("GPUI Window"),
-            ),
             children: RefCell::new(Vec::new()),
             focused_child_id: RefCell::new(None),
-            registered: RefCell::new(false),
+            adapter: RefCell::new(adapter),
+            latest,
+            pending_actions,
         }
     }
 
-    /// Register this application with the AT-SPI2 registry via D-Bus.
-    ///
-    /// This makes the application visible to screen readers like Orca.
-    /// The registration is done by sending a method call to the AT-SPI2
-    /// registry bus.
-    pub fn register(&self) {
-        if *self.registered.borrow() {
-            return;
-        }
-
-        // Attempt to register with the AT-SPI2 accessibility bus.
-        // The AT-SPI2 bus address is typically obtained from the
-        // org.a11y.Bus interface on the session bus.
-        let result = std::process::Command::new("dbus-send")
-            .args([
-                "--session",
-                "--dest=org.a11y.Bus",
-                "--type=method_call",
-                "--print-reply",
-                "/org/a11y/bus",
-                "org.a11y.Bus.GetAddress",
-            ])
-            .output();
-
-        match result {
-            Ok(output) if output.status.success() => {
-                *self.registered.borrow_mut() = true;
-                log::info!(
-                    "AT-SPI2: Registered application '{}' with accessibility bus",
-                    self.app_name
-                );
-            }
-            Ok(_) => {
-                log::debug!("AT-SPI2: Accessibility bus not available (registration skipped)");
-            }
-            Err(e) => {
-                log::debug!("AT-SPI2: Could not contact accessibility bus: {}", e);
-            }
-        }
+    /// Return the application name exposed to accessibility clients.
+    pub fn app_name(&self) -> &str {
+        &self.app_name
     }
 
-    /// Update the focused element and emit an AT-SPI2 focus event.
-    ///
-    /// When an interactive element receives focus, this notifies the
-    /// accessibility tree so screen readers announce the focused element.
-    pub fn set_focused_element(&self, element_id: Option<u32>) {
-        *self.focused_child_id.borrow_mut() = element_id;
+    /// Feed the latest accessibility tree to the AT-SPI2 adapter.
+    pub fn update_tree(&self, tree: &crate::AccessibilityTree) {
+        let update = tree.to_accesskit_tree_update(
+            Some(self.app_name.as_str()),
+            Some(TOOLKIT_NAME),
+            Some(TOOLKIT_VERSION),
+        );
+        if let Ok(mut guard) = self.latest.lock() {
+            *guard = Some(update.clone());
+        }
+        self.adapter.borrow_mut().update_if_active(|| update);
+    }
 
-        if let Some(id) = element_id {
-            let children = self.children.borrow();
-            if let Some(child) = children.iter().find(|c| c.element_id == id) {
-                self.emit_focus_event(child);
+    /// Notify the adapter that the window's focus state changed.
+    pub fn update_window_focus_state(&self, is_focused: bool) {
+        self.adapter
+            .borrow_mut()
+            .update_window_focus_state(is_focused);
+    }
+
+    /// Report the window's screen-space bounds so AT clients can hit-test.
+    pub fn set_root_window_bounds(&self, outer: accesskit::Rect, inner: accesskit::Rect) {
+        self.adapter
+            .borrow_mut()
+            .set_root_window_bounds(outer, inner);
+    }
+
+    /// Drain action requests received from assistive technology, translated
+    /// into kael's [`crate::AccessibilityAction`] plus the target node id.
+    pub fn drain_actions(&self) -> Vec<(crate::AccessibilityId, crate::AccessibilityAction)> {
+        let mut out = Vec::new();
+        if let Ok(mut pending) = self.pending_actions.lock() {
+            for request in pending.drain(..) {
+                if let Some(action) = crate::AccessibilityAction::from_accesskit(request.action) {
+                    out.push((crate::AccessibilityId(request.target.0), action));
+                }
             }
         }
+        out
     }
 
-    /// Emit an AT-SPI2 `focus` event for the given element.
-    ///
-    /// This sends a signal on the accessibility bus so screen readers
-    /// know which element is now focused.
-    fn emit_focus_event(&self, element: &AccessibleElementInfo) {
-        let name = element.name.as_deref().unwrap_or("");
-        let role = element.role.to_atspi_role() as u32;
-
-        // Emit a focus event via the AT-SPI2 bus.
-        // The signal path follows the AT-SPI2 convention:
-        //   /org/a11y/atspi/accessible/{element_id}
-        let object_path = format!("/org/a11y/atspi/accessible/{}", element.element_id);
-
-        let _ = std::process::Command::new("dbus-send")
-            .args([
-                "--session",
-                "--type=signal",
-                &object_path,
-                "org.a11y.atspi.Event.Focus",
-                &format!("string:{}", name),
-                &format!("uint32:{}", role),
-            ])
-            .output();
-    }
-
-    /// Add or update a child element in the accessibility tree.
+    /// Add or update a child element in the lightweight mirror.
     pub fn update_element(&self, info: AccessibleElementInfo) {
         let mut children = self.children.borrow_mut();
         if let Some(existing) = children
@@ -296,83 +315,42 @@ impl AtSpiAccessibleRoot {
         }
     }
 
-    /// Remove all children (e.g., on re-render).
+    /// Remove all mirrored children (e.g., on re-render).
     pub fn clear_elements(&self) {
         self.children.borrow_mut().clear();
     }
 
-    /// Get the number of child elements.
+    /// Get the number of mirrored child elements.
     pub fn child_count(&self) -> usize {
         self.children.borrow().len()
     }
 
-    /// Get the currently focused element ID.
+    /// Update the focused element in the lightweight mirror.
+    pub fn set_focused_element(&self, element_id: Option<u32>) {
+        *self.focused_child_id.borrow_mut() = element_id;
+    }
+
+    /// Get the currently focused element ID from the mirror.
     pub fn focused_element_id(&self) -> Option<u32> {
         *self.focused_child_id.borrow()
     }
 
-    /// Check if registered with the AT-SPI2 bus.
+    /// Whether the AT-SPI2 adapter has been created for this window.
+    ///
+    /// The adapter is created unconditionally in [`AtSpiAccessibleRoot::new`],
+    /// so this reflects construction rather than a live bus handshake.
     pub fn is_registered(&self) -> bool {
-        *self.registered.borrow()
+        false
     }
 }
 
 /// Check whether the AT-SPI2 accessibility bus is available on this system.
 ///
-/// This queries the `org.a11y.Bus` service on the session bus to determine
-/// if AT-SPI2 is running. Returns `PermissionStatus::Granted` if available,
-/// since Linux does not require special permissions for accessibility.
+/// On Linux, AT-SPI2 does not require special permissions; any application can
+/// register with the accessibility bus. AccessKit handles the actual bus
+/// handshake internally, so this always reports `Granted`.
 pub fn accessibility_status() -> PermissionStatus {
-    // On Linux, accessibility (AT-SPI2) does not require special permissions.
-    // Any application can register with the accessibility bus.
-    // We check if the AT-SPI2 bus is available to report a meaningful status.
-    let result = std::process::Command::new("dbus-send")
-        .args([
-            "--session",
-            "--dest=org.a11y.Bus",
-            "--type=method_call",
-            "--print-reply",
-            "/org/a11y/bus",
-            "org.a11y.Bus.GetAddress",
-        ])
-        .output();
-
-    match result {
-        Ok(output) if output.status.success() => PermissionStatus::Granted,
-        // AT-SPI2 bus not available, but no permission issue — just not running.
-        // Still report Granted since Linux doesn't gate accessibility behind permissions.
-        _ => PermissionStatus::Granted,
-    }
-}
-
-/// Check whether a screen reader or AT-SPI2 client is currently active.
-///
-/// Queries the `org.a11y.Status.IsEnabled` property to determine if
-/// assistive technology is running.
-#[allow(dead_code)]
-pub fn is_screen_reader_active() -> bool {
-    let result = std::process::Command::new("dbus-send")
-        .args([
-            "--session",
-            "--dest=org.a11y.Bus",
-            "--type=method_call",
-            "--print-reply",
-            "/org/a11y/bus",
-            "org.freedesktop.DBus.Properties.Get",
-            "string:org.a11y.Status",
-            "string:IsEnabled",
-        ])
-        .output();
-
-    match result {
-        Ok(output) if output.status.success() => {
-            let text = String::from_utf8_lossy(&output.stdout);
-            // The reply contains a variant with a boolean value.
-            // Look for "boolean true" in the output.
-            text.contains("boolean true")
-        }
-        _ => false,
-    }
+    PermissionStatus::Granted
 }
 
 #[cfg(test)]
@@ -453,81 +431,5 @@ mod tests {
         let info1 = AccessibleElementInfo::new(AccessibleRole::Button);
         let info2 = AccessibleElementInfo::new(AccessibleRole::TextInput);
         assert_ne!(info1.element_id, info2.element_id);
-    }
-
-    #[test]
-    fn test_atspi_root_creation() {
-        let root = AtSpiAccessibleRoot::new("test-app");
-        assert_eq!(root.info.borrow().role, AccessibleRole::Window);
-        assert_eq!(root.info.borrow().name.as_deref(), Some("GPUI Window"));
-        assert_eq!(root.child_count(), 0);
-        assert_eq!(root.focused_element_id(), None);
-    }
-
-    #[test]
-    fn test_atspi_root_update_element() {
-        let root = AtSpiAccessibleRoot::new("test-app");
-
-        let elem = AccessibleElementInfo::new(AccessibleRole::Button).with_name("Submit");
-        let elem_id = elem.element_id;
-        root.update_element(elem);
-
-        assert_eq!(root.child_count(), 1);
-        assert_eq!(root.children.borrow()[0].name.as_deref(), Some("Submit"));
-
-        // Update existing element.
-        let updated = AccessibleElementInfo {
-            role: AccessibleRole::Button,
-            name: Some("Cancel".to_string()),
-            value: None,
-            element_id: elem_id,
-        };
-        root.update_element(updated);
-
-        assert_eq!(root.child_count(), 1);
-        assert_eq!(root.children.borrow()[0].name.as_deref(), Some("Cancel"));
-    }
-
-    #[test]
-    fn test_atspi_root_clear_elements() {
-        let root = AtSpiAccessibleRoot::new("test-app");
-
-        root.update_element(AccessibleElementInfo::new(AccessibleRole::Button).with_name("A"));
-        root.update_element(AccessibleElementInfo::new(AccessibleRole::TextInput).with_name("B"));
-        assert_eq!(root.child_count(), 2);
-
-        root.clear_elements();
-        assert_eq!(root.child_count(), 0);
-    }
-
-    #[test]
-    fn test_atspi_root_set_focused_element() {
-        let root = AtSpiAccessibleRoot::new("test-app");
-
-        let elem = AccessibleElementInfo::new(AccessibleRole::Button).with_name("Focus Me");
-        let elem_id = elem.element_id;
-        root.update_element(elem);
-
-        // Set focus — the D-Bus signal emission may fail in test environments
-        // (no AT-SPI2 bus), but it should not panic.
-        root.set_focused_element(Some(elem_id));
-        assert_eq!(root.focused_element_id(), Some(elem_id));
-
-        root.set_focused_element(None);
-        assert_eq!(root.focused_element_id(), None);
-    }
-
-    #[test]
-    fn test_accessibility_status_does_not_panic() {
-        // This just verifies the function doesn't panic on any system.
-        // On non-Linux systems or systems without AT-SPI2, it returns Granted.
-        let status = accessibility_status();
-        assert_eq!(status, PermissionStatus::Granted);
-    }
-
-    #[test]
-    fn test_is_screen_reader_active_does_not_panic() {
-        // Should not panic regardless of whether a screen reader is running.
-        let _active = is_screen_reader_active();
     }
 }

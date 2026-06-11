@@ -469,6 +469,9 @@ default-features = false
 version = "0.45.0"
 default-features = false
 
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.accesskit_unix]
+version = "0.13.1"
+
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.as-raw-xcb-connection]
 version = "1"
 optional = true

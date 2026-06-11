@@ -1876,35 +1876,16 @@ impl PlatformWindow for X11Window {
     }
 
     fn update_accessibility_tree(&mut self, tree: &crate::AccessibilityTree) {
-        use crate::platform::linux::accessibility::{AccessibleElementInfo, AccessibleRole};
-        let mut state = self.0.state.borrow_mut();
-        state.accessibility_root.clear_elements();
-        for (_, node) in &tree.nodes {
-            if node.id == tree.root {
-                continue;
-            }
-            let role = AccessibleRole::from(node.role);
-            let mut info = AccessibleElementInfo::new(role);
-            if let Some(ref label) = node.label {
-                info = info.with_name(label.clone());
-            }
-            if let Some(ref value) = node.value {
-                info = info.with_value(match value {
-                    crate::AccessibilityValue::Text(text) => text.clone(),
-                    crate::AccessibilityValue::Number(n) => n.to_string(),
-                    crate::AccessibilityValue::Range { current, .. } => current.to_string(),
-                    crate::AccessibilityValue::Toggle(v) => v.to_string(),
-                });
-            }
-            info.element_id = node.id.0 as u32;
-            state.accessibility_root.update_element(info);
-        }
-        if let Some(focused_id) = tree.focused_node() {
-            state
-                .accessibility_root
-                .set_focused_element(Some(focused_id.0 as u32));
-        } else {
-            state.accessibility_root.set_focused_element(None);
+        let state = self.0.state.borrow();
+        state.accessibility_root.update_tree(tree);
+        let actions = state.accessibility_root.drain_actions();
+        drop(state);
+        for (target, action) in actions {
+            log::debug!(
+                "AccessKit action request: {:?} on node {}",
+                action,
+                target.0
+            );
         }
     }
 }
