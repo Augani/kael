@@ -1,9 +1,10 @@
 use crate::{
+    AnyElement, App, Bounds, BoxShadow, Element, ElementId, GlobalElementId, InspectorElementId,
+    IntoElement, LayoutId, Pixels, Window,
     elements::cached::{
-        cached_paint, cached_prepaint, cached_request_layout, CachedRequestLayoutState,
+        CachedRequestLayoutState, cached_paint, cached_prepaint, cached_request_layout,
     },
-    px, AnyElement, App, Bounds, BoxShadow, Element, ElementId, GlobalElementId,
-    InspectorElementId, IntoElement, LayoutId, Pixels, Window,
+    px,
 };
 
 #[track_caller]
@@ -134,7 +135,7 @@ impl IntoElement for EffectLayer {
 #[cfg(test)]
 mod tests {
     use super::effect_layer;
-    use crate::{div, hsla, point, px, BoxShadow, ParentElement, Styled};
+    use crate::{BoxShadow, ParentElement, Styled, div, hsla, point, px};
 
     #[test]
     fn effect_layer_defaults_to_no_effects() {
@@ -166,9 +167,9 @@ mod tests {
 mod render_tests {
     use super::effect_layer;
     use crate::{
-        div, hsla, point, px, BoxShadow, Context, IntoElement, ParentElement, Render, Styled,
-        TestAppContext, VisualContext, Window, POLYCHROME_SPRITE_KIND_CONTENT_BLURRED,
-        POLYCHROME_SPRITE_KIND_CONTENT_SHADOW, POLYCHROME_SPRITE_KIND_PREMULTIPLIED,
+        BoxShadow, Context, IntoElement, POLYCHROME_SPRITE_KIND_CONTENT_BLURRED,
+        POLYCHROME_SPRITE_KIND_CONTENT_SHADOW, POLYCHROME_SPRITE_KIND_PREMULTIPLIED, ParentElement,
+        Render, Styled, TestAppContext, VisualContext, Window, div, hsla, point, px,
     };
 
     struct BlurView;

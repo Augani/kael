@@ -162,14 +162,12 @@ impl Render for AsyncQueryDemo {
                     .flex()
                     .flex_row()
                     .gap(px(12.0))
-                    .child(
-                        Button::new("refetch", "Refetch").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.fail_next.set(false);
-                                this.query.update(cx, |query, cx| query.refetch(cx));
-                            },
-                        )),
-                    )
+                    .child(Button::new("refetch", "Refetch").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.fail_next.set(false);
+                            this.query.update(cx, |query, cx| query.refetch(cx));
+                        },
+                    )))
                     .child(
                         Button::new("fail", "Trigger error")
                             .variant(ButtonVariant::Destructive)

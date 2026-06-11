@@ -1,5 +1,5 @@
 use kael::{
-    div, hsla, point, prelude::*, px, rgb, App, Application, Context, Render, Window, WindowOptions,
+    App, Application, Context, Render, Window, WindowOptions, div, hsla, point, prelude::*, px, rgb,
 };
 use std::time::Duration;
 

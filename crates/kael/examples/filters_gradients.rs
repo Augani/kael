@@ -2,8 +2,9 @@ use std::{fs, path::PathBuf};
 
 use anyhow::Result;
 use kael::{
-    conic_gradient, div, img, linear_color_stop, linear_gradient, prelude::*, px, rgb, size, App,
-    Application, AssetSource, Bounds, Context, SharedString, Window, WindowBounds, WindowOptions,
+    App, Application, AssetSource, Bounds, Context, SharedString, Window, WindowBounds,
+    WindowOptions, conic_gradient, div, img, linear_color_stop, linear_gradient, prelude::*, px,
+    rgb, size,
 };
 
 struct Assets {

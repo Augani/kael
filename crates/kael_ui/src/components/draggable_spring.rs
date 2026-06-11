@@ -125,31 +125,28 @@ impl DraggableSpringState {
     }
 
     fn schedule_tick(&self, cx: &mut Context<Self>) {
-        cx.spawn(
-            async | this,
-            cx | {
-                cx.background_executor().timer(FRAME_INTERVAL).await;
+        cx.spawn(async |this, cx| {
+            cx.background_executor().timer(FRAME_INTERVAL).await;
 
-                _ = this.update(cx, |state, cx| {
-                    if !state.animating {
-                        return;
-                    }
+            _ = this.update(cx, |state, cx| {
+                if !state.animating {
+                    return;
+                }
 
-                    if state.is_dragging {
-                        state.animating = false;
-                        return;
-                    }
+                if state.is_dragging {
+                    state.animating = false;
+                    return;
+                }
 
-                    let moving = state.offset.tick_with_real_dt();
-                    if moving {
-                        state.schedule_tick(cx);
-                    } else {
-                        state.animating = false;
-                    }
-                    cx.notify();
-                });
-            },
-        )
+                let moving = state.offset.tick_with_real_dt();
+                if moving {
+                    state.schedule_tick(cx);
+                } else {
+                    state.animating = false;
+                }
+                cx.notify();
+            });
+        })
         .detach();
     }
 }

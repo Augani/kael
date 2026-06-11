@@ -22,15 +22,15 @@ use crate::scroll_elasticity::{
 use crate::{
     AbsoluteLength, Action, AnyDrag, AnyElement, AnyTooltip, AnyView, App, AppContext, Background,
     Bounds, BoxShadow, ClickEvent, Context, Corners, CursorStyle, DispatchPhase, Element,
-    ElementId, Entity, Fill,
-    FocusHandle, GestureRecognizer, Global, GlobalElementId, Hitbox, HitboxBehavior, HitboxId,
-    Hsla, InspectorElementId, IntoElement, IsZero, KeyContext, KeyDownEvent, KeyUpEvent,
-    KeyboardButton, KeyboardClickEvent, LayoutId, MagnifyEvent, ModifiersChangedEvent, MouseButton,
-    MouseClickEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Overflow, PanGesture,
-    PanGestureEvent, PanState, ParentElement, PinchGesture, PinchGestureEvent, Pixels, Point,
-    Render, Rgba, ScaledPixels, ScrollDelta, ScrollWheelEvent, SharedString, Size, Style,
-    StyleRefinement, Styled, SwipeDirection, SwipeGesture, SwipeGestureEvent, Task, TooltipId,
-    TouchPhase, TransformationMatrix, Visibility, Window, WindowControlArea, point, px, size,
+    ElementId, Entity, Fill, FocusHandle, GestureRecognizer, Global, GlobalElementId, Hitbox,
+    HitboxBehavior, HitboxId, Hsla, InspectorElementId, IntoElement, IsZero, KeyContext,
+    KeyDownEvent, KeyUpEvent, KeyboardButton, KeyboardClickEvent, LayoutId, MagnifyEvent,
+    ModifiersChangedEvent, MouseButton, MouseClickEvent, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Overflow, PanGesture, PanGestureEvent, PanState, ParentElement, PinchGesture,
+    PinchGestureEvent, Pixels, Point, Render, Rgba, ScaledPixels, ScrollDelta, ScrollWheelEvent,
+    SharedString, Size, Style, StyleRefinement, Styled, SwipeDirection, SwipeGesture,
+    SwipeGestureEvent, Task, TooltipId, TouchPhase, TransformationMatrix, Visibility, Window,
+    WindowControlArea, point, px, size,
 };
 use collections::HashMap;
 use refineable::Refineable;
@@ -340,9 +340,7 @@ impl FlipLayoutState {
         if let Some(prev_origin) = prev_origin
             && prev_origin != origin
         {
-            let current_offset = self
-                .current_offset(now, config)
-                .unwrap_or(Point::default());
+            let current_offset = self.current_offset(now, config).unwrap_or(Point::default());
             let offset = current_offset + (prev_origin - origin);
             if offset != Point::default() {
                 self.animation = Some(FlipAnimation {
@@ -2955,90 +2953,107 @@ impl Interactivity {
                 let flip_transform =
                     self.resolve_flip_transform(element_state.as_mut(), bounds, window);
                 window.with_element_transform(flip_transform, |window| {
-                window.with_element_opacity(style.opacity, |window| {
-                    style.paint(bounds, window, cx, |window: &mut Window, cx: &mut App| {
-                        window.with_text_style(style.text_style().cloned(), |window| {
-                            window.with_content_mask(
-                                style.overflow_mask(bounds, window.rem_size()),
-                                |window| {
-                                    window.with_rounded_clip(
-                                        style.rounded_overflow_clip(bounds, window.rem_size()),
-                                        |window| {
-                                    window.with_tab_group(tab_group, |window| {
-                                        if let Some(hitbox) = hitbox {
-                                            #[cfg(debug_assertions)]
-                                            self.paint_debug_info(
-                                                global_id, hitbox, &style, window, cx,
-                                            );
+                    window.with_element_opacity(style.opacity, |window| {
+                        style.paint(bounds, window, cx, |window: &mut Window, cx: &mut App| {
+                            window.with_text_style(style.text_style().cloned(), |window| {
+                                window.with_content_mask(
+                                    style.overflow_mask(bounds, window.rem_size()),
+                                    |window| {
+                                        window.with_rounded_clip(
+                                            style.rounded_overflow_clip(bounds, window.rem_size()),
+                                            |window| {
+                                                window.with_tab_group(tab_group, |window| {
+                                                    if let Some(hitbox) = hitbox {
+                                                        #[cfg(debug_assertions)]
+                                                        self.paint_debug_info(
+                                                            global_id, hitbox, &style, window, cx,
+                                                        );
 
-                                            if let Some(drag) = cx.active_drag.as_ref() {
-                                                if let Some(mouse_cursor) = drag.cursor_style {
-                                                    window.set_window_cursor_style(mouse_cursor);
-                                                }
-                                            } else {
-                                                if let Some(mouse_cursor) = style.mouse_cursor {
-                                                    window.set_cursor_style(mouse_cursor, hitbox);
-                                                }
-                                            }
+                                                        if let Some(drag) = cx.active_drag.as_ref()
+                                                        {
+                                                            if let Some(mouse_cursor) =
+                                                                drag.cursor_style
+                                                            {
+                                                                window.set_window_cursor_style(
+                                                                    mouse_cursor,
+                                                                );
+                                                            }
+                                                        } else {
+                                                            if let Some(mouse_cursor) =
+                                                                style.mouse_cursor
+                                                            {
+                                                                window.set_cursor_style(
+                                                                    mouse_cursor,
+                                                                    hitbox,
+                                                                );
+                                                            }
+                                                        }
 
-                                            if let Some(group) = self.group.clone() {
-                                                GroupHitboxes::push(group, hitbox.id, cx);
-                                            }
+                                                        if let Some(group) = self.group.clone() {
+                                                            GroupHitboxes::push(
+                                                                group, hitbox.id, cx,
+                                                            );
+                                                        }
 
-                                            if let Some(area) = self.window_control {
-                                                window.insert_window_control_hitbox(
-                                                    area,
-                                                    hitbox.clone(),
-                                                );
-                                            }
+                                                        if let Some(area) = self.window_control {
+                                                            window.insert_window_control_hitbox(
+                                                                area,
+                                                                hitbox.clone(),
+                                                            );
+                                                        }
 
-                                            self.paint_mouse_listeners(
-                                                hitbox,
-                                                element_state.as_mut(),
-                                                window,
-                                                cx,
-                                            );
-                                            self.paint_scroll_listener(hitbox, &style, window, cx);
-                                            self.paint_gesture_listeners(
-                                                hitbox,
-                                                element_state.as_mut(),
-                                                window,
-                                                cx,
-                                            );
-                                        }
+                                                        self.paint_mouse_listeners(
+                                                            hitbox,
+                                                            element_state.as_mut(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                        self.paint_scroll_listener(
+                                                            hitbox, &style, window, cx,
+                                                        );
+                                                        self.paint_gesture_listeners(
+                                                            hitbox,
+                                                            element_state.as_mut(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    }
 
-                                        self.paint_keyboard_listeners(window, cx);
-                                        f(&style, window, cx);
+                                                    self.paint_keyboard_listeners(window, cx);
+                                                    f(&style, window, cx);
 
-                                        if let Some(_hitbox) = hitbox {
-                                            #[cfg(any(feature = "inspector", debug_assertions))]
-                                            window.insert_inspector_hitbox(
-                                                _hitbox.id,
-                                                _inspector_id,
-                                                cx,
-                                            );
+                                                    if let Some(_hitbox) = hitbox {
+                                                        #[cfg(any(
+                                                            feature = "inspector",
+                                                            debug_assertions
+                                                        ))]
+                                                        window.insert_inspector_hitbox(
+                                                            _hitbox.id,
+                                                            _inspector_id,
+                                                            cx,
+                                                        );
 
-                                            if let Some(group) = self.group.as_ref() {
-                                                GroupHitboxes::pop(group, cx);
-                                            }
-                                        }
-                                    })
-                                        },
-                                    )
-                                },
-                            );
-                            if let Some(element_state) = element_state.as_mut() {
-                                self.paint_auto_scrollbars(
-                                    bounds,
-                                    &style,
-                                    element_state,
-                                    auto_scrollbars,
-                                    window,
+                                                        if let Some(group) = self.group.as_ref() {
+                                                            GroupHitboxes::pop(group, cx);
+                                                        }
+                                                    }
+                                                })
+                                            },
+                                        )
+                                    },
                                 );
-                            }
+                                if let Some(element_state) = element_state.as_mut() {
+                                    self.paint_auto_scrollbars(
+                                        bounds,
+                                        &style,
+                                        element_state,
+                                        auto_scrollbars,
+                                        window,
+                                    );
+                                }
+                            });
                         });
                     });
-                });
                 });
 
                 ((), element_state)
@@ -5590,10 +5605,10 @@ mod test {
     use super::{
         ImplicitStyleAnimationState, ImplicitVisualStyle, TOOLTIP_SHOW_DELAY, TransitionConfig,
     };
-    use crate::{AbsoluteLength, BoxShadow};
     use crate::scroll_elasticity::{
         add_scroll_elasticity, advance_scroll_elasticity, apply_scroll_delta_axis,
     };
+    use crate::{AbsoluteLength, BoxShadow};
     use crate::{
         AccessibilityAttributes, AccessibilityRole, AccessibilityState, AppContext, Context,
         FocusHandle, InteractiveElement, Interactivity, MouseButton, MouseDownEvent,
@@ -5950,8 +5965,12 @@ mod test {
         to_style.opacity = Some(1.0);
         let _ = state.resolve(to_style.clone(), start, true, &config);
 
-        let (mid, mid_needs_frame) =
-            state.resolve(to_style.clone(), start + Duration::from_millis(300), true, &config);
+        let (mid, mid_needs_frame) = state.resolve(
+            to_style.clone(),
+            start + Duration::from_millis(300),
+            true,
+            &config,
+        );
         let mid_opacity = mid.opacity.unwrap_or(1.0);
         assert!(mid_opacity > 0.0 && mid_opacity < 1.0);
         assert!(mid_needs_frame);
@@ -5979,8 +5998,7 @@ mod test {
         to_style.opacity = Some(1.0);
         let _ = state.resolve(to_style.clone(), start, true, &config);
 
-        let (mid, _) =
-            state.resolve(to_style, start + Duration::from_millis(50), true, &config);
+        let (mid, _) = state.resolve(to_style, start + Duration::from_millis(50), true, &config);
         let mid_opacity = mid.opacity.expect("expected mid-transition opacity");
         assert!((mid_opacity - 0.5).abs() < 0.01);
     }
@@ -6011,12 +6029,7 @@ mod test {
         });
         let _ = state.resolve(to_style.clone(), start, true, &config);
 
-        let (mid, _) = state.resolve(
-            to_style,
-            start + Duration::from_millis(50),
-            true,
-            &config,
-        );
+        let (mid, _) = state.resolve(to_style, start + Duration::from_millis(50), true, &config);
 
         let AbsoluteLength::Pixels(mid_radius) = mid.corner_radii.top_left else {
             panic!("expected pixel corner radius");

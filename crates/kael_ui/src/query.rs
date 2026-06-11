@@ -81,8 +81,7 @@ impl Generation {
 
 type LastQuery<T> = Box<dyn Fn() -> BoxFetch<T> + 'static>;
 
-type BoxFetch<T> =
-    std::pin::Pin<Box<dyn Future<Output = Result<T, SharedString>> + 'static>>;
+type BoxFetch<T> = std::pin::Pin<Box<dyn Future<Output = Result<T, SharedString>> + 'static>>;
 
 /// Manages the fetch lifecycle for a single asynchronously loaded value.
 ///
@@ -152,11 +151,8 @@ impl<T: 'static> QueryState<T> {
     /// The factory is stored so [`QueryState::refetch`] can re-run the same
     /// query. Each call bumps the generation, so a slow response from an earlier
     /// call is dropped once a newer call has started.
-    pub fn run<Fut>(
-        &mut self,
-        cx: &mut Context<Self>,
-        fetch: impl Fn() -> Fut + 'static,
-    ) where
+    pub fn run<Fut>(&mut self, cx: &mut Context<Self>, fetch: impl Fn() -> Fut + 'static)
+    where
         Fut: Future<Output = Result<T, SharedString>> + 'static,
     {
         self.last_query = Some(Box::new(move || Box::pin(fetch())));
