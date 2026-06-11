@@ -47,8 +47,12 @@ Kael. To be unambiguous about that history:
   Kael is its continuation.
 - **The rename is not a severing of ties with Zed.** Kael is independent and is
   not affiliated with or endorsed by Zed Industries, but it is built on their
-  foundational work, credits it, keeps the Apache-2.0 license, and continues to
-  watch and selectively pull from upstream GPUI where it benefits Kael users.
+  foundational work, credits it, keeps the Apache-2.0 license, and remains
+  immensely grateful for it.
+- **Kael does not track upstream.** The Zed team has been clear that GPUI takes
+  only what benefits their editor, so Kael is deliberately not structured as a
+  fork that follows upstream and keeps it intact. There is no need for that.
+  When Kael needs a capability, Kael builds it.
 - **Why fork at all?** GPUI is excellent, and it is Zed-shaped: the Zed team has
   been clear that they prioritize APIs that directly benefit their editor.
   That is a reasonable position for them — and it leaves no home for
@@ -101,8 +105,7 @@ In order:
    the render graph. The most-requested capability in the GPUI ecosystem and the
    thing upstream won't take.
 3. **Stability and community** — SemVer policy, deliberate public surface,
-   upstream GPUI tracking strategy, contribution guidelines that welcome
-   general-purpose features.
+   contribution guidelines that welcome general-purpose features.
 4. **Domain stacks (media included)** — continue as optional layers, funded by
    and subordinate to items 1–3.
 
@@ -121,8 +124,8 @@ backends, and Kael. Fragmentation before maturity helps no one. Kael's position:
   problems — custom shader APIs, versioning against upstream, platform backends.
   If you maintain one of these projects and want to align on an API, open an
   issue.
-- Where upstream GPUI later ships something better than ours, we would rather
-  converge than diverge.
+- We do not wait on upstream. Zed builds for their editor; Kael builds for every
+  desktop app. When Kael needs something, we build it ourselves.
 
 ---
 
