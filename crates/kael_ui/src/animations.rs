@@ -93,98 +93,78 @@ pub mod durations {
     pub const EXTRA_SLOW: Duration = Duration::from_millis(600);
 }
 
-/// Professional easing functions for smooth animations
-/// Based on CSS cubic-bezier curves and spring physics
+/// Easing functions for smooth animations.
+///
+/// These are compatibility shims that delegate to the canonical
+/// [`kael::Easing`] vocabulary; prefer [`kael::Easing`] variants directly in new
+/// code. Each function preserves its historical name and `fn(f32) -> f32`
+/// signature so existing call sites keep compiling. The `spring`,
+/// `smooth_spring`, and `cubic_bezier` curves have no core variant and remain
+/// defined here as their authoritative implementation.
 pub mod easings {
-    /// Linear easing (no acceleration)
+    use kael::Easing;
+
+    /// Linear easing. Delegates to [`Easing::Linear`].
     pub fn linear(t: f32) -> f32 {
-        t
+        Easing::Linear.ease(t)
     }
 
-    /// Ease in quad - starts slow, accelerates
+    /// Quadratic ease-in. Delegates to [`Easing::EaseIn`].
     pub fn ease_in_quad(t: f32) -> f32 {
-        t * t
+        Easing::EaseIn.ease(t)
     }
 
-    /// Ease out quad - starts fast, decelerates
+    /// Quadratic ease-out. Delegates to [`Easing::EaseOut`].
     pub fn ease_out_quad(t: f32) -> f32 {
-        t * (2.0 - t)
+        Easing::EaseOut.ease(t)
     }
 
-    /// Ease in-out quad - smooth acceleration and deceleration
+    /// Quadratic ease-in-out. Delegates to [`Easing::EaseInOut`].
     pub fn ease_in_out_quad(t: f32) -> f32 {
-        if t < 0.5 {
-            2.0 * t * t
-        } else {
-            -1.0 + (4.0 - 2.0 * t) * t
-        }
+        Easing::EaseInOut.ease(t)
     }
 
-    /// Ease in cubic - stronger acceleration
+    /// Cubic ease-in. Delegates to [`Easing::EaseInCubic`].
     pub fn ease_in_cubic(t: f32) -> f32 {
-        t * t * t
+        Easing::EaseInCubic.ease(t)
     }
 
-    /// Ease out cubic - stronger deceleration (most natural feeling)
+    /// Cubic ease-out. Delegates to [`Easing::EaseOutCubic`].
     pub fn ease_out_cubic(t: f32) -> f32 {
-        let t = t - 1.0;
-        t * t * t + 1.0
+        Easing::EaseOutCubic.ease(t)
     }
 
-    /// Ease in-out cubic - smooth and professional (recommended default)
+    /// Cubic ease-in-out. Delegates to [`Easing::EaseInOutCubic`].
     pub fn ease_in_out_cubic(t: f32) -> f32 {
-        if t < 0.5 {
-            4.0 * t * t * t
-        } else {
-            let t = 2.0 * t - 2.0;
-            1.0 + t * t * t / 2.0
-        }
+        Easing::EaseInOutCubic.ease(t)
     }
 
-    /// Ease in quart - very strong acceleration
+    /// Quartic ease-in. Delegates to [`Easing::EaseInQuart`].
     pub fn ease_in_quart(t: f32) -> f32 {
-        t * t * t * t
+        Easing::EaseInQuart.ease(t)
     }
 
-    /// Ease out quart - very smooth deceleration
+    /// Quartic ease-out. Delegates to [`Easing::EaseOutQuart`].
     pub fn ease_out_quart(t: f32) -> f32 {
-        let t = t - 1.0;
-        1.0 - t * t * t * t
+        Easing::EaseOutQuart.ease(t)
     }
 
-    /// Ease in-out quart - very smooth both ways
+    /// Quartic ease-in-out. Delegates to [`Easing::EaseInOutQuart`].
     pub fn ease_in_out_quart(t: f32) -> f32 {
-        if t < 0.5 {
-            8.0 * t * t * t * t
-        } else {
-            let t = t - 1.0;
-            1.0 - 8.0 * t * t * t * t
-        }
+        Easing::EaseInOutQuart.ease(t)
     }
 
-    /// Ease out expo - dramatic deceleration
+    /// Exponential ease-out. Delegates to [`Easing::EaseOutExpo`].
     pub fn ease_out_expo(t: f32) -> f32 {
-        if t >= 1.0 {
-            1.0
-        } else {
-            1.0 - 2_f32.powf(-10.0 * t)
-        }
+        Easing::EaseOutExpo.ease(t)
     }
 
-    /// Ease in-out expo - dramatic both ways
+    /// Exponential ease-in-out. Delegates to [`Easing::EaseInOutExpo`].
     pub fn ease_in_out_expo(t: f32) -> f32 {
-        if t == 0.0 {
-            0.0
-        } else if t >= 1.0 {
-            1.0
-        } else if t < 0.5 {
-            2_f32.powf(20.0 * t - 10.0) / 2.0
-        } else {
-            (2.0 - 2_f32.powf(-20.0 * t + 10.0)) / 2.0
-        }
+        Easing::EaseInOutExpo.ease(t)
     }
 
-    /// Spring easing - natural bouncy effect
+    /// Natural bouncy spring. No core variant; defined here.
     pub fn spring(t: f32) -> f32 {
         if t >= 1.0 {
             return 1.0;
@@ -193,145 +173,94 @@ pub mod easings {
         let frequency = 1.5;
         let decay = (-damping * t * 10.0).exp();
         let oscillation = (frequency * t * std::f32::consts::PI * 2.0).sin();
-        let result = 1.0 - decay * oscillation * 0.5; // Reduced amplitude
-        result.clamp(0.0, 1.0)
+        (1.0 - decay * oscillation * 0.5).clamp(0.0, 1.0)
     }
 
-    /// Elastic easing - more pronounced spring effect
+    /// Clamped elastic spring. Delegates to [`Easing::Elastic`].
     pub fn elastic(t: f32) -> f32 {
-        if t == 0.0 {
-            return 0.0;
-        }
-        if t >= 1.0 {
-            return 1.0;
-        }
-        let p = 0.3;
-        let s = p / 4.0;
-        let t_adj = t - 1.0;
-        let result = 1.0
-            + (2_f32.powf(10.0 * t_adj)) * ((t_adj - s) * (2.0 * std::f32::consts::PI) / p).sin();
-        result.clamp(0.0, 1.0)
+        Easing::Elastic.ease(t)
     }
 
-    /// Smooth spring - subtle spring effect (recommended for UI)
+    /// Subtle spring suited to UI. No core variant; defined here.
     pub fn smooth_spring(t: f32) -> f32 {
         if t >= 1.0 {
             return 1.0;
         }
-        let damping = 0.9; // Increased damping for smoother effect
+        let damping = 0.9;
         let frequency = 1.0;
         let decay = (-damping * t * 10.0).exp();
         let oscillation = (frequency * t * std::f32::consts::PI * 2.0).sin();
-        let result = t + decay * oscillation * 0.1; // Very subtle spring
-        result.clamp(0.0, 1.0)
+        (t + decay * oscillation * 0.1).clamp(0.0, 1.0)
     }
 
-    /// Back easing - slight overshoot for emphasis
-    /// Note: Clamped to prevent values outside 0-1 range
+    /// Backing ease-out with reduced overshoot. Delegates to
+    /// [`Easing::EaseOutBack`].
     pub fn ease_out_back(t: f32) -> f32 {
-        if t >= 1.0 {
-            return 1.0;
-        }
-        // Use a smaller constant to reduce overshoot
-        let c1 = 1.2; // Reduced from 1.70158 to stay within bounds
-        let c3 = c1 + 1.0;
-        let t_adj = t - 1.0;
-        let result = 1.0 + c3 * t_adj * t_adj * t_adj + c1 * t_adj * t_adj;
-        result.clamp(0.0, 1.0)
+        Easing::EaseOutBack(1.2).ease(t)
     }
 
+    /// Exponential ease-in. Delegates to [`Easing::EaseInExpo`].
     pub fn ease_in_expo(t: f32) -> f32 {
-        if t == 0.0 {
-            0.0
-        } else {
-            2_f32.powf(10.0 * t - 10.0)
-        }
+        Easing::EaseInExpo.ease(t)
     }
 
+    /// Circular ease-in. Delegates to [`Easing::EaseInCirc`].
     pub fn ease_in_circ(t: f32) -> f32 {
-        1.0 - (1.0 - t * t).sqrt()
+        Easing::EaseInCirc.ease(t)
     }
 
+    /// Circular ease-out. Delegates to [`Easing::EaseOutCirc`].
     pub fn ease_out_circ(t: f32) -> f32 {
-        let t = t - 1.0;
-        (1.0 - t * t).sqrt()
+        Easing::EaseOutCirc.ease(t)
     }
 
+    /// Circular ease-in-out. Delegates to [`Easing::EaseInOutCirc`].
     pub fn ease_in_out_circ(t: f32) -> f32 {
-        if t < 0.5 {
-            (1.0 - (1.0 - (2.0 * t).powi(2)).sqrt()) / 2.0
-        } else {
-            ((1.0 - (-2.0 * t + 2.0).powi(2)).sqrt() + 1.0) / 2.0
-        }
+        Easing::EaseInOutCirc.ease(t)
     }
 
+    /// Backing ease-in. Delegates to [`Easing::EaseInBack`].
     pub fn ease_in_back(t: f32) -> f32 {
-        let c1 = 1.70158;
-        let c3 = c1 + 1.0;
-        (c3 * t * t * t - c1 * t * t).max(0.0)
+        Easing::EaseInBack(1.70158).ease(t)
     }
 
+    /// Backing ease-in-out. Delegates to [`Easing::EaseInOutBack`].
     pub fn ease_in_out_back(t: f32) -> f32 {
-        let c1 = 1.70158;
-        let c2 = c1 * 1.525;
-        if t < 0.5 {
-            ((2.0 * t).powi(2) * ((c2 + 1.0) * 2.0 * t - c2)) / 2.0
-        } else {
-            let result =
-                ((2.0 * t - 2.0).powi(2) * ((c2 + 1.0) * (t * 2.0 - 2.0) + c2) + 2.0) / 2.0;
-            result.clamp(0.0, 1.0)
-        }
+        Easing::EaseInOutBack(1.70158).ease(t)
     }
 
+    /// Elastic ease-in. Delegates to [`Easing::EaseInElastic`].
     pub fn ease_in_elastic(t: f32) -> f32 {
-        if t == 0.0 {
-            return 0.0;
-        }
-        if t >= 1.0 {
-            return 1.0;
-        }
-        let c4 = (2.0 * std::f32::consts::PI) / 3.0;
-        let result = -(2_f32.powf(10.0 * t - 10.0) * ((t * 10.0 - 10.75) * c4).sin());
-        result.clamp(0.0, 1.0)
+        Easing::EaseInElastic.ease(t)
     }
 
+    /// Elastic ease-out. Delegates to [`Easing::EaseOutElastic`].
     pub fn ease_out_elastic(t: f32) -> f32 {
-        if t == 0.0 {
-            return 0.0;
-        }
-        if t >= 1.0 {
-            return 1.0;
-        }
-        let c4 = (2.0 * std::f32::consts::PI) / 3.0;
-        let result = 2_f32.powf(-10.0 * t) * ((t * 10.0 - 0.75) * c4).sin() + 1.0;
-        result.clamp(0.0, 1.0)
+        Easing::EaseOutElastic.ease(t)
     }
 
+    /// Quintic ease-in. Delegates to [`Easing::EaseInQuint`].
     pub fn ease_in_quint(t: f32) -> f32 {
-        t * t * t * t * t
+        Easing::EaseInQuint.ease(t)
     }
 
+    /// Quintic ease-out. Delegates to [`Easing::EaseOutQuint`].
     pub fn ease_out_quint(t: f32) -> f32 {
-        let t = t - 1.0;
-        1.0 + t * t * t * t * t
+        Easing::EaseOutQuint.ease(t)
     }
 
+    /// Quintic ease-in-out. Delegates to [`Easing::EaseInOutQuint`].
     pub fn ease_in_out_quint(t: f32) -> f32 {
-        if t < 0.5 {
-            16.0 * t * t * t * t * t
-        } else {
-            let t = 2.0 * t - 2.0;
-            1.0 + t * t * t * t * t / 2.0
-        }
+        Easing::EaseInOutQuint.ease(t)
     }
 
+    /// Stepped easing builder. Delegates to [`Easing::Steps`].
     pub fn steps(n: u32) -> impl Fn(f32) -> f32 {
-        move |t: f32| {
-            let n = n.max(1) as f32;
-            (t * n).floor() / n
-        }
+        move |t: f32| Easing::Steps(n).ease(t)
     }
 
+    /// Cubic Bezier easing builder. No core variant of equal precision;
+    /// defined here.
     pub fn cubic_bezier(x1: f32, y1: f32, x2: f32, y2: f32) -> impl Fn(f32) -> f32 {
         move |t: f32| {
             if t <= 0.0 {
@@ -365,10 +294,12 @@ pub mod easings {
         3.0 * (1.0 - t) * (1.0 - t) * t * p1 + 3.0 * (1.0 - t) * t2 * p2 + t3
     }
 
+    /// Recommended smooth default. Delegates to [`Easing::EaseInOutCubic`].
     pub fn smooth() -> impl Fn(f32) -> f32 {
         ease_in_out_cubic
     }
 
+    /// Snappy default with overshoot. Delegates to [`Easing::EaseOutBack`].
     pub fn snappy() -> impl Fn(f32) -> f32 {
         ease_out_back
     }
@@ -711,4 +642,47 @@ pub fn lerp_shadows(from: &[BoxShadow], to: &[BoxShadow], t: f32) -> SmallVec<[B
     kael::interpolate::interpolate_shadows(&from, &to, t)
         .into_iter()
         .collect()
+}
+
+#[cfg(test)]
+mod easing_delegate_tests {
+    use super::easings;
+    use kael::Easing;
+
+    fn sweep(delegate: impl Fn(f32) -> f32, easing: Easing) {
+        for step in 0..=100 {
+            let t = step as f32 / 100.0;
+            assert_eq!(delegate(t), easing.ease(t), "mismatch at t={t}");
+        }
+    }
+
+    #[test]
+    fn delegates_match_core_variants() {
+        sweep(easings::linear, Easing::Linear);
+        sweep(easings::ease_in_quad, Easing::EaseIn);
+        sweep(easings::ease_out_quad, Easing::EaseOut);
+        sweep(easings::ease_in_out_quad, Easing::EaseInOut);
+        sweep(easings::ease_in_cubic, Easing::EaseInCubic);
+        sweep(easings::ease_out_cubic, Easing::EaseOutCubic);
+        sweep(easings::ease_in_out_cubic, Easing::EaseInOutCubic);
+        sweep(easings::ease_in_quart, Easing::EaseInQuart);
+        sweep(easings::ease_out_quart, Easing::EaseOutQuart);
+        sweep(easings::ease_in_out_quart, Easing::EaseInOutQuart);
+        sweep(easings::ease_in_quint, Easing::EaseInQuint);
+        sweep(easings::ease_out_quint, Easing::EaseOutQuint);
+        sweep(easings::ease_in_out_quint, Easing::EaseInOutQuint);
+        sweep(easings::ease_in_expo, Easing::EaseInExpo);
+        sweep(easings::ease_out_expo, Easing::EaseOutExpo);
+        sweep(easings::ease_in_out_expo, Easing::EaseInOutExpo);
+        sweep(easings::ease_in_circ, Easing::EaseInCirc);
+        sweep(easings::ease_out_circ, Easing::EaseOutCirc);
+        sweep(easings::ease_in_out_circ, Easing::EaseInOutCirc);
+        sweep(easings::ease_in_back, Easing::EaseInBack(1.70158));
+        sweep(easings::ease_out_back, Easing::EaseOutBack(1.2));
+        sweep(easings::ease_in_out_back, Easing::EaseInOutBack(1.70158));
+        sweep(easings::ease_in_elastic, Easing::EaseInElastic);
+        sweep(easings::ease_out_elastic, Easing::EaseOutElastic);
+        sweep(easings::elastic, Easing::Elastic);
+        sweep(easings::steps(4), Easing::Steps(4));
+    }
 }

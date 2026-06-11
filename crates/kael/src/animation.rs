@@ -122,6 +122,11 @@ impl Animation {
 }
 
 /// Supported easing curves for explicit animations.
+///
+/// This is the canonical easing vocabulary for the workspace. The `quad`
+/// variants ([`Easing::EaseIn`], [`Easing::EaseOut`], [`Easing::EaseInOut`])
+/// are quadratic; the cubic/quart/quint/expo/circ/back/elastic variants extend
+/// the set with the standard CSS-style curves.
 #[derive(Clone)]
 pub enum Easing {
     /// A linear curve.
@@ -132,6 +137,50 @@ pub enum Easing {
     EaseOut,
     /// A quadratic ease-in-out curve.
     EaseInOut,
+    /// A cubic ease-in curve.
+    EaseInCubic,
+    /// A cubic ease-out curve (natural-feeling deceleration).
+    EaseOutCubic,
+    /// A cubic ease-in-out curve.
+    EaseInOutCubic,
+    /// A quartic ease-in curve.
+    EaseInQuart,
+    /// A quartic ease-out curve.
+    EaseOutQuart,
+    /// A quartic ease-in-out curve.
+    EaseInOutQuart,
+    /// A quintic ease-in curve.
+    EaseInQuint,
+    /// A quintic ease-out curve.
+    EaseOutQuint,
+    /// A quintic ease-in-out curve.
+    EaseInOutQuint,
+    /// An exponential ease-in curve.
+    EaseInExpo,
+    /// An exponential ease-out curve.
+    EaseOutExpo,
+    /// An exponential ease-in-out curve.
+    EaseInOutExpo,
+    /// A circular ease-in curve.
+    EaseInCirc,
+    /// A circular ease-out curve.
+    EaseOutCirc,
+    /// A circular ease-in-out curve.
+    EaseInOutCirc,
+    /// A backing ease-in curve with the given overshoot constant.
+    EaseInBack(f32),
+    /// A backing ease-out curve with the given overshoot constant.
+    EaseOutBack(f32),
+    /// A backing ease-in-out curve with the given overshoot constant.
+    EaseInOutBack(f32),
+    /// An elastic ease-in curve.
+    EaseInElastic,
+    /// An elastic ease-out curve.
+    EaseOutElastic,
+    /// A clamped elastic curve with a single decaying overshoot.
+    Elastic,
+    /// A stepped curve with the given number of discrete steps.
+    Steps(u32),
     /// A cubic Bezier curve with CSS-style control points.
     CubicBezier(f32, f32, f32, f32),
     /// A custom easing callback.
@@ -140,6 +189,7 @@ pub enum Easing {
 
 impl Easing {
     pub(crate) fn sample(&self, delta: f32) -> f32 {
+        use std::f32::consts::PI;
         let delta = delta.clamp(0.0, 1.0);
 
         match self {
@@ -147,6 +197,145 @@ impl Easing {
             Self::EaseIn => easing::quadratic(delta),
             Self::EaseOut => easing::ease_out(delta),
             Self::EaseInOut => easing::ease_in_out(delta),
+            Self::EaseInCubic => delta * delta * delta,
+            Self::EaseOutCubic => {
+                let t = delta - 1.0;
+                t * t * t + 1.0
+            }
+            Self::EaseInOutCubic => {
+                if delta < 0.5 {
+                    4.0 * delta * delta * delta
+                } else {
+                    let t = 2.0 * delta - 2.0;
+                    1.0 + t * t * t / 2.0
+                }
+            }
+            Self::EaseInQuart => delta * delta * delta * delta,
+            Self::EaseOutQuart => {
+                let t = delta - 1.0;
+                1.0 - t * t * t * t
+            }
+            Self::EaseInOutQuart => {
+                if delta < 0.5 {
+                    8.0 * delta * delta * delta * delta
+                } else {
+                    let t = delta - 1.0;
+                    1.0 - 8.0 * t * t * t * t
+                }
+            }
+            Self::EaseInQuint => delta * delta * delta * delta * delta,
+            Self::EaseOutQuint => {
+                let t = delta - 1.0;
+                1.0 + t * t * t * t * t
+            }
+            Self::EaseInOutQuint => {
+                if delta < 0.5 {
+                    16.0 * delta * delta * delta * delta * delta
+                } else {
+                    let t = 2.0 * delta - 2.0;
+                    1.0 + t * t * t * t * t / 2.0
+                }
+            }
+            Self::EaseInExpo => {
+                if delta == 0.0 {
+                    0.0
+                } else {
+                    2_f32.powf(10.0 * delta - 10.0)
+                }
+            }
+            Self::EaseOutExpo => {
+                if delta >= 1.0 {
+                    1.0
+                } else {
+                    1.0 - 2_f32.powf(-10.0 * delta)
+                }
+            }
+            Self::EaseInOutExpo => {
+                if delta == 0.0 {
+                    0.0
+                } else if delta >= 1.0 {
+                    1.0
+                } else if delta < 0.5 {
+                    2_f32.powf(20.0 * delta - 10.0) / 2.0
+                } else {
+                    (2.0 - 2_f32.powf(-20.0 * delta + 10.0)) / 2.0
+                }
+            }
+            Self::EaseInCirc => 1.0 - (1.0 - delta * delta).sqrt(),
+            Self::EaseOutCirc => {
+                let t = delta - 1.0;
+                (1.0 - t * t).sqrt()
+            }
+            Self::EaseInOutCirc => {
+                if delta < 0.5 {
+                    (1.0 - (1.0 - (2.0 * delta).powi(2)).sqrt()) / 2.0
+                } else {
+                    ((1.0 - (-2.0 * delta + 2.0).powi(2)).sqrt() + 1.0) / 2.0
+                }
+            }
+            Self::EaseInBack(overshoot) => {
+                let c1 = *overshoot;
+                let c3 = c1 + 1.0;
+                (c3 * delta * delta * delta - c1 * delta * delta).max(0.0)
+            }
+            Self::EaseOutBack(overshoot) => {
+                if delta >= 1.0 {
+                    return 1.0;
+                }
+                let c1 = *overshoot;
+                let c3 = c1 + 1.0;
+                let t = delta - 1.0;
+                (1.0 + c3 * t * t * t + c1 * t * t).clamp(0.0, 1.0)
+            }
+            Self::EaseInOutBack(overshoot) => {
+                let c1 = *overshoot;
+                let c2 = c1 * 1.525;
+                if delta < 0.5 {
+                    ((2.0 * delta).powi(2) * ((c2 + 1.0) * 2.0 * delta - c2)) / 2.0
+                } else {
+                    (((2.0 * delta - 2.0).powi(2) * ((c2 + 1.0) * (delta * 2.0 - 2.0) + c2) + 2.0)
+                        / 2.0)
+                        .clamp(0.0, 1.0)
+                }
+            }
+            Self::EaseInElastic => {
+                if delta == 0.0 {
+                    return 0.0;
+                }
+                if delta >= 1.0 {
+                    return 1.0;
+                }
+                let c4 = (2.0 * PI) / 3.0;
+                (-(2_f32.powf(10.0 * delta - 10.0) * ((delta * 10.0 - 10.75) * c4).sin()))
+                    .clamp(0.0, 1.0)
+            }
+            Self::EaseOutElastic => {
+                if delta == 0.0 {
+                    return 0.0;
+                }
+                if delta >= 1.0 {
+                    return 1.0;
+                }
+                let c4 = (2.0 * PI) / 3.0;
+                (2_f32.powf(-10.0 * delta) * ((delta * 10.0 - 0.75) * c4).sin() + 1.0)
+                    .clamp(0.0, 1.0)
+            }
+            Self::Elastic => {
+                if delta == 0.0 {
+                    return 0.0;
+                }
+                if delta >= 1.0 {
+                    return 1.0;
+                }
+                let p = 0.3;
+                let s = p / 4.0;
+                let t = delta - 1.0;
+                (1.0 + (2_f32.powf(10.0 * t)) * ((t - s) * (2.0 * PI) / p).sin()).clamp(0.0, 1.0)
+            }
+            Self::Steps(count) => {
+                let n = (*count).max(1) as f32;
+                (delta * n).floor() / n
+            }
             Self::CubicBezier(x1, y1, x2, y2) => cubic_bezier(*x1, *y1, *x2, *y2, delta),
             Self::Custom(callback) => callback(delta).clamp(0.0, 1.0),
         }
@@ -537,6 +726,230 @@ pub mod easing {
             let normalized_alpha = (breath + 1.0) / 2.0;
             min + normalized_alpha * range
         }
+    }
+}
+
+#[cfg(test)]
+mod easing_variant_tests {
+    use super::Easing;
+
+    mod oracle {
+        use std::f32::consts::PI;
+
+        pub fn ease_in_cubic(t: f32) -> f32 {
+            t * t * t
+        }
+        pub fn ease_out_cubic(t: f32) -> f32 {
+            let t = t - 1.0;
+            t * t * t + 1.0
+        }
+        pub fn ease_in_out_cubic(t: f32) -> f32 {
+            if t < 0.5 {
+                4.0 * t * t * t
+            } else {
+                let t = 2.0 * t - 2.0;
+                1.0 + t * t * t / 2.0
+            }
+        }
+        pub fn ease_in_quart(t: f32) -> f32 {
+            t * t * t * t
+        }
+        pub fn ease_out_quart(t: f32) -> f32 {
+            let t = t - 1.0;
+            1.0 - t * t * t * t
+        }
+        pub fn ease_in_out_quart(t: f32) -> f32 {
+            if t < 0.5 {
+                8.0 * t * t * t * t
+            } else {
+                let t = t - 1.0;
+                1.0 - 8.0 * t * t * t * t
+            }
+        }
+        pub fn ease_in_quint(t: f32) -> f32 {
+            t * t * t * t * t
+        }
+        pub fn ease_out_quint(t: f32) -> f32 {
+            let t = t - 1.0;
+            1.0 + t * t * t * t * t
+        }
+        pub fn ease_in_out_quint(t: f32) -> f32 {
+            if t < 0.5 {
+                16.0 * t * t * t * t * t
+            } else {
+                let t = 2.0 * t - 2.0;
+                1.0 + t * t * t * t * t / 2.0
+            }
+        }
+        pub fn ease_in_expo(t: f32) -> f32 {
+            if t == 0.0 {
+                0.0
+            } else {
+                2_f32.powf(10.0 * t - 10.0)
+            }
+        }
+        pub fn ease_out_expo(t: f32) -> f32 {
+            if t >= 1.0 {
+                1.0
+            } else {
+                1.0 - 2_f32.powf(-10.0 * t)
+            }
+        }
+        pub fn ease_in_out_expo(t: f32) -> f32 {
+            if t == 0.0 {
+                0.0
+            } else if t >= 1.0 {
+                1.0
+            } else if t < 0.5 {
+                2_f32.powf(20.0 * t - 10.0) / 2.0
+            } else {
+                (2.0 - 2_f32.powf(-20.0 * t + 10.0)) / 2.0
+            }
+        }
+        pub fn ease_in_circ(t: f32) -> f32 {
+            1.0 - (1.0 - t * t).sqrt()
+        }
+        pub fn ease_out_circ(t: f32) -> f32 {
+            let t = t - 1.0;
+            (1.0 - t * t).sqrt()
+        }
+        pub fn ease_in_out_circ(t: f32) -> f32 {
+            if t < 0.5 {
+                (1.0 - (1.0 - (2.0 * t).powi(2)).sqrt()) / 2.0
+            } else {
+                ((1.0 - (-2.0 * t + 2.0).powi(2)).sqrt() + 1.0) / 2.0
+            }
+        }
+        pub fn ease_in_back(t: f32) -> f32 {
+            let c1 = 1.70158;
+            let c3 = c1 + 1.0;
+            (c3 * t * t * t - c1 * t * t).max(0.0)
+        }
+        pub fn ease_out_back(t: f32) -> f32 {
+            if t >= 1.0 {
+                return 1.0;
+            }
+            let c1 = 1.2;
+            let c3 = c1 + 1.0;
+            let t_adj = t - 1.0;
+            (1.0 + c3 * t_adj * t_adj * t_adj + c1 * t_adj * t_adj).clamp(0.0, 1.0)
+        }
+        pub fn ease_in_out_back(t: f32) -> f32 {
+            let c1 = 1.70158;
+            let c2 = c1 * 1.525;
+            if t < 0.5 {
+                ((2.0 * t).powi(2) * ((c2 + 1.0) * 2.0 * t - c2)) / 2.0
+            } else {
+                (((2.0 * t - 2.0).powi(2) * ((c2 + 1.0) * (t * 2.0 - 2.0) + c2) + 2.0) / 2.0)
+                    .clamp(0.0, 1.0)
+            }
+        }
+        pub fn ease_in_elastic(t: f32) -> f32 {
+            if t == 0.0 {
+                return 0.0;
+            }
+            if t >= 1.0 {
+                return 1.0;
+            }
+            let c4 = (2.0 * PI) / 3.0;
+            (-(2_f32.powf(10.0 * t - 10.0) * ((t * 10.0 - 10.75) * c4).sin())).clamp(0.0, 1.0)
+        }
+        pub fn ease_out_elastic(t: f32) -> f32 {
+            if t == 0.0 {
+                return 0.0;
+            }
+            if t >= 1.0 {
+                return 1.0;
+            }
+            let c4 = (2.0 * PI) / 3.0;
+            (2_f32.powf(-10.0 * t) * ((t * 10.0 - 0.75) * c4).sin() + 1.0).clamp(0.0, 1.0)
+        }
+        pub fn elastic(t: f32) -> f32 {
+            if t == 0.0 {
+                return 0.0;
+            }
+            if t >= 1.0 {
+                return 1.0;
+            }
+            let p = 0.3;
+            let s = p / 4.0;
+            let t_adj = t - 1.0;
+            (1.0 + (2_f32.powf(10.0 * t_adj)) * ((t_adj - s) * (2.0 * PI) / p).sin())
+                .clamp(0.0, 1.0)
+        }
+        pub fn steps(n: u32, t: f32) -> f32 {
+            let n = n.max(1) as f32;
+            (t * n).floor() / n
+        }
+    }
+
+    const SAMPLES: [f32; 3] = [0.0, 0.5, 1.0];
+
+    fn assert_matches(easing: &Easing, oracle: impl Fn(f32) -> f32) {
+        for delta in SAMPLES {
+            assert_eq!(easing.sample(delta), oracle(delta), "at delta={delta}");
+        }
+    }
+
+    #[test]
+    fn cubic_variants_match_relocated_math() {
+        assert_matches(&Easing::EaseInCubic, oracle::ease_in_cubic);
+        assert_matches(&Easing::EaseOutCubic, oracle::ease_out_cubic);
+        assert_matches(&Easing::EaseInOutCubic, oracle::ease_in_out_cubic);
+    }
+
+    #[test]
+    fn quart_variants_match_relocated_math() {
+        assert_matches(&Easing::EaseInQuart, oracle::ease_in_quart);
+        assert_matches(&Easing::EaseOutQuart, oracle::ease_out_quart);
+        assert_matches(&Easing::EaseInOutQuart, oracle::ease_in_out_quart);
+    }
+
+    #[test]
+    fn quint_variants_match_relocated_math() {
+        assert_matches(&Easing::EaseInQuint, oracle::ease_in_quint);
+        assert_matches(&Easing::EaseOutQuint, oracle::ease_out_quint);
+        assert_matches(&Easing::EaseInOutQuint, oracle::ease_in_out_quint);
+    }
+
+    #[test]
+    fn expo_variants_match_relocated_math() {
+        assert_matches(&Easing::EaseInExpo, oracle::ease_in_expo);
+        assert_matches(&Easing::EaseOutExpo, oracle::ease_out_expo);
+        assert_matches(&Easing::EaseInOutExpo, oracle::ease_in_out_expo);
+    }
+
+    #[test]
+    fn circ_variants_match_relocated_math() {
+        assert_matches(&Easing::EaseInCirc, oracle::ease_in_circ);
+        assert_matches(&Easing::EaseOutCirc, oracle::ease_out_circ);
+        assert_matches(&Easing::EaseInOutCirc, oracle::ease_in_out_circ);
+    }
+
+    #[test]
+    fn back_variants_match_relocated_math() {
+        assert_matches(&Easing::EaseInBack(1.70158), oracle::ease_in_back);
+        assert_matches(&Easing::EaseOutBack(1.2), oracle::ease_out_back);
+        assert_matches(&Easing::EaseInOutBack(1.70158), oracle::ease_in_out_back);
+    }
+
+    #[test]
+    fn elastic_variants_match_relocated_math() {
+        assert_matches(&Easing::EaseInElastic, oracle::ease_in_elastic);
+        assert_matches(&Easing::EaseOutElastic, oracle::ease_out_elastic);
+        assert_matches(&Easing::Elastic, oracle::elastic);
+    }
+
+    #[test]
+    fn steps_variant_matches_relocated_math() {
+        assert_matches(&Easing::Steps(4), |delta| oracle::steps(4, delta));
+        assert_matches(&Easing::Steps(1), |delta| oracle::steps(1, delta));
+    }
+
+    #[test]
+    fn quad_aliases_remain_quadratic() {
+        assert_eq!(Easing::EaseIn.sample(0.5), 0.25);
+        assert_eq!(Easing::EaseOut.sample(0.5), 0.75);
     }
 }
 

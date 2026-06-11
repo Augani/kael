@@ -69,20 +69,40 @@ Animation::new(Duration::from_millis(400))
 
 ## Easing curves
 
-The `Easing` enum covers the common curves plus a physical spring:
+`kael::Easing` is the single, canonical easing vocabulary for the workspace. It
+covers the full standard curve set in named variants:
 
 | Variant | Curve |
 |---------|-------|
 | `Easing::Linear` | constant rate |
 | `Easing::EaseIn` / `EaseOut` / `EaseInOut` | quadratic |
+| `Easing::EaseInCubic` / `EaseOutCubic` / `EaseInOutCubic` | cubic |
+| `Easing::EaseInQuart` / `EaseOutQuart` / `EaseInOutQuart` | quartic |
+| `Easing::EaseInQuint` / `EaseOutQuint` / `EaseInOutQuint` | quintic |
+| `Easing::EaseInExpo` / `EaseOutExpo` / `EaseInOutExpo` | exponential |
+| `Easing::EaseInCirc` / `EaseOutCirc` / `EaseInOutCirc` | circular |
+| `Easing::EaseInBack(overshoot)` / `EaseOutBack(overshoot)` / `EaseInOutBack(overshoot)` | backing overshoot |
+| `Easing::EaseInElastic` / `EaseOutElastic` / `Elastic` | elastic |
+| `Easing::Steps(n)` | `n` discrete steps |
 | `Easing::CubicBezier(x1, y1, x2, y2)` | CSS-style cubic Bézier |
-| `Easing::Spring { stiffness, damping, mass }` | damped spring |
 | `Easing::Custom(Rc<dyn Fn(f32) -> f32>)` | your own |
 
 ```rust
 Animation::new(Duration::from_millis(600))
-    .easing(Easing::Spring { stiffness: 180.0, damping: 12.0, mass: 1.0 });
+    .easing(Easing::EaseOutBack(1.70158));
 ```
+
+For a smooth physical spring, `kael_ui` provides `SpringValue`/`SpringPoint`
+(see [Springs and gestures](#springs-and-gestures)).
+
+### `kael_ui` compatibility shims
+
+`kael_ui::animations::easings` exposes the same curves as free `fn(f32) -> f32`
+functions (`ease_out_cubic`, `ease_in_back`, `steps(n)`, …). These are
+compatibility shims that delegate to the `Easing` variants above; prefer the
+`Easing` variants directly in new code. The `spring`, `smooth_spring`, and
+`cubic_bezier` helpers have no `Easing` variant and remain defined in that
+module.
 
 ## Keyframes and sequences
 
