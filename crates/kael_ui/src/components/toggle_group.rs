@@ -3,7 +3,7 @@
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ToggleGroupVariant {
@@ -178,8 +178,8 @@ impl Styled for ToggleGroup {
 }
 
 impl RenderOnce for ToggleGroup {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
 
         let variant = self.variant;
         let current_value = self.value;

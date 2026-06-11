@@ -1,5 +1,5 @@
 use crate::charts::pie_chart::PieChartSegment;
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 
 const CHART_COLORS: [u32; 8] = [
@@ -134,8 +134,8 @@ fn get_color_at_angle(angle: f32, segment_data: &[(f32, f32, Hsla)]) -> Hsla {
 }
 
 impl RenderOnce for DonutChart {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let user_style = self.style;
         let chart_size = self.size.to_pixels();
         let show_legend = self.show_legend;
@@ -144,7 +144,7 @@ impl RenderOnce for DonutChart {
         let total: f64 = self.segments.iter().map(|s| s.value).sum();
 
         let chart = if total == 0.0 || self.segments.is_empty() {
-            render_empty(chart_size, &theme)
+            render_empty(chart_size, theme)
         } else {
             render_donut(
                 chart_size,
@@ -153,7 +153,7 @@ impl RenderOnce for DonutChart {
                 self.inner_radius,
                 self.center_label.clone(),
                 self.center_value.clone(),
-                &theme,
+                theme,
             )
         };
 
@@ -162,7 +162,7 @@ impl RenderOnce for DonutChart {
                 &self.segments,
                 total,
                 show_percentages,
-                &theme,
+                theme,
             ))
         } else {
             None

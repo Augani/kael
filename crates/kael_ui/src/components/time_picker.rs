@@ -1,5 +1,5 @@
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
@@ -338,7 +338,7 @@ impl Styled for TimePicker {
 
 impl RenderOnce for TimePicker {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let user_style = self.style;
         let state_data = self.state.read(cx);
         let is_open = state_data.open;
@@ -421,7 +421,7 @@ impl RenderOnce for TimePicker {
                                     value.hour,
                                     state.clone(),
                                     "hour",
-                                    &theme,
+                                    theme,
                                     on_change.clone(),
                                 ))
                                 .child(
@@ -436,7 +436,7 @@ impl RenderOnce for TimePicker {
                                     value.minute,
                                     state.clone(),
                                     "minute",
-                                    &theme,
+                                    theme,
                                     on_change.clone(),
                                 ))
                                 .when(show_seconds, {
@@ -455,7 +455,7 @@ impl RenderOnce for TimePicker {
                                                 value.second.unwrap_or(0),
                                                 state_for_seconds.clone(),
                                                 "second",
-                                                &theme,
+                                                theme,
                                                 on_change,
                                             ),
                                         )

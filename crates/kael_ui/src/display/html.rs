@@ -11,7 +11,7 @@ use crate::display::rich_text::LinkClickHandler;
 #[cfg(feature = "html-render")]
 use crate::display::rich_text::{render_blocks, ListItem, RichBlock, RichInline, TableAlignment};
 #[cfg(feature = "html-render")]
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 #[cfg(feature = "html-render")]
 static ALLOWED_TAGS: &[&str] = &[
@@ -663,7 +663,7 @@ fn rgb_to_hsla(r: u8, g: u8, b: u8, a: f32) -> Hsla {
 #[cfg(feature = "html-render")]
 impl RenderOnce for Html {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let base_size = self.base_font_size.unwrap_or(px(14.0));
 
         let blocks = parse_html(&self.source);

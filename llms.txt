@@ -190,12 +190,17 @@ Messages: `WorkerRequest::{Ping, Execute { payload }}`, `WorkerResponse::{Pong, 
 
 ## Theming
 
+One pipeline, two cooperating types: `kael::Theme` is the serializable, file-facing theme (`colors`/`typography`/`spacing`/`radii`/`shadows`) the hot-reload watcher reloads; `kael_ui::Theme` (`variant` + rich `ThemeTokens`) is the runtime token system components render from. Flow: `theme.toml` → `kael::Theme` (Global) → `ThemeTokens` (bridge) → components.
+
 ```rust
-Theme::init(cx);
-cx.set_global(Theme::dark()); // or Theme::light(), Theme::from_json_str(), Theme::from_path()
-ThemeRuntime::watch("theme.json", cx); // hot-reload
-let theme = cx.global::<Theme>(); // access colors: theme.background, theme.primary, etc.
+kael_ui::init(cx);
+install_theme(cx, Theme::dark()); // 18 presets, or Theme::custom(ThemeTokens { ..ThemeTokens::dark() })
+install_theme_file_bridge(cx); // maps reloaded kael::Theme -> ThemeTokens, then install_theme
+cx.observe_theme_file("theme.toml", |theme, cx| cx.set_global(theme))?; // file → kael::Theme → bridge → live restyle
+let theme = Theme::of(cx); // read tokens: theme.tokens.background, theme.tokens.primary, ...
 ```
+
+Custom mapping: register your own `cx.observe_theme_files(|core, cx| ...)` subscriber, optionally via `tokens_from_core_theme(core, base)`.
 
 ## Event pattern
 

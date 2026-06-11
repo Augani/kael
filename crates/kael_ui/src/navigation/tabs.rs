@@ -2,7 +2,7 @@
 
 use crate::components::icon::Icon;
 use crate::components::icon_source::IconSource;
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::sync::Arc;
 
@@ -346,8 +346,8 @@ impl<T: Clone + PartialEq + 'static> Styled for Tabs<T> {
 }
 
 impl<T: Clone + PartialEq + 'static> RenderOnce for Tabs<T> {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let user_style = self.style;
 
         if self.tabs.is_empty() {
@@ -373,7 +373,7 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for Tabs<T> {
                 tab,
                 index,
                 is_active,
-                &theme,
+                theme,
                 self.on_change.clone(),
                 self.on_close.clone(),
             ));

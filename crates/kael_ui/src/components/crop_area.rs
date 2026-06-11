@@ -2,7 +2,7 @@
 
 use kael::{prelude::FluentBuilder as _, *};
 
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum DragHandle {
@@ -262,7 +262,7 @@ impl ParentElement for CropArea {
 
 impl RenderOnce for CropArea {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let user_style = self.style;
         let selection = self.state.read(cx).selection;
 

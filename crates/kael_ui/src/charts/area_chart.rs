@@ -1,4 +1,4 @@
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 
 const CHART_COLORS: [u32; 8] = [
@@ -262,8 +262,8 @@ fn format_value(value: f64) -> String {
 }
 
 impl RenderOnce for AreaChart {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let user_style = self.style;
         let (chart_w, chart_h) = self.size.dimensions();
 

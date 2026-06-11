@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::animations::easings;
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 #[derive(Clone)]
 pub struct ContextMenuItem {
@@ -112,8 +112,8 @@ impl Styled for ContextMenu {
 }
 
 impl RenderOnce for ContextMenu {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let position = self.position;
         let on_close_handler = self.on_close.clone();
         let user_style = self.style;

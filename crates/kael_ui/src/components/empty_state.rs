@@ -1,7 +1,7 @@
 use crate::components::button::{Button, ButtonVariant};
 use crate::components::icon::Icon;
 use crate::components::icon_source::IconSource;
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
@@ -114,8 +114,8 @@ impl Styled for EmptyState {
 }
 
 impl RenderOnce for EmptyState {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let user_style = self.style;
         let icon_size = self.size.icon_size();
         let title_size = self.size.title_size();

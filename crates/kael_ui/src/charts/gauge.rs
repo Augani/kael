@@ -1,4 +1,4 @@
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
@@ -102,8 +102,8 @@ impl Styled for Gauge {
 }
 
 impl RenderOnce for Gauge {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let user_style = self.style;
         let (width, height) = self.size.dimensions();
         let stroke = self.size.stroke_width();

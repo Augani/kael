@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::animations::{durations, easings};
 use crate::fonts::mono_font_family;
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 pub struct AnimatedCounterState {
     display_value: f64,
@@ -114,7 +114,7 @@ impl AnimatedCounter {
 
 impl RenderOnce for AnimatedCounter {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let state = self.state.read(cx);
         let value = state.display_value();
 

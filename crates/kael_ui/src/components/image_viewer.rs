@@ -4,7 +4,7 @@ use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 actions!(
     image_viewer,
@@ -247,7 +247,7 @@ impl EventEmitter<()> for ImageViewer {}
 
 impl Render for ImageViewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let state = self.state.read(cx);
         let current_image = state.current_image().cloned();
         let current_index = state.current_index();

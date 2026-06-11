@@ -3,7 +3,7 @@
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 #[derive(IntoElement)]
 pub struct Collapsible {
@@ -76,8 +76,8 @@ impl Styled for Collapsible {
 }
 
 impl RenderOnce for Collapsible {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let user_style = self.style;
         let Collapsible {
             trigger,

@@ -1,127 +1,178 @@
 # Theming
 
-Kael has two theming layers:
+Kael has **one** theming pipeline with two cooperating types, each with a clear
+role:
 
-- **`kael_ui` themes** — the component library's design-token system: 18 shipped
-  presets, user-defined brand themes via `Theme::custom`, and live switching
-  with `install_theme`. If you build with kael_ui components, this is the one
-  you want — see [Component Library](component-library.md#custom-themes-and-live-switching).
-- **Core `kael::Theme`** — a lower-level, file-based palette for apps that use
-  the core framework directly without kael_ui. Documented below.
+- **`kael::Theme`** — the *serializable, file-facing* theme. It is what a
+  JSON/TOML theme file deserializes into (`colors`, `typography`, `spacing`,
+  `radii`, `shadows`), and it is what the hot-reload file watcher reloads. Think
+  of it as the theme *on disk*.
+- **`kael_ui::Theme`** (a `variant` plus a rich [`ThemeTokens`]) — the *runtime
+  token system* that components actually render from. Every kael_ui component
+  reads `Theme::of(cx).tokens.*`. Think of it as the theme *in memory*.
 
-Kael's core theme system provides JSON/TOML-based theming with hot-reload support. The `Theme` type implements `Global`, making it available anywhere in your app.
+A bridge connects them so that editing a theme file restyles live components.
 
-## Built-in themes
+## The pipeline
 
-```rust
-// Initialize theme system
-Theme::init(cx);
-
-// Switch themes
-cx.set_global(Theme::dark());
-cx.set_global(Theme::light());
-
-// Match system appearance
-cx.set_global(Theme::for_appearance(window));
+```text
+  theme.toml / theme.json          (you edit this)
+        │  file watcher (App::observe_theme_file)
+        ▼
+  kael::Theme                      (parsed, stored as a Global)
+        │  App::observe_theme_files subscriber
+        ▼
+  kael_ui::ThemeTokens             (core fields mapped onto current tokens)
+        │  install_theme  →  set_global + refresh_windows
+        ▼
+  components                       (re-render with Theme::of(cx).tokens.*)
 ```
 
-## Theme from JSON
+Each stage is one observable hop: a file edit walks all the way down to a
+visible restyle, with no restart.
 
-```json
-{
-  "name": "Ocean",
-  "appearance": "dark",
-  "background": "#0a1628",
-  "foreground": "#e2e8f0",
-  "primary": "#3b82f6",
-  "secondary": "#64748b",
-  "accent": "#06b6d4",
-  "error": "#ef4444",
-  "warning": "#f59e0b",
-  "success": "#22c55e",
-  "border": "#1e293b",
-  "surface": "#0f172a",
-  "muted": "#334155"
-}
-```
+## Reading the theme in components
 
-Load it:
-
-```rust
-let theme = Theme::from_json_str(json_str)?;
-cx.set_global(theme);
-```
-
-## Theme from TOML
-
-```toml
-name = "Forest"
-appearance = "dark"
-background = "#1a2e1a"
-foreground = "#d4e6d4"
-primary = "#22c55e"
-```
-
-```rust
-let theme = Theme::from_toml_str(toml_str)?;
-cx.set_global(theme);
-```
-
-## Loading from file
-
-```rust
-let theme = Theme::from_path("themes/custom.json")?;
-cx.set_global(theme);
-```
-
-## Hot-reload
-
-Automatically reload theme when the file changes:
-
-```rust
-use kael::ThemeRuntime;
-
-ThemeRuntime::watch("themes/active.json", cx);
-// Theme reloads automatically when the file is saved
-```
-
-## Using theme colors in views
+Components read tokens through the zero-clone borrow:
 
 ```rust
 impl Render for MyView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.global::<Theme>();
+        let theme = Theme::of(cx);
 
         div()
-            .bg(theme.background)
-            .text_color(theme.foreground)
-            .border_color(theme.border)
+            .bg(theme.tokens.background)
+            .text_color(theme.tokens.foreground)
+            .border_color(theme.tokens.border)
             .child(
                 div()
-                    .bg(theme.primary)
-                    .text_color(rgb(0xffffff))
-                    .px_4().py_2()
-                    .rounded(px(6.0))
-                    .child("Primary button")
+                    .bg(theme.tokens.primary)
+                    .text_color(theme.tokens.primary_foreground)
+                    .px(px(16.0))
+                    .py(px(8.0))
+                    .rounded(theme.tokens.radius_md)
+                    .child("Primary button"),
             )
     }
 }
 ```
 
-## Theme properties
+`Theme::of(cx)` (alias `Theme::get(cx)`) borrows the theme from the app's global
+state without cloning. `use_theme()` is a legacy clone-per-call shim retained
+for call sites where the borrow checker cannot take a `&Theme` cleanly; prefer
+`Theme::of(cx)` everywhere else.
 
-| Property | Description |
-|----------|-------------|
-| `name` | Theme name |
-| `appearance` | `"light"` or `"dark"` |
-| `background` | Main background color |
-| `foreground` | Main text color |
-| `primary` | Primary action color |
-| `secondary` | Secondary/muted action color |
-| `accent` | Highlight/accent color |
-| `error` | Error state color |
-| `warning` | Warning state color |
-| `success` | Success state color |
-| `border` | Default border color |
-| `surface` | Elevated surface color |
-| `muted` | Subdued text/element color |
+## Presets, custom themes, and live switching
+
+`kael_ui` ships 18 presets and lets you brand your app from any of them:
+
+```rust
+kael_ui::init(cx);
+install_theme(cx, Theme::dark());
+
+// Brand it: start from a preset's tokens and override what you need.
+let brand = Theme::custom(ThemeTokens {
+    primary: hsla(262.0 / 360.0, 0.83, 0.58, 1.0),
+    radius_md: px(10.0),
+    ..ThemeTokens::dark()
+});
+install_theme(cx, brand);
+```
+
+`install_theme` stores the active `Theme` as a `Global` and refreshes every open
+window, so re-installing at runtime switches themes live. See
+[Component Library](component-library.md#custom-themes-and-live-switching).
+
+## Theme files
+
+A theme file deserializes into a `kael::Theme`. Fields are grouped; omit any
+section to keep its defaults.
+
+```toml
+[colors]
+background = "#0b1020"
+surface    = "#161c2e"
+primary    = "#6366f1"
+accent     = "#22d3ee"
+muted      = "#3b4252"
+foreground = "#e5e7eb"
+border     = "#2a3350"
+error      = "#ef4444"
+
+[radii]
+sm = 4.0
+md = 8.0
+lg = 12.0
+xl = 16.0
+
+[typography]
+ui_font_family   = "Inter"
+code_font_family = "JetBrains Mono"
+```
+
+The same shape works as JSON. Load one directly with:
+
+```rust
+let theme = kael::Theme::from_path("themes/active.toml")?;
+cx.set_global(theme);
+```
+
+## Hot-reload end-to-end
+
+Wire the file watcher and the bridge once during startup. After that, every save
+to the watched file restyles the live UI:
+
+```rust
+Application::new().run(move |cx| {
+    kael_ui::init(cx);
+    install_theme(cx, Theme::dark());
+
+    // Register the bridge: maps reloaded kael::Theme -> ThemeTokens, then
+    // install_theme (refreshing all windows).
+    install_theme_file_bridge(cx);
+
+    // Watch the file; on_change updates the core kael::Theme global, which
+    // fires the bridge subscriber registered above.
+    cx.observe_theme_file("themes/active.toml", |theme, cx| cx.set_global(theme))
+        .expect("failed to watch theme file");
+
+    // ... open your window; components read Theme::of(cx).tokens.*
+});
+```
+
+Order matters only in that the bridge must be registered before (or alongside)
+the watcher; `observe_theme_file` applies the initial file once, and every
+later save flows through the same path. A runnable example lives at
+`crates/kael_ui/examples/theme_hot_reload_demo.rs` — run it, edit the printed
+TOML path, and watch the buttons, badges, card, and accent bars recolor.
+
+## Core → token mapping
+
+When a theme file reloads, the bridge maps the loaded `kael::Theme` onto the
+**currently installed** `ThemeTokens`. Token fields without a core source are
+preserved, so a partial file changes only what it names.
+
+| core `kael::Theme` field       | `ThemeTokens` field(s)   |
+|--------------------------------|--------------------------|
+| `colors.background`            | `background`             |
+| `colors.foreground`            | `foreground`             |
+| `colors.surface`               | `card`, `popover`        |
+| `colors.primary`               | `primary`, `ring`        |
+| `colors.accent`                | `accent`                 |
+| `colors.muted`                 | `muted`                  |
+| `colors.border`                | `border`, `input`        |
+| `colors.error`                 | `destructive`            |
+| `radii.sm` / `md` / `lg` / `xl`| `radius_sm/md/lg/xl`     |
+| `shadows.sm` / `md` / `lg`     | `shadow_sm/md/lg`        |
+| `typography.ui_font_family`    | `font_family`            |
+| `typography.code_font_family`  | `font_mono`              |
+
+Fields with no core source keep their existing token values: the `*_foreground`
+colors, `secondary`, `muted_foreground`, `accent_foreground`, `shadow_xs`,
+`shadow_xl`, `ring_offset`, and the spacing / duration / z-index scales. Core
+fields with no token target (`separator`, `selected_text`, `warning`,
+`success`, `radii.pill`, and the typographic sizes/weights) are intentionally
+not mapped.
+
+If you need a different mapping, call `tokens_from_core_theme(core, base)`
+yourself inside a custom `cx.observe_theme_files` subscriber.

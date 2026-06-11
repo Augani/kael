@@ -1,6 +1,6 @@
 use crate::components::scrollable::scrollable_vertical;
 use crate::icon_config::resolve_icon_path;
-use crate::theme::use_theme;
+use crate::theme::{use_theme, Theme};
 use kael::{prelude::FluentBuilder as _, *};
 use regex::Regex;
 use ropey::Rope;
@@ -4106,7 +4106,7 @@ impl RenderOnce for Editor {
             state.fold_marker_color_override = self.fold_marker_color;
             state.syntax_color_fn = syn_fn;
         });
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let font_family_for_editor = self
             .state
             .read(cx)

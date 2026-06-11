@@ -2,7 +2,7 @@
 
 use crate::components::icon::Icon;
 use crate::components::icon_source::IconSource;
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::sync::Arc;
 
@@ -49,8 +49,8 @@ impl<T: Clone + 'static> Styled for Breadcrumbs<T> {
 }
 
 impl<T: Clone + 'static> RenderOnce for Breadcrumbs<T> {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let user_style = self.style;
 
         if self.items.is_empty() {

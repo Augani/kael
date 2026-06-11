@@ -169,7 +169,10 @@ pub use crate::overlays::popover::Popover;
 pub use crate::overlays::popover_menu::{PopoverMenu, PopoverMenuItem};
 pub use crate::overlays::sheet::{Sheet, SheetSide, SheetSize};
 pub use crate::overlays::toast::{ToastItem, ToastManager, ToastPosition, ToastVariant};
-pub use crate::theme::{install_theme, use_theme, Theme, ThemeTokens, ThemeVariant};
+pub use crate::theme::{
+    install_theme, install_theme_file_bridge, observe_theme_file_bridge, tokens_from_core_theme,
+    use_theme, Theme, ThemeTokens, ThemeVariant,
+};
 
 pub use crate::content_transition::{ContentTransition, ContentTransitionState};
 pub use crate::responsive::{

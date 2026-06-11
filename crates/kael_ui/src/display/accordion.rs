@@ -1,6 +1,10 @@
 //! Accordion - Collapsible content sections with smooth animations.
 
-use crate::{components::icon::Icon, components::icon_source::IconSource, theme::use_theme};
+use crate::{
+    components::icon::Icon,
+    components::icon_source::IconSource,
+    theme::{use_theme, Theme},
+};
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
@@ -187,8 +191,8 @@ impl AccordionItem {
 }
 
 impl RenderOnce for AccordionItem {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let is_open = self.is_open;
 
         div()

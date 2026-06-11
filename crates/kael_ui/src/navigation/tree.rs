@@ -2,7 +2,7 @@
 
 use crate::components::icon::Icon;
 use crate::components::icon_source::IconSource;
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::*, *};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -370,8 +370,8 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> Styled for TreeList<T> {
 }
 
 impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
 
         let expanded_set: HashSet<T> = self.expanded_ids.iter().cloned().collect();
 
@@ -543,7 +543,7 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                                                     self.render_highlighted_text(
                                                         &flat_node.node.label,
                                                         ranges,
-                                                        &theme,
+                                                        theme,
                                                         is_selected,
                                                     )
                                                     .into_any_element()
@@ -766,8 +766,8 @@ impl<T: Clone + PartialEq + 'static> List<T> {
 }
 
 impl<T: Clone + PartialEq + 'static> RenderOnce for List<T> {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
 
         div()
             .flex()
@@ -777,7 +777,7 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for List<T> {
             .children(
                 self.items
                     .iter()
-                    .map(|item| self.render_item(item, &theme).into_any_element()),
+                    .map(|item| self.render_item(item, theme).into_any_element()),
             )
     }
 }

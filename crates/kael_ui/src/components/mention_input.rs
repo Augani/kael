@@ -1,6 +1,6 @@
 use crate::components::avatar::{Avatar, AvatarSize};
 use crate::components::scrollable::scrollable_vertical;
-use crate::theme::use_theme;
+use crate::theme::{use_theme, Theme};
 use kael::{prelude::*, *};
 use std::ops::Range;
 use std::rc::Rc;
@@ -1138,7 +1138,7 @@ impl kael::Element for MentionTextElement {
         let content: SharedString = input.content.clone().into();
         let selected_range = input.selected_range.clone();
         let cursor_offset = input.cursor_offset();
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let style = window.text_style();
 
         let (display_text, text_color) = if content.is_empty() {

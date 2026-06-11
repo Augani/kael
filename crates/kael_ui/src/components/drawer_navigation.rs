@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::animations::{durations, easings};
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum DrawerSide {
@@ -152,7 +152,7 @@ impl ParentElement for DrawerNavigation {
 
 impl RenderOnce for DrawerNavigation {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+        let theme = Theme::of(cx);
         let user_style = self.style;
         let state = self.state.read(cx);
         let is_open = state.is_open;

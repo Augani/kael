@@ -8,10 +8,19 @@ use std::{
 
 use crate::{
     App, BorrowAppContext, BoxShadow, FileWatchEvent, FileWatcher, FontWeight, Global, Hsla,
-    Pixels, Rgba, SharedString, Subscription, Window, WindowAppearance, black,
+    Pixels, Rgba, SharedString, SubscriberSet, Subscription, Window, WindowAppearance, black,
     colors::{Colors, GlobalColors},
     point, px,
 };
+
+/// A callback invoked after a watched theme file reloads and the core
+/// [`Theme`] global has been updated.
+///
+/// Registered through [`App::observe_theme_files`], every active subscriber is
+/// notified with the freshly parsed [`Theme`] so downstream layers (such as
+/// `kael_ui`'s token system) can bridge the file-facing theme onto their own
+/// runtime representation.
+pub type ThemeFileSubscriber = Box<dyn FnMut(&Theme, &mut App) + 'static>;
 
 /// A full application theme that can be stored in GPUI global state.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -372,6 +381,29 @@ pub(crate) fn retain_file_watcher(cx: &mut App, watcher: FileWatcher) {
     });
 }
 
+pub(crate) fn register_theme_file_subscriber(
+    cx: &mut App,
+    subscriber: ThemeFileSubscriber,
+) -> Subscription {
+    cx.update_default_global::<ThemeRuntime, _>(|runtime, _| {
+        let (subscription, activate) = runtime.file_subscribers.insert((), subscriber);
+        activate();
+        subscription
+    })
+}
+
+pub(crate) fn notify_theme_file_subscribers(cx: &mut App, theme: &Theme) {
+    if !cx.has_global::<ThemeRuntime>() {
+        return;
+    }
+
+    let subscribers = cx.global::<ThemeRuntime>().file_subscribers.clone();
+    subscribers.retain(&(), |subscriber| {
+        subscriber(theme, cx);
+        true
+    });
+}
+
 fn same_theme_path(candidate: &Path, watched_path: &Path) -> bool {
     if candidate == watched_path {
         return true;
@@ -393,10 +425,20 @@ fn sync_theme_colors(cx: &mut App) {
     cx.set_global(GlobalColors(Arc::new(colors)));
 }
 
-#[derive(Default)]
 struct ThemeRuntime {
     sync_subscription: Option<Subscription>,
     file_watchers: Vec<FileWatcher>,
+    file_subscribers: SubscriberSet<(), ThemeFileSubscriber>,
+}
+
+impl Default for ThemeRuntime {
+    fn default() -> Self {
+        Self {
+            sync_subscription: None,
+            file_watchers: Vec::new(),
+            file_subscribers: SubscriberSet::new(),
+        }
+    }
 }
 
 impl Global for ThemeRuntime {}
@@ -534,6 +576,55 @@ foreground = "#f9fafb"
             assert_eq!(colors.selected, expected_colors.selected);
             assert_eq!(colors.text, expected_colors.text);
         });
+    }
+
+    #[kael::test]
+    fn theme_file_subscriber_receives_reloaded_theme(cx: &mut crate::TestAppContext) {
+        use std::{cell::RefCell, rc::Rc};
+
+        let directory = create_temp_theme_dir();
+        let theme_path = directory.join("theme.toml");
+
+        cx.on_quit({
+            let directory = directory.clone();
+            move || {
+                let _ = fs::remove_dir_all(directory);
+            }
+        });
+
+        fs::write(&theme_path, "[colors]\nbackground = \"#101820\"\n").unwrap();
+        let watched_path = normalize_theme_path(&theme_path).unwrap();
+
+        let received: Rc<RefCell<Vec<Theme>>> = Rc::new(RefCell::new(Vec::new()));
+
+        cx.update(|cx| {
+            Theme::init(cx);
+            let sink = received.clone();
+            cx.observe_theme_files(move |theme, _| sink.borrow_mut().push(theme.clone()))
+                .detach();
+        });
+
+        fs::write(
+            &theme_path,
+            "[colors]\nbackground = \"#1f2937\"\nprimary = \"#2563eb\"\nforeground = \"#f9fafb\"\n",
+        )
+        .unwrap();
+
+        let expected_theme = Theme::from_path(&theme_path).unwrap();
+
+        cx.update(|cx| {
+            crate::app::handle_theme_file_event(
+                cx,
+                &FileWatchEvent::Modified(watched_path.clone()),
+                &watched_path,
+                &mut |theme, cx| cx.set_global(theme),
+            )
+            .unwrap();
+        });
+
+        let received = received.borrow();
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0], expected_theme);
     }
 
     #[test]

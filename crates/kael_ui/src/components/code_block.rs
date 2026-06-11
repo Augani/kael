@@ -1,6 +1,6 @@
 use kael::*;
 
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CodeBlockCopyState {
@@ -69,8 +69,8 @@ impl CodeBlock {
 }
 
 impl RenderOnce for CodeBlock {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let lines: Vec<&str> = self.code.split('\n').collect();
         let is_rust = self
             .language

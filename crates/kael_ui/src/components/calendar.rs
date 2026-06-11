@@ -4,7 +4,7 @@ use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
-use crate::theme::use_theme;
+use crate::theme::Theme;
 
 /// Default English weekday abbreviations
 pub const DEFAULT_WEEKDAYS: [&str; 7] = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
@@ -340,8 +340,8 @@ impl Styled for Calendar {
 }
 
 impl RenderOnce for Calendar {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let current_month = self.current_month;
         let selected_date = self.selected_date;
         let locale = self.locale.clone();

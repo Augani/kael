@@ -1,4 +1,4 @@
-use crate::theme::use_theme;
+use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 
 fn lerp_color(low: Hsla, high: Hsla, t: f32) -> Hsla {
@@ -96,8 +96,8 @@ impl Styled for Heatmap {
 }
 
 impl RenderOnce for Heatmap {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let user_style = self.style;
 
         let low_color = self.low_color.unwrap_or_else(|| hsla(0.58, 0.7, 0.92, 1.0));

@@ -7,7 +7,7 @@ use crate::{
         icon_source::IconSource,
         text::caption,
     },
-    theme::use_theme,
+    theme::{use_theme, Theme},
 };
 use kael::{prelude::FluentBuilder as _, InteractiveElement, *};
 use std::rc::Rc;
@@ -183,8 +183,8 @@ impl Default for StatusBar {
 }
 
 impl Render for StatusBar {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = use_theme();
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::of(cx);
         let user_style = self.style.clone();
 
         div()
