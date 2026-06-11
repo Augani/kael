@@ -296,7 +296,13 @@ impl CapabilityReport {
         self.add(
             PlatformFeature::GlobalHotkeys,
             SupportLevel::Partial,
-            Some("X11 only; unsupported on Wayland"),
+            Some(
+                "X11: direct key grab. Wayland: via the GlobalShortcuts desktop portal \
+                 (xdg-desktop-portal with a backend implementing GlobalShortcuts v1+); \
+                 binding is interactive and may prompt for consent, the compositor may \
+                 assign a different trigger than requested, and registration resolves \
+                 asynchronously. Returns a descriptive error if the portal is unavailable.",
+            ),
         );
         self.add(
             PlatformFeature::StatusBarItem,

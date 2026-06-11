@@ -138,7 +138,60 @@ cx.on_global_hotkey(|id| {
         _ => {}
     }
 });
+
+cx.on_global_hotkey_up(|id| {
+    if id == 1 { /* hotkey released */ }
+});
 ```
+
+### Platform behaviour
+
+| Platform | Backend | Notes |
+| --- | --- | --- |
+| macOS | Carbon/`NSEvent` monitors | Immediate registration. |
+| Windows | `RegisterHotKey` | Immediate registration. |
+| Linux (X11) | `XGrabKey` on the root window | Immediate registration; fails if another client already holds the grab. |
+| Linux (Wayland) | `org.freedesktop.portal.GlobalShortcuts` desktop portal | Interactive and asynchronous — see below. |
+
+### Wayland: the GlobalShortcuts portal
+
+Wayland compositors do not let arbitrary clients grab keys, so global hotkeys go
+through [`org.freedesktop.portal.GlobalShortcuts`][portal] provided by
+`xdg-desktop-portal` and a backend that implements the interface (GNOME, KDE
+Plasma, Hyprland's portal, and others). The flow is `CreateSession` →
+`BindShortcuts` → listen for `Activated`/`Deactivated` signals, which are routed
+into the same `on_global_hotkey` / `on_global_hotkey_up` callbacks used on every
+other platform.
+
+Because of how the portal works, Wayland registration differs from the other
+backends in three honest ways:
+
+- **It is asynchronous.** `register_global_hotkey` records the request and starts
+  the portal session in the background, returning `Ok(())` to mean
+  *registered-pending* rather than *bound and live*. The shortcut becomes active
+  once the portal confirms the binding.
+- **It is interactive.** The first `BindShortcuts` call may show a system dialog
+  asking the user to confirm or reassign the shortcuts. Nothing fires until the
+  user responds.
+- **The trigger may change.** The compositor is free to bind a different key
+  combination than the one requested. The preferred trigger is sent as a hint in
+  the XDG shortcuts format (e.g. `CTRL+SHIFT+k`, `LOGO+space`); the actual,
+  user-facing trigger is reported back and can be read for display.
+
+`register_global_hotkey` returns a descriptive `Err` only when it can fail
+synchronously — currently when the keystroke cannot be mapped to an XDG trigger.
+If the portal itself is unavailable (no `xdg-desktop-portal`, or a backend that
+does not implement GlobalShortcuts), the background session fails and the
+shortcut simply never activates; the failure is logged. Query
+`CapabilityReport::current()` for `PlatformFeature::GlobalHotkeys`, which reports
+`Partial` on Linux with a note describing the portal dependency.
+
+> **Current limitation (v1):** shortcuts are bound to a single portal session.
+> Registering additional hotkeys after the session is already bound re-binds the
+> full set, which some compositors only honour at session creation. For the most
+> predictable behaviour, register all Wayland hotkeys during startup.
+
+[portal]: https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html
 
 ---
 

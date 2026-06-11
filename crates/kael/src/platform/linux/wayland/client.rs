@@ -244,6 +244,9 @@ pub(crate) struct WaylandClientState {
     event_loop: Option<EventLoop<'static, WaylandClientStatePtr>>,
     common: LinuxCommon,
     tray: crate::platform::linux::tray::LinuxTray,
+    global_hotkey: crate::platform::linux::global_hotkey::wayland::WaylandGlobalHotkey,
+    global_hotkey_tx:
+        calloop::channel::Sender<crate::platform::linux::global_hotkey::wayland::HotkeyEvent>,
 }
 
 pub struct DragState {
@@ -608,6 +611,62 @@ impl WaylandClient {
             })
             .unwrap();
 
+        let (global_hotkey_tx, global_hotkey_rx) = calloop::channel::channel::<
+            crate::platform::linux::global_hotkey::wayland::HotkeyEvent,
+        >();
+        handle
+            .insert_source(global_hotkey_rx, {
+                move |event, _, client: &mut WaylandClientStatePtr| {
+                    use crate::platform::linux::global_hotkey::wayland::HotkeyEvent;
+                    let calloop::channel::Event::Msg(event) = event else {
+                        return;
+                    };
+                    let Some(state) = client.0.upgrade() else {
+                        return;
+                    };
+                    match event {
+                        HotkeyEvent::Activated(portal_id) => {
+                            let mut state = state.borrow_mut();
+                            let Some(id) = state.global_hotkey.on_activated(&portal_id.to_string())
+                            else {
+                                return;
+                            };
+                            let mut callback = state.common.callbacks.global_hotkey.take();
+                            drop(state);
+                            if let Some(ref mut cb) = callback {
+                                cb(id);
+                            }
+                            if let Some(state) = client.0.upgrade() {
+                                state.borrow_mut().common.callbacks.global_hotkey = callback;
+                            }
+                        }
+                        HotkeyEvent::Deactivated(portal_id) => {
+                            let mut state = state.borrow_mut();
+                            let Some(id) =
+                                state.global_hotkey.on_deactivated(&portal_id.to_string())
+                            else {
+                                return;
+                            };
+                            let mut callback = state.common.callbacks.global_hotkey_up.take();
+                            drop(state);
+                            if let Some(ref mut cb) = callback {
+                                cb(id);
+                            }
+                            if let Some(state) = client.0.upgrade() {
+                                state.borrow_mut().common.callbacks.global_hotkey_up = callback;
+                            }
+                        }
+                        HotkeyEvent::BindResult(bound) => {
+                            state.borrow_mut().global_hotkey.apply_bind_result(&bound);
+                        }
+                        HotkeyEvent::Failed(reason) => {
+                            log::warn!("Wayland global hotkey portal failed: {reason}");
+                        }
+                    }
+                }
+            })
+            .unwrap();
+
         let mut state = Rc::new(RefCell::new(WaylandClientState {
             serial_tracker: SerialTracker::new(),
             globals,
@@ -674,6 +733,9 @@ impl WaylandClient {
             pending_activation: None,
             event_loop: Some(event_loop),
             tray: crate::platform::linux::tray::LinuxTray::new(),
+            global_hotkey: crate::platform::linux::global_hotkey::wayland::WaylandGlobalHotkey::new(
+            ),
+            global_hotkey_tx,
         }));
 
         WaylandSource::new(conn, event_queue)
@@ -979,11 +1041,18 @@ impl LinuxClient for WaylandClient {
         self.0.borrow().tray.get_icon_bounds()
     }
 
-    fn register_global_hotkey(&self, _id: u32, _keystroke: &Keystroke) -> crate::Result<()> {
-        Err(anyhow::anyhow!("Global hotkeys not supported on Wayland"))
+    fn register_global_hotkey(&self, id: u32, keystroke: &Keystroke) -> crate::Result<()> {
+        let mut state = self.0.borrow_mut();
+        let executor = state.common.background_executor.clone();
+        let event_tx = state.global_hotkey_tx.clone();
+        state
+            .global_hotkey
+            .register(id, keystroke, &executor, event_tx)
     }
 
-    fn unregister_global_hotkey(&self, _id: u32) {}
+    fn unregister_global_hotkey(&self, id: u32) {
+        self.0.borrow_mut().global_hotkey.unregister(id);
+    }
 
     fn system_idle_time(&self) -> Option<Duration> {
         crate::platform::linux::power::system_idle_time_dbus()
