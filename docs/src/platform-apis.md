@@ -435,6 +435,40 @@ for display in &displays {
 
 ---
 
+## Text Antialiasing
+
+Kael renders text with the best antialiasing each platform's font rasterizer can
+produce. When a glyph is drawn with an opaque color at full opacity and without a
+transform, Kael requests **subpixel (LCD RGB) antialiasing**; otherwise it falls
+back to **grayscale** antialiasing. Subpixel coverage is rasterized per channel and
+uploaded into the polychrome (RGBA) glyph atlas, then blended in the sprite shader
+by collapsing the per-channel coverage to a dominant alpha while preserving the RGB
+fringing — the same math across every backend.
+
+| Platform | Subpixel text | Rasterizer |
+|----------|---------------|-----------|
+| macOS    | Yes           | Core Text / `font-kit` (BGRA coverage) |
+| Windows  | Yes           | DirectWrite ClearType (`DWRITE_TEXTURE_CLEARTYPE_3x1`) with the OS gamma/contrast correction |
+| Linux    | Grayscale only | cosmic-text / swash |
+
+Subpixel selection is decided by the text system's capability, not a compile-time
+target check, so a backend that gains LCD support is picked up automatically.
+
+### Why Linux stays grayscale
+
+Linux text shaping and rasterization go through `cosmic-text`, whose `SwashCache`
+renders every non-color glyph with `Format::Alpha` — a single-channel grayscale
+mask. Its `Content::SubpixelMask` branch is an unimplemented `TODO`, so the cache
+never emits RGB coverage. The underlying `swash` scaler *can* produce
+`Format::Subpixel`, but reaching it means bypassing `SwashCache` and driving
+`swash`'s `ScaleContext`/`Render` directly (or adding a FreeType path with an LCD
+filter), plus matching the glyph-cache keys and fractional-offset handling. That is
+a separate rasterizer effort; until then Linux uses high-quality grayscale
+antialiasing, which is visually correct (just without the horizontal-resolution
+gain of LCD subpixel rendering).
+
+---
+
 ## Crash Reporting
 
 Automatic crash capture with remote submission:

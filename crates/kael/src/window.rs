@@ -3613,7 +3613,7 @@ impl Window {
             x: (fract_x * SUBPIXEL_VARIANTS_X as f32).floor() as u8,
             y: (fract_y * SUBPIXEL_VARIANTS_Y as f32).floor() as u8,
         };
-        let raster_mode = if cfg!(target_os = "macos")
+        let raster_mode = if self.text_system().supports_subpixel_glyphs()
             && color.a >= 1.0
             && element_opacity >= 1.0
             && transformation == TransformationMatrix::unit()
