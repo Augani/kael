@@ -76,6 +76,52 @@ fn window_handles_do_not_panic() {
     let _ = platform.primary_display();
 }
 
+/// Verify the cross-platform `PlatformDisplay::refresh_rate()` contract: the
+/// test backend reports a concrete rate, and any reported rate is positive and
+/// finite. Platform backends that cannot determine a rate return `None` rather
+/// than a bogus value.
+#[test]
+fn display_refresh_rate_is_plausible_or_none() {
+    use crate::PlatformDisplay;
+
+    let test_display = crate::platform::test::TestDisplay::new();
+    assert_eq!(test_display.refresh_rate(), Some(60.0));
+
+    let _guard = lock_platform_test_surface();
+    let platform = crate::platform::current_platform(true);
+    for display in platform.displays() {
+        if let Some(rate) = display.refresh_rate() {
+            assert!(
+                rate > 0.0 && rate.is_finite(),
+                "refresh rate must be positive and finite, got {rate}"
+            );
+        }
+    }
+}
+
+/// The default `PlatformDisplay::refresh_rate()` implementation returns `None`
+/// so backends that do not override it never report a fabricated rate.
+#[test]
+fn display_refresh_rate_defaults_to_none() {
+    use crate::{Bounds, DisplayId, Pixels, PlatformDisplay, Point, px};
+
+    #[derive(Debug)]
+    struct BareDisplay;
+    impl PlatformDisplay for BareDisplay {
+        fn id(&self) -> DisplayId {
+            DisplayId(0)
+        }
+        fn uuid(&self) -> anyhow::Result<uuid::Uuid> {
+            Ok(uuid::Uuid::nil())
+        }
+        fn bounds(&self) -> Bounds<Pixels> {
+            Bounds::from_corners(Point::default(), Point::new(px(1.0), px(1.0)))
+        }
+    }
+
+    assert_eq!(BareDisplay.refresh_rate(), None);
+}
+
 /// **Validates: Requirements 12.3**
 ///
 /// Verify that `hide_other_apps` doesn't panic on Windows (or any platform).

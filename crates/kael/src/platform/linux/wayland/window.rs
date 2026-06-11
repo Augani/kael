@@ -1061,6 +1061,7 @@ impl PlatformWindow for WaylandWindow {
                 id: id.clone(),
                 name: display.name.clone(),
                 bounds: display.bounds.to_pixels(state.scale),
+                refresh_mhz: display.refresh_mhz,
             }) as Rc<dyn PlatformDisplay>
         })
     }

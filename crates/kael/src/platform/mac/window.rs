@@ -2173,6 +2173,10 @@ impl PlatformWindow for MacWindow {
         }
     }
 
+    fn display_refresh_rate(&self) -> Option<f32> {
+        self.display().and_then(|display| display.refresh_rate())
+    }
+
     fn mouse_position(&self) -> Point<Pixels> {
         let position = unsafe {
             self.0

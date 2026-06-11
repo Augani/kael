@@ -432,6 +432,15 @@ pub trait PlatformDisplay: Send + Sync + Debug {
         let origin = point(center.x - offset.width, center.y - offset.height);
         Bounds::new(origin, DEFAULT_WINDOW_SIZE)
     }
+
+    /// The refresh rate of this display in hertz (e.g. `60.0`, `120.0`).
+    ///
+    /// Returns `None` when the platform cannot report a rate for the display
+    /// (for example a virtual or headless display, or a panel that does not
+    /// advertise a fixed rate). Callers should fall back to a sensible default.
+    fn refresh_rate(&self) -> Option<f32> {
+        None
+    }
 }
 
 /// Metadata for a given [ScreenCaptureSource]
