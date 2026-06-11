@@ -6,17 +6,18 @@ Multi-screen apps push and pop views on a navigation stack. The canonical API is
 ## Navigator
 
 ```rust
-use kael::{Navigator, Route, navigator};
+use kael::{Navigator, Route, Transition, navigator};
 
 let nav = navigator(Route::new("inbox", inbox_view));
 
 nav.push(
     Route::new("thread", thread_view).with_memento(ThreadScroll { offset }),
+    Transition::SlideLeft,
     window,
     cx,
 );
 
-nav.pop(window, cx);
+nav.pop(Transition::SlideRight, window, cx);
 ```
 
 - **Routes** pair a stable id with an `AnyView`.
@@ -31,17 +32,5 @@ nav.pop(window, cx);
 `Navigator` is a screen stack, not a URL router — there is no path matching or
 deep linking yet; those are tracked for a future release.
 
-## ViewRouter (kael_ui, legacy)
-
-`kael_ui::components::view_router::ViewRouter` predates `Navigator` and overlaps
-with it (push/pop/replace with `PageTransition` animations). It remains
-supported for existing apps, but `Navigator` is the one being invested in —
-prefer it for new code. `ViewRouter` may be folded into `Navigator` before 1.0.
-
-| | `kael::Navigator` | `kael_ui::ViewRouter` |
-|---|---|---|
-| Stack push/pop | yes | yes (+ replace) |
-| Restorable route state | mementos | no |
-| Route-change events | `RouteChangeEvent` | no |
-| Transition animations | slide/fade/custom | slide/fade presets |
-| Status | canonical | legacy, kept for compatibility |
+`Navigator` also offers `replace`, `replace_stack`, and `pop_to_root` for
+rewriting the stack, each taking a `Transition` to animate the change.

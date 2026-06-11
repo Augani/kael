@@ -129,7 +129,6 @@ pub use crate::components::video_player::{
     init_video_player, VideoPlaybackSpeed, VideoPlaybackState, VideoPlayer, VideoPlayerSize,
     VideoPlayerState,
 };
-pub use crate::components::view_router::{PageTransition, ViewRouter, ViewRouterState};
 pub use crate::display::accordion::{Accordion, AccordionItem};
 pub use crate::display::badge::{Badge, BadgeVariant};
 pub use crate::display::card::Card;

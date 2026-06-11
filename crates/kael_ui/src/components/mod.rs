@@ -99,7 +99,6 @@ pub mod spotlight;
 pub mod text_highlight;
 pub mod text_reveal;
 pub mod type_writer;
-pub mod view_router;
 
 pub mod aurora;
 pub mod crop_area;
