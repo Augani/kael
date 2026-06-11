@@ -857,32 +857,48 @@ fn find_app_bundle_in(dir: &std::path::Path) -> Result<std::path::PathBuf> {
     bail!("no .app bundle found in {}", dir.display())
 }
 
-/// Replace the existing app bundle with the new one.
+/// Validate the code signature of `new_app`, then atomically swap it over
+/// `existing_app` with rollback on failure.
+///
+/// The new bundle is first copied into a staging location on the same volume as
+/// the live install so the swap can use an atomic `rename`. Verification uses
+/// `codesign --verify`; an invalid signature aborts before any swap occurs.
 #[cfg(target_os = "macos")]
 fn replace_app_bundle(new_app: &std::path::Path, existing_app: &std::path::Path) -> Result<()> {
-    let backup = existing_app.with_extension("app.bak");
-    if backup.exists() {
-        std::fs::remove_dir_all(&backup)?;
+    use kael_release::apply::{FsInstaller, SwapPlan, atomic_swap_with_rollback, verify_codesign};
+
+    verify_codesign(new_app).context("downloaded app bundle failed codesign verification")?;
+
+    let parent = existing_app
+        .parent()
+        .ok_or_else(|| anyhow!("could not determine parent directory of {existing_app:?}"))?;
+    let file_name = existing_app
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("Kael.app");
+
+    let staged = parent.join(format!(".{file_name}.staged"));
+    if staged.exists() {
+        std::fs::remove_dir_all(&staged)?;
     }
-    std::fs::rename(existing_app, &backup)
-        .context("failed to move existing app bundle to backup")?;
 
     let status = std::process::Command::new("cp")
-        .args([
-            "-R",
-            &new_app.to_string_lossy(),
-            &existing_app.to_string_lossy(),
-        ])
+        .args(["-R", &new_app.to_string_lossy(), &staged.to_string_lossy()])
         .status()
-        .context("failed to copy new app bundle")?;
-
+        .context("failed to stage new app bundle")?;
     if !status.success() {
-        // Attempt to restore backup
-        let _ = std::fs::rename(&backup, existing_app);
-        bail!("failed to copy new app bundle into place");
+        let _ = std::fs::remove_dir_all(&staged);
+        bail!("failed to stage new app bundle into place");
     }
 
-    let _ = std::fs::remove_dir_all(&backup);
+    let plan = SwapPlan {
+        live: existing_app.to_path_buf(),
+        staged,
+        backup: existing_app.with_extension("app.backup"),
+    };
+
+    atomic_swap_with_rollback(&FsInstaller, &plan)
+        .context("failed to swap new app bundle into place")?;
     Ok(())
 }
 
@@ -1742,6 +1758,62 @@ mod tests {
                 .to_string()
                 .contains("unsupported macOS package format")
         );
+    }
+
+    /// Exercise the real atomic apply path against a dummy `.app` bundle in a
+    /// tempdir, including rollback. Uses the shared kael_release apply machinery
+    /// directly so no `codesign`/`open`/`hdiutil` side effects are triggered.
+    #[test]
+    fn test_apply_swaps_dummy_app_bundle_in_tempdir() {
+        use kael_release::apply::{FsInstaller, SwapPlan, atomic_swap_with_rollback};
+
+        let root = std::env::temp_dir().join(format!("kael_apply_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let make_bundle = |path: &std::path::Path, marker: &str| {
+            let macos = path.join("Contents").join("MacOS");
+            std::fs::create_dir_all(&macos).unwrap();
+            std::fs::write(path.join("Contents").join("Info.plist"), marker).unwrap();
+            std::fs::write(macos.join("kael"), marker).unwrap();
+        };
+
+        let live = root.join("Kael.app");
+        let staged = root.join(".Kael.app.staged");
+        let backup = root.join("Kael.app.backup");
+        make_bundle(&live, "v1");
+        make_bundle(&staged, "v2");
+
+        let plan = SwapPlan {
+            live: live.clone(),
+            staged: staged.clone(),
+            backup: backup.clone(),
+        };
+        let state = atomic_swap_with_rollback(&FsInstaller, &plan).unwrap();
+        assert!(state.is_committed());
+        assert_eq!(
+            std::fs::read_to_string(live.join("Contents").join("Info.plist")).unwrap(),
+            "v2"
+        );
+        assert!(!backup.exists());
+        assert!(!staged.exists());
+
+        // Now drive a rollback: a staged path that does not exist forces the
+        // swap to fail, and the original bundle must be restored intact.
+        let missing = root.join(".missing.app.staged");
+        let plan = SwapPlan {
+            live: live.clone(),
+            staged: missing,
+            backup: root.join("Kael.app.backup2"),
+        };
+        let result = atomic_swap_with_rollback(&FsInstaller, &plan);
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_to_string(live.join("Contents").join("Info.plist")).unwrap(),
+            "v2",
+            "live bundle must be restored after a failed swap"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[cfg(target_os = "windows")]

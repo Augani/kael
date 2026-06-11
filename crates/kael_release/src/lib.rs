@@ -6,6 +6,7 @@
 /// signatures and keys against the exact version used for manifest signing.
 pub use ed25519_dalek;
 
+pub mod apply;
 pub mod license;
 pub mod metadata;
 pub mod notarize;
