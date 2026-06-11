@@ -96,6 +96,14 @@ pub struct UpdatePolicy {
     pub auto_install: bool,
     /// Interval in seconds between update checks.
     pub check_interval_secs: u64,
+    /// Whether the client must refuse updates that are not signed by the
+    /// configured public key (fail closed). Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub require_signed_feeds: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl UpdatePolicy {
@@ -107,6 +115,7 @@ impl UpdatePolicy {
             auto_download: false,
             auto_install: false,
             check_interval_secs: 86400,
+            require_signed_feeds: true,
         }
     }
 }
