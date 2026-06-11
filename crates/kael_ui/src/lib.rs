@@ -56,8 +56,6 @@
 extern crate kael;
 
 pub mod animate;
-pub mod animated_state;
-pub mod animation_coordinator;
 pub mod animations;
 pub mod charts;
 pub mod components;
