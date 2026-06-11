@@ -184,11 +184,12 @@ pub use crate::responsive::{
     current_breakpoint, responsive_columns, responsive_value, Breakpoint, Responsive,
 };
 pub use crate::scroll_physics::ScrollPhysics;
-pub use crate::spring::Spring;
+pub use crate::spring::{Spring, SpringPoint, SpringPreset, SpringValue};
 
 pub use crate::components::animated_counter::{AnimatedCounter, AnimatedCounterState};
 pub use crate::components::animated_presence::{AnimatedPresence, AnimatedPresenceState};
 pub use crate::components::copy_button::{CopyButton, CopyButtonState};
+pub use crate::components::draggable_spring::{DraggableSpring, DraggableSpringState};
 pub use crate::components::gradient_border::GradientBorder;
 pub use crate::components::kbd::{KBDSize, KBD};
 pub use crate::components::pulse_indicator::PulseIndicator;
