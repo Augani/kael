@@ -26,7 +26,7 @@ impl LinuxGlobalHotkey {
     }
 }
 
-pub use crate::platform::global_hotkey_portal as portal;
+pub(crate) use crate::platform::global_hotkey_portal as portal;
 
 #[cfg(feature = "x11")]
 pub mod x11 {
@@ -269,9 +269,9 @@ pub mod wayland {
     };
     use super::*;
     use crate::BackgroundExecutor;
+    use ashpd::desktop::CreateSessionOptions;
     use ashpd::desktop::Session;
     use ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
-    use ashpd::desktop::session::CreateSessionOptions;
     use calloop::channel::Sender;
     use smol::stream::StreamExt;
 
