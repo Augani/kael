@@ -103,6 +103,21 @@ pub(crate) use windows::*;
 #[cfg(any(test, feature = "test-support"))]
 pub use test::{TestDispatcher, TestScreenCaptureSource, TestScreenCaptureStream};
 
+/// Emits a single `log::warn!` for an API that is accepted but not implemented on the
+/// current platform, so callers learn the call is a no-op without flooding the log on
+/// every invocation. Each expansion site warns at most once for the process lifetime.
+macro_rules! warn_unsupported_once {
+    ($api:literal) => {{
+        static WARNED: std::sync::Once = std::sync::Once::new();
+        WARNED.call_once(|| {
+            log::warn!(concat!(
+                $api,
+                " is not supported on this platform; ignoring the call"
+            ));
+        });
+    }};
+}
+
 /// Returns a background executor for the current platform.
 pub fn background_executor() -> BackgroundExecutor {
     current_platform(true).background_executor()
@@ -672,18 +687,62 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn tab_bar_visible(&self) -> bool {
         false
     }
-    fn set_edited(&mut self, _edited: bool) {}
-    fn show_character_palette(&self) {}
-    fn titlebar_double_click(&self) {}
-    fn on_move_tab_to_new_window(&self, _callback: Box<dyn FnMut()>) {}
-    fn on_merge_all_windows(&self, _callback: Box<dyn FnMut()>) {}
-    fn on_select_previous_tab(&self, _callback: Box<dyn FnMut()>) {}
-    fn on_select_next_tab(&self, _callback: Box<dyn FnMut()>) {}
-    fn on_toggle_tab_bar(&self, _callback: Box<dyn FnMut()>) {}
-    fn merge_all_windows(&self) {}
-    fn move_tab_to_new_window(&self) {}
-    fn toggle_window_tab_overview(&self) {}
-    fn set_tabbing_identifier(&self, _identifier: Option<String>) {}
+    /// Marks the window as having unsaved changes (the macOS document-edited dot).
+    /// macOS-only; a no-op on other platforms.
+    fn set_edited(&mut self, _edited: bool) {
+        warn_unsupported_once!("set_edited");
+    }
+    /// Shows the system emoji & symbols palette. macOS-only; a no-op elsewhere.
+    fn show_character_palette(&self) {
+        warn_unsupported_once!("show_character_palette");
+    }
+    /// Performs the configured titlebar double-click action (zoom/minimize).
+    /// macOS-only; a no-op elsewhere.
+    fn titlebar_double_click(&self) {
+        warn_unsupported_once!("titlebar_double_click");
+    }
+    /// Registers a handler for the native "move tab to new window" command.
+    /// macOS window tabbing only; the callback is never invoked on other platforms.
+    fn on_move_tab_to_new_window(&self, _callback: Box<dyn FnMut()>) {
+        warn_unsupported_once!("on_move_tab_to_new_window (macOS window tabbing)");
+    }
+    /// Registers a handler for the native "merge all windows" command.
+    /// macOS window tabbing only; the callback is never invoked on other platforms.
+    fn on_merge_all_windows(&self, _callback: Box<dyn FnMut()>) {
+        warn_unsupported_once!("on_merge_all_windows (macOS window tabbing)");
+    }
+    /// Registers a handler for the native "select previous tab" command.
+    /// macOS window tabbing only; the callback is never invoked on other platforms.
+    fn on_select_previous_tab(&self, _callback: Box<dyn FnMut()>) {
+        warn_unsupported_once!("on_select_previous_tab (macOS window tabbing)");
+    }
+    /// Registers a handler for the native "select next tab" command.
+    /// macOS window tabbing only; the callback is never invoked on other platforms.
+    fn on_select_next_tab(&self, _callback: Box<dyn FnMut()>) {
+        warn_unsupported_once!("on_select_next_tab (macOS window tabbing)");
+    }
+    /// Registers a handler for the native "toggle tab bar" command.
+    /// macOS window tabbing only; the callback is never invoked on other platforms.
+    fn on_toggle_tab_bar(&self, _callback: Box<dyn FnMut()>) {
+        warn_unsupported_once!("on_toggle_tab_bar (macOS window tabbing)");
+    }
+    /// Merges all open windows into one tabbed window. macOS-only; a no-op elsewhere.
+    fn merge_all_windows(&self) {
+        warn_unsupported_once!("merge_all_windows (macOS window tabbing)");
+    }
+    /// Moves the current tab into its own window. macOS-only; a no-op elsewhere.
+    fn move_tab_to_new_window(&self) {
+        warn_unsupported_once!("move_tab_to_new_window (macOS window tabbing)");
+    }
+    /// Toggles the macOS tab overview (Exposé-style). macOS-only; a no-op elsewhere.
+    fn toggle_window_tab_overview(&self) {
+        warn_unsupported_once!("toggle_window_tab_overview (macOS window tabbing)");
+    }
+    /// Sets the tabbing identifier used to group windows into native tabs.
+    /// macOS-only; a no-op elsewhere.
+    fn set_tabbing_identifier(&self, _identifier: Option<String>) {
+        warn_unsupported_once!("set_tabbing_identifier (macOS window tabbing)");
+    }
 
     #[cfg(target_os = "windows")]
     fn get_raw_handle(&self) -> windows::HWND;
@@ -1413,6 +1472,9 @@ pub struct WindowOptions {
     pub window_decorations: Option<WindowDecorations>,
 
     /// Tab group name, allows opening the window as a native tab on macOS 10.12+. Windows with the same tabbing identifier will be grouped together.
+    ///
+    /// macOS-only: native window tabbing is an AppKit feature. On Windows and Linux this
+    /// field is accepted but ignored (no native tab grouping exists).
     pub tabbing_identifier: Option<String>,
 
     /// Whether the window should allow mouse events to pass through to windows behind it
@@ -1550,7 +1612,10 @@ pub struct TitlebarOptions {
     /// Refer to [`WindowOptions::window_decorations`] on Linux
     pub appears_transparent: bool,
 
-    /// The position of the macOS traffic light buttons
+    /// The position of the macOS traffic light buttons.
+    ///
+    /// macOS-only: there are no traffic-light buttons on Windows or Linux, so this field
+    /// is accepted but ignored on those platforms.
     pub traffic_light_position: Option<Point<Pixels>>,
 }
 

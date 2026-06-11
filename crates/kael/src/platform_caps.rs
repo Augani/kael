@@ -50,6 +50,9 @@ pub enum PlatformFeature {
     /// Always-on-top / overlay windows that render above other windows,
     /// including fullscreen surfaces.
     AlwaysOnTopWindows,
+    /// Native window tabbing (grouping windows into a single tabbed window,
+    /// tab bar, tab overview, merge-all-windows). A macOS AppKit feature.
+    WindowTabbing,
 }
 
 /// The level of support for a platform feature.
@@ -192,6 +195,7 @@ impl CapabilityReport {
             SupportLevel::Full,
             Some("NSWindow screen-saver/floating window levels"),
         );
+        self.add(PlatformFeature::WindowTabbing, SupportLevel::Full, None);
     }
 
     #[cfg(target_os = "windows")]
@@ -270,6 +274,11 @@ impl CapabilityReport {
             PlatformFeature::AlwaysOnTopWindows,
             SupportLevel::Full,
             Some("HWND_TOPMOST z-order"),
+        );
+        self.add(
+            PlatformFeature::WindowTabbing,
+            SupportLevel::Unsupported,
+            Some("No native window tabbing; tabbing_identifier is ignored"),
         );
     }
 
@@ -380,6 +389,11 @@ impl CapabilityReport {
                  compositors, KDE Plasma); compositors without it (e.g. GNOME/Mutter) fall \
                  back to a regular window with no always-on-top guarantee.",
             ),
+        );
+        self.add(
+            PlatformFeature::WindowTabbing,
+            SupportLevel::Unsupported,
+            Some("No native window tabbing; tabbing_identifier is ignored"),
         );
     }
 
