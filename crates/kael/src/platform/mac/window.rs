@@ -1797,7 +1797,10 @@ impl MacWindow {
                 select_previous_tab_callback: None,
                 toggle_tab_bar_callback: None,
                 activated_least_once: false,
-                accessibility_provider: super::accessibility::MacAccessibilityProvider::new("Kael"),
+                accessibility_provider: super::accessibility::MacAccessibilityProvider::new(
+                    "Kael",
+                    native_view as *mut c_void,
+                ),
                 webviews: HashMap::default(),
                 pending_webview_commands: HashMap::default(),
             })));
@@ -2701,28 +2704,16 @@ impl PlatformWindow for MacWindow {
     }
 
     fn update_accessibility_tree(&mut self, tree: &crate::AccessibilityTree) {
-        use super::accessibility::role_to_ns_accessibility;
         let mut this = self.0.lock();
         this.accessibility_provider.update_tree(tree);
-        let native_view = this.native_view.as_ptr();
-        unsafe {
-            let role_str = role_to_ns_accessibility(crate::AccessibilityRole::Group);
-            let role_ns = ns_string(role_str);
-            let _: () = msg_send![native_view, setAccessibilityRole: role_ns];
-            let _: () = msg_send![native_view, setAccessibilityElement: YES];
-            if let Some(root) = tree.get(tree.root) {
-                if let Some(ref label) = root.label {
-                    let label_ns = ns_string(label.as_str());
-                    let _: () = msg_send![native_view, setAccessibilityLabel: label_ns];
-                }
-            }
-            if let Some(focused_id) = tree.focused_node() {
-                if let Some(node) = tree.get(focused_id) {
-                    let focused_label = node.label.as_deref().unwrap_or("");
-                    let label_ns = ns_string(focused_label);
-                    let _: () = msg_send![native_view, setAccessibilityValueDescription: label_ns];
-                }
-            }
+        let actions = this.accessibility_provider.drain_actions();
+        drop(this);
+        for (target, action) in actions {
+            log::debug!(
+                "AccessKit action request: {:?} on node {}",
+                action,
+                target.0
+            );
         }
     }
 }
@@ -3323,6 +3314,8 @@ extern "C" fn window_did_change_key_status(this: id, selector: Sel, _: id) {
     let window_state = unsafe { get_window_state(this) };
     let mut lock = window_state.lock();
     let is_active = unsafe { lock.native_window.isKeyWindow() == YES };
+    lock.accessibility_provider
+        .update_view_focus_state(is_active);
 
     // When opening a pop-up while the application isn't active, Cocoa sends a spurious
     // `windowDidBecomeKey` message to the previous key window even though that window

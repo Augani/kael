@@ -247,6 +247,42 @@ pub enum AccessibilityAction {
     Custom(u32),
 }
 
+impl AccessibilityAction {
+    /// Map to the closest AccessKit [`accesskit::Action`].
+    pub fn to_accesskit(self) -> accesskit::Action {
+        use accesskit::Action;
+        match self {
+            Self::Click | Self::Toggle => Action::Click,
+            Self::Focus => Action::Focus,
+            Self::ScrollUp => Action::ScrollUp,
+            Self::ScrollDown => Action::ScrollDown,
+            Self::Expand => Action::Expand,
+            Self::Collapse => Action::Collapse,
+            Self::Increment => Action::Increment,
+            Self::Decrement => Action::Decrement,
+            Self::ShowMenu => Action::Click,
+            Self::Dismiss => Action::Collapse,
+            Self::Custom(_) => Action::CustomAction,
+        }
+    }
+
+    /// Map an AccessKit [`accesskit::Action`] back to a kael action, if one applies.
+    pub fn from_accesskit(action: accesskit::Action) -> Option<Self> {
+        use accesskit::Action;
+        match action {
+            Action::Click => Some(Self::Click),
+            Action::Focus => Some(Self::Focus),
+            Action::ScrollUp => Some(Self::ScrollUp),
+            Action::ScrollDown => Some(Self::ScrollDown),
+            Action::Expand => Some(Self::Expand),
+            Action::Collapse => Some(Self::Collapse),
+            Action::Increment => Some(Self::Increment),
+            Action::Decrement => Some(Self::Decrement),
+            _ => None,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Value
 // ---------------------------------------------------------------------------
@@ -374,9 +410,18 @@ impl AccessibilityNode {
         if let Some(description) = &self.description {
             node.set_description(description.as_str());
         }
+        if let Some(placeholder) = &self.placeholder {
+            node.set_placeholder(placeholder.as_str());
+        }
         if let Some(bounds) = &self.bounds {
             node.set_bounds(bounds.to_accesskit());
         }
+        apply_value(&mut node, self);
+        apply_states(&mut node, self.states);
+        for action in &self.actions {
+            node.add_action(action.to_accesskit());
+        }
+
         let children: Vec<accesskit::NodeId> = self
             .children
             .iter()
@@ -494,6 +539,134 @@ impl AccessibilityTree {
                 None
             }
         })
+    }
+
+    /// Build a full AccessKit [`accesskit::TreeUpdate`] from this tree.
+    ///
+    /// Only nodes reachable from the root are emitted, and every parent's child
+    /// list is filtered to nodes that actually exist, so the resulting update is
+    /// always internally consistent (AccessKit panics on a malformed tree).
+    /// Hidden nodes are pruned along with their subtrees.
+    pub fn to_accesskit_tree_update(
+        &self,
+        app_name: Option<&str>,
+        toolkit_name: Option<&str>,
+        toolkit_version: Option<&str>,
+    ) -> accesskit::TreeUpdate {
+        let root_id = accesskit::NodeId(self.root.0);
+        let mut nodes: Vec<(accesskit::NodeId, accesskit::Node)> = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(self.root);
+
+        while let Some(id) = queue.pop_front() {
+            if !visited.insert(id) {
+                continue;
+            }
+            let Some(node) = self.nodes.get(&id) else {
+                continue;
+            };
+            if id != self.root && node.states.contains(AccessibilityState::HIDDEN) {
+                continue;
+            }
+
+            let mut ak_node = accesskit::Node::new(node.role.to_accesskit());
+            if let Some(label) = &node.label {
+                ak_node.set_label(label.as_str());
+            }
+            if let Some(description) = &node.description {
+                ak_node.set_description(description.as_str());
+            }
+            if let Some(placeholder) = &node.placeholder {
+                ak_node.set_placeholder(placeholder.as_str());
+            }
+            if let Some(bounds) = &node.bounds {
+                ak_node.set_bounds(bounds.to_accesskit());
+            }
+            apply_value(&mut ak_node, node);
+            apply_states(&mut ak_node, node.states);
+            for action in &node.actions {
+                ak_node.add_action(action.to_accesskit());
+            }
+
+            let mut child_ids = Vec::new();
+            for child in &node.children {
+                if let Some(child_node) = self.nodes.get(child) {
+                    if child_node.states.contains(AccessibilityState::HIDDEN) {
+                        continue;
+                    }
+                    child_ids.push(accesskit::NodeId(child.0));
+                    queue.push_back(*child);
+                }
+            }
+            ak_node.set_children(child_ids);
+
+            nodes.push((accesskit::NodeId(id.0), ak_node));
+        }
+
+        let focus = self
+            .focused_node()
+            .filter(|id| visited.contains(id))
+            .map(|id| accesskit::NodeId(id.0))
+            .unwrap_or(root_id);
+
+        let mut tree = accesskit::Tree::new(root_id);
+        tree.app_name = app_name.map(str::to_owned);
+        tree.toolkit_name = toolkit_name.map(str::to_owned);
+        tree.toolkit_version = toolkit_version.map(str::to_owned);
+
+        accesskit::TreeUpdate {
+            nodes,
+            tree: Some(tree),
+            focus,
+        }
+    }
+}
+
+fn apply_value(node: &mut accesskit::Node, source: &AccessibilityNode) {
+    match &source.value {
+        Some(AccessibilityValue::Text(text)) => node.set_value(text.as_str()),
+        Some(AccessibilityValue::Number(number)) => node.set_numeric_value(*number),
+        Some(AccessibilityValue::Range {
+            current,
+            min,
+            max,
+            step,
+        }) => {
+            node.set_numeric_value(*current);
+            node.set_min_numeric_value(*min);
+            node.set_max_numeric_value(*max);
+            if let Some(step) = step {
+                node.set_numeric_value_step(*step);
+            }
+        }
+        Some(AccessibilityValue::Toggle(on)) => {
+            node.set_toggled(if *on {
+                accesskit::Toggled::True
+            } else {
+                accesskit::Toggled::False
+            });
+        }
+        None => {}
+    }
+}
+
+fn apply_states(node: &mut accesskit::Node, states: AccessibilityState) {
+    if states.contains(AccessibilityState::DISABLED) {
+        node.set_disabled();
+    }
+    if states.contains(AccessibilityState::SELECTED) {
+        node.set_selected(true);
+    }
+    if states.contains(AccessibilityState::EXPANDED) {
+        node.set_expanded(true);
+    } else if states.contains(AccessibilityState::COLLAPSED) {
+        node.set_expanded(false);
+    }
+    if states.contains(AccessibilityState::INDETERMINATE) {
+        node.set_toggled(accesskit::Toggled::Mixed);
+    } else if states.contains(AccessibilityState::CHECKED) {
+        node.set_toggled(accesskit::Toggled::True);
     }
 }
 
@@ -847,5 +1020,183 @@ mod accesskit_spike_tests {
     fn node_omits_geometry_when_bounds_absent() {
         let node = AccessibilityNode::new(AccessibilityRole::Button);
         assert!(node.to_accesskit_node().bounds().is_none());
+    }
+
+    #[test]
+    fn node_maps_value_and_states() {
+        let node = AccessibilityNode::new(AccessibilityRole::Slider)
+            .with_value(AccessibilityValue::Range {
+                current: 3.0,
+                min: 0.0,
+                max: 10.0,
+                step: Some(1.0),
+            })
+            .with_states(AccessibilityState::DISABLED | AccessibilityState::SELECTED)
+            .with_actions(vec![
+                AccessibilityAction::Increment,
+                AccessibilityAction::Focus,
+            ]);
+        let ak = node.to_accesskit_node();
+        assert_eq!(ak.numeric_value(), Some(3.0));
+        assert_eq!(ak.min_numeric_value(), Some(0.0));
+        assert_eq!(ak.max_numeric_value(), Some(10.0));
+        assert!(ak.is_disabled());
+        assert!(ak.is_selected().unwrap_or(false));
+        assert!(ak.supports_action(accesskit::Action::Increment));
+        assert!(ak.supports_action(accesskit::Action::Focus));
+    }
+
+    #[test]
+    fn tree_update_is_consistent_and_focus_resolves() {
+        let root = AccessibilityNode::new(AccessibilityRole::Window);
+        let root_id = root.id;
+        let mut tree = AccessibilityTree::new(root);
+
+        let button = AccessibilityNode::new(AccessibilityRole::Button)
+            .with_label("Save")
+            .with_states(AccessibilityState::FOCUSED);
+        let button_id = button.id;
+        tree.insert(button);
+        tree.set_parent(button_id, root_id);
+
+        let update = tree.to_accesskit_tree_update(Some("App"), Some("Kael"), Some("0.0.0"));
+        let ak_tree = update.tree.expect("tree present");
+        assert_eq!(ak_tree.root, accesskit::NodeId(root_id.0));
+        assert_eq!(ak_tree.app_name.as_deref(), Some("App"));
+        assert_eq!(update.focus, accesskit::NodeId(button_id.0));
+
+        let root_node = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == accesskit::NodeId(root_id.0))
+            .map(|(_, node)| node)
+            .expect("root emitted");
+        assert_eq!(root_node.children(), [accesskit::NodeId(button_id.0)]);
+        assert!(
+            update
+                .nodes
+                .iter()
+                .any(|(id, _)| *id == accesskit::NodeId(button_id.0))
+        );
+    }
+
+    #[test]
+    fn tree_update_prunes_hidden_subtrees() {
+        let root = AccessibilityNode::new(AccessibilityRole::Window);
+        let root_id = root.id;
+        let mut tree = AccessibilityTree::new(root);
+
+        let hidden = AccessibilityNode::new(AccessibilityRole::Group)
+            .with_states(AccessibilityState::HIDDEN);
+        let hidden_id = hidden.id;
+        tree.insert(hidden);
+        tree.set_parent(hidden_id, root_id);
+
+        let child = AccessibilityNode::new(AccessibilityRole::Button).with_label("Buried");
+        let child_id = child.id;
+        tree.insert(child);
+        tree.set_parent(child_id, hidden_id);
+
+        let update = tree.to_accesskit_tree_update(None, None, None);
+        assert!(
+            !update
+                .nodes
+                .iter()
+                .any(|(id, _)| *id == accesskit::NodeId(hidden_id.0))
+        );
+        assert!(
+            !update
+                .nodes
+                .iter()
+                .any(|(id, _)| *id == accesskit::NodeId(child_id.0))
+        );
+        let root_node = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == accesskit::NodeId(root_id.0))
+            .map(|(_, node)| node)
+            .expect("root emitted");
+        assert!(root_node.children().is_empty());
+    }
+
+    #[test]
+    fn action_round_trips_through_accesskit() {
+        assert_eq!(
+            AccessibilityAction::from_accesskit(AccessibilityAction::Click.to_accesskit()),
+            Some(AccessibilityAction::Click)
+        );
+        assert_eq!(
+            AccessibilityAction::from_accesskit(AccessibilityAction::Increment.to_accesskit()),
+            Some(AccessibilityAction::Increment)
+        );
+    }
+
+    #[test]
+    fn form_like_tree_maps_roles_values_and_states() {
+        let root = AccessibilityNode::new(AccessibilityRole::Window);
+        let root_id = root.id;
+        let mut tree = AccessibilityTree::new(root);
+
+        let text = AccessibilityNode::new(AccessibilityRole::TextInput)
+            .with_value(AccessibilityValue::Text("Control room".into()));
+        let text_id = text.id;
+        tree.insert(text);
+        tree.set_parent(text_id, root_id);
+
+        let checkbox = AccessibilityNode::new(AccessibilityRole::CheckBox)
+            .with_label("Enable notifications")
+            .with_states(AccessibilityState::CHECKED);
+        let checkbox_id = checkbox.id;
+        tree.insert(checkbox);
+        tree.set_parent(checkbox_id, root_id);
+
+        let slider = AccessibilityNode::new(AccessibilityRole::Slider).with_value(
+            AccessibilityValue::Range {
+                current: 65.0,
+                min: 0.0,
+                max: 100.0,
+                step: Some(1.0),
+            },
+        );
+        let slider_id = slider.id;
+        tree.insert(slider);
+        tree.set_parent(slider_id, root_id);
+
+        let button = AccessibilityNode::new(AccessibilityRole::Button)
+            .with_label("Review delivery reset")
+            .with_actions(vec![AccessibilityAction::Click, AccessibilityAction::Focus]);
+        let button_id = button.id;
+        tree.insert(button);
+        tree.set_parent(button_id, root_id);
+
+        let update = tree.to_accesskit_tree_update(Some("form_controls"), Some("Kael"), None);
+        let lookup = |id: AccessibilityId| {
+            update
+                .nodes
+                .iter()
+                .find(|(nid, _)| *nid == accesskit::NodeId(id.0))
+                .map(|(_, node)| node)
+                .expect("node emitted")
+        };
+
+        assert_eq!(lookup(text_id).role(), accesskit::Role::TextInput);
+        assert_eq!(lookup(text_id).value(), Some("Control room"));
+
+        let cb = lookup(checkbox_id);
+        assert_eq!(cb.role(), accesskit::Role::CheckBox);
+        assert_eq!(cb.label(), Some("Enable notifications"));
+        assert_eq!(cb.toggled(), Some(accesskit::Toggled::True));
+
+        let sl = lookup(slider_id);
+        assert_eq!(sl.role(), accesskit::Role::Slider);
+        assert_eq!(sl.numeric_value(), Some(65.0));
+        assert_eq!(sl.max_numeric_value(), Some(100.0));
+
+        let btn = lookup(button_id);
+        assert_eq!(btn.role(), accesskit::Role::Button);
+        assert!(btn.supports_action(accesskit::Action::Click));
+
+        let root_children = lookup(root_id).children().len();
+        assert_eq!(root_children, 4);
     }
 }
