@@ -7,7 +7,7 @@
 //! `progress` is the normalized blend factor; callers that require clamping to
 //! `0..=1` must clamp before calling.
 
-use crate::{point, px, BoxShadow, Hsla, Pixels, Rgba};
+use crate::{BoxShadow, Hsla, Pixels, Rgba, point, px};
 use smallvec::SmallVec;
 
 /// Linearly interpolate a scalar without clamping `progress`.

@@ -15,6 +15,7 @@
 //! and Tailwind-like styling that you can use to build your own custom elements. Div is
 //! constructed by combining these two systems into an all-in-one element.
 
+use crate::interpolate::{interpolate_f32, interpolate_hsla, interpolate_shadows};
 use crate::scroll_elasticity::{
     advance_scroll_elasticity, apply_scroll_delta_axis, rubber_band_scroll_enabled,
 };
@@ -32,7 +33,6 @@ use crate::{
     SwipeGestureEvent, Task, TooltipId, TouchPhase, TransformationMatrix, Visibility, Window,
     WindowControlArea, point, px, size,
 };
-use crate::interpolate::{interpolate_f32, interpolate_hsla, interpolate_shadows};
 use collections::HashMap;
 use refineable::Refineable;
 use smallvec::SmallVec;
