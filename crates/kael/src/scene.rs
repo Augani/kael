@@ -57,12 +57,40 @@ impl Scene {
         self.paint_operations.len()
     }
 
+    /// A stable content fingerprint of the scene: identical scenes hash equally and any
+    /// visual change (geometry or color, across every primitive type) changes the hash.
+    /// This is the frame-identity primitive a safe skip-render / damage path needs.
+    /// Padding bytes are deliberately not hashed (they are uninitialized), so the value
+    /// is deterministic across identical scenes.
     pub(crate) fn structural_checksum(&self) -> u64 {
+        fn hsla_bits(color: &Hsla) -> [u64; 4] {
+            [
+                color.h.to_bits() as u64,
+                color.s.to_bits() as u64,
+                color.l.to_bits() as u64,
+                color.a.to_bits() as u64,
+            ]
+        }
+        fn bounds_bits(bounds: &Bounds<ScaledPixels>) -> [u64; 4] {
+            [
+                bounds.origin.x.0.to_bits() as u64,
+                bounds.origin.y.0.to_bits() as u64,
+                bounds.size.width.0.to_bits() as u64,
+                bounds.size.height.0.to_bits() as u64,
+            ]
+        }
+
         let mut hash = 0xcbf2_9ce4_8422_2325u64;
         let mut mix = |value: u64| {
             hash ^= value;
             hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
         };
+        let mut mix_all = |values: [u64; 4], mix: &mut dyn FnMut(u64)| {
+            for value in values {
+                mix(value);
+            }
+        };
+
         mix(self.shadows.len() as u64);
         mix(self.blur_rects.len() as u64);
         mix(self.quads.len() as u64);
@@ -71,21 +99,39 @@ impl Scene {
         mix(self.monochrome_sprites.len() as u64);
         mix(self.polychrome_sprites.len() as u64);
         mix(self.surfaces.len() as u64);
+
         for quad in &self.quads {
-            mix(quad.bounds.origin.x.0.to_bits() as u64);
-            mix(quad.bounds.origin.y.0.to_bits() as u64);
-            mix(quad.bounds.size.width.0.to_bits() as u64);
-            mix(quad.bounds.size.height.0.to_bits() as u64);
-            mix(quad.background.solid.h.to_bits() as u64);
-            mix(quad.background.solid.s.to_bits() as u64);
-            mix(quad.background.solid.l.to_bits() as u64);
-            mix(quad.background.solid.a.to_bits() as u64);
+            mix_all(bounds_bits(&quad.bounds), &mut mix);
+            mix_all(hsla_bits(&quad.background.solid), &mut mix);
+            mix_all(hsla_bits(&quad.border_color.solid), &mut mix);
+            mix(quad.blend_mode as u64);
+        }
+        for shadow in &self.shadows {
+            mix_all(bounds_bits(&shadow.bounds), &mut mix);
+            mix_all(hsla_bits(&shadow.color), &mut mix);
+            mix(shadow.blur_radius.0.to_bits() as u64);
+        }
+        for blur in &self.blur_rects {
+            mix_all(bounds_bits(&blur.bounds), &mut mix);
+            mix_all(hsla_bits(&blur.tint), &mut mix);
+            mix(blur.blur_radius.0.to_bits() as u64);
+        }
+        for path in &self.paths {
+            mix_all(bounds_bits(&path.bounds), &mut mix);
+            mix_all(hsla_bits(&path.color.solid), &mut mix);
+        }
+        for underline in &self.underlines {
+            mix_all(bounds_bits(&underline.bounds), &mut mix);
+            mix_all(hsla_bits(&underline.color), &mut mix);
         }
         for sprite in &self.monochrome_sprites {
-            mix(sprite.color.h.to_bits() as u64);
-            mix(sprite.color.s.to_bits() as u64);
-            mix(sprite.color.l.to_bits() as u64);
-            mix(sprite.color.a.to_bits() as u64);
+            mix_all(bounds_bits(&sprite.bounds), &mut mix);
+            mix_all(hsla_bits(&sprite.color), &mut mix);
+        }
+        for sprite in &self.polychrome_sprites {
+            mix_all(bounds_bits(&sprite.bounds), &mut mix);
+            mix(sprite.opacity.to_bits() as u64);
+            mix(sprite.grayscale as u64);
         }
         hash
     }
@@ -1776,6 +1822,37 @@ mod tests {
             red.structural_checksum(),
             blue.structural_checksum(),
             "a color-only change must change the frame checksum"
+        );
+    }
+
+    #[test]
+    fn structural_checksum_detects_border_color_changes() {
+        fn scene_with_border(color: crate::Hsla) -> Scene {
+            let bounds = Bounds {
+                origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size: Size {
+                    width: ScaledPixels(10.0),
+                    height: ScaledPixels(10.0),
+                },
+            };
+            let mut scene = Scene::default();
+            scene.insert_primitive(Quad {
+                bounds,
+                content_mask: ContentMask { bounds },
+                background: Background::from(crate::hsla(0.0, 0.0, 0.5, 1.0)),
+                border_color: Background::from(color),
+                ..Default::default()
+            });
+            scene.finish();
+            scene
+        }
+
+        // The old geometry-only checksum hashed neither the border color nor most
+        // primitive fields; the completed checksum must distinguish a border change.
+        assert_ne!(
+            scene_with_border(crate::hsla(0.0, 1.0, 0.5, 1.0)).structural_checksum(),
+            scene_with_border(crate::hsla(0.66, 1.0, 0.5, 1.0)).structural_checksum(),
+            "a border-color-only change must change the frame checksum"
         );
     }
 }
