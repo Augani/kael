@@ -1,16 +1,16 @@
 use crate::{
-    AbsoluteLength, App, Bounds, DefiniteLength, Edges, Length, Pixels, Point, Size, Style, Window,
-    point, size,
+    point, size, AbsoluteLength, App, Bounds, DefiniteLength, Edges, Length, Pixels, Point, Size,
+    Style, Window,
 };
 use collections::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
-use stacksafe::{StackSafe, stacksafe};
+use stacksafe::{stacksafe, StackSafe};
 use std::{fmt::Debug, ops::Range};
 use taffy::{
-    TaffyTree,
     geometry::{Point as TaffyPoint, Rect as TaffyRect, Size as TaffySize},
     style::AvailableSpace as TaffyAvailableSpace,
     tree::NodeId,
+    TaffyTree,
 };
 
 type NodeMeasureFn = StackSafe<
@@ -82,13 +82,8 @@ impl TaffyLayoutEngine {
         style: Style,
         rem_size: Pixels,
         scale_factor: f32,
-        measure: impl FnMut(
-            Size<Option<Pixels>>,
-            Size<AvailableSpace>,
-            &mut Window,
-            &mut App,
-        ) -> Size<Pixels>
-        + 'static,
+        measure: impl FnMut(Size<Option<Pixels>>, Size<AvailableSpace>, &mut Window, &mut App) -> Size<Pixels>
+            + 'static,
     ) -> LayoutId {
         let taffy_style = style.to_taffy(rem_size, scale_factor);
 
@@ -285,7 +280,7 @@ trait ToTaffy<Output> {
 impl ToTaffy<taffy::style::Style> for Style {
     fn to_taffy(&self, rem_size: Pixels, scale_factor: f32) -> taffy::style::Style {
         use taffy::style_helpers::{
-            TaffyAuto, TaffyMaxContent, TaffyMinContent, fr, length, minmax, percent, repeat,
+            fr, length, minmax, percent, repeat, TaffyAuto, TaffyMaxContent, TaffyMinContent,
         };
 
         fn to_grid_line(
@@ -720,7 +715,7 @@ impl From<Size<Pixels>> for Size<AvailableSpace> {
 #[cfg(test)]
 mod tests {
     use super::ToTaffy;
-    use crate::{AlignItems, Style, px};
+    use crate::{px, AlignItems, Style};
 
     #[test]
     fn justify_items_and_self_map_to_taffy_grid_alignment() {
