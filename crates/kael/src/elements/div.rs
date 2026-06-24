@@ -6665,6 +6665,16 @@ mod test {
     }
 
     #[test]
+    fn refine_style_applies_reusable_preset() {
+        use crate::{black, div, px, StyleRefinement, Styled};
+
+        let preset = StyleRefinement::default().bg(black()).w(px(120.0));
+        let mut element = div().refine_style(&preset);
+        assert!(element.style().background.is_some());
+        assert_eq!(element.style().size.width, Some(px(120.0).into()));
+    }
+
+    #[test]
     fn glow_and_shadow_inner_set_box_shadow() {
         use crate::{black, div, px, Styled};
 

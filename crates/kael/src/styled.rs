@@ -229,6 +229,17 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Apply a reusable style preset built once as a [`StyleRefinement`]
+    /// (e.g. `StyleRefinement::default().bg(...).rounded(...)`) and shared across many
+    /// elements, so a custom look stays DRY instead of being re-typed per element.
+    ///
+    /// The preset's set properties are written onto this element; call it as a base
+    /// before any element-specific style methods, which then override the preset.
+    fn refine_style(mut self, preset: &StyleRefinement) -> Self {
+        refineable::Refineable::refine(self.style(), preset);
+        self
+    }
+
     /// Applies a text shadow with custom parameters.
     fn text_shadow(mut self, shadow: TextShadow) -> Self {
         self.text_style()
