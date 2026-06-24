@@ -1232,6 +1232,16 @@ pub trait InteractiveElement: Sized {
         self
     }
 
+    /// Animate keyed style changes with a spring-like preset (tuned duration + overshoot easing),
+    /// so hover/active/state restyles settle with physical-feeling motion.
+    fn transition_spring(mut self, preset: crate::animation::SpringPreset) -> Self {
+        self.interactivity().implicit_transition = Some(TransitionConfig {
+            duration: preset.duration(),
+            easing: Some(preset.easing()),
+        });
+        self
+    }
+
     /// Animate this element's position when layout moves it (FLIP). When the
     /// element's painted origin changes between frames, it glides from the old
     /// position to the new one over `duration` instead of snapping.

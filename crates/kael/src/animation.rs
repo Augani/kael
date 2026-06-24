@@ -669,6 +669,42 @@ pub(crate) struct AnimationSample {
     pub finished: bool,
 }
 
+/// Presets for spring-like declarative transitions, each mapping to a tuned duration
+/// and an overshoot easing so state-driven style changes feel physical rather than flat.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpringPreset {
+    /// Smooth deceleration with no overshoot.
+    Gentle,
+    /// Quick settle with a slight overshoot.
+    Snappy,
+    /// Pronounced, playful bounce.
+    Bouncy,
+    /// Very fast, tight settle.
+    Stiff,
+}
+
+impl SpringPreset {
+    /// The transition duration for this preset.
+    pub fn duration(self) -> Duration {
+        match self {
+            SpringPreset::Gentle => Duration::from_millis(320),
+            SpringPreset::Snappy => Duration::from_millis(260),
+            SpringPreset::Bouncy => Duration::from_millis(440),
+            SpringPreset::Stiff => Duration::from_millis(180),
+        }
+    }
+
+    /// The easing curve for this preset.
+    pub fn easing(self) -> Easing {
+        match self {
+            SpringPreset::Gentle => Easing::EaseOutCubic,
+            SpringPreset::Snappy => Easing::EaseOutBack(1.4),
+            SpringPreset::Bouncy => Easing::EaseOutBack(2.4),
+            SpringPreset::Stiff => Easing::EaseOutQuint,
+        }
+    }
+}
+
 fn interpolate_optional(start: Option<f32>, end: Option<f32>, delta: f32) -> Option<f32> {
     match (start, end) {
         (Some(start), Some(end)) => Some(start + (end - start) * delta),
@@ -997,6 +1033,22 @@ mod tests {
         let midpoint = frames.sample(0.5);
         assert_eq!(midpoint.translate_x, Some(50.0));
         assert_eq!(midpoint.translate_y, Some(20.0));
+    }
+
+    #[test]
+    fn spring_presets_map_to_tuned_easings() {
+        use super::{Easing, SpringPreset};
+
+        assert_eq!(SpringPreset::Snappy.duration(), Duration::from_millis(260));
+        assert!(matches!(
+            SpringPreset::Snappy.easing(),
+            Easing::EaseOutBack(_)
+        ));
+        assert!(matches!(
+            SpringPreset::Gentle.easing(),
+            Easing::EaseOutCubic
+        ));
+        assert!(matches!(SpringPreset::Stiff.easing(), Easing::EaseOutQuint));
     }
 
     #[test]
