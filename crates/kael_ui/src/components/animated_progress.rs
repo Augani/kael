@@ -78,7 +78,7 @@ impl RenderOnce for AnimatedProgress {
             ProgressSize::Lg => px(12.0),
         };
 
-        let bar_color = self.color.unwrap_or_else(|| match self.variant {
+        let bar_color = self.color.unwrap_or(match self.variant {
             ProgressVariant::Default => theme.tokens.primary,
             ProgressVariant::Success => theme.tokens.success,
             ProgressVariant::Warning => theme.tokens.warning,
