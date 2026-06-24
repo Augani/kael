@@ -463,6 +463,48 @@ fragment float4 quad_fragment(QuadFragmentInput input [[stage_in]],
                         saturate(antialias_threshold - outer_sdf) * rounded_clip);
 }
 
+// W3C separable blend formulas that read the backdrop, for the modes that cannot be
+// expressed as fixed-function blend factors (overlay, soft-light, difference).
+float3 blend_backdrop(float3 src, float3 dst, uint mode) {
+  switch (mode) {
+    case 3u: { // overlay = hard-light(src, dst)
+      float3 lo = 2.0 * src * dst;
+      float3 hi = 1.0 - 2.0 * (1.0 - src) * (1.0 - dst);
+      return select(hi, lo, dst < float3(0.5));
+    }
+    case 4u: { // soft-light (W3C)
+      float3 d = select(((16.0 * dst - 12.0) * dst + 4.0) * dst, sqrt(dst), dst > float3(0.25));
+      float3 lo = dst - (1.0 - 2.0 * src) * dst * (1.0 - dst);
+      float3 hi = dst + (2.0 * src - 1.0) * (d - dst);
+      return select(lo, hi, src > float3(0.5));
+    }
+    case 5u: return fabs(src - dst); // difference
+    default: return src;
+  }
+}
+
+// Fragment for destination-reading blend modes on simple (unbordered, unrounded) quads.
+// Reads the framebuffer via [[color(0)]] (declared first to avoid a buffer/color index
+// clash), applies the blend, and composites over the backdrop by the quad's coverage,
+// so the pipeline runs with blending disabled.
+fragment float4 quad_fragment_blend(float4 dst [[color(0)]],
+                                    QuadFragmentInput input [[stage_in]],
+                                    constant Quad *quads
+                                    [[buffer(QuadInputIndex_Quads)]]) {
+  Quad quad = quads[input.quad_id];
+  float rounded_clip = rounded_clip_factor(
+      input.position.xy, quad.rounded_clip_bounds, quad.rounded_clip_radii);
+  float2 local_position = apply_inverse_transform(input.position.xy, quad.transform);
+  float4 src = fill_color(quad.background, local_position, quad.bounds,
+    input.background_solid);
+  src = apply_color_filter(src, quad.color_filter);
+  float coverage = src.a * rounded_clip;
+  float3 blended = blend_backdrop(src.rgb, dst.rgb, input.blend_mode);
+  float3 out_rgb = mix(dst.rgb, blended, coverage);
+  float out_a = coverage + dst.a * (1.0 - coverage);
+  return float4(out_rgb, out_a);
+}
+
 struct BlurVertexOutput {
   uint blur_id [[flat]];
   float4 position [[position]];

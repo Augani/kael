@@ -276,7 +276,13 @@ fn build_gradient_scene(width: u32, height: u32, stops: &[crate::LinearColorStop
 }
 
 #[cfg(test)]
-fn build_blend_scene(width: u32, height: u32, fg: crate::Hsla, fg_blend_mode: u32) -> Scene {
+fn build_blend_scene(
+    width: u32,
+    height: u32,
+    bg: crate::Hsla,
+    fg: crate::Hsla,
+    fg_blend_mode: u32,
+) -> Scene {
     let mut scene = Scene::default();
     let full = Bounds {
         origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
@@ -285,7 +291,7 @@ fn build_blend_scene(width: u32, height: u32, fg: crate::Hsla, fg_blend_mode: u3
     scene.insert_primitive(crate::Quad {
         bounds: full,
         content_mask: ContentMask { bounds: full },
-        background: Background::from(hsla(0.0, 0.0, 0.5, 1.0)),
+        background: Background::from(bg),
         transform: TransformationMatrix::unit(),
         ..Default::default()
     });
@@ -564,7 +570,13 @@ mod tests {
         // White over a gray backdrop, Multiply: real `src*dst` leaves the backdrop
         // unchanged (white is the multiply identity); the old `src*src` self-blend
         // would turn it white.
-        let multiply = build_blend_scene(64, 64, hsla(0.0, 0.0, 1.0, 1.0), 1);
+        let multiply = build_blend_scene(
+            64,
+            64,
+            hsla(0.0, 0.0, 0.5, 1.0),
+            hsla(0.0, 0.0, 1.0, 1.0),
+            1,
+        );
         let m = renderer
             .render_scene_to_bytes(&multiply)
             .unwrap()
@@ -581,7 +593,13 @@ mod tests {
 
         // Black over a gray backdrop, Screen: real screen leaves the backdrop unchanged
         // (black is the screen identity); the old self-blend would turn it black.
-        let screen = build_blend_scene(64, 64, hsla(0.0, 0.0, 0.0, 1.0), 2);
+        let screen = build_blend_scene(
+            64,
+            64,
+            hsla(0.0, 0.0, 0.5, 1.0),
+            hsla(0.0, 0.0, 0.0, 1.0),
+            2,
+        );
         let s = renderer
             .render_scene_to_bytes(&screen)
             .unwrap()
@@ -594,6 +612,52 @@ mod tests {
         assert!(
             s_overlap > 35,
             "screen overlap must not be black (the old self-blend result): {s_overlap}"
+        );
+    }
+
+    #[test]
+    fn framebuffer_fetch_blend_modes_read_the_destination() {
+        let mut renderer = match HeadlessRenderer::new(64, 64) {
+            Ok(renderer) => renderer,
+            Err(_) => return,
+        };
+        if renderer.backend() != HeadlessBackend::Gpu {
+            return;
+        }
+
+        let white = hsla(0.0, 0.0, 1.0, 1.0);
+        let gray = hsla(0.0, 0.0, 0.5, 1.0);
+        let sample = |bytes: &[u8], x: usize| bytes[(32 * 64 + x) * 4 + 2] as i32;
+
+        // Difference of white over a WHITE backdrop = |1 - 1| = black. The old
+        // self-blend approximation (|src - 0.5|) would give mid-gray instead. Skip if
+        // the device lacks programmable blending (the backdrop then isn't ~white only
+        // when the fetch path ran — here it always renders white either way, so the
+        // overlap is the real discriminator).
+        let difference = build_blend_scene(64, 64, white, white, 5);
+        let d = renderer
+            .render_scene_to_bytes(&difference)
+            .unwrap()
+            .expect("gpu backend yields pixels");
+        let d_overlap = sample(&d, 48);
+        assert!(
+            d_overlap < 70,
+            "difference(white, white) must rasterize ~black via real dst read; \
+             the old approximation gives mid-gray. overlap={d_overlap}"
+        );
+
+        // Overlay of mid-gray over a WHITE backdrop = white (real); the approximation
+        // gives mid-gray.
+        let overlay = build_blend_scene(64, 64, white, gray, 3);
+        let o = renderer
+            .render_scene_to_bytes(&overlay)
+            .unwrap()
+            .expect("gpu backend yields pixels");
+        let o_overlap = sample(&o, 48);
+        assert!(
+            o_overlap > 200,
+            "overlay(gray, white) must rasterize ~white via real dst read; \
+             the old approximation gives mid-gray. overlap={o_overlap}"
         );
     }
 

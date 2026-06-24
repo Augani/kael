@@ -136,6 +136,7 @@ pub(crate) struct MetalRenderer {
     quads_pipeline_state: metal::RenderPipelineState,
     quads_multiply_pipeline_state: metal::RenderPipelineState,
     quads_screen_pipeline_state: metal::RenderPipelineState,
+    quads_blend_fetch_pipeline_state: Option<metal::RenderPipelineState>,
     quads_pipeline_state_rgba16f: metal::RenderPipelineState,
     shadows_pipeline_state_rgba16f: metal::RenderPipelineState,
     underlines_pipeline_state_rgba16f: metal::RenderPipelineState,
@@ -280,6 +281,8 @@ impl MetalRenderer {
             metal::MTLBlendFactor::One,
             metal::MTLBlendFactor::OneMinusSourceColor,
         );
+        let quads_blend_fetch_pipeline_state =
+            build_quad_blend_fetch_pipeline_state(&device, &library, RENDER_TARGET_PIXEL_FORMAT);
         let quads_pipeline_state_rgba16f = build_pipeline_state(
             &device,
             &library,
@@ -369,6 +372,7 @@ impl MetalRenderer {
             quads_pipeline_state,
             quads_multiply_pipeline_state,
             quads_screen_pipeline_state,
+            quads_blend_fetch_pipeline_state,
             quads_pipeline_state_rgba16f,
             shadows_pipeline_state_rgba16f,
             underlines_pipeline_state_rgba16f,
@@ -1644,26 +1648,43 @@ impl MetalRenderer {
         }
 
         // Group consecutive quads by their blend pipeline so destination-reading modes
-        // (multiply, screen) get real fixed-function blending. The common all-normal
-        // run draws in one call exactly as before.
-        let blend_key = |mode: u32| -> u32 {
-            match mode {
+        // get real blending: Multiply/Screen via fixed-function blend factors, and
+        // Overlay/SoftLight/Difference via the framebuffer-fetch pipeline (simple quads
+        // only — bordered/rounded ones keep the in-shader approximation). The common
+        // all-normal run draws in one call exactly as before.
+        let blend_key = |q: &Quad| -> u32 {
+            match q.blend_mode {
                 1 => 1,
                 2 => 2,
+                3..=5 => {
+                    let simple = q.corner_radii.top_left.0 == 0.0
+                        && q.corner_radii.top_right.0 == 0.0
+                        && q.corner_radii.bottom_left.0 == 0.0
+                        && q.corner_radii.bottom_right.0 == 0.0
+                        && q.border_widths.top.0 == 0.0
+                        && q.border_widths.right.0 == 0.0
+                        && q.border_widths.bottom.0 == 0.0
+                        && q.border_widths.left.0 == 0.0;
+                    if simple { 3 } else { 0 }
+                }
                 _ => 0,
             }
         };
         let stride = mem::size_of::<Quad>();
         let mut run_start = 0usize;
         while run_start < quads.len() {
-            let key = blend_key(quads[run_start].blend_mode);
+            let key = blend_key(&quads[run_start]);
             let mut run_end = run_start + 1;
-            while run_end < quads.len() && blend_key(quads[run_end].blend_mode) == key {
+            while run_end < quads.len() && blend_key(&quads[run_end]) == key {
                 run_end += 1;
             }
             let pipeline = match key {
                 1 => &self.quads_multiply_pipeline_state,
                 2 => &self.quads_screen_pipeline_state,
+                3 => self
+                    .quads_blend_fetch_pipeline_state
+                    .as_ref()
+                    .unwrap_or(&self.quads_pipeline_state),
                 _ => &self.quads_pipeline_state,
             };
             let run_offset = (*instance_offset + run_start * stride) as u64;
@@ -2301,6 +2322,29 @@ fn build_quad_blend_pipeline_state(
     device
         .new_render_pipeline_state(&descriptor)
         .expect("could not create render pipeline state")
+}
+
+/// Build the destination-reading blend pipeline (`quad_fragment_blend`, which reads the
+/// framebuffer via `[[color(0)]]`). Blending is disabled because the shader composites
+/// over the backdrop itself. Returns `None` when the device/driver does not support
+/// programmable blending (e.g. Intel Macs), so callers fall back to the standard pipeline.
+fn build_quad_blend_fetch_pipeline_state(
+    device: &metal::DeviceRef,
+    library: &metal::LibraryRef,
+    pixel_format: metal::MTLPixelFormat,
+) -> Option<metal::RenderPipelineState> {
+    let vertex_fn = library.get_function("quad_vertex", None).ok()?;
+    let fragment_fn = library.get_function("quad_fragment_blend", None).ok()?;
+
+    let descriptor = metal::RenderPipelineDescriptor::new();
+    descriptor.set_label("quads_blend_fetch");
+    descriptor.set_vertex_function(Some(vertex_fn.as_ref()));
+    descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
+    let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
+    color_attachment.set_pixel_format(pixel_format);
+    color_attachment.set_blending_enabled(false);
+
+    device.new_render_pipeline_state(&descriptor).ok()
 }
 
 fn build_path_sprite_pipeline_state(
