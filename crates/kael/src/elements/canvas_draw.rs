@@ -3,10 +3,10 @@ pub use lyon::tessellation::{LineCap, LineJoin};
 use refineable::Refineable as _;
 
 use crate::{
-    App, Background, Bounds, ContentMask, Corners, Element, ElementId, GlobalElementId, Hsla,
-    InspectorElementId, IntoElement, Path, PathBuilder, PathStyle, Pixels, Point, ShapedLine, Size,
-    Style, StyleRefinement, Styled, TransformationMatrix, Window, point, px, quad,
-    transparent_black,
+    point, px, quad, size, transparent_black, App, Background, Bounds, ContentMask, Corners,
+    Element, ElementId, GlobalElementId, Hsla, InspectorElementId, IntoElement, Path, PathBuilder,
+    PathStyle, Pixels, Point, Radians, ShapedLine, Size, Style, StyleRefinement, Styled,
+    TransformationMatrix, Window,
 };
 
 use super::canvas::CanvasConstructor;
@@ -76,6 +76,7 @@ pub struct DrawContext {
     bounds: Bounds<Pixels>,
     canvas_origin: Point<Pixels>,
     current_state: DrawState,
+    state_stack: Vec<DrawState>,
     commands: Vec<DrawCommand>,
 }
 
@@ -89,6 +90,7 @@ impl DrawContext {
                 opacity: 1.0,
                 content_mask,
             },
+            state_stack: Vec::new(),
             commands: Vec::new(),
         }
     }
@@ -224,6 +226,63 @@ impl DrawContext {
         let result = f(self);
         self.current_state = previous;
         result
+    }
+
+    /// Save the current drawing state (transform, opacity, clip) onto the state stack.
+    ///
+    /// Mirrors `CanvasRenderingContext2D.save()`. Pair every `save` with a matching
+    /// [`DrawContext::restore`]. This is the flat alternative to the scoped
+    /// [`DrawContext::with_transform`] / [`DrawContext::with_opacity`] / [`DrawContext::with_clip`]
+    /// helpers, for loops and recursion where closures are awkward.
+    pub fn save(&mut self) {
+        self.state_stack.push(self.current_state.clone());
+    }
+
+    /// Restore the most recently saved drawing state. No-op if the stack is empty.
+    ///
+    /// Mirrors `CanvasRenderingContext2D.restore()`.
+    pub fn restore(&mut self) {
+        if let Some(state) = self.state_stack.pop() {
+            self.current_state = state;
+        }
+    }
+
+    /// Translate the current transform by the given offset, in canvas-local pixels.
+    pub fn translate(&mut self, x: Pixels, y: Pixels) {
+        self.current_state.transform = self
+            .current_state
+            .transform
+            .compose(translation_matrix(point(x, y)));
+    }
+
+    /// Rotate the current transform clockwise by the given angle in radians.
+    pub fn rotate(&mut self, radians: f32) {
+        self.current_state.transform = self.current_state.transform.rotate(Radians(radians));
+    }
+
+    /// Scale the current transform by independent x and y factors.
+    pub fn scale(&mut self, x: f32, y: f32) {
+        self.current_state.transform = self.current_state.transform.scale(size(x, y));
+    }
+
+    /// Set the global drawing opacity applied to subsequent commands (clamped to `0.0..=1.0`).
+    ///
+    /// Mirrors `CanvasRenderingContext2D.globalAlpha`. Saved and restored by
+    /// [`DrawContext::save`] / [`DrawContext::restore`].
+    pub fn set_global_alpha(&mut self, alpha: f32) {
+        self.current_state.opacity = alpha.clamp(0.0, 1.0);
+    }
+
+    /// Restrict subsequent drawing to the given rectangle, intersected with any
+    /// existing clip. The flat counterpart to [`DrawContext::with_clip`].
+    pub fn clip_rect(&mut self, bounds: Bounds<Pixels>) {
+        let clip_bounds = transform_bounds(
+            bounds,
+            full_path_transform(self.canvas_origin, self.current_state.transform),
+        );
+        self.current_state.content_mask = self.current_state.content_mask.intersect(&ContentMask {
+            bounds: clip_bounds,
+        });
     }
 
     /// Draw a shaped line of text at the given local origin.
@@ -540,8 +599,30 @@ fn paint_text_line(
 
 #[cfg(test)]
 mod tests {
-    use super::{StrokeDash, stroke, transform_bounds};
-    use crate::{Bounds, PathBuilder, point, px, size};
+    use super::{stroke, transform_bounds, StrokeDash};
+    use crate::{point, px, size, Bounds, PathBuilder};
+
+    #[test]
+    fn save_restore_round_trips_transform_and_alpha() {
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(100.)));
+        let mask = crate::ContentMask { bounds };
+        let mut cx = super::DrawContext::new(bounds, mask);
+
+        cx.translate(px(10.), px(20.));
+        cx.set_global_alpha(0.5);
+        cx.save();
+        cx.translate(px(5.), px(5.));
+        cx.set_global_alpha(0.25);
+        assert_eq!(cx.current_state.transform.translation, [15.0, 25.0]);
+        assert_eq!(cx.current_state.opacity, 0.25);
+
+        cx.restore();
+        assert_eq!(cx.current_state.transform.translation, [10.0, 20.0]);
+        assert_eq!(cx.current_state.opacity, 0.5);
+
+        cx.restore();
+        assert_eq!(cx.current_state.transform.translation, [10.0, 20.0]);
+    }
 
     #[test]
     fn transformed_bounds_cover_all_corners() {
