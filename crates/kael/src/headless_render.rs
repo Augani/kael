@@ -249,7 +249,7 @@ fn build_benchmark_scene(width: u32, height: u32, complexity: usize) -> Scene {
 }
 
 #[cfg(test)]
-fn build_gradient_scene(width: u32, height: u32, stops: &[crate::LinearColorStop]) -> Scene {
+fn build_quad_scene(width: u32, height: u32, background: Background) -> Scene {
     let mut scene = Scene::default();
     let viewport = Bounds {
         origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
@@ -258,12 +258,31 @@ fn build_gradient_scene(width: u32, height: u32, stops: &[crate::LinearColorStop
     scene.insert_primitive(crate::Quad {
         bounds: viewport,
         content_mask: ContentMask { bounds: viewport },
-        background: crate::multi_stop_linear_gradient(90.0, stops),
+        background,
         transform: TransformationMatrix::unit(),
         ..Default::default()
     });
     scene.finish();
     scene
+}
+
+#[cfg(test)]
+fn build_gradient_scene(width: u32, height: u32, stops: &[crate::LinearColorStop]) -> Scene {
+    build_quad_scene(
+        width,
+        height,
+        crate::multi_stop_linear_gradient(90.0, stops),
+    )
+}
+
+#[cfg(test)]
+fn channel_range(bytes: &[u8], channel: usize) -> (u8, u8) {
+    let (mut lo, mut hi) = (255u8, 0u8);
+    for pixel in bytes.chunks_exact(4) {
+        lo = lo.min(pixel[channel]);
+        hi = hi.max(pixel[channel]);
+    }
+    (lo, hi)
 }
 
 #[cfg(test)]
@@ -342,16 +361,8 @@ mod tests {
             .expect("gpu backend yields pixels");
         assert_eq!(bytes.len(), 64 * 64 * 4);
 
-        let (mut min_r, mut max_r) = (255u8, 0u8);
-        let (mut min_b, mut max_b) = (255u8, 0u8);
-        for pixel in bytes.chunks_exact(4) {
-            let (b, r) = (pixel[0], pixel[2]);
-            min_r = min_r.min(r);
-            max_r = max_r.max(r);
-            min_b = min_b.min(b);
-            max_b = max_b.max(b);
-        }
-
+        let (min_r, max_r) = channel_range(&bytes, 2);
+        let (min_b, max_b) = channel_range(&bytes, 0);
         assert!(
             max_r - min_r > 80,
             "red channel should span a gradient range, got {min_r}..{max_r}"
@@ -359,6 +370,110 @@ mod tests {
         assert!(
             max_b - min_b > 80,
             "blue channel should span a gradient range, got {min_b}..{max_b}"
+        );
+    }
+
+    #[test]
+    fn solid_quad_rasterizes_a_uniform_color() {
+        let mut renderer = match HeadlessRenderer::new(32, 32) {
+            Ok(renderer) => renderer,
+            Err(_) => return,
+        };
+        if renderer.backend() != HeadlessBackend::Gpu {
+            return;
+        }
+
+        let scene = build_quad_scene(32, 32, Background::from(hsla(0.0, 1.0, 0.5, 1.0)));
+        let bytes = renderer
+            .render_scene_to_bytes(&scene)
+            .unwrap()
+            .expect("gpu backend yields pixels");
+
+        let (min_r, max_r) = channel_range(&bytes, 2);
+        let (_, max_g) = channel_range(&bytes, 1);
+        let (_, max_b) = channel_range(&bytes, 0);
+        assert!(
+            min_r > 180,
+            "a solid red fill should keep a high red channel everywhere, got min {min_r}"
+        );
+        assert!(
+            max_r - min_r < 16,
+            "a solid fill should be uniform, red spanned {min_r}..{max_r}"
+        );
+        assert!(
+            max_g < 90 && max_b < 90,
+            "a red fill should carry little green/blue, got g{max_g} b{max_b}"
+        );
+    }
+
+    #[test]
+    fn radial_gradient_varies_from_center_to_edge() {
+        let mut renderer = match HeadlessRenderer::new(64, 64) {
+            Ok(renderer) => renderer,
+            Err(_) => return,
+        };
+        if renderer.backend() != HeadlessBackend::Gpu {
+            return;
+        }
+
+        let stops = [
+            crate::LinearColorStop {
+                color: hsla(0.0, 1.0, 0.5, 1.0),
+                percentage: 0.0,
+            },
+            crate::LinearColorStop {
+                color: hsla(0.66, 1.0, 0.5, 1.0),
+                percentage: 1.0,
+            },
+        ];
+        let scene = build_quad_scene(64, 64, crate::radial_gradient(0.5, 0.5, 0.5, &stops));
+        let bytes = renderer
+            .render_scene_to_bytes(&scene)
+            .unwrap()
+            .expect("gpu backend yields pixels");
+
+        let (min_r, max_r) = channel_range(&bytes, 2);
+        let (min_b, max_b) = channel_range(&bytes, 0);
+        assert!(
+            max_r - min_r > 80,
+            "radial gradient should vary in red, got {min_r}..{max_r}"
+        );
+        assert!(
+            max_b - min_b > 80,
+            "radial gradient should vary in blue, got {min_b}..{max_b}"
+        );
+    }
+
+    #[test]
+    fn conic_gradient_varies_around_the_sweep() {
+        let mut renderer = match HeadlessRenderer::new(64, 64) {
+            Ok(renderer) => renderer,
+            Err(_) => return,
+        };
+        if renderer.backend() != HeadlessBackend::Gpu {
+            return;
+        }
+
+        let stops = [
+            crate::LinearColorStop {
+                color: hsla(0.0, 1.0, 0.5, 1.0),
+                percentage: 0.0,
+            },
+            crate::LinearColorStop {
+                color: hsla(0.66, 1.0, 0.5, 1.0),
+                percentage: 1.0,
+            },
+        ];
+        let scene = build_quad_scene(64, 64, crate::conic_gradient(0.5, 0.5, 0.0, &stops));
+        let bytes = renderer
+            .render_scene_to_bytes(&scene)
+            .unwrap()
+            .expect("gpu backend yields pixels");
+
+        let (min_r, max_r) = channel_range(&bytes, 2);
+        assert!(
+            max_r - min_r > 80,
+            "conic gradient should vary in red around the sweep, got {min_r}..{max_r}"
         );
     }
 
