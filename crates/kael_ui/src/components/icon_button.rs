@@ -165,6 +165,13 @@ impl RenderOnce for IconButton {
                 kael::transparent_black(),
                 theme.tokens.primary.opacity(0.8),
             ),
+            ButtonVariant::Custom(colors) => (
+                colors.background,
+                colors.foreground,
+                colors.border,
+                colors.hover_background,
+                colors.hover_foreground,
+            ),
         };
 
         let clickable = self.clickable();

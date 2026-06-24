@@ -28,7 +28,66 @@ fn render_loading_spinner(size: Pixels, color: Hsla) -> impl IntoElement {
     )
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+/// A fully custom color set for [`ButtonVariant::Custom`], letting an app define any
+/// button look — including hover colors — without forking the component.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct ButtonColors {
+    /// Resting background fill.
+    pub background: Hsla,
+    /// Resting text/icon color.
+    pub foreground: Hsla,
+    /// Border color (drawn only when `has_border` is set).
+    pub border: Hsla,
+    /// Background fill on hover.
+    pub hover_background: Hsla,
+    /// Text/icon color on hover.
+    pub hover_foreground: Hsla,
+    /// Whether to draw the resting/hover drop shadow.
+    pub has_shadow: bool,
+    /// Whether to draw a 1px border.
+    pub has_border: bool,
+}
+
+impl ButtonColors {
+    /// A solid filled button with a slightly translucent hover.
+    pub fn solid(background: impl Into<Hsla>, foreground: impl Into<Hsla>) -> Self {
+        let background = background.into();
+        let foreground = foreground.into();
+        Self {
+            background,
+            foreground,
+            border: background,
+            hover_background: background.opacity(0.9),
+            hover_foreground: foreground,
+            has_shadow: true,
+            has_border: false,
+        }
+    }
+
+    /// An outlined button: transparent fill with a colored border and text.
+    pub fn outline(border: impl Into<Hsla>, foreground: impl Into<Hsla>) -> Self {
+        let border = border.into();
+        let foreground = foreground.into();
+        Self {
+            background: kael::transparent_black(),
+            foreground,
+            border,
+            hover_background: border.opacity(0.1),
+            hover_foreground: foreground,
+            has_shadow: false,
+            has_border: true,
+        }
+    }
+
+    /// Override the hover colors.
+    pub fn hover(mut self, background: impl Into<Hsla>, foreground: impl Into<Hsla>) -> Self {
+        self.hover_background = background.into();
+        self.hover_foreground = foreground.into();
+        self
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ButtonVariant {
     Default,
     Secondary,
@@ -36,6 +95,8 @@ pub enum ButtonVariant {
     Outline,
     Ghost,
     Link,
+    /// An app-defined color set — build any look (including hover) without forking.
+    Custom(ButtonColors),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -101,6 +162,14 @@ impl Button {
 
     pub fn variant(mut self, variant: ButtonVariant) -> Self {
         self.variant = variant;
+        self
+    }
+
+    /// Use a fully custom color set, setting the variant to [`ButtonVariant::Custom`].
+    /// Lets you give a button a distinctive look — including hover colors — without
+    /// hand-rolling it from `div()`.
+    pub fn colors(mut self, colors: ButtonColors) -> Self {
+        self.variant = ButtonVariant::Custom(colors);
         self
     }
 
@@ -182,7 +251,7 @@ impl RenderOnce for Button {
             ButtonSize::Icon => (px(40.0), px(10.0), px(14.0)),
         };
 
-        let (bg, fg, border, hover_bg, hover_fg, has_shadow) = match self.variant {
+        let (bg, fg, border, hover_bg, hover_fg, has_shadow, has_border) = match self.variant {
             ButtonVariant::Default => (
                 theme.tokens.primary,
                 theme.tokens.primary_foreground,
@@ -190,6 +259,7 @@ impl RenderOnce for Button {
                 theme.tokens.primary.opacity(0.9),
                 theme.tokens.primary_foreground,
                 true,
+                false,
             ),
             ButtonVariant::Secondary => (
                 theme.tokens.secondary,
@@ -198,6 +268,7 @@ impl RenderOnce for Button {
                 theme.tokens.secondary.opacity(0.8),
                 theme.tokens.secondary_foreground,
                 true,
+                false,
             ),
             ButtonVariant::Destructive => (
                 theme.tokens.destructive,
@@ -206,6 +277,7 @@ impl RenderOnce for Button {
                 theme.tokens.destructive.opacity(0.9),
                 theme.tokens.destructive_foreground,
                 true,
+                false,
             ),
             ButtonVariant::Outline => (
                 kael::transparent_black(),
@@ -214,6 +286,7 @@ impl RenderOnce for Button {
                 theme.tokens.accent,
                 theme.tokens.accent_foreground,
                 false,
+                true,
             ),
             ButtonVariant::Ghost => (
                 kael::transparent_black(),
@@ -221,6 +294,7 @@ impl RenderOnce for Button {
                 kael::transparent_black(),
                 theme.tokens.accent,
                 theme.tokens.accent_foreground,
+                false,
                 false,
             ),
             ButtonVariant::Link => (
@@ -230,6 +304,16 @@ impl RenderOnce for Button {
                 kael::transparent_black(),
                 theme.tokens.primary.opacity(0.8),
                 false,
+                false,
+            ),
+            ButtonVariant::Custom(colors) => (
+                colors.background,
+                colors.foreground,
+                colors.border,
+                colors.hover_background,
+                colors.hover_foreground,
+                colors.has_shadow,
+                colors.has_border,
             ),
         };
 
@@ -277,9 +361,7 @@ impl RenderOnce for Button {
             .when(has_shadow, |this| {
                 this.shadow(theme.tokens.shadow_xs.to_vec())
             })
-            .when(self.variant == ButtonVariant::Outline, |this| {
-                this.border_1().border_color(border)
-            })
+            .when(has_border, |this| this.border_1().border_color(border))
             .when(is_selected && !self.disabled, |this| {
                 this.bg(theme.tokens.accent)
                     .text_color(theme.tokens.accent_foreground)
@@ -355,5 +437,30 @@ impl RenderOnce for Button {
                         this.child(render_loading_spinner(icon_size, fg))
                     }),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Button, ButtonColors, ButtonVariant};
+
+    #[test]
+    fn colors_sets_custom_variant() {
+        let palette = ButtonColors::solid(kael::black(), kael::white());
+        let button = Button::new("b", "Hi").colors(palette);
+        assert!(matches!(button.variant, ButtonVariant::Custom(_)));
+    }
+
+    #[test]
+    fn solid_and_outline_presets_differ() {
+        let solid = ButtonColors::solid(kael::black(), kael::white());
+        assert!(solid.has_shadow && !solid.has_border);
+
+        let outline = ButtonColors::outline(kael::black(), kael::white());
+        assert!(outline.has_border && !outline.has_shadow);
+
+        let custom = outline.hover(kael::white(), kael::black());
+        assert_eq!(custom.hover_background, kael::white());
+        assert_eq!(custom.hover_foreground, kael::black());
     }
 }
