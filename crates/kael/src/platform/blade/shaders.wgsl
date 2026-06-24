@@ -110,7 +110,7 @@ struct Background {
     color_space: u32,
     solid: Hsla,
     gradient_angle_or_pattern_height: f32,
-    colors: array<LinearColorStop, 4>,
+    colors: array<LinearColorStop, 8>,
     stop_count: u32,
     center: vec2<f32>,
     radius: vec2<f32>,
@@ -429,7 +429,7 @@ struct GradientColor {
 }
 
 fn prepare_gradient_color(tag: u32, color_space: u32,
-    solid: Hsla, colors: array<LinearColorStop, 4>, stop_count: u32) -> GradientColor {
+    solid: Hsla, colors: array<LinearColorStop, 8>, stop_count: u32) -> GradientColor {
     var result = GradientColor();
 
     if (tag == 0u || tag == 2u) {
@@ -457,32 +457,39 @@ fn prepare_gradient_color(tag: u32, color_space: u32,
     return result;
 }
 
-fn interpolate_multi_stop(t_raw: f32, background: Background, color_space: u32,
-    c0: vec4<f32>, c1: vec4<f32>, c2: vec4<f32>, c3: vec4<f32>) -> vec4<f32> {
+// Prepare a single gradient stop's color in the working color space.
+fn stop_color(stop: LinearColorStop, color_space: u32) -> vec4<f32> {
+    var c = hsla_to_rgba(stop.color);
+    if (color_space == 0u) {
+        c = linear_to_srgba(c);
+    } else if (color_space == 1u) {
+        c = linear_srgb_to_oklab(c);
+    }
+    return c;
+}
+
+fn interpolate_multi_stop(t_raw: f32, background: Background, color_space: u32) -> vec4<f32> {
+    // Copy the stops into a function-space array so they can be indexed by a dynamic
+    // loop variable (Naga's MSL backend mishandles dynamic indexing of a by-value
+    // struct's array member). This lets the stop count grow past the 4 the
+    // vertex->fragment varying interface could carry.
+    var stops = background.colors;
     let count = select(2u, background.stop_count, background.stop_count > 0u);
     let t = clamp(t_raw, 0.0, 1.0);
 
-    var mixed: vec4<f32>;
-    if (count <= 2u) {
-        let s0 = background.colors[0].percentage;
-        let s1 = background.colors[1].percentage;
-        let local_t = clamp((t - s0) / (s1 - s0), 0.0, 1.0);
-        mixed = mix(c0, c1, local_t);
-    } else {
-        if (t <= background.colors[0].percentage) {
-            mixed = c0;
-        } else if (t <= background.colors[1].percentage) {
-            let local_t = (t - background.colors[0].percentage) / (background.colors[1].percentage - background.colors[0].percentage);
-            mixed = mix(c0, c1, local_t);
-        } else if (count > 2u && t <= background.colors[2].percentage) {
-            let local_t = (t - background.colors[1].percentage) / (background.colors[2].percentage - background.colors[1].percentage);
-            mixed = mix(c1, c2, local_t);
-        } else if (count > 3u && t <= background.colors[3].percentage) {
-            let local_t = (t - background.colors[2].percentage) / (background.colors[3].percentage - background.colors[2].percentage);
-            mixed = mix(c2, c3, local_t);
-        } else {
-            if (count == 3u) { mixed = c2; }
-            else { mixed = c3; }
+    var mixed = stop_color(stops[0], color_space);
+    if (t >= stops[count - 1u].percentage) {
+        mixed = stop_color(stops[count - 1u], color_space);
+    } else if (t > stops[0].percentage) {
+        for (var i = 0u; i < count - 1u; i = i + 1u) {
+            let s0 = stops[i].percentage;
+            let s1 = stops[i + 1u].percentage;
+            if (t >= s0 && t <= s1) {
+                let span = max(s1 - s0, 1e-5);
+                let local_t = clamp((t - s0) / span, 0.0, 1.0);
+                mixed = mix(stop_color(stops[i], color_space), stop_color(stops[i + 1u], color_space), local_t);
+                break;
+            }
         }
     }
 
@@ -497,8 +504,7 @@ fn interpolate_multi_stop(t_raw: f32, background: Background, color_space: u32,
 }
 
 fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
-    solid_color: vec4<f32>, color0: vec4<f32>, color1: vec4<f32>,
-    color2: vec4<f32>, color3: vec4<f32>) -> vec4<f32> {
+    solid_color: vec4<f32>) -> vec4<f32> {
     var background_color = vec4<f32>(0.0);
 
     switch (background.tag) {
@@ -526,8 +532,7 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
                 t = (t + half_size.y) / bounds.size.y;
             }
 
-            background_color = interpolate_multi_stop(t, background, background.color_space,
-                color0, color1, color2, color3);
+            background_color = interpolate_multi_stop(t, background, background.color_space);
         }
         case 2u: {
             let gradient_angle_or_pattern_height = background.gradient_angle_or_pattern_height;
@@ -552,8 +557,7 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
             let radius_px = background.radius * bounds.size;
             let diff = (position - center) / radius_px;
             let t = length(diff);
-            background_color = interpolate_multi_stop(t, background, background.color_space,
-                color0, color1, color2, color3);
+            background_color = interpolate_multi_stop(t, background, background.color_space);
         }
         case 4u: {
             let center = bounds.origin + background.center * bounds.size;
@@ -562,8 +566,7 @@ fn gradient_color(background: Background, position: vec2<f32>, bounds: Bounds,
             let angle_offset = background.gradient_angle_or_pattern_height * M_PI_F / 180.0;
             var t = (angle_rad + M_PI_F + angle_offset) / (2.0 * M_PI_F);
             t = t % 1.0;
-            background_color = interpolate_multi_stop(t, background, background.color_space,
-                color0, color1, color2, color3);
+            background_color = interpolate_multi_stop(t, background, background.color_space);
         }
     }
 
@@ -673,8 +676,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     let local_position = apply_inverse_transform(input.position.xy, quad.transform);
 
     var background_color = gradient_color(quad.background, local_position, quad.bounds,
-        input.background_solid, input.background_color0, input.background_color1,
-        input.background_color2, input.background_color3);
+        input.background_solid);
     background_color = apply_blend_mode(background_color, input.blend_mode);
 
     let unrounded = quad.corner_radii.top_left == 0.0 &&
@@ -806,8 +808,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
                 quad.border_color.stop_count
             );
             border_color = gradient_color(quad.border_color, local_position, quad.bounds,
-                border_gradient.solid, border_gradient.color0, border_gradient.color1,
-                border_gradient.color2, border_gradient.color3);
+                border_gradient.solid);
         }
 
         // Dashed border logic when border_style == 1
@@ -1323,8 +1324,7 @@ fn fs_path_rasterization(input: PathRasterizationVarying) -> @location(0) vec4<f
         background.stop_count,
     );
     let color = gradient_color(background, input.position.xy, bounds,
-        gradient_col.solid, gradient_col.color0, gradient_col.color1,
-        gradient_col.color2, gradient_col.color3);
+        gradient_col.solid);
     return vec4<f32>(color.rgb * color.a * alpha, color.a * alpha);
 }
 

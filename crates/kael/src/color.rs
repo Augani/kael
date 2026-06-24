@@ -694,7 +694,7 @@ pub struct Background {
     pub(crate) color_space: ColorSpace,
     pub(crate) solid: Hsla,
     pub(crate) gradient_angle_or_pattern_height: f32,
-    pub(crate) colors: [LinearColorStop; 4],
+    pub(crate) colors: [LinearColorStop; 8],
     pub(crate) stop_count: u32,
     pub(crate) center: [f32; 2],
     pub(crate) radius: [f32; 2],
@@ -764,7 +764,7 @@ impl Default for Background {
             solid: Hsla::default(),
             color_space: ColorSpace::default(),
             gradient_angle_or_pattern_height: 0.0,
-            colors: [LinearColorStop::default(); 4],
+            colors: [LinearColorStop::default(); 8],
             stop_count: 0,
             center: [0.5, 0.5],
             radius: [0.5, 0.5],
@@ -806,7 +806,7 @@ pub fn linear_gradient(
     from: impl Into<LinearColorStop>,
     to: impl Into<LinearColorStop>,
 ) -> Background {
-    let mut colors = [LinearColorStop::default(); 4];
+    let mut colors = [LinearColorStop::default(); 8];
     colors[0] = from.into();
     colors[1] = to.into();
     Background {
@@ -818,24 +818,28 @@ pub fn linear_gradient(
     }
 }
 
-/// Reduce an arbitrary stop list to the 4 the GPU pipeline carries. Stop lists of 4 or
-/// fewer pass through unchanged; longer lists are resampled by index so the first and
-/// last stops are always preserved (the gradient keeps its true start and end color
-/// instead of silently dropping its tail).
-fn fit_gradient_stops(stops: &[LinearColorStop]) -> ([LinearColorStop; 4], u32) {
-    let mut colors = [LinearColorStop::default(); 4];
+/// Number of gradient color stops the GPU pipeline carries per background.
+pub const MAX_GRADIENT_STOPS: usize = 8;
+
+/// Reduce an arbitrary stop list to the [`MAX_GRADIENT_STOPS`] the GPU pipeline carries.
+/// Stop lists at or under the cap pass through unchanged; longer lists are resampled by
+/// index so the first and last stops are always preserved (the gradient keeps its true
+/// start and end color instead of silently dropping its tail).
+fn fit_gradient_stops(stops: &[LinearColorStop]) -> ([LinearColorStop; MAX_GRADIENT_STOPS], u32) {
+    let mut colors = [LinearColorStop::default(); MAX_GRADIENT_STOPS];
     let n = stops.len();
     if n == 0 {
         return (colors, 0);
     }
-    if n <= 4 {
+    if n <= MAX_GRADIENT_STOPS {
         colors[..n].copy_from_slice(stops);
         return (colors, n as u32);
     }
+    let last = MAX_GRADIENT_STOPS - 1;
     for (i, slot) in colors.iter_mut().enumerate() {
-        slot.clone_from(&stops[i * (n - 1) / 3]);
+        slot.clone_from(&stops[i * (n - 1) / last]);
     }
-    (colors, 4)
+    (colors, MAX_GRADIENT_STOPS as u32)
 }
 
 /// Creates a linear gradient. The GPU pipeline carries 4 stops; longer stop lists are
@@ -942,12 +946,7 @@ impl Background {
     pub fn opacity(&self, factor: f32) -> Self {
         let mut background = *self;
         background.solid = background.solid.opacity(factor);
-        background.colors = [
-            self.colors[0].opacity(factor),
-            self.colors[1].opacity(factor),
-            self.colors[2].opacity(factor),
-            self.colors[3].opacity(factor),
-        ];
+        background.colors = self.colors.map(|stop| stop.opacity(factor));
         background
     }
 
@@ -1012,23 +1011,37 @@ mod tests {
     }
 
     #[test]
-    fn gradient_stops_beyond_four_resample_preserving_endpoints() {
-        let stops: Vec<LinearColorStop> = (0..6)
-            .map(|i| LinearColorStop {
-                color: hsla(i as f32 / 6.0, 1.0, 0.5, 1.0),
-                percentage: i as f32 / 5.0,
-            })
-            .collect();
+    fn gradient_stops_pass_through_to_capacity_then_resample_preserving_endpoints() {
+        let make = |count: usize| -> Vec<LinearColorStop> {
+            (0..count)
+                .map(|i| LinearColorStop {
+                    color: hsla(i as f32 / count as f32, 1.0, 0.5, 1.0),
+                    percentage: i as f32 / (count - 1) as f32,
+                })
+                .collect()
+        };
 
-        let bg = multi_stop_linear_gradient(0.0, &stops);
-        assert_eq!(bg.stop_count, 4);
-        assert_eq!(bg.colors[0], stops[0]);
-        assert_eq!(bg.colors[3], stops[5]);
+        // Up to MAX_GRADIENT_STOPS pass through unchanged.
+        let full = make(MAX_GRADIENT_STOPS);
+        let bg = multi_stop_linear_gradient(0.0, &full);
+        assert_eq!(bg.stop_count, MAX_GRADIENT_STOPS as u32);
+        assert_eq!(bg.colors[0], full[0]);
+        assert_eq!(
+            bg.colors[MAX_GRADIENT_STOPS - 1],
+            full[MAX_GRADIENT_STOPS - 1]
+        );
 
-        let few = multi_stop_linear_gradient(0.0, &stops[..3]);
+        // More than the cap resample to the cap, preserving first and last.
+        let many = make(MAX_GRADIENT_STOPS + 4);
+        let bg_many = multi_stop_linear_gradient(0.0, &many);
+        assert_eq!(bg_many.stop_count, MAX_GRADIENT_STOPS as u32);
+        assert_eq!(bg_many.colors[0], many[0]);
+        assert_eq!(bg_many.colors[MAX_GRADIENT_STOPS - 1], many[many.len() - 1]);
+
+        let few = multi_stop_linear_gradient(0.0, &full[..3]);
         assert_eq!(few.stop_count, 3);
-        assert_eq!(few.colors[0], stops[0]);
-        assert_eq!(few.colors[2], stops[2]);
+        assert_eq!(few.colors[0], full[0]);
+        assert_eq!(few.colors[2], full[2]);
 
         let empty = multi_stop_linear_gradient(0.0, &[]);
         assert_eq!(empty.stop_count, 0);

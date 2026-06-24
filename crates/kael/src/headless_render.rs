@@ -478,6 +478,44 @@ mod tests {
     }
 
     #[test]
+    fn eight_stop_gradient_renders_a_stop_beyond_the_old_four_cap() {
+        let mut renderer = match HeadlessRenderer::new(64, 64) {
+            Ok(renderer) => renderer,
+            Err(_) => return,
+        };
+        if renderer.backend() != HeadlessBackend::Gpu {
+            return;
+        }
+
+        let red = hsla(0.0, 1.0, 0.5, 1.0);
+        let green = hsla(0.33, 1.0, 0.5, 1.0);
+        let stops: Vec<crate::LinearColorStop> = (0..8u32)
+            .map(|i| crate::LinearColorStop {
+                color: if i == 5 { green } else { red },
+                percentage: i as f32 / 7.0,
+            })
+            .collect();
+        let scene = build_quad_scene(64, 64, crate::multi_stop_linear_gradient(90.0, &stops));
+        let bytes = renderer
+            .render_scene_to_bytes(&scene)
+            .unwrap()
+            .expect("gpu backend yields pixels");
+
+        let mut saw_green = false;
+        for pixel in bytes.chunks_exact(4) {
+            let (b, g, r) = (pixel[0], pixel[1], pixel[2]);
+            if g > 120 && r < 120 && b < 120 {
+                saw_green = true;
+                break;
+            }
+        }
+        assert!(
+            saw_green,
+            "an 8-stop gradient must render its 6th stop (green); a <=4-stop pipeline would drop it"
+        );
+    }
+
+    #[test]
     fn compute_doubler_runs_on_gpu_or_is_unsupported() {
         let renderer = match HeadlessRenderer::new(8, 8) {
             Ok(renderer) => renderer,
