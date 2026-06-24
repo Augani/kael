@@ -134,6 +134,8 @@ pub(crate) struct MetalRenderer {
     path_sprites_pipeline_state: metal::RenderPipelineState,
     shadows_pipeline_state: metal::RenderPipelineState,
     quads_pipeline_state: metal::RenderPipelineState,
+    quads_multiply_pipeline_state: metal::RenderPipelineState,
+    quads_screen_pipeline_state: metal::RenderPipelineState,
     quads_pipeline_state_rgba16f: metal::RenderPipelineState,
     shadows_pipeline_state_rgba16f: metal::RenderPipelineState,
     underlines_pipeline_state_rgba16f: metal::RenderPipelineState,
@@ -262,6 +264,22 @@ impl MetalRenderer {
             "quad_fragment",
             RENDER_TARGET_PIXEL_FORMAT,
         );
+        let quads_multiply_pipeline_state = build_quad_blend_pipeline_state(
+            &device,
+            &library,
+            "quads_multiply",
+            RENDER_TARGET_PIXEL_FORMAT,
+            metal::MTLBlendFactor::DestinationColor,
+            metal::MTLBlendFactor::Zero,
+        );
+        let quads_screen_pipeline_state = build_quad_blend_pipeline_state(
+            &device,
+            &library,
+            "quads_screen",
+            RENDER_TARGET_PIXEL_FORMAT,
+            metal::MTLBlendFactor::One,
+            metal::MTLBlendFactor::OneMinusSourceColor,
+        );
         let quads_pipeline_state_rgba16f = build_pipeline_state(
             &device,
             &library,
@@ -349,6 +367,8 @@ impl MetalRenderer {
             path_sprites_pipeline_state,
             shadows_pipeline_state,
             quads_pipeline_state,
+            quads_multiply_pipeline_state,
+            quads_screen_pipeline_state,
             quads_pipeline_state_rgba16f,
             shadows_pipeline_state_rgba16f,
             underlines_pipeline_state_rgba16f,
@@ -1599,23 +1619,11 @@ impl MetalRenderer {
         }
         align_offset(instance_offset);
 
-        command_encoder.set_render_pipeline_state(&self.quads_pipeline_state);
         command_encoder.set_vertex_buffer(
             QuadInputIndex::Vertices as u64,
             Some(&self.unit_vertices),
             0,
         );
-        command_encoder.set_vertex_buffer(
-            QuadInputIndex::Quads as u64,
-            Some(&instance_buffer.metal_buffer),
-            *instance_offset as u64,
-        );
-        command_encoder.set_fragment_buffer(
-            QuadInputIndex::Quads as u64,
-            Some(&instance_buffer.metal_buffer),
-            *instance_offset as u64,
-        );
-
         command_encoder.set_vertex_bytes(
             QuadInputIndex::ViewportSize as u64,
             mem::size_of_val(&viewport_size) as u64,
@@ -1635,12 +1643,50 @@ impl MetalRenderer {
             ptr::copy_nonoverlapping(quads.as_ptr() as *const u8, buffer_contents, quad_bytes_len);
         }
 
-        command_encoder.draw_primitives_instanced(
-            metal::MTLPrimitiveType::Triangle,
-            0,
-            6,
-            quads.len() as u64,
-        );
+        // Group consecutive quads by their blend pipeline so destination-reading modes
+        // (multiply, screen) get real fixed-function blending. The common all-normal
+        // run draws in one call exactly as before.
+        let blend_key = |mode: u32| -> u32 {
+            match mode {
+                1 => 1,
+                2 => 2,
+                _ => 0,
+            }
+        };
+        let stride = mem::size_of::<Quad>();
+        let mut run_start = 0usize;
+        while run_start < quads.len() {
+            let key = blend_key(quads[run_start].blend_mode);
+            let mut run_end = run_start + 1;
+            while run_end < quads.len() && blend_key(quads[run_end].blend_mode) == key {
+                run_end += 1;
+            }
+            let pipeline = match key {
+                1 => &self.quads_multiply_pipeline_state,
+                2 => &self.quads_screen_pipeline_state,
+                _ => &self.quads_pipeline_state,
+            };
+            let run_offset = (*instance_offset + run_start * stride) as u64;
+            command_encoder.set_render_pipeline_state(pipeline);
+            command_encoder.set_vertex_buffer(
+                QuadInputIndex::Quads as u64,
+                Some(&instance_buffer.metal_buffer),
+                run_offset,
+            );
+            command_encoder.set_fragment_buffer(
+                QuadInputIndex::Quads as u64,
+                Some(&instance_buffer.metal_buffer),
+                run_offset,
+            );
+            command_encoder.draw_primitives_instanced(
+                metal::MTLPrimitiveType::Triangle,
+                0,
+                6,
+                (run_end - run_start) as u64,
+            );
+            run_start = run_end;
+        }
+
         *instance_offset = next_offset;
         true
     }
@@ -2214,6 +2260,43 @@ fn build_pipeline_state(
     color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::One);
     color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
     color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::One);
+
+    device
+        .new_render_pipeline_state(&descriptor)
+        .expect("could not create render pipeline state")
+}
+
+/// Build a quad pipeline whose color attachment uses custom RGB blend factors, so
+/// destination-reading blend modes (multiply, screen) are evaluated by fixed-function
+/// blending. Alpha accumulates with standard over compositing.
+fn build_quad_blend_pipeline_state(
+    device: &metal::DeviceRef,
+    library: &metal::LibraryRef,
+    label: &str,
+    pixel_format: metal::MTLPixelFormat,
+    source_rgb: metal::MTLBlendFactor,
+    destination_rgb: metal::MTLBlendFactor,
+) -> metal::RenderPipelineState {
+    let vertex_fn = library
+        .get_function("quad_vertex", None)
+        .expect("error locating quad_vertex");
+    let fragment_fn = library
+        .get_function("quad_fragment", None)
+        .expect("error locating quad_fragment");
+
+    let descriptor = metal::RenderPipelineDescriptor::new();
+    descriptor.set_label(label);
+    descriptor.set_vertex_function(Some(vertex_fn.as_ref()));
+    descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
+    let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
+    color_attachment.set_pixel_format(pixel_format);
+    color_attachment.set_blending_enabled(true);
+    color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
+    color_attachment.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
+    color_attachment.set_source_rgb_blend_factor(source_rgb);
+    color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::One);
+    color_attachment.set_destination_rgb_blend_factor(destination_rgb);
+    color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
 
     device
         .new_render_pipeline_state(&descriptor)

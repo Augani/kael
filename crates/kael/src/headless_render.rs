@@ -276,6 +276,39 @@ fn build_gradient_scene(width: u32, height: u32, stops: &[crate::LinearColorStop
 }
 
 #[cfg(test)]
+fn build_blend_scene(width: u32, height: u32, fg: crate::Hsla, fg_blend_mode: u32) -> Scene {
+    let mut scene = Scene::default();
+    let full = Bounds {
+        origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+        size: size(ScaledPixels(width as f32), ScaledPixels(height as f32)),
+    };
+    scene.insert_primitive(crate::Quad {
+        bounds: full,
+        content_mask: ContentMask { bounds: full },
+        background: Background::from(hsla(0.0, 0.0, 0.5, 1.0)),
+        transform: TransformationMatrix::unit(),
+        ..Default::default()
+    });
+    let right_half = Bounds {
+        origin: point(ScaledPixels(width as f32 / 2.0), ScaledPixels(0.0)),
+        size: size(
+            ScaledPixels(width as f32 / 2.0),
+            ScaledPixels(height as f32),
+        ),
+    };
+    scene.insert_primitive(crate::Quad {
+        bounds: right_half,
+        content_mask: ContentMask { bounds: full },
+        background: Background::from(fg),
+        transform: TransformationMatrix::unit(),
+        blend_mode: fg_blend_mode,
+        ..Default::default()
+    });
+    scene.finish();
+    scene
+}
+
+#[cfg(test)]
 fn channel_range(bytes: &[u8], channel: usize) -> (u8, u8) {
     let (mut lo, mut hi) = (255u8, 0u8);
     for pixel in bytes.chunks_exact(4) {
@@ -512,6 +545,55 @@ mod tests {
         assert!(
             saw_green,
             "an 8-stop gradient must render its 6th stop (green); a <=4-stop pipeline would drop it"
+        );
+    }
+
+    #[test]
+    fn multiply_and_screen_blend_modes_read_the_destination() {
+        let mut renderer = match HeadlessRenderer::new(64, 64) {
+            Ok(renderer) => renderer,
+            Err(_) => return,
+        };
+        if renderer.backend() != HeadlessBackend::Gpu {
+            return;
+        }
+
+        // R channel at row 32: x=16 is backdrop-only, x=48 is the blended overlap.
+        let sample = |bytes: &[u8], x: usize| bytes[(32 * 64 + x) * 4 + 2] as i32;
+
+        // White over a gray backdrop, Multiply: real `src*dst` leaves the backdrop
+        // unchanged (white is the multiply identity); the old `src*src` self-blend
+        // would turn it white.
+        let multiply = build_blend_scene(64, 64, hsla(0.0, 0.0, 1.0, 1.0), 1);
+        let m = renderer
+            .render_scene_to_bytes(&multiply)
+            .unwrap()
+            .expect("gpu backend yields pixels");
+        let (m_bg, m_overlap) = (sample(&m, 16), sample(&m, 48));
+        assert!(
+            (m_overlap - m_bg).abs() < 28,
+            "white multiply must leave the backdrop ~unchanged (real dst read): bg={m_bg} overlap={m_overlap}"
+        );
+        assert!(
+            m_overlap < 220,
+            "multiply overlap must not be white (the old self-blend result): {m_overlap}"
+        );
+
+        // Black over a gray backdrop, Screen: real screen leaves the backdrop unchanged
+        // (black is the screen identity); the old self-blend would turn it black.
+        let screen = build_blend_scene(64, 64, hsla(0.0, 0.0, 0.0, 1.0), 2);
+        let s = renderer
+            .render_scene_to_bytes(&screen)
+            .unwrap()
+            .expect("gpu backend yields pixels");
+        let (s_bg, s_overlap) = (sample(&s, 16), sample(&s, 48));
+        assert!(
+            (s_overlap - s_bg).abs() < 28,
+            "black screen must leave the backdrop ~unchanged (real dst read): bg={s_bg} overlap={s_overlap}"
+        );
+        assert!(
+            s_overlap > 35,
+            "screen overlap must not be black (the old self-blend result): {s_overlap}"
         );
     }
 

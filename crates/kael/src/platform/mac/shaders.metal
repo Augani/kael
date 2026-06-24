@@ -122,9 +122,11 @@ vertex QuadVertexOutput quad_vertex(uint unit_vertex_id [[vertex_id]],
 
 float4 apply_blend_mode(float4 src, uint mode) {
   switch (mode) {
+    // Multiply (1) and Screen (2) read the destination, so they are evaluated by the
+    // quad's blend pipeline state (real src*dst / screen blend factors), not here.
     case 0u: return src;
-    case 1u: return float4(src.rgb * src.rgb, src.a);
-    case 2u: return float4(1.0 - (1.0 - src.rgb) * (1.0 - src.rgb), src.a);
+    case 1u: return src;
+    case 2u: return src;
     case 3u: {
       float3 mid = float3(0.5);
       float3 r = select(

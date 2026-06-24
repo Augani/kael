@@ -766,9 +766,9 @@ pub enum BlendMode {
     /// Standard alpha blending (source over destination).
     #[default]
     Normal = 0,
-    /// Darkens by multiplying source color with itself.
+    /// Darkens by multiplying the source color with the destination (backdrop).
     Multiply = 1,
-    /// Lightens by applying the screen formula to the source color.
+    /// Lightens by applying the screen formula between source and destination (backdrop).
     Screen = 2,
     /// Combines multiply and screen based on source luminance.
     Overlay = 3,
