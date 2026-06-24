@@ -143,6 +143,7 @@ pub use crate::display::html::Html;
 pub use crate::display::markdown::Markdown;
 pub use crate::display::rich_text::{RichBlock, RichInline, TableAlignment as RichTableAlignment};
 pub use crate::display::table::{Table, TableColumn, TableRow};
+pub use crate::headless::{DisclosureController, SelectController, ToggleController};
 pub use crate::layout::{
     Align, Cluster, Container, Flow, FlowDirection, Grid, HStack, Justify, MasonryGrid,
     MasonryItem, Panel, PhysicsScrollState, ScrollContainer, ScrollDirection, ScrollList, Spacer,
