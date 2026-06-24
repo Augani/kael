@@ -158,6 +158,11 @@ impl TestAppContext {
         self.test_platform.did_prompt_for_new_path()
     }
 
+    /// Sets the simulated "reduce motion" accessibility preference for tests.
+    pub fn set_reduce_motion(&self, reduce_motion: bool) {
+        self.test_platform.set_reduce_motion(reduce_motion);
+    }
+
     /// returns a new `TestAppContext` re-using the same executors to interleave tasks.
     pub fn new_app(&self) -> TestAppContext {
         Self::build(self.dispatcher.clone(), self.fn_name)

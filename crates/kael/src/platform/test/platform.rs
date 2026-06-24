@@ -37,6 +37,7 @@ pub(crate) struct TestPlatform {
     pub opened_url: RefCell<Option<String>>,
     pub text_system: Arc<dyn PlatformTextSystem>,
     power_mode: Cell<PowerMode>,
+    reduce_motion: Cell<bool>,
     open_urls_callback: RefCell<Option<Box<dyn FnMut(Vec<String>)>>>,
     system_power_callback: RefCell<Option<Box<dyn FnMut(SystemPowerEvent)>>>,
     #[cfg(target_os = "windows")]
@@ -125,6 +126,7 @@ impl TestPlatform {
             weak: weak.clone(),
             opened_url: Default::default(),
             power_mode: Cell::new(PowerMode::Performance),
+            reduce_motion: Cell::new(false),
             open_urls_callback: RefCell::new(None),
             system_power_callback: RefCell::new(None),
             #[cfg(target_os = "windows")]
@@ -252,6 +254,10 @@ impl TestPlatform {
         self.power_mode.set(power_mode);
     }
 
+    pub(crate) fn set_reduce_motion(&self, reduce_motion: bool) {
+        self.reduce_motion.set(reduce_motion);
+    }
+
     pub(crate) fn simulate_system_power_event(&self, event: SystemPowerEvent) {
         let mut callback = self.system_power_callback.borrow_mut().take();
         if let Some(ref mut callback) = callback {
@@ -345,6 +351,10 @@ impl Platform for TestPlatform {
 
     fn power_mode(&self) -> PowerMode {
         self.power_mode.get()
+    }
+
+    fn should_reduce_motion(&self) -> bool {
+        self.reduce_motion.get()
     }
 
     fn on_system_power_event(&self, callback: Box<dyn FnMut(SystemPowerEvent)>) {

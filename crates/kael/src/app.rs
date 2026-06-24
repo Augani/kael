@@ -1371,6 +1371,13 @@ impl App {
         self.platform.power_mode()
     }
 
+    /// Whether the OS "reduce motion" accessibility preference is enabled. The framework
+    /// folds this into [`crate::Window::animations_enabled`]; apps should also minimize
+    /// non-essential motion when this is true.
+    pub fn reduce_motion(&self) -> bool {
+        self.platform.should_reduce_motion()
+    }
+
     /// Get the duration since the last user input event.
     pub fn system_idle_time(&self) -> Option<Duration> {
         self.platform.system_idle_time()

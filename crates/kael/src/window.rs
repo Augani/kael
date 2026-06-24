@@ -882,6 +882,7 @@ pub struct Window {
     pub(crate) last_input_timestamp: Rc<Cell<Instant>>,
     pub(crate) keyboard_navigation_active: bool,
     power_mode: PowerMode,
+    reduce_motion: bool,
     last_frame_presented_at: Instant,
     pub(crate) refreshing: bool,
     pub(crate) activation_observers: SubscriberSet<(), AnyObserver>,
@@ -1033,6 +1034,7 @@ impl Window {
         let next_frame_callbacks: Rc<RefCell<Vec<FrameCallback>>> = Default::default();
         let last_input_timestamp = Rc::new(Cell::new(Instant::now()));
         let power_mode = cx.power_mode();
+        let reduce_motion = cx.reduce_motion();
 
         platform_window
             .request_decorations(window_decorations.unwrap_or(WindowDecorations::Server));
@@ -1078,6 +1080,7 @@ impl Window {
                 let frame_throttled = handle
                     .update(&mut cx, |_, window, cx| {
                         window.power_mode = cx.power_mode();
+                        window.reduce_motion = cx.reduce_motion();
                         window.should_throttle_frame(request_frame_options)
                     })
                     .log_err()
@@ -1310,6 +1313,7 @@ impl Window {
             last_input_timestamp,
             keyboard_navigation_active: false,
             power_mode,
+            reduce_motion,
             last_frame_presented_at: Instant::now(),
             refreshing: false,
             activation_observers: SubscriberSet::new(),
@@ -1972,9 +1976,17 @@ impl Window {
         self.power_mode
     }
 
+    /// Returns whether the OS "reduce motion" accessibility preference is active for this frame.
+    pub fn reduce_motion(&self) -> bool {
+        self.reduce_motion
+    }
+
     /// Returns whether animations should run at full fidelity for this frame.
+    ///
+    /// False when the system is in low-power mode or the user has enabled the
+    /// "reduce motion" accessibility preference.
     pub fn animations_enabled(&self) -> bool {
-        self.power_mode != PowerMode::LowPower
+        self.power_mode != PowerMode::LowPower && !self.reduce_motion
     }
 
     /// Schedule a frame to be drawn on the next animation frame.
@@ -2253,6 +2265,7 @@ impl Window {
         #[cfg(any(feature = "inspector", debug_assertions))]
         let frame_started_at = Instant::now();
         self.power_mode = cx.power_mode();
+        self.reduce_motion = cx.reduce_motion();
         self.invalidate_entities();
         cx.entities.clear_accessed();
         debug_assert!(self.rendered_entity_stack.is_empty());

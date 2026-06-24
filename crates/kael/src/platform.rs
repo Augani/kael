@@ -388,6 +388,10 @@ pub(crate) trait Platform: 'static {
     fn power_mode(&self) -> PowerMode {
         PowerMode::Performance
     }
+    /// Whether the OS "reduce motion" accessibility preference is enabled.
+    fn should_reduce_motion(&self) -> bool {
+        false
+    }
     fn system_idle_time(&self) -> Option<Duration> {
         None
     }

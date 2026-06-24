@@ -6612,6 +6612,25 @@ mod test {
     }
 
     #[kael::test]
+    fn reduce_motion_disables_animations(cx: &mut TestAppContext) {
+        struct MotionRoot;
+
+        impl Render for MotionRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div().size_full()
+            }
+        }
+
+        cx.set_reduce_motion(true);
+        let (_view, mut window) = cx.add_window_view(|_, _| MotionRoot);
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(window.reduce_motion());
+            assert!(!window.animations_enabled());
+        });
+    }
+
+    #[kael::test]
     fn aspect_ratio_derives_missing_dimension(cx: &mut TestAppContext) {
         struct AspectRoot;
 

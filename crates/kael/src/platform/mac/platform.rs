@@ -1592,6 +1592,10 @@ impl Platform for MacPlatform {
         }
     }
 
+    fn should_reduce_motion(&self) -> bool {
+        objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
+    }
+
     fn should_auto_hide_scrollbars(&self) -> bool {
         #[allow(non_upper_case_globals)]
         const NSScrollerStyleOverlay: NSInteger = 1;
