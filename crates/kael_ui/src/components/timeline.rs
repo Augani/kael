@@ -216,8 +216,8 @@ impl TimelineItem {
     fn get_color(&self, theme: &crate::theme::Theme) -> Hsla {
         match self.variant {
             TimelineItemVariant::Default => theme.tokens.muted_foreground,
-            TimelineItemVariant::Success => rgb(0x22c55e).into(),
-            TimelineItemVariant::Warning => rgb(0xf59e0b).into(),
+            TimelineItemVariant::Success => theme.tokens.success,
+            TimelineItemVariant::Warning => theme.tokens.warning,
             TimelineItemVariant::Error => theme.tokens.destructive,
             TimelineItemVariant::Info => theme.tokens.primary,
         }

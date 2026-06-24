@@ -141,11 +141,11 @@ impl Alert {
                 theme.tokens.primary,
             ),
             AlertVariant::Success => {
-                let success_color: Hsla = rgb(0x22c55e).into();
+                let success_color: Hsla = theme.tokens.success;
                 (success_color.opacity(0.1), success_color, success_color)
             }
             AlertVariant::Warning => {
-                let warning_color: Hsla = rgb(0xf59e0b).into();
+                let warning_color: Hsla = theme.tokens.warning;
                 (warning_color.opacity(0.1), warning_color, warning_color)
             }
             AlertVariant::Error => (

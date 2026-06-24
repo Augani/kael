@@ -135,8 +135,8 @@ impl RenderOnce for ProgressBar {
 
         let bar_color = match self.variant {
             ProgressVariant::Default => primary,
-            ProgressVariant::Success => rgb(0x22c55e).into(), // green-500
-            ProgressVariant::Warning => rgb(0xf59e0b).into(), // amber-500
+            ProgressVariant::Success => tokens.success, // green-500
+            ProgressVariant::Warning => tokens.warning, // amber-500
             ProgressVariant::Destructive => destructive,
             ProgressVariant::Custom(color) => color,
         };
@@ -305,8 +305,8 @@ impl RenderOnce for CircularProgress {
 
         let stroke_color = match self.variant {
             ProgressVariant::Default => primary,
-            ProgressVariant::Success => rgb(0x22c55e).into(),
-            ProgressVariant::Warning => rgb(0xf59e0b).into(),
+            ProgressVariant::Success => tokens.success,
+            ProgressVariant::Warning => tokens.warning,
             ProgressVariant::Destructive => destructive,
             ProgressVariant::Custom(color) => color,
         };

@@ -80,8 +80,8 @@ impl RenderOnce for AnimatedProgress {
 
         let bar_color = self.color.unwrap_or_else(|| match self.variant {
             ProgressVariant::Default => theme.tokens.primary,
-            ProgressVariant::Success => rgb(0x22c55e).into(),
-            ProgressVariant::Warning => rgb(0xf59e0b).into(),
+            ProgressVariant::Success => theme.tokens.success,
+            ProgressVariant::Warning => theme.tokens.warning,
             ProgressVariant::Destructive => theme.tokens.destructive,
             ProgressVariant::Custom(color) => color,
         });

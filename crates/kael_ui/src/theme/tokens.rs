@@ -79,6 +79,10 @@ pub struct ThemeTokens {
     pub secondary_foreground: Hsla,
     pub destructive: Hsla,
     pub destructive_foreground: Hsla,
+    pub success: Hsla,
+    pub success_foreground: Hsla,
+    pub warning: Hsla,
+    pub warning_foreground: Hsla,
     pub border: Hsla,
     pub input: Hsla,
     pub ring: Hsla,
@@ -248,6 +252,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0x0a0a0a).into(),
             destructive: rgb(0xef4444).into(),
             destructive_foreground: rgb(0xffffff).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0xe5e5e5).into(),
             input: rgb(0xe5e5e5).into(),
             ring: rgb(0xd4d4d8).into(),
@@ -316,6 +324,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xf5f5f5).into(),
             destructive: rgb(0xff4444).into(),
             destructive_foreground: rgb(0xffffff).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x333333).into(),
             input: rgb(0x333333).into(),
             ring: rgb(0xffffff).into(),
@@ -384,6 +396,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xe2e8f0).into(),
             destructive: rgb(0xef4444).into(),
             destructive_foreground: rgb(0xffffff).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x21262d).into(),
             input: rgb(0x21262d).into(),
             ring: rgb(0x60a5fa).into(),
@@ -452,6 +468,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xbbf7d0).into(),
             destructive: rgb(0xf87171).into(),
             destructive_foreground: rgb(0xffffff).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x1a2520).into(),
             input: rgb(0x1a2520).into(),
             ring: rgb(0x4ade80).into(),
@@ -520,6 +540,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xe9d5ff).into(),
             destructive: rgb(0xef4444).into(),
             destructive_foreground: rgb(0xffffff).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x3a2415).into(),
             input: rgb(0x3a2415).into(),
             ring: rgb(0xfbbf24).into(),
@@ -588,6 +612,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xe0f2fe).into(),
             destructive: rgb(0xf87171).into(),
             destructive_foreground: rgb(0xffffff).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x0f2638).into(),
             input: rgb(0x0f2638).into(),
             ring: rgb(0x22d3ee).into(),
@@ -656,6 +684,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xf8f8f2).into(),
             destructive: rgb(0xff6e6e).into(),
             destructive_foreground: rgb(0xf8f8f2).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x3a3c4e).into(),
             input: rgb(0x3a3c4e).into(),
             ring: rgb(0xc9a9ff).into(),
@@ -724,6 +756,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xeceff4).into(),
             destructive: rgb(0xbf616a).into(),
             destructive_foreground: rgb(0xeceff4).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x3b4252).into(),
             input: rgb(0x3b4252).into(),
             ring: rgb(0x8fbcbb).into(),
@@ -792,6 +828,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xfcfcfa).into(),
             destructive: rgb(0xff6e97).into(),
             destructive_foreground: rgb(0xfcfcfa).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x403e41).into(),
             input: rgb(0x403e41).into(),
             ring: rgb(0xffe66d).into(),
@@ -860,6 +900,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xc0caf5).into(),
             destructive: rgb(0xf7768e).into(),
             destructive_foreground: rgb(0xc0caf5).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x292e42).into(),
             input: rgb(0x292e42).into(),
             ring: rgb(0x7dcfff).into(),
@@ -928,6 +972,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xcdd6f4).into(),
             destructive: rgb(0xf38ba8).into(),
             destructive_foreground: rgb(0xcdd6f4).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x313244).into(),
             input: rgb(0x313244).into(),
             ring: rgb(0x89b4fa).into(),
@@ -996,6 +1044,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xe0def4).into(),
             destructive: rgb(0xeb6f92).into(),
             destructive_foreground: rgb(0xe0def4).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x26233a).into(),
             input: rgb(0x26233a).into(),
             ring: rgb(0xc4a7e7).into(),
@@ -1064,6 +1116,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xFFFFFF).into(),
             destructive: rgb(0xF56565).into(), // Bright red
             destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0xFFD4C2).into(), // Soft coral border
             input: rgb(0xFFE4D6).into(),
             ring: rgb(0xFF6B6B).into(), // Coral ring
@@ -1132,6 +1188,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xFFFFFF).into(),
             destructive: rgb(0xE53E3E).into(), // Red
             destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0xD6CEFF).into(), // Lavender border
             input: rgb(0xE8E3FF).into(),
             ring: rgb(0x9F7AEA).into(), // Lavender ring
@@ -1200,6 +1260,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xFFFFFF).into(),
             destructive: rgb(0xF56565).into(), // Red
             destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0xB8EBD9).into(), // Mint border
             input: rgb(0xD4F4E8).into(),
             ring: rgb(0x38B2AC).into(), // Teal ring
@@ -1268,6 +1332,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xFFFFFF).into(),
             destructive: rgb(0xE53E3E).into(), // Red
             destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0xFFD9B3).into(), // Peach border
             input: rgb(0xFFE4CC).into(),
             ring: rgb(0xFF9966).into(), // Peach ring
@@ -1336,6 +1404,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xFFFFFF).into(),
             destructive: rgb(0xF44336).into(), // Red
             destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x90CAF9).into(), // Sky blue border
             input: rgb(0xBBDEFB).into(),
             ring: rgb(0x2196F3).into(), // Blue ring
@@ -1404,6 +1476,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xFFFFFF).into(),
             destructive: rgb(0xE53935).into(), // Red
             destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0xFFB3D9).into(), // Pink border
             input: rgb(0xFFD6ED).into(),
             ring: rgb(0xE91E63).into(), // Pink ring
@@ -1622,5 +1698,25 @@ impl ThemeTokens {
             ));
         }
         layers
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ThemeTokens;
+    use kael::black;
+
+    #[test]
+    fn themes_carry_overridable_semantic_tokens() {
+        let light = ThemeTokens::light();
+        assert_ne!(light.success, light.destructive);
+        assert_ne!(light.warning, light.success);
+
+        let custom = ThemeTokens {
+            success: black(),
+            ..ThemeTokens::light()
+        };
+        assert_eq!(custom.success, black());
+        assert_eq!(custom.warning, light.warning);
     }
 }
