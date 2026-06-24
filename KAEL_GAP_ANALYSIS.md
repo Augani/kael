@@ -346,12 +346,12 @@ Everything above is additive, traces to confirmed audit findings, and leans on m
 
 This section records what was actually implemented against the analysis, and the **specific, verified blocker** for everything that was not (so the remaining work is a precise execution plan, not a re-audit).
 
-### Shipped — 24 gaps bridged on `main` (each with a TDD test, `cargo build`, and `cargo clippy` green; full suite 952+ lib tests passing)
+### Shipped — 30+ gaps bridged on `main` (each with a TDD test, `cargo build`, and `cargo clippy` green; full suite 952+ kael lib tests + the kael_ui suite passing)
 
 - **A11y:** accessibility node geometry populated from layout bounds at all 13 registration sites; `prefers-reduced-motion` honored (`Platform::should_reduce_motion`, real macOS `NSWorkspace` read, folded into `Window::animations_enabled`).
 - **Canvas / one-Context2D (priority #3):** flat `save`/`restore` state stack + `translate`/`rotate`/`scale`/`set_global_alpha`/`clip_rect`; `draw_image`; `fill_ellipse`/`stroke_ellipse`; `Path::contains` (isPointInPath, lyon hit-test); `draw_text_aligned` (textAlign); `stroke_rect`/`stroke_rounded_rect`.
 - **Styling & layout:** `aspect_ratio`/`aspect_square`/`aspect_video`; **real CSS Grid track sizing** (`GridTrack` px/rem/fr/auto/min-content/max-content/fraction/minmax/repeat + `grid_template_columns`/`grid_template_rows`/`grid_auto_flow`, mapped to Taffy 0.9); `glow`/`shadow_inner` presets; `refine_style` reusable style presets.
-- **Component freedom (priority #2):** open `Custom(Colors)` variants + `.colors()`/`.color()` for Button, IconButton, Input, Textarea, Alert, Progress, CircularProgress, AnimatedProgress, and Spinner; prelude exports for the new color types.
+- **Component freedom (priority #2):** open `Custom(Colors)` variants + `.colors()`/`.color()` for Button, IconButton, Input, Textarea, Alert, Progress, CircularProgress, AnimatedProgress, and Spinner; reusable style presets (`Styled::refine_style`); and the **start of the headless primitive layer** (the report's #1 anti-sameness lever) — `kael_ui::headless` with 8 unstyled-but-correct state machines (Disclosure, Toggle, Select, Tabs, Slider, Combobox, Accordion, Pagination), so apps can render any visual over correct interaction logic instead of forking styled components.
 - **Memory (priority #1):** `TileCache` bounded with an LRU byte budget; `App::gpu_memory_budget()` exposes the real per-platform GPU memory query (Metal/DXGI/Vulkan); corrected the misleading `RetainAllImageCache` "LRU" doc.
 - **Motion:** keyframe `translate`; implicit `.transition()` now animates translate, skew, and the 4-channel color filter; spring presets (`SpringPreset` + `transition_spring`); `Animation::stagger`.
 
@@ -366,6 +366,7 @@ This section records what was actually implemented against the analysis, and the
 | Windows AccessKit `SubclassingAdapter` swap | Windows-only; compile-checkable but never runtime-verifiable here. | Real Windows hardware / GPU-backed Windows CI. |
 | `kael-cli` (`cargo install` + `kael new`) | crates.io publish-gated. | crates.io access + `include_dir` template embedding. |
 | Semantic `success`/`warning` theme tokens | `ThemeTokens` has no `Default` and ~18 presets are full struct literals → ~36–72 brittle edits. | Refactor presets onto a `Default` base (`..ThemeTokens::base()`) first, then add tokens. |
-| Damage/dirty-region rendering, incremental layout, headless-component layer, code hot-reload | XL multi-week rewrites; the first two also carry corruption risk unverifiable here. | Dedicated multi-week workstreams. |
+| Headless-component layer (full) | Core state-machine controllers are **landed** (8 controllers, tested); remaining work is reskinning the 100+ styled components on top of them. | Incremental per-component refactor (not gated). |
+| Damage/dirty-region rendering, incremental layout, code hot-reload | XL multi-week rewrites; the first two also carry corruption risk unverifiable here. | Dedicated multi-week workstreams. |
 
 **Bottom line:** Wave 1's verifiable, non-gated surface is substantially landed. The remainder is a multi-engineer, multi-week program gated on a Taffy upgrade, a GPU golden-image CI, real Windows hardware, and crates.io — not on missing design.
