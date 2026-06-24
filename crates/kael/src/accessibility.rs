@@ -341,6 +341,16 @@ impl AccessibilityRect {
         }
     }
 
+    /// Build a rect from an element's laid-out bounds in window coordinates.
+    pub fn from_bounds(bounds: crate::Bounds<crate::Pixels>) -> Self {
+        Self {
+            x: bounds.origin.x.0 as f64,
+            y: bounds.origin.y.0 as f64,
+            width: bounds.size.width.0 as f64,
+            height: bounds.size.height.0 as f64,
+        }
+    }
+
     /// Convert to an AccessKit min/max-corner rectangle.
     pub fn to_accesskit(&self) -> accesskit::Rect {
         accesskit::Rect {

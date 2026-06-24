@@ -1144,7 +1144,7 @@ impl Element for TextInput {
             }
             node
         };
-        window.register_accessibility_node(node);
+        window.register_accessibility_node_at(node, bounds);
 
         state.update(cx, |input, _| {
             input.last_layout = Some(prepaint.layout.clone());

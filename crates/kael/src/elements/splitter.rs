@@ -545,7 +545,7 @@ impl Element for Splitter {
             }
         });
 
-        window.register_accessibility_node(
+        window.register_accessibility_node_at(
             AccessibilityAttributes::new(AccessibilityRole::Separator)
                 .states(if is_focused {
                     AccessibilityState::FOCUSED
@@ -564,6 +564,7 @@ impl Element for Splitter {
                     AccessibilityAction::Decrement,
                 ])
                 .to_node(crate::AccessibilityId::new()),
+            bounds,
         );
     }
 }

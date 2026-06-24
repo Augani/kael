@@ -56,7 +56,7 @@ impl Element for &'static str {
         &mut self,
         _id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
+        bounds: Bounds<Pixels>,
         text_layout: &mut TextLayout,
         _: &mut (),
         window: &mut Window,
@@ -65,7 +65,7 @@ impl Element for &'static str {
         text_layout.paint(self, window, cx);
         let node = crate::AccessibilityNode::new(crate::AccessibilityRole::StaticText)
             .with_label(self.to_string());
-        window.register_accessibility_node(node);
+        window.register_accessibility_node_at(node, bounds);
     }
 }
 
@@ -125,7 +125,7 @@ impl Element for SharedString {
         &mut self,
         _id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
+        bounds: Bounds<Pixels>,
         text_layout: &mut Self::RequestLayoutState,
         _: &mut Self::PrepaintState,
         window: &mut Window,
@@ -134,7 +134,7 @@ impl Element for SharedString {
         text_layout.paint(self.as_ref(), window, cx);
         let node = crate::AccessibilityNode::new(crate::AccessibilityRole::StaticText)
             .with_label(self.to_string());
-        window.register_accessibility_node(node);
+        window.register_accessibility_node_at(node, bounds);
     }
 }
 
@@ -281,7 +281,7 @@ impl Element for StyledText {
         &mut self,
         _id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
+        bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
         _: &mut Self::PrepaintState,
         window: &mut Window,
@@ -290,7 +290,7 @@ impl Element for StyledText {
         self.layout.paint(&self.text, window, cx);
         let node = crate::AccessibilityNode::new(crate::AccessibilityRole::StaticText)
             .with_label(self.text.to_string());
-        window.register_accessibility_node(node);
+        window.register_accessibility_node_at(node, bounds);
     }
 }
 
@@ -896,7 +896,7 @@ impl Element for InteractiveText {
 
                 let node = crate::AccessibilityNode::new(crate::AccessibilityRole::StaticText)
                     .with_label(self.text.text.to_string());
-                window.register_accessibility_node(node);
+                window.register_accessibility_node_at(node, bounds);
 
                 ((), interactive_state)
             },

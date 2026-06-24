@@ -378,7 +378,7 @@ impl Element for ScrollBar {
             }
         });
 
-        window.register_accessibility_node(
+        window.register_accessibility_node_at(
             AccessibilityAttributes::new(AccessibilityRole::ScrollBar)
                 .states(if render_state.focused {
                     AccessibilityState::FOCUSED
@@ -397,6 +397,7 @@ impl Element for ScrollBar {
                     AccessibilityAction::Decrement,
                 ])
                 .to_node(crate::AccessibilityId::new()),
+            bounds,
         );
     }
 }

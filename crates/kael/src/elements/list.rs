@@ -1231,7 +1231,7 @@ impl Element for List {
     ) {
         let list_node = crate::AccessibilityNode::new(crate::AccessibilityRole::List);
         let list_id = list_node.id;
-        window.register_accessibility_node(list_node);
+        window.register_accessibility_node_at(list_node, bounds);
 
         let current_view = window.current_view();
         window.with_accessibility_parent(list_id, |window| {

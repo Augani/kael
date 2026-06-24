@@ -2380,6 +2380,7 @@ impl Element for Div {
                     .as_ref()
                     .map(|attrs| {
                         let mut node = attrs.to_node(crate::AccessibilityId::new());
+                        node.bounds = Some(crate::AccessibilityRect::from_bounds(bounds));
                         if self
                             .interactivity
                             .tracked_focus_handle
@@ -6562,6 +6563,51 @@ mod test {
             assert_eq!(button.role, AccessibilityRole::Button);
             assert_eq!(button.label.as_deref(), Some("Child Button"));
             assert_eq!(button.parent, Some(container.id));
+        });
+    }
+
+    #[kael::test]
+    fn accessibility_node_carries_layout_bounds(cx: &mut TestAppContext) {
+        struct BoundsRoot;
+
+        impl Render for BoundsRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div().size_full().child(
+                    div()
+                        .id("bounded-button")
+                        .debug_selector(|| "bounded-button".to_string())
+                        .w(px(40.0))
+                        .h(px(24.0))
+                        .accessibility(
+                            AccessibilityAttributes::new(AccessibilityRole::Button)
+                                .label("Bounded"),
+                        ),
+                )
+            }
+        }
+
+        let (_view, mut window) = cx.add_window_view(|_, _| BoundsRoot);
+        let rendered = window.debug_bounds("bounded-button").unwrap();
+
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+
+            let node = window
+                .accessibility_tree
+                .nodes
+                .values()
+                .find(|node| {
+                    node.role == AccessibilityRole::Button
+                        && node.label.as_deref() == Some("Bounded")
+                })
+                .unwrap();
+            let node_bounds = node
+                .bounds
+                .expect("accessibility node should carry layout bounds");
+            assert_eq!(node_bounds.width, 40.0);
+            assert_eq!(node_bounds.height, 24.0);
+            assert_eq!(node_bounds.x, rendered.origin.x.0 as f64);
+            assert_eq!(node_bounds.y, rendered.origin.y.0 as f64);
         });
     }
 

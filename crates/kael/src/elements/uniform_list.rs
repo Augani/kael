@@ -573,7 +573,7 @@ impl Element for UniformList {
             |_, window, cx| {
                 let list_node = crate::AccessibilityNode::new(crate::AccessibilityRole::List);
                 let list_id = list_node.id;
-                window.register_accessibility_node(list_node);
+                window.register_accessibility_node_at(list_node, bounds);
 
                 window.with_accessibility_parent(list_id, |window| {
                     for (ix, item) in request_layout.items.iter_mut().enumerate() {

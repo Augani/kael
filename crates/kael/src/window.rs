@@ -1614,6 +1614,19 @@ impl Window {
         self.next_frame.accessibility_nodes.push(node);
     }
 
+    /// Register an accessibility node, stamping its screen-space bounds from the
+    /// element's laid-out bounds unless the node already carries explicit bounds.
+    pub fn register_accessibility_node_at(
+        &mut self,
+        mut node: crate::AccessibilityNode,
+        bounds: crate::Bounds<crate::Pixels>,
+    ) {
+        if node.bounds.is_none() {
+            node.bounds = Some(crate::AccessibilityRect::from_bounds(bounds));
+        }
+        self.register_accessibility_node(node);
+    }
+
     /// Rebuild the accessibility tree from nodes collected during the frame.
     pub fn update_accessibility_tree(&mut self) {
         let root = crate::AccessibilityNode::new(crate::AccessibilityRole::Window);

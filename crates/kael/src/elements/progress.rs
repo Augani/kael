@@ -172,7 +172,10 @@ impl Element for Progress {
             accessibility.value(accessibility_value.expect("determinate progress has range value"))
         };
 
-        window.register_accessibility_node(accessibility.to_node(crate::AccessibilityId::new()));
+        window.register_accessibility_node_at(
+            accessibility.to_node(crate::AccessibilityId::new()),
+            bounds,
+        );
     }
 }
 
