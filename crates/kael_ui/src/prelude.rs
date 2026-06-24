@@ -144,7 +144,8 @@ pub use crate::display::markdown::Markdown;
 pub use crate::display::rich_text::{RichBlock, RichInline, TableAlignment as RichTableAlignment};
 pub use crate::display::table::{Table, TableColumn, TableRow};
 pub use crate::headless::{
-    AccordionController, ComboboxController, DisclosureController, SelectController,
+    AccordionController, ComboboxController, DisclosureController, PaginationController,
+    SelectController,
     SliderController, TabsController, ToggleController,
 };
 pub use crate::layout::{

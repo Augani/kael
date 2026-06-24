@@ -485,11 +485,83 @@ impl AccordionController {
     }
 }
 
+/// Zero-based pagination state with bounds-checked navigation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PaginationController {
+    page: usize,
+    page_count: usize,
+}
+
+impl PaginationController {
+    /// Create a controller over `page_count` pages, positioned on the first page.
+    pub fn new(page_count: usize) -> Self {
+        Self {
+            page: 0,
+            page_count,
+        }
+    }
+
+    /// The current (zero-based) page.
+    pub fn page(&self) -> usize {
+        self.page
+    }
+
+    /// The total number of pages.
+    pub fn page_count(&self) -> usize {
+        self.page_count
+    }
+
+    /// Update the page count, clamping the current page into range.
+    pub fn set_page_count(&mut self, page_count: usize) {
+        self.page_count = page_count;
+        self.page = self.page.min(page_count.saturating_sub(1));
+    }
+
+    /// Go to a specific page (clamped into range).
+    pub fn set_page(&mut self, page: usize) {
+        self.page = page.min(self.page_count.saturating_sub(1));
+    }
+
+    /// Whether there is a next page.
+    pub fn has_next(&self) -> bool {
+        self.page + 1 < self.page_count
+    }
+
+    /// Whether there is a previous page.
+    pub fn has_prev(&self) -> bool {
+        self.page > 0
+    }
+
+    /// Advance to the next page if there is one.
+    pub fn next(&mut self) {
+        if self.has_next() {
+            self.page += 1;
+        }
+    }
+
+    /// Go back to the previous page if there is one.
+    pub fn prev(&mut self) {
+        if self.has_prev() {
+            self.page -= 1;
+        }
+    }
+
+    /// Jump to the first page.
+    pub fn first(&mut self) {
+        self.page = 0;
+    }
+
+    /// Jump to the last page.
+    pub fn last(&mut self) {
+        self.page = self.page_count.saturating_sub(1);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        AccordionController, ComboboxController, DisclosureController, SelectController,
-        SliderController, TabsController, ToggleController,
+        AccordionController, ComboboxController, DisclosureController, PaginationController,
+        SelectController, SliderController, TabsController, ToggleController,
     };
 
     #[test]
@@ -633,5 +705,30 @@ mod tests {
         assert!(multi.is_open(2));
         multi.toggle(0);
         assert!(!multi.is_open(0));
+    }
+
+    #[test]
+    fn pagination_navigates_within_bounds() {
+        let mut pagination = PaginationController::new(3);
+        assert_eq!(pagination.page(), 0);
+        assert!(!pagination.has_prev());
+        assert!(pagination.has_next());
+
+        pagination.next();
+        pagination.next();
+        assert_eq!(pagination.page(), 2);
+        pagination.next(); // already last, no-op
+        assert_eq!(pagination.page(), 2);
+        assert!(!pagination.has_next());
+
+        pagination.first();
+        assert_eq!(pagination.page(), 0);
+        pagination.last();
+        assert_eq!(pagination.page(), 2);
+
+        pagination.set_page_count(2); // clamps current page from 2 to 1
+        assert_eq!(pagination.page(), 1);
+        pagination.set_page(99);
+        assert_eq!(pagination.page(), 1);
     }
 }
