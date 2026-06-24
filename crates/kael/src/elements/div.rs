@@ -6723,6 +6723,16 @@ mod test {
     }
 
     #[kael::test]
+    fn gpu_memory_budget_is_queryable(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            if let Some(budget) = cx.gpu_memory_budget() {
+                assert!(budget.total_bytes > 0);
+                assert!(budget.available_bytes() <= budget.total_bytes);
+            }
+        });
+    }
+
+    #[kael::test]
     fn reduce_motion_disables_animations(cx: &mut TestAppContext) {
         struct MotionRoot;
 

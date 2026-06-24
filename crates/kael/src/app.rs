@@ -1378,6 +1378,16 @@ impl App {
         self.platform.should_reduce_motion()
     }
 
+    /// Query the default GPU's current memory budget and usage, or `None` if unavailable.
+    ///
+    /// Backed by the native API per platform (Metal `recommendedMaxWorkingSetSize`, DXGI
+    /// `QueryVideoMemoryInfo`, Vulkan `VK_EXT_memory_budget`). Lets apps monitor GPU memory
+    /// pressure and shed their own caches; pair with [`crate::GpuMemoryManager`] to enforce
+    /// a budget over registered GPU resources.
+    pub fn gpu_memory_budget(&self) -> Option<crate::GpuMemoryBudget> {
+        crate::GpuMemoryBudget::query()
+    }
+
     /// Get the duration since the last user input event.
     pub fn system_idle_time(&self) -> Option<Duration> {
         self.platform.system_idle_time()
