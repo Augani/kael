@@ -29,7 +29,9 @@ pub use crate::components::audio_player::{
 };
 pub use crate::components::avatar::{Avatar, AvatarSize};
 pub use crate::components::avatar_group::{AvatarGroup, AvatarItem};
-pub use crate::components::button::{Button, ButtonSize, ButtonVariant, IconPosition};
+pub use crate::components::button::{
+    Button, ButtonColors, ButtonSize, ButtonVariant, IconPosition,
+};
 pub use crate::components::calendar::{Calendar, CalendarLocale, DateValue};
 pub use crate::components::carousel::{
     bounce, ease_in_out, ease_out_quint, linear, pulsating_between, quadratic, Carousel,
@@ -62,6 +64,7 @@ pub use crate::components::image_viewer::{
 };
 pub use crate::components::infinite_scroll::{InfiniteScroll, InfiniteScrollState, LoadingState};
 pub use crate::components::inline_edit::{InlineEdit, InlineEditState, InlineEditTrigger};
+pub use crate::components::input::{InputColors, InputVariant};
 pub use crate::components::keyboard_shortcuts::{
     KeyboardShortcuts, ShortcutCategory, ShortcutItem,
 };

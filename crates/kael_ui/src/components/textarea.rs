@@ -1,6 +1,6 @@
 //! Textarea component - Multi-line text input component.
 
-use crate::components::input::InputVariant;
+use crate::components::input::{InputColors, InputVariant};
 use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
@@ -55,6 +55,12 @@ impl Textarea {
 
     pub fn variant(mut self, variant: InputVariant) -> Self {
         self.variant = variant;
+        self
+    }
+
+    /// Use a fully custom color set, setting the variant to [`InputVariant::Custom`].
+    pub fn colors(mut self, colors: InputColors) -> Self {
+        self.variant = InputVariant::Custom(colors);
         self
     }
 
@@ -151,6 +157,9 @@ impl RenderOnce for Textarea {
                     theme.tokens.destructive.opacity(0.3),
                     theme.tokens.foreground,
                 ),
+                InputVariant::Custom(colors) => {
+                    (colors.background, theme.tokens.destructive, colors.text)
+                }
             }
         } else {
             match self.variant {
@@ -169,6 +178,7 @@ impl RenderOnce for Textarea {
                     theme.tokens.border.opacity(0.3),
                     theme.tokens.foreground,
                 ),
+                InputVariant::Custom(colors) => (colors.background, colors.border, colors.text),
             }
         };
 

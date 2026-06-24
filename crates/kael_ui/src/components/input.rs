@@ -46,11 +46,55 @@ pub fn init(cx: &mut App) {
     ]);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A custom color set for [`InputVariant::Custom`], letting an app give inputs and
+/// textareas a distinctive look without forking the component.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InputColors {
+    /// Resting background fill.
+    pub background: Hsla,
+    /// Border color.
+    pub border: Hsla,
+    /// Text color.
+    pub text: Hsla,
+}
+
+impl InputColors {
+    /// Construct a color set from background, border, and text colors.
+    pub fn new(
+        background: impl Into<Hsla>,
+        border: impl Into<Hsla>,
+        text: impl Into<Hsla>,
+    ) -> Self {
+        Self {
+            background: background.into(),
+            border: border.into(),
+            text: text.into(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod input_colors_tests {
+    use super::{InputColors, InputVariant};
+
+    #[test]
+    fn input_colors_round_trip_and_custom_variant() {
+        let colors = InputColors::new(kael::black(), kael::white(), kael::black());
+        assert_eq!(colors.background, kael::black());
+        assert_eq!(colors.border, kael::white());
+
+        let variant = InputVariant::Custom(colors);
+        assert!(matches!(variant, InputVariant::Custom(_)));
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InputVariant {
     Default,
     Outline,
     Ghost,
+    /// An app-defined color set — build any look without forking the component.
+    Custom(InputColors),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -164,6 +208,12 @@ impl Input {
     /// Set the input variant
     pub fn variant(mut self, variant: InputVariant) -> Self {
         self.variant = variant;
+        self
+    }
+
+    /// Use a fully custom color set, setting the variant to [`InputVariant::Custom`].
+    pub fn colors(mut self, colors: InputColors) -> Self {
+        self.variant = InputVariant::Custom(colors);
         self
     }
 
@@ -610,6 +660,9 @@ impl RenderOnce for Input {
                     theme.tokens.destructive.opacity(0.3),
                     theme.tokens.foreground,
                 ),
+                InputVariant::Custom(colors) => {
+                    (colors.background, theme.tokens.destructive, colors.text)
+                }
             }
         } else {
             match self.variant {
@@ -628,6 +681,7 @@ impl RenderOnce for Input {
                     theme.tokens.border.opacity(0.3),
                     theme.tokens.foreground,
                 ),
+                InputVariant::Custom(colors) => (colors.background, colors.border, colors.text),
             }
         };
 
