@@ -349,10 +349,147 @@ impl SliderController {
     }
 }
 
+/// Combobox/autocomplete state: a text query plus single-select navigation over the
+/// app-filtered results. The app recomputes its filtered items when the query changes
+/// and reports the new count via [`ComboboxController::set_result_count`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComboboxController {
+    query: String,
+    select: SelectController,
+}
+
+impl ComboboxController {
+    /// Create an empty combobox over the given number of currently-visible results.
+    pub fn new(result_count: usize) -> Self {
+        Self {
+            query: String::new(),
+            select: SelectController::new(result_count),
+        }
+    }
+
+    /// The current query text.
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    /// Set the query text, opening the popup and resetting the highlight to the top.
+    pub fn set_query(&mut self, query: impl Into<String>) {
+        self.query = query.into();
+        self.select.open();
+        self.select.highlight_first();
+    }
+
+    /// Update the number of visible (filtered) results.
+    pub fn set_result_count(&mut self, count: usize) {
+        self.select.set_len(count);
+    }
+
+    /// Whether the results popup is open.
+    pub fn is_open(&self) -> bool {
+        self.select.is_open()
+    }
+
+    /// Open the results popup.
+    pub fn open(&mut self) {
+        self.select.open();
+    }
+
+    /// Close the results popup.
+    pub fn close(&mut self) {
+        self.select.close();
+    }
+
+    /// The highlighted result index, if any.
+    pub fn highlighted(&self) -> Option<usize> {
+        self.select.highlighted()
+    }
+
+    /// Highlight the next result, wrapping.
+    pub fn highlight_next(&mut self) {
+        self.select.highlight_next();
+    }
+
+    /// Highlight the previous result, wrapping.
+    pub fn highlight_prev(&mut self) {
+        self.select.highlight_prev();
+    }
+
+    /// Commit the highlighted result and close; returns the chosen result index.
+    pub fn select_highlighted(&mut self) -> Option<usize> {
+        self.select.select_highlighted()
+    }
+
+    /// The committed result index, if any.
+    pub fn selected(&self) -> Option<usize> {
+        self.select.selected()
+    }
+}
+
+/// Multi-section disclosure state for accordions: tracks which of `len` sections are
+/// open, in either single-expand (one at a time) or multi-expand mode.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccordionController {
+    open: Vec<bool>,
+    allow_multiple: bool,
+}
+
+impl AccordionController {
+    /// Create a controller over `len` sections, all closed.
+    pub fn new(len: usize, allow_multiple: bool) -> Self {
+        Self {
+            open: vec![false; len],
+            allow_multiple,
+        }
+    }
+
+    /// The number of sections.
+    pub fn len(&self) -> usize {
+        self.open.len()
+    }
+
+    /// Whether there are no sections.
+    pub fn is_empty(&self) -> bool {
+        self.open.is_empty()
+    }
+
+    /// Whether section `index` is open.
+    pub fn is_open(&self, index: usize) -> bool {
+        self.open.get(index).copied().unwrap_or(false)
+    }
+
+    /// Open section `index`, closing the others in single-expand mode.
+    pub fn open(&mut self, index: usize) {
+        if index >= self.open.len() {
+            return;
+        }
+        if !self.allow_multiple {
+            self.open.iter_mut().for_each(|open| *open = false);
+        }
+        self.open[index] = true;
+    }
+
+    /// Close section `index`.
+    pub fn close(&mut self, index: usize) {
+        if let Some(open) = self.open.get_mut(index) {
+            *open = false;
+        }
+    }
+
+    /// Toggle section `index`.
+    pub fn toggle(&mut self, index: usize) {
+        if self.is_open(index) {
+            self.close(index);
+        } else {
+            self.open(index);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        DisclosureController, SelectController, SliderController, TabsController, ToggleController,
+        AccordionController, ComboboxController, DisclosureController, SelectController,
+        SliderController, TabsController, ToggleController,
     };
 
     #[test]
@@ -461,5 +598,40 @@ mod tests {
         assert_eq!(slider.fraction(), 0.8);
         slider.set_fraction(0.0);
         assert_eq!(slider.value(), 0.0);
+    }
+
+    #[test]
+    fn combobox_query_drives_navigation() {
+        let mut combobox = ComboboxController::new(5);
+        combobox.set_query("ab");
+        assert_eq!(combobox.query(), "ab");
+        assert!(combobox.is_open());
+        assert_eq!(combobox.highlighted(), Some(0));
+
+        combobox.set_result_count(2);
+        combobox.highlight_next();
+        assert_eq!(combobox.highlighted(), Some(1));
+        combobox.highlight_next();
+        assert_eq!(combobox.highlighted(), Some(0)); // wrapped over 2 results
+        combobox.highlight_next();
+        assert_eq!(combobox.select_highlighted(), Some(1));
+        assert!(!combobox.is_open());
+    }
+
+    #[test]
+    fn accordion_single_vs_multi_expand() {
+        let mut single = AccordionController::new(3, false);
+        single.open(0);
+        single.open(1);
+        assert!(!single.is_open(0)); // single-expand closed section 0
+        assert!(single.is_open(1));
+
+        let mut multi = AccordionController::new(3, true);
+        multi.open(0);
+        multi.open(2);
+        assert!(multi.is_open(0));
+        assert!(multi.is_open(2));
+        multi.toggle(0);
+        assert!(!multi.is_open(0));
     }
 }
