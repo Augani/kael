@@ -81,6 +81,30 @@ pub fn stroke(width: Pixels, color: impl Into<Hsla>) -> Stroke {
     }
 }
 
+impl Stroke {
+    /// Set the line cap style (web canvas `lineCap`).
+    pub fn cap(mut self, cap: LineCap) -> Self {
+        self.cap = cap;
+        self
+    }
+
+    /// Set the line join style (web canvas `lineJoin`).
+    pub fn join(mut self, join: LineJoin) -> Self {
+        self.join = join;
+        self
+    }
+
+    /// Set a dash pattern with the given on/off segment lengths and offset along the
+    /// outline (web canvas `setLineDash` + `lineDashOffset`).
+    pub fn dashed(mut self, segments: impl Into<Vec<Pixels>>, offset: Pixels) -> Self {
+        self.dash = Some(StrokeDash {
+            segments: segments.into(),
+            offset,
+        });
+        self
+    }
+}
+
 /// Immediate-mode drawing context used by `canvas(size, draw)`.
 pub struct DrawContext {
     bounds: Bounds<Pixels>,
@@ -904,5 +928,21 @@ mod tests {
         let stroked =
             super::stroke_existing_path(&path, &stroke).expect("stroke should tessellate");
         assert!(!stroked.vertices.is_empty());
+    }
+
+    #[test]
+    fn stroke_builders_set_cap_join_and_dash() {
+        use super::{LineCap, LineJoin};
+
+        let s = stroke(px(2.), crate::black())
+            .cap(LineCap::Round)
+            .join(LineJoin::Bevel)
+            .dashed(vec![px(4.), px(2.)], px(1.));
+
+        assert!(matches!(s.cap, LineCap::Round));
+        assert!(matches!(s.join, LineJoin::Bevel));
+        let dash = s.dash.expect("dash should be set");
+        assert_eq!(dash.segments.len(), 2);
+        assert_eq!(dash.offset, px(1.));
     }
 }
