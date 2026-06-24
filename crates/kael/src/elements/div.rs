@@ -6612,6 +6612,28 @@ mod test {
     }
 
     #[kael::test]
+    fn aspect_ratio_derives_missing_dimension(cx: &mut TestAppContext) {
+        struct AspectRoot;
+
+        impl Render for AspectRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div().size_full().items_start().child(
+                    div()
+                        .id("aspect-box")
+                        .debug_selector(|| "aspect-box".to_string())
+                        .w(px(160.0))
+                        .aspect_video(),
+                )
+            }
+        }
+
+        let (_view, mut window) = cx.add_window_view(|_, _| AspectRoot);
+        let bounds = window.debug_bounds("aspect-box").unwrap();
+        assert_eq!(bounds.size.width.0, 160.0);
+        assert_eq!(bounds.size.height.0, 90.0);
+    }
+
+    #[kael::test]
     fn accessibility_pressed_state_tracks_active_click(cx: &mut TestAppContext) {
         struct PressedAccessibilityRoot;
 

@@ -1,9 +1,9 @@
 use crate::{
-    self as kael, AbsoluteLength, AlignContent, AlignItems, Background, BlendMode, BorderStyle,
-    CursorStyle, DefiniteLength, Display, Fill, FlexDirection, FlexWrap, Font, FontStyle,
-    FontWeight, GridPlacement, Hsla, JustifyContent, Length, Pixels, SharedString,
+    self as kael, point, px, relative, rems, AbsoluteLength, AlignContent, AlignItems, Background,
+    BlendMode, BorderStyle, CursorStyle, DefiniteLength, Display, Fill, FlexDirection, FlexWrap,
+    Font, FontStyle, FontWeight, GridPlacement, Hsla, JustifyContent, Length, Pixels, SharedString,
     StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow, TextShadow, TextStyleRefinement,
-    UnderlineStyle, WhiteSpace, point, px, relative, rems,
+    UnderlineStyle, WhiteSpace,
 };
 pub use kael_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
@@ -985,6 +985,25 @@ pub trait Styled: Sized {
         let grid_location = self.style().grid_location_mut();
         grid_location.row = GridPlacement::Line(1)..GridPlacement::Line(-1);
         self
+    }
+
+    /// Sets the preferred aspect ratio (width divided by height) for this element.
+    /// When one axis is definite and the other is automatic, the missing axis is
+    /// derived from this ratio.
+    /// [Docs](https://tailwindcss.com/docs/aspect-ratio)
+    fn aspect_ratio(mut self, ratio: f32) -> Self {
+        self.style().aspect_ratio = Some(ratio);
+        self
+    }
+
+    /// Sets a 1:1 (square) aspect ratio.
+    fn aspect_square(self) -> Self {
+        self.aspect_ratio(1.0)
+    }
+
+    /// Sets a 16:9 (widescreen video) aspect ratio.
+    fn aspect_video(self) -> Self {
+        self.aspect_ratio(16.0 / 9.0)
     }
 
     /// Draws a debug border around this element.
