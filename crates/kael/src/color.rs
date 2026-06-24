@@ -818,16 +818,35 @@ pub fn linear_gradient(
     }
 }
 
-/// Creates a linear gradient with up to 4 color stops.
-pub fn multi_stop_linear_gradient(angle: f32, stops: &[LinearColorStop]) -> Background {
+/// Reduce an arbitrary stop list to the 4 the GPU pipeline carries. Stop lists of 4 or
+/// fewer pass through unchanged; longer lists are resampled by index so the first and
+/// last stops are always preserved (the gradient keeps its true start and end color
+/// instead of silently dropping its tail).
+fn fit_gradient_stops(stops: &[LinearColorStop]) -> ([LinearColorStop; 4], u32) {
     let mut colors = [LinearColorStop::default(); 4];
-    let count = stops.len().min(4);
-    colors[..count].copy_from_slice(&stops[..count]);
+    let n = stops.len();
+    if n == 0 {
+        return (colors, 0);
+    }
+    if n <= 4 {
+        colors[..n].copy_from_slice(stops);
+        return (colors, n as u32);
+    }
+    for (i, slot) in colors.iter_mut().enumerate() {
+        slot.clone_from(&stops[i * (n - 1) / 3]);
+    }
+    (colors, 4)
+}
+
+/// Creates a linear gradient. The GPU pipeline carries 4 stops; longer stop lists are
+/// resampled to 4 with the first and last stops preserved.
+pub fn multi_stop_linear_gradient(angle: f32, stops: &[LinearColorStop]) -> Background {
+    let (colors, stop_count) = fit_gradient_stops(stops);
     Background {
         tag: BackgroundTag::LinearGradient,
         gradient_angle_or_pattern_height: angle,
         colors,
-        stop_count: count as u32,
+        stop_count,
         ..Default::default()
     }
 }
@@ -836,20 +855,19 @@ pub fn multi_stop_linear_gradient(angle: f32, stops: &[LinearColorStop]) -> Back
 ///
 /// `center` is the center point of the gradient in normalized coordinates (0.0 to 1.0).
 /// `radius` is the radius of the gradient in normalized coordinates (0.0 to 1.0).
-/// Supports up to 4 color stops.
+/// The GPU pipeline carries 4 stops; longer stop lists are resampled to 4 with the
+/// first and last stops preserved.
 pub fn radial_gradient(
     center_x: f32,
     center_y: f32,
     radius: f32,
     stops: &[LinearColorStop],
 ) -> Background {
-    let mut colors = [LinearColorStop::default(); 4];
-    let count = stops.len().min(4);
-    colors[..count].copy_from_slice(&stops[..count]);
+    let (colors, stop_count) = fit_gradient_stops(stops);
     Background {
         tag: BackgroundTag::RadialGradient,
         colors,
-        stop_count: count as u32,
+        stop_count,
         center: [center_x, center_y],
         radius: [radius, radius],
         ..Default::default()
@@ -860,21 +878,20 @@ pub fn radial_gradient(
 ///
 /// `center` is the center point of the gradient in normalized coordinates (0.0 to 1.0).
 /// `angle_offset` is the starting angle offset in degrees.
-/// Supports up to 4 color stops.
+/// The GPU pipeline carries 4 stops; longer stop lists are resampled to 4 with the
+/// first and last stops preserved.
 pub fn conic_gradient(
     center_x: f32,
     center_y: f32,
     angle_offset: f32,
     stops: &[LinearColorStop],
 ) -> Background {
-    let mut colors = [LinearColorStop::default(); 4];
-    let count = stops.len().min(4);
-    colors[..count].copy_from_slice(&stops[..count]);
+    let (colors, stop_count) = fit_gradient_stops(stops);
     Background {
         tag: BackgroundTag::ConicGradient,
         gradient_angle_or_pattern_height: angle_offset,
         colors,
-        stop_count: count as u32,
+        stop_count,
         center: [center_x, center_y],
         ..Default::default()
     }
@@ -992,6 +1009,29 @@ mod tests {
         let actual: Rgba = serde_json::from_value(json!("#f09f")).unwrap();
 
         assert_eq!(actual, rgba(0xff0099ff))
+    }
+
+    #[test]
+    fn gradient_stops_beyond_four_resample_preserving_endpoints() {
+        let stops: Vec<LinearColorStop> = (0..6)
+            .map(|i| LinearColorStop {
+                color: hsla(i as f32 / 6.0, 1.0, 0.5, 1.0),
+                percentage: i as f32 / 5.0,
+            })
+            .collect();
+
+        let bg = multi_stop_linear_gradient(0.0, &stops);
+        assert_eq!(bg.stop_count, 4);
+        assert_eq!(bg.colors[0], stops[0]);
+        assert_eq!(bg.colors[3], stops[5]);
+
+        let few = multi_stop_linear_gradient(0.0, &stops[..3]);
+        assert_eq!(few.stop_count, 3);
+        assert_eq!(few.colors[0], stops[0]);
+        assert_eq!(few.colors[2], stops[2]);
+
+        let empty = multi_stop_linear_gradient(0.0, &[]);
+        assert_eq!(empty.stop_count, 0);
     }
 
     #[test]
