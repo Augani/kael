@@ -1214,6 +1214,61 @@ impl Path<Pixels> {
         }
     }
 
+    /// Append a closed rectangle subpath, as the web canvas `rect()` does.
+    pub fn rect(&mut self, bounds: Bounds<Pixels>) {
+        let x = bounds.origin.x.0;
+        let y = bounds.origin.y.0;
+        let w = bounds.size.width.0;
+        let h = bounds.size.height.0;
+        self.move_to(point(crate::px(x), crate::px(y)));
+        self.line_to(point(crate::px(x + w), crate::px(y)));
+        self.line_to(point(crate::px(x + w), crate::px(y + h)));
+        self.line_to(point(crate::px(x), crate::px(y + h)));
+        self.close_path();
+    }
+
+    /// Append a closed rounded-rectangle subpath with a uniform corner `radius`, as the
+    /// web canvas `roundRect()` (single-radius form). The radius is clamped to half the
+    /// smaller side; a zero radius falls back to a plain rectangle.
+    pub fn round_rect(&mut self, bounds: Bounds<Pixels>, radius: Pixels) {
+        let x = bounds.origin.x.0;
+        let y = bounds.origin.y.0;
+        let w = bounds.size.width.0;
+        let h = bounds.size.height.0;
+        let r = radius.0.max(0.0).min(w * 0.5).min(h * 0.5);
+        if r <= 0.0 {
+            self.rect(bounds);
+            return;
+        }
+        use std::f32::consts::{FRAC_PI_2, PI};
+        self.move_to(point(crate::px(x + r), crate::px(y)));
+        self.arc(
+            point(crate::px(x + w - r), crate::px(y + r)),
+            crate::px(r),
+            -FRAC_PI_2,
+            0.0,
+        );
+        self.arc(
+            point(crate::px(x + w - r), crate::px(y + h - r)),
+            crate::px(r),
+            0.0,
+            FRAC_PI_2,
+        );
+        self.arc(
+            point(crate::px(x + r), crate::px(y + h - r)),
+            crate::px(r),
+            FRAC_PI_2,
+            PI,
+        );
+        self.arc(
+            point(crate::px(x + r), crate::px(y + r)),
+            crate::px(r),
+            PI,
+            PI + FRAC_PI_2,
+        );
+        self.close_path();
+    }
+
     /// Append an arc tangent to the lines (current point → `ctrl`) and (`ctrl` → `to`)
     /// with the given `radius`, as the web canvas `arcTo` does — the primitive behind
     /// rounded paths. Degenerate or collinear inputs fall back to a straight line.
@@ -1411,6 +1466,26 @@ mod tests {
         );
         assert!((rotated.bounds.size.width.0 - 20.).abs() < 1.0);
         assert!((rotated.bounds.size.height.0 - 60.).abs() < 1.0);
+    }
+
+    #[test]
+    fn rect_and_round_rect_span_their_bounds() {
+        let bounds = Bounds::new(
+            crate::point(crate::px(10.), crate::px(20.)),
+            crate::size(crate::px(100.), crate::px(60.)),
+        );
+
+        let mut rect = Path::new(crate::point(crate::px(10.), crate::px(20.)));
+        rect.rect(bounds);
+        assert!((rect.bounds.size.width.0 - 100.).abs() < 0.5);
+        assert!((rect.bounds.size.height.0 - 60.).abs() < 0.5);
+        assert!((rect.current.x.0 - 10.).abs() < 0.5);
+        assert!((rect.current.y.0 - 20.).abs() < 0.5);
+
+        let mut rounded = Path::new(crate::point(crate::px(10.), crate::px(20.)));
+        rounded.round_rect(bounds, crate::px(12.));
+        assert!((rounded.bounds.size.width.0 - 100.).abs() < 1.0);
+        assert!((rounded.bounds.size.height.0 - 60.).abs() < 1.0);
     }
 
     #[test]
