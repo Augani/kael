@@ -629,11 +629,130 @@ impl StepperController {
     }
 }
 
+/// Single-select group state with ARIA roving focus, where arrow navigation moves both
+/// the focus and the selection (radio groups, segmented single-choice controls).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RadioGroupController {
+    len: usize,
+    selected: Option<usize>,
+    focused: usize,
+}
+
+impl RadioGroupController {
+    /// Create a group over `len` options with nothing selected.
+    pub fn new(len: usize) -> Self {
+        Self {
+            len,
+            selected: None,
+            focused: 0,
+        }
+    }
+
+    /// The number of options.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Whether the group is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The selected option, if any.
+    pub fn selected(&self) -> Option<usize> {
+        self.selected
+    }
+
+    /// The roving-focus index.
+    pub fn focused(&self) -> usize {
+        self.focused
+    }
+
+    /// Select (and focus) a specific option.
+    pub fn select(&mut self, index: usize) {
+        if index < self.len {
+            self.selected = Some(index);
+            self.focused = index;
+        }
+    }
+
+    /// Move focus and selection to the next option, wrapping.
+    pub fn next(&mut self) {
+        if self.len > 0 {
+            self.select((self.focused + 1) % self.len);
+        }
+    }
+
+    /// Move focus and selection to the previous option, wrapping.
+    pub fn prev(&mut self) {
+        if self.len > 0 {
+            self.select((self.focused + self.len - 1) % self.len);
+        }
+    }
+}
+
+/// A FIFO queue of dismissable items (toasts, snackbars), each with a stable id, with a
+/// cap on how many are visible at once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToastQueueController {
+    next_id: u64,
+    items: Vec<u64>,
+    max_visible: usize,
+}
+
+impl ToastQueueController {
+    /// Create a queue that shows at most `max_visible` items at once.
+    pub fn new(max_visible: usize) -> Self {
+        Self {
+            next_id: 0,
+            items: Vec::new(),
+            max_visible: max_visible.max(1),
+        }
+    }
+
+    /// Enqueue a new item and return its stable id.
+    pub fn push(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.items.push(id);
+        id
+    }
+
+    /// Dismiss the item with the given id. Returns whether it was present.
+    pub fn dismiss(&mut self, id: u64) -> bool {
+        let before = self.items.len();
+        self.items.retain(|&item| item != id);
+        self.items.len() != before
+    }
+
+    /// The currently visible item ids (the oldest, up to `max_visible`).
+    pub fn visible(&self) -> &[u64] {
+        let count = self.items.len().min(self.max_visible);
+        &self.items[..count]
+    }
+
+    /// The total number of queued items.
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    /// Whether the queue is empty.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    /// Remove every item.
+    pub fn clear(&mut self) {
+        self.items.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AccordionController, ComboboxController, DisclosureController, PaginationController,
-        SelectController, SliderController, StepperController, TabsController, ToggleController,
+        RadioGroupController, SelectController, SliderController, StepperController,
+        TabsController, ToastQueueController, ToggleController,
     };
 
     #[test]
@@ -824,5 +943,38 @@ mod tests {
         stepper.next(); // last, stays put but marks complete
         assert_eq!(stepper.step(), 2);
         assert!(stepper.is_completed(2));
+    }
+
+    #[test]
+    fn radio_group_focus_follows_selection() {
+        let mut radio = RadioGroupController::new(3);
+        assert_eq!(radio.selected(), None);
+        radio.next();
+        assert_eq!(radio.selected(), Some(1));
+        assert_eq!(radio.focused(), 1);
+        radio.prev();
+        radio.prev();
+        assert_eq!(radio.selected(), Some(2)); // wrapped, selection follows focus
+        radio.select(0);
+        assert_eq!(radio.selected(), Some(0));
+        assert_eq!(radio.focused(), 0);
+    }
+
+    #[test]
+    fn toast_queue_caps_visible_and_dismisses() {
+        let mut toasts = ToastQueueController::new(2);
+        let a = toasts.push();
+        let b = toasts.push();
+        let _c = toasts.push();
+        assert_eq!(toasts.len(), 3);
+        assert_eq!(toasts.visible(), &[a, b]); // capped to 2 oldest
+
+        assert!(toasts.dismiss(a));
+        assert!(!toasts.dismiss(a)); // already gone
+        assert_eq!(toasts.len(), 2);
+        assert_eq!(toasts.visible().len(), 2);
+
+        toasts.clear();
+        assert!(toasts.is_empty());
     }
 }

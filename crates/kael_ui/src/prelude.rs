@@ -145,8 +145,8 @@ pub use crate::display::rich_text::{RichBlock, RichInline, TableAlignment as Ric
 pub use crate::display::table::{Table, TableColumn, TableRow};
 pub use crate::headless::{
     AccordionController, ComboboxController, DisclosureController, PaginationController,
-    SelectController,
-    SliderController, TabsController, ToggleController,
+    RadioGroupController, SelectController, SliderController, StepperController, TabsController,
+    ToastQueueController, ToggleController,
 };
 pub use crate::layout::{
     Align, Cluster, Container, Flow, FlowDirection, Grid, HStack, Justify, MasonryGrid,
