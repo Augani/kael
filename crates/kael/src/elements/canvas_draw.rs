@@ -8,7 +8,7 @@ use crate::{
     point, px, quad, size, transparent_black, App, Background, Bounds, ContentMask, Corners,
     Element, ElementId, GlobalElementId, Hsla, InspectorElementId, IntoElement, Path, PathBuilder,
     PathStyle, Pixels, Point, Radians, RenderImage, ShapedLine, Size, Style, StyleRefinement,
-    Styled, TransformationMatrix, Window,
+    Styled, TextAlign, TransformationMatrix, Window,
 };
 
 use super::canvas::CanvasConstructor;
@@ -344,6 +344,19 @@ impl DrawContext {
         });
     }
 
+    /// Draw a shaped line of text anchored horizontally at `origin` per `align`, mirroring
+    /// the web canvas `textAlign` (`origin.x` is the left/center/right anchor).
+    pub fn draw_text_aligned(
+        &mut self,
+        text: &ShapedLine,
+        origin: Point<Pixels>,
+        color: Hsla,
+        align: TextAlign,
+    ) {
+        let x = aligned_text_x(origin.x, text.layout.width, align);
+        self.draw_text(text, point(x, origin.y), color);
+    }
+
     /// Draw an image filling the given rectangle, respecting the current transform,
     /// clip, and opacity. Mirrors `CanvasRenderingContext2D.drawImage`.
     pub fn draw_image(&mut self, image: Arc<RenderImage>, bounds: Bounds<Pixels>) {
@@ -669,6 +682,14 @@ fn translation_matrix(origin: Point<Pixels>) -> TransformationMatrix {
     }
 }
 
+fn aligned_text_x(origin_x: Pixels, width: Pixels, align: TextAlign) -> Pixels {
+    match align {
+        TextAlign::Center => origin_x - width / 2.0,
+        TextAlign::Right => origin_x - width,
+        TextAlign::Left => origin_x,
+    }
+}
+
 fn offset_bounds(bounds: Bounds<Pixels>, offset: Point<Pixels>) -> Bounds<Pixels> {
     Bounds::new(bounds.origin + offset, bounds.size)
 }
@@ -781,6 +802,19 @@ mod tests {
             }
             _ => panic!("expected an image command"),
         }
+    }
+
+    #[test]
+    fn aligned_text_x_offsets_by_alignment() {
+        use super::aligned_text_x;
+        use crate::TextAlign;
+
+        assert_eq!(aligned_text_x(px(100.), px(40.), TextAlign::Left), px(100.));
+        assert_eq!(
+            aligned_text_x(px(100.), px(40.), TextAlign::Center),
+            px(80.)
+        );
+        assert_eq!(aligned_text_x(px(100.), px(40.), TextAlign::Right), px(60.));
     }
 
     #[test]
