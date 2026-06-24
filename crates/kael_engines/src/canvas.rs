@@ -170,36 +170,119 @@ pub struct TileCoord {
     pub zoom: u8,
 }
 
-/// Cache for rendered tile data.
+#[derive(Debug)]
+struct CachedTile {
+    data: Vec<u8>,
+    order: u64,
+}
+
+/// Cache for rendered tile data, optionally bounded by a maximum byte budget with
+/// least-recently-used eviction (driven by [`TileCache::insert`] and [`TileCache::touch`]).
 #[derive(Debug, Default)]
 pub struct TileCache {
-    tiles: HashMap<TileCoord, Vec<u8>>,
+    tiles: HashMap<TileCoord, CachedTile>,
+    max_bytes: Option<usize>,
+    current_bytes: usize,
+    clock: u64,
 }
 
 impl TileCache {
-    /// Create a new empty tile cache.
+    /// Create a new, unbounded tile cache.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Insert tile data at the given coordinate.
+    /// Create a tile cache bounded to at most `max_bytes` of tile data. Inserting beyond
+    /// the budget evicts least-recently-used tiles until the data fits.
+    pub fn with_max_bytes(max_bytes: usize) -> Self {
+        Self {
+            max_bytes: Some(max_bytes),
+            ..Self::default()
+        }
+    }
+
+    fn next_order(&mut self) -> u64 {
+        self.clock += 1;
+        self.clock
+    }
+
+    /// Insert tile data at the given coordinate, evicting LRU tiles if over budget.
     pub fn insert(&mut self, coord: TileCoord, data: Vec<u8>) {
-        self.tiles.insert(coord, data);
+        let order = self.next_order();
+        let bytes = data.len();
+        if let Some(previous) = self.tiles.insert(coord, CachedTile { data, order }) {
+            self.current_bytes -= previous.data.len();
+        }
+        self.current_bytes += bytes;
+        self.evict_to_budget();
     }
 
     /// Get cached tile data.
     pub fn get(&self, coord: &TileCoord) -> Option<&Vec<u8>> {
-        self.tiles.get(coord)
+        self.tiles.get(coord).map(|tile| &tile.data)
+    }
+
+    /// Mark a tile as most-recently-used so it is evicted last. Returns true if present.
+    pub fn touch(&mut self, coord: &TileCoord) -> bool {
+        let order = self.next_order();
+        match self.tiles.get_mut(coord) {
+            Some(tile) => {
+                tile.order = order;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Remove a single tile from the cache. Returns true if the tile existed.
     pub fn invalidate(&mut self, coord: &TileCoord) -> bool {
-        self.tiles.remove(coord).is_some()
+        match self.tiles.remove(coord) {
+            Some(tile) => {
+                self.current_bytes -= tile.data.len();
+                true
+            }
+            None => false,
+        }
     }
 
     /// Remove all cached tiles.
     pub fn clear(&mut self) {
         self.tiles.clear();
+        self.current_bytes = 0;
+    }
+
+    /// Total bytes of tile data currently cached.
+    pub fn byte_len(&self) -> usize {
+        self.current_bytes
+    }
+
+    /// Number of tiles currently cached.
+    pub fn len(&self) -> usize {
+        self.tiles.len()
+    }
+
+    /// Returns true if no tiles are cached.
+    pub fn is_empty(&self) -> bool {
+        self.tiles.is_empty()
+    }
+
+    fn evict_to_budget(&mut self) {
+        let Some(max_bytes) = self.max_bytes else {
+            return;
+        };
+        while self.current_bytes > max_bytes && !self.tiles.is_empty() {
+            let Some(coord) = self
+                .tiles
+                .iter()
+                .min_by_key(|(_, tile)| tile.order)
+                .map(|(coord, _)| *coord)
+            else {
+                break;
+            };
+            if let Some(tile) = self.tiles.remove(&coord) {
+                self.current_bytes -= tile.data.len();
+            }
+        }
     }
 
     /// Return the coordinates of tiles visible within a viewport at the given zoom level.
@@ -326,15 +409,13 @@ mod tests {
         };
         cache.insert(coord, vec![42]);
         assert_eq!(cache.get(&coord).unwrap(), &vec![42]);
-        assert!(
-            cache
-                .get(&TileCoord {
-                    x: 0,
-                    y: 0,
-                    zoom: 0
-                })
-                .is_none()
-        );
+        assert!(cache
+            .get(&TileCoord {
+                x: 0,
+                y: 0,
+                zoom: 0
+            })
+            .is_none());
     }
 
     #[test]
@@ -370,15 +451,54 @@ mod tests {
             vec![],
         );
         cache.clear();
-        assert!(
-            cache
-                .get(&TileCoord {
-                    x: 0,
-                    y: 0,
-                    zoom: 0
-                })
-                .is_none()
-        );
+        assert!(cache
+            .get(&TileCoord {
+                x: 0,
+                y: 0,
+                zoom: 0
+            })
+            .is_none());
+    }
+
+    #[test]
+    fn tile_cache_evicts_lru_over_budget() {
+        let mut cache = TileCache::with_max_bytes(10);
+        let coord = |x| TileCoord { x, y: 0, zoom: 0 };
+
+        cache.insert(coord(0), vec![0u8; 6]);
+        cache.insert(coord(1), vec![0u8; 4]);
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.byte_len(), 10);
+
+        cache.insert(coord(2), vec![0u8; 5]);
+        assert!(cache.byte_len() <= 10);
+        assert!(cache.get(&coord(0)).is_none());
+        assert!(cache.get(&coord(1)).is_some());
+        assert!(cache.get(&coord(2)).is_some());
+    }
+
+    #[test]
+    fn tile_cache_touch_protects_from_eviction() {
+        let mut cache = TileCache::with_max_bytes(10);
+        let coord = |x| TileCoord { x, y: 0, zoom: 0 };
+
+        cache.insert(coord(0), vec![0u8; 5]);
+        cache.insert(coord(1), vec![0u8; 5]);
+        assert!(cache.touch(&coord(0)));
+
+        cache.insert(coord(2), vec![0u8; 5]);
+        assert!(cache.get(&coord(0)).is_some());
+        assert!(cache.get(&coord(1)).is_none());
+        assert!(cache.get(&coord(2)).is_some());
+    }
+
+    #[test]
+    fn tile_cache_unbounded_by_default() {
+        let mut cache = TileCache::new();
+        for x in 0..100 {
+            cache.insert(TileCoord { x, y: 0, zoom: 0 }, vec![0u8; 1000]);
+        }
+        assert_eq!(cache.len(), 100);
     }
 
     #[test]
