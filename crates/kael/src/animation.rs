@@ -1026,7 +1026,7 @@ mod easing_variant_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{keyframes, Animation, AnimationSequence, Repeat};
+    use super::{Animation, AnimationSequence, Repeat, keyframes};
     use crate::animation::StyledKeyframe;
     use std::time::Duration;
 

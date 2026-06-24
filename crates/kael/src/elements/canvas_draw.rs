@@ -5,10 +5,10 @@ pub use lyon::tessellation::{LineCap, LineJoin};
 use refineable::Refineable as _;
 
 use crate::{
-    point, px, quad, size, transparent_black, App, Background, Bounds, ContentMask, Corners,
-    Element, ElementId, GlobalElementId, Hsla, InspectorElementId, IntoElement, Path, PathBuilder,
-    PathStyle, Pixels, Point, Radians, RenderImage, ShapedLine, Size, Style, StyleRefinement,
-    Styled, TextAlign, TransformationMatrix, Window,
+    App, Background, Bounds, ContentMask, Corners, Element, ElementId, GlobalElementId, Hsla,
+    InspectorElementId, IntoElement, Path, PathBuilder, PathStyle, Pixels, Point, Radians,
+    RenderImage, ShapedLine, Size, Style, StyleRefinement, Styled, TextAlign, TransformationMatrix,
+    Window, point, px, quad, size, transparent_black,
 };
 
 use super::canvas::CanvasConstructor;
@@ -780,8 +780,8 @@ fn paint_text_line(
 
 #[cfg(test)]
 mod tests {
-    use super::{stroke, transform_bounds, StrokeDash};
-    use crate::{point, px, size, Bounds, PathBuilder};
+    use super::{StrokeDash, stroke, transform_bounds};
+    use crate::{Bounds, PathBuilder, point, px, size};
 
     #[test]
     fn save_restore_round_trips_transform_and_alpha() {

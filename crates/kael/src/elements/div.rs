@@ -141,8 +141,16 @@ impl ImplicitVisualStyle {
             corner_radii: interpolate_corners(&self.corner_radii, &other.corner_radii, progress),
             box_shadow: interpolate_shadows(&self.box_shadow, &other.box_shadow, progress),
             translate: Point {
-                x: px(interpolate_f32(self.translate.x.0, other.translate.x.0, progress)),
-                y: px(interpolate_f32(self.translate.y.0, other.translate.y.0, progress)),
+                x: px(interpolate_f32(
+                    self.translate.x.0,
+                    other.translate.x.0,
+                    progress,
+                )),
+                y: px(interpolate_f32(
+                    self.translate.y.0,
+                    other.translate.y.0,
+                    progress,
+                )),
             },
             skew: Point {
                 x: interpolate_f32(self.skew.x, other.skew.x, progress),
@@ -6666,7 +6674,7 @@ mod test {
 
     #[test]
     fn refine_style_applies_reusable_preset() {
-        use crate::{black, div, px, StyleRefinement, Styled};
+        use crate::{StyleRefinement, Styled, black, div, px};
 
         let preset = StyleRefinement::default().bg(black()).w(px(120.0));
         let mut element = div().refine_style(&preset);
@@ -6676,7 +6684,7 @@ mod test {
 
     #[test]
     fn glow_and_shadow_inner_set_box_shadow() {
-        use crate::{black, div, px, Styled};
+        use crate::{Styled, black, div, px};
 
         let mut glowing = div().glow(black(), px(8.0));
         let glow_shadows = glowing.style().box_shadow.clone().unwrap();
@@ -6823,9 +6831,24 @@ mod test {
                         3,
                         vec![crate::GridTrack::fr(1.0)],
                     )])
-                    .child(div().id("r0").debug_selector(|| "r0".to_string()).h(px(10.0)))
-                    .child(div().id("r1").debug_selector(|| "r1".to_string()).h(px(10.0)))
-                    .child(div().id("r2").debug_selector(|| "r2".to_string()).h(px(10.0)))
+                    .child(
+                        div()
+                            .id("r0")
+                            .debug_selector(|| "r0".to_string())
+                            .h(px(10.0)),
+                    )
+                    .child(
+                        div()
+                            .id("r1")
+                            .debug_selector(|| "r1".to_string())
+                            .h(px(10.0)),
+                    )
+                    .child(
+                        div()
+                            .id("r2")
+                            .debug_selector(|| "r2".to_string())
+                            .h(px(10.0)),
+                    )
             }
         }
 
