@@ -40,6 +40,12 @@ impl Animation {
         self
     }
 
+    /// Delays this animation by `index * step`, for staggering a list or grid so its
+    /// elements animate in sequence instead of all at once.
+    pub fn stagger(self, index: usize, step: Duration) -> Self {
+        self.delay(step.saturating_mul(index as u32))
+    }
+
     /// Sets the repeat behavior for this animation.
     pub fn repeat(mut self, repeat: Repeat) -> Self {
         self.repeat = repeat;
@@ -1033,6 +1039,13 @@ mod tests {
         let midpoint = frames.sample(0.5);
         assert_eq!(midpoint.translate_x, Some(50.0));
         assert_eq!(midpoint.translate_y, Some(20.0));
+    }
+
+    #[test]
+    fn stagger_offsets_delay_by_index() {
+        let step = Duration::from_millis(50);
+        let staggered = Animation::new(Duration::from_millis(200)).stagger(3, step);
+        assert_eq!(staggered.delay, Duration::from_millis(150));
     }
 
     #[test]
