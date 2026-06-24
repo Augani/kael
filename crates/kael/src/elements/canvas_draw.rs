@@ -174,6 +174,34 @@ impl DrawContext {
         });
     }
 
+    /// Stroke the outline of an axis-aligned rectangle (web canvas `strokeRect`).
+    pub fn stroke_rect(&mut self, bounds: Bounds<Pixels>, stroke: Stroke) {
+        self.stroke_rounded_rect(bounds, px(0.), stroke);
+    }
+
+    /// Stroke the outline of a rounded rectangle.
+    pub fn stroke_rounded_rect(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        radii: impl Into<Corners<Pixels>>,
+        stroke: Stroke,
+    ) {
+        if stroke.width <= px(0.) {
+            return;
+        }
+        self.commands.push(DrawCommand::Quad {
+            quad: quad(
+                bounds,
+                radii,
+                transparent_black(),
+                stroke.width,
+                stroke.color,
+                crate::BorderStyle::Solid,
+            ),
+            state: self.current_state.clone(),
+        });
+    }
+
     /// Fill a circle.
     pub fn fill_circle(
         &mut self,
@@ -815,6 +843,25 @@ mod tests {
             px(80.)
         );
         assert_eq!(aligned_text_x(px(100.), px(40.), TextAlign::Right), px(60.));
+    }
+
+    #[test]
+    fn stroke_rect_records_quad_command_and_skips_zero_width() {
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(100.)));
+        let mut cx = super::DrawContext::new(bounds, crate::ContentMask { bounds });
+
+        cx.stroke_rect(
+            Bounds::new(point(px(10.), px(10.)), size(px(50.), px(40.))),
+            stroke(px(2.), crate::black()),
+        );
+        assert_eq!(cx.commands.len(), 1);
+        assert!(matches!(cx.commands[0], super::DrawCommand::Quad { .. }));
+
+        cx.stroke_rect(
+            Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.))),
+            stroke(px(0.), crate::black()),
+        );
+        assert_eq!(cx.commands.len(), 1);
     }
 
     #[test]

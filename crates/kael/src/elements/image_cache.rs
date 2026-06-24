@@ -224,7 +224,11 @@ impl<T: ImageCache> ImageCacheProvider for Entity<T> {
     }
 }
 
-/// An implementation of ImageCache, that uses an LRU caching strategy to unload images when the cache is full
+/// An [`ImageCache`] that retains every decoded image for the lifetime of the cache
+/// (no eviction). Images are released together when the cache entity is dropped or
+/// [`RetainAllImageCache::clear`] is called. Use this when the working set of images is
+/// bounded; for unbounded or churning image sets, scope the cache to a smaller subtree
+/// (a shorter-lived element id) so it is dropped and reclaimed more often.
 pub struct RetainAllImageCache(HashMap<u64, ImageCacheItem>);
 
 impl fmt::Debug for RetainAllImageCache {
