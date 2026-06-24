@@ -22,14 +22,6 @@ impl Template {
         }
     }
 
-    pub fn dir_name(self) -> &'static str {
-        match self {
-            Template::Dashboard => "dashboard",
-            Template::Messaging => "messaging",
-            Template::Workspace => "workspace",
-        }
-    }
-
     /// The window title the source template hardcodes in `main.rs`.
     fn source_window_title(self) -> &'static str {
         match self {
@@ -55,22 +47,24 @@ pub struct ScaffoldOutcome {
     pub app_id: String,
 }
 
-pub fn run(templates_root: &Path, options: &ScaffoldOptions) -> Result<ScaffoldOutcome> {
+/// The `src/main.rs` for each template, embedded at compile time so the scaffolder is
+/// self-contained and does not depend on the repository's `templates/` directory on disk
+/// (lets it work as an installed `kael new` binary).
+fn template_main_src(template: Template) -> &'static str {
+    match template {
+        Template::Dashboard => include_str!("../../templates/dashboard/src/main.rs"),
+        Template::Messaging => include_str!("../../templates/messaging/src/main.rs"),
+        Template::Workspace => include_str!("../../templates/workspace/src/main.rs"),
+    }
+}
+
+pub fn run(options: &ScaffoldOptions) -> Result<ScaffoldOutcome> {
     let crate_name = sanitize_crate_name(&options.name)?;
     let app_name = display_name(&options.name);
     let app_id = options
         .app_id
         .clone()
         .unwrap_or_else(|| default_app_id(&crate_name));
-
-    let source_dir = templates_root.join(options.template.dir_name());
-    if !source_dir.is_dir() {
-        bail!(
-            "template source not found: {} (looked under {})",
-            options.template.dir_name(),
-            templates_root.display()
-        );
-    }
 
     if options.target_dir.exists() {
         let is_empty = fs::read_dir(&options.target_dir)
@@ -84,8 +78,7 @@ pub fn run(templates_root: &Path, options: &ScaffoldOptions) -> Result<ScaffoldO
         }
     }
 
-    let main_src = fs::read_to_string(source_dir.join("src/main.rs"))
-        .with_context(|| format!("reading {}/src/main.rs", source_dir.display()))?;
+    let main_src = template_main_src(options.template);
 
     let cargo_toml = render_cargo_toml(options.template, &crate_name, options.local_dev);
     let dist_toml = render_dist_toml(&app_name, &app_id);
@@ -274,13 +267,6 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn workspace_templates_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("templates")
-    }
-
     #[test]
     fn sanitize_crate_name_lowercases_and_replaces() {
         assert_eq!(sanitize_crate_name("My App").unwrap(), "my-app");
@@ -334,7 +320,7 @@ mod tests {
             local_dev: false,
         };
 
-        let outcome = run(&workspace_templates_root(), &options).unwrap();
+        let outcome = run(&options).unwrap();
         assert_eq!(outcome.crate_name, "my-dash");
         assert_eq!(outcome.app_name, "My Dash");
         assert_eq!(outcome.app_id, "com.acme.mydash");
@@ -374,7 +360,7 @@ mod tests {
             local_dev: true,
         };
 
-        run(&workspace_templates_root(), &options).unwrap();
+        run(&options).unwrap();
 
         let cargo = fs::read_to_string(target.join("Cargo.toml")).unwrap();
         assert!(cargo.contains("crates/kael"));
@@ -394,7 +380,7 @@ mod tests {
             app_id: None,
             local_dev: false,
         };
-        assert!(run(&workspace_templates_root(), &options).is_err());
+        assert!(run(&options).is_err());
     }
 
     /// Scaffolds with `--local-dev` and runs a real `cargo check --offline`
@@ -412,7 +398,7 @@ mod tests {
             app_id: None,
             local_dev: true,
         };
-        run(&workspace_templates_root(), &options).unwrap();
+        run(&options).unwrap();
 
         let status = std::process::Command::new(env!("CARGO"))
             .current_dir(&target)

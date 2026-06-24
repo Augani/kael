@@ -349,10 +349,6 @@ fn main() -> Result<()> {
         } => {
             let template = scaffold::Template::parse(&template)?;
             let target_dir = target_dir.unwrap_or_else(|| PathBuf::from(&name));
-            let templates_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .map(|root| root.join("templates"))
-                .context("locating templates directory")?;
             let options = scaffold::ScaffoldOptions {
                 name,
                 template,
@@ -360,7 +356,7 @@ fn main() -> Result<()> {
                 app_id,
                 local_dev,
             };
-            let outcome = scaffold::run(&templates_root, &options)?;
+            let outcome = scaffold::run(&options)?;
             println!(
                 "scaffolded '{}' ({}) into {}",
                 outcome.app_name,
