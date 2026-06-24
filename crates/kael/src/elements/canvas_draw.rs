@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use lyon::tessellation::StrokeOptions;
 pub use lyon::tessellation::{LineCap, LineJoin};
 use refineable::Refineable as _;
@@ -5,8 +7,8 @@ use refineable::Refineable as _;
 use crate::{
     point, px, quad, size, transparent_black, App, Background, Bounds, ContentMask, Corners,
     Element, ElementId, GlobalElementId, Hsla, InspectorElementId, IntoElement, Path, PathBuilder,
-    PathStyle, Pixels, Point, Radians, ShapedLine, Size, Style, StyleRefinement, Styled,
-    TransformationMatrix, Window,
+    PathStyle, Pixels, Point, Radians, RenderImage, ShapedLine, Size, Style, StyleRefinement,
+    Styled, TransformationMatrix, Window,
 };
 
 use super::canvas::CanvasConstructor;
@@ -32,6 +34,14 @@ enum DrawCommand {
         text: ShapedLine,
         origin: Point<Pixels>,
         color: Hsla,
+        state: DrawState,
+    },
+    Image {
+        data: Arc<RenderImage>,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        frame_index: usize,
+        grayscale: bool,
         state: DrawState,
     },
 }
@@ -295,6 +305,47 @@ impl DrawContext {
         });
     }
 
+    /// Draw an image filling the given rectangle, respecting the current transform,
+    /// clip, and opacity. Mirrors `CanvasRenderingContext2D.drawImage`.
+    pub fn draw_image(&mut self, image: Arc<RenderImage>, bounds: Bounds<Pixels>) {
+        self.draw_image_rounded(image, bounds, Corners::default());
+    }
+
+    /// Draw an image filling the given rectangle with rounded corners.
+    pub fn draw_image_rounded(
+        &mut self,
+        image: Arc<RenderImage>,
+        bounds: Bounds<Pixels>,
+        corner_radii: impl Into<Corners<Pixels>>,
+    ) {
+        self.commands.push(DrawCommand::Image {
+            data: image,
+            bounds,
+            corner_radii: corner_radii.into(),
+            frame_index: 0,
+            grayscale: false,
+            state: self.current_state.clone(),
+        });
+    }
+
+    /// Draw a single frame of a multi-frame image (e.g. an animated GIF), optionally desaturated.
+    pub fn draw_image_frame(
+        &mut self,
+        image: Arc<RenderImage>,
+        bounds: Bounds<Pixels>,
+        frame_index: usize,
+        grayscale: bool,
+    ) {
+        self.commands.push(DrawCommand::Image {
+            data: image,
+            bounds,
+            corner_radii: Corners::default(),
+            frame_index,
+            grayscale,
+            state: self.current_state.clone(),
+        });
+    }
+
     /// Flush any queued draw commands into the window.
     ///
     /// Call this when mixing `DrawContext` drawing with direct `Window` painting and you need
@@ -346,6 +397,28 @@ impl DrawContext {
                             color,
                             self.canvas_origin,
                             state.transform,
+                        );
+                    })
+                });
+            }
+            DrawCommand::Image {
+                data,
+                bounds,
+                corner_radii,
+                frame_index,
+                grayscale,
+                state,
+            } => {
+                let local_bounds = transform_bounds(bounds, state.transform);
+                let window_bounds = offset_bounds(local_bounds, self.canvas_origin);
+                window.with_content_mask(Some(state.content_mask), |window| {
+                    window.with_element_opacity(Some(state.opacity), |window| {
+                        let _ = window.paint_image(
+                            window_bounds,
+                            corner_radii,
+                            data,
+                            frame_index,
+                            grayscale,
                         );
                     })
                 });
@@ -622,6 +695,33 @@ mod tests {
 
         cx.restore();
         assert_eq!(cx.current_state.transform.translation, [10.0, 20.0]);
+    }
+
+    #[test]
+    fn draw_image_records_command_with_state() {
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.)));
+        let mask = crate::ContentMask { bounds };
+        let mut cx = super::DrawContext::new(bounds, mask);
+
+        let buffer = image::ImageBuffer::from_pixel(1, 1, image::Rgba([10u8, 20, 30, 255]));
+        let img = std::sync::Arc::new(crate::RenderImage::new(vec![image::Frame::new(buffer)]));
+
+        cx.translate(px(4.), px(6.));
+        cx.draw_image(
+            img,
+            Bounds::new(point(px(0.), px(0.)), size(px(8.), px(8.))),
+        );
+
+        assert_eq!(cx.commands.len(), 1);
+        match &cx.commands[0] {
+            super::DrawCommand::Image {
+                state, bounds: b, ..
+            } => {
+                assert_eq!(state.transform.translation, [4.0, 6.0]);
+                assert_eq!(b.size.width.0, 8.0);
+            }
+            _ => panic!("expected an image command"),
+        }
     }
 
     #[test]
