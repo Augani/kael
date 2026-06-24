@@ -22,12 +22,14 @@ impl SpinnerSize {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum SpinnerVariant {
     Default,
     Primary,
     Secondary,
     Muted,
+    /// An app-defined spinner color.
+    Custom(Hsla),
 }
 
 #[derive(IntoElement)]
@@ -55,6 +57,12 @@ impl Spinner {
 
     pub fn variant(mut self, variant: SpinnerVariant) -> Self {
         self.variant = variant;
+        self
+    }
+
+    /// Use a fully custom spinner color, setting the variant to [`SpinnerVariant::Custom`].
+    pub fn color(mut self, color: impl Into<Hsla>) -> Self {
+        self.variant = SpinnerVariant::Custom(color.into());
         self
     }
 
@@ -91,6 +99,7 @@ impl RenderOnce for Spinner {
             SpinnerVariant::Primary => tokens.primary,
             SpinnerVariant::Secondary => tokens.secondary,
             SpinnerVariant::Muted => tokens.muted_foreground,
+            SpinnerVariant::Custom(color) => color,
         };
 
         let center = size_px * 0.5;
@@ -148,5 +157,16 @@ impl RenderOnce for Spinner {
                         .child(label),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Spinner, SpinnerVariant};
+
+    #[test]
+    fn color_sets_custom_spinner_variant() {
+        let spinner = Spinner::new().color(kael::black());
+        assert!(matches!(spinner.variant, SpinnerVariant::Custom(_)));
     }
 }

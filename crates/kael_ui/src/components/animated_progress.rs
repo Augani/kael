@@ -83,6 +83,7 @@ impl RenderOnce for AnimatedProgress {
             ProgressVariant::Success => rgb(0x22c55e).into(),
             ProgressVariant::Warning => rgb(0xf59e0b).into(),
             ProgressVariant::Destructive => theme.tokens.destructive,
+            ProgressVariant::Custom(color) => color,
         });
 
         let target_value = self.value;

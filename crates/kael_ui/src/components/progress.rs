@@ -2,7 +2,7 @@ use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 
 /// Progress bar variants
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ProgressVariant {
     /// Default blue progress bar
     Default,
@@ -12,6 +12,8 @@ pub enum ProgressVariant {
     Warning,
     /// Error/failure state (red)
     Destructive,
+    /// An app-defined fill color.
+    Custom(Hsla),
 }
 
 /// Progress bar sizes
@@ -83,6 +85,12 @@ impl ProgressBar {
         self
     }
 
+    /// Use a fully custom fill color, setting the variant to [`ProgressVariant::Custom`].
+    pub fn color(mut self, color: impl Into<Hsla>) -> Self {
+        self.variant = ProgressVariant::Custom(color.into());
+        self
+    }
+
     /// Set the progress size
     pub fn size(mut self, size: ProgressSize) -> Self {
         self.size = size;
@@ -130,6 +138,7 @@ impl RenderOnce for ProgressBar {
             ProgressVariant::Success => rgb(0x22c55e).into(), // green-500
             ProgressVariant::Warning => rgb(0xf59e0b).into(), // amber-500
             ProgressVariant::Destructive => destructive,
+            ProgressVariant::Custom(color) => color,
         };
 
         let progress_width = if let Some(value) = self.value {
@@ -267,6 +276,12 @@ impl CircularProgress {
         self
     }
 
+    /// Use a fully custom fill color, setting the variant to [`ProgressVariant::Custom`].
+    pub fn color(mut self, color: impl Into<Hsla>) -> Self {
+        self.variant = ProgressVariant::Custom(color.into());
+        self
+    }
+
     /// Set the spinner type
     pub fn spinner_type(mut self, spinner_type: SpinnerType) -> Self {
         self.spinner_type = spinner_type;
@@ -293,6 +308,7 @@ impl RenderOnce for CircularProgress {
             ProgressVariant::Success => rgb(0x22c55e).into(),
             ProgressVariant::Warning => rgb(0xf59e0b).into(),
             ProgressVariant::Destructive => destructive,
+            ProgressVariant::Custom(color) => color,
         };
 
         div()
@@ -527,5 +543,16 @@ impl RenderOnce for CircularProgress {
                 div.style().refine(&user_style);
                 div
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProgressBar, ProgressVariant};
+
+    #[test]
+    fn color_sets_custom_progress_variant() {
+        let bar = ProgressBar::new(0.5).color(kael::black());
+        assert!(matches!(bar.variant, ProgressVariant::Custom(_)));
     }
 }
