@@ -1086,6 +1086,58 @@ pub trait Styled: Sized {
         self.grid_auto_flow(GridAutoFlow::ColumnDense)
     }
 
+    /// Aligns all grid items in the inline (row) axis within their grid areas (CSS `justify-items`).
+    fn justify_items(mut self, value: AlignItems) -> Self {
+        self.style().justify_items = Some(value);
+        self
+    }
+
+    /// Packs grid items toward the inline-axis start of their grid areas.
+    fn justify_items_start(self) -> Self {
+        self.justify_items(AlignItems::Start)
+    }
+
+    /// Centers grid items in the inline axis of their grid areas.
+    fn justify_items_center(self) -> Self {
+        self.justify_items(AlignItems::Center)
+    }
+
+    /// Packs grid items toward the inline-axis end of their grid areas.
+    fn justify_items_end(self) -> Self {
+        self.justify_items(AlignItems::End)
+    }
+
+    /// Stretches grid items to fill the inline axis of their grid areas.
+    fn justify_items_stretch(self) -> Self {
+        self.justify_items(AlignItems::Stretch)
+    }
+
+    /// Aligns this grid item in the inline (row) axis within its grid area (CSS `justify-self`).
+    fn justify_self(mut self, value: AlignItems) -> Self {
+        self.style().justify_self = Some(value);
+        self
+    }
+
+    /// Packs this grid item toward the inline-axis start of its grid area.
+    fn justify_self_start(self) -> Self {
+        self.justify_self(AlignItems::Start)
+    }
+
+    /// Centers this grid item in the inline axis of its grid area.
+    fn justify_self_center(self) -> Self {
+        self.justify_self(AlignItems::Center)
+    }
+
+    /// Packs this grid item toward the inline-axis end of its grid area.
+    fn justify_self_end(self) -> Self {
+        self.justify_self(AlignItems::End)
+    }
+
+    /// Stretches this grid item to fill the inline axis of its grid area.
+    fn justify_self_stretch(self) -> Self {
+        self.justify_self(AlignItems::Stretch)
+    }
+
     /// Draws a debug border around this element.
     #[cfg(debug_assertions)]
     fn debug(mut self) -> Self {

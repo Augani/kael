@@ -427,6 +427,8 @@ impl ToTaffy<taffy::style::Style> for Style {
             align_self: self.align_self.map(|x| x.into()),
             align_content: self.align_content.map(|x| x.into()),
             justify_content: self.justify_content.map(|x| x.into()),
+            justify_items: self.justify_items.map(|x| x.into()),
+            justify_self: self.justify_self.map(|x| x.into()),
             gap: self.gap.to_taffy(rem_size, scale_factor),
             flex_direction: self.flex_direction.into(),
             flex_wrap: self.flex_wrap.into(),
@@ -712,5 +714,33 @@ impl From<Size<Pixels>> for Size<AvailableSpace> {
             width: AvailableSpace::Definite(size.width),
             height: AvailableSpace::Definite(size.height),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ToTaffy;
+    use crate::{AlignItems, Style, px};
+
+    #[test]
+    fn justify_items_and_self_map_to_taffy_grid_alignment() {
+        let style = Style {
+            justify_items: Some(AlignItems::Center),
+            justify_self: Some(AlignItems::End),
+            ..Style::default()
+        };
+        let taffy_style: taffy::style::Style = style.to_taffy(px(16.0), 1.0);
+        assert_eq!(
+            taffy_style.justify_items,
+            Some(taffy::style::AlignItems::Center)
+        );
+        assert_eq!(taffy_style.justify_self, Some(taffy::style::AlignSelf::End));
+    }
+
+    #[test]
+    fn justify_items_defaults_to_none() {
+        let taffy_style: taffy::style::Style = Style::default().to_taffy(px(16.0), 1.0);
+        assert_eq!(taffy_style.justify_items, None);
+        assert_eq!(taffy_style.justify_self, None);
     }
 }

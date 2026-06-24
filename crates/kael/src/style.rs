@@ -221,6 +221,10 @@ pub struct Style {
     pub align_content: Option<AlignContent>,
     /// How should contained within this item be aligned in the main/inline axis
     pub justify_content: Option<JustifyContent>,
+    /// How grid items are aligned in the inline (row) axis within their grid area
+    pub justify_items: Option<AlignItems>,
+    /// How this grid item aligns itself in the inline (row) axis. Falls back to the parent's `justify_items`
+    pub justify_self: Option<AlignSelf>,
     /// How large should the gaps between items in a flex container be?
     #[refineable]
     pub gap: Size<DefiniteLength>,
@@ -953,6 +957,8 @@ impl Default for Style {
             align_self: None,
             align_content: None,
             justify_content: None,
+            justify_items: None,
+            justify_self: None,
             // Flexbox
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::NoWrap,
