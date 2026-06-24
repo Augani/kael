@@ -1183,6 +1183,37 @@ impl Path<Pixels> {
         }
     }
 
+    /// Append an elliptical arc centered at `center` with radii `radius_x`/`radius_y`,
+    /// the ellipse rotated by `rotation` radians, sweeping from `start_angle` to
+    /// `end_angle`. Mirrors the web canvas `ellipse`; flattened to line segments so it
+    /// needs no shader work.
+    pub fn ellipse(
+        &mut self,
+        center: Point<Pixels>,
+        radius_x: Pixels,
+        radius_y: Pixels,
+        rotation: f32,
+        start_angle: f32,
+        end_angle: f32,
+    ) {
+        let radius_x = radius_x.0.max(0.0);
+        let radius_y = radius_y.0.max(0.0);
+        let span = end_angle - start_angle;
+        let arc_len = span.abs() * radius_x.max(radius_y);
+        let segments = ((arc_len / CURVE_FLATTEN_SEGMENT_PX).ceil() as usize).clamp(2, 512);
+        let (cos_r, sin_r) = (rotation.cos(), rotation.sin());
+        for step in 0..=segments {
+            let t = step as f32 / segments as f32;
+            let angle = start_angle + span * t;
+            let ex = radius_x * angle.cos();
+            let ey = radius_y * angle.sin();
+            self.line_to(point(
+                crate::px(center.x.0 + ex * cos_r - ey * sin_r),
+                crate::px(center.y.0 + ex * sin_r + ey * cos_r),
+            ));
+        }
+    }
+
     /// Append an arc tangent to the lines (current point → `ctrl`) and (`ctrl` → `to`)
     /// with the given `radius`, as the web canvas `arcTo` does — the primitive behind
     /// rounded paths. Degenerate or collinear inputs fall back to a straight line.
@@ -1351,6 +1382,35 @@ mod tests {
         path.arc(center, crate::px(radius), 0., std::f32::consts::TAU);
         assert!((path.bounds.size.width.0 - 2. * radius).abs() < 1.0);
         assert!((path.bounds.size.height.0 - 2. * radius).abs() < 1.0);
+    }
+
+    #[test]
+    fn ellipse_respects_radii_and_rotation() {
+        let center = crate::point(crate::px(50.), crate::px(50.));
+
+        let mut axis_aligned = Path::new(crate::point(crate::px(80.), crate::px(50.)));
+        axis_aligned.ellipse(
+            center,
+            crate::px(30.),
+            crate::px(10.),
+            0.0,
+            0.0,
+            std::f32::consts::TAU,
+        );
+        assert!((axis_aligned.bounds.size.width.0 - 60.).abs() < 1.0);
+        assert!((axis_aligned.bounds.size.height.0 - 20.).abs() < 1.0);
+
+        let mut rotated = Path::new(center);
+        rotated.ellipse(
+            center,
+            crate::px(30.),
+            crate::px(10.),
+            std::f32::consts::FRAC_PI_2,
+            0.0,
+            std::f32::consts::TAU,
+        );
+        assert!((rotated.bounds.size.width.0 - 20.).abs() < 1.0);
+        assert!((rotated.bounds.size.height.0 - 60.).abs() < 1.0);
     }
 
     #[test]
