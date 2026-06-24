@@ -29,8 +29,8 @@ impl NotificationVariant {
     fn color(&self, theme: &crate::theme::Theme) -> Hsla {
         match self {
             NotificationVariant::Info => theme.tokens.primary,
-            NotificationVariant::Success => kael::hsla(142.0 / 360.0, 0.71, 0.45, 1.0),
-            NotificationVariant::Warning => kael::hsla(48.0 / 360.0, 0.96, 0.53, 1.0),
+            NotificationVariant::Success => theme.tokens.success,
+            NotificationVariant::Warning => theme.tokens.warning,
             NotificationVariant::Error => theme.tokens.destructive,
         }
     }
@@ -602,5 +602,27 @@ impl RenderOnce for NotificationBell {
                         }),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NotificationVariant;
+    use crate::theme::Theme;
+    use kael::black;
+
+    #[test]
+    fn success_and_warning_route_through_semantic_tokens() {
+        let mut theme = Theme::light();
+        theme.tokens.success = black();
+        assert_eq!(NotificationVariant::Success.color(&theme), black());
+        assert_eq!(
+            NotificationVariant::Warning.color(&theme),
+            Theme::light().tokens.warning
+        );
+        assert_eq!(
+            NotificationVariant::Error.color(&theme),
+            theme.tokens.destructive
+        );
     }
 }

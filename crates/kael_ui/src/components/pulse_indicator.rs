@@ -5,7 +5,7 @@ use std::time::Duration;
 #[derive(IntoElement)]
 pub struct PulseIndicator {
     base: Stateful<Div>,
-    color: Hsla,
+    color: Option<Hsla>,
     dot_size: Pixels,
     speed: Duration,
 }
@@ -14,14 +14,14 @@ impl PulseIndicator {
     pub fn new(id: impl Into<ElementId>) -> Self {
         Self {
             base: div().id(id.into()),
-            color: hsla(142.0 / 360.0, 0.71, 0.45, 1.0),
+            color: None,
             dot_size: px(8.0),
             speed: Duration::from_secs(2),
         }
     }
 
     pub fn color(mut self, color: Hsla) -> Self {
-        self.color = color;
+        self.color = Some(color);
         self
     }
 
@@ -38,7 +38,9 @@ impl PulseIndicator {
 
 impl RenderOnce for PulseIndicator {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let color = self.color;
+        let color = self
+            .color
+            .unwrap_or_else(|| crate::theme::use_theme().tokens.success);
         let dot = self.dot_size;
         let ring_max = dot * 2.5;
         let speed = self.speed;

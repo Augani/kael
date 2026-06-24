@@ -73,9 +73,7 @@ impl RenderOnce for CopyButton {
             .transition(theme.tokens.transition_fast)
             .hover(|s| s.bg(theme.tokens.muted))
             .active(|s| s.opacity(0.7))
-            .when(copied, |el| {
-                el.text_color(hsla(142.0 / 360.0, 0.71, 0.45, 1.0))
-            })
+            .when(copied, |el| el.text_color(theme.tokens.success))
             .on_click(move |_, window, cx| {
                 state.update(cx, |s, cx| s.copy(window, cx));
             })
