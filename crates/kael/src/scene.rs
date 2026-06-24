@@ -37,6 +37,60 @@ pub(crate) struct Scene {
     pub(crate) cached_surface_snapshots: Vec<CachedSurfaceSnapshot>,
 }
 
+/// Whole-frame damage tracking: the coarse "early-out" half of dirty-region rendering.
+///
+/// When enabled, a frame whose [`Scene::structural_checksum`] matches the last presented
+/// frame can be skipped — the compositor retains the previously presented contents, so
+/// re-rasterizing identical content is wasted work. This is the safe, verifiable half of
+/// the dirty-region story (the fine-grained per-rectangle GPU path is separate); it is
+/// opt-in and a no-op until enabled.
+#[derive(Debug, Default)]
+pub struct FrameSkip {
+    enabled: bool,
+    last_checksum: Option<u64>,
+}
+
+impl FrameSkip {
+    /// Create a disabled frame-skip tracker.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Enable or disable skipping. Disabling clears the recorded frame so the next frame
+    /// always renders.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+        if !enabled {
+            self.last_checksum = None;
+        }
+    }
+
+    /// Whether skipping is currently enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Record this frame's content checksum and return whether the frame may be skipped
+    /// (its content is identical to the previously recorded frame). A disabled tracker
+    /// never skips.
+    pub fn should_skip(&mut self, checksum: u64) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        if self.last_checksum == Some(checksum) {
+            return true;
+        }
+        self.last_checksum = Some(checksum);
+        false
+    }
+
+    /// Force the next frame to render regardless of content (e.g. after a resize or a
+    /// surface change that the content checksum does not capture).
+    pub fn invalidate(&mut self) {
+        self.last_checksum = None;
+    }
+}
+
 impl Scene {
     pub fn clear(&mut self) {
         self.paint_operations.clear();
@@ -1853,6 +1907,70 @@ mod tests {
             scene_with_border(crate::hsla(0.0, 1.0, 0.5, 1.0)).structural_checksum(),
             scene_with_border(crate::hsla(0.66, 1.0, 0.5, 1.0)).structural_checksum(),
             "a border-color-only change must change the frame checksum"
+        );
+    }
+
+    #[test]
+    fn frame_skip_respects_enable_and_change() {
+        let mut skip = FrameSkip::new();
+        // Disabled: never skips, regardless of repeats.
+        assert!(!skip.should_skip(7));
+        assert!(!skip.should_skip(7));
+
+        skip.set_enabled(true);
+        assert!(
+            !skip.should_skip(7),
+            "first frame after enabling must render"
+        );
+        assert!(skip.should_skip(7), "an identical frame may be skipped");
+        assert!(!skip.should_skip(9), "a changed frame must render");
+        assert!(skip.should_skip(9), "the new content may then be skipped");
+
+        skip.invalidate();
+        assert!(
+            !skip.should_skip(9),
+            "invalidate forces the next frame to render"
+        );
+
+        skip.set_enabled(false);
+        assert!(!skip.should_skip(9), "disabling stops skipping");
+    }
+
+    #[test]
+    fn frame_skip_driven_by_real_scene_checksums() {
+        fn solid_scene(color: crate::Hsla) -> Scene {
+            let bounds = Bounds {
+                origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size: Size {
+                    width: ScaledPixels(10.0),
+                    height: ScaledPixels(10.0),
+                },
+            };
+            let mut scene = Scene::default();
+            scene.insert_primitive(Quad {
+                bounds,
+                content_mask: ContentMask { bounds },
+                background: Background::from(color),
+                ..Default::default()
+            });
+            scene.finish();
+            scene
+        }
+
+        let mut skip = FrameSkip::new();
+        skip.set_enabled(true);
+        let red = solid_scene(crate::hsla(0.0, 1.0, 0.5, 1.0));
+        let red_again = solid_scene(crate::hsla(0.0, 1.0, 0.5, 1.0));
+        let blue = solid_scene(crate::hsla(0.66, 1.0, 0.5, 1.0));
+
+        assert!(!skip.should_skip(red.structural_checksum()));
+        assert!(
+            skip.should_skip(red_again.structural_checksum()),
+            "an identical scene must be skippable end-to-end"
+        );
+        assert!(
+            !skip.should_skip(blue.structural_checksum()),
+            "a recolored scene must force a render"
         );
     }
 }
