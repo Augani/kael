@@ -1,9 +1,9 @@
 use crate::{
     self as kael, point, px, relative, rems, AbsoluteLength, AlignContent, AlignItems, Background,
     BlendMode, BorderStyle, CursorStyle, DefiniteLength, Display, Fill, FlexDirection, FlexWrap,
-    Font, FontStyle, FontWeight, GridPlacement, Hsla, JustifyContent, Length, Pixels, SharedString,
-    StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow, TextShadow, TextStyleRefinement,
-    UnderlineStyle, WhiteSpace,
+    Font, FontStyle, FontWeight, GridAutoFlow, GridPlacement, GridTrack, Hsla, JustifyContent,
+    Length, Pixels, SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
+    TextShadow, TextStyleRefinement, UnderlineStyle, WhiteSpace,
 };
 pub use kael_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
@@ -1004,6 +1004,46 @@ pub trait Styled: Sized {
     /// Sets a 16:9 (widescreen video) aspect ratio.
     fn aspect_video(self) -> Self {
         self.aspect_ratio(16.0 / 9.0)
+    }
+
+    /// Sets explicit column tracks for a grid container (CSS `grid-template-columns`).
+    /// Takes precedence over [`Styled::grid_cols`] when non-empty.
+    fn grid_template_columns(mut self, tracks: impl Into<Vec<GridTrack>>) -> Self {
+        self.style().grid_template_columns = Some(tracks.into());
+        self
+    }
+
+    /// Sets explicit row tracks for a grid container (CSS `grid-template-rows`).
+    /// Takes precedence over [`Styled::grid_rows`] when non-empty.
+    fn grid_template_rows(mut self, tracks: impl Into<Vec<GridTrack>>) -> Self {
+        self.style().grid_template_rows = Some(tracks.into());
+        self
+    }
+
+    /// Sets the grid auto-placement flow (CSS `grid-auto-flow`).
+    fn grid_auto_flow(mut self, flow: GridAutoFlow) -> Self {
+        self.style().grid_auto_flow = Some(flow);
+        self
+    }
+
+    /// Flows grid auto-placed items into rows (CSS `grid-auto-flow: row`).
+    fn grid_flow_row(self) -> Self {
+        self.grid_auto_flow(GridAutoFlow::Row)
+    }
+
+    /// Flows grid auto-placed items into columns (CSS `grid-auto-flow: column`).
+    fn grid_flow_col(self) -> Self {
+        self.grid_auto_flow(GridAutoFlow::Column)
+    }
+
+    /// Flows grid auto-placed items into rows using the dense packing algorithm.
+    fn grid_flow_row_dense(self) -> Self {
+        self.grid_auto_flow(GridAutoFlow::RowDense)
+    }
+
+    /// Flows grid auto-placed items into columns using the dense packing algorithm.
+    fn grid_flow_col_dense(self) -> Self {
+        self.grid_auto_flow(GridAutoFlow::ColumnDense)
     }
 
     /// Draws a debug border around this element.

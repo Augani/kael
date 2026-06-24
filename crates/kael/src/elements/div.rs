@@ -6634,6 +6634,68 @@ mod test {
     }
 
     #[kael::test]
+    fn grid_template_columns_size_tracks(cx: &mut TestAppContext) {
+        struct GridRoot;
+
+        impl Render for GridRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div()
+                    .grid()
+                    .w(px(300.0))
+                    .h(px(100.0))
+                    .grid_template_columns(vec![
+                        crate::GridTrack::px(100.0),
+                        crate::GridTrack::fr(1.0),
+                    ])
+                    .child(
+                        div()
+                            .id("cell-a")
+                            .debug_selector(|| "cell-a".to_string())
+                            .h(px(20.0)),
+                    )
+                    .child(
+                        div()
+                            .id("cell-b")
+                            .debug_selector(|| "cell-b".to_string())
+                            .h(px(20.0)),
+                    )
+            }
+        }
+
+        let (_view, mut window) = cx.add_window_view(|_, _| GridRoot);
+        let a = window.debug_bounds("cell-a").unwrap();
+        let b = window.debug_bounds("cell-b").unwrap();
+        assert_eq!(a.size.width.0, 100.0);
+        assert_eq!(b.size.width.0, 200.0);
+    }
+
+    #[kael::test]
+    fn grid_repeat_columns_expand(cx: &mut TestAppContext) {
+        struct RepeatRoot;
+
+        impl Render for RepeatRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div()
+                    .grid()
+                    .w(px(300.0))
+                    .h(px(50.0))
+                    .grid_template_columns(vec![crate::GridTrack::repeat(
+                        3,
+                        vec![crate::GridTrack::fr(1.0)],
+                    )])
+                    .child(div().id("r0").debug_selector(|| "r0".to_string()).h(px(10.0)))
+                    .child(div().id("r1").debug_selector(|| "r1".to_string()).h(px(10.0)))
+                    .child(div().id("r2").debug_selector(|| "r2".to_string()).h(px(10.0)))
+            }
+        }
+
+        let (_view, mut window) = cx.add_window_view(|_, _| RepeatRoot);
+        for id in ["r0", "r1", "r2"] {
+            assert_eq!(window.debug_bounds(id).unwrap().size.width.0, 100.0);
+        }
+    }
+
+    #[kael::test]
     fn accessibility_pressed_state_tracks_active_click(cx: &mut TestAppContext) {
         struct PressedAccessibilityRoot;
 
