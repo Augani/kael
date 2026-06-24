@@ -74,6 +74,7 @@ struct ImplicitVisualStyle {
     text_color: Option<Hsla>,
     corner_radii: Corners<AbsoluteLength>,
     box_shadow: SmallVec<[BoxShadow; 1]>,
+    translate: Point<Pixels>,
 }
 
 impl From<&Style> for ImplicitVisualStyle {
@@ -88,6 +89,7 @@ impl From<&Style> for ImplicitVisualStyle {
             text_color: style.text.color,
             corner_radii: style.corner_radii,
             box_shadow: style.box_shadow.clone(),
+            translate: style.translate.unwrap_or_default(),
         }
     }
 }
@@ -102,6 +104,7 @@ impl ImplicitVisualStyle {
             || self.text_color != other.text_color
             || self.corner_radii != other.corner_radii
             || self.box_shadow != other.box_shadow
+            || self.translate != other.translate
             || optional_backgrounds_can_interpolate(self.background, other.background)
                 && self.background != other.background
     }
@@ -131,6 +134,10 @@ impl ImplicitVisualStyle {
             text_color: interpolate_optional_hsla(self.text_color, other.text_color, progress),
             corner_radii: interpolate_corners(&self.corner_radii, &other.corner_radii, progress),
             box_shadow: interpolate_shadows(&self.box_shadow, &other.box_shadow, progress),
+            translate: Point {
+                x: px(interpolate_f32(self.translate.x.0, other.translate.x.0, progress)),
+                y: px(interpolate_f32(self.translate.y.0, other.translate.y.0, progress)),
+            },
         }
     }
 
@@ -144,6 +151,7 @@ impl ImplicitVisualStyle {
         style.text.color = self.text_color;
         style.corner_radii = self.corner_radii;
         style.box_shadow = self.box_shadow.clone();
+        style.translate = (self.translate != Point::default()).then_some(self.translate);
     }
 }
 
@@ -6609,6 +6617,20 @@ mod test {
             assert_eq!(node_bounds.x, rendered.origin.x.0 as f64);
             assert_eq!(node_bounds.y, rendered.origin.y.0 as f64);
         });
+    }
+
+    #[test]
+    fn implicit_transition_interpolates_translate() {
+        let from = ImplicitVisualStyle::from(&crate::Style::default());
+
+        let mut to_style = crate::Style::default();
+        to_style.translate = Some(crate::point(crate::px(100.0), crate::px(0.0)));
+        let to = ImplicitVisualStyle::from(&to_style);
+
+        assert!(from.can_transition_to(&to));
+        let mid = from.interpolate(&to, 0.5);
+        assert_eq!(mid.translate.x, crate::px(50.0));
+        assert_eq!(mid.translate.y, crate::px(0.0));
     }
 
     #[kael::test]
