@@ -6665,6 +6665,20 @@ mod test {
     }
 
     #[test]
+    fn glow_and_shadow_inner_set_box_shadow() {
+        use crate::{black, div, px, Styled};
+
+        let mut glowing = div().glow(black(), px(8.0));
+        let glow_shadows = glowing.style().box_shadow.clone().unwrap();
+        assert_eq!(glow_shadows.len(), 1);
+        assert!(!glow_shadows[0].inset);
+        assert_eq!(glow_shadows[0].blur_radius, px(8.0));
+
+        let mut inset = div().shadow_inner(black(), px(4.0), px(0.0));
+        assert!(inset.style().box_shadow.clone().unwrap()[0].inset);
+    }
+
+    #[test]
     fn implicit_transition_interpolates_translate() {
         let from = ImplicitVisualStyle::from(&crate::Style::default());
 

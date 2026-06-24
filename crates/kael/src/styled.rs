@@ -200,6 +200,35 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Applies an inset (inner) shadow — useful for pressed, inset, or neumorphic surfaces.
+    fn shadow_inner(
+        mut self,
+        color: impl Into<Hsla>,
+        blur_radius: impl Into<Pixels>,
+        spread_radius: impl Into<Pixels>,
+    ) -> Self {
+        self.style().box_shadow = Some(smallvec::smallvec![crate::BoxShadow {
+            color: color.into(),
+            offset: point(px(0.), px(2.)),
+            blur_radius: blur_radius.into(),
+            spread_radius: spread_radius.into(),
+            inset: true,
+        }]);
+        self
+    }
+
+    /// Applies a soft, offset-free outer glow of the given color and radius.
+    fn glow(mut self, color: impl Into<Hsla>, radius: impl Into<Pixels>) -> Self {
+        self.style().box_shadow = Some(smallvec::smallvec![crate::BoxShadow {
+            color: color.into(),
+            offset: point(px(0.), px(0.)),
+            blur_radius: radius.into(),
+            spread_radius: px(0.),
+            inset: false,
+        }]);
+        self
+    }
+
     /// Applies a text shadow with custom parameters.
     fn text_shadow(mut self, shadow: TextShadow) -> Self {
         self.text_style()
