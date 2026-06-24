@@ -5,8 +5,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, DevicePixels, Edges, Hsla,
-    Pixels, Point, Radians, ScaledPixels, Size, bounds_tree::BoundsTree, point,
+    bounds_tree::BoundsTree, point, AtlasTextureId, AtlasTile, Background, Bounds, ContentMask,
+    Corners, DevicePixels, Edges, Hsla, Pixels, Point, Radians, ScaledPixels, Size,
 };
 use std::{
     fmt::Debug,
@@ -1034,6 +1034,23 @@ impl Path<Pixels> {
         self.source_path.as_deref()
     }
 
+    /// Returns whether `point` (in this path's own coordinate space) lies inside the
+    /// filled region, using the nonzero winding rule. Mirrors the web canvas
+    /// `isPointInPath`. Returns `false` for paths built without a retained source
+    /// outline (e.g. those assembled directly from vertex buffers).
+    pub fn contains(&self, point: Point<Pixels>) -> bool {
+        let Some(source) = self.source_path.as_ref() else {
+            return false;
+        };
+        let position = lyon::math::point(point.x.0, point.y.0);
+        lyon::algorithms::hit_test::hit_test_path(
+            &position,
+            source.iter(),
+            lyon::path::FillRule::NonZero,
+            0.1,
+        )
+    }
+
     pub(crate) fn transformed(&self, transform: TransformationMatrix) -> Self {
         if transform == TransformationMatrix::unit() {
             return self.clone();
@@ -1166,6 +1183,19 @@ impl PathVertex<Pixels> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_contains_hit_tests_filled_region() {
+        let mut builder = crate::PathBuilder::fill();
+        builder.move_to(crate::point(crate::px(0.), crate::px(0.)));
+        builder.line_to(crate::point(crate::px(100.), crate::px(0.)));
+        builder.line_to(crate::point(crate::px(100.), crate::px(100.)));
+        builder.close();
+        let path = builder.build().expect("path builds");
+
+        assert!(path.contains(crate::point(crate::px(80.), crate::px(20.))));
+        assert!(!path.contains(crate::point(crate::px(20.), crate::px(80.))));
+    }
 
     fn wgsl_struct_span(module: &naga::Module, struct_name: &str) -> usize {
         let (_, ty) = module
@@ -1334,11 +1364,9 @@ mod tests {
         match batches.next() {
             Some(PrimitiveBatch::BlurRects(blur_rects)) => {
                 assert_eq!(blur_rects.len(), 2);
-                assert!(
-                    blur_rects
-                        .iter()
-                        .all(|blur_rect| blur_rect.order == scene.blur_rects[0].order)
-                );
+                assert!(blur_rects
+                    .iter()
+                    .all(|blur_rect| blur_rect.order == scene.blur_rects[0].order));
             }
             other => panic!("expected blur batch, got {other:?}"),
         }
