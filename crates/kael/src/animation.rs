@@ -581,6 +581,8 @@ pub struct StyledKeyframe {
     scale_x: Option<f32>,
     scale_y: Option<f32>,
     rotate_degrees: Option<f32>,
+    translate_x: Option<f32>,
+    translate_y: Option<f32>,
 }
 
 impl StyledKeyframe {
@@ -610,6 +612,25 @@ impl StyledKeyframe {
         self
     }
 
+    /// Sets the target translation in logical pixels along both axes.
+    pub fn translate(mut self, x: f32, y: f32) -> Self {
+        self.translate_x = Some(x);
+        self.translate_y = Some(y);
+        self
+    }
+
+    /// Sets the target horizontal translation in logical pixels.
+    pub fn translate_x(mut self, x: f32) -> Self {
+        self.translate_x = Some(x);
+        self
+    }
+
+    /// Sets the target vertical translation in logical pixels.
+    pub fn translate_y(mut self, y: f32) -> Self {
+        self.translate_y = Some(y);
+        self
+    }
+
     /// Applies this keyframe to a styled element.
     pub fn apply<E: Styled>(self, mut element: E) -> E {
         if let Some(opacity) = self.opacity {
@@ -621,6 +642,12 @@ impl StyledKeyframe {
         if let Some(rotate_degrees) = self.rotate_degrees {
             element = element.rotate(rotate_degrees);
         }
+        if let Some(translate_x) = self.translate_x {
+            element = element.translate_x(crate::px(translate_x));
+        }
+        if let Some(translate_y) = self.translate_y {
+            element = element.translate_y(crate::px(translate_y));
+        }
         element
     }
 
@@ -630,6 +657,8 @@ impl StyledKeyframe {
             scale_x: interpolate_optional(self.scale_x, other.scale_x, delta),
             scale_y: interpolate_optional(self.scale_y, other.scale_y, delta),
             rotate_degrees: interpolate_optional(self.rotate_degrees, other.rotate_degrees, delta),
+            translate_x: interpolate_optional(self.translate_x, other.translate_x, delta),
+            translate_y: interpolate_optional(self.translate_y, other.translate_y, delta),
         }
     }
 }
@@ -955,9 +984,20 @@ mod easing_variant_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{Animation, AnimationSequence, Repeat, keyframes};
+    use super::{keyframes, Animation, AnimationSequence, Repeat};
     use crate::animation::StyledKeyframe;
     use std::time::Duration;
+
+    #[test]
+    fn keyframe_translate_interpolates() {
+        let frames = keyframes()
+            .at(0.0, |frame| frame.translate(0.0, 0.0))
+            .at(1.0, |frame| frame.translate(100.0, 40.0));
+
+        let midpoint = frames.sample(0.5);
+        assert_eq!(midpoint.translate_x, Some(50.0));
+        assert_eq!(midpoint.translate_y, Some(20.0));
+    }
 
     #[test]
     fn animation_sequence_offsets_the_next_step() {
