@@ -173,6 +173,25 @@ impl HeadlessRenderer {
         anyhow::bail!("RGBA16Float rendering is only available on the GPU backend")
     }
 
+    /// Rasterize an arbitrary scene off-screen and read back its pixels as tightly
+    /// packed BGRA bytes (`width * height * 4`). Returns `None` on the CPU-only
+    /// backend, where no pixels are produced. Intended for golden-image and
+    /// pixel-level tests that need to assert on real rendered output.
+    #[cfg(test)]
+    pub(crate) fn render_scene_to_bytes(&mut self, scene: &Scene) -> Result<Option<Vec<u8>>> {
+        #[cfg(all(target_os = "macos", not(feature = "macos-blade")))]
+        if let Some(renderer) = self.metal.as_mut() {
+            let viewport = size(
+                DevicePixels(self.width as i32),
+                DevicePixels(self.height as i32),
+            );
+            let readback = renderer.render_scene_to_bytes(scene, viewport)?;
+            return Ok(Some(readback.bgra));
+        }
+        let _ = scene;
+        Ok(None)
+    }
+
     /// Run a built-in GPU compute kernel that doubles each input value, proving
     /// the compute-pipeline path end-to-end. Available only on the GPU backend.
     pub fn run_compute_doubler(&self, data: &[f32]) -> Result<Vec<f32>> {
@@ -230,6 +249,24 @@ fn build_benchmark_scene(width: u32, height: u32, complexity: usize) -> Scene {
 }
 
 #[cfg(test)]
+fn build_gradient_scene(width: u32, height: u32, stops: &[crate::LinearColorStop]) -> Scene {
+    let mut scene = Scene::default();
+    let viewport = Bounds {
+        origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+        size: size(ScaledPixels(width as f32), ScaledPixels(height as f32)),
+    };
+    scene.insert_primitive(crate::Quad {
+        bounds: viewport,
+        content_mask: ContentMask { bounds: viewport },
+        background: crate::multi_stop_linear_gradient(90.0, stops),
+        transform: TransformationMatrix::unit(),
+        ..Default::default()
+    });
+    scene.finish();
+    scene
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -276,6 +313,53 @@ mod tests {
             }
             Err(_) => assert_eq!(renderer.backend(), HeadlessBackend::CpuOnly),
         }
+    }
+
+    #[test]
+    fn linear_gradient_rasterizes_a_color_range_not_a_solid_fill() {
+        let mut renderer = match HeadlessRenderer::new(64, 64) {
+            Ok(renderer) => renderer,
+            Err(_) => return,
+        };
+        if renderer.backend() != HeadlessBackend::Gpu {
+            return;
+        }
+
+        let stops = [
+            crate::LinearColorStop {
+                color: hsla(0.0, 1.0, 0.5, 1.0),
+                percentage: 0.0,
+            },
+            crate::LinearColorStop {
+                color: hsla(0.66, 1.0, 0.5, 1.0),
+                percentage: 1.0,
+            },
+        ];
+        let scene = build_gradient_scene(64, 64, &stops);
+        let bytes = renderer
+            .render_scene_to_bytes(&scene)
+            .unwrap()
+            .expect("gpu backend yields pixels");
+        assert_eq!(bytes.len(), 64 * 64 * 4);
+
+        let (mut min_r, mut max_r) = (255u8, 0u8);
+        let (mut min_b, mut max_b) = (255u8, 0u8);
+        for pixel in bytes.chunks_exact(4) {
+            let (b, r) = (pixel[0], pixel[2]);
+            min_r = min_r.min(r);
+            max_r = max_r.max(r);
+            min_b = min_b.min(b);
+            max_b = max_b.max(b);
+        }
+
+        assert!(
+            max_r - min_r > 80,
+            "red channel should span a gradient range, got {min_r}..{max_r}"
+        );
+        assert!(
+            max_b - min_b > 80,
+            "blue channel should span a gradient range, got {min_b}..{max_b}"
+        );
     }
 
     #[test]
