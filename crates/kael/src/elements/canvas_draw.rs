@@ -201,6 +201,45 @@ impl DrawContext {
         }
     }
 
+    /// Fill an ellipse centered at `center` with the given horizontal and vertical radii.
+    pub fn fill_ellipse(
+        &mut self,
+        center: Point<Pixels>,
+        radius_x: Pixels,
+        radius_y: Pixels,
+        fill: impl Into<Background>,
+    ) {
+        if let Some(path) = build_ellipse_path(PathBuilder::fill(), center, radius_x, radius_y) {
+            self.commands.push(DrawCommand::Path {
+                path,
+                fill: fill.into(),
+                state: self.current_state.clone(),
+            });
+        }
+    }
+
+    /// Stroke an ellipse centered at `center` with the given horizontal and vertical radii.
+    pub fn stroke_ellipse(
+        &mut self,
+        center: Point<Pixels>,
+        radius_x: Pixels,
+        radius_y: Pixels,
+        stroke: Stroke,
+    ) {
+        if let Some(path) = build_ellipse_path(
+            configure_stroke_builder(&stroke),
+            center,
+            radius_x,
+            radius_y,
+        ) {
+            self.commands.push(DrawCommand::Path {
+                path,
+                fill: stroke.color.into(),
+                state: self.current_state.clone(),
+            });
+        }
+    }
+
     /// Apply an affine transform to commands issued within the callback.
     pub fn with_transform<R>(
         &mut self,
@@ -544,6 +583,26 @@ fn build_circle_path(
     builder.build().ok()
 }
 
+fn build_ellipse_path(
+    mut builder: PathBuilder,
+    center: Point<Pixels>,
+    radius_x: Pixels,
+    radius_y: Pixels,
+) -> Option<Path<Pixels>> {
+    if radius_x <= px(0.) || radius_y <= px(0.) {
+        return None;
+    }
+
+    let right = point(center.x + radius_x, center.y);
+    let left = point(center.x - radius_x, center.y);
+    let radii = point(radius_x, radius_y);
+    builder.move_to(right);
+    builder.arc_to(radii, px(0.), true, true, left);
+    builder.arc_to(radii, px(0.), true, true, right);
+    builder.close();
+    builder.build().ok()
+}
+
 fn configure_stroke_builder(stroke: &Stroke) -> PathBuilder {
     let mut builder = PathBuilder::fill().with_style(PathStyle::Stroke(stroke_options(stroke)));
     if let Some(dash) = &stroke.dash {
@@ -722,6 +781,19 @@ mod tests {
             }
             _ => panic!("expected an image command"),
         }
+    }
+
+    #[test]
+    fn fill_ellipse_records_path_command() {
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(100.)));
+        let mut cx = super::DrawContext::new(bounds, crate::ContentMask { bounds });
+
+        cx.fill_ellipse(point(px(50.), px(50.)), px(30.), px(20.), crate::black());
+        assert_eq!(cx.commands.len(), 1);
+        assert!(matches!(cx.commands[0], super::DrawCommand::Path { .. }));
+
+        cx.fill_ellipse(point(px(50.), px(50.)), px(0.), px(20.), crate::black());
+        assert_eq!(cx.commands.len(), 1);
     }
 
     #[test]
