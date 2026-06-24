@@ -339,3 +339,33 @@ Ordered. The theme is "connect what already exists, fix what is silently wrong, 
 8. **Publish `kael-cli` with `kael new` (M).** The scaffolder already works; embed templates via `include_dir`, publish, and document. Gives agents and humans a real front door.
 
 Everything above is additive, traces to confirmed audit findings, and leans on machinery kael already built. Land Wave 1 + the top of Wave 2 and kael moves from "a fast native toolkit with great docs" to "a credible Electron alternative for beautiful, complex, agent-built apps."
+
+---
+
+## 8. Implementation status — 2026-06-24 iteration
+
+This section records what was actually implemented against the analysis, and the **specific, verified blocker** for everything that was not (so the remaining work is a precise execution plan, not a re-audit).
+
+### Shipped — 24 gaps bridged on `main` (each with a TDD test, `cargo build`, and `cargo clippy` green; full suite 952+ lib tests passing)
+
+- **A11y:** accessibility node geometry populated from layout bounds at all 13 registration sites; `prefers-reduced-motion` honored (`Platform::should_reduce_motion`, real macOS `NSWorkspace` read, folded into `Window::animations_enabled`).
+- **Canvas / one-Context2D (priority #3):** flat `save`/`restore` state stack + `translate`/`rotate`/`scale`/`set_global_alpha`/`clip_rect`; `draw_image`; `fill_ellipse`/`stroke_ellipse`; `Path::contains` (isPointInPath, lyon hit-test); `draw_text_aligned` (textAlign); `stroke_rect`/`stroke_rounded_rect`.
+- **Styling & layout:** `aspect_ratio`/`aspect_square`/`aspect_video`; **real CSS Grid track sizing** (`GridTrack` px/rem/fr/auto/min-content/max-content/fraction/minmax/repeat + `grid_template_columns`/`grid_template_rows`/`grid_auto_flow`, mapped to Taffy 0.9); `glow`/`shadow_inner` presets; `refine_style` reusable style presets.
+- **Component freedom (priority #2):** open `Custom(Colors)` variants + `.colors()`/`.color()` for Button, IconButton, Input, Textarea, Alert, Progress, CircularProgress, AnimatedProgress, and Spinner; prelude exports for the new color types.
+- **Memory (priority #1):** `TileCache` bounded with an LRU byte budget; `App::gpu_memory_budget()` exposes the real per-platform GPU memory query (Metal/DXGI/Vulkan); corrected the misleading `RetainAllImageCache` "LRU" doc.
+- **Motion:** keyframe `translate`; implicit `.transition()` now animates translate, skew, and the 4-channel color filter; spring presets (`SpringPreset` + `transition_spring`); `Animation::stagger`.
+
+### Not bridged — verified blockers and what each needs to unblock
+
+| Gap (report ref) | Verified blocker | Prerequisite to unblock |
+|---|---|---|
+| Intrinsic sizing (`min/max/fit-content` width/height) | Taffy 0.9 `Dimension` only impls `TaffyZero`+`TaffyAuto` — no content sizing. | Taffy upgrade/fork exposing content sizing on `Dimension`. |
+| `calc()` lengths | Taffy can't resolve `100% − 64px` statically. | A measured-layout pass, or Taffy calc support. |
+| GPU atlas LRU eviction (#1/#2) | Evicting an in-use atlas tile risks **visual corruption/panic**; not validatable without on-device GPU stress testing. | GPU golden-image CI + last-used-frame atlas tracking; manager (`GpuMemoryManager`) is already a complete, tested primitive. |
+| Multi-stop gradients, blend-mode dst-read, clip-path/mask, wide-gamut, gradient text, dual-Kawase blur | Shader work; not pixel-verifiable on this machine. | A golden-image GPU test harness (per-backend tolerance). |
+| Windows AccessKit `SubclassingAdapter` swap | Windows-only; compile-checkable but never runtime-verifiable here. | Real Windows hardware / GPU-backed Windows CI. |
+| `kael-cli` (`cargo install` + `kael new`) | crates.io publish-gated. | crates.io access + `include_dir` template embedding. |
+| Semantic `success`/`warning` theme tokens | `ThemeTokens` has no `Default` and ~18 presets are full struct literals → ~36–72 brittle edits. | Refactor presets onto a `Default` base (`..ThemeTokens::base()`) first, then add tokens. |
+| Damage/dirty-region rendering, incremental layout, headless-component layer, code hot-reload | XL multi-week rewrites; the first two also carry corruption risk unverifiable here. | Dedicated multi-week workstreams. |
+
+**Bottom line:** Wave 1's verifiable, non-gated surface is substantially landed. The remainder is a multi-engineer, multi-week program gated on a Taffy upgrade, a GPU golden-image CI, real Windows hardware, and crates.io — not on missing design.
