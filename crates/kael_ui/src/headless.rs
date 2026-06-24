@@ -221,9 +221,139 @@ impl SelectController {
     }
 }
 
+/// Selected-tab state with keyboard navigation, for tab strips and segmented controls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TabsController {
+    len: usize,
+    selected: usize,
+}
+
+impl TabsController {
+    /// Create a controller over `len` tabs with the first tab selected.
+    pub fn new(len: usize) -> Self {
+        Self { len, selected: 0 }
+    }
+
+    /// The number of tabs.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Whether there are no tabs.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The selected tab index.
+    pub fn selected(&self) -> usize {
+        self.selected
+    }
+
+    /// Select a specific tab (ignored if out of range).
+    pub fn select(&mut self, index: usize) {
+        if index < self.len {
+            self.selected = index;
+        }
+    }
+
+    /// Select the next tab, wrapping around.
+    pub fn next(&mut self) {
+        if self.len > 0 {
+            self.selected = (self.selected + 1) % self.len;
+        }
+    }
+
+    /// Select the previous tab, wrapping around.
+    pub fn prev(&mut self) {
+        if self.len > 0 {
+            self.selected = (self.selected + self.len - 1) % self.len;
+        }
+    }
+}
+
+/// Ranged numeric state for sliders, with clamping and step snapping.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SliderController {
+    value: f64,
+    min: f64,
+    max: f64,
+    step: f64,
+}
+
+impl SliderController {
+    /// Create a controller over `[min, max]` with the given step, clamping `value`.
+    pub fn new(value: f64, min: f64, max: f64, step: f64) -> Self {
+        let mut controller = Self {
+            value: min,
+            min,
+            max,
+            step: step.max(0.0),
+        };
+        controller.set_value(value);
+        controller
+    }
+
+    /// The current value (clamped and snapped).
+    pub fn value(&self) -> f64 {
+        self.value
+    }
+
+    /// The minimum bound.
+    pub fn min(&self) -> f64 {
+        self.min
+    }
+
+    /// The maximum bound.
+    pub fn max(&self) -> f64 {
+        self.max
+    }
+
+    /// The step increment.
+    pub fn step(&self) -> f64 {
+        self.step
+    }
+
+    /// Set the value, clamping to `[min, max]` and snapping to the nearest step.
+    pub fn set_value(&mut self, value: f64) {
+        let clamped = value.clamp(self.min, self.max);
+        self.value = if self.step > 0.0 {
+            let steps = ((clamped - self.min) / self.step).round();
+            (self.min + steps * self.step).clamp(self.min, self.max)
+        } else {
+            clamped
+        };
+    }
+
+    /// Increase the value by one step.
+    pub fn increment(&mut self) {
+        self.set_value(self.value + self.step.max(f64::EPSILON));
+    }
+
+    /// Decrease the value by one step.
+    pub fn decrement(&mut self) {
+        self.set_value(self.value - self.step.max(f64::EPSILON));
+    }
+
+    /// The value as a fraction of the range, in `0.0..=1.0`.
+    pub fn fraction(&self) -> f64 {
+        if self.max <= self.min {
+            0.0
+        } else {
+            ((self.value - self.min) / (self.max - self.min)).clamp(0.0, 1.0)
+        }
+    }
+
+    /// Set the value from a fraction of the range (e.g. from a drag position).
+    pub fn set_fraction(&mut self, fraction: f64) {
+        self.set_value(self.min + fraction.clamp(0.0, 1.0) * (self.max - self.min));
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{DisclosureController, SelectController, ToggleController};
+    use super::{
+        DisclosureController, SelectController, SliderController, TabsController, ToggleController,
+    };
 
     #[test]
     fn disclosure_toggles() {
@@ -300,5 +430,36 @@ mod tests {
         select.highlight_next();
         assert_eq!(select.highlighted(), None);
         assert_eq!(select.select_highlighted(), None);
+    }
+
+    #[test]
+    fn tabs_navigation_wraps_and_clamps() {
+        let mut tabs = TabsController::new(3);
+        assert_eq!(tabs.selected(), 0);
+        tabs.next();
+        assert_eq!(tabs.selected(), 1);
+        tabs.prev();
+        tabs.prev();
+        assert_eq!(tabs.selected(), 2); // wrapped past the start
+        tabs.select(5); // out of range, ignored
+        assert_eq!(tabs.selected(), 2);
+        tabs.select(0);
+        assert_eq!(tabs.selected(), 0);
+    }
+
+    #[test]
+    fn slider_clamps_snaps_and_steps() {
+        let mut slider = SliderController::new(0.0, 0.0, 10.0, 2.0);
+        slider.set_value(6.4);
+        assert_eq!(slider.value(), 6.0); // snapped to nearest step
+        slider.set_value(100.0);
+        assert_eq!(slider.value(), 10.0); // clamped to max
+        slider.increment();
+        assert_eq!(slider.value(), 10.0); // already at max
+        slider.decrement();
+        assert_eq!(slider.value(), 8.0);
+        assert_eq!(slider.fraction(), 0.8);
+        slider.set_fraction(0.0);
+        assert_eq!(slider.value(), 0.0);
     }
 }
