@@ -1116,6 +1116,14 @@ impl Path<Pixels> {
         self.current = to;
     }
 
+    /// Close the current subpath with a straight line from the current point back to the
+    /// subpath's start, mirroring the web canvas `closePath`. No-op if already at start.
+    pub fn close_path(&mut self) {
+        if self.current != self.start {
+            self.line_to(self.start);
+        }
+    }
+
     /// Draw a curve from the current point to the given point, using the given control point.
     pub fn curve_to(&mut self, to: Point<Pixels>, ctrl: Point<Pixels>) {
         self.contour_count += 1;
@@ -1358,6 +1366,17 @@ mod tests {
         );
         assert!((path.current.x.0 - 50.).abs() < 0.5);
         assert!((path.current.y.0 - 0.).abs() < 0.5);
+    }
+
+    #[test]
+    fn close_path_returns_current_to_subpath_start() {
+        let start = crate::point(crate::px(0.), crate::px(0.));
+        let mut path = Path::new(start);
+        path.line_to(crate::point(crate::px(100.), crate::px(0.)));
+        path.line_to(crate::point(crate::px(100.), crate::px(100.)));
+        path.close_path();
+        assert!((path.current.x.0 - start.x.0).abs() < 0.001);
+        assert!((path.current.y.0 - start.y.0).abs() < 0.001);
     }
 
     fn wgsl_struct_span(module: &naga::Module, struct_name: &str) -> usize {
