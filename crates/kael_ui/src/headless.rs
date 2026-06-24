@@ -557,11 +557,83 @@ impl PaginationController {
     }
 }
 
+/// Multi-step flow state for wizards and onboarding: a current step over `step_count`
+/// steps, with per-step completion tracking and forward/back navigation that cannot
+/// skip past the next incomplete step.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StepperController {
+    step: usize,
+    completed: Vec<bool>,
+}
+
+impl StepperController {
+    /// Create a stepper over `step_count` steps, positioned on the first step.
+    pub fn new(step_count: usize) -> Self {
+        Self {
+            step: 0,
+            completed: vec![false; step_count],
+        }
+    }
+
+    /// The current (zero-based) step.
+    pub fn step(&self) -> usize {
+        self.step
+    }
+
+    /// The total number of steps.
+    pub fn step_count(&self) -> usize {
+        self.completed.len()
+    }
+
+    /// Whether step `index` has been marked complete.
+    pub fn is_completed(&self, index: usize) -> bool {
+        self.completed.get(index).copied().unwrap_or(false)
+    }
+
+    /// Whether the current step is the first.
+    pub fn is_first(&self) -> bool {
+        self.step == 0
+    }
+
+    /// Whether the current step is the last.
+    pub fn is_last(&self) -> bool {
+        self.step + 1 >= self.step_count()
+    }
+
+    /// Mark the current step complete and advance to the next, if any.
+    pub fn next(&mut self) {
+        if let Some(done) = self.completed.get_mut(self.step) {
+            *done = true;
+        }
+        if !self.is_last() {
+            self.step += 1;
+        }
+    }
+
+    /// Go back to the previous step, if any.
+    pub fn prev(&mut self) {
+        if self.step > 0 {
+            self.step -= 1;
+        }
+    }
+
+    /// Jump to step `index` only if it is already reachable (at or before the current
+    /// step, or the immediately next step). Returns whether the jump was allowed.
+    pub fn go_to(&mut self, index: usize) -> bool {
+        if index < self.step_count() && index <= self.step + 1 {
+            self.step = index;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AccordionController, ComboboxController, DisclosureController, PaginationController,
-        SelectController, SliderController, TabsController, ToggleController,
+        SelectController, SliderController, StepperController, TabsController, ToggleController,
     };
 
     #[test]
@@ -730,5 +802,27 @@ mod tests {
         assert_eq!(pagination.page(), 1);
         pagination.set_page(99);
         assert_eq!(pagination.page(), 1);
+    }
+
+    #[test]
+    fn stepper_advances_and_gates_jumps() {
+        let mut stepper = StepperController::new(3);
+        assert!(stepper.is_first());
+        assert!(!stepper.is_completed(0));
+
+        stepper.next();
+        assert_eq!(stepper.step(), 1);
+        assert!(stepper.is_completed(0));
+
+        assert!(!stepper.go_to(2 + 1)); // out of range
+        assert!(stepper.go_to(0)); // back is allowed
+        assert_eq!(stepper.step(), 0);
+
+        stepper.next();
+        stepper.next();
+        assert!(stepper.is_last());
+        stepper.next(); // last, stays put but marks complete
+        assert_eq!(stepper.step(), 2);
+        assert!(stepper.is_completed(2));
     }
 }
