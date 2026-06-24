@@ -5,8 +5,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    bounds_tree::BoundsTree, point, AtlasTextureId, AtlasTile, Background, Bounds, ContentMask,
-    Corners, DevicePixels, Edges, Hsla, Pixels, Point, Radians, ScaledPixels, Size,
+    AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, DevicePixels, Edges, Hsla,
+    Pixels, Point, Radians, ScaledPixels, Size, bounds_tree::BoundsTree, point,
 };
 use std::{
     fmt::Debug,
@@ -985,6 +985,32 @@ pub struct Path<P: Clone + Debug + Default + PartialEq> {
     contour_count: usize,
 }
 
+const CURVE_FLATTEN_SEGMENT_PX: f32 = 2.0;
+
+fn point_distance(a: Point<Pixels>, b: Point<Pixels>) -> f32 {
+    let dx = a.x.0 - b.x.0;
+    let dy = a.y.0 - b.y.0;
+    (dx * dx + dy * dy).sqrt()
+}
+
+fn cubic_bezier_point(
+    p0: Point<Pixels>,
+    c1: Point<Pixels>,
+    c2: Point<Pixels>,
+    p3: Point<Pixels>,
+    t: f32,
+) -> Point<Pixels> {
+    let mt = 1.0 - t;
+    let a = mt * mt * mt;
+    let b = 3.0 * mt * mt * t;
+    let c = 3.0 * mt * t * t;
+    let d = t * t * t;
+    point(
+        crate::px(a * p0.x.0 + b * c1.x.0 + c * c2.x.0 + d * p3.x.0),
+        crate::px(a * p0.y.0 + b * c1.y.0 + c * c2.y.0 + d * p3.y.0),
+    )
+}
+
 impl Path<Pixels> {
     /// Create a new path with the given starting point.
     pub fn new(start: Point<Pixels>) -> Self {
@@ -1107,6 +1133,94 @@ impl Path<Pixels> {
         self.current = to;
     }
 
+    /// Draw a cubic Bézier curve from the current point to `to`, using `ctrl1` and
+    /// `ctrl2` as control points. Mirrors the web canvas `bezierCurveTo`; the curve is
+    /// flattened into line segments that fill with the existing winding rule.
+    pub fn cubic_to(&mut self, to: Point<Pixels>, ctrl1: Point<Pixels>, ctrl2: Point<Pixels>) {
+        let from = self.current;
+        let hull =
+            point_distance(from, ctrl1) + point_distance(ctrl1, ctrl2) + point_distance(ctrl2, to);
+        let segments = ((hull / CURVE_FLATTEN_SEGMENT_PX).ceil() as usize).clamp(8, 256);
+        for step in 1..=segments {
+            let t = step as f32 / segments as f32;
+            self.line_to(cubic_bezier_point(from, ctrl1, ctrl2, to, t));
+        }
+    }
+
+    /// Append a circular arc centered at `center` with the given `radius`, sweeping from
+    /// `start_angle` to `end_angle` in radians. Mirrors the web canvas `arc`; like the
+    /// canvas it connects from the current point with a straight line to the arc start.
+    pub fn arc(&mut self, center: Point<Pixels>, radius: Pixels, start_angle: f32, end_angle: f32) {
+        let radius = radius.0.max(0.0);
+        let span = end_angle - start_angle;
+        let arc_len = span.abs() * radius;
+        let segments = ((arc_len / CURVE_FLATTEN_SEGMENT_PX).ceil() as usize).clamp(2, 512);
+        for step in 0..=segments {
+            let t = step as f32 / segments as f32;
+            let angle = start_angle + span * t;
+            self.line_to(point(
+                crate::px(center.x.0 + radius * angle.cos()),
+                crate::px(center.y.0 + radius * angle.sin()),
+            ));
+        }
+    }
+
+    /// Append an arc tangent to the lines (current point → `ctrl`) and (`ctrl` → `to`)
+    /// with the given `radius`, as the web canvas `arcTo` does — the primitive behind
+    /// rounded paths. Degenerate or collinear inputs fall back to a straight line.
+    pub fn arc_to(&mut self, ctrl: Point<Pixels>, to: Point<Pixels>, radius: Pixels) {
+        let radius = radius.0.max(0.0);
+        let from = self.current;
+        let (v1x, v1y) = (from.x.0 - ctrl.x.0, from.y.0 - ctrl.y.0);
+        let (v2x, v2y) = (to.x.0 - ctrl.x.0, to.y.0 - ctrl.y.0);
+        let len1 = (v1x * v1x + v1y * v1y).sqrt();
+        let len2 = (v2x * v2x + v2y * v2y).sqrt();
+        if radius <= 0.0 || len1 < f32::EPSILON || len2 < f32::EPSILON {
+            self.line_to(ctrl);
+            return;
+        }
+        let (u1x, u1y) = (v1x / len1, v1y / len1);
+        let (u2x, u2y) = (v2x / len2, v2y / len2);
+        let cos_angle = (u1x * u2x + u1y * u2y).clamp(-1.0, 1.0);
+        let angle = cos_angle.acos();
+        if angle < 1e-4 || (std::f32::consts::PI - angle) < 1e-4 {
+            self.line_to(ctrl);
+            return;
+        }
+        let half = angle / 2.0;
+        let tan_dist = radius / half.tan();
+        let (bix, biy) = (u1x + u2x, u1y + u2y);
+        let bilen = (bix * bix + biy * biy).sqrt();
+        if bilen < f32::EPSILON {
+            self.line_to(ctrl);
+            return;
+        }
+        let center_dist = radius / half.sin();
+        let cx = ctrl.x.0 + (bix / bilen) * center_dist;
+        let cy = ctrl.y.0 + (biy / bilen) * center_dist;
+        let t1x = ctrl.x.0 + u1x * tan_dist;
+        let t1y = ctrl.y.0 + u1y * tan_dist;
+        let t2x = ctrl.x.0 + u2x * tan_dist;
+        let t2y = ctrl.y.0 + u2y * tan_dist;
+        let a1 = (t1y - cy).atan2(t1x - cx);
+        let a2 = (t2y - cy).atan2(t2x - cx);
+        let pi = std::f32::consts::PI;
+        let two_pi = 2.0 * pi;
+        let mut span = a2 - a1;
+        while span > pi {
+            span -= two_pi;
+        }
+        while span < -pi {
+            span += two_pi;
+        }
+        self.arc(
+            point(crate::px(cx), crate::px(cy)),
+            crate::px(radius),
+            a1,
+            a1 + span,
+        );
+    }
+
     /// Push a triangle to the Path.
     pub fn push_triangle(
         &mut self,
@@ -1195,6 +1309,55 @@ mod tests {
 
         assert!(path.contains(crate::point(crate::px(80.), crate::px(20.))));
         assert!(!path.contains(crate::point(crate::px(20.), crate::px(80.))));
+    }
+
+    #[test]
+    fn cubic_to_flattens_to_endpoint_and_bulges() {
+        let mut path = Path::new(crate::point(crate::px(0.), crate::px(0.)));
+        path.cubic_to(
+            crate::point(crate::px(100.), crate::px(0.)),
+            crate::point(crate::px(0.), crate::px(100.)),
+            crate::point(crate::px(100.), crate::px(100.)),
+        );
+        assert!((path.current.x.0 - 100.).abs() < 0.5);
+        assert!((path.current.y.0 - 0.).abs() < 0.5);
+        assert!(!path.vertices.is_empty());
+        assert!(path.bounds.size.height.0 > 10.);
+    }
+
+    #[test]
+    fn arc_full_circle_spans_diameter() {
+        let center = crate::point(crate::px(50.), crate::px(50.));
+        let radius = 25.;
+        let mut path = Path::new(crate::point(crate::px(75.), crate::px(50.)));
+        path.arc(center, crate::px(radius), 0., std::f32::consts::TAU);
+        assert!((path.bounds.size.width.0 - 2. * radius).abs() < 1.0);
+        assert!((path.bounds.size.height.0 - 2. * radius).abs() < 1.0);
+    }
+
+    #[test]
+    fn arc_to_rounds_corner_to_second_tangent() {
+        let mut path = Path::new(crate::point(crate::px(0.), crate::px(0.)));
+        path.arc_to(
+            crate::point(crate::px(100.), crate::px(0.)),
+            crate::point(crate::px(100.), crate::px(100.)),
+            crate::px(20.),
+        );
+        assert!((path.current.x.0 - 100.).abs() < 0.5);
+        assert!((path.current.y.0 - 20.).abs() < 0.5);
+    }
+
+    #[test]
+    fn arc_to_collinear_falls_back_to_line() {
+        let mut path = Path::new(crate::point(crate::px(0.), crate::px(0.)));
+        let ctrl = crate::point(crate::px(50.), crate::px(0.));
+        path.arc_to(
+            ctrl,
+            crate::point(crate::px(100.), crate::px(0.)),
+            crate::px(10.),
+        );
+        assert!((path.current.x.0 - 50.).abs() < 0.5);
+        assert!((path.current.y.0 - 0.).abs() < 0.5);
     }
 
     fn wgsl_struct_span(module: &naga::Module, struct_name: &str) -> usize {
@@ -1364,9 +1527,11 @@ mod tests {
         match batches.next() {
             Some(PrimitiveBatch::BlurRects(blur_rects)) => {
                 assert_eq!(blur_rects.len(), 2);
-                assert!(blur_rects
-                    .iter()
-                    .all(|blur_rect| blur_rect.order == scene.blur_rects[0].order));
+                assert!(
+                    blur_rects
+                        .iter()
+                        .all(|blur_rect| blur_rect.order == scene.blur_rects[0].order)
+                );
             }
             other => panic!("expected blur batch, got {other:?}"),
         }
