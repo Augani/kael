@@ -747,12 +747,152 @@ impl ToastQueueController {
     }
 }
 
+/// Current-slide state for carousels, with optional wrap-around. When wrapping is off,
+/// [`CarouselController::can_next`] / [`CarouselController::can_prev`] report whether the
+/// edge arrows should be enabled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CarouselController {
+    len: usize,
+    current: usize,
+    wrap: bool,
+}
+
+impl CarouselController {
+    /// Create a wrapping carousel over `len` slides, positioned on the first.
+    pub fn new(len: usize) -> Self {
+        Self {
+            len,
+            current: 0,
+            wrap: true,
+        }
+    }
+
+    /// Disable wrap-around (the arrows stop at the ends).
+    pub fn no_wrap(mut self) -> Self {
+        self.wrap = false;
+        self
+    }
+
+    /// The number of slides.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Whether there are no slides.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The current slide index.
+    pub fn current(&self) -> usize {
+        self.current
+    }
+
+    /// Jump to a specific slide (ignored if out of range).
+    pub fn go_to(&mut self, index: usize) {
+        if index < self.len {
+            self.current = index;
+        }
+    }
+
+    /// Whether advancing is possible.
+    pub fn can_next(&self) -> bool {
+        self.len > 0 && (self.wrap || self.current + 1 < self.len)
+    }
+
+    /// Whether going back is possible.
+    pub fn can_prev(&self) -> bool {
+        self.len > 0 && (self.wrap || self.current > 0)
+    }
+
+    /// Advance to the next slide (wrapping if enabled).
+    pub fn next(&mut self) {
+        if !self.can_next() {
+            return;
+        }
+        self.current = if self.current + 1 < self.len {
+            self.current + 1
+        } else {
+            0
+        };
+    }
+
+    /// Go back to the previous slide (wrapping if enabled).
+    pub fn prev(&mut self) {
+        if !self.can_prev() {
+            return;
+        }
+        self.current = if self.current > 0 {
+            self.current - 1
+        } else {
+            self.len - 1
+        };
+    }
+}
+
+/// Tree-view state: which nodes are expanded and which node is selected, keyed by stable
+/// app-defined node ids (so it works for any tree shape). The app flattens its visible
+/// nodes for layout; this controller owns the expand/collapse/select state.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TreeController {
+    expanded: std::collections::HashSet<u64>,
+    selected: Option<u64>,
+}
+
+impl TreeController {
+    /// Create an empty tree controller (nothing expanded or selected).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether node `id` is expanded.
+    pub fn is_expanded(&self, id: u64) -> bool {
+        self.expanded.contains(&id)
+    }
+
+    /// Expand node `id`.
+    pub fn expand(&mut self, id: u64) {
+        self.expanded.insert(id);
+    }
+
+    /// Collapse node `id`.
+    pub fn collapse(&mut self, id: u64) {
+        self.expanded.remove(&id);
+    }
+
+    /// Toggle node `id`'s expansion and return the new state.
+    pub fn toggle(&mut self, id: u64) -> bool {
+        if self.expanded.contains(&id) {
+            self.expanded.remove(&id);
+            false
+        } else {
+            self.expanded.insert(id);
+            true
+        }
+    }
+
+    /// The selected node id, if any.
+    pub fn selected(&self) -> Option<u64> {
+        self.selected
+    }
+
+    /// Select node `id`.
+    pub fn select(&mut self, id: u64) {
+        self.selected = Some(id);
+    }
+
+    /// Whether node `id` is selected.
+    pub fn is_selected(&self, id: u64) -> bool {
+        self.selected == Some(id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        AccordionController, ComboboxController, DisclosureController, PaginationController,
-        RadioGroupController, SelectController, SliderController, StepperController,
-        TabsController, ToastQueueController, ToggleController,
+        AccordionController, CarouselController, ComboboxController, DisclosureController,
+        PaginationController, RadioGroupController, SelectController, SliderController,
+        StepperController, TabsController, ToastQueueController, ToggleController, TreeController,
     };
 
     #[test]
@@ -976,5 +1116,39 @@ mod tests {
 
         toasts.clear();
         assert!(toasts.is_empty());
+    }
+
+    #[test]
+    fn carousel_wrap_vs_no_wrap() {
+        let mut wrapping = CarouselController::new(3);
+        wrapping.prev();
+        assert_eq!(wrapping.current(), 2); // wrapped to last
+        wrapping.next();
+        assert_eq!(wrapping.current(), 0); // wrapped to first
+
+        let mut bounded = CarouselController::new(3).no_wrap();
+        assert!(!bounded.can_prev());
+        bounded.prev();
+        assert_eq!(bounded.current(), 0); // clamped
+        bounded.go_to(2);
+        assert!(!bounded.can_next());
+        bounded.next();
+        assert_eq!(bounded.current(), 2);
+    }
+
+    #[test]
+    fn tree_expand_and_select() {
+        let mut tree = TreeController::new();
+        assert!(!tree.is_expanded(7));
+        assert!(tree.toggle(7));
+        assert!(tree.is_expanded(7));
+        assert!(!tree.toggle(7));
+        assert!(!tree.is_expanded(7));
+
+        tree.expand(3);
+        tree.select(3);
+        assert!(tree.is_expanded(3));
+        assert!(tree.is_selected(3));
+        assert_eq!(tree.selected(), Some(3));
     }
 }
