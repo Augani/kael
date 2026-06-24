@@ -75,6 +75,8 @@ struct ImplicitVisualStyle {
     corner_radii: Corners<AbsoluteLength>,
     box_shadow: SmallVec<[BoxShadow; 1]>,
     translate: Point<Pixels>,
+    skew: Point<f32>,
+    color_filter: crate::ColorFilter,
 }
 
 impl From<&Style> for ImplicitVisualStyle {
@@ -90,6 +92,8 @@ impl From<&Style> for ImplicitVisualStyle {
             corner_radii: style.corner_radii,
             box_shadow: style.box_shadow.clone(),
             translate: style.translate.unwrap_or_default(),
+            skew: style.skew.unwrap_or_default(),
+            color_filter: style.color_filter.unwrap_or_default(),
         }
     }
 }
@@ -105,6 +109,8 @@ impl ImplicitVisualStyle {
             || self.corner_radii != other.corner_radii
             || self.box_shadow != other.box_shadow
             || self.translate != other.translate
+            || self.skew != other.skew
+            || self.color_filter != other.color_filter
             || optional_backgrounds_can_interpolate(self.background, other.background)
                 && self.background != other.background
     }
@@ -138,6 +144,32 @@ impl ImplicitVisualStyle {
                 x: px(interpolate_f32(self.translate.x.0, other.translate.x.0, progress)),
                 y: px(interpolate_f32(self.translate.y.0, other.translate.y.0, progress)),
             },
+            skew: Point {
+                x: interpolate_f32(self.skew.x, other.skew.x, progress),
+                y: interpolate_f32(self.skew.y, other.skew.y, progress),
+            },
+            color_filter: crate::ColorFilter {
+                grayscale: interpolate_f32(
+                    self.color_filter.grayscale,
+                    other.color_filter.grayscale,
+                    progress,
+                ),
+                saturate: interpolate_f32(
+                    self.color_filter.saturate,
+                    other.color_filter.saturate,
+                    progress,
+                ),
+                brightness: interpolate_f32(
+                    self.color_filter.brightness,
+                    other.color_filter.brightness,
+                    progress,
+                ),
+                contrast: interpolate_f32(
+                    self.color_filter.contrast,
+                    other.color_filter.contrast,
+                    progress,
+                ),
+            },
         }
     }
 
@@ -152,6 +184,9 @@ impl ImplicitVisualStyle {
         style.corner_radii = self.corner_radii;
         style.box_shadow = self.box_shadow.clone();
         style.translate = (self.translate != Point::default()).then_some(self.translate);
+        style.skew = (self.skew != Point::default()).then_some(self.skew);
+        style.color_filter =
+            (self.color_filter != crate::ColorFilter::identity()).then_some(self.color_filter);
     }
 }
 
@@ -6631,6 +6666,26 @@ mod test {
         let mid = from.interpolate(&to, 0.5);
         assert_eq!(mid.translate.x, crate::px(50.0));
         assert_eq!(mid.translate.y, crate::px(0.0));
+    }
+
+    #[test]
+    fn implicit_transition_interpolates_skew_and_filter() {
+        let from = ImplicitVisualStyle::from(&crate::Style::default());
+
+        let mut to_style = crate::Style::default();
+        to_style.skew = Some(crate::point(0.4, 0.0));
+        to_style.color_filter = Some(crate::ColorFilter {
+            grayscale: 1.0,
+            saturate: 1.0,
+            brightness: 1.0,
+            contrast: 1.0,
+        });
+        let to = ImplicitVisualStyle::from(&to_style);
+
+        assert!(from.can_transition_to(&to));
+        let mid = from.interpolate(&to, 0.5);
+        assert_eq!(mid.skew.x, 0.2);
+        assert_eq!(mid.color_filter.grayscale, 0.5);
     }
 
     #[kael::test]
