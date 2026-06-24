@@ -21,7 +21,7 @@ pub use crate::charts::line_chart::{LineChart, LineChartPoint, LineChartSeries};
 pub use crate::charts::pie_chart::{
     PieChart, PieChartLabelPosition, PieChartSegment, PieChartSize, PieChartVariant,
 };
-pub use crate::components::alert::{alert, Alert, AlertVariant};
+pub use crate::components::alert::{alert, Alert, AlertColors, AlertVariant};
 pub use crate::components::animated_collapsible::AnimatedCollapsible;
 pub use crate::components::animated_switch::{AnimatedSwitch, AnimatedSwitchTransition};
 pub use crate::components::audio_player::{

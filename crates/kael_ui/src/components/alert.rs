@@ -4,13 +4,26 @@ use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+/// A custom color set for [`AlertVariant::Custom`], giving an alert any look without forking.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct AlertColors {
+    /// Background fill.
+    pub background: Hsla,
+    /// Accent color used for the border and icon.
+    pub accent: Hsla,
+    /// Title and description text color.
+    pub foreground: Hsla,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Default)]
 pub enum AlertVariant {
     #[default]
     Info,
     Success,
     Warning,
     Error,
+    /// An app-defined color set — build any look without forking the component.
+    Custom(AlertColors),
 }
 
 impl AlertVariant {
@@ -20,6 +33,7 @@ impl AlertVariant {
             AlertVariant::Success => "check-circle",
             AlertVariant::Warning => "alert-triangle",
             AlertVariant::Error => "alert-circle",
+            AlertVariant::Custom(_) => "info",
         }
     }
 }
@@ -70,6 +84,12 @@ impl Alert {
 
     pub fn variant(mut self, variant: AlertVariant) -> Self {
         self.variant = variant;
+        self
+    }
+
+    /// Use a fully custom color set, setting the variant to [`AlertVariant::Custom`].
+    pub fn colors(mut self, colors: AlertColors) -> Self {
+        self.variant = AlertVariant::Custom(colors);
         self
     }
 
@@ -133,6 +153,7 @@ impl Alert {
                 theme.tokens.destructive,
                 theme.tokens.destructive,
             ),
+            AlertVariant::Custom(colors) => (colors.background, colors.accent, colors.foreground),
         }
     }
 }
@@ -253,4 +274,19 @@ impl RenderOnce for Alert {
 
 pub fn alert() -> Alert {
     Alert::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Alert, AlertColors, AlertVariant};
+
+    #[test]
+    fn colors_sets_custom_alert_variant() {
+        let alert = Alert::new().colors(AlertColors {
+            background: kael::black(),
+            accent: kael::white(),
+            foreground: kael::white(),
+        });
+        assert!(matches!(alert.variant, AlertVariant::Custom(_)));
+    }
 }
