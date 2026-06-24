@@ -76,6 +76,16 @@ impl Scene {
             mix(quad.bounds.origin.y.0.to_bits() as u64);
             mix(quad.bounds.size.width.0.to_bits() as u64);
             mix(quad.bounds.size.height.0.to_bits() as u64);
+            mix(quad.background.solid.h.to_bits() as u64);
+            mix(quad.background.solid.s.to_bits() as u64);
+            mix(quad.background.solid.l.to_bits() as u64);
+            mix(quad.background.solid.a.to_bits() as u64);
+        }
+        for sprite in &self.monochrome_sprites {
+            mix(sprite.color.h.to_bits() as u64);
+            mix(sprite.color.s.to_bits() as u64);
+            mix(sprite.color.l.to_bits() as u64);
+            mix(sprite.color.a.to_bits() as u64);
         }
         hash
     }
@@ -1595,5 +1605,42 @@ mod tests {
             Some(PrimitiveBatch::BlurRects(blur_rects)) => assert_eq!(blur_rects.len(), 1),
             other => panic!("expected replayed blur batch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn structural_checksum_detects_quad_color_changes() {
+        fn scene_with_quad_color(color: crate::Hsla) -> Scene {
+            let bounds = Bounds {
+                origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size: Size {
+                    width: ScaledPixels(10.0),
+                    height: ScaledPixels(10.0),
+                },
+            };
+            let mut scene = Scene::default();
+            scene.insert_primitive(Quad {
+                bounds,
+                content_mask: ContentMask { bounds },
+                background: Background::from(color),
+                ..Default::default()
+            });
+            scene.finish();
+            scene
+        }
+
+        let red = scene_with_quad_color(crate::hsla(0.0, 1.0, 0.5, 1.0));
+        let red_again = scene_with_quad_color(crate::hsla(0.0, 1.0, 0.5, 1.0));
+        let blue = scene_with_quad_color(crate::hsla(0.66, 1.0, 0.5, 1.0));
+
+        assert_eq!(
+            red.structural_checksum(),
+            red_again.structural_checksum(),
+            "identical scenes must hash equally"
+        );
+        assert_ne!(
+            red.structural_checksum(),
+            blue.structural_checksum(),
+            "a color-only change must change the frame checksum"
+        );
     }
 }
