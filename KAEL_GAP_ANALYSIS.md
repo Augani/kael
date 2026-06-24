@@ -365,7 +365,7 @@ This section records what was actually implemented against the analysis, and the
 | Multi-stop gradients, blend-mode dst-read, clip-path/mask, wide-gamut, gradient text, dual-Kawase blur | Shader work; not pixel-verifiable on this machine. | A golden-image GPU test harness (per-backend tolerance). |
 | Windows AccessKit `SubclassingAdapter` swap | Windows-only; compile-checkable but never runtime-verifiable here. | Real Windows hardware / GPU-backed Windows CI. |
 | `kael-cli` (`cargo install` + `kael new`) | crates.io publish-gated. | crates.io access + `include_dir` template embedding. |
-| Headless-component layer (full) | Core state-machine controllers are **landed** (8 controllers, tested); remaining work is reskinning the 100+ styled components on top of them. | Incremental per-component refactor (not gated). |
+| Headless-component layer (full) | Core state-machine controllers are **landed** (13 controllers, tested); remaining work is reskinning the 100+ styled components on top of them. | Incremental per-component refactor (not gated). |
 | Damage/dirty-region rendering, incremental layout, code hot-reload | XL multi-week rewrites; the first two also carry corruption risk unverifiable here. | Dedicated multi-week workstreams. |
 
 **Bottom line:** Wave 1's verifiable, non-gated surface is substantially landed. The remainder is a multi-engineer, multi-week program gated on a Taffy upgrade, a GPU golden-image CI, real Windows hardware, and crates.io — not on missing design.
