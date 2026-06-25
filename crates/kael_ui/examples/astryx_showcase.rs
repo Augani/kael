@@ -4,9 +4,9 @@ use kael_ui::components::scrollable::scrollable_vertical;
 use kael_ui::components::text::body;
 use kael_ui::components::text::{caption, h1, h3, muted};
 use kael_ui::prelude::{
-    Avatar, AvatarSize, Badge, BadgeVariant, Button, ButtonSize, ButtonVariant, Card, Checkbox,
-    Hue, ProgressBar, Radio, RadioGroup, Spinner, SpinnerSize, SpinnerVariant, TextField,
-    TextFieldSize, Toggle, KBD,
+    Avatar, AvatarSize, Badge, BadgeVariant, Banner, Button, ButtonSize, ButtonVariant, Card,
+    Checkbox, Hue, ProgressBar, Radio, RadioGroup, SelectableCard, Spinner, SpinnerSize,
+    SpinnerVariant, StatusDot, StatusTone, TextField, TextFieldSize, Toggle, KBD,
 };
 use kael_ui::theme::{install_theme, use_theme, Theme, ThemeTokens, ThemeVariant};
 
@@ -15,6 +15,7 @@ struct AstryxShowcase {
     notifications: bool,
     marketing: bool,
     plan: usize,
+    card_pick: usize,
 }
 
 impl AstryxShowcase {
@@ -24,6 +25,7 @@ impl AstryxShowcase {
             notifications: true,
             marketing: false,
             plan: 1,
+            card_pick: 1,
         }
     }
 }
@@ -353,6 +355,69 @@ impl Render for AstryxShowcase {
                     .description("We couldn't reach the server. Try again."),
             );
 
+        let extras = section(
+            "Banners, status & selectable cards",
+            "New Astryx building blocks",
+            &theme,
+        )
+        .child(Banner::announcement(
+            "Astryx components now ship as part of Kael UI.",
+        ))
+        .child(Banner::success("All systems operational."))
+        .child(
+            row()
+                .gap(px(24.0))
+                .child(StatusDot::success().label("Online").pulse(true))
+                .child(StatusDot::new(StatusTone::Warning).label("Degraded"))
+                .child(StatusDot::error().label("Offline"))
+                .child(StatusDot::new(StatusTone::Hue(Hue::Purple)).label("Beta")),
+        )
+        .child(
+            row()
+                .gap(px(12.0))
+                .items_start()
+                .child(
+                    div().w(px(210.0)).child(
+                        SelectableCard::new("sc-free")
+                            .selected(self.card_pick == 0)
+                            .content(
+                                col()
+                                    .child(h3("Free".to_string()))
+                                    .child(muted("For hobby projects".to_string())),
+                            )
+                            .on_click({
+                                let view = view.clone();
+                                move |_, _, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.card_pick = 0;
+                                        cx.notify();
+                                    });
+                                }
+                            }),
+                    ),
+                )
+                .child(
+                    div().w(px(210.0)).child(
+                        SelectableCard::new("sc-pro")
+                            .selected(self.card_pick == 1)
+                            .content(
+                                col()
+                                    .child(h3("Pro".to_string()))
+                                    .child(muted("For growing teams".to_string())),
+                            )
+                            .on_click({
+                                let view = view.clone();
+                                move |_, _, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.card_pick = 1;
+                                        cx.notify();
+                                    });
+                                }
+                            }),
+                    ),
+                ),
+        );
+
         let misc = section(
             "Progress, spinners & avatars",
             "Loading and identity",
@@ -435,6 +500,7 @@ impl Render for AstryxShowcase {
             .child(inputs)
             .child(selection)
             .child(feedback)
+            .child(extras)
             .child(misc)
             .child(cards);
 

@@ -30,9 +30,9 @@ impl AlertVariant {
     fn default_icon(&self) -> &'static str {
         match self {
             AlertVariant::Info => "info",
-            AlertVariant::Success => "check-circle",
-            AlertVariant::Warning => "alert-triangle",
-            AlertVariant::Error => "alert-circle",
+            AlertVariant::Success => "circle-check",
+            AlertVariant::Warning => "triangle-alert",
+            AlertVariant::Error => "circle-alert",
             AlertVariant::Custom(_) => "info",
         }
     }

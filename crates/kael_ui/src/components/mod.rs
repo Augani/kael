@@ -2,10 +2,12 @@
 
 pub mod alert;
 pub mod audio_player;
+pub mod banner;
 pub mod button;
 pub mod icon;
 pub mod icon_button;
 pub mod icon_source;
+pub mod status_dot;
 pub mod text;
 
 // Re-export commonly used types

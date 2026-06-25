@@ -36,6 +36,7 @@ pub use crate::components::audio_player::{
 };
 pub use crate::components::avatar::{Avatar, AvatarSize};
 pub use crate::components::avatar_group::{AvatarGroup, AvatarItem};
+pub use crate::components::banner::{Banner, BannerVariant};
 pub use crate::components::button::{
     Button, ButtonColors, ButtonSize, ButtonVariant, IconPosition,
 };
@@ -113,6 +114,7 @@ pub use crate::components::spinner::{Spinner, SpinnerSize, SpinnerVariant};
 pub use crate::components::split_pane::{
     CollapsiblePane, SplitDirection, SplitPane, SplitPaneEvent, SplitPaneState,
 };
+pub use crate::components::status_dot::{StatusDot, StatusTone};
 pub use crate::components::stepper::{
     StepItem, StepStatus, Stepper, StepperOrientation, StepperSize, StepperState,
 };
@@ -149,6 +151,7 @@ pub use crate::display::data_table::{ColumnDef, DataTable, SortDirection};
 pub use crate::display::html::Html;
 pub use crate::display::markdown::Markdown;
 pub use crate::display::rich_text::{RichBlock, RichInline, TableAlignment as RichTableAlignment};
+pub use crate::display::selectable_card::SelectableCard;
 pub use crate::display::table::{Table, TableColumn, TableRow};
 pub use crate::headless::{
     AccordionController, CarouselController, ComboboxController, DisclosureController,
