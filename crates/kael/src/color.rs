@@ -1,8 +1,8 @@
-use anyhow::{Context as _, bail};
-use schemars::{JsonSchema, json_schema};
+use anyhow::{bail, Context as _};
+use schemars::{json_schema, JsonSchema};
 use serde::{
-    Deserialize, Deserializer, Serialize, Serializer,
     de::{self, Visitor},
+    Deserialize, Deserializer, Serialize, Serializer,
 };
 use std::borrow::Cow;
 use std::{
@@ -528,7 +528,7 @@ impl Hsla {
     ///
     /// Example:
     /// ```
-    /// let color = gpui::red();
+    /// let color = kael::red();
     /// let faded_color = color.opacity(0.5);
     /// assert_eq!(faded_color.a, 0.5);
     /// ```
@@ -560,7 +560,7 @@ impl Hsla {
     ///
     /// Example:
     /// ```
-    /// let color = gpui::red();
+    /// let color = kael::red();
     /// let red_color = color.alpha(0.25);
     /// assert_eq!(red_color.a, 0.25);
     /// ```
