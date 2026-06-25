@@ -7,6 +7,8 @@
 //! cached GPU texture/buffer with the manager, `touch` it on use, and call
 //! [`GpuMemoryManager::ensure_available`] before a large allocation.
 
+use crate::{App, BorrowAppContext, Global, SubscriberSet, Subscription};
+
 /// A snapshot of GPU memory budget and usage for the default device, with a real
 /// query on every backend (Metal / DXGI / Vulkan) via [`kael_gpu_budget`].
 pub use kael_gpu_budget::GpuMemoryBudget;
@@ -152,6 +154,129 @@ impl GpuMemoryManager {
     }
 }
 
+/// Coarse GPU-memory pressure level derived from device budget utilization.
+///
+/// Apps subscribe via [`App::on_memory_pressure`] and shed their own caches when
+/// the level rises; the framework also evicts everything registered with the
+/// app's [`GpuMemoryManager`] down to budget on [`MemoryPressureLevel::Critical`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemoryPressureLevel {
+    /// Comfortable headroom; no action needed.
+    Normal,
+    /// Approaching the budget; shed non-essential caches.
+    Warning,
+    /// At or over the budget; shed aggressively to avoid eviction by the OS.
+    Critical,
+}
+
+impl MemoryPressureLevel {
+    /// Map a `[0.0, 1.0+]` budget utilization onto a pressure level
+    /// (`>= 0.90` critical, `>= 0.75` warning, else normal).
+    pub fn from_utilization(utilization: f64) -> Self {
+        if utilization >= 0.90 {
+            Self::Critical
+        } else if utilization >= 0.75 {
+            Self::Warning
+        } else {
+            Self::Normal
+        }
+    }
+
+    /// Derive the pressure level from a device memory budget snapshot.
+    pub fn from_budget(budget: &GpuMemoryBudget) -> Self {
+        Self::from_utilization(budget.utilization())
+    }
+}
+
+type MemoryPressureSubscriber = Box<dyn FnMut(MemoryPressureLevel, &mut App) + 'static>;
+
+struct GpuMemoryRuntime {
+    manager: GpuMemoryManager,
+    last_level: MemoryPressureLevel,
+    subscribers: SubscriberSet<(), MemoryPressureSubscriber>,
+}
+
+impl Default for GpuMemoryRuntime {
+    fn default() -> Self {
+        Self {
+            manager: GpuMemoryManager::new(u64::MAX),
+            last_level: MemoryPressureLevel::Normal,
+            subscribers: SubscriberSet::new(),
+        }
+    }
+}
+
+impl Global for GpuMemoryRuntime {}
+
+impl App {
+    /// Set the soft GPU-memory budget the app's [`GpuMemoryManager`] enforces over
+    /// resources registered through [`App::with_gpu_memory_manager`]. Does not evict
+    /// on its own; eviction happens on [`App::notify_memory_pressure`]
+    /// ([`MemoryPressureLevel::Critical`]) or an explicit
+    /// [`GpuMemoryManager::evict_to_budget`].
+    pub fn set_gpu_budget(&mut self, budget_bytes: u64) {
+        self.update_default_global::<GpuMemoryRuntime, _>(|runtime, _| {
+            runtime.manager.set_budget(budget_bytes);
+        });
+    }
+
+    /// Run `f` against the app-wide [`GpuMemoryManager`] to register, touch, release,
+    /// or evict GPU resources. This is the single point subsystems and apps use to put
+    /// their evictable GPU caches under the shared budget.
+    pub fn with_gpu_memory_manager<R>(&mut self, f: impl FnOnce(&mut GpuMemoryManager) -> R) -> R {
+        self.update_default_global::<GpuMemoryRuntime, _>(|runtime, _| f(&mut runtime.manager))
+    }
+
+    /// Subscribe to GPU-memory pressure transitions. The callback fires when the level
+    /// changes (via [`App::poll_memory_pressure`] or [`App::notify_memory_pressure`]),
+    /// letting the app shed its own caches. Drop the returned [`Subscription`] to
+    /// unsubscribe, or call [`Subscription::detach`] to keep it for the app's lifetime.
+    pub fn on_memory_pressure(
+        &mut self,
+        callback: impl FnMut(MemoryPressureLevel, &mut App) + 'static,
+    ) -> Subscription {
+        self.update_default_global::<GpuMemoryRuntime, _>(|runtime, _| {
+            let (subscription, activate) = runtime.subscribers.insert((), Box::new(callback));
+            activate();
+            subscription
+        })
+    }
+
+    /// Dispatch a pressure level to all subscribers, recording it as the current level.
+    /// A [`MemoryPressureLevel::Critical`] notification also evicts every registered GPU
+    /// resource down to budget before the subscribers run.
+    pub fn notify_memory_pressure(&mut self, level: MemoryPressureLevel) {
+        let subscribers = self.update_default_global::<GpuMemoryRuntime, _>(|runtime, _| {
+            runtime.last_level = level;
+            if matches!(level, MemoryPressureLevel::Critical) {
+                runtime.manager.evict_to_budget();
+            }
+            runtime.subscribers.clone()
+        });
+        subscribers.retain(&(), |subscriber| {
+            subscriber(level, self);
+            true
+        });
+    }
+
+    /// Query the device GPU-memory budget, map it to a [`MemoryPressureLevel`], and
+    /// dispatch to subscribers if the level changed since the last poll. Returns the
+    /// current level (`Normal` when no budget is available). Call once per frame or on a
+    /// timer to drive automatic cache shedding.
+    pub fn poll_memory_pressure(&mut self) -> MemoryPressureLevel {
+        let level = self
+            .gpu_memory_budget()
+            .map(|budget| MemoryPressureLevel::from_budget(&budget))
+            .unwrap_or(MemoryPressureLevel::Normal);
+        let last_level =
+            self.update_default_global::<GpuMemoryRuntime, _>(|runtime, _| runtime.last_level);
+        if level != last_level {
+            self.notify_memory_pressure(level);
+        }
+        level
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,5 +363,96 @@ mod tests {
     #[test]
     fn query_is_callable() {
         let _ = GpuMemoryBudget::query();
+    }
+
+    #[test]
+    fn memory_pressure_level_thresholds() {
+        assert_eq!(
+            MemoryPressureLevel::from_utilization(0.50),
+            MemoryPressureLevel::Normal
+        );
+        assert_eq!(
+            MemoryPressureLevel::from_utilization(0.80),
+            MemoryPressureLevel::Warning
+        );
+        assert_eq!(
+            MemoryPressureLevel::from_utilization(0.95),
+            MemoryPressureLevel::Critical
+        );
+        assert_eq!(
+            MemoryPressureLevel::from_utilization(1.20),
+            MemoryPressureLevel::Critical
+        );
+    }
+
+    #[kael::test]
+    fn set_gpu_budget_registers_and_evicts(cx: &mut crate::TestAppContext) {
+        cx.update(|cx| {
+            cx.set_gpu_budget(100);
+            cx.with_gpu_memory_manager(|manager| {
+                manager.register(40, || {});
+                manager.register(40, || {});
+                manager.register(40, || {});
+            });
+            let used = cx.with_gpu_memory_manager(|manager| manager.used_bytes());
+            assert_eq!(
+                used, 120,
+                "all three resources are tracked under the budget"
+            );
+
+            let evicted = cx.with_gpu_memory_manager(|manager| manager.evict_to_budget());
+            assert_eq!(
+                evicted, 1,
+                "one resource must be shed to fit a 100-byte budget"
+            );
+            let used = cx.with_gpu_memory_manager(|manager| manager.used_bytes());
+            assert!(
+                used <= 100,
+                "tracked bytes must fit the budget after eviction"
+            );
+        });
+    }
+
+    #[kael::test]
+    fn on_memory_pressure_fires_and_critical_evicts(cx: &mut crate::TestAppContext) {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let seen: Rc<RefCell<Vec<MemoryPressureLevel>>> = Rc::new(RefCell::new(Vec::new()));
+        let evictions = Arc::new(AtomicU64::new(0));
+
+        cx.update(|cx| {
+            cx.set_gpu_budget(50);
+            let evict_counter = evictions.clone();
+            cx.with_gpu_memory_manager(move |manager| {
+                let counter = evict_counter.clone();
+                manager.register(40, move || {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                });
+                let counter = evict_counter.clone();
+                manager.register(40, move || {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                });
+            });
+
+            let sink = seen.clone();
+            cx.on_memory_pressure(move |level, _| sink.borrow_mut().push(level))
+                .detach();
+
+            cx.notify_memory_pressure(MemoryPressureLevel::Warning);
+            cx.notify_memory_pressure(MemoryPressureLevel::Critical);
+        });
+
+        assert_eq!(
+            *seen.borrow(),
+            vec![MemoryPressureLevel::Warning, MemoryPressureLevel::Critical],
+            "subscribers must receive each dispatched pressure level in order"
+        );
+        assert!(
+            evictions.load(Ordering::SeqCst) >= 1,
+            "a Critical notification must evict registered resources down to budget"
+        );
     }
 }

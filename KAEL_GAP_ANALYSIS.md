@@ -158,13 +158,13 @@ What's genuinely strong underneath: real lyon path tessellation cached once and 
 
 | Sev | Gap | Impact | Recommendation | Effort |
 |---|---|---|---|---|
-| Critical | GpuMemoryManager orphaned | No system-wide GPU ceiling | Wire into AtlasState, `evict_to_budget` end-of-frame, `App::set_gpu_budget` | L |
+| Critical | GpuMemoryManager orphaned | No system-wide GPU ceiling | **App API DONE** — `App::set_gpu_budget(bytes)` + `App::with_gpu_memory_manager(\|m\| …)` register/touch/evict + `App::poll/notify_memory_pressure` (Critical auto-evicts to budget); unit-tested. **Remaining:** auto-register *atlas* glyph tiles (the mid-frame-eviction-hazard plumbing) | L (App half done) |
 | Critical | Glyph/shadow atlas never evicts | GPU memory climbs for hours | `last_used_frame` LRU; instantiate `ShadowLruTracker`; cap `raster_bounds` | L |
 | High | Canvas path deep-clone | Per-frame heap churn | Arc paths, interned state, retained Vec | M |
 | High | Orphaned cache crates | Unbounded TileCache for infinite-canvas apps | Integrate `MemoryCache` LRU + byte cap, or delete | M |
 | Medium | Image cache retain-all (misleading LRU doc) | Image-heavy apps never evict | `RetainLruImageCache(max_bytes)` + fix doc | M |
 | Medium | recycling_list O(n) heights/frame | Defeats virtualization at scale | Cache heights, lazy per-range estimation | M |
-| Medium | No memory-pressure hook | Can't shed caches under OS pressure | `App::on_memory_pressure(level)` from NSProcessInfo/DXGI/PSI | M |
+| Medium | Memory-pressure hook | Can't shed caches under OS pressure | **DONE (app-driven)** — `App::on_memory_pressure(cb)` + `MemoryPressureLevel` (Normal/Warning/Critical from budget utilization) + `App::poll_memory_pressure()` (queries device budget, dispatches on transition); unit-tested. OS-event *source* (NSProcessInfo/DXGI/PSI) is the remaining platform wiring | M (logic done) |
 | Low | CPU shadow rasterizer dead on Metal | Misleads future memory work | Delete or wire tracker + document | S |
 
 ### Styling expressiveness — 6/10
