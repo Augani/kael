@@ -774,4 +774,59 @@ mod tests {
             "scissor + load partial repaint must be pixel-identical to a full repaint, max channel diff {max_diff}"
         );
     }
+
+    #[test]
+    fn arbitrary_triangle_clip_produces_correct_pixels() {
+        let viewport = 48u32;
+        let mut renderer = match HeadlessRenderer::new(viewport, viewport) {
+            Ok(renderer) => renderer,
+            Err(_) => return,
+        };
+        if renderer.backend() != HeadlessBackend::Gpu {
+            return;
+        }
+
+        // Rasterize a solid red full-viewport quad on the real GPU pipeline.
+        let scene = build_quad_scene(
+            viewport,
+            viewport,
+            Background::from(hsla(0.0, 1.0, 0.5, 1.0)),
+        );
+        let mut bytes = renderer
+            .render_scene_to_bytes(&scene)
+            .unwrap()
+            .expect("gpu backend yields pixels");
+
+        // Clip the rendered pixels to an upward-pointing triangle via the ClipShape mask.
+        let triangle = crate::ClipShape::ConvexPolygon {
+            vertices: vec![
+                point(crate::px(24.0), crate::px(2.0)),
+                point(crate::px(2.0), crate::px(46.0)),
+                point(crate::px(46.0), crate::px(46.0)),
+            ],
+        };
+        let mask = triangle.rasterize_mask(
+            point(crate::px(0.0), crate::px(0.0)),
+            viewport as usize,
+            viewport as usize,
+            crate::px(1.0),
+        );
+        crate::apply_clip_mask_bgra(&mut bytes, &mask);
+
+        let alpha = |x: u32, y: u32| bytes[((y * viewport + x) * 4 + 3) as usize];
+        // BGRA readback: channel index 2 is red.
+        let red = |x: u32, y: u32| bytes[((y * viewport + x) * 4 + 2) as usize];
+
+        // Inside the triangle (near its centroid ~(24, 31)): opaque red survives the clip.
+        assert!(
+            alpha(24, 30) > 250,
+            "interior stays opaque, got {}",
+            alpha(24, 30)
+        );
+        assert!(red(24, 30) > 180, "interior keeps its red fill");
+
+        // The top corners lie above the triangle's slanted edges → cut to transparent.
+        assert_eq!(alpha(2, 2), 0, "top-left corner is outside the triangle");
+        assert_eq!(alpha(46, 2), 0, "top-right corner is outside the triangle");
+    }
 }

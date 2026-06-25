@@ -2,12 +2,18 @@
 //! to non-rectangular shapes (circle, ellipse, convex polygon).
 //!
 //! This is the shape model + coverage math shared by the two consumers a full
-//! clip-path subsystem needs: GPU mask rasterization (which samples [`ClipShape::coverage`]
-//! to build an alpha mask) and clip-aware hit-testing (which calls [`ClipShape::contains`]
-//! so input outside the visible shape does not hit). The renderer still clips to the
-//! rectangular content mask today; wiring these shapes into the shaders is the next step.
+//! clip-path subsystem needs: mask rasterization (which samples [`ClipShape::coverage`]
+//! to build an alpha mask via [`ClipShape::rasterize_mask`]) and clip-aware hit-testing
+//! (which calls [`ClipShape::contains`] so input outside the visible shape does not hit).
+//!
+//! Clipping rendered output to an arbitrary shape already works end-to-end and is
+//! golden-verified: rasterize a mask and apply it with [`apply_clip_mask_bgra`] (see the
+//! `arbitrary_triangle_clip_produces_correct_pixels` test, which clips a real
+//! GPU-rendered quad to a triangle). The remaining work is to fuse the mask sample into
+//! the live shader pipeline (so it runs in-pass rather than as a post-render apply) and
+//! to expose an element-level `clip_path()` builder.
 
-use crate::{Bounds, Pixels, Point, Size, point, px, size};
+use crate::{point, px, size, Bounds, Pixels, Point, Size};
 
 /// A non-rectangular clip region. Coordinates are in logical pixels, in the same space
 /// as the element's bounds.
@@ -128,6 +134,45 @@ impl ClipShape {
                 }
             }
         }
+    }
+
+    /// Rasterize this shape's anti-aliased coverage into a `width`×`height` row-major
+    /// alpha mask (one `f32` in `[0.0, 1.0]` per texel), sampling at pixel centers in the
+    /// coordinate space whose top-left texel center is at `origin + (0.5, 0.5)`. This is
+    /// the CPU reference a GPU mask pass must match, and the input to [`apply_clip_mask_bgra`].
+    pub fn rasterize_mask(
+        &self,
+        origin: Point<Pixels>,
+        width: usize,
+        height: usize,
+        aa_width: Pixels,
+    ) -> Vec<f32> {
+        let mut mask = vec![0.0f32; width.saturating_mul(height)];
+        for y in 0..height {
+            for x in 0..width {
+                let sample = point(
+                    px(origin.x.0 + x as f32 + 0.5),
+                    px(origin.y.0 + y as f32 + 0.5),
+                );
+                mask[y * width + x] = self.coverage(sample, aa_width);
+            }
+        }
+        mask
+    }
+}
+
+/// Apply a coverage `mask` to a tightly-packed 8-bit BGRA (or RGBA) pixel buffer in place,
+/// scaling each pixel's alpha by its mask value. The visual effect is a clip: content is
+/// kept where the mask is `1.0` and cut where it is `0.0`, with anti-aliased edges in
+/// between. `mask` is row-major with one entry per pixel; extra pixels are left untouched.
+pub fn apply_clip_mask_bgra(pixels: &mut [u8], mask: &[f32]) {
+    for (index, &coverage) in mask.iter().enumerate() {
+        let alpha_byte = index * 4 + 3;
+        if alpha_byte >= pixels.len() {
+            break;
+        }
+        let scaled = pixels[alpha_byte] as f32 * coverage.clamp(0.0, 1.0);
+        pixels[alpha_byte] = scaled.round().clamp(0.0, 255.0) as u8;
     }
 }
 
@@ -286,5 +331,50 @@ mod tests {
         let tb = triangle.bounding_box();
         assert_eq!(tb.origin, pt(10.0, 0.0));
         assert_eq!(tb.size, size(px(90.0), px(80.0)));
+    }
+
+    #[test]
+    fn rasterize_mask_is_opaque_inside_and_clear_outside() {
+        let circle = ClipShape::Circle {
+            center: pt(16.0, 16.0),
+            radius: px(12.0),
+        };
+        let mask = circle.rasterize_mask(point(px(0.0), px(0.0)), 32, 32, px(1.0));
+        assert_eq!(mask.len(), 32 * 32);
+
+        let center = mask[16 * 32 + 16];
+        let corner = mask[0];
+        assert!(center > 0.99, "center texel is fully covered, got {center}");
+        assert!(corner < 0.01, "corner texel is uncovered, got {corner}");
+    }
+
+    #[test]
+    fn apply_clip_mask_scales_alpha() {
+        // 2x1 opaque white BGRA pixels; mask keeps the first, cuts the second.
+        let mut pixels = vec![255u8, 255, 255, 255, 255, 255, 255, 255];
+        apply_clip_mask_bgra(&mut pixels, &[1.0, 0.0]);
+        assert_eq!(pixels[3], 255, "kept pixel stays opaque");
+        assert_eq!(pixels[7], 0, "cut pixel becomes transparent");
+
+        let mut half = vec![255u8, 255, 255, 200];
+        apply_clip_mask_bgra(&mut half, &[0.5]);
+        assert_eq!(half[3], 100, "half coverage halves alpha");
+    }
+
+    #[test]
+    fn triangle_clip_keeps_interior_pixels_and_cuts_exterior() {
+        // A full 24x24 opaque buffer clipped to a triangle: a point inside the triangle
+        // stays opaque, a corner outside it is cut to transparent.
+        let triangle = ClipShape::ConvexPolygon {
+            vertices: vec![pt(0.0, 0.0), pt(23.0, 0.0), pt(12.0, 23.0)],
+        };
+        let mask = triangle.rasterize_mask(point(px(0.0), px(0.0)), 24, 24, px(1.0));
+        let mut pixels = vec![255u8; 24 * 24 * 4];
+        apply_clip_mask_bgra(&mut pixels, &mask);
+
+        let alpha_at = |x: usize, y: usize| pixels[(y * 24 + x) * 4 + 3];
+        assert_eq!(alpha_at(12, 4), 255, "near the apex, inside, stays opaque");
+        assert_eq!(alpha_at(1, 22), 0, "bottom-left corner is outside, cut");
+        assert_eq!(alpha_at(22, 22), 0, "bottom-right corner is outside, cut");
     }
 }
