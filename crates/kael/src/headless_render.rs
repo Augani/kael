@@ -829,4 +829,79 @@ mod tests {
         assert_eq!(alpha(2, 2), 0, "top-left corner is outside the triangle");
         assert_eq!(alpha(46, 2), 0, "top-right corner is outside the triangle");
     }
+
+    #[test]
+    fn circle_clip_shape_renders_through_the_rounded_clip_shader() {
+        let viewport = 40u32;
+        let mut renderer = match HeadlessRenderer::new(viewport, viewport) {
+            Ok(renderer) => renderer,
+            Err(_) => return,
+        };
+        if renderer.backend() != HeadlessBackend::Gpu {
+            return;
+        }
+
+        // A ClipShape::Circle maps to the rounded-clip the quad shader already honors —
+        // drive a full red quad through that clip and confirm it renders as a circle.
+        let circle = crate::ClipShape::Circle {
+            center: point(crate::px(20.0), crate::px(20.0)),
+            radius: crate::px(20.0),
+        };
+        let (clip_bounds, clip_radii) = circle.as_rounded_clip().expect("circle maps");
+
+        let full = Bounds {
+            origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size: size(ScaledPixels(viewport as f32), ScaledPixels(viewport as f32)),
+        };
+        let to_scaled_bounds = Bounds {
+            origin: point(
+                ScaledPixels(clip_bounds.origin.x.0),
+                ScaledPixels(clip_bounds.origin.y.0),
+            ),
+            size: size(
+                ScaledPixels(clip_bounds.size.width.0),
+                ScaledPixels(clip_bounds.size.height.0),
+            ),
+        };
+        let scaled_radii = crate::Corners {
+            top_left: ScaledPixels(clip_radii.top_left.0),
+            top_right: ScaledPixels(clip_radii.top_right.0),
+            bottom_right: ScaledPixels(clip_radii.bottom_right.0),
+            bottom_left: ScaledPixels(clip_radii.bottom_left.0),
+        };
+
+        let mut scene = Scene::default();
+        scene.insert_primitive(crate::Quad {
+            bounds: full,
+            content_mask: ContentMask { bounds: full },
+            background: Background::from(hsla(0.0, 1.0, 0.5, 1.0)),
+            rounded_clip_bounds: to_scaled_bounds,
+            rounded_clip_radii: scaled_radii,
+            transform: TransformationMatrix::unit(),
+            ..Default::default()
+        });
+        scene.finish();
+
+        let bytes = renderer
+            .render_scene_to_bytes(&scene)
+            .unwrap()
+            .expect("gpu backend yields pixels");
+        let alpha = |x: u32, y: u32| bytes[((y * viewport + x) * 4 + 3) as usize];
+
+        // Center of the inscribed circle: opaque. The four square corners are outside the
+        // circle, so the rounded clip cuts them to transparent.
+        assert!(
+            alpha(20, 20) > 250,
+            "circle center is opaque, got {}",
+            alpha(20, 20)
+        );
+        assert_eq!(alpha(1, 1), 0, "top-left corner is outside the circle");
+        assert_eq!(alpha(38, 1), 0, "top-right corner is outside the circle");
+        assert_eq!(alpha(1, 38), 0, "bottom-left corner is outside the circle");
+        assert_eq!(
+            alpha(38, 38),
+            0,
+            "bottom-right corner is outside the circle"
+        );
+    }
 }

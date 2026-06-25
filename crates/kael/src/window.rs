@@ -3085,6 +3085,30 @@ impl Window {
         result
     }
 
+    /// Clip primitives painted inside the closure to an arbitrary [`crate::ClipShape`]
+    /// (circle, ellipse, or convex polygon).
+    ///
+    /// Circles (and equal-radius ellipses) clip exactly through the existing shader-backed
+    /// rounded-clip path. Shapes that path cannot express yet — true ellipses and convex
+    /// polygons — clip to the shape's bounding box via the content mask as a conservative
+    /// fallback until the per-shape mask sample is fused into the pipeline.
+    ///
+    /// This method should only be called during the paint phase of element drawing.
+    pub fn with_clip_path<R>(
+        &mut self,
+        shape: &crate::ClipShape,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.invalidator.debug_assert_paint();
+
+        if let Some((bounds, corner_radii)) = shape.as_rounded_clip() {
+            self.with_rounded_clip(Some((bounds, corner_radii)), f)
+        } else {
+            let bbox = shape.bounding_box();
+            self.with_content_mask(Some(ContentMask { bounds: bbox }), f)
+        }
+    }
+
     /// Perform prepaint on child elements in a "retryable" manner, so that any side effects
     /// of prepaints can be discarded before prepainting again. This is used to support autoscroll
     /// where we need to prepaint children to detect the autoscroll bounds, then adjust the

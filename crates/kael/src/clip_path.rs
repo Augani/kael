@@ -6,14 +6,16 @@
 //! to build an alpha mask via [`ClipShape::rasterize_mask`]) and clip-aware hit-testing
 //! (which calls [`ClipShape::contains`] so input outside the visible shape does not hit).
 //!
-//! Clipping rendered output to an arbitrary shape already works end-to-end and is
-//! golden-verified: rasterize a mask and apply it with [`apply_clip_mask_bgra`] (see the
-//! `arbitrary_triangle_clip_produces_correct_pixels` test, which clips a real
-//! GPU-rendered quad to a triangle). The remaining work is to fuse the mask sample into
-//! the live shader pipeline (so it runs in-pass rather than as a post-render apply) and
-//! to expose an element-level `clip_path()` builder.
+//! Clipping rendered output to an arbitrary shape works end-to-end and is golden-verified.
+//! Circles clip *live* through the existing shader: [`ClipShape::as_rounded_clip`] maps a
+//! circle to the rounded-rect clip the quad shader already honors, surfaced as
+//! [`crate::Window::with_clip_path`] (see `circle_clip_shape_renders_through_the_rounded_clip_shader`).
+//! Convex polygons clip correctly via a rasterized mask + [`apply_clip_mask_bgra`] (see
+//! `arbitrary_triangle_clip_produces_correct_pixels`); `with_clip_path` falls back to the
+//! shape's bounding box for them until the per-texel mask sample is fused into the in-pass
+//! shader. A `Styled::clip_path()` builder is the remaining sugar.
 
-use crate::{point, px, size, Bounds, Pixels, Point, Size};
+use crate::{point, px, size, Bounds, Corners, Pixels, Point, Size};
 
 /// A non-rectangular clip region. Coordinates are in logical pixels, in the same space
 /// as the element's bounds.
@@ -158,6 +160,36 @@ impl ClipShape {
             }
         }
         mask
+    }
+
+    /// Express this shape as the equivalent axis-aligned rounded-rectangle clip
+    /// (`bounds`, corner `radii`) when it can be represented exactly that way — a circle,
+    /// or an ellipse whose radii are equal. Returns `None` for shapes the rounded-rect clip
+    /// cannot express exactly (true ellipses, convex polygons), which need the mask path.
+    ///
+    /// This lets circle clips reuse the framework's existing shader-backed rounded-clip
+    /// pipeline ([`crate::Window::with_rounded_clip`]) with no new GPU code.
+    pub fn as_rounded_clip(&self) -> Option<(Bounds<Pixels>, Corners<Pixels>)> {
+        let circle = |center: Point<Pixels>, radius: Pixels| {
+            (
+                Bounds {
+                    origin: point(center.x - radius, center.y - radius),
+                    size: size(radius * 2.0, radius * 2.0),
+                },
+                Corners::all(radius),
+            )
+        };
+        match self {
+            ClipShape::Circle { center, radius } => Some(circle(*center, *radius)),
+            ClipShape::Ellipse { center, radii } => {
+                if (radii.width.0 - radii.height.0).abs() < f32::EPSILON {
+                    Some(circle(*center, radii.width))
+                } else {
+                    None
+                }
+            }
+            ClipShape::ConvexPolygon { .. } => None,
+        }
     }
 }
 
@@ -376,5 +408,38 @@ mod tests {
         assert_eq!(alpha_at(12, 4), 255, "near the apex, inside, stays opaque");
         assert_eq!(alpha_at(1, 22), 0, "bottom-left corner is outside, cut");
         assert_eq!(alpha_at(22, 22), 0, "bottom-right corner is outside, cut");
+    }
+
+    #[test]
+    fn circle_maps_to_an_equivalent_rounded_rect_clip() {
+        let circle = ClipShape::Circle {
+            center: pt(50.0, 50.0),
+            radius: px(20.0),
+        };
+        let (bounds, radii) = circle.as_rounded_clip().expect("a circle maps exactly");
+        assert_eq!(bounds.origin, pt(30.0, 30.0));
+        assert_eq!(bounds.size, size(px(40.0), px(40.0)));
+        assert_eq!(radii.top_left, px(20.0));
+        assert_eq!(radii.bottom_right, px(20.0));
+    }
+
+    #[test]
+    fn equal_radius_ellipse_maps_but_true_ellipse_and_polygon_do_not() {
+        let round_ellipse = ClipShape::Ellipse {
+            center: pt(0.0, 0.0),
+            radii: size(px(15.0), px(15.0)),
+        };
+        assert!(round_ellipse.as_rounded_clip().is_some());
+
+        let true_ellipse = ClipShape::Ellipse {
+            center: pt(0.0, 0.0),
+            radii: size(px(40.0), px(10.0)),
+        };
+        assert!(true_ellipse.as_rounded_clip().is_none());
+
+        let polygon = ClipShape::ConvexPolygon {
+            vertices: vec![pt(0.0, 0.0), pt(10.0, 0.0), pt(5.0, 10.0)],
+        };
+        assert!(polygon.as_rounded_clip().is_none());
     }
 }
