@@ -707,7 +707,6 @@ impl RenderOnce for Input {
         }
         let shake_count = self.state.read(cx).shake_count;
 
-        let shadow_xs = theme.tokens.shadow_xs.clone();
         let focus_ring = theme.tokens.focus_ring_light();
         let error_ring_focused = theme.tokens.error_ring();
         let error_ring_unfocused = theme.tokens.error_ring();
@@ -763,7 +762,6 @@ impl RenderOnce for Input {
                             .text_size(font_size)
                             .font_family(theme.tokens.font_mono.clone())
                             .text_color(text_color)
-                            .shadow(shadow_xs.to_vec())
                             .when(!self.disabled, |h| h.cursor(kael::CursorStyle::IBeam))
                             .when(!self.disabled, |h| {
                                 h.hover(move |style| {

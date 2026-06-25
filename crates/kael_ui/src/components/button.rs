@@ -252,32 +252,41 @@ impl RenderOnce for Button {
         };
         let is_icon_only = matches!(self.size, ButtonSize::Icon);
 
+        let dark = theme.tokens.background.l < 0.5;
+        let ink = |c: Hsla, amt: f32| {
+            if dark {
+                hsla(c.h, c.s, (c.l + amt).min(1.0), c.a)
+            } else {
+                hsla(c.h, c.s, (c.l - amt).max(0.0), c.a)
+            }
+        };
+
         let (bg, fg, border, hover_bg, hover_fg, has_shadow, has_border) = match self.variant {
             ButtonVariant::Default => (
                 theme.tokens.primary,
                 theme.tokens.primary_foreground,
-                theme.tokens.primary,
-                theme.tokens.primary.opacity(0.9),
+                kael::transparent_black(),
+                ink(theme.tokens.primary, 0.05),
                 theme.tokens.primary_foreground,
-                true,
+                false,
                 false,
             ),
             ButtonVariant::Secondary => (
                 theme.tokens.secondary,
                 theme.tokens.secondary_foreground,
-                theme.tokens.secondary,
-                theme.tokens.secondary.opacity(0.8),
+                kael::transparent_black(),
+                ink(theme.tokens.secondary, 0.04),
                 theme.tokens.secondary_foreground,
-                true,
+                false,
                 false,
             ),
             ButtonVariant::Destructive => (
                 theme.tokens.destructive,
                 theme.tokens.destructive_foreground,
-                theme.tokens.destructive,
-                theme.tokens.destructive.opacity(0.9),
+                kael::transparent_black(),
+                ink(theme.tokens.destructive, 0.05),
                 theme.tokens.destructive_foreground,
-                true,
+                false,
                 false,
             ),
             ButtonVariant::Outline => (
@@ -303,7 +312,7 @@ impl RenderOnce for Button {
                 theme.tokens.primary,
                 kael::transparent_black(),
                 kael::transparent_black(),
-                theme.tokens.primary.opacity(0.8),
+                ink(theme.tokens.primary, 0.1),
                 false,
                 false,
             ),
@@ -316,6 +325,11 @@ impl RenderOnce for Button {
                 colors.has_shadow,
                 colors.has_border,
             ),
+        };
+        let active_bg = if bg.a > 0.0 {
+            ink(bg, 0.1)
+        } else {
+            ink(theme.tokens.accent, 0.06)
         };
 
         let clickable = self.clickable();
@@ -383,17 +397,9 @@ impl RenderOnce for Button {
                 this.opacity(0.5).cursor(CursorStyle::Arrow)
             })
             .when(!self.disabled && !is_loading, |this| {
-                let shadow_sm = theme.tokens.shadow_sm.clone();
                 this.cursor(CursorStyle::PointingHand)
-                    .hover(move |style| {
-                        let hover_style = style.bg(hover_bg).text_color(hover_fg);
-                        if has_shadow {
-                            hover_style.shadow(shadow_sm.to_vec())
-                        } else {
-                            hover_style
-                        }
-                    })
-                    .active(|style| style.opacity(0.92).scale(0.97))
+                    .hover(move |style| style.bg(hover_bg).text_color(hover_fg))
+                    .active(move |style| style.bg(active_bg).scale(0.98))
             })
             .map(|this| {
                 let mut div = this;

@@ -624,6 +624,29 @@ impl Render for AstryxShowcase {
                 })),
         );
 
+        let col_a = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .gap(px(20.0))
+            .child(buttons)
+            .child(badges)
+            .child(inputs)
+            .child(selection)
+            .child(feedback)
+            .child(nav_disclosure);
+
+        let col_b = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .gap(px(20.0))
+            .child(typography)
+            .child(extras)
+            .child(misc)
+            .child(details)
+            .child(cards);
+
         let content = div()
             .flex()
             .flex_col()
@@ -631,17 +654,15 @@ impl Render for AstryxShowcase {
             .p(px(24.0))
             .pb(px(64.0))
             .child(header)
-            .child(typography)
-            .child(buttons)
-            .child(badges)
-            .child(inputs)
-            .child(selection)
-            .child(feedback)
-            .child(extras)
-            .child(misc)
-            .child(details)
-            .child(nav_disclosure)
-            .child(cards);
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(20.0))
+                    .items_start()
+                    .child(col_a)
+                    .child(col_b),
+            );
 
         div()
             .size_full()
@@ -654,7 +675,7 @@ impl Render for AstryxShowcase {
 
 fn main() {
     Application::new().run(move |cx| {
-        let bounds = Bounds::centered(None, size(px(1040.0), px(860.0)), cx);
+        let bounds = Bounds::centered(None, size(px(1400.0), px(1280.0)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),

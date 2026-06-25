@@ -125,7 +125,6 @@ impl RenderOnce for Radio {
         let font_family = tokens.font_family.clone();
         let radius_md = tokens.radius_md;
         let transition_fast = tokens.transition_fast;
-        let shadow_xs = tokens.shadow_xs.clone();
         let focus_ring = tokens.focus_ring_light();
 
         let (border_color, bg, dot_opacity) = if self.checked {
@@ -169,7 +168,6 @@ impl RenderOnce for Radio {
                     .border_color(border_color)
                     .bg(bg)
                     .transition(transition_fast)
-                    .when(!self.disabled, |this| this.shadow(shadow_xs.to_vec()))
                     .child(
                         div()
                             .absolute()
