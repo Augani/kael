@@ -162,7 +162,7 @@ What's genuinely strong underneath: real lyon path tessellation cached once and 
 | Critical | Glyph/shadow atlas never evicts | GPU memory climbs for hours | `last_used_frame` LRU; instantiate `ShadowLruTracker`; cap `raster_bounds` | L |
 | High | Canvas path deep-clone | Per-frame heap churn | Arc paths, interned state, retained Vec | M |
 | High | Orphaned cache crates | Unbounded TileCache for infinite-canvas apps | Integrate `MemoryCache` LRU + byte cap, or delete | M |
-| Medium | Image cache retain-all (misleading LRU doc) | Image-heavy apps never evict | `RetainLruImageCache(max_bytes)` + fix doc | M |
+| Medium | Image cache retain-all (misleading LRU doc) | Image-heavy apps never evict | **DONE** — doc already corrected (honestly says "no eviction"); added `LruImageCache` + `lru(id, max_images)` provider: a bounded LRU image cache that evicts least-recently-used decoded images (releasing GPU textures via `drop_image`) once over the cap, never evicting in-flight loads. Pure victim-selection unit-tested (4 cases). | M |
 | Medium | recycling_list O(n) heights/frame | Defeats virtualization at scale | Cache heights, lazy per-range estimation | M |
 | Medium | Memory-pressure hook | Can't shed caches under OS pressure | **DONE (app-driven)** — `App::on_memory_pressure(cb)` + `MemoryPressureLevel` (Normal/Warning/Critical from budget utilization) + `App::poll_memory_pressure()` (queries device budget, dispatches on transition); unit-tested. OS-event *source* (NSProcessInfo/DXGI/PSI) is the remaining platform wiring | M (logic done) |
 | Low | CPU shadow rasterizer dead on Metal | Misleads future memory work | Delete or wire tracker + document | S |

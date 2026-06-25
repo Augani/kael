@@ -355,3 +355,257 @@ impl ImageCacheProvider for RetainAllImageCacheProvider {
             .into()
     }
 }
+
+struct LruImageEntry {
+    item: ImageCacheItem,
+    last_used: u64,
+}
+
+/// Choose which cache keys to evict to bring a cache of `len` entries down to
+/// `max_images`, least-recently-used first. Only loaded entries are evictable; entries
+/// still loading are never selected (so in-flight work is preserved), which means the
+/// cap may be transiently exceeded when many loads are concurrently in flight.
+fn select_lru_victims(
+    entries: impl Iterator<Item = (u64, bool, u64)>,
+    len: usize,
+    max_images: usize,
+) -> Vec<u64> {
+    if len <= max_images {
+        return Vec::new();
+    }
+    let mut loaded: Vec<(u64, u64)> = entries
+        .filter_map(|(key, is_loaded, last_used)| is_loaded.then_some((key, last_used)))
+        .collect();
+    loaded.sort_by_key(|(_, last_used)| *last_used);
+    let evictable = (len - max_images).min(loaded.len());
+    loaded
+        .into_iter()
+        .take(evictable)
+        .map(|(key, _)| key)
+        .collect()
+}
+
+/// An [`ImageCache`] that retains at most `max_images` decoded images, evicting the
+/// least-recently-used entries (releasing their GPU textures via `drop_image`) once the
+/// cap is exceeded. Use this for churning or unbounded image working sets — an infinite
+/// feed, gallery, or map — where [`RetainAllImageCache`] would grow without bound.
+///
+/// Still-loading entries are never evicted; the cap is enforced over decoded images, so a
+/// burst of concurrent loads may transiently exceed `max_images` until they resolve and
+/// the least-recently-used ones are shed.
+pub struct LruImageCache {
+    items: HashMap<u64, LruImageEntry>,
+    tick: u64,
+    max_images: usize,
+}
+
+impl fmt::Debug for LruImageCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LruImageCache")
+            .field("num_images", &self.items.len())
+            .field("max_images", &self.max_images)
+            .finish()
+    }
+}
+
+impl LruImageCache {
+    /// Create a new bounded image cache holding at most `max_images` decoded images
+    /// (clamped to at least 1).
+    pub fn new(max_images: usize, cx: &mut App) -> Entity<Self> {
+        let e = cx.new(|_cx| LruImageCache {
+            items: HashMap::new(),
+            tick: 0,
+            max_images: max_images.max(1),
+        });
+        cx.observe_release(&e, |image_cache, cx| {
+            for (_, mut entry) in std::mem::replace(&mut image_cache.items, HashMap::new()) {
+                if let Some(Ok(image)) = entry.item.get() {
+                    cx.drop_image(image, None);
+                }
+            }
+        })
+        .detach();
+        e
+    }
+
+    fn next_tick(&mut self) -> u64 {
+        self.tick += 1;
+        self.tick
+    }
+
+    /// Load an image from the given source, marking it most-recently-used.
+    ///
+    /// Returns `None` if the image is loading.
+    pub fn load(
+        &mut self,
+        source: &Resource,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
+        let hash = hash(source);
+        let tick = self.next_tick();
+
+        if let Some(entry) = self.items.get_mut(&hash) {
+            entry.last_used = tick;
+            return entry.item.get();
+        }
+
+        let fut = AssetLogger::<ImageAssetLoader>::load(source.clone(), cx);
+        let task = cx.background_executor().spawn(fut).shared();
+        self.items.insert(
+            hash,
+            LruImageEntry {
+                item: ImageCacheItem::Loading(task.clone()),
+                last_used: tick,
+            },
+        );
+
+        let entity = window.current_view();
+        window
+            .spawn(cx, {
+                async move |cx| {
+                    _ = task.await;
+                    cx.on_next_frame(move |_, cx| {
+                        cx.notify(entity);
+                    });
+                }
+            })
+            .detach();
+
+        self.evict_over_cap(window, cx);
+
+        None
+    }
+
+    fn evict_over_cap(&mut self, window: &mut Window, cx: &mut App) {
+        let victims = select_lru_victims(
+            self.items.iter().map(|(key, entry)| {
+                (
+                    *key,
+                    matches!(entry.item, ImageCacheItem::Loaded(_)),
+                    entry.last_used,
+                )
+            }),
+            self.items.len(),
+            self.max_images,
+        );
+        for key in victims {
+            if let Some(mut entry) = self.items.remove(&key)
+                && let Some(Ok(image)) = entry.item.get()
+            {
+                cx.drop_image(image, Some(window));
+            }
+        }
+    }
+
+    /// Clear the image cache, releasing every retained image.
+    pub fn clear(&mut self, window: &mut Window, cx: &mut App) {
+        for (_, mut entry) in std::mem::replace(&mut self.items, HashMap::new()) {
+            if let Some(Ok(image)) = entry.item.get() {
+                cx.drop_image(image, Some(window));
+            }
+        }
+    }
+
+    /// Remove a single image from the cache by its source.
+    pub fn remove(&mut self, source: &Resource, window: &mut Window, cx: &mut App) {
+        let hash = hash(source);
+        if let Some(mut entry) = self.items.remove(&hash)
+            && let Some(Ok(image)) = entry.item.get()
+        {
+            cx.drop_image(image, Some(window));
+        }
+    }
+
+    /// The maximum number of decoded images this cache retains.
+    pub fn capacity(&self) -> usize {
+        self.max_images
+    }
+
+    /// The number of entries (loaded or loading) currently held.
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    /// Returns true if the cache holds no entries.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+}
+
+impl ImageCache for LruImageCache {
+    fn load(
+        &mut self,
+        resource: &Resource,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
+        LruImageCache::load(self, resource, window, cx)
+    }
+}
+
+/// Constructs a bounded LRU image cache (holding at most `max_images` decoded images)
+/// keyed to the element state for the given ID.
+pub fn lru(id: impl Into<ElementId>, max_images: usize) -> LruImageCacheProvider {
+    LruImageCacheProvider {
+        id: id.into(),
+        max_images,
+    }
+}
+
+/// A provider struct for creating a bounded LRU image cache inline.
+pub struct LruImageCacheProvider {
+    id: ElementId,
+    max_images: usize,
+}
+
+impl ImageCacheProvider for LruImageCacheProvider {
+    fn provide(&mut self, window: &mut Window, cx: &mut App) -> AnyImageCache {
+        let max_images = self.max_images;
+        window
+            .with_global_id(self.id.clone(), |global_id, window| {
+                window.with_element_state::<Entity<LruImageCache>, _>(
+                    global_id,
+                    |cache, _window| {
+                        let mut cache = cache.unwrap_or_else(|| LruImageCache::new(max_images, cx));
+                        (cache.clone(), cache)
+                    },
+                )
+            })
+            .into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_lru_victims;
+
+    #[test]
+    fn lru_victims_within_cap_is_a_noop() {
+        let entries = [(1u64, true, 1u64), (2, true, 2)];
+        assert!(select_lru_victims(entries.into_iter(), 2, 2).is_empty());
+    }
+
+    #[test]
+    fn lru_victims_evicts_least_recently_used_first() {
+        // Three loaded entries, cap of two → the oldest (lowest last_used) is shed.
+        let entries = [(10u64, true, 1u64), (20, true, 3), (30, true, 2)];
+        assert_eq!(select_lru_victims(entries.into_iter(), 3, 2), vec![10]);
+    }
+
+    #[test]
+    fn lru_victims_never_evicts_loading_entries() {
+        // Two loading + one loaded, cap of one: only the loaded entry is evictable, so the
+        // cap is held by shedding it and the in-flight loads are preserved.
+        let entries = [(1u64, false, 5u64), (2, false, 6), (3, true, 7)];
+        assert_eq!(select_lru_victims(entries.into_iter(), 3, 1), vec![3]);
+    }
+
+    #[test]
+    fn lru_victims_sheds_multiple_when_far_over_cap() {
+        let entries = [(1u64, true, 1u64), (2, true, 2), (3, true, 3), (4, true, 4)];
+        let mut victims = select_lru_victims(entries.into_iter(), 4, 2);
+        victims.sort_unstable();
+        assert_eq!(victims, vec![1, 2]);
+    }
+}
