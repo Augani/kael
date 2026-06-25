@@ -1,8 +1,8 @@
-use anyhow::{bail, Context as _};
-use schemars::{json_schema, JsonSchema};
+use anyhow::{Context as _, bail};
+use schemars::{JsonSchema, json_schema};
 use serde::{
-    de::{self, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
+    de::{self, Visitor},
 };
 use std::borrow::Cow;
 use std::{

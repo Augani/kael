@@ -3920,6 +3920,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "kael-cli"
+version = "0.3.0"
+
+[[package]]
 name = "kael-macros"
 version = "0.3.0"
 dependencies = [
