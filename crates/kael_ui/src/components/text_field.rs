@@ -270,6 +270,8 @@ impl RenderOnce for TextField {
             base = base.opacity(0.5);
         }
 
+        let focus_handle_for_input = focus_handle.clone();
+
         base.map(|this| {
             let mut div = this;
             div.style().refine(&user_style);
@@ -278,15 +280,13 @@ impl RenderOnce for TextField {
         .child(
             div().size_full().flex().items_center().child(
                 canvas_with_prepaint(
-                    move |bounds, window, cx| {
-                        let focus_handle = focus_handle.clone();
+                    |_bounds, _window, _cx| {},
+                    move |bounds, _data, window, cx| {
                         window.handle_input(
-                            &focus_handle,
+                            &focus_handle_for_input,
                             ElementInputHandler::new(bounds, self.state.clone()),
                             cx,
                         );
-                    },
-                    move |bounds, _data, window, cx| {
                         if !text_content.is_empty() {
                             let text_style = window.text_style();
                             let text_run = TextRun {
