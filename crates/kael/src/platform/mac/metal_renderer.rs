@@ -150,6 +150,7 @@ pub(crate) struct MetalRenderer {
     #[allow(clippy::arc_with_non_send_sync)]
     instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>,
     sprite_atlas: Arc<MetalAtlas>,
+    atlas_byte_budget: Option<u64>,
     core_video_texture_cache: core_video::metal_texture_cache::CVMetalTextureCache,
     drawable_size: Size<DevicePixels>,
     drawable_capacity: Size<DevicePixels>,
@@ -385,6 +386,7 @@ impl MetalRenderer {
             unit_vertices,
             instance_buffer_pool,
             sprite_atlas,
+            atlas_byte_budget: None,
             core_video_texture_cache,
             drawable_size: size(DevicePixels(0), DevicePixels(0)),
             drawable_capacity: size(DevicePixels(0), DevicePixels(0)),
@@ -409,6 +411,15 @@ impl MetalRenderer {
 
     pub fn sprite_atlas(&self) -> &Arc<MetalAtlas> {
         &self.sprite_atlas
+    }
+
+    /// Set a soft byte budget for the glyph/sprite atlas. When set, the renderer evicts the
+    /// least-recently-used atlas tiles down to this budget at the end of each presented frame
+    /// (protecting tiles used within the swapchain's in-flight depth). `None` (the default)
+    /// disables eviction, leaving atlas behavior unchanged.
+    #[allow(dead_code)]
+    pub fn set_atlas_byte_budget(&mut self, budget: Option<u64>) {
+        self.atlas_byte_budget = budget;
     }
 
     pub fn set_presents_with_transaction(&mut self, presents_with_transaction: bool) {
@@ -644,6 +655,16 @@ impl MetalRenderer {
                     if next_drawable_wait_micros > 2_000 {
                         self.counters.drawable_stall_count += 1;
                     }
+
+                    // End of frame: shed least-recently-used atlas tiles to the budget (if
+                    // configured), protecting the frames still in flight, then advance the
+                    // atlas clock so the next frame's glyphs are stamped fresh and protected.
+                    if let Some(budget) = self.atlas_byte_budget {
+                        const IN_FLIGHT_FRAMES: u64 = 3;
+                        self.sprite_atlas
+                            .evict_to_budget_keeping(budget, IN_FLIGHT_FRAMES);
+                    }
+                    self.sprite_atlas.advance_frame();
 
                     return;
                 }

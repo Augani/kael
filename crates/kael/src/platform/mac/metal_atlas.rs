@@ -43,6 +43,19 @@ impl MetalAtlas {
         self.0.lock().evict_to_budget(max_bytes)
     }
 
+    /// Like [`Self::evict_to_budget`], but additionally protects tiles used within the last
+    /// `keep_recent_frames` frames (not just the current one). The render loop uses this with
+    /// the swapchain's in-flight depth so a tile whose region is reclaimed can never be one a
+    /// not-yet-completed command buffer is still sampling.
+    #[allow(dead_code)]
+    pub(crate) fn evict_to_budget_keeping(&self, max_bytes: u64, keep_recent_frames: u64) -> usize {
+        let mut lock = self.0.lock();
+        let guard = lock
+            .frame
+            .saturating_sub(keep_recent_frames.saturating_sub(1));
+        lock.evict_to_budget_with_guard(max_bytes, guard)
+    }
+
     /// The number of distinct tiles currently held.
     #[allow(dead_code)]
     pub(crate) fn tile_count(&self) -> usize {
@@ -227,6 +240,11 @@ impl MetalAtlasState {
     }
 
     fn evict_to_budget(&mut self, max_bytes: u64) -> usize {
+        let guard = self.frame;
+        self.evict_to_budget_with_guard(max_bytes, guard)
+    }
+
+    fn evict_to_budget_with_guard(&mut self, max_bytes: u64, guard_frame: u64) -> usize {
         let entries: Vec<(AtlasKey, u64, u64)> = self
             .tiles_by_key
             .iter()
@@ -241,7 +259,7 @@ impl MetalAtlasState {
             .map(|(_, last_used, bytes)| (*last_used, *bytes))
             .collect();
 
-        let victims = crate::select_atlas_evictions(&policy_input, total, max_bytes, self.frame);
+        let victims = crate::select_atlas_evictions(&policy_input, total, max_bytes, guard_frame);
         let mut evicted = 0;
         for index in victims {
             if self.evict_tile(&entries[index].0) {
@@ -451,6 +469,44 @@ mod tests {
             builds,
             before + 1,
             "an evicted tile is rebuilt on next request"
+        );
+    }
+
+    #[test]
+    fn keep_window_protects_recent_frames_from_eviction() {
+        let Some(device) = metal::Device::system_default() else {
+            return;
+        };
+        let atlas = MetalAtlas::new(device);
+        let tile_size = size(DevicePixels(64), DevicePixels(64));
+        const TILE_BYTES: u64 = 64 * 64 * 4;
+
+        // Five tiles across frames 1..=5.
+        for id in 0..5usize {
+            atlas.advance_frame();
+            atlas
+                .get_or_insert_with(&image_key(id), &mut || {
+                    Ok(Some((
+                        tile_size,
+                        Cow::Owned(vec![0u8; TILE_BYTES as usize]),
+                    )))
+                })
+                .unwrap();
+        }
+        assert_eq!(atlas.tile_count(), 5);
+
+        // Current frame is 5. Keep the last 3 frames (3,4,5) protected even though the
+        // 1-tile budget would otherwise want to shed 4 tiles. Only frames 1 and 2 are
+        // evictable, so the atlas stays over budget rather than touch the in-flight window.
+        let evicted = atlas.evict_to_budget_keeping(TILE_BYTES, 3);
+        assert_eq!(
+            evicted, 2,
+            "only the two tiles outside the keep-window are evictable"
+        );
+        assert_eq!(
+            atlas.tile_count(),
+            3,
+            "the three most-recent frames are protected"
         );
     }
 }
