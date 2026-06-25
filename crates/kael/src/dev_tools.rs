@@ -611,9 +611,82 @@ fn strip_pii(input: &str) -> String {
     result
 }
 
+/// Live-reload design tokens from a styles file without recompiling.
+///
+/// Watches `path` (a JSON or TOML theme file carrying any subset of the color,
+/// typography, spacing, radius, and shadow tokens) and applies every successful
+/// reload to the global [`crate::Theme`], so edits to spacing/color/typography
+/// take effect in the running app on save. This is the styles slice of hot
+/// reload — the cheapest iteration-speed win while full code hot-patch is out of
+/// scope. The initial load is applied immediately; a parse error on a later edit
+/// is logged and the previous styles are kept.
+///
+/// ```no_run
+/// # use kael::App;
+/// # fn demo(cx: &mut App) -> anyhow::Result<()> {
+/// kael::dev::watch_styles(cx, "theme.toml")?;
+/// # Ok(())
+/// # }
+/// ```
+pub fn watch_styles(cx: &mut crate::App, path: impl AsRef<std::path::Path>) -> anyhow::Result<()> {
+    cx.observe_theme_file(path, |theme, cx| cx.set_global(theme))
+}
+
+/// Developer ergonomics front door (`kael::dev::*`).
+///
+/// A stable, discoverable namespace for iteration-speed tools such as
+/// [`watch_styles`](dev::watch_styles) live token reload.
+pub mod dev {
+    pub use super::watch_styles;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[kael::test]
+    fn watch_styles_live_applies_spacing_and_color_tokens(cx: &mut crate::TestAppContext) {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static NEXT_DIR: AtomicU32 = AtomicU32::new(0);
+
+        let directory = std::env::temp_dir().join(format!(
+            "kael-watch-styles-{}-{}",
+            std::process::id(),
+            NEXT_DIR.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let styles_path = directory.join("styles.toml");
+
+        cx.on_quit({
+            let directory = directory.clone();
+            move || {
+                let _ = std::fs::remove_dir_all(directory);
+            }
+        });
+
+        std::fs::write(
+            &styles_path,
+            "[spacing]\nmd = 20.0\n[colors]\nprimary = \"#2563eb\"\n",
+        )
+        .unwrap();
+
+        cx.update(|cx| {
+            watch_styles(cx, &styles_path).unwrap();
+        });
+
+        let expected = crate::Theme::from_path(&styles_path).unwrap();
+        cx.read_global::<crate::Theme, _>(|theme, _| {
+            assert_eq!(
+                theme, &expected,
+                "watch_styles must apply the styles file to the global theme"
+            );
+            assert_eq!(
+                theme.spacing.md,
+                crate::px(20.0),
+                "a non-color (spacing) token must hot-apply, not just colors"
+            );
+        });
+    }
 
     fn sample_tree() -> InspectedElement {
         InspectedElement {
