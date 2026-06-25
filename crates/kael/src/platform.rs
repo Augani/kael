@@ -1195,6 +1195,48 @@ impl From<TileId> for etagere::AllocId {
     }
 }
 
+/// Choose which atlas tiles to evict to bring the atlas's total byte usage down to
+/// `max_bytes`, least-recently-used first.
+///
+/// `tiles` lists each evictable tile as `(last_used_frame, byte_size)`. A tile last used in
+/// the *current* frame is never selected: it may be referenced by the in-flight GPU render,
+/// so reclaiming its atlas region could corrupt the frame. Returns indices into `tiles`,
+/// oldest first; if the not-this-frame tiles cannot free enough, it returns all it safely
+/// can (the atlas may remain over budget until those tiles age out — by design, never at the
+/// cost of correctness).
+///
+/// This is the verified policy the per-backend atlas wiring (metal/blade/directx) will call
+/// to bound glyph-atlas growth; compiled in all builds, exercised by tests until that
+/// wiring lands.
+#[allow(dead_code)]
+pub(crate) fn select_atlas_evictions(
+    tiles: &[(u64, u64)],
+    total_bytes: u64,
+    max_bytes: u64,
+    current_frame: u64,
+) -> Vec<usize> {
+    if total_bytes <= max_bytes {
+        return Vec::new();
+    }
+
+    let mut candidates: Vec<usize> = (0..tiles.len())
+        .filter(|&index| tiles[index].0 < current_frame)
+        .collect();
+    candidates.sort_by_key(|&index| tiles[index].0);
+
+    let needed = total_bytes - max_bytes;
+    let mut freed = 0u64;
+    let mut victims = Vec::new();
+    for index in candidates {
+        if freed >= needed {
+            break;
+        }
+        freed = freed.saturating_add(tiles[index].1);
+        victims.push(index);
+    }
+    victims
+}
+
 pub(crate) struct PlatformInputHandler {
     cx: AsyncWindowContext,
     handler: Box<dyn InputHandler>,
