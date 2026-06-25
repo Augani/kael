@@ -10,10 +10,11 @@
 //! Circles clip *live* through the existing shader: [`ClipShape::as_rounded_clip`] maps a
 //! circle to the rounded-rect clip the quad shader already honors, surfaced as
 //! [`crate::Window::with_clip_path`] (see `circle_clip_shape_renders_through_the_rounded_clip_shader`).
-//! Convex polygons clip correctly via a rasterized mask + [`apply_clip_mask_bgra`] (see
-//! `arbitrary_triangle_clip_produces_correct_pixels`); `with_clip_path` falls back to the
-//! shape's bounding box for them until the per-texel mask sample is fused into the in-pass
-//! shader. Apps reach this through the [`crate::clip_path`] wrapper element.
+//! Convex polygons clip correctly via a rasterized mask, applied either on the CPU
+//! ([`apply_clip_mask_bgra`]) or on the GPU (a compute-kernel multiply that golden-matches
+//! the CPU reference); `with_clip_path` falls back to the shape's bounding box for them
+//! until the per-texel mask sample is fused into the in-pass shader. Apps reach all of this
+//! through the [`crate::clip_path`] wrapper element.
 
 use crate::{point, px, size, Bounds, Corners, Pixels, Point, Size};
 

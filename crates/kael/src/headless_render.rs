@@ -217,6 +217,21 @@ impl HeadlessRenderer {
         Ok(None)
     }
 
+    /// Apply a per-pixel coverage `mask` to a BGRA8 `pixels` buffer on the GPU, returning
+    /// `true` if the GPU path ran (and `pixels` was modified in place) or `false` on the
+    /// CPU-only backend. Lets golden tests confirm the GPU clip-mask multiply matches the
+    /// CPU `apply_clip_mask_bgra` reference.
+    #[cfg(test)]
+    pub(crate) fn apply_clip_mask_gpu(&self, pixels: &mut [u8], mask: &[f32]) -> Result<bool> {
+        #[cfg(all(target_os = "macos", not(feature = "macos-blade")))]
+        if let Some(renderer) = self.metal.as_ref() {
+            renderer.apply_clip_mask(pixels, mask)?;
+            return Ok(true);
+        }
+        let _ = (pixels, mask);
+        Ok(false)
+    }
+
     /// Run a built-in GPU compute kernel that doubles each input value, proving
     /// the compute-pipeline path end-to-end. Available only on the GPU backend.
     pub fn run_compute_doubler(&self, data: &[f32]) -> Result<Vec<f32>> {
@@ -903,5 +918,67 @@ mod tests {
             0,
             "bottom-right corner is outside the circle"
         );
+    }
+
+    #[test]
+    fn gpu_clip_mask_matches_the_cpu_reference_and_clips_a_triangle() {
+        let viewport = 48u32;
+        let mut renderer = match HeadlessRenderer::new(viewport, viewport) {
+            Ok(renderer) => renderer,
+            Err(_) => return,
+        };
+        if renderer.backend() != HeadlessBackend::Gpu {
+            return;
+        }
+
+        let scene = build_quad_scene(
+            viewport,
+            viewport,
+            Background::from(hsla(0.0, 1.0, 0.5, 1.0)),
+        );
+        let rendered = renderer
+            .render_scene_to_bytes(&scene)
+            .unwrap()
+            .expect("gpu backend yields pixels");
+
+        let triangle = crate::ClipShape::ConvexPolygon {
+            vertices: vec![
+                point(crate::px(24.0), crate::px(2.0)),
+                point(crate::px(2.0), crate::px(46.0)),
+                point(crate::px(46.0), crate::px(46.0)),
+            ],
+        };
+        let mask = triangle.rasterize_mask(
+            point(crate::px(0.0), crate::px(0.0)),
+            viewport as usize,
+            viewport as usize,
+            crate::px(1.0),
+        );
+
+        // Apply the same mask two ways: the CPU reference and the GPU compute kernel.
+        let mut cpu = rendered.clone();
+        crate::apply_clip_mask_bgra(&mut cpu, &mask);
+
+        let mut gpu = rendered.clone();
+        let ran = renderer.apply_clip_mask_gpu(&mut gpu, &mask).unwrap();
+        assert!(ran, "gpu backend must run the clip-mask kernel");
+
+        // The GPU multiply must match the CPU reference within rounding tolerance.
+        let max_diff = cpu
+            .iter()
+            .zip(&gpu)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_diff <= 1,
+            "gpu clip-mask must match the cpu reference, max byte diff {max_diff}"
+        );
+
+        // And it produces the correct clip: interior opaque, exterior cut.
+        let alpha = |x: u32, y: u32| gpu[((y * viewport + x) * 4 + 3) as usize];
+        assert!(alpha(24, 30) > 250, "interior stays opaque");
+        assert_eq!(alpha(2, 2), 0, "exterior corner is cut");
+        assert_eq!(alpha(46, 2), 0, "exterior corner is cut");
     }
 }

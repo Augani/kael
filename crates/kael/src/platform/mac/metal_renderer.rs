@@ -1233,6 +1233,98 @@ impl MetalRenderer {
         Ok(())
     }
 
+    /// Apply a per-pixel coverage `mask` to a tightly-packed BGRA8 `pixels` buffer on the
+    /// GPU, scaling each pixel's alpha by its mask value. This is the GPU equivalent of the
+    /// CPU `apply_clip_mask_bgra` reference — the path a polygon clip uses to offload the
+    /// mask multiply from the CPU.
+    #[cfg(test)]
+    pub(crate) fn apply_clip_mask(&self, pixels: &mut [u8], mask: &[f32]) -> Result<()> {
+        let count = (pixels.len() / 4).min(mask.len());
+        if count == 0 {
+            return Ok(());
+        }
+
+        const KERNEL: &str = concat!(
+            "#include <metal_stdlib>\n",
+            "using namespace metal;\n",
+            "kernel void apply_clip_mask(device uchar4* pixels [[buffer(0)]],\n",
+            "                            device const float* mask [[buffer(1)]],\n",
+            "                            constant uint& count [[buffer(2)]],\n",
+            "                            uint id [[thread_position_in_grid]]) {\n",
+            "    if (id >= count) { return; }\n",
+            "    uchar4 p = pixels[id];\n",
+            "    float coverage = clamp(mask[id], 0.0, 1.0);\n",
+            "    p.w = uchar(round(float(p.w) * coverage));\n",
+            "    pixels[id] = p;\n",
+            "}\n",
+        );
+
+        let library = self
+            .device
+            .new_library_with_source(KERNEL, &metal::CompileOptions::new())
+            .map_err(|err| anyhow::anyhow!("failed to compile clip-mask kernel: {err}"))?;
+        let function = library
+            .get_function("apply_clip_mask", None)
+            .map_err(|err| anyhow::anyhow!("clip-mask entry not found: {err}"))?;
+        let pipeline = self
+            .device
+            .new_compute_pipeline_state_with_function(&function)
+            .map_err(|err| anyhow::anyhow!("failed to create clip-mask pipeline: {err}"))?;
+
+        let pixel_bytes = (count * 4) as u64;
+        let pixel_buffer = self.device.new_buffer_with_data(
+            pixels.as_ptr() as *const c_void,
+            pixel_bytes,
+            MTLResourceOptions::StorageModeShared,
+        );
+        let mask_buffer = self.device.new_buffer_with_data(
+            mask.as_ptr() as *const c_void,
+            (count * mem::size_of::<f32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+        let count_u32 = count as u32;
+        let count_buffer = self.device.new_buffer_with_data(
+            &count_u32 as *const u32 as *const c_void,
+            mem::size_of::<u32>() as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let command_buffer = self.command_queue.new_command_buffer();
+        let encoder = command_buffer.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(&pipeline);
+        encoder.set_buffer(0, Some(&pixel_buffer), 0);
+        encoder.set_buffer(1, Some(&mask_buffer), 0);
+        encoder.set_buffer(2, Some(&count_buffer), 0);
+
+        let threads = count as u64;
+        let threads_per_group = pipeline
+            .max_total_threads_per_threadgroup()
+            .min(threads)
+            .max(1);
+        encoder.dispatch_threads(
+            metal::MTLSize {
+                width: threads,
+                height: 1,
+                depth: 1,
+            },
+            metal::MTLSize {
+                width: threads_per_group,
+                height: 1,
+                depth: 1,
+            },
+        );
+        encoder.end_encoding();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        unsafe {
+            let contents = pixel_buffer.contents() as *const u8;
+            let slice = std::slice::from_raw_parts(contents, pixel_bytes as usize);
+            pixels[..pixel_bytes as usize].copy_from_slice(slice);
+        }
+        Ok(())
+    }
+
     fn ensure_buffer_size(&mut self, scene: &Scene) {
         const ALIGN: usize = 256;
         let align_up = |size: usize| size.div_ceil(ALIGN) * ALIGN;
