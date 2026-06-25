@@ -220,6 +220,17 @@ impl App {
         });
     }
 
+    /// Set a soft glyph/sprite-atlas byte budget across all currently open windows. When
+    /// set, each window's renderer evicts least-recently-used atlas tiles down to the budget
+    /// at the end of every frame, bounding glyph-atlas memory growth on long-running,
+    /// text-churning UIs. Size it against the device with [`App::gpu_memory_budget`]; `None`
+    /// disables eviction (the default). Currently honored on the Metal backend.
+    pub fn set_atlas_byte_budget(&mut self, budget: Option<u64>) {
+        for window in self.windows.values().flatten() {
+            window.set_atlas_byte_budget(budget);
+        }
+    }
+
     /// Run `f` against the app-wide [`GpuMemoryManager`] to register, touch, release,
     /// or evict GPU resources. This is the single point subsystems and apps use to put
     /// their evictable GPU caches under the shared budget.

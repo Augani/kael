@@ -5192,6 +5192,14 @@ impl Window {
         self.platform_window.set_mouse_passthrough(passthrough);
     }
 
+    /// Set a soft byte budget for this window's glyph/sprite atlas. When set, the renderer
+    /// evicts least-recently-used atlas tiles down to the budget at the end of each frame,
+    /// bounding glyph-atlas growth on long-running, text-churning UIs. `None` (the default)
+    /// disables eviction. Currently honored on the Metal backend.
+    pub fn set_atlas_byte_budget(&self, budget: Option<u64>) {
+        self.platform_window.set_atlas_byte_budget(budget);
+    }
+
     /// Toggle full screen status on the current window at the platform level.
     pub fn toggle_fullscreen(&self) {
         self.platform_window.toggle_fullscreen();

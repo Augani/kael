@@ -780,6 +780,10 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         true
     }
     fn set_mouse_passthrough(&self, _passthrough: bool) {}
+    /// Set a soft byte budget for this window's glyph/sprite atlas. When set, least-recently
+    /// -used atlas tiles are evicted to the budget at the end of each frame. `None` (default)
+    /// disables eviction. No-op on backends that do not yet implement atlas eviction.
+    fn set_atlas_byte_budget(&self, _budget: Option<u64>) {}
     fn set_progress_bar(&self, _state: ProgressBarState) {}
 
     /// Get the display refresh rate for this window's current display.

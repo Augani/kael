@@ -2652,6 +2652,11 @@ impl PlatformWindow for MacWindow {
         }
     }
 
+    #[cfg(not(feature = "macos-blade"))]
+    fn set_atlas_byte_budget(&self, budget: Option<u64>) {
+        self.0.lock().renderer.set_atlas_byte_budget(budget);
+    }
+
     fn titlebar_double_click(&self) {
         let window = self.0.lock().native_window;
         perform_titlebar_double_click_action(window)
