@@ -1,12 +1,13 @@
 use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::components::alert::Alert;
 use kael_ui::components::scrollable::scrollable_vertical;
-use kael_ui::components::text::body;
-use kael_ui::components::text::{caption, h1, h3, muted};
+use kael_ui::components::text::{body, caption, code, h1, h2, h3, h4, h5, h6, label, muted};
+use kael_ui::components::tooltip::tooltip;
 use kael_ui::prelude::{
-    Avatar, AvatarSize, Badge, BadgeVariant, Banner, Button, ButtonSize, ButtonVariant, Card,
-    Checkbox, Hue, ProgressBar, Radio, RadioGroup, SelectableCard, Spinner, SpinnerSize,
-    SpinnerVariant, StatusDot, StatusTone, TextField, TextFieldSize, Toggle, KBD,
+    Avatar, AvatarGroup, AvatarItem, AvatarSize, Badge, BadgeVariant, Banner, Button, ButtonSize,
+    ButtonVariant, Card, Checkbox, Hue, ProgressBar, Radio, RadioGroup, SelectableCard, Separator,
+    Skeleton, SkeletonVariant, Spinner, SpinnerSize, SpinnerVariant, StatusDot, StatusTone,
+    TextField, TextFieldSize, Toggle, KBD,
 };
 use kael_ui::theme::{install_theme, use_theme, Theme, ThemeTokens, ThemeVariant};
 
@@ -488,6 +489,92 @@ impl Render for AstryxShowcase {
                 ),
         );
 
+        let typography = section("Typography", "Figtree-scale headings and text", &theme)
+            .child(
+                col()
+                    .gap(px(6.0))
+                    .child(h1("Heading 1".to_string()))
+                    .child(h2("Heading 2".to_string()))
+                    .child(h3("Heading 3".to_string()))
+                    .child(h4("Heading 4".to_string()))
+                    .child(h5("Heading 5".to_string()))
+                    .child(h6("Heading 6".to_string())),
+            )
+            .child(
+                col()
+                    .gap(px(4.0))
+                    .child(body(
+                        "Body text — the workhorse size for paragraphs and UI copy.".to_string(),
+                    ))
+                    .child(label(
+                        "Label — used on form fields and metadata.".to_string(),
+                    ))
+                    .child(caption(
+                        "Caption — secondary, lower-emphasis text.".to_string(),
+                    ))
+                    .child(muted("Muted — de-emphasized supporting text.".to_string()))
+                    .child(code("let astryx = Theme::astryx();".to_string())),
+            );
+
+        let details = section(
+            "Avatars, skeletons, dividers & tooltips",
+            "Identity, loading and structure",
+            &theme,
+        )
+        .child(
+            row()
+                .gap(px(32.0))
+                .items_center()
+                .child(
+                    AvatarGroup::new(vec![
+                        AvatarItem::new().name("Augustus Otu"),
+                        AvatarItem::new().name("Kael UI"),
+                        AvatarItem::new().name("Astryx Design"),
+                        AvatarItem::new().name("Meta Open Source"),
+                        AvatarItem::new().name("Desktop Native"),
+                    ])
+                    .max_visible(3)
+                    .size(AvatarSize::Md),
+                )
+                .child(tooltip(
+                    Button::new("tt-btn", "Hover for tooltip").variant(ButtonVariant::Outline),
+                    "Astryx-styled tooltip",
+                )),
+        )
+        .child(
+            col()
+                .gap(px(10.0))
+                .child(
+                    Skeleton::new()
+                        .variant(SkeletonVariant::Text)
+                        .w(px(260.0))
+                        .h(px(12.0)),
+                )
+                .child(
+                    Skeleton::new()
+                        .variant(SkeletonVariant::Text)
+                        .w(px(200.0))
+                        .h(px(12.0)),
+                )
+                .child(
+                    row()
+                        .gap(px(12.0))
+                        .items_center()
+                        .child(
+                            Skeleton::new()
+                                .variant(SkeletonVariant::Circle)
+                                .size(px(40.0)),
+                        )
+                        .child(
+                            Skeleton::new()
+                                .variant(SkeletonVariant::Rect)
+                                .w(px(160.0))
+                                .h(px(48.0)),
+                        ),
+                ),
+        )
+        .child(Separator::new().label("section divider"));
+
         let content = div()
             .flex()
             .flex_col()
@@ -495,6 +582,7 @@ impl Render for AstryxShowcase {
             .p(px(24.0))
             .pb(px(64.0))
             .child(header)
+            .child(typography)
             .child(buttons)
             .child(badges)
             .child(inputs)
@@ -502,6 +590,7 @@ impl Render for AstryxShowcase {
             .child(feedback)
             .child(extras)
             .child(misc)
+            .child(details)
             .child(cards);
 
         div()
