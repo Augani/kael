@@ -32,6 +32,7 @@ mod auto_updater;
 pub mod benchmark;
 mod bounds_tree;
 mod cache;
+mod clip_path;
 mod color;
 /// The default colors used by GPUI.
 pub mod colors;
@@ -151,6 +152,7 @@ pub use assets::*;
 pub use auto_updater::*;
 pub use background_jobs::*;
 pub use benchmark::*;
+pub use clip_path::*;
 pub use color::*;
 pub use command_registry::{CommandDescriptor, CommandPalette, PaletteCommandId};
 pub use computed::*;
