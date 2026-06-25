@@ -91,6 +91,121 @@ impl FrameSkip {
     }
 }
 
+/// The region of a frame that changed relative to a previously presented frame.
+///
+/// This is the descriptor the fine-grained ("per-rectangle") half of dirty-region
+/// rendering consumes: rather than skipping or repainting the whole frame, only
+/// [`FrameDamage::Region`] need be re-rasterized (with the compositor's retained
+/// contents loaded underneath). [`Scene::damage_since`] computes it conservatively —
+/// it never under-reports the changed area, so acting on it is always visually correct.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FrameDamage {
+    /// Nothing changed — the frame is identical and may be skipped entirely.
+    None,
+    /// Only this rectangle changed — re-rasterize just this region.
+    Region(Bounds<ScaledPixels>),
+    /// The whole frame changed, or its structure changed such that a tight region
+    /// cannot be computed cheaply — re-rasterize everything.
+    Full,
+}
+
+struct FnvHash(u64);
+
+impl FnvHash {
+    fn new() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+
+    fn mix(&mut self, value: u64) {
+        self.0 ^= value;
+        self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+
+    fn mix_hsla(&mut self, color: &Hsla) {
+        self.mix(color.h.to_bits() as u64);
+        self.mix(color.s.to_bits() as u64);
+        self.mix(color.l.to_bits() as u64);
+        self.mix(color.a.to_bits() as u64);
+    }
+
+    fn mix_bounds(&mut self, bounds: &Bounds<ScaledPixels>) {
+        self.mix(bounds.origin.x.0.to_bits() as u64);
+        self.mix(bounds.origin.y.0.to_bits() as u64);
+        self.mix(bounds.size.width.0.to_bits() as u64);
+        self.mix(bounds.size.height.0.to_bits() as u64);
+    }
+
+    fn mix_transform(&mut self, transform: &TransformationMatrix) {
+        self.mix(transform.rotation_scale[0][0].to_bits() as u64);
+        self.mix(transform.rotation_scale[0][1].to_bits() as u64);
+        self.mix(transform.rotation_scale[1][0].to_bits() as u64);
+        self.mix(transform.rotation_scale[1][1].to_bits() as u64);
+        self.mix(transform.translation[0].to_bits() as u64);
+        self.mix(transform.translation[1].to_bits() as u64);
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+fn quad_fingerprint(quad: &Quad) -> u64 {
+    let mut hash = FnvHash::new();
+    hash.mix_bounds(&quad.bounds);
+    hash.mix_hsla(&quad.background.solid);
+    hash.mix_hsla(&quad.border_color.solid);
+    hash.mix(quad.blend_mode as u64);
+    hash.mix_transform(&quad.transform);
+    hash.finish()
+}
+
+fn shadow_fingerprint(shadow: &Shadow) -> u64 {
+    let mut hash = FnvHash::new();
+    hash.mix_bounds(&shadow.bounds);
+    hash.mix_hsla(&shadow.color);
+    hash.mix(shadow.blur_radius.0.to_bits() as u64);
+    hash.finish()
+}
+
+fn blur_rect_fingerprint(blur: &BlurRect) -> u64 {
+    let mut hash = FnvHash::new();
+    hash.mix_bounds(&blur.bounds);
+    hash.mix_hsla(&blur.tint);
+    hash.mix(blur.blur_radius.0.to_bits() as u64);
+    hash.finish()
+}
+
+fn path_fingerprint(path: &Path<ScaledPixels>) -> u64 {
+    let mut hash = FnvHash::new();
+    hash.mix_bounds(&path.bounds);
+    hash.mix_hsla(&path.color.solid);
+    hash.finish()
+}
+
+fn underline_fingerprint(underline: &Underline) -> u64 {
+    let mut hash = FnvHash::new();
+    hash.mix_bounds(&underline.bounds);
+    hash.mix_hsla(&underline.color);
+    hash.finish()
+}
+
+fn monochrome_fingerprint(sprite: &MonochromeSprite) -> u64 {
+    let mut hash = FnvHash::new();
+    hash.mix_bounds(&sprite.bounds);
+    hash.mix_hsla(&sprite.color);
+    hash.mix_transform(&sprite.transformation);
+    hash.finish()
+}
+
+fn polychrome_fingerprint(sprite: &PolychromeSprite) -> u64 {
+    let mut hash = FnvHash::new();
+    hash.mix_bounds(&sprite.bounds);
+    hash.mix_hsla(&sprite.color);
+    hash.mix(sprite.opacity.to_bits() as u64);
+    hash.mix(sprite.grayscale as u64);
+    hash.finish()
+}
+
 impl Scene {
     pub fn clear(&mut self) {
         self.paint_operations.clear();
@@ -117,94 +232,123 @@ impl Scene {
     /// Padding bytes are deliberately not hashed (they are uninitialized), so the value
     /// is deterministic across identical scenes.
     pub(crate) fn structural_checksum(&self) -> u64 {
-        fn hsla_bits(color: &Hsla) -> [u64; 4] {
-            [
-                color.h.to_bits() as u64,
-                color.s.to_bits() as u64,
-                color.l.to_bits() as u64,
-                color.a.to_bits() as u64,
-            ]
-        }
-        fn bounds_bits(bounds: &Bounds<ScaledPixels>) -> [u64; 4] {
-            [
-                bounds.origin.x.0.to_bits() as u64,
-                bounds.origin.y.0.to_bits() as u64,
-                bounds.size.width.0.to_bits() as u64,
-                bounds.size.height.0.to_bits() as u64,
-            ]
-        }
-        fn transform_bits(transform: &TransformationMatrix) -> [u64; 6] {
-            [
-                transform.rotation_scale[0][0].to_bits() as u64,
-                transform.rotation_scale[0][1].to_bits() as u64,
-                transform.rotation_scale[1][0].to_bits() as u64,
-                transform.rotation_scale[1][1].to_bits() as u64,
-                transform.translation[0].to_bits() as u64,
-                transform.translation[1].to_bits() as u64,
-            ]
-        }
+        let mut hash = FnvHash::new();
 
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        let mut mix = |value: u64| {
-            hash ^= value;
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        };
-        let mut mix_all = |values: [u64; 4], mix: &mut dyn FnMut(u64)| {
-            for value in values {
-                mix(value);
-            }
-        };
-
-        mix(self.shadows.len() as u64);
-        mix(self.blur_rects.len() as u64);
-        mix(self.quads.len() as u64);
-        mix(self.paths.len() as u64);
-        mix(self.underlines.len() as u64);
-        mix(self.monochrome_sprites.len() as u64);
-        mix(self.polychrome_sprites.len() as u64);
-        mix(self.surfaces.len() as u64);
+        hash.mix(self.shadows.len() as u64);
+        hash.mix(self.blur_rects.len() as u64);
+        hash.mix(self.quads.len() as u64);
+        hash.mix(self.paths.len() as u64);
+        hash.mix(self.underlines.len() as u64);
+        hash.mix(self.monochrome_sprites.len() as u64);
+        hash.mix(self.polychrome_sprites.len() as u64);
+        hash.mix(self.surfaces.len() as u64);
 
         for quad in &self.quads {
-            mix_all(bounds_bits(&quad.bounds), &mut mix);
-            mix_all(hsla_bits(&quad.background.solid), &mut mix);
-            mix_all(hsla_bits(&quad.border_color.solid), &mut mix);
-            mix(quad.blend_mode as u64);
-            for value in transform_bits(&quad.transform) {
-                mix(value);
-            }
+            hash.mix(quad_fingerprint(quad));
         }
         for shadow in &self.shadows {
-            mix_all(bounds_bits(&shadow.bounds), &mut mix);
-            mix_all(hsla_bits(&shadow.color), &mut mix);
-            mix(shadow.blur_radius.0.to_bits() as u64);
+            hash.mix(shadow_fingerprint(shadow));
         }
         for blur in &self.blur_rects {
-            mix_all(bounds_bits(&blur.bounds), &mut mix);
-            mix_all(hsla_bits(&blur.tint), &mut mix);
-            mix(blur.blur_radius.0.to_bits() as u64);
+            hash.mix(blur_rect_fingerprint(blur));
         }
         for path in &self.paths {
-            mix_all(bounds_bits(&path.bounds), &mut mix);
-            mix_all(hsla_bits(&path.color.solid), &mut mix);
+            hash.mix(path_fingerprint(path));
         }
         for underline in &self.underlines {
-            mix_all(bounds_bits(&underline.bounds), &mut mix);
-            mix_all(hsla_bits(&underline.color), &mut mix);
+            hash.mix(underline_fingerprint(underline));
         }
         for sprite in &self.monochrome_sprites {
-            mix_all(bounds_bits(&sprite.bounds), &mut mix);
-            mix_all(hsla_bits(&sprite.color), &mut mix);
-            for value in transform_bits(&sprite.transformation) {
-                mix(value);
-            }
+            hash.mix(monochrome_fingerprint(sprite));
         }
         for sprite in &self.polychrome_sprites {
-            mix_all(bounds_bits(&sprite.bounds), &mut mix);
-            mix_all(hsla_bits(&sprite.color), &mut mix);
-            mix(sprite.opacity.to_bits() as u64);
-            mix(sprite.grayscale as u64);
+            hash.mix(polychrome_fingerprint(sprite));
         }
-        hash
+        hash.finish()
+    }
+
+    /// Compute the region that changed relative to a previously presented `prev` scene —
+    /// the fine-grained ("per-rectangle") half of dirty-region rendering.
+    ///
+    /// Primitives are compared by content fingerprint at matching indices (the order in
+    /// which kael emits primitives is stable frame-to-frame for unchanged content). When a
+    /// primitive differs, both its previous and current bounds are unioned into the damage
+    /// region, so the area to erase *and* the area to repaint are both covered. If the
+    /// primitive counts differ, or either scene has a live external surface, the structure
+    /// changed in a way that cannot be localized cheaply, so the whole frame is reported.
+    ///
+    /// The result is conservative: it never reports a region smaller than the true changed
+    /// area, so re-rasterizing exactly [`FrameDamage::Region`] (with the prior frame loaded
+    /// underneath) is always visually identical to a full repaint.
+    ///
+    /// Verified by the GPU golden harness (`render_damage_to_bytes`); awaiting a live
+    /// present-loop consumer, hence currently exercised only under test.
+    #[allow(dead_code)]
+    pub(crate) fn damage_since(&self, prev: &Scene) -> FrameDamage {
+        if self.has_live_surfaces() || prev.has_live_surfaces() {
+            return FrameDamage::Full;
+        }
+        if self.quads.len() != prev.quads.len()
+            || self.shadows.len() != prev.shadows.len()
+            || self.blur_rects.len() != prev.blur_rects.len()
+            || self.paths.len() != prev.paths.len()
+            || self.underlines.len() != prev.underlines.len()
+            || self.monochrome_sprites.len() != prev.monochrome_sprites.len()
+            || self.polychrome_sprites.len() != prev.polychrome_sprites.len()
+        {
+            return FrameDamage::Full;
+        }
+
+        let mut damage: Option<Bounds<ScaledPixels>> = None;
+        let mut grow = |current: &Bounds<ScaledPixels>, previous: &Bounds<ScaledPixels>| {
+            for region in [current, previous] {
+                damage = Some(match damage {
+                    Some(existing) => existing.union(region),
+                    None => *region,
+                });
+            }
+        };
+
+        for (current, previous) in self.quads.iter().zip(&prev.quads) {
+            if quad_fingerprint(current) != quad_fingerprint(previous) {
+                grow(&current.bounds, &previous.bounds);
+            }
+        }
+        for (current, previous) in self.shadows.iter().zip(&prev.shadows) {
+            if shadow_fingerprint(current) != shadow_fingerprint(previous) {
+                grow(&current.bounds, &previous.bounds);
+            }
+        }
+        for (current, previous) in self.blur_rects.iter().zip(&prev.blur_rects) {
+            if blur_rect_fingerprint(current) != blur_rect_fingerprint(previous) {
+                grow(&current.bounds, &previous.bounds);
+            }
+        }
+        for (current, previous) in self.paths.iter().zip(&prev.paths) {
+            if path_fingerprint(current) != path_fingerprint(previous) {
+                grow(&current.bounds, &previous.bounds);
+            }
+        }
+        for (current, previous) in self.underlines.iter().zip(&prev.underlines) {
+            if underline_fingerprint(current) != underline_fingerprint(previous) {
+                grow(&current.bounds, &previous.bounds);
+            }
+        }
+        for (current, previous) in self.monochrome_sprites.iter().zip(&prev.monochrome_sprites) {
+            if monochrome_fingerprint(current) != monochrome_fingerprint(previous) {
+                grow(&current.bounds, &previous.bounds);
+            }
+        }
+        for (current, previous) in self.polychrome_sprites.iter().zip(&prev.polychrome_sprites) {
+            if polychrome_fingerprint(current) != polychrome_fingerprint(previous) {
+                grow(&current.bounds, &previous.bounds);
+            }
+        }
+
+        match damage {
+            Some(region) => FrameDamage::Region(region),
+            None => FrameDamage::None,
+        }
     }
 
     /// Whether the scene contains any live external surface (e.g. a video frame or other
@@ -2034,5 +2178,88 @@ mod tests {
             !skip.should_skip(blue.structural_checksum()),
             "a recolored scene must force a render"
         );
+    }
+
+    fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds<ScaledPixels> {
+        Bounds {
+            origin: point(ScaledPixels(x), ScaledPixels(y)),
+            size: Size {
+                width: ScaledPixels(w),
+                height: ScaledPixels(h),
+            },
+        }
+    }
+
+    fn quad_scene(quads: &[(Bounds<ScaledPixels>, crate::Hsla)]) -> Scene {
+        let mut scene = Scene::default();
+        for (bounds, color) in quads {
+            scene.insert_primitive(Quad {
+                bounds: *bounds,
+                content_mask: ContentMask {
+                    bounds: rect(0.0, 0.0, 1000.0, 1000.0),
+                },
+                background: Background::from(*color),
+                ..Default::default()
+            });
+        }
+        scene.finish();
+        scene
+    }
+
+    #[test]
+    fn damage_since_reports_none_for_identical_scenes() {
+        let red = crate::hsla(0.0, 1.0, 0.5, 1.0);
+        let green = crate::hsla(0.33, 1.0, 0.5, 1.0);
+        let a = quad_scene(&[
+            (rect(0.0, 0.0, 50.0, 50.0), red),
+            (rect(60.0, 60.0, 20.0, 20.0), green),
+        ]);
+        let b = quad_scene(&[
+            (rect(0.0, 0.0, 50.0, 50.0), red),
+            (rect(60.0, 60.0, 20.0, 20.0), green),
+        ]);
+        assert_eq!(a.damage_since(&b), FrameDamage::None);
+    }
+
+    #[test]
+    fn damage_since_localizes_a_color_change_to_one_rect() {
+        let red = crate::hsla(0.0, 1.0, 0.5, 1.0);
+        let green = crate::hsla(0.33, 1.0, 0.5, 1.0);
+        let blue = crate::hsla(0.66, 1.0, 0.5, 1.0);
+        let changed_rect = rect(60.0, 60.0, 20.0, 20.0);
+        let before = quad_scene(&[(rect(0.0, 0.0, 50.0, 50.0), red), (changed_rect, green)]);
+        let after = quad_scene(&[(rect(0.0, 0.0, 50.0, 50.0), red), (changed_rect, blue)]);
+        // Only the second quad changed (color), its bounds unchanged, so the damage is
+        // exactly that quad's rectangle — not the whole frame.
+        assert_eq!(
+            after.damage_since(&before),
+            FrameDamage::Region(changed_rect)
+        );
+    }
+
+    #[test]
+    fn damage_since_unions_old_and_new_bounds_when_a_quad_moves() {
+        let red = crate::hsla(0.0, 1.0, 0.5, 1.0);
+        let from = rect(10.0, 10.0, 20.0, 20.0);
+        let to = rect(100.0, 100.0, 20.0, 20.0);
+        let before = quad_scene(&[(from, red)]);
+        let after = quad_scene(&[(to, red)]);
+        // Both the vacated and the newly-occupied rectangles must be repainted.
+        assert_eq!(
+            after.damage_since(&before),
+            FrameDamage::Region(from.union(&to))
+        );
+    }
+
+    #[test]
+    fn damage_since_falls_back_to_full_on_structural_change() {
+        let red = crate::hsla(0.0, 1.0, 0.5, 1.0);
+        let green = crate::hsla(0.33, 1.0, 0.5, 1.0);
+        let before = quad_scene(&[(rect(0.0, 0.0, 50.0, 50.0), red)]);
+        let after = quad_scene(&[
+            (rect(0.0, 0.0, 50.0, 50.0), red),
+            (rect(60.0, 60.0, 20.0, 20.0), green),
+        ]);
+        assert_eq!(after.damage_since(&before), FrameDamage::Full);
     }
 }

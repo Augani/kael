@@ -804,6 +804,189 @@ impl MetalRenderer {
         })
     }
 
+    #[cfg(test)]
+    fn encode_scene_into(
+        &mut self,
+        scene: &Scene,
+        target_ref: &metal::TextureRef,
+        viewport_size: Size<DevicePixels>,
+        load_action: metal::MTLLoadAction,
+        scissor: Option<metal::MTLScissorRect>,
+    ) -> Result<()> {
+        self.ensure_buffer_size(scene);
+        let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
+
+        let command_queue = self.command_queue.clone();
+        let command_buffer = command_queue.new_command_buffer();
+        let alpha = if self.layer.is_opaque() { 1.0 } else { 0.0 };
+        let mut instance_offset = 0;
+
+        let apply_scissor = |encoder: &metal::RenderCommandEncoderRef| {
+            if let Some(rect) = scissor {
+                encoder.set_scissor_rect(rect);
+            }
+        };
+
+        let command_encoder = new_texture_command_encoder(
+            command_buffer,
+            target_ref,
+            viewport_size,
+            load_action,
+            alpha,
+        );
+        apply_scissor(command_encoder);
+
+        let scene_ok = self.draw_scene_with_encoder(
+            scene,
+            &mut instance_buffer,
+            &mut instance_offset,
+            viewport_size,
+            command_buffer,
+            target_ref,
+            command_encoder,
+            |command_buffer, load_action| {
+                let encoder = new_texture_command_encoder(
+                    command_buffer,
+                    target_ref,
+                    viewport_size,
+                    load_action,
+                    alpha,
+                );
+                apply_scissor(encoder);
+                encoder
+            },
+        );
+
+        let snapshots_ok = scene_ok
+            && self.draw_cached_surface_snapshots(
+                scene,
+                &mut instance_buffer,
+                &mut instance_offset,
+                viewport_size,
+                command_buffer,
+            );
+
+        instance_buffer.metal_buffer.did_modify_range(NSRange {
+            location: 0,
+            length: instance_offset as u64,
+        });
+
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        self.instance_buffer_pool.lock().release(instance_buffer);
+
+        if !snapshots_ok {
+            anyhow::bail!("scene exceeded instance buffer capacity during damage render");
+        }
+        Ok(())
+    }
+
+    /// Render `base` fully, then re-rasterize only the `damage` rectangle from `next` on
+    /// top (the compositor's "load previous contents and repaint just the dirty region"
+    /// path), and read back the composited result. This exercises the scissor + load
+    /// mechanism the fine-grained dirty-region path relies on, so its output can be
+    /// pixel-compared against a full render of `next`.
+    #[cfg(test)]
+    pub(crate) fn render_damage_to_bytes(
+        &mut self,
+        base: &Scene,
+        next: &Scene,
+        damage: Bounds<ScaledPixels>,
+        viewport_size: Size<DevicePixels>,
+    ) -> Result<OffscreenReadback> {
+        let width = viewport_size.width.0.max(0) as u64;
+        let height = viewport_size.height.0.max(0) as u64;
+        if width == 0 || height == 0 {
+            anyhow::bail!("offscreen render requires a non-zero viewport");
+        }
+
+        let descriptor = metal::TextureDescriptor::new();
+        descriptor.set_width(width);
+        descriptor.set_height(height);
+        descriptor.set_pixel_format(RENDER_TARGET_PIXEL_FORMAT);
+        descriptor
+            .set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
+        let target = self.device.new_texture(&descriptor);
+        let target_ref: &metal::TextureRef = &target;
+
+        let left = damage.origin.x.0.max(0.0).floor() as u64;
+        let top = damage.origin.y.0.max(0.0).floor() as u64;
+        let right = (damage.origin.x.0 + damage.size.width.0).max(0.0).ceil() as u64;
+        let bottom = (damage.origin.y.0 + damage.size.height.0).max(0.0).ceil() as u64;
+        let x = left.min(width);
+        let y = top.min(height);
+        let scissor = metal::MTLScissorRect {
+            x,
+            y,
+            width: right.min(width).saturating_sub(x),
+            height: bottom.min(height).saturating_sub(y),
+        };
+
+        self.encode_scene_into(
+            base,
+            target_ref,
+            viewport_size,
+            metal::MTLLoadAction::Clear,
+            None,
+        )?;
+        self.encode_scene_into(
+            next,
+            target_ref,
+            viewport_size,
+            metal::MTLLoadAction::Load,
+            Some(scissor),
+        )?;
+
+        let bytes_per_row = align_up_256(width * 4);
+        let buffer_len = bytes_per_row * height;
+        let staging = self
+            .device
+            .new_buffer(buffer_len, MTLResourceOptions::StorageModeShared);
+
+        let command_buffer = self.command_queue.new_command_buffer();
+        let blit = command_buffer.new_blit_command_encoder();
+        blit.copy_from_texture_to_buffer(
+            target_ref,
+            0,
+            0,
+            metal::MTLOrigin { x: 0, y: 0, z: 0 },
+            metal::MTLSize {
+                width,
+                height,
+                depth: 1,
+            },
+            &staging,
+            0,
+            bytes_per_row,
+            buffer_len,
+            metal::MTLBlitOption::empty(),
+        );
+        blit.end_encoding();
+        command_buffer.commit();
+        command_buffer.wait_until_completed();
+
+        let row_bytes = (width * 4) as usize;
+        let src_stride = bytes_per_row as usize;
+        let mut bgra = vec![0u8; row_bytes * height as usize];
+        unsafe {
+            let contents = staging.contents() as *const u8;
+            let src = std::slice::from_raw_parts(contents, buffer_len as usize);
+            for y in 0..height as usize {
+                let src_start = y * src_stride;
+                let dst_start = y * row_bytes;
+                bgra[dst_start..dst_start + row_bytes]
+                    .copy_from_slice(&src[src_start..src_start + row_bytes]);
+            }
+        }
+
+        Ok(OffscreenReadback {
+            width: width as u32,
+            height: height as u32,
+            bgra,
+        })
+    }
+
     fn encode_instanced<T>(
         &self,
         encoder: &metal::RenderCommandEncoderRef,

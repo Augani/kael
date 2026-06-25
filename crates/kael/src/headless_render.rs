@@ -192,6 +192,31 @@ impl HeadlessRenderer {
         Ok(None)
     }
 
+    /// Render `base` fully, then re-rasterize only the `damage` rectangle of `next` on
+    /// top of it (the fine-grained dirty-region path: load the prior frame, scissor to the
+    /// changed rect, repaint). Returns the composited BGRA bytes, or `None` on the CPU-only
+    /// backend. Lets golden tests assert that a per-rectangle partial repaint is pixel-for-
+    /// pixel identical to a full repaint of `next`.
+    #[cfg(test)]
+    pub(crate) fn render_damage_to_bytes(
+        &mut self,
+        base: &Scene,
+        next: &Scene,
+        damage: Bounds<ScaledPixels>,
+    ) -> Result<Option<Vec<u8>>> {
+        #[cfg(all(target_os = "macos", not(feature = "macos-blade")))]
+        if let Some(renderer) = self.metal.as_mut() {
+            let viewport = size(
+                DevicePixels(self.width as i32),
+                DevicePixels(self.height as i32),
+            );
+            let readback = renderer.render_damage_to_bytes(base, next, damage, viewport)?;
+            return Ok(Some(readback.bgra));
+        }
+        let _ = (base, next, damage);
+        Ok(None)
+    }
+
     /// Run a built-in GPU compute kernel that doubles each input value, proving
     /// the compute-pipeline path end-to-end. Available only on the GPU backend.
     pub fn run_compute_doubler(&self, data: &[f32]) -> Result<Vec<f32>> {
@@ -671,5 +696,82 @@ mod tests {
             Ok(output) => assert_eq!(output, vec![2.0, 4.0, 6.0, 8.0]),
             Err(_) => assert_eq!(renderer.backend(), HeadlessBackend::CpuOnly),
         }
+    }
+
+    fn corner_quad_scene(
+        viewport: u32,
+        corner: Bounds<ScaledPixels>,
+        corner_color: crate::Hsla,
+    ) -> Scene {
+        let mut scene = Scene::default();
+        let full = Bounds {
+            origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+            size: size(ScaledPixels(viewport as f32), ScaledPixels(viewport as f32)),
+        };
+        scene.insert_primitive(crate::Quad {
+            bounds: full,
+            content_mask: ContentMask { bounds: full },
+            background: Background::from(hsla(0.0, 1.0, 0.5, 1.0)),
+            transform: TransformationMatrix::unit(),
+            ..Default::default()
+        });
+        scene.insert_primitive(crate::Quad {
+            bounds: corner,
+            content_mask: ContentMask { bounds: full },
+            background: Background::from(corner_color),
+            transform: TransformationMatrix::unit(),
+            ..Default::default()
+        });
+        scene.finish();
+        scene
+    }
+
+    #[test]
+    fn per_rectangle_partial_repaint_matches_a_full_repaint() {
+        let viewport = 64u32;
+        let mut renderer = match HeadlessRenderer::new(viewport, viewport) {
+            Ok(renderer) => renderer,
+            Err(_) => return,
+        };
+        if renderer.backend() != HeadlessBackend::Gpu {
+            return;
+        }
+
+        let corner = Bounds {
+            origin: point(ScaledPixels(40.0), ScaledPixels(40.0)),
+            size: size(ScaledPixels(16.0), ScaledPixels(16.0)),
+        };
+        // Only the corner quad changes color between frames; the full-viewport red
+        // background is identical, so the damage must localize to the corner rectangle.
+        let base = corner_quad_scene(viewport, corner, hsla(0.33, 1.0, 0.5, 1.0));
+        let next = corner_quad_scene(viewport, corner, hsla(0.66, 1.0, 0.5, 1.0));
+
+        let damage = next.damage_since(&base);
+        assert_eq!(
+            damage,
+            crate::FrameDamage::Region(corner),
+            "a color change confined to the corner quad must produce exactly that damage rect"
+        );
+
+        let partial = renderer
+            .render_damage_to_bytes(&base, &next, corner)
+            .unwrap()
+            .expect("gpu backend yields pixels");
+        let full = renderer
+            .render_scene_to_bytes(&next)
+            .unwrap()
+            .expect("gpu backend yields pixels");
+        assert_eq!(partial.len(), full.len());
+
+        let max_diff = partial
+            .iter()
+            .zip(&full)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_diff <= 2,
+            "scissor + load partial repaint must be pixel-identical to a full repaint, max channel diff {max_diff}"
+        );
     }
 }
