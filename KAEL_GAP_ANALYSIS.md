@@ -173,7 +173,7 @@ What's genuinely strong underneath: real lyon path tessellation cached once and 
 | Sev | Gap | Impact | Recommendation | Effort |
 |---|---|---|---|---|
 | High | Blend modes never sample backdrop (correctness bug) | `.blend_mode(Multiply)` silently wrong | dst-read blend (offscreen/framebuffer-fetch) + W3C formula + `isolation()`; or rename honestly | L |
-| High | No clip-path/mask | Only rounded rects; samey clipped surfaces | `clip_path(ClipPath{Circle/Polygon/Path})` + `mask(MaskSource)` in shader | XL |
+| High | No clip-path/mask | Only rounded rects; samey clipped surfaces | **Increment 1 landed** — `ClipShape{Circle,Ellipse,ConvexPolygon}` device-independent shape model with exact `contains()` (hit-test), `signed_distance()`/`coverage()` (the SDF a GPU mask rasterizes), `bounding_box()`; 7 unit tests. **Remaining:** GPU mask-sample pipeline + hit-test wiring (increment 2). | XL (foundation done) |
 | High | No position sticky/fixed | Sticky headers hand-rolled everywhere | `Position::Sticky/Fixed` against scroll handle | L |
 | Medium | Transitions exclude translate/skew/filter/layout | Common slide-in snaps (FLIP covers layout move only) | Extend `ImplicitVisualStyle` w/ translate/skew/filter; `transition_layout()` opt-in | M |
 | Medium | Element filters 4-channel only | No hue-rotate/invert/sepia on content | Add matrices to `ColorFilter`; `Styled::blur()` wraps existing `effect_layer` | M |
