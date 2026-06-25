@@ -905,9 +905,9 @@ impl RenderOnce for MentionInput {
                     .id("mention-input-container")
                     .flex()
                     .items_center()
-                    .h(px(40.0))
+                    .h(px(32.0))
                     .px(px(12.0))
-                    .bg(theme.tokens.background)
+                    .bg(theme.tokens.card)
                     .border_1()
                     .border_color(if is_focused {
                         theme.tokens.ring
