@@ -16,7 +16,7 @@
 //! until the per-texel mask sample is fused into the in-pass shader. Apps reach all of this
 //! through the [`crate::clip_path`] wrapper element.
 
-use crate::{point, px, size, Bounds, Corners, Pixels, Point, Size};
+use crate::{Bounds, Corners, Pixels, Point, Size, point, px, size};
 
 /// A non-rectangular clip region. Coordinates are in logical pixels, in the same space
 /// as the element's bounds.
