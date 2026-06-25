@@ -191,15 +191,9 @@ impl Render for Sheet {
                     .occlude()
                     .flex()
                     .flex_col()
-                    .bg(theme.tokens.background)
+                    .bg(theme.tokens.card)
                     .border_color(theme.tokens.border)
-                    .shadow(smallvec::smallvec![BoxShadow {
-                        color: hsla(0.0, 0.0, 0.0, 0.2),
-                        offset: point(px(0.0), px(0.0)),
-                        blur_radius: px(16.0),
-                        spread_radius: px(0.0),
-                        inset: false,
-                    }])
+                    .shadow(theme.tokens.shadow_lg.to_vec())
                     .on_mouse_down(MouseButton::Left, |_, _, _| {})
                     .when(self.side == SheetSide::Right, |this: Div| {
                         this.absolute()

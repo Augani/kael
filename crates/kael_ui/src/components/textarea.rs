@@ -143,12 +143,12 @@ impl RenderOnce for Textarea {
         } else if self.error {
             match self.variant {
                 InputVariant::Default => (
-                    theme.tokens.background,
+                    theme.tokens.card,
                     theme.tokens.destructive,
                     theme.tokens.foreground,
                 ),
                 InputVariant::Outline => (
-                    theme.tokens.background,
+                    theme.tokens.card,
                     theme.tokens.destructive,
                     theme.tokens.foreground,
                 ),
@@ -164,12 +164,12 @@ impl RenderOnce for Textarea {
         } else {
             match self.variant {
                 InputVariant::Default => (
-                    theme.tokens.background,
+                    theme.tokens.card,
                     theme.tokens.input,
                     theme.tokens.foreground,
                 ),
                 InputVariant::Outline => (
-                    theme.tokens.background,
+                    theme.tokens.card,
                     theme.tokens.border,
                     theme.tokens.foreground,
                 ),

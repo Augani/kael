@@ -365,17 +365,17 @@ impl OTPInput {
 
     fn box_size(&self) -> Pixels {
         match self.size {
-            OTPInputSize::Sm => px(36.0),
-            OTPInputSize::Md => px(44.0),
-            OTPInputSize::Lg => px(52.0),
+            OTPInputSize::Sm => px(28.0),
+            OTPInputSize::Md => px(32.0),
+            OTPInputSize::Lg => px(36.0),
         }
     }
 
     fn font_size(&self) -> Pixels {
         match self.size {
-            OTPInputSize::Sm => px(16.0),
-            OTPInputSize::Md => px(20.0),
-            OTPInputSize::Lg => px(24.0),
+            OTPInputSize::Sm => px(14.0),
+            OTPInputSize::Md => px(16.0),
+            OTPInputSize::Lg => px(18.0),
         }
     }
 
@@ -493,7 +493,7 @@ impl RenderOnce for OTPInput {
                     .bg(if disabled {
                         theme.tokens.muted.opacity(0.5)
                     } else {
-                        theme.tokens.background
+                        theme.tokens.card
                     })
                     .border_1()
                     .border_color(if is_focused && !disabled {

@@ -214,11 +214,11 @@ impl Render for Dialog {
                     .max_h(self.size.max_height())
                     .flex()
                     .flex_col()
-                    .bg(theme.tokens.card)
+                    .bg(theme.tokens.popover)
                     .border_1()
                     .border_color(theme.tokens.border)
                     .rounded(theme.tokens.radius_lg)
-                    .shadow_xl()
+                    .shadow(theme.tokens.shadow_lg.to_vec())
                     .overflow_hidden()
                     .when(has_header, |this| {
                         if has_slot_header {

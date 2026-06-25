@@ -265,9 +265,9 @@ impl Render for ToastManager {
                             .bg(bg_color)
                             .border_1()
                             .border_color(border_color)
-                            .rounded(theme.tokens.radius_md)
+                            .rounded(theme.tokens.radius_lg)
                             .p(px(16.0))
-                            .shadow_lg()
+                            .shadow(theme.tokens.shadow_lg.to_vec())
                             .map(|this| {
                                 let mut div = this;
                                 div.style().refine(&user_style);

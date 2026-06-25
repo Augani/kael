@@ -244,7 +244,7 @@ impl Render for SearchInput {
                     .gap(px(8.0))
                     .px(px(12.0))
                     .py(px(8.0))
-                    .bg(theme.tokens.input)
+                    .bg(theme.tokens.card)
                     .border_1()
                     .border_color(theme.tokens.border)
                     .rounded(theme.tokens.radius_md)

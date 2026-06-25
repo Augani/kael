@@ -298,9 +298,9 @@ impl<T: Clone + 'static> Render for Select<T> {
             .flex()
             .items_center()
             .justify_between()
-            .h(px(40.0))
+            .h(px(32.0))
             .px(px(12.0))
-            .bg(theme.tokens.background)
+            .bg(theme.tokens.card)
             .border_1()
             .border_color(if open {
                 theme.tokens.ring
@@ -361,7 +361,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .rounded(px(10.0))
+                                .rounded(theme.tokens.radius_sm)
                                 .cursor(CursorStyle::PointingHand)
                                 .hover(|mut style| {
                                     style.background = Some(theme.tokens.muted.into());
@@ -459,7 +459,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                                             .bg(theme.tokens.popover)
                                             .border_2()
                                             .border_color(theme.tokens.ring)
-                                            .rounded(theme.tokens.radius_md)
+                                            .rounded(theme.tokens.radius_lg)
                                             .shadow_xl()
                                             .overflow_hidden()
                                             .child(
@@ -481,7 +481,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                         .px(px(8.0))
                                                                         .flex()
                                                                         .items_center()
-                                                                        .bg(theme.tokens.background)
+                                                                        .bg(theme.tokens.card)
                                                                         .border_1()
                                                                         .border_color(theme.tokens.input)
                                                                         .rounded(theme.tokens.radius_sm)

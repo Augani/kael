@@ -182,8 +182,8 @@ impl RenderOnce for Pagination {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .h(px(36.0))
-                        .w(px(36.0))
+                        .h(px(28.0))
+                        .w(px(28.0))
                         .text_color(theme.tokens.muted_foreground)
                         .child("...")
                         .into_any_element(),

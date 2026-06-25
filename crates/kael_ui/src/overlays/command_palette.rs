@@ -312,7 +312,7 @@ impl Render for CommandPalette {
                     .border_1()
                     .border_color(theme.tokens.border)
                     .rounded(theme.tokens.radius_lg)
-                    .shadow_lg()
+                    .shadow(theme.tokens.shadow_lg.to_vec())
                     .overflow_hidden()
                     .on_mouse_down(MouseButton::Left, |_event, _window, _cx| {})
                     .map(|this| {

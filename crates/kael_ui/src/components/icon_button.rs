@@ -42,7 +42,7 @@ impl IconButton {
             base: div().flex_shrink_0().id(id),
             icon_source,
             variant: ButtonVariant::Default,
-            size: px(40.0),
+            size: px(32.0),
             icon_size: None,
             disabled: false,
             no_background: false,

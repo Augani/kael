@@ -725,7 +725,7 @@ impl RenderOnce for InlineEdit {
                 .h(px(32.0))
                 .px(px(8.0))
                 .py(px(4.0))
-                .bg(theme.tokens.background)
+                .bg(theme.tokens.card)
                 .border_1()
                 .border_color(theme.tokens.ring)
                 .rounded(theme.tokens.radius_md)

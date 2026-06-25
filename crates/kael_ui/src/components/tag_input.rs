@@ -1,3 +1,4 @@
+use crate::styled_ext::StyledExt;
 use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
@@ -191,10 +192,10 @@ impl RenderOnce for TagInput {
                     .flex_wrap()
                     .items_center()
                     .gap(px(6.0))
-                    .min_h(px(40.0))
+                    .min_h(px(32.0))
                     .px(px(10.0))
                     .py(px(6.0))
-                    .bg(theme.tokens.background)
+                    .bg(theme.tokens.card)
                     .border_1()
                     .border_color(if is_focused {
                         theme.tokens.ring
@@ -202,6 +203,9 @@ impl RenderOnce for TagInput {
                         theme.tokens.input
                     })
                     .rounded(theme.tokens.radius_md)
+                    .when(is_focused && !self.disabled, |d| {
+                        d.inset_ring(theme.tokens.ring.opacity(0.5), px(2.0))
+                    })
                     .when(self.disabled, |d| d.opacity(0.5))
                     .when(!self.disabled, |d| {
                         d.track_focus(&focus_handle.tab_index(0).tab_stop(true))
@@ -220,7 +224,7 @@ impl RenderOnce for TagInput {
                             .py(px(4.0))
                             .bg(theme.tokens.primary.opacity(0.1))
                             .text_color(theme.tokens.primary)
-                            .rounded(px(4.0))
+                            .rounded(theme.tokens.radius_sm)
                             .text_size(px(13.0))
                             .font_family(theme.tokens.font_family.clone())
                             .child(tag.clone())

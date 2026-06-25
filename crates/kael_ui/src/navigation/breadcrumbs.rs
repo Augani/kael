@@ -84,7 +84,7 @@ impl<T: Clone + 'static> RenderOnce for Breadcrumbs<T> {
                 .gap(px(4.0))
                 .px(px(2.0))
                 .py(px(2.0))
-                .rounded(px(4.0))
+                .rounded(theme.tokens.radius_sm)
                 .text_size(px(14.0))
                 .font_family(theme.tokens.font_family.clone());
 
@@ -121,6 +121,7 @@ impl<T: Clone + 'static> RenderOnce for Breadcrumbs<T> {
                 breadcrumb_element = breadcrumb_element
                     .text_color(theme.tokens.primary)
                     .cursor(CursorStyle::PointingHand)
+                    .transition(theme.tokens.transition_fast)
                     .hover(|style| {
                         style
                             .bg(theme.tokens.accent.opacity(0.1))

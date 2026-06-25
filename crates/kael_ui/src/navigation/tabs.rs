@@ -180,6 +180,7 @@ impl<T: Clone + PartialEq + 'static> Tabs<T> {
             .py(px(8.0))
             .text_size(px(14.0))
             .font_family(theme.tokens.font_family.clone())
+            .transition(theme.tokens.transition_fast)
             .cursor(if tab.disabled {
                 CursorStyle::Arrow
             } else {
@@ -297,7 +298,7 @@ impl<T: Clone + PartialEq + 'static> Tabs<T> {
                 div()
                     .ml(px(4.0))
                     .p(px(2.0))
-                    .rounded(px(4.0))
+                    .rounded(theme.tokens.radius_sm)
                     .cursor(CursorStyle::PointingHand)
                     .hover(|mut style| {
                         style.background = Some(if is_active && variant == TabVariant::Pills {

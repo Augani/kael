@@ -142,14 +142,8 @@ impl RenderOnce for ContextMenu {
                     .bg(theme.tokens.popover)
                     .border_1()
                     .border_color(theme.tokens.border)
-                    .rounded(theme.tokens.radius_md)
-                    .shadow(smallvec::smallvec![BoxShadow {
-                        color: hsla(0.0, 0.0, 0.0, 0.1),
-                        offset: point(px(0.0), px(2.0)),
-                        blur_radius: px(8.0),
-                        spread_radius: px(0.0),
-                        inset: false,
-                    }])
+                    .rounded(theme.tokens.radius_lg)
+                    .shadow(theme.tokens.shadow_lg.to_vec())
                     .p(px(4.0))
                     .map(|this| {
                         let mut div = this;

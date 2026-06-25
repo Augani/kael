@@ -24,9 +24,9 @@ pub enum SegmentedNavSize {
 impl SegmentedNavSize {
     fn height(&self) -> Pixels {
         match self {
-            Self::Sm => px(32.0),
-            Self::Md => px(40.0),
-            Self::Lg => px(48.0),
+            Self::Sm => px(28.0),
+            Self::Md => px(32.0),
+            Self::Lg => px(36.0),
         }
     }
 

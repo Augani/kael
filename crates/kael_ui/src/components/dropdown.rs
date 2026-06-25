@@ -190,7 +190,7 @@ impl RenderOnce for Dropdown {
                         .bg(theme.tokens.popover)
                         .border_1()
                         .border_color(theme.tokens.border)
-                        .rounded(theme.tokens.radius_md)
+                        .rounded(theme.tokens.radius_lg)
                         .shadow(smallvec::smallvec![BoxShadow {
                             color: hsla(0.0, 0.0, 0.0, 0.15),
                             offset: point(px(0.0), px(4.0)),
@@ -235,7 +235,7 @@ impl RenderOnce for Dropdown {
                                 .px(px(12.0))
                                 .py(px(8.0))
                                 .mx(px(4.0))
-                                .rounded(px(4.0))
+                                .rounded(theme.tokens.radius_sm)
                                 .text_size(px(14.0))
                                 .text_color(text_color)
                                 .font_family(theme.tokens.font_family.clone())

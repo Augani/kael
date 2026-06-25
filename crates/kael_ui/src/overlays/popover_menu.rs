@@ -106,8 +106,8 @@ impl RenderOnce for PopoverMenu {
                                 .text_color(theme.tokens.popover_foreground)
                                 .border_1()
                                 .border_color(theme.tokens.border)
-                                .rounded(theme.tokens.radius_md)
-                                .shadow_lg()
+                                .rounded(theme.tokens.radius_lg)
+                                .shadow(theme.tokens.shadow_lg.to_vec())
                                 .p(px(4.0))
                                 .map(|this| {
                                     let mut div = this;
@@ -127,7 +127,7 @@ impl RenderOnce for PopoverMenu {
                                         .gap(px(8.0))
                                         .px(px(12.0))
                                         .py(px(8.0))
-                                        .rounded(px(4.0))
+                                        .rounded(theme.tokens.radius_sm)
                                         .cursor(if disabled {
                                             CursorStyle::Arrow
                                         } else {

@@ -25,9 +25,9 @@ pub enum ToolbarSize {
 impl ToolbarSize {
     fn button_size(&self) -> Pixels {
         match self {
-            Self::Sm => px(32.0),
-            Self::Md => px(36.0),
-            Self::Lg => px(40.0),
+            Self::Sm => px(28.0),
+            Self::Md => px(32.0),
+            Self::Lg => px(36.0),
         }
     }
 
@@ -251,6 +251,7 @@ fn render_toolbar_button(
         .items_center()
         .justify_center()
         .rounded(theme.tokens.radius_sm)
+        .transition(theme.tokens.transition_fast)
         .cursor(if button.disabled {
             CursorStyle::Arrow
         } else {

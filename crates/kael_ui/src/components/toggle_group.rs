@@ -23,9 +23,9 @@ pub enum ToggleGroupSize {
 impl ToggleGroupSize {
     fn height(&self) -> Pixels {
         match self {
-            Self::Sm => px(32.0),
-            Self::Md => px(36.0),
-            Self::Lg => px(40.0),
+            Self::Sm => px(28.0),
+            Self::Md => px(32.0),
+            Self::Lg => px(36.0),
         }
     }
 

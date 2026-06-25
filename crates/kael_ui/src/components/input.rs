@@ -442,9 +442,9 @@ impl Input {
     /// Get height based on size
     fn height(&self) -> Pixels {
         match self.size {
-            InputSize::Sm => px(32.0),
-            InputSize::Md => px(40.0),
-            InputSize::Lg => px(48.0),
+            InputSize::Sm => px(28.0),
+            InputSize::Md => px(32.0),
+            InputSize::Lg => px(36.0),
         }
     }
 
@@ -646,12 +646,12 @@ impl RenderOnce for Input {
         } else if self.error {
             match self.variant {
                 InputVariant::Default => (
-                    theme.tokens.background,
+                    theme.tokens.card,
                     theme.tokens.destructive,
                     theme.tokens.foreground,
                 ),
                 InputVariant::Outline => (
-                    theme.tokens.background,
+                    theme.tokens.card,
                     theme.tokens.destructive,
                     theme.tokens.foreground,
                 ),
@@ -667,12 +667,12 @@ impl RenderOnce for Input {
         } else {
             match self.variant {
                 InputVariant::Default => (
-                    theme.tokens.background,
+                    theme.tokens.card,
                     theme.tokens.input,
                     theme.tokens.foreground,
                 ),
                 InputVariant::Outline => (
-                    theme.tokens.background,
+                    theme.tokens.card,
                     theme.tokens.border,
                     theme.tokens.foreground,
                 ),
@@ -794,7 +794,7 @@ impl RenderOnce for Input {
                                         .id(("input-clear", self.state.entity_id()))
                                         .px(px(4.0))
                                         .py(px(4.0))
-                                        .rounded(px(4.0))
+                                        .rounded(theme.tokens.radius_sm)
                                         .cursor_pointer()
                                         .transition(theme.tokens.transition_fast)
                                         .hover(|style| style.bg(theme.tokens.muted))
@@ -813,7 +813,7 @@ impl RenderOnce for Input {
                                         .id(("input-reveal", self.state.entity_id()))
                                         .px(px(4.0))
                                         .py(px(4.0))
-                                        .rounded(px(4.0))
+                                        .rounded(theme.tokens.radius_sm)
                                         .cursor_pointer()
                                         .transition(theme.tokens.transition_fast)
                                         .hover(|style| style.bg(theme.tokens.muted))

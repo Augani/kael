@@ -1,3 +1,4 @@
+use crate::styled_ext::StyledExt;
 use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
@@ -187,9 +188,9 @@ impl RenderOnce for NumberInput {
         let state = self.state.clone();
 
         let (height, padding_x, text_size, button_size) = match self.size {
-            NumberInputSize::Sm => (px(32.0), px(8.0), px(13.0), px(24.0)),
-            NumberInputSize::Md => (px(40.0), px(12.0), px(14.0), px(32.0)),
-            NumberInputSize::Lg => (px(48.0), px(14.0), px(16.0), px(40.0)),
+            NumberInputSize::Sm => (px(28.0), px(8.0), px(13.0), px(24.0)),
+            NumberInputSize::Md => (px(32.0), px(12.0), px(14.0), px(28.0)),
+            NumberInputSize::Lg => (px(36.0), px(16.0), px(16.0), px(32.0)),
         };
 
         div()
@@ -204,7 +205,7 @@ impl RenderOnce for NumberInput {
                     .flex()
                     .items_center()
                     .h(height)
-                    .bg(theme.tokens.background)
+                    .bg(theme.tokens.card)
                     .border_1()
                     .border_color(if is_focused {
                         theme.tokens.ring
@@ -212,6 +213,9 @@ impl RenderOnce for NumberInput {
                         theme.tokens.input
                     })
                     .rounded(theme.tokens.radius_md)
+                    .when(is_focused && !self.disabled, |this| {
+                        this.inset_ring(theme.tokens.ring.opacity(0.5), px(2.0))
+                    })
                     .when(self.disabled, |d| d.opacity(0.5))
                     .when(self.show_buttons, {
                         let state = state.clone();
