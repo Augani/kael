@@ -137,6 +137,7 @@ impl Render for KeyboardShortcuts {
                                 .px(px(12.0))
                                 .py(px(8.0))
                                 .rounded(theme.tokens.radius_sm)
+                                .transition(theme.tokens.transition_fast)
                                 .hover(|style| style.bg(theme.tokens.muted.opacity(0.5)))
                                 .child(
                                     div().flex().items_center().gap(px(8.0)).child(

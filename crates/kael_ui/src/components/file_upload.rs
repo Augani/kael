@@ -437,6 +437,7 @@ impl RenderOnce for FileUpload {
                     .border_2()
                     .border_color(border_color)
                     .bg(bg_color)
+                    .transition(theme.tokens.transition_fast)
                     .when(!disabled, |this| {
                         this.cursor(CursorStyle::PointingHand).hover(move |style| {
                             style
@@ -746,6 +747,7 @@ impl RenderOnce for FileUpload {
                                         .items_center()
                                         .justify_center()
                                         .cursor(CursorStyle::PointingHand)
+                                        .transition(theme.tokens.transition_fast)
                                         .hover(|style| {
                                             style.bg(theme.tokens.destructive.opacity(0.1))
                                         })

@@ -372,7 +372,7 @@ impl RenderOnce for FileTree {
                     .mx(px(8.0))
                     .px(px(8.0))
                     .pl(indent + px(8.0))
-                    .rounded(px(8.0))
+                    .rounded(theme.tokens.radius_sm)
                     .cursor_pointer()
                     .transition(theme.tokens.transition_fast)
                     .bg(if is_selected {

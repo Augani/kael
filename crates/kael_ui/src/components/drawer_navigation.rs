@@ -212,7 +212,7 @@ impl RenderOnce for DrawerNavigation {
                         .w(drawer_width)
                         .when(side == DrawerSide::Left, |this| this.left_0())
                         .when(side == DrawerSide::Right, |this| this.right_0())
-                        .bg(theme.tokens.background)
+                        .bg(theme.tokens.card)
                         .border_color(theme.tokens.border)
                         .when(side == DrawerSide::Left, |this| this.border_r_1())
                         .when(side == DrawerSide::Right, |this| this.border_l_1())

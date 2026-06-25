@@ -443,6 +443,8 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                             .items_center()
                             .px(px(8.0))
                             .pl(indent + px(8.0))
+                            .rounded(theme.tokens.radius_sm)
+                            .transition(theme.tokens.transition_fast)
                             .cursor(if flat_node.node.disabled {
                                 CursorStyle::Arrow
                             } else {
@@ -670,6 +672,8 @@ impl<T: Clone + PartialEq + 'static> List<T> {
             .w_full()
             .px(px(12.0))
             .py(px(8.0))
+            .rounded(theme.tokens.radius_sm)
+            .transition(theme.tokens.transition_fast)
             .cursor(if item.disabled {
                 CursorStyle::Arrow
             } else {
@@ -734,7 +738,7 @@ impl<T: Clone + PartialEq + 'static> List<T> {
                 div()
                     .px(px(6.0))
                     .py(px(2.0))
-                    .rounded(px(10.0))
+                    .rounded(theme.tokens.radius_sm)
                     .bg(if is_selected {
                         theme.tokens.accent_foreground.opacity(0.2)
                     } else {

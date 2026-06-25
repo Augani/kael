@@ -362,10 +362,10 @@ impl RenderOnce for TimePicker {
                     .flex()
                     .items_center()
                     .gap(px(8.0))
+                    .h(px(32.0))
                     .px(px(12.0))
-                    .py(px(8.0))
                     .min_w(px(140.0))
-                    .bg(theme.tokens.background)
+                    .bg(theme.tokens.card)
                     .border_1()
                     .border_color(if is_open {
                         theme.tokens.ring
@@ -373,6 +373,7 @@ impl RenderOnce for TimePicker {
                         theme.tokens.input
                     })
                     .rounded(theme.tokens.radius_md)
+                    .transition(theme.tokens.transition_fast)
                     .text_size(px(14.0))
                     .text_color(theme.tokens.foreground)
                     .font_family(theme.tokens.font_family.clone())
@@ -399,14 +400,8 @@ impl RenderOnce for TimePicker {
                         .bg(theme.tokens.popover)
                         .border_1()
                         .border_color(theme.tokens.border)
-                        .rounded(theme.tokens.radius_md)
-                        .shadow(smallvec::smallvec![BoxShadow {
-                            color: hsla(0.0, 0.0, 0.0, 0.15),
-                            offset: point(px(0.0), px(4.0)),
-                            blur_radius: px(12.0),
-                            spread_radius: px(0.0),
-                            inset: false,
-                        }])
+                        .rounded(theme.tokens.radius_lg)
+                        .shadow(theme.tokens.shadow_lg.to_vec())
                         .p(px(16.0))
                         .child({
                             let on_change = self.on_change.clone();
@@ -565,7 +560,7 @@ impl TimePicker {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(4.0))
+                    .rounded(theme.tokens.radius_sm)
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.tokens.accent))
                     .text_color(theme.tokens.muted_foreground)
@@ -592,7 +587,7 @@ impl TimePicker {
                     .items_center()
                     .justify_center()
                     .bg(theme.tokens.muted)
-                    .rounded(px(6.0))
+                    .rounded(theme.tokens.radius_sm)
                     .text_size(px(20.0))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.tokens.foreground)
@@ -607,7 +602,7 @@ impl TimePicker {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(4.0))
+                    .rounded(theme.tokens.radius_sm)
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.tokens.accent))
                     .text_color(theme.tokens.muted_foreground)

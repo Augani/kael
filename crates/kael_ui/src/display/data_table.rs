@@ -843,7 +843,7 @@ impl<T: Clone + 'static> DataTable<T> {
                         div()
                             .w(px(16.0))
                             .h(px(16.0))
-                            .rounded(px(3.0))
+                            .rounded(theme.tokens.radius_sm)
                             .border_1()
                             .border_color(if all_selected {
                                 theme.tokens.primary
@@ -1063,7 +1063,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                                         div()
                                             .w(px(16.0))
                                             .h(px(16.0))
-                                            .rounded(px(3.0))
+                                            .rounded(theme.tokens.radius_sm)
                                             .border_1()
                                             .border_color(if is_selected {
                                                 theme.tokens.primary
@@ -1230,7 +1230,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                                     div()
                                         .w(px(96.0))
                                         .h(px(12.0))
-                                        .rounded(px(4.0))
+                                        .rounded(theme.tokens.radius_sm)
                                         .bg(theme.tokens.muted.opacity(0.6)),
                                 )
                         });
@@ -1482,7 +1482,7 @@ impl<T: Clone + 'static> DataTable<T> {
                         .bg(theme.tokens.popover)
                         .border_1()
                         .border_color(theme.tokens.border)
-                        .rounded(theme.tokens.radius_md)
+                        .rounded(theme.tokens.radius_lg)
                         .shadow_xl()
                         .p(px(4.0))
                         .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -1499,6 +1499,7 @@ impl<T: Clone + 'static> DataTable<T> {
                                 .py(px(8.0))
                                 .rounded(theme.tokens.radius_sm)
                                 .cursor(CursorStyle::PointingHand)
+                                .transition(theme.tokens.transition_fast)
                                 .hover(|style| style.bg(theme.tokens.accent))
                                 .text_size(px(14.0))
                                 .text_color(if action.destructive {

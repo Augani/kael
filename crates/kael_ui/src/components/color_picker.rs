@@ -213,12 +213,13 @@ impl RenderOnce for ColorPicker {
             .flex()
             .items_center()
             .gap_2()
-            .h(px(40.0))
+            .h(px(32.0))
             .px(px(12.0))
-            .bg(theme.tokens.background)
+            .bg(theme.tokens.card)
             .border_1()
             .border_color(theme.tokens.border)
             .rounded(theme.tokens.radius_md)
+            .transition(theme.tokens.transition_fast)
             .when(!disabled, |this| {
                 this.cursor(CursorStyle::PointingHand)
                     .hover(|style| style.bg(theme.tokens.accent.opacity(0.1)))
@@ -227,7 +228,7 @@ impl RenderOnce for ColorPicker {
             .child(
                 div()
                     .size(px(24.0))
-                    .rounded(px(4.0))
+                    .rounded(theme.tokens.radius_sm)
                     .bg(color)
                     .border_1()
                     .border_color(theme.tokens.border),

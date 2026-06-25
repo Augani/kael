@@ -133,6 +133,7 @@ impl IntoElement for Table {
 
             div()
                 .flex()
+                .transition(theme.tokens.transition_fast)
                 .hover(|style| style.bg(theme.tokens.accent.opacity(0.1)))
                 .children(cell_elements)
         });
@@ -142,7 +143,7 @@ impl IntoElement for Table {
             .flex_col()
             .border_1()
             .border_color(theme.tokens.border)
-            .rounded(theme.tokens.radius_md)
+            .rounded(theme.tokens.radius_lg)
             .overflow_hidden()
             .child(header)
             .children(row_elements)

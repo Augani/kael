@@ -237,6 +237,7 @@ fn render_status_item(item: StatusItem) -> impl IntoElement {
         .px(px(8.0))
         .py(px(4.0))
         .rounded(theme.tokens.radius_sm)
+        .transition(theme.tokens.transition_fast)
         .when(!item.disabled && item.on_click.is_some(), |div| {
             div.cursor(CursorStyle::PointingHand)
                 .hover(|style| style.bg(theme.tokens.muted))

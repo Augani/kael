@@ -217,6 +217,7 @@ fn render_menu_item<T: Clone + PartialEq + Eq + Hash + 'static>(
                     px(8.0),
                 ))
                 .rounded(theme.tokens.radius_sm)
+                .transition(theme.tokens.transition_fast)
                 .text_size(px(14.0))
                 .when(is_selected, |this: Div| this.bg(theme.tokens.accent))
                 .when(!is_selected && !disabled, |this: Div| {
@@ -234,7 +235,7 @@ fn render_menu_item<T: Clone + PartialEq + Eq + Hash + 'static>(
                             .justify_center()
                             .w(px(20.0))
                             .h(px(20.0))
-                            .rounded(px(4.0))
+                            .rounded(theme.tokens.radius_sm)
                             .cursor(if disabled {
                                 CursorStyle::Arrow
                             } else {
@@ -335,14 +336,8 @@ fn render_menu_item<T: Clone + PartialEq + Eq + Hash + 'static>(
                                 .bg(theme.tokens.popover)
                                 .border_1()
                                 .border_color(theme.tokens.border)
-                                .rounded(theme.tokens.radius_md)
-                                .shadow(smallvec::smallvec![BoxShadow {
-                                    color: hsla(0.0, 0.0, 0.0, 0.1),
-                                    offset: point(px(0.0), px(2.0)),
-                                    blur_radius: px(8.0),
-                                    spread_radius: px(0.0),
-                                    inset: false,
-                                }])
+                                .rounded(theme.tokens.radius_lg)
+                                .shadow(theme.tokens.shadow_lg.to_vec())
                                 .p(px(4.0))
                         },
                     )

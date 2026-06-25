@@ -372,7 +372,8 @@ impl RenderOnce for Calendar {
             .flex_col()
             .w(px(280.0))
             .p(px(16.0))
-            .bg(theme.tokens.background)
+            .bg(theme.tokens.card)
+            .rounded(theme.tokens.radius_lg)
             .child(
                 div()
                     .flex()
@@ -508,6 +509,7 @@ impl RenderOnce for Calendar {
                                         .h(px(36.0))
                                         .text_size(px(14.0))
                                         .rounded(theme.tokens.radius_sm)
+                                        .transition(theme.tokens.transition_fast)
                                         // Disabled state styling
                                         .when(is_disabled, |this: Div| {
                                             this.text_color(

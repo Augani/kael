@@ -236,7 +236,7 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for Sidebar<T> {
         sidebar = match variant {
             SidebarVariant::Overlay => sidebar
                 .absolute()
-                .shadow_lg()
+                .shadow(theme.tokens.shadow_lg.to_vec())
                 .when(position == SidebarPosition::Right, |s| s.right_0())
                 .when(position == SidebarPosition::Left, |s| s.left_0()),
             _ => sidebar,
@@ -327,9 +327,10 @@ impl<T: Clone + PartialEq + 'static> Sidebar<T> {
             .flex()
             .items_center()
             .w_full()
-            .h(px(40.0))
+            .h(px(36.0))
             .px(px(12.0))
-            .rounded(px(6.0))
+            .rounded(theme.tokens.radius_sm)
+            .transition(theme.tokens.transition_fast)
             .cursor(if item.disabled {
                 CursorStyle::Arrow
             } else {
@@ -407,7 +408,7 @@ impl<T: Clone + PartialEq + 'static> Sidebar<T> {
                 let badge_element = div()
                     .px(px(6.0))
                     .py(px(2.0))
-                    .rounded(px(8.0))
+                    .rounded(theme.tokens.radius_sm)
                     .bg(if is_selected {
                         theme.tokens.primary.opacity(0.2)
                     } else {

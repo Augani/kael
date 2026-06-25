@@ -376,13 +376,14 @@ impl RenderOnce for DatePicker {
                     .items_center()
                     .justify_between()
                     .w_full()
-                    .h(px(40.0))
+                    .h(px(32.0))
                     .px(px(12.0))
                     .gap(px(8.0))
-                    .bg(theme.tokens.background)
+                    .bg(theme.tokens.card)
                     .border_1()
                     .border_color(theme.tokens.input)
                     .rounded(theme.tokens.radius_md)
+                    .transition(theme.tokens.transition_fast)
                     .when(!disabled, |div| {
                         div.cursor(CursorStyle::PointingHand)
                             .hover(|style| style.border_color(theme.tokens.ring))
@@ -408,7 +409,7 @@ impl RenderOnce for DatePicker {
                                 parent_div.child(
                                     div()
                                         .p(px(2.0))
-                                        .rounded(px(4.0))
+                                        .rounded(theme.tokens.radius_sm)
                                         .cursor_pointer()
                                         .hover(move |style| style.bg(muted_bg))
                                         .on_mouse_down(

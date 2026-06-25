@@ -166,8 +166,8 @@ impl RenderOnce for Menu {
             .bg(theme.tokens.popover)
             .border_1()
             .border_color(theme.tokens.border)
-            .rounded(theme.tokens.radius_md)
-            .shadow_lg()
+            .rounded(theme.tokens.radius_lg)
+            .shadow(theme.tokens.shadow_lg.to_vec())
             .p(px(4.0))
             .children(self.items.into_iter().map(render_menu_item))
             .map(|this| {
@@ -201,6 +201,7 @@ fn render_menu_item(item: MenuItem) -> impl IntoElement {
                 .px(px(12.0))
                 .py(px(8.0))
                 .rounded(theme.tokens.radius_sm)
+                .transition(theme.tokens.transition_fast)
                 .cursor(if item.disabled {
                     CursorStyle::Arrow
                 } else {
@@ -307,7 +308,7 @@ impl Render for MenuBar {
         div()
             .flex()
             .items_center()
-            .h(px(40.0))
+            .h(px(32.0))
             .px(px(8.0))
             .gap(px(2.0))
             .bg(theme.tokens.background)
@@ -321,6 +322,7 @@ impl Render for MenuBar {
                     .px(px(12.0))
                     .py(px(6.0))
                     .rounded(theme.tokens.radius_sm)
+                    .transition(theme.tokens.transition_fast)
                     .cursor(CursorStyle::PointingHand)
                     .when(is_active, |div| div.bg(theme.tokens.accent))
                     .when(!is_active, |div| {
@@ -371,8 +373,8 @@ impl RenderOnce for ContextMenu {
                     .bg(theme.tokens.popover)
                     .border_1()
                     .border_color(theme.tokens.border)
-                    .rounded(theme.tokens.radius_md)
-                    .shadow_lg()
+                    .rounded(theme.tokens.radius_lg)
+                    .shadow(theme.tokens.shadow_lg.to_vec())
                     .p(px(4.0))
                     .children(self.items.into_iter().map(render_menu_item)),
             )

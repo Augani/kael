@@ -438,6 +438,7 @@ impl RenderOnce for NotificationCenter {
                                         .text_color(theme.tokens.muted_foreground)
                                         .text_size(px(14.0))
                                         .font_family(theme.tokens.font_family.clone())
+                                        .transition(theme.tokens.transition_fast)
                                         .hover(|style| style.bg(theme.tokens.accent))
                                         .on_mouse_down(MouseButton::Left, {
                                             let id = id.clone();
@@ -554,8 +555,8 @@ impl RenderOnce for NotificationBell {
         div()
             .id(self.id)
             .relative()
-            .w(px(40.0))
-            .h(px(40.0))
+            .w(px(32.0))
+            .h(px(32.0))
             .flex()
             .items_center()
             .justify_center()

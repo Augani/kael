@@ -204,7 +204,7 @@ impl RenderOnce for AccordionItem {
             .when(self.bordered, |div| {
                 div.border_1()
                     .border_color(theme.tokens.border)
-                    .rounded(theme.tokens.radius_md)
+                    .rounded(theme.tokens.radius_lg)
             })
             .child(
                 div()
@@ -219,7 +219,8 @@ impl RenderOnce for AccordionItem {
                         CursorStyle::PointingHand
                     })
                     .when(!self.disabled, |div| {
-                        div.hover(|style| style.bg(theme.tokens.muted.opacity(0.5)))
+                        div.transition(theme.tokens.transition_fast)
+                            .hover(|style| style.bg(theme.tokens.muted.opacity(0.5)))
                     })
                     .when(self.is_open && self.bordered, |div| {
                         div.border_b_1().border_color(theme.tokens.border)

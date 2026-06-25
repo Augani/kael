@@ -128,17 +128,11 @@ impl Render for AlertDialog {
             .child(
                 div()
                     .w(px(500.0))
-                    .bg(theme.tokens.card)
+                    .bg(theme.tokens.popover)
                     .border_1()
                     .border_color(theme.tokens.border)
                     .rounded(theme.tokens.radius_lg)
-                    .shadow(smallvec::smallvec![BoxShadow {
-                        color: hsla(0.0, 0.0, 0.0, 0.25),
-                        offset: point(px(0.0), px(8.0)),
-                        blur_radius: px(24.0),
-                        spread_radius: px(0.0),
-                        inset: false,
-                    }])
+                    .shadow(theme.tokens.shadow_lg.to_vec())
                     .overflow_hidden()
                     .child(
                         div()
