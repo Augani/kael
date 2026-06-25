@@ -1,0 +1,21 @@
+[package]
+edition.workspace = true
+name = "kael-cli"
+rust-version.workspace = true
+homepage.workspace = true
+version.workspace = true
+publish = true
+description = "Command-line tools for the Kael UI framework — scaffold new apps with `kael new`"
+keywords = ["kael", "cli", "scaffold", "gui"]
+categories = ["command-line-utilities", "gui"]
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "kael"
+path = "src/main.rs"
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "deny"

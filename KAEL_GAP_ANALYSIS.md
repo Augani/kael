@@ -320,7 +320,7 @@ What's genuinely strong underneath: real lyon path tessellation cached once and 
 
 ### Wave 4 — DX & agent ergonomics
 1. **Code hot reload (XL):** ~~`kael::dev::watch_styles()` near-term~~ **DONE** — `kael::dev::watch_styles(cx, path)` ships, live-reloading color/typography/spacing/radius/shadow tokens from a JSON/TOML file onto the global `Theme` (built on the already-wired `App::observe_theme_file` watcher; spacing-token reload unit-tested). `subsecond` hot-patch + `cargo kael dev` (full *code* hot-reload) remain the XL medium-term. Biggest iteration-speed lever.
-2. **Publish `cargo install kael-cli` with embedded-template `kael new` (M);** document the front door everywhere.
+2. ~~**Publish `cargo install kael-cli` with embedded-template `kael new` (M)**~~ **BUILT** — the `kael-cli` crate ships a `kael` binary with `kael new <name>` that scaffolds a ready-to-run app (Cargo.toml + src/main.rs + README + .gitignore) from templates embedded via `include_str!` (works offline), with name validation, overwrite refusal, and 3 unit tests + an end-to-end smoke run. Only `cargo publish` (crates.io credentials) remains. Document the front door everywhere.
 3. **Recipe corpus in `llms.txt` from the existing templates (M);** fix the `dev_tools.rs` dead twin (M); add missing-id debug diagnostic (S).
 
 ---
@@ -336,7 +336,7 @@ Ordered. The theme is "connect what already exists, fix what is silently wrong, 
 5. **Real CSS Grid track sizing (L).** Unblocks every app-shell/bento/responsive layout — the most-felt layout gap; Taffy already supports the model.
 6. **Variable-length gradient stops + aspect-ratio builder + true blend-mode fix (M+S+L).** Three high-ROI styling wins; the blend-mode fix corrects a silently-wrong API.
 7. ~~**`kael::dev::watch_styles()` token hot-reload (M, scoped slice of the XL).**~~ **DONE** — `kael::dev::watch_styles(cx, path)` extends the existing theme `FileWatcher` so spacing/color/typography/radii/shadows iterate live without recompiling (delegates to `App::observe_theme_file`, applies each reload to the global `Theme`; spacing-token live-apply unit-tested). The cheapest meaningful dent in the #1 DX problem; full code hot-patch still scoped.
-8. **Publish `kael-cli` with `kael new` (M).** The scaffolder already works; embed templates via `include_dir`, publish, and document. Gives agents and humans a real front door.
+8. ~~**Publish `kael-cli` with `kael new` (M).**~~ **BUILT (publish pending creds).** `crates/kael-cli` produces the `kael` binary; `kael new <name>` scaffolds a ready-to-run app from `include_str!`-embedded templates (offline-capable), tested + smoke-run. Only `cargo publish` needs crates.io credentials. Gives agents and humans a real front door.
 
 Everything above is additive, traces to confirmed audit findings, and leans on machinery kael already built. Land Wave 1 + the top of Wave 2 and kael moves from "a fast native toolkit with great docs" to "a credible Electron alternative for beautiful, complex, agent-built apps."
 

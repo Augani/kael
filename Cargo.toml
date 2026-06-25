@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/kael",
+    "crates/kael-cli",
     "crates/kael-media",
     "crates/kael-macros",
     "crates/kael_storage",
