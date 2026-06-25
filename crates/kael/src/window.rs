@@ -845,6 +845,7 @@ pub struct Window {
     rem_size_override_stack: SmallVec<[Pixels; 8]>,
     pub(crate) viewport_size: Size<Pixels>,
     layout_engine: Option<TaffyLayoutEngine>,
+    frame_skip: crate::FrameSkip,
     pub(crate) root: Option<AnyView>,
     pub(crate) element_id_stack: SmallVec<[ElementId; 32]>,
     pub(crate) text_style_stack: SmallVec<[TextStyleRefinement; 4]>,
@@ -1277,6 +1278,7 @@ impl Window {
             rem_size_override_stack: SmallVec::new(),
             viewport_size: content_size,
             layout_engine: Some(TaffyLayoutEngine::new()),
+            frame_skip: crate::FrameSkip::new(),
             root: None,
             element_id_stack: SmallVec::default(),
             text_style_stack: SmallVec::new(),
@@ -1472,6 +1474,20 @@ impl Window {
             self.invalidator.set_dirty(true);
             self.update_frame_polling();
         }
+    }
+
+    /// Enable or disable whole-frame damage skipping. When enabled, a frame whose scene
+    /// is byte-identical to the previously presented one is not re-rasterized or
+    /// re-presented — the compositor keeps the prior contents — which removes redundant
+    /// GPU work for mostly-static UIs. Off by default; frames containing live external
+    /// surfaces (e.g. video) are never skipped.
+    pub fn set_frame_skip_enabled(&mut self, enabled: bool) {
+        self.frame_skip.set_enabled(enabled);
+    }
+
+    /// Whether whole-frame damage skipping is currently enabled.
+    pub fn frame_skip_enabled(&self) -> bool {
+        self.frame_skip.is_enabled()
     }
 
     fn should_throttle_frame(&self, request_frame_options: crate::RequestFrameOptions) -> bool {
@@ -2021,6 +2037,9 @@ impl Window {
         self.viewport_size = self.platform_window.content_size();
         self.display_id = self.platform_window.display().map(|display| display.id());
 
+        // The content checksum can't see the viewport/scale change, so force the next
+        // frame to present rather than risk skipping a resize.
+        self.frame_skip.invalidate();
         self.refresh();
 
         self.bounds_observers
@@ -2399,6 +2418,22 @@ impl Window {
     fn present(&mut self) {
         self.platform_window
             .sync_webviews(&self.rendered_frame.webviews);
+
+        // Whole-frame damage early-out (opt-in via `set_frame_skip_enabled`): if the
+        // scene is byte-identical to the last presented frame, skip the GPU rasterize +
+        // present entirely — the compositor retains the previously presented contents.
+        // Live external surfaces (video) change without a scene-primitive change, so a
+        // frame containing any is never skipped and resets the tracker.
+        if self.rendered_frame.scene.has_live_surfaces() {
+            self.frame_skip.invalidate();
+        } else if self
+            .frame_skip
+            .should_skip(self.rendered_frame.scene.structural_checksum())
+        {
+            self.needs_present.set(false);
+            return;
+        }
+
         self.platform_window.draw(&self.rendered_frame.scene);
         self.needs_present.set(false);
         self.last_frame_presented_at = Instant::now();

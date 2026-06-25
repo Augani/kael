@@ -133,6 +133,16 @@ impl Scene {
                 bounds.size.height.0.to_bits() as u64,
             ]
         }
+        fn transform_bits(transform: &TransformationMatrix) -> [u64; 6] {
+            [
+                transform.rotation_scale[0][0].to_bits() as u64,
+                transform.rotation_scale[0][1].to_bits() as u64,
+                transform.rotation_scale[1][0].to_bits() as u64,
+                transform.rotation_scale[1][1].to_bits() as u64,
+                transform.translation[0].to_bits() as u64,
+                transform.translation[1].to_bits() as u64,
+            ]
+        }
 
         let mut hash = 0xcbf2_9ce4_8422_2325u64;
         let mut mix = |value: u64| {
@@ -159,6 +169,9 @@ impl Scene {
             mix_all(hsla_bits(&quad.background.solid), &mut mix);
             mix_all(hsla_bits(&quad.border_color.solid), &mut mix);
             mix(quad.blend_mode as u64);
+            for value in transform_bits(&quad.transform) {
+                mix(value);
+            }
         }
         for shadow in &self.shadows {
             mix_all(bounds_bits(&shadow.bounds), &mut mix);
@@ -181,13 +194,25 @@ impl Scene {
         for sprite in &self.monochrome_sprites {
             mix_all(bounds_bits(&sprite.bounds), &mut mix);
             mix_all(hsla_bits(&sprite.color), &mut mix);
+            for value in transform_bits(&sprite.transformation) {
+                mix(value);
+            }
         }
         for sprite in &self.polychrome_sprites {
             mix_all(bounds_bits(&sprite.bounds), &mut mix);
+            mix_all(hsla_bits(&sprite.color), &mut mix);
             mix(sprite.opacity.to_bits() as u64);
             mix(sprite.grayscale as u64);
         }
         hash
+    }
+
+    /// Whether the scene contains any live external surface (e.g. a video frame or other
+    /// externally-updated texture) whose contents change independently of the scene's
+    /// primitives. Such frames must never be skipped by whole-frame damage tracking,
+    /// because [`Self::structural_checksum`] cannot see their per-frame content.
+    pub(crate) fn has_live_surfaces(&self) -> bool {
+        !self.surfaces.is_empty()
     }
 
     pub fn push_layer(&mut self, bounds: Bounds<ScaledPixels>) {
@@ -1907,6 +1932,43 @@ mod tests {
             scene_with_border(crate::hsla(0.0, 1.0, 0.5, 1.0)).structural_checksum(),
             scene_with_border(crate::hsla(0.66, 1.0, 0.5, 1.0)).structural_checksum(),
             "a border-color-only change must change the frame checksum"
+        );
+    }
+
+    #[test]
+    fn structural_checksum_detects_transform_changes() {
+        fn scene_with_transform(transform: TransformationMatrix) -> Scene {
+            let bounds = Bounds {
+                origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size: Size {
+                    width: ScaledPixels(10.0),
+                    height: ScaledPixels(10.0),
+                },
+            };
+            let mut scene = Scene::default();
+            scene.insert_primitive(Quad {
+                bounds,
+                content_mask: ContentMask { bounds },
+                background: Background::from(crate::hsla(0.0, 0.0, 0.5, 1.0)),
+                transform,
+                ..Default::default()
+            });
+            scene.finish();
+            scene
+        }
+
+        // A transform-only change (e.g. a rotating/translating element via the transform
+        // matrix, with identical bounds + color) must change the checksum — otherwise a
+        // transform animation would freeze under skip-render.
+        let identity = TransformationMatrix::unit();
+        let translated = TransformationMatrix {
+            rotation_scale: [[1.0, 0.0], [0.0, 1.0]],
+            translation: [5.0, 0.0],
+        };
+        assert_ne!(
+            scene_with_transform(identity).structural_checksum(),
+            scene_with_transform(translated).structural_checksum(),
+            "a transform-only change must change the frame checksum"
         );
     }
 
