@@ -413,6 +413,7 @@ pub struct BladeRenderer {
     pipelines: BladePipelines,
     instance_belt: BufferBelt,
     atlas: Arc<BladeAtlas>,
+    atlas_byte_budget: Option<u64>,
     atlas_sampler: gpu::Sampler,
     #[cfg(target_os = "macos")]
     core_video_texture_cache: CVMetalTextureCache,
@@ -525,6 +526,7 @@ impl BladeRenderer {
             pipelines,
             instance_belt,
             atlas,
+            atlas_byte_budget: None,
             atlas_sampler,
             #[cfg(target_os = "macos")]
             core_video_texture_cache,
@@ -689,6 +691,14 @@ impl BladeRenderer {
 
     pub fn sprite_atlas(&self) -> &Arc<BladeAtlas> {
         &self.atlas
+    }
+
+    /// Set a soft byte budget for the glyph/sprite atlas. When set, the renderer evicts the
+    /// least-recently-used atlas tiles down to this budget at the end of each frame
+    /// (protecting tiles still in flight). `None` (the default) disables eviction.
+    #[allow(dead_code)]
+    pub fn set_atlas_byte_budget(&mut self, budget: Option<u64>) {
+        self.atlas_byte_budget = budget;
     }
 
     #[cfg_attr(target_os = "macos", allow(dead_code))]
@@ -1090,6 +1100,14 @@ impl BladeRenderer {
         profiling::scope!("finish");
         self.instance_belt.flush(&sync_point);
         self.atlas.after_frame(&sync_point);
+
+        // End of frame: shed least-recently-used atlas tiles to the budget (if configured),
+        // protecting the frames still in flight, then advance the atlas clock.
+        if let Some(budget) = self.atlas_byte_budget {
+            const IN_FLIGHT_FRAMES: u64 = 3;
+            self.atlas.evict_to_budget_keeping(budget, IN_FLIGHT_FRAMES);
+        }
+        self.atlas.advance_frame();
 
         self.wait_for_gpu();
         self.last_sync_point = Some(sync_point);

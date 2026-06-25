@@ -23,6 +23,8 @@ struct BladeAtlasState {
     upload_belt: BufferBelt,
     storage: BladeAtlasStorage,
     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
+    last_used: FxHashMap<AtlasKey, u64>,
+    frame: u64,
     initializations: Vec<AtlasTextureId>,
     uploads: Vec<PendingUpload>,
 }
@@ -53,9 +55,36 @@ impl BladeAtlas {
             }),
             storage: BladeAtlasStorage::default(),
             tiles_by_key: Default::default(),
+            last_used: Default::default(),
+            frame: 0,
             initializations: Vec::new(),
             uploads: Vec::new(),
         }))
+    }
+
+    /// Advance the atlas frame clock so tiles fetched after this call are protected from
+    /// eviction until the following frame.
+    #[allow(dead_code)]
+    pub(crate) fn advance_frame(&self) {
+        self.0.lock().frame += 1;
+    }
+
+    /// Evict least-recently-used tiles (reclaiming their atlas regions) until total tile
+    /// bytes fit `max_bytes`, protecting tiles used within the last `keep_recent_frames`
+    /// frames. Returns the number of tiles evicted.
+    #[allow(dead_code)]
+    pub(crate) fn evict_to_budget_keeping(&self, max_bytes: u64, keep_recent_frames: u64) -> usize {
+        let mut lock = self.0.lock();
+        let guard = lock
+            .frame
+            .saturating_sub(keep_recent_frames.saturating_sub(1));
+        lock.evict_to_budget_with_guard(max_bytes, guard)
+    }
+
+    /// The number of distinct tiles currently held.
+    #[allow(dead_code)]
+    pub(crate) fn tile_count(&self) -> usize {
+        self.0.lock().tiles_by_key.len()
     }
 
     pub(crate) fn destroy(&self) {
@@ -89,8 +118,10 @@ impl PlatformAtlas for BladeAtlas {
         build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
     ) -> Result<Option<AtlasTile>> {
         let mut lock = self.0.lock();
-        if let Some(tile) = lock.tiles_by_key.get(key) {
-            Ok(Some(tile.clone()))
+        let frame = lock.frame;
+        if let Some(tile) = lock.tiles_by_key.get(key).cloned() {
+            lock.last_used.insert(key.clone(), frame);
+            Ok(Some(tile))
         } else {
             profiling::scope!("new tile");
             let Some((size, bytes)) = build()? else {
@@ -99,6 +130,7 @@ impl PlatformAtlas for BladeAtlas {
             let tile = lock.allocate(size, key.texture_kind(), key.allocation_class(size));
             lock.upload_texture(tile.texture_id, tile.bounds, &bytes);
             lock.tiles_by_key.insert(key.clone(), tile.clone());
+            lock.last_used.insert(key.clone(), frame);
             Ok(Some(tile))
         }
     }
@@ -236,6 +268,67 @@ impl BladeAtlasState {
     fn upload_texture(&mut self, id: AtlasTextureId, bounds: Bounds<DevicePixels>, bytes: &[u8]) {
         let data = self.upload_belt.alloc_bytes(bytes, &self.gpu);
         self.uploads.push(PendingUpload { id, bounds, data });
+    }
+
+    fn tile_bytes(tile: &AtlasTile) -> u64 {
+        let bytes_per_pixel = match tile.texture_id.kind {
+            AtlasTextureKind::Monochrome => 1u8,
+            AtlasTextureKind::Polychrome => 4u8,
+        };
+        u64::from(tile.bounds.size.width.to_bytes(bytes_per_pixel))
+            * u64::from(tile.bounds.size.height)
+    }
+
+    fn evict_to_budget_with_guard(&mut self, max_bytes: u64, guard_frame: u64) -> usize {
+        let entries: Vec<(AtlasKey, u64, u64)> = self
+            .tiles_by_key
+            .iter()
+            .map(|(key, tile)| {
+                let last_used = self.last_used.get(key).copied().unwrap_or(0);
+                (key.clone(), last_used, Self::tile_bytes(tile))
+            })
+            .collect();
+        let total: u64 = entries.iter().map(|(_, _, bytes)| *bytes).sum();
+        let policy_input: Vec<(u64, u64)> = entries
+            .iter()
+            .map(|(_, last_used, bytes)| (*last_used, *bytes))
+            .collect();
+
+        let victims = crate::select_atlas_evictions(&policy_input, total, max_bytes, guard_frame);
+        let mut evicted = 0;
+        for index in victims {
+            if self.evict_tile(&entries[index].0) {
+                evicted += 1;
+            }
+        }
+        evicted
+    }
+
+    fn evict_tile(&mut self, key: &AtlasKey) -> bool {
+        let Some(tile) = self.tiles_by_key.remove(key) else {
+            return false;
+        };
+        self.last_used.remove(key);
+
+        let id = tile.texture_id;
+        let Some(texture_slot) = self.storage[id.kind].textures.get_mut(id.index as usize) else {
+            return true;
+        };
+        if let Some(mut texture) = texture_slot.take() {
+            texture
+                .allocator
+                .deallocate(etagere::AllocId::from(tile.tile_id));
+            texture.decrement_ref_count();
+            if texture.is_unreferenced() {
+                self.storage[id.kind]
+                    .free_list
+                    .push(texture.id.index as usize);
+                texture.destroy(&self.gpu);
+            } else {
+                *texture_slot = Some(texture);
+            }
+        }
+        true
     }
 
     fn flush_initializations(&mut self, encoder: &mut gpu::CommandEncoder) {
