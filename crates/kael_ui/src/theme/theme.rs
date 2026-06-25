@@ -7,6 +7,14 @@ use super::tokens::ThemeTokens;
 /// Theme variants
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ThemeVariant {
+    /// Astryx — Facebook's open design system, light (blue accent)
+    Astryx,
+    /// Astryx — dark (blue accent)
+    AstryxDark,
+    /// Astryx Neutral — grayscale spine, light
+    AstryxNeutral,
+    /// Astryx Neutral — grayscale spine, dark
+    AstryxNeutralDark,
     /// Light theme
     Light,
     /// Dark theme
@@ -50,6 +58,10 @@ pub enum ThemeVariant {
 impl ThemeVariant {
     pub fn display_name(&self) -> &'static str {
         match self {
+            Self::Astryx => "Astryx",
+            Self::AstryxDark => "Astryx Dark",
+            Self::AstryxNeutral => "Astryx Neutral",
+            Self::AstryxNeutralDark => "Astryx Neutral Dark",
             Self::Light => "Light",
             Self::Dark => "Dark",
             Self::MidnightBlue => "Midnight Blue",
@@ -81,6 +93,34 @@ pub struct Theme {
 }
 
 impl Theme {
+    /// Astryx — the default look: vivid blue accent on a tinted light canvas.
+    pub fn astryx() -> Self {
+        Self {
+            variant: ThemeVariant::Astryx,
+            tokens: ThemeTokens::astryx(),
+        }
+    }
+    /// Astryx — dark mode.
+    pub fn astryx_dark() -> Self {
+        Self {
+            variant: ThemeVariant::AstryxDark,
+            tokens: ThemeTokens::astryx_dark(),
+        }
+    }
+    /// Astryx Neutral — grayscale spine, light.
+    pub fn astryx_neutral() -> Self {
+        Self {
+            variant: ThemeVariant::AstryxNeutral,
+            tokens: ThemeTokens::astryx_neutral(),
+        }
+    }
+    /// Astryx Neutral — grayscale spine, dark.
+    pub fn astryx_neutral_dark() -> Self {
+        Self {
+            variant: ThemeVariant::AstryxNeutralDark,
+            tokens: ThemeTokens::astryx_neutral_dark(),
+        }
+    }
     pub fn light() -> Self {
         Self {
             variant: ThemeVariant::Light,
@@ -212,6 +252,10 @@ impl Theme {
 
     pub fn all() -> Vec<Theme> {
         vec![
+            Self::astryx(),
+            Self::astryx_dark(),
+            Self::astryx_neutral(),
+            Self::astryx_neutral_dark(),
             Self::dark(),
             Self::light(),
             Self::midnight_blue(),
@@ -261,7 +305,7 @@ impl Theme {
 }
 
 static THEME_STATE: Lazy<std::sync::Mutex<Arc<Theme>>> =
-    Lazy::new(|| std::sync::Mutex::new(Arc::new(Theme::dark())));
+    Lazy::new(|| std::sync::Mutex::new(Arc::new(Theme::astryx())));
 
 fn sync_theme_mirror(theme: &Theme) -> Arc<Theme> {
     let next = Arc::new(theme.clone());

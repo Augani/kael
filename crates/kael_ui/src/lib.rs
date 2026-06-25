@@ -57,6 +57,7 @@ extern crate kael;
 
 pub mod animate;
 pub mod animations;
+pub mod astryx;
 pub mod charts;
 pub mod components;
 pub mod content_transition;

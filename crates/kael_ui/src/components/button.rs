@@ -245,11 +245,12 @@ impl RenderOnce for Button {
         let theme = use_theme();
 
         let (height, px_h, text_size) = match self.size {
-            ButtonSize::Sm => (px(36.0), px(12.0), px(13.0)),
-            ButtonSize::Md => (px(40.0), px(16.0), px(14.0)),
-            ButtonSize::Lg => (px(44.0), px(20.0), px(15.0)),
-            ButtonSize::Icon => (px(40.0), px(10.0), px(14.0)),
+            ButtonSize::Sm => (px(28.0), px(10.0), px(13.0)),
+            ButtonSize::Md => (px(32.0), px(12.0), px(14.0)),
+            ButtonSize::Lg => (px(36.0), px(16.0), px(14.0)),
+            ButtonSize::Icon => (px(32.0), px(0.0), px(14.0)),
         };
+        let is_icon_only = matches!(self.size, ButtonSize::Icon);
 
         let (bg, fg, border, hover_bg, hover_fg, has_shadow, has_border) = match self.variant {
             ButtonVariant::Default => (
@@ -327,6 +328,8 @@ impl RenderOnce for Button {
             .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
             .read(cx)
             .clone();
+        let is_focused = focus_handle.is_focused(window);
+        let ring_color = theme.tokens.ring;
 
         let label_text = Text::new(self.label.clone())
             .variant(TextVariant::Custom)
@@ -354,6 +357,7 @@ impl RenderOnce for Button {
             .gap_2()
             .h(height)
             .px(px_h)
+            .when(is_icon_only, |this| this.w(height))
             .rounded(theme.tokens.radius_md)
             .text_color(fg)
             .bg(bg)
@@ -362,6 +366,11 @@ impl RenderOnce for Button {
                 this.shadow(theme.tokens.shadow_xs.to_vec())
             })
             .when(has_border, |this| this.border_1().border_color(border))
+            .when(is_focused && !self.disabled, |this| {
+                this.shadow(smallvec::smallvec![crate::astryx::focus_ring_outer(
+                    ring_color
+                )])
+            })
             .when(is_selected && !self.disabled, |this| {
                 this.bg(theme.tokens.accent)
                     .text_color(theme.tokens.accent_foreground)

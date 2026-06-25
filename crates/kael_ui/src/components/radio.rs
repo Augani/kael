@@ -118,7 +118,7 @@ impl RenderOnce for Radio {
         let tokens = &Theme::of(cx).tokens;
         let primary = tokens.primary;
         let input = tokens.input;
-        let background = tokens.background;
+        let card = tokens.card;
         let primary_foreground = tokens.primary_foreground;
         let muted_foreground = tokens.muted_foreground;
         let foreground = tokens.foreground;
@@ -131,7 +131,7 @@ impl RenderOnce for Radio {
         let (border_color, bg, dot_opacity) = if self.checked {
             (primary, primary, 1.0)
         } else {
-            (input, background, 0.0)
+            (input, card, 0.0)
         };
 
         let (border_color, bg) = if self.disabled {

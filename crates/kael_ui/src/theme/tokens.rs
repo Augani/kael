@@ -1529,6 +1529,172 @@ impl ThemeTokens {
         }
         .apply_standard()
     }
+
+    /// Astryx — Facebook's open design system look, light mode.
+    ///
+    /// Signature traits: a vivid blue accent (`#0064E0`) on a tinted body
+    /// canvas (`#F1F4F7`) with white floating surfaces, ultra-subtle borders
+    /// (~10% navy), the 4 / 8 / 12 / 16 radius ladder (element = 8px), soft
+    /// elevation shadows, and snappy motion.
+    pub fn astryx() -> Self {
+        Self {
+            background: rgb(0xF1F4F7).into(),
+            foreground: rgb(0x0A1317).into(),
+            card: rgb(0xFFFFFF).into(),
+            card_foreground: rgb(0x0A1317).into(),
+            popover: rgb(0xFFFFFF).into(),
+            popover_foreground: rgb(0x0A1317).into(),
+            muted: rgb(0xE9EDF1).into(),
+            muted_foreground: rgb(0x4E606F).into(),
+            accent: rgb(0xE8EDF2).into(),
+            accent_foreground: rgb(0x0A1317).into(),
+            primary: rgb(0x0064E0).into(),
+            primary_foreground: rgb(0xFFFFFF).into(),
+            secondary: rgb(0xE4E9EE).into(),
+            secondary_foreground: rgb(0x0A1317).into(),
+            destructive: rgb(0xE3193B).into(),
+            destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x0D8626).into(),
+            success_foreground: rgb(0xFFFFFF).into(),
+            warning: rgb(0xE9AF08).into(),
+            warning_foreground: rgb(0x0A1317).into(),
+            border: rgba(0x05365919).into(),
+            input: rgba(0x05365919).into(),
+            ring: rgb(0x0064E0).into(),
+
+            radius_sm: px(4.0),
+            radius_md: px(8.0),
+            radius_lg: px(12.0),
+            radius_xl: px(16.0),
+
+            transition_fast: Duration::from_millis(140),
+            transition_base: Duration::from_millis(220),
+            transition_slow: Duration::from_millis(320),
+
+            ..Self::light()
+        }
+    }
+
+    /// Astryx — dark mode (vivid `#2694FE` accent on near-black surfaces).
+    pub fn astryx_dark() -> Self {
+        Self {
+            background: rgb(0x111112).into(),
+            foreground: rgb(0xDFE2E5).into(),
+            card: rgb(0x1F1F22).into(),
+            card_foreground: rgb(0xDFE2E5).into(),
+            popover: rgb(0x28292C).into(),
+            popover_foreground: rgb(0xDFE2E5).into(),
+            muted: rgb(0x1C1C1F).into(),
+            muted_foreground: rgb(0xAAAFB5).into(),
+            accent: rgb(0x2A2B2E).into(),
+            accent_foreground: rgb(0xDFE2E5).into(),
+            primary: rgb(0x2694FE).into(),
+            primary_foreground: rgb(0xFFFFFF).into(),
+            secondary: rgb(0x2A2B2E).into(),
+            secondary_foreground: rgb(0xDFE2E5).into(),
+            destructive: rgb(0xF5394F).into(),
+            destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x0D8626).into(),
+            success_foreground: rgb(0xFFFFFF).into(),
+            warning: rgb(0xF2C00B).into(),
+            warning_foreground: rgb(0x0A1317).into(),
+            border: rgba(0xF2F4F619).into(),
+            input: rgba(0xF2F4F619).into(),
+            ring: rgb(0x2694FE).into(),
+
+            radius_sm: px(4.0),
+            radius_md: px(8.0),
+            radius_lg: px(12.0),
+            radius_xl: px(16.0),
+
+            transition_fast: Duration::from_millis(140),
+            transition_base: Duration::from_millis(220),
+            transition_slow: Duration::from_millis(320),
+
+            ..Self::dark()
+        }
+    }
+
+    /// Astryx Neutral — the grayscale spine variant (near-black accent on a
+    /// pure neutral ramp), light mode. Closest to a shadcn/Tailwind look.
+    pub fn astryx_neutral() -> Self {
+        Self {
+            background: rgb(0xF1F1F1).into(),
+            foreground: rgb(0x171717).into(),
+            card: rgb(0xFFFFFF).into(),
+            card_foreground: rgb(0x171717).into(),
+            popover: rgb(0xFFFFFF).into(),
+            popover_foreground: rgb(0x171717).into(),
+            muted: rgb(0xF1F1F1).into(),
+            muted_foreground: rgb(0x737373).into(),
+            accent: rgb(0xECECEC).into(),
+            accent_foreground: rgb(0x171717).into(),
+            primary: rgb(0x262626).into(),
+            primary_foreground: rgb(0xFAFAFA).into(),
+            secondary: rgb(0xECECEC).into(),
+            secondary_foreground: rgb(0x171717).into(),
+            destructive: rgb(0xE3193B).into(),
+            destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x0D8626).into(),
+            success_foreground: rgb(0xFFFFFF).into(),
+            warning: rgb(0xE9AF08).into(),
+            warning_foreground: rgb(0x171717).into(),
+            border: rgb(0xE5E5E5).into(),
+            input: rgb(0xE5E5E5).into(),
+            ring: rgb(0x262626).into(),
+
+            radius_sm: px(4.0),
+            radius_md: px(8.0),
+            radius_lg: px(12.0),
+            radius_xl: px(16.0),
+
+            transition_fast: Duration::from_millis(125),
+            transition_base: Duration::from_millis(200),
+            transition_slow: Duration::from_millis(300),
+
+            ..Self::light()
+        }
+    }
+
+    /// Astryx Neutral — grayscale spine, dark mode.
+    pub fn astryx_neutral_dark() -> Self {
+        Self {
+            background: rgb(0x1B1B1B).into(),
+            foreground: rgb(0xFAFAFA).into(),
+            card: rgb(0x1F1F1F).into(),
+            card_foreground: rgb(0xFAFAFA).into(),
+            popover: rgb(0x232323).into(),
+            popover_foreground: rgb(0xFAFAFA).into(),
+            muted: rgb(0x262626).into(),
+            muted_foreground: rgb(0xA3A3A3).into(),
+            accent: rgb(0x262626).into(),
+            accent_foreground: rgb(0xFAFAFA).into(),
+            primary: rgb(0xEBEBEB).into(),
+            primary_foreground: rgb(0x171717).into(),
+            secondary: rgb(0x2A2A2A).into(),
+            secondary_foreground: rgb(0xFAFAFA).into(),
+            destructive: rgb(0xF5394F).into(),
+            destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x26A756).into(),
+            success_foreground: rgb(0x171717).into(),
+            warning: rgb(0xF2C00B).into(),
+            warning_foreground: rgb(0x171717).into(),
+            border: rgba(0xFFFFFF1A).into(),
+            input: rgba(0xFFFFFF1A).into(),
+            ring: rgb(0xEBEBEB).into(),
+
+            radius_sm: px(4.0),
+            radius_md: px(8.0),
+            radius_lg: px(12.0),
+            radius_xl: px(16.0),
+
+            transition_fast: Duration::from_millis(125),
+            transition_base: Duration::from_millis(200),
+            transition_slow: Duration::from_millis(300),
+
+            ..Self::dark()
+        }
+    }
 }
 
 impl ThemeTokens {

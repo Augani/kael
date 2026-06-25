@@ -2,6 +2,7 @@
 
 use crate::{
     components::icon::{Icon, IconSize as IconSizeEnum},
+    styled_ext::StyledExt,
     theme::use_theme,
 };
 use kael::{prelude::FluentBuilder as _, *};
@@ -131,7 +132,7 @@ impl RenderOnce for Checkbox {
             )
         } else {
             (
-                theme.tokens.background,
+                theme.tokens.card,
                 theme.tokens.border,
                 theme.tokens.primary_foreground,
             )
@@ -141,6 +142,8 @@ impl RenderOnce for Checkbox {
             .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
             .read(cx)
             .clone();
+        let is_focused = focus_handle.is_focused(window);
+        let ring_color = theme.tokens.ring;
 
         let user_style = self.style;
 
@@ -171,6 +174,9 @@ impl RenderOnce for Checkbox {
                     .when(self.disabled, |this| this.opacity(0.6))
                     .when(!self.disabled && !checked && !indeterminate, |this| {
                         this.hover(|style| style.border_color(theme.tokens.primary.opacity(0.5)))
+                    })
+                    .when(is_focused && !self.disabled, |this| {
+                        this.inset_ring(ring_color.opacity(0.5), px(2.0))
                     })
                     .child(checkbox_icon(
                         self.id.clone(),

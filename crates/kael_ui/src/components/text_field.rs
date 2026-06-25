@@ -1,5 +1,6 @@
 //! Text field component - Simple text input field.
 
+use crate::styled_ext::StyledExt;
 use crate::theme::use_theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::ops::Range;
@@ -225,25 +226,28 @@ impl Styled for TextField {
 }
 
 impl RenderOnce for TextField {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = use_theme();
         let user_style = self.style;
 
         let (height, padding_x, padding_y, text_size) = match self.size {
-            TextFieldSize::Sm => (px(36.0), px(12.0), px(8.0), px(14.0)),
-            TextFieldSize::Md => (px(40.0), px(12.0), px(8.0), px(14.0)),
-            TextFieldSize::Lg => (px(44.0), px(12.0), px(10.0), px(16.0)),
-        };
-
-        let border_color = if self.invalid {
-            theme.tokens.destructive
-        } else {
-            theme.tokens.input
+            TextFieldSize::Sm => (px(28.0), px(10.0), px(6.0), px(13.0)),
+            TextFieldSize::Md => (px(32.0), px(12.0), px(8.0), px(14.0)),
+            TextFieldSize::Lg => (px(36.0), px(14.0), px(8.0), px(14.0)),
         };
 
         let focus_handle = self.state.read(cx).focus_handle.clone();
+        let is_focused = focus_handle.is_focused(window);
         let focus_handle_for_mouse = focus_handle.clone();
         let text_content = self.state.read(cx).text().to_string();
+
+        let border_color = if self.invalid {
+            theme.tokens.destructive
+        } else if is_focused {
+            theme.tokens.ring
+        } else {
+            theme.tokens.input
+        };
 
         let mut base = div()
             .id(("text-field", self.state.entity_id()))
@@ -251,10 +255,16 @@ impl RenderOnce for TextField {
             .h(height)
             .px(padding_x)
             .py(padding_y)
-            .bg(theme.tokens.background)
+            .bg(theme.tokens.card)
             .border_1()
             .border_color(border_color)
             .rounded(theme.tokens.radius_md);
+
+        if self.invalid {
+            base = base.inset_ring(theme.tokens.destructive.opacity(0.45), px(2.0));
+        } else if is_focused {
+            base = base.inset_ring(theme.tokens.ring.opacity(0.5), px(2.0));
+        }
 
         if self.disabled {
             base = base.opacity(0.5);

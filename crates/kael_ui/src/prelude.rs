@@ -3,6 +3,13 @@
 pub use crate::kael_ext::*;
 pub use crate::styled_ext::StyledExt;
 
+pub use crate::astryx::{
+    focus_ring as astryx_focus_ring, focus_ring_outer as astryx_focus_ring_outer,
+    inset_ring as astryx_inset_ring, overlay_hover as astryx_overlay_hover,
+    overlay_pressed as astryx_overlay_pressed, status_muted as astryx_status_muted, ControlSize,
+    Hue, HueColors, ASTRYX_EASE,
+};
+
 pub use crate::animate::{
     bounce_in as animate_bounce_in, fade_in as animate_fade_in, fade_out as animate_fade_out,
     scale_in as animate_scale_in, slide_down as animate_slide_down,
