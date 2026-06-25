@@ -19,11 +19,34 @@ impl MetalAtlas {
             monochrome_textures: Default::default(),
             polychrome_textures: Default::default(),
             tiles_by_key: Default::default(),
+            last_used: Default::default(),
+            frame: 0,
         }))
     }
 
     pub(crate) fn metal_texture(&self, id: AtlasTextureId) -> metal::Texture {
         self.0.lock().texture(id).metal_texture.clone()
+    }
+
+    /// Advance the atlas frame clock. Tiles fetched after this call are stamped with the new
+    /// frame and so are protected from eviction until the following frame.
+    #[allow(dead_code)]
+    pub(crate) fn advance_frame(&self) {
+        self.0.lock().frame += 1;
+    }
+
+    /// Evict least-recently-used tiles (reclaiming their atlas regions) until total tile
+    /// bytes fit `max_bytes`, never evicting a tile used in the current frame. Returns the
+    /// number of tiles evicted.
+    #[allow(dead_code)]
+    pub(crate) fn evict_to_budget(&self, max_bytes: u64) -> usize {
+        self.0.lock().evict_to_budget(max_bytes)
+    }
+
+    /// The number of distinct tiles currently held.
+    #[allow(dead_code)]
+    pub(crate) fn tile_count(&self) -> usize {
+        self.0.lock().tiles_by_key.len()
     }
 }
 
@@ -32,6 +55,8 @@ struct MetalAtlasState {
     monochrome_textures: AtlasTextureList<MetalAtlasTexture>,
     polychrome_textures: AtlasTextureList<MetalAtlasTexture>,
     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
+    last_used: FxHashMap<AtlasKey, u64>,
+    frame: u64,
 }
 
 impl PlatformAtlas for MetalAtlas {
@@ -41,8 +66,10 @@ impl PlatformAtlas for MetalAtlas {
         build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
     ) -> Result<Option<AtlasTile>> {
         let mut lock = self.0.lock();
-        if let Some(tile) = lock.tiles_by_key.get(key) {
-            Ok(Some(tile.clone()))
+        let frame = lock.frame;
+        if let Some(tile) = lock.tiles_by_key.get(key).cloned() {
+            lock.last_used.insert(key.clone(), frame);
+            Ok(Some(tile))
         } else {
             let Some((size, bytes)) = build()? else {
                 return Ok(None);
@@ -54,6 +81,7 @@ impl PlatformAtlas for MetalAtlas {
             let texture = lock.texture(tile.texture_id);
             texture.upload(tile.bounds, &bytes);
             lock.tiles_by_key.insert(key.clone(), tile.clone());
+            lock.last_used.insert(key.clone(), frame);
             Ok(Some(tile))
         }
     }
@@ -188,6 +216,73 @@ impl MetalAtlasState {
         };
         textures[id.index as usize].as_ref().unwrap()
     }
+
+    fn tile_bytes(tile: &AtlasTile) -> u64 {
+        let bytes_per_pixel = match tile.texture_id.kind {
+            AtlasTextureKind::Monochrome => 1u8,
+            AtlasTextureKind::Polychrome => 4u8,
+        };
+        u64::from(tile.bounds.size.width.to_bytes(bytes_per_pixel))
+            * u64::from(tile.bounds.size.height)
+    }
+
+    fn evict_to_budget(&mut self, max_bytes: u64) -> usize {
+        let entries: Vec<(AtlasKey, u64, u64)> = self
+            .tiles_by_key
+            .iter()
+            .map(|(key, tile)| {
+                let last_used = self.last_used.get(key).copied().unwrap_or(0);
+                (key.clone(), last_used, Self::tile_bytes(tile))
+            })
+            .collect();
+        let total: u64 = entries.iter().map(|(_, _, bytes)| *bytes).sum();
+        let policy_input: Vec<(u64, u64)> = entries
+            .iter()
+            .map(|(_, last_used, bytes)| (*last_used, *bytes))
+            .collect();
+
+        let victims = crate::select_atlas_evictions(&policy_input, total, max_bytes, self.frame);
+        let mut evicted = 0;
+        for index in victims {
+            if self.evict_tile(&entries[index].0) {
+                evicted += 1;
+            }
+        }
+        evicted
+    }
+
+    fn evict_tile(&mut self, key: &AtlasKey) -> bool {
+        let Some(tile) = self.tiles_by_key.remove(key) else {
+            return false;
+        };
+        self.last_used.remove(key);
+
+        let id = tile.texture_id;
+        let textures = match id.kind {
+            AtlasTextureKind::Monochrome => &mut self.monochrome_textures,
+            AtlasTextureKind::Polychrome => &mut self.polychrome_textures,
+        };
+        let Some(texture_slot) = textures
+            .textures
+            .iter_mut()
+            .find(|texture| texture.as_ref().is_some_and(|v| v.id == id))
+        else {
+            return true;
+        };
+
+        if let Some(mut texture) = texture_slot.take() {
+            texture
+                .allocator
+                .deallocate(etagere::AllocId::from(tile.tile_id));
+            texture.decrement_ref_count();
+            if texture.is_unreferenced() {
+                textures.free_list.push(id.index as usize);
+            } else {
+                *texture_slot = Some(texture);
+            }
+        }
+        true
+    }
 }
 
 struct MetalAtlasTexture {
@@ -282,3 +377,80 @@ impl From<etagere::Rectangle> for Bounds<DevicePixels> {
 struct AssertSend<T>(T);
 
 unsafe impl<T> Send for AssertSend<T> {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ImageId, PlatformAtlas, RenderImageParams, size};
+    use std::borrow::Cow;
+
+    fn image_key(id: usize) -> AtlasKey {
+        AtlasKey::Image(RenderImageParams {
+            image_id: ImageId(id),
+            frame_index: 0,
+        })
+    }
+
+    #[test]
+    fn evicts_lru_tiles_to_budget_and_protects_the_current_frame() {
+        let Some(device) = metal::Device::system_default() else {
+            return;
+        };
+        let atlas = MetalAtlas::new(device);
+        let tile_size = size(DevicePixels(64), DevicePixels(64));
+        const TILE_BYTES: u64 = 64 * 64 * 4;
+
+        let mut builds = 0usize;
+        for id in 0..4usize {
+            atlas.advance_frame();
+            atlas
+                .get_or_insert_with(&image_key(id), &mut || {
+                    builds += 1;
+                    Ok(Some((
+                        tile_size,
+                        Cow::Owned(vec![0u8; TILE_BYTES as usize]),
+                    )))
+                })
+                .unwrap();
+        }
+        assert_eq!(atlas.tile_count(), 4);
+        assert_eq!(builds, 4, "each distinct image rasterized once");
+
+        // Current frame is 4 (image 3 used this frame, protected). Budget = 1 tile.
+        let evicted = atlas.evict_to_budget(TILE_BYTES);
+        assert_eq!(
+            evicted, 3,
+            "the three older tiles are shed to fit a one-tile budget"
+        );
+        assert_eq!(atlas.tile_count(), 1, "only the current-frame tile remains");
+
+        // The protected tile survived: re-requesting it is a cache hit (no re-rasterize).
+        let before = builds;
+        atlas
+            .get_or_insert_with(&image_key(3), &mut || {
+                builds += 1;
+                Ok(Some((
+                    tile_size,
+                    Cow::Owned(vec![0u8; TILE_BYTES as usize]),
+                )))
+            })
+            .unwrap();
+        assert_eq!(builds, before, "the current-frame tile stayed cached");
+
+        // An evicted tile re-rasterizes (and reuses reclaimed atlas space).
+        atlas
+            .get_or_insert_with(&image_key(0), &mut || {
+                builds += 1;
+                Ok(Some((
+                    tile_size,
+                    Cow::Owned(vec![0u8; TILE_BYTES as usize]),
+                )))
+            })
+            .unwrap();
+        assert_eq!(
+            builds,
+            before + 1,
+            "an evicted tile is rebuilt on next request"
+        );
+    }
+}
