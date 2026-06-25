@@ -5,6 +5,7 @@ mod cached;
 mod canvas;
 mod canvas_draw;
 mod checkbox;
+mod clip_path;
 mod date_picker;
 mod deferred;
 mod disclosure;
@@ -53,6 +54,7 @@ pub use deferred::*;
 pub use disclosure::*;
 /// Scroll bar primitives bound to scroll handles.
 pub mod scroll_bar;
+pub use clip_path::*;
 pub use div::*;
 pub use effects::*;
 pub use icon::*;

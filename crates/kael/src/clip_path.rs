@@ -13,7 +13,7 @@
 //! Convex polygons clip correctly via a rasterized mask + [`apply_clip_mask_bgra`] (see
 //! `arbitrary_triangle_clip_produces_correct_pixels`); `with_clip_path` falls back to the
 //! shape's bounding box for them until the per-texel mask sample is fused into the in-pass
-//! shader. A `Styled::clip_path()` builder is the remaining sugar.
+//! shader. Apps reach this through the [`crate::clip_path`] wrapper element.
 
 use crate::{point, px, size, Bounds, Corners, Pixels, Point, Size};
 
@@ -189,6 +189,25 @@ impl ClipShape {
                 }
             }
             ClipShape::ConvexPolygon { .. } => None,
+        }
+    }
+
+    /// Return a copy of this shape translated by `offset`. Used to move a shape expressed in
+    /// element-relative coordinates into the absolute (window) space the clip is applied in.
+    pub fn translate(&self, offset: Point<Pixels>) -> ClipShape {
+        let shift = |p: Point<Pixels>| point(p.x + offset.x, p.y + offset.y);
+        match self {
+            ClipShape::Circle { center, radius } => ClipShape::Circle {
+                center: shift(*center),
+                radius: *radius,
+            },
+            ClipShape::Ellipse { center, radii } => ClipShape::Ellipse {
+                center: shift(*center),
+                radii: *radii,
+            },
+            ClipShape::ConvexPolygon { vertices } => ClipShape::ConvexPolygon {
+                vertices: vertices.iter().map(|v| shift(*v)).collect(),
+            },
         }
     }
 }
@@ -441,5 +460,29 @@ mod tests {
             vertices: vec![pt(0.0, 0.0), pt(10.0, 0.0), pt(5.0, 10.0)],
         };
         assert!(polygon.as_rounded_clip().is_none());
+    }
+
+    #[test]
+    fn translate_moves_every_shape_into_absolute_space() {
+        let circle = ClipShape::Circle {
+            center: pt(10.0, 10.0),
+            radius: px(5.0),
+        };
+        assert_eq!(
+            circle.translate(pt(100.0, 200.0)),
+            ClipShape::Circle {
+                center: pt(110.0, 210.0),
+                radius: px(5.0),
+            }
+        );
+
+        let polygon = ClipShape::ConvexPolygon {
+            vertices: vec![pt(0.0, 0.0), pt(10.0, 0.0), pt(5.0, 10.0)],
+        };
+        let moved = polygon.translate(pt(3.0, 4.0));
+        // The moved triangle is (3,4),(13,4),(8,14): (8, 9) is inside it, while the
+        // original-space origin (0, 0) now sits below the shifted base and is outside.
+        assert!(moved.contains(pt(8.0, 9.0)));
+        assert!(!moved.contains(pt(0.0, 0.0)));
     }
 }
