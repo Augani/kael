@@ -1,8 +1,10 @@
 use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::components::alert::Alert;
+use kael_ui::components::pagination::Pagination;
 use kael_ui::components::scrollable::scrollable_vertical;
 use kael_ui::components::text::{body, caption, code, h1, h2, h3, h4, h5, h6, label, muted};
 use kael_ui::components::tooltip::tooltip;
+use kael_ui::display::accordion::Accordion;
 use kael_ui::prelude::{
     Avatar, AvatarGroup, AvatarItem, AvatarSize, Badge, BadgeVariant, Banner, Button, ButtonSize,
     ButtonVariant, Card, Checkbox, Hue, ProgressBar, Radio, RadioGroup, SelectableCard, Separator,
@@ -17,6 +19,8 @@ struct AstryxShowcase {
     marketing: bool,
     plan: usize,
     card_pick: usize,
+    page: usize,
+    acc_open: std::collections::HashSet<usize>,
 }
 
 impl AstryxShowcase {
@@ -27,6 +31,8 @@ impl AstryxShowcase {
             marketing: false,
             plan: 1,
             card_pick: 1,
+            page: 3,
+            acc_open: std::collections::HashSet::from([0]),
         }
     }
 }
@@ -575,6 +581,49 @@ impl Render for AstryxShowcase {
         )
         .child(Separator::new().label("section divider"));
 
+        let nav_disclosure = section(
+            "Navigation & disclosure",
+            "Pagination and accordion",
+            &theme,
+        )
+        .child(
+            Pagination::new()
+                .current_page(self.page)
+                .total_pages(10)
+                .on_page_change({
+                    let view = view.clone();
+                    move |p, _, cx| {
+                        view.update(cx, |this, cx| {
+                            this.page = p;
+                            cx.notify();
+                        });
+                    }
+                }),
+        )
+        .child(
+            Accordion::new("astryx-acc")
+                .item(|item| {
+                    item.title("What is Astryx?")
+                        .icon("info")
+                        .content(body(
+                            "An open, fully-customizable design system from Meta.".to_string(),
+                        ))
+                        .open(self.acc_open.contains(&0))
+                })
+                .item(|item| {
+                    item.title("Is it flexible?")
+                        .icon("settings")
+                        .content(body(
+                            "Yes — every token and component style can be overridden.".to_string(),
+                        ))
+                        .open(self.acc_open.contains(&1))
+                })
+                .on_change(cx.listener(|this, indices: &[usize], _window, cx| {
+                    this.acc_open = indices.iter().copied().collect();
+                    cx.notify();
+                })),
+        );
+
         let content = div()
             .flex()
             .flex_col()
@@ -591,6 +640,7 @@ impl Render for AstryxShowcase {
             .child(extras)
             .child(misc)
             .child(details)
+            .child(nav_disclosure)
             .child(cards);
 
         div()
