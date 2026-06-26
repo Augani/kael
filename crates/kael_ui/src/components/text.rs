@@ -42,13 +42,13 @@ impl TextVariant {
     /// Get the text size for this variant
     pub fn size(&self) -> Pixels {
         match self {
-            Self::H1 => px(32.0),
-            Self::H2 => px(28.0),
-            Self::H3 => px(24.0),
-            Self::H4 => px(20.0),
-            Self::H5 => px(18.0),
-            Self::H6 => px(16.0),
-            Self::BodyLarge => px(16.0),
+            Self::H1 => px(24.0),
+            Self::H2 => px(20.0),
+            Self::H3 => px(17.0),
+            Self::H4 => px(14.0),
+            Self::H5 => px(12.0),
+            Self::H6 => px(11.0),
+            Self::BodyLarge => px(17.0),
             Self::Body => px(14.0),
             Self::BodySmall => px(13.0),
             Self::Caption => px(12.0),
