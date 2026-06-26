@@ -230,10 +230,10 @@ impl RenderOnce for TextField {
         let theme = use_theme();
         let user_style = self.style;
 
-        let (height, padding_x, padding_y, text_size) = match self.size {
-            TextFieldSize::Sm => (px(28.0), px(10.0), px(6.0), px(13.0)),
-            TextFieldSize::Md => (px(32.0), px(12.0), px(8.0), px(14.0)),
-            TextFieldSize::Lg => (px(36.0), px(14.0), px(8.0), px(14.0)),
+        let (height, padding_x, text_size) = match self.size {
+            TextFieldSize::Sm => (px(28.0), px(10.0), px(13.0)),
+            TextFieldSize::Md => (px(32.0), px(12.0), px(14.0)),
+            TextFieldSize::Lg => (px(36.0), px(14.0), px(14.0)),
         };
 
         let focus_handle = self.state.read(cx).focus_handle.clone();
@@ -254,7 +254,6 @@ impl RenderOnce for TextField {
             .track_focus(&focus_handle)
             .h(height)
             .px(padding_x)
-            .py(padding_y)
             .bg(theme.tokens.card)
             .border_1()
             .border_color(border_color)
@@ -307,7 +306,7 @@ impl RenderOnce for TextField {
 
                             let _ = shaped.paint(
                                 point(bounds.left(), bounds.top()),
-                                height,
+                                bounds.size.height,
                                 window,
                                 cx,
                             );
@@ -331,7 +330,7 @@ impl RenderOnce for TextField {
 
                             let _ = shaped.paint(
                                 point(bounds.left(), bounds.top()),
-                                height,
+                                bounds.size.height,
                                 window,
                                 cx,
                             );

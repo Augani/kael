@@ -110,11 +110,11 @@ impl RenderOnce for Checkbox {
         let theme = use_theme();
 
         let size = match self.size {
-            CheckboxSize::Sm => px(16.0),
-            CheckboxSize::Md => px(20.0),
+            CheckboxSize::Sm => px(18.0),
+            CheckboxSize::Md => px(22.0),
         };
 
-        let border_radius = theme.tokens.radius_sm;
+        let border_radius = px(6.0);
         let checked = self.checked;
         let indeterminate = self.indeterminate;
 
@@ -133,7 +133,7 @@ impl RenderOnce for Checkbox {
         } else {
             (
                 theme.tokens.card,
-                theme.tokens.border,
+                theme.tokens.input,
                 theme.tokens.primary_foreground,
             )
         };
@@ -258,8 +258,8 @@ fn checkbox_icon(
     let toggle_state = window.use_keyed_state(id.clone(), cx, |_, _| (checked, indeterminate));
 
     let icon_size = match size {
-        CheckboxSize::Sm => px(10.0),
-        CheckboxSize::Md => px(14.0),
+        CheckboxSize::Sm => px(12.0),
+        CheckboxSize::Md => px(15.0),
     };
 
     let (prev_checked, prev_indeterminate) = *toggle_state.read(cx);
