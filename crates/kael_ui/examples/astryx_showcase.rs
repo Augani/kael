@@ -2,6 +2,8 @@ use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::components::alert::Alert;
 use kael_ui::components::pagination::Pagination;
 use kael_ui::components::scrollable::scrollable_vertical;
+use kael_ui::components::segmented_nav::{SegmentedNav, SegmentedNavState};
+use kael_ui::components::slider::{Slider, SliderState};
 use kael_ui::components::text::{body, caption, code, h1, h2, h3, h4, h5, h6, label, muted};
 use kael_ui::components::tooltip::tooltip;
 use kael_ui::display::accordion::Accordion;
@@ -21,10 +23,17 @@ struct AstryxShowcase {
     card_pick: usize,
     page: usize,
     acc_open: std::collections::HashSet<usize>,
+    segmented: Entity<SegmentedNavState>,
+    slider: Entity<SliderState>,
 }
 
 impl AstryxShowcase {
-    fn new(_cx: &mut Context<Self>) -> Self {
+    fn new(cx: &mut Context<Self>) -> Self {
+        let slider = cx.new(|cx| {
+            let mut s = SliderState::new(cx);
+            s.set_value(60.0, cx);
+            s
+        });
         Self {
             terms: true,
             notifications: true,
@@ -33,6 +42,8 @@ impl AstryxShowcase {
             card_pick: 1,
             page: 3,
             acc_open: std::collections::HashSet::from([0]),
+            segmented: cx.new(|_cx| SegmentedNavState::new("grid")),
+            slider,
         }
     }
 }
@@ -624,6 +635,15 @@ impl Render for AstryxShowcase {
                 })),
         );
 
+        let controls = section("Controls", "Segmented control and slider", &theme)
+            .child(
+                SegmentedNav::new("seg-view", self.segmented.clone())
+                    .item("grid", "Grid")
+                    .item("list", "List")
+                    .item("table", "Table"),
+            )
+            .child(div().w(px(280.0)).child(Slider::new(self.slider.clone())));
+
         let col_a = div()
             .flex()
             .flex_col()
@@ -633,6 +653,7 @@ impl Render for AstryxShowcase {
             .child(badges)
             .child(inputs)
             .child(selection)
+            .child(controls)
             .child(feedback)
             .child(nav_disclosure);
 
