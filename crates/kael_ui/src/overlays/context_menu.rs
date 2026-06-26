@@ -170,7 +170,7 @@ impl RenderOnce for ContextMenu {
                             .gap(px(8.0))
                             .px(px(8.0))
                             .py(px(6.0))
-                            .rounded(theme.tokens.radius_sm)
+                            .rounded(theme.tokens.radius_md)
                             .text_size(px(14.0))
                             .cursor(if disabled {
                                 CursorStyle::Arrow

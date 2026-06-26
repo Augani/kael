@@ -127,7 +127,7 @@ impl RenderOnce for PopoverMenu {
                                         .gap(px(8.0))
                                         .px(px(12.0))
                                         .py(px(8.0))
-                                        .rounded(theme.tokens.radius_sm)
+                                        .rounded(theme.tokens.radius_md)
                                         .cursor(if disabled {
                                             CursorStyle::Arrow
                                         } else {
