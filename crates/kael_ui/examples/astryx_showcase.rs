@@ -2,7 +2,10 @@ use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::astryx::ControlSize;
 use kael_ui::components::alert::Alert;
 use kael_ui::components::button_group::{ButtonGroup, ButtonGroupItem};
+use kael_ui::components::code_block::CodeBlock;
+use kael_ui::components::date_picker::{DatePicker, DatePickerState};
 use kael_ui::components::number_input::{NumberInput, NumberInputState};
+use kael_ui::components::otp_input::{OTPInput, OTPState};
 use kael_ui::components::pagination::Pagination;
 use kael_ui::components::rating::{Rating, RatingState};
 use kael_ui::components::scrollable::scrollable_vertical;
@@ -10,7 +13,9 @@ use kael_ui::components::segmented_nav::{SegmentedNav, SegmentedNavState};
 use kael_ui::components::select::{Select, SelectOption};
 use kael_ui::components::slider::{Slider, SliderState};
 use kael_ui::components::stepper::{StepItem, Stepper, StepperState};
+use kael_ui::components::tag_input::{TagInput, TagInputState};
 use kael_ui::components::text::{body, caption, code, h1, h2, h3, h4, h5, h6, label, muted};
+use kael_ui::components::toggle_group::{ToggleGroup, ToggleGroupItem, ToggleGroupVariant};
 use kael_ui::components::tooltip::tooltip;
 use kael_ui::display::accordion::Accordion;
 use kael_ui::display::table::{Table, TableColumn, TableRow};
@@ -38,6 +43,9 @@ struct AstryxShowcase {
     number: Entity<NumberInputState>,
     rating: Entity<RatingState>,
     stepper: Entity<StepperState>,
+    otp: Entity<OTPState>,
+    tags: Entity<TagInputState>,
+    date: Entity<DatePickerState>,
 }
 
 impl AstryxShowcase {
@@ -78,6 +86,9 @@ impl AstryxShowcase {
             number: cx.new(NumberInputState::new),
             rating: cx.new(RatingState::new),
             stepper,
+            otp: cx.new(|cx| OTPState::new(cx, 6)),
+            tags: cx.new(TagInputState::new),
+            date: cx.new(|cx| DatePickerState::new(cx)),
         }
     }
 }
@@ -793,6 +804,27 @@ impl Render for AstryxShowcase {
             .child(Rating::new(self.rating.clone()))
             .child(Stepper::new(self.stepper.clone()));
 
+        let otp_date = section("OTP & date picker", "Specialized inputs", &theme)
+            .child(OTPInput::new(&self.otp))
+            .child(div().w(px(220.0)).child(DatePicker::new(self.date.clone())));
+
+        let code_tags = section("Code, tags & toggle group", "Tokens and snippets", &theme)
+            .child(
+                CodeBlock::new("let astryx = Theme::astryx_neutral();\ninstall_theme(cx, astryx);")
+                    .language("rust"),
+            )
+            .child(TagInput::new(self.tags.clone()))
+            .child(
+                ToggleGroup::new()
+                    .variant(ToggleGroupVariant::Single)
+                    .items(vec![
+                        ToggleGroupItem::new("bold", "Bold").icon("bold"),
+                        ToggleGroupItem::new("italic", "Italic").icon("italic"),
+                        ToggleGroupItem::new("underline", "Underline").icon("underline"),
+                    ])
+                    .value("bold"),
+            );
+
         let col_a = div()
             .flex()
             .flex_col()
@@ -803,6 +835,7 @@ impl Render for AstryxShowcase {
             .child(inputs)
             .child(more_inputs)
             .child(dropdowns)
+            .child(otp_date)
             .child(selection)
             .child(controls)
             .child(nav_sec)
@@ -819,6 +852,7 @@ impl Render for AstryxShowcase {
             .child(misc)
             .child(details)
             .child(rating_stepper)
+            .child(code_tags)
             .child(data_table)
             .child(timeline_sec)
             .child(empty_disclosure)
