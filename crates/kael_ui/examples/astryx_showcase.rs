@@ -3,7 +3,9 @@ use kael_ui::astryx::ControlSize;
 use kael_ui::components::alert::Alert;
 use kael_ui::components::button_group::{ButtonGroup, ButtonGroupItem};
 use kael_ui::components::code_block::CodeBlock;
+use kael_ui::components::color_picker::{ColorPicker, ColorPickerState};
 use kael_ui::components::date_picker::{DatePicker, DatePickerState};
+use kael_ui::components::file_upload::{FileUpload, FileUploadState};
 use kael_ui::components::number_input::{NumberInput, NumberInputState};
 use kael_ui::components::otp_input::{OTPInput, OTPState};
 use kael_ui::components::pagination::Pagination;
@@ -15,6 +17,7 @@ use kael_ui::components::slider::{Slider, SliderState};
 use kael_ui::components::stepper::{StepItem, Stepper, StepperState};
 use kael_ui::components::tag_input::{TagInput, TagInputState};
 use kael_ui::components::text::{body, caption, code, h1, h2, h3, h4, h5, h6, label, muted};
+use kael_ui::components::time_picker::{TimePicker, TimePickerState};
 use kael_ui::components::toggle_group::{ToggleGroup, ToggleGroupItem, ToggleGroupVariant};
 use kael_ui::components::tooltip::tooltip;
 use kael_ui::display::accordion::Accordion;
@@ -48,6 +51,9 @@ struct AstryxShowcase {
     otp: Entity<OTPState>,
     tags: Entity<TagInputState>,
     date: Entity<DatePickerState>,
+    file_state: Entity<FileUploadState>,
+    color_state: Entity<ColorPickerState>,
+    time_state: Entity<TimePickerState>,
 }
 
 impl AstryxShowcase {
@@ -91,6 +97,9 @@ impl AstryxShowcase {
             otp: cx.new(|cx| OTPState::new(cx, 6)),
             tags: cx.new(TagInputState::new),
             date: cx.new(|cx| DatePickerState::new(cx)),
+            file_state: cx.new(|_| FileUploadState::new()),
+            color_state: cx.new(|_| ColorPickerState::new(kael::hsla(0.62, 0.7, 0.5, 1.0))),
+            time_state: cx.new(TimePickerState::new),
         }
     }
 }
@@ -810,6 +819,19 @@ impl Render for AstryxShowcase {
             .child(OTPInput::new(&self.otp))
             .child(div().w(px(220.0)).child(DatePicker::new(self.date.clone())));
 
+        let pickers = section("Pickers", "Time, color and file upload", &theme)
+            .child(
+                div()
+                    .w(px(200.0))
+                    .child(TimePicker::new(self.time_state.clone())),
+            )
+            .child(ColorPicker::new("cp-demo", self.color_state.clone()))
+            .child(
+                div()
+                    .w(px(340.0))
+                    .child(FileUpload::new("fu-demo", self.file_state.clone())),
+            );
+
         let overlays = section("Overlays", "Hover card and popover", &theme).child(
             row()
                 .child(
@@ -870,6 +892,7 @@ impl Render for AstryxShowcase {
             .child(more_inputs)
             .child(dropdowns)
             .child(otp_date)
+            .child(pickers)
             .child(selection)
             .child(controls)
             .child(nav_sec)
