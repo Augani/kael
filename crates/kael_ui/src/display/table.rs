@@ -96,7 +96,7 @@ impl IntoElement for Table {
                 .px(px(12.0))
                 .py(px(8.0))
                 .w(width)
-                .text_size(px(12.0))
+                .text_size(px(14.0))
                 .font_family(theme.tokens.font_family.clone())
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.tokens.muted_foreground)
@@ -118,11 +118,11 @@ impl IntoElement for Table {
                     .px(px(12.0))
                     .py(px(8.0))
                     .w(width)
-                    .text_size(px(13.0))
+                    .text_size(px(14.0))
                     .font_family(theme.tokens.font_family.clone())
                     .text_color(theme.tokens.foreground)
                     .border_b_1()
-                    .border_color(theme.tokens.border.opacity(0.5))
+                    .border_color(theme.tokens.border)
                     .bg(if row.selected {
                         theme.tokens.accent.opacity(0.3)
                     } else {
