@@ -42,13 +42,12 @@ impl Skeleton {
 impl RenderOnce for Skeleton {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = &Theme::of(cx).tokens;
-        let muted = tokens.muted;
         let radius_md = tokens.radius_md;
 
         let base_color = if self.secondary {
-            muted.opacity(0.5)
+            tokens.muted_foreground.opacity(0.10)
         } else {
-            muted
+            tokens.muted_foreground.opacity(0.16)
         };
 
         self.base
