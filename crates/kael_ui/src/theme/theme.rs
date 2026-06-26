@@ -305,7 +305,7 @@ impl Theme {
 }
 
 static THEME_STATE: Lazy<std::sync::Mutex<Arc<Theme>>> =
-    Lazy::new(|| std::sync::Mutex::new(Arc::new(Theme::astryx())));
+    Lazy::new(|| std::sync::Mutex::new(Arc::new(Theme::astryx_neutral())));
 
 fn sync_theme_mirror(theme: &Theme) -> Arc<Theme> {
     let next = Arc::new(theme.clone());

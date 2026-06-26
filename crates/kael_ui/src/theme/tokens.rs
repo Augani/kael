@@ -60,6 +60,33 @@ fn shadows_dark() -> [ShadowStack; 5] {
     ]
 }
 
+/// Astryx elevation: soft, diffuse two-layer shadows (`--shadow-low/med/high`).
+/// `a` is the per-layer black alpha (~0.10 light, ~0.20 dark).
+fn astryx_shadows(a: f32, a_high: f32) -> [ShadowStack; 5] {
+    [
+        smallvec![
+            shadow_layer(1.0, 1.0, 0.0, a),
+            shadow_layer(2.0, 8.0, 0.0, a),
+        ],
+        smallvec![
+            shadow_layer(1.0, 1.0, 0.0, a),
+            shadow_layer(2.0, 8.0, 0.0, a),
+        ],
+        smallvec![
+            shadow_layer(1.0, 2.0, 0.0, a),
+            shadow_layer(2.0, 12.0, 0.0, a),
+        ],
+        smallvec![
+            shadow_layer(2.0, 2.0, 0.0, a),
+            shadow_layer(8.0, 24.0, 0.0, a_high),
+        ],
+        smallvec![
+            shadow_layer(2.0, 2.0, 0.0, a),
+            shadow_layer(8.0, 24.0, 0.0, a_high),
+        ],
+    ]
+}
+
 /// Shadcn-inspired semantic color and layout tokens
 #[derive(Clone, Debug)]
 pub struct ThemeTokens {
@@ -1537,6 +1564,7 @@ impl ThemeTokens {
     /// (~10% navy), the 4 / 8 / 12 / 16 radius ladder (element = 8px), soft
     /// elevation shadows, and snappy motion.
     pub fn astryx() -> Self {
+        let sh = astryx_shadows(0.10, 0.10);
         Self {
             background: rgb(0xF1F4F7).into(),
             foreground: rgb(0x0A1317).into(),
@@ -1559,13 +1587,19 @@ impl ThemeTokens {
             warning: rgb(0xE9AF08).into(),
             warning_foreground: rgb(0x0A1317).into(),
             border: rgba(0x05365919).into(),
-            input: rgba(0x05365919).into(),
+            input: rgba(0x05365926).into(),
             ring: rgb(0x0064E0).into(),
 
             radius_sm: px(4.0),
             radius_md: px(8.0),
             radius_lg: px(12.0),
             radius_xl: px(16.0),
+
+            shadow_xs: sh[0].clone(),
+            shadow_sm: sh[1].clone(),
+            shadow_md: sh[2].clone(),
+            shadow_lg: sh[3].clone(),
+            shadow_xl: sh[4].clone(),
 
             transition_fast: Duration::from_millis(140),
             transition_base: Duration::from_millis(220),
@@ -1577,6 +1611,7 @@ impl ThemeTokens {
 
     /// Astryx — dark mode (vivid `#2694FE` accent on near-black surfaces).
     pub fn astryx_dark() -> Self {
+        let sh = astryx_shadows(0.22, 0.30);
         Self {
             background: rgb(0x111112).into(),
             foreground: rgb(0xDFE2E5).into(),
@@ -1599,13 +1634,19 @@ impl ThemeTokens {
             warning: rgb(0xF2C00B).into(),
             warning_foreground: rgb(0x0A1317).into(),
             border: rgba(0xF2F4F619).into(),
-            input: rgba(0xF2F4F619).into(),
+            input: rgba(0xF2F4F626).into(),
             ring: rgb(0x2694FE).into(),
 
             radius_sm: px(4.0),
             radius_md: px(8.0),
             radius_lg: px(12.0),
             radius_xl: px(16.0),
+
+            shadow_xs: sh[0].clone(),
+            shadow_sm: sh[1].clone(),
+            shadow_md: sh[2].clone(),
+            shadow_lg: sh[3].clone(),
+            shadow_xl: sh[4].clone(),
 
             transition_fast: Duration::from_millis(140),
             transition_base: Duration::from_millis(220),
@@ -1615,9 +1656,11 @@ impl ThemeTokens {
         }
     }
 
-    /// Astryx Neutral — the grayscale spine variant (near-black accent on a
-    /// pure neutral ramp), light mode. Closest to a shadcn/Tailwind look.
+    /// Astryx Neutral — the canonical grayscale look used across the Astryx
+    /// component gallery: a near-black accent (`#262626`) on a pure neutral
+    /// ramp, deep muted status colors, hairline borders and soft elevation.
     pub fn astryx_neutral() -> Self {
+        let sh = astryx_shadows(0.10, 0.10);
         Self {
             background: rgb(0xF1F1F1).into(),
             foreground: rgb(0x171717).into(),
@@ -1625,28 +1668,34 @@ impl ThemeTokens {
             card_foreground: rgb(0x171717).into(),
             popover: rgb(0xFFFFFF).into(),
             popover_foreground: rgb(0x171717).into(),
-            muted: rgb(0xF1F1F1).into(),
+            muted: rgb(0xF5F5F5).into(),
             muted_foreground: rgb(0x737373).into(),
-            accent: rgb(0xECECEC).into(),
+            accent: rgb(0xF5F5F5).into(),
             accent_foreground: rgb(0x171717).into(),
             primary: rgb(0x262626).into(),
-            primary_foreground: rgb(0xFAFAFA).into(),
-            secondary: rgb(0xECECEC).into(),
+            primary_foreground: rgb(0xFFFFFF).into(),
+            secondary: rgba(0x0000000F).into(),
             secondary_foreground: rgb(0x171717).into(),
-            destructive: rgb(0xE3193B).into(),
+            destructive: rgb(0xA50C25).into(),
             destructive_foreground: rgb(0xFFFFFF).into(),
-            success: rgb(0x0D8626).into(),
+            success: rgb(0x007004).into(),
             success_foreground: rgb(0xFFFFFF).into(),
-            warning: rgb(0xE9AF08).into(),
-            warning_foreground: rgb(0x171717).into(),
-            border: rgb(0xE5E5E5).into(),
-            input: rgb(0xE5E5E5).into(),
+            warning: rgb(0x745B00).into(),
+            warning_foreground: rgb(0xFFFFFF).into(),
+            border: rgb(0xEBEBEB).into(),
+            input: rgb(0xDCDCDC).into(),
             ring: rgb(0x262626).into(),
 
             radius_sm: px(4.0),
             radius_md: px(8.0),
             radius_lg: px(12.0),
             radius_xl: px(16.0),
+
+            shadow_xs: sh[0].clone(),
+            shadow_sm: sh[1].clone(),
+            shadow_md: sh[2].clone(),
+            shadow_lg: sh[3].clone(),
+            shadow_xl: sh[4].clone(),
 
             transition_fast: Duration::from_millis(125),
             transition_base: Duration::from_millis(200),
@@ -1658,6 +1707,7 @@ impl ThemeTokens {
 
     /// Astryx Neutral — grayscale spine, dark mode.
     pub fn astryx_neutral_dark() -> Self {
+        let sh = astryx_shadows(0.30, 0.40);
         Self {
             background: rgb(0x1B1B1B).into(),
             foreground: rgb(0xFAFAFA).into(),
@@ -1671,22 +1721,28 @@ impl ThemeTokens {
             accent_foreground: rgb(0xFAFAFA).into(),
             primary: rgb(0xEBEBEB).into(),
             primary_foreground: rgb(0x171717).into(),
-            secondary: rgb(0x2A2A2A).into(),
+            secondary: rgba(0xFFFFFF1A).into(),
             secondary_foreground: rgb(0xFAFAFA).into(),
             destructive: rgb(0xF5394F).into(),
             destructive_foreground: rgb(0xFFFFFF).into(),
             success: rgb(0x26A756).into(),
             success_foreground: rgb(0x171717).into(),
-            warning: rgb(0xF2C00B).into(),
+            warning: rgb(0xFDCF4F).into(),
             warning_foreground: rgb(0x171717).into(),
             border: rgba(0xFFFFFF1A).into(),
-            input: rgba(0xFFFFFF1A).into(),
+            input: rgba(0xFFFFFF26).into(),
             ring: rgb(0xEBEBEB).into(),
 
             radius_sm: px(4.0),
             radius_md: px(8.0),
             radius_lg: px(12.0),
             radius_xl: px(16.0),
+
+            shadow_xs: sh[0].clone(),
+            shadow_sm: sh[1].clone(),
+            shadow_md: sh[2].clone(),
+            shadow_lg: sh[3].clone(),
+            shadow_xl: sh[4].clone(),
 
             transition_fast: Duration::from_millis(125),
             transition_base: Duration::from_millis(200),

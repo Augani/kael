@@ -132,20 +132,6 @@ impl Render for AstryxShowcase {
                 row()
                     .child(label_chip("Theme", &theme))
                     .child(theme_pill(
-                        "Astryx",
-                        variant == ThemeVariant::Astryx,
-                        ThemeTokens::astryx(),
-                        &theme,
-                        |cx| install_theme(cx, Theme::astryx()),
-                    ))
-                    .child(theme_pill(
-                        "Astryx Dark",
-                        variant == ThemeVariant::AstryxDark,
-                        ThemeTokens::astryx_dark(),
-                        &theme,
-                        |cx| install_theme(cx, Theme::astryx_dark()),
-                    ))
-                    .child(theme_pill(
                         "Neutral",
                         variant == ThemeVariant::AstryxNeutral,
                         ThemeTokens::astryx_neutral(),
@@ -158,6 +144,20 @@ impl Render for AstryxShowcase {
                         ThemeTokens::astryx_neutral_dark(),
                         &theme,
                         |cx| install_theme(cx, Theme::astryx_neutral_dark()),
+                    ))
+                    .child(theme_pill(
+                        "Blue",
+                        variant == ThemeVariant::Astryx,
+                        ThemeTokens::astryx(),
+                        &theme,
+                        |cx| install_theme(cx, Theme::astryx()),
+                    ))
+                    .child(theme_pill(
+                        "Blue Dark",
+                        variant == ThemeVariant::AstryxDark,
+                        ThemeTokens::astryx_dark(),
+                        &theme,
+                        |cx| install_theme(cx, Theme::astryx_dark()),
                     )),
             );
 
@@ -686,7 +686,7 @@ fn main() {
                 ..Default::default()
             },
             |_, cx| {
-                install_theme(cx, Theme::astryx());
+                install_theme(cx, Theme::astryx_neutral());
                 cx.new(AstryxShowcase::new)
             },
         )
