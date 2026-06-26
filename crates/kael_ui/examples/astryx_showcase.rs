@@ -23,8 +23,11 @@ use kael_ui::components::tooltip::tooltip;
 use kael_ui::display::accordion::Accordion;
 use kael_ui::display::table::{Table, TableColumn, TableRow};
 use kael_ui::navigation::tabs::{TabItem, TabVariant, Tabs};
+use kael_ui::overlays::dialog::Dialog;
 use kael_ui::overlays::hover_card::HoverCard;
 use kael_ui::overlays::popover::{Popover, PopoverContent};
+use kael_ui::overlays::sheet::{Sheet, SheetSide};
+use kael_ui::overlays::toast::{ToastItem, ToastManager, ToastPosition, ToastVariant};
 use kael_ui::prelude::{
     Avatar, AvatarGroup, AvatarItem, AvatarSize, Badge, BadgeVariant, Banner, Button, ButtonSize,
     ButtonVariant, Card, Checkbox, Collapsible, EmptyState, Hue, IconButton, ProgressBar, Radio,
@@ -54,6 +57,12 @@ struct AstryxShowcase {
     file_state: Entity<FileUploadState>,
     color_state: Entity<ColorPickerState>,
     time_state: Entity<TimePickerState>,
+    show_dialog: bool,
+    show_sheet: bool,
+    dialog: Entity<Dialog>,
+    sheet: Entity<Sheet>,
+    toasts: Entity<ToastManager>,
+    toast_n: u64,
 }
 
 impl AstryxShowcase {
@@ -80,6 +89,33 @@ impl AstryxShowcase {
                 StepItem::new("Confirm"),
             ])
         });
+        let view = cx.entity();
+        let dialog = cx.new(|cx| {
+            let view = view.clone();
+            Dialog::new(cx)
+                .title("Delete project?")
+                .description("This permanently removes the project and all of its data.")
+                .on_close(move |_window, cx| {
+                    view.update(cx, |this, cx| {
+                        this.show_dialog = false;
+                        cx.notify();
+                    });
+                })
+        });
+        let sheet = cx.new(|cx| {
+            let view = view.clone();
+            Sheet::new(cx)
+                .side(SheetSide::Right)
+                .title("Edit profile")
+                .description("Update your account details and preferences.")
+                .on_close(move |_window, cx| {
+                    view.update(cx, |this, cx| {
+                        this.show_sheet = false;
+                        cx.notify();
+                    });
+                })
+        });
+        let toasts = cx.new(|cx| ToastManager::new(cx).position(ToastPosition::BottomRight));
         Self {
             terms: true,
             notifications: true,
@@ -100,6 +136,12 @@ impl AstryxShowcase {
             file_state: cx.new(|_| FileUploadState::new()),
             color_state: cx.new(|_| ColorPickerState::new(kael::hsla(0.62, 0.7, 0.5, 1.0))),
             time_state: cx.new(TimePickerState::new),
+            show_dialog: false,
+            show_sheet: false,
+            dialog,
+            sheet,
+            toasts,
+            toast_n: 0,
         }
     }
 }
@@ -864,6 +906,63 @@ impl Render for AstryxShowcase {
                 ),
         );
 
+        let modal_triggers = section(
+            "Overlays — click to open",
+            "Dialog, sheet and toast",
+            &theme,
+        )
+        .child(
+            row()
+                .child(
+                    Button::new("open-dialog", "Open dialog")
+                        .variant(ButtonVariant::Outline)
+                        .on_click({
+                            let view = view.clone();
+                            move |_, _, cx| {
+                                view.update(cx, |this, cx| {
+                                    this.show_dialog = true;
+                                    cx.notify();
+                                });
+                            }
+                        }),
+                )
+                .child(
+                    Button::new("open-sheet", "Open sheet")
+                        .variant(ButtonVariant::Outline)
+                        .on_click({
+                            let view = view.clone();
+                            move |_, _, cx| {
+                                view.update(cx, |this, cx| {
+                                    this.show_sheet = true;
+                                    cx.notify();
+                                });
+                            }
+                        }),
+                )
+                .child(
+                    Button::new("show-toast", "Show toast")
+                        .variant(ButtonVariant::Outline)
+                        .on_click({
+                            let view = view.clone();
+                            move |_, window, cx| {
+                                view.update(cx, |this, cx| {
+                                    this.toast_n += 1;
+                                    let id = this.toast_n;
+                                    this.toasts.update(cx, |manager, cx| {
+                                        manager.add_toast(
+                                            ToastItem::new(id, "Changes saved")
+                                                .description("Your project was updated.")
+                                                .variant(ToastVariant::Success),
+                                            window,
+                                            cx,
+                                        );
+                                    });
+                                });
+                            }
+                        }),
+                ),
+        );
+
         let code_tags = section("Code, tags & toggle group", "Tokens and snippets", &theme)
             .child(
                 CodeBlock::new("let astryx = Theme::astryx_neutral();\ninstall_theme(cx, astryx);")
@@ -911,6 +1010,7 @@ impl Render for AstryxShowcase {
             .child(rating_stepper)
             .child(code_tags)
             .child(overlays)
+            .child(modal_triggers)
             .child(data_table)
             .child(timeline_sec)
             .child(empty_disclosure)
@@ -934,11 +1034,15 @@ impl Render for AstryxShowcase {
             );
 
         div()
+            .relative()
             .size_full()
             .bg(theme.tokens.background)
             .text_color(theme.tokens.foreground)
             .font_family(theme.tokens.font_family.clone())
             .child(scrollable_vertical(content).size_full())
+            .when(self.show_dialog, |this| this.child(self.dialog.clone()))
+            .when(self.show_sheet, |this| this.child(self.sheet.clone()))
+            .child(self.toasts.clone())
     }
 }
 
