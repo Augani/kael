@@ -1,5 +1,7 @@
 use kael::{prelude::FluentBuilder as _, *};
+use kael_ui::astryx::ControlSize;
 use kael_ui::components::alert::Alert;
+use kael_ui::components::button_group::{ButtonGroup, ButtonGroupItem};
 use kael_ui::components::pagination::Pagination;
 use kael_ui::components::scrollable::scrollable_vertical;
 use kael_ui::components::segmented_nav::{SegmentedNav, SegmentedNavState};
@@ -635,14 +637,37 @@ impl Render for AstryxShowcase {
                 })),
         );
 
-        let controls = section("Controls", "Segmented control and slider", &theme)
-            .child(
-                SegmentedNav::new("seg-view", self.segmented.clone())
-                    .item("grid", "Grid")
-                    .item("list", "List")
-                    .item("table", "Table"),
-            )
-            .child(div().w(px(280.0)).child(Slider::new(self.slider.clone())));
+        let controls = section(
+            "Controls",
+            "Segmented control, button group and slider",
+            &theme,
+        )
+        .child(
+            SegmentedNav::new("seg-view", self.segmented.clone())
+                .item("grid", "Grid")
+                .item("list", "List")
+                .item("table", "Table"),
+        )
+        .child(
+            ButtonGroup::new("bg-edit")
+                .size(ControlSize::Md)
+                .child(
+                    ButtonGroupItem::new("Copy")
+                        .icon("copy")
+                        .on_click(|_, _| {}),
+                )
+                .child(
+                    ButtonGroupItem::new("Cut")
+                        .icon("scissors")
+                        .on_click(|_, _| {}),
+                )
+                .child(
+                    ButtonGroupItem::new("Paste")
+                        .icon("clipboard")
+                        .on_click(|_, _| {}),
+                ),
+        )
+        .child(div().w(px(280.0)).child(Slider::new(self.slider.clone())));
 
         let col_a = div()
             .flex()

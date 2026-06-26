@@ -4,6 +4,7 @@ pub mod alert;
 pub mod audio_player;
 pub mod banner;
 pub mod button;
+pub mod button_group;
 pub mod icon;
 pub mod icon_button;
 pub mod icon_source;

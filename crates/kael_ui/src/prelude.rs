@@ -40,6 +40,7 @@ pub use crate::components::banner::{Banner, BannerVariant};
 pub use crate::components::button::{
     Button, ButtonColors, ButtonSize, ButtonVariant, IconPosition,
 };
+pub use crate::components::button_group::{ButtonGroup, ButtonGroupItem};
 pub use crate::components::calendar::{Calendar, CalendarLocale, DateValue};
 pub use crate::components::carousel::{
     bounce, ease_in_out, ease_out_quint, linear, pulsating_between, quadratic, Carousel,
