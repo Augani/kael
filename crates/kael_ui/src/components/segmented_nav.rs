@@ -157,8 +157,7 @@ impl RenderOnce for SegmentedNav {
         let tokens = &Theme::of(cx).tokens;
         let muted = tokens.muted;
         let radius_md = tokens.radius_md;
-        let radius_sm = tokens.radius_sm;
-        let background = tokens.background;
+        let card = tokens.card;
         let foreground = tokens.foreground;
         let muted_foreground = tokens.muted_foreground;
 
@@ -185,8 +184,8 @@ impl RenderOnce for SegmentedNav {
                         .absolute()
                         .top(px(4.0))
                         .bottom(px(4.0))
-                        .rounded(radius_sm)
-                        .bg(background)
+                        .rounded(px(7.0))
+                        .bg(card)
                         .shadow(smallvec::smallvec![BoxShadow {
                             color: hsla(0.0, 0.0, 0.0, 0.08),
                             offset: point(px(0.0), px(1.0)),

@@ -41,6 +41,7 @@ pub struct Avatar {
     name: Option<SharedString>,
     fallback_text: Option<SharedString>,
     size: AvatarSize,
+    colorful: bool,
     style: StyleRefinement,
 }
 
@@ -51,8 +52,16 @@ impl Avatar {
             name: None,
             fallback_text: None,
             size: AvatarSize::default(),
+            colorful: false,
             style: StyleRefinement::default(),
         }
+    }
+
+    /// Use a name-derived colored background instead of the default neutral
+    /// gray fallback. Off by default to match the Astryx look.
+    pub fn colorful(mut self, colorful: bool) -> Self {
+        self.colorful = colorful;
+        self
     }
 
     pub fn src(mut self, src: impl Into<SharedString>) -> Self {
@@ -145,8 +154,17 @@ impl RenderOnce for Avatar {
             )
         } else if let Some(name) = self.name {
             let initials = Self::extract_initials(&name);
-            let bg_color = Self::name_to_color(&name, &theme);
-            let text_color = theme.tokens.background;
+            let (bg_color, text_color) = if self.colorful {
+                (
+                    Self::name_to_color(&name, &theme).opacity(0.8),
+                    theme.tokens.background,
+                )
+            } else {
+                (
+                    theme.tokens.muted_foreground.opacity(0.16),
+                    theme.tokens.foreground,
+                )
+            };
 
             (
                 div()
@@ -154,7 +172,7 @@ impl RenderOnce for Avatar {
                     .font_weight(FontWeight::MEDIUM)
                     .child(initials)
                     .into_any_element(),
-                bg_color.opacity(0.8),
+                bg_color,
                 text_color,
             )
         } else if let Some(fallback) = self.fallback_text {
