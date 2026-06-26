@@ -20,6 +20,8 @@ use kael_ui::components::tooltip::tooltip;
 use kael_ui::display::accordion::Accordion;
 use kael_ui::display::table::{Table, TableColumn, TableRow};
 use kael_ui::navigation::tabs::{TabItem, TabVariant, Tabs};
+use kael_ui::overlays::hover_card::HoverCard;
+use kael_ui::overlays::popover::{Popover, PopoverContent};
 use kael_ui::prelude::{
     Avatar, AvatarGroup, AvatarItem, AvatarSize, Badge, BadgeVariant, Banner, Button, ButtonSize,
     ButtonVariant, Card, Checkbox, Collapsible, EmptyState, Hue, IconButton, ProgressBar, Radio,
@@ -808,6 +810,38 @@ impl Render for AstryxShowcase {
             .child(OTPInput::new(&self.otp))
             .child(div().w(px(220.0)).child(DatePicker::new(self.date.clone())));
 
+        let overlays = section("Overlays", "Hover card and popover", &theme).child(
+            row()
+                .child(
+                    HoverCard::new()
+                        .trigger(Button::new("hc", "Hover card").variant(ButtonVariant::Outline))
+                        .content(
+                            col()
+                                .gap(px(4.0))
+                                .child(body("Augustus Otu".to_string()))
+                                .child(muted("Building the Kael UI framework".to_string())),
+                        ),
+                )
+                .child(
+                    Popover::new("pop")
+                        .trigger(
+                            Button::new("pop-t", "Open popover").variant(ButtonVariant::Outline),
+                        )
+                        .content(|window, cx| {
+                            cx.new(|cx| {
+                                PopoverContent::new(window, cx, |_w, _c| {
+                                    col()
+                                        .gap(px(6.0))
+                                        .p(px(4.0))
+                                        .child(body("Quick actions".to_string()))
+                                        .child(muted("Rename · Duplicate · Delete".to_string()))
+                                        .into_any_element()
+                                })
+                            })
+                        }),
+                ),
+        );
+
         let code_tags = section("Code, tags & toggle group", "Tokens and snippets", &theme)
             .child(
                 CodeBlock::new("let astryx = Theme::astryx_neutral();\ninstall_theme(cx, astryx);")
@@ -853,6 +887,7 @@ impl Render for AstryxShowcase {
             .child(details)
             .child(rating_stepper)
             .child(code_tags)
+            .child(overlays)
             .child(data_table)
             .child(timeline_sec)
             .child(empty_disclosure)
