@@ -173,61 +173,72 @@ impl RenderOnce for AvatarGroup {
             .filter_map(|item| item.name.as_ref().map(|n| n.to_string()))
             .collect();
 
+        let card = theme.tokens.card;
+        let step = size_px + overlap;
+        let slots = visible_count + if overflow_count > 0 { 1 } else { 0 };
+        let total_w = if slots == 0 {
+            0.0
+        } else {
+            (slots as f32 - 1.0).max(0.0) * step + size_px
+        };
+
+        // Painted rightmost-first so the leftmost avatar ends up on top.
+        let mut children: Vec<AnyElement> = Vec::new();
+
+        if overflow_count > 0 {
+            let left = visible_count as f32 * step;
+            let visual = div()
+                .size(px(size_px))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .bg(theme.tokens.muted)
+                .text_color(theme.tokens.muted_foreground)
+                .text_size(px(text_size))
+                .font_weight(FontWeight::MEDIUM)
+                .font_family(theme.tokens.font_family.clone())
+                .border_2()
+                .border_color(card)
+                .child(format!("+{}", overflow_count));
+            children.push(if show_tooltips && !overflow_names.is_empty() {
+                tooltip(visual, overflow_names.join(", "))
+                    .absolute()
+                    .left(px(left))
+                    .top_0()
+                    .into_any_element()
+            } else {
+                visual.absolute().left(px(left)).top_0().into_any_element()
+            });
+        }
+
+        for (index, item) in visible_items.iter().enumerate().rev() {
+            let left = index as f32 * step;
+            let visual = div()
+                .rounded_full()
+                .border_2()
+                .border_color(card)
+                .child(create_avatar(item, size));
+            let el = match (show_tooltips, item.name.clone()) {
+                (true, Some(name)) => tooltip(visual, name)
+                    .absolute()
+                    .left(px(left))
+                    .top_0()
+                    .into_any_element(),
+                _ => visual.absolute().left(px(left)).top_0().into_any_element(),
+            };
+            children.push(el);
+        }
+
         div()
-            .flex()
-            .flex_row_reverse()
-            .items_center()
+            .relative()
+            .h(px(size_px))
+            .w(px(total_w))
             .map(|this| {
                 let mut div = this;
                 div.style().refine(&user_style);
                 div
             })
-            .when(overflow_count > 0, |this| {
-                let overflow_indicator = div()
-                    .relative()
-                    .mr(px(overlap))
-                    .size(px(size_px))
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .justify_center()
-                    .rounded_full()
-                    .bg(theme.tokens.muted)
-                    .text_color(theme.tokens.muted_foreground)
-                    .text_size(px(text_size))
-                    .font_weight(FontWeight::MEDIUM)
-                    .font_family(theme.tokens.font_family.clone())
-                    .border_2()
-                    .border_color(theme.tokens.background)
-                    .child(format!("+{}", overflow_count));
-
-                if show_tooltips && !overflow_names.is_empty() {
-                    let tooltip_content = overflow_names.join(", ");
-                    this.child(tooltip(overflow_indicator, tooltip_content))
-                } else {
-                    this.child(overflow_indicator)
-                }
-            })
-            .children(visible_items.iter().enumerate().rev().map(|(index, item)| {
-                let avatar = create_avatar(item, size);
-                let is_last_in_iteration = index == visible_count - 1;
-                let margin_right = if is_last_in_iteration && overflow_count == 0 {
-                    0.0
-                } else {
-                    overlap
-                };
-
-                let avatar_wrapper = div().relative().mr(px(margin_right)).child(avatar);
-
-                if show_tooltips {
-                    if let Some(ref name) = item.name {
-                        tooltip(avatar_wrapper, name.clone()).into_any_element()
-                    } else {
-                        avatar_wrapper.into_any_element()
-                    }
-                } else {
-                    avatar_wrapper.into_any_element()
-                }
-            }))
+            .children(children)
     }
 }
