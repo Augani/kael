@@ -134,25 +134,16 @@ impl Alert {
     }
 
     fn get_colors(&self, theme: &crate::theme::Theme) -> (Hsla, Hsla, Hsla) {
+        let dark = theme.tokens.background.l < 0.5;
+        let hue = |h: crate::astryx::Hue| {
+            let c = h.colors(dark);
+            (c.background, c.border, c.text)
+        };
         match self.variant {
-            AlertVariant::Info => (
-                theme.tokens.primary.opacity(0.1),
-                theme.tokens.primary,
-                theme.tokens.primary,
-            ),
-            AlertVariant::Success => {
-                let success_color: Hsla = theme.tokens.success;
-                (success_color.opacity(0.1), success_color, success_color)
-            }
-            AlertVariant::Warning => {
-                let warning_color: Hsla = theme.tokens.warning;
-                (warning_color.opacity(0.1), warning_color, warning_color)
-            }
-            AlertVariant::Error => (
-                theme.tokens.destructive.opacity(0.1),
-                theme.tokens.destructive,
-                theme.tokens.destructive,
-            ),
+            AlertVariant::Info => hue(crate::astryx::Hue::Blue),
+            AlertVariant::Success => hue(crate::astryx::Hue::Green),
+            AlertVariant::Warning => hue(crate::astryx::Hue::Yellow),
+            AlertVariant::Error => hue(crate::astryx::Hue::Red),
             AlertVariant::Custom(colors) => (colors.background, colors.accent, colors.foreground),
         }
     }
@@ -211,7 +202,7 @@ impl RenderOnce for Alert {
                                 div()
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme.tokens.foreground)
+                                    .text_color(accent_color)
                                     .child(title),
                             )
                         })

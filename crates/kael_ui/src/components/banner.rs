@@ -1,6 +1,6 @@
 //! Banner - a full-width, sentiment-tinted announcement bar.
 
-use crate::astryx::status_muted;
+use crate::astryx::Hue;
 use crate::components::icon::Icon;
 use crate::components::icon_source::IconSource;
 use crate::theme::Theme;
@@ -112,12 +112,16 @@ impl Styled for Banner {
 impl RenderOnce for Banner {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = Theme::of(cx);
-        let accent = match self.variant {
-            BannerVariant::Info | BannerVariant::Announcement => theme.tokens.primary,
-            BannerVariant::Success => theme.tokens.success,
-            BannerVariant::Warning => theme.tokens.warning,
-            BannerVariant::Error => theme.tokens.destructive,
+        let dark = theme.tokens.background.l < 0.5;
+        let hue = match self.variant {
+            BannerVariant::Info | BannerVariant::Announcement => Hue::Blue,
+            BannerVariant::Success => Hue::Green,
+            BannerVariant::Warning => Hue::Yellow,
+            BannerVariant::Error => Hue::Red,
         };
+        let colors = hue.colors(dark);
+        let bg = colors.background;
+        let accent = colors.text;
         let user_style = self.style;
         let icon_source = self
             .icon
@@ -131,8 +135,8 @@ impl RenderOnce for Banner {
             .px(px(16.0))
             .py(px(10.0))
             .rounded(theme.tokens.radius_md)
-            .bg(status_muted(accent))
-            .text_color(theme.tokens.foreground)
+            .bg(bg)
+            .text_color(accent)
             .when(self.show_icon, |this| {
                 this.child(
                     div()
@@ -144,6 +148,7 @@ impl RenderOnce for Banner {
                 div()
                     .flex_1()
                     .text_size(px(14.0))
+                    .font_weight(FontWeight::SEMIBOLD)
                     .font_family(theme.tokens.font_family.clone())
                     .child(self.message.clone()),
             )
