@@ -123,7 +123,6 @@ impl RenderOnce for ProgressBar {
         let destructive = tokens.destructive;
         let foreground = tokens.foreground;
         let muted_foreground = tokens.muted_foreground;
-        let muted = tokens.muted;
         let radius_lg = tokens.radius_lg;
         let user_style = self.style;
 
@@ -187,8 +186,8 @@ impl RenderOnce for ProgressBar {
                     .relative()
                     .w_full()
                     .h(height)
-                    .rounded(radius_lg)
-                    .bg(muted)
+                    .rounded_full()
+                    .bg(muted_foreground.opacity(0.25))
                     .overflow_hidden()
                     .child(
                         div()
