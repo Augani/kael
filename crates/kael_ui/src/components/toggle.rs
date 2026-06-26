@@ -101,8 +101,8 @@ impl RenderOnce for Toggle {
         let user_style = self.style;
 
         let (bg_width, bg_height, bar_width, inset) = match self.size {
-            ToggleSize::Sm => (px(32.0), px(18.0), px(14.0), px(2.0)),
-            ToggleSize::Md => (px(40.0), px(24.0), px(20.0), px(2.0)),
+            ToggleSize::Sm => (px(32.0), px(18.0), px(12.0), px(3.0)),
+            ToggleSize::Md => (px(40.0), px(24.0), px(16.0), px(4.0)),
         };
 
         let checked = self.checked;
@@ -150,11 +150,9 @@ impl RenderOnce for Toggle {
                     .flex()
                     .items_center()
                     .bg(bg)
-                    .border_2()
-                    .border_color(kael::transparent_black())
                     .transition(theme.tokens.transition_fast)
                     .when(is_focused && !self.disabled, |this| {
-                        this.border_color(theme.tokens.ring)
+                        this.shadow(vec![crate::astryx::focus_ring_outer(theme.tokens.ring)])
                     })
                     .cursor(if self.disabled {
                         CursorStyle::Arrow
@@ -245,7 +243,6 @@ fn toggle_thumb(
     div()
         .rounded(radius)
         .bg(color)
-        .shadow_md()
         .size(bar_width)
         .relative()
         .map(|this| {

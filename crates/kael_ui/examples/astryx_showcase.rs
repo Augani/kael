@@ -719,23 +719,55 @@ impl Render for AstryxShowcase {
     }
 }
 
+struct Assets {
+    base: std::path::PathBuf,
+}
+
+impl kael::AssetSource for Assets {
+    fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        std::fs::read(self.base.join(path))
+            .map(|data| Some(std::borrow::Cow::Owned(data)))
+            .map_err(|err| err.into())
+    }
+
+    fn list(&self, path: &str) -> Result<Vec<SharedString>> {
+        std::fs::read_dir(self.base.join(path))
+            .map(|entries| {
+                entries
+                    .filter_map(|entry| {
+                        entry
+                            .ok()
+                            .and_then(|entry| entry.file_name().into_string().ok())
+                            .map(SharedString::from)
+                    })
+                    .collect()
+            })
+            .map_err(|err| err.into())
+    }
+}
+
 fn main() {
-    Application::new().run(move |cx| {
-        let bounds = Bounds::centered(None, size(px(1400.0), px(1280.0)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Astryx · Kael UI".into()),
+    Application::new()
+        .with_assets(Assets {
+            base: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        })
+        .run(move |cx| {
+            kael_ui::init(cx);
+            kael_ui::set_icon_base_path("assets/icons");
+            install_theme(cx, Theme::astryx_neutral());
+
+            let bounds = Bounds::centered(None, size(px(1400.0), px(1280.0)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    titlebar: Some(TitlebarOptions {
+                        title: Some("Astryx · Kael UI".into()),
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            },
-            |_, cx| {
-                install_theme(cx, Theme::astryx_neutral());
-                cx.new(AstryxShowcase::new)
-            },
-        )
-        .unwrap();
-    });
+                },
+                |_, cx| cx.new(AstryxShowcase::new),
+            )
+            .unwrap();
+        });
 }
