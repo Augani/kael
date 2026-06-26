@@ -18,14 +18,15 @@ fn render_icon(icon_src: IconSource, size: Pixels, color: Hsla) -> impl IntoElem
     svg().path(svg_path).size(size).text_color(color)
 }
 
-/// Render a loading spinner
+/// Render an animated loading spinner that matches the button's text color.
 fn render_loading_spinner(size: Pixels, color: Hsla) -> impl IntoElement {
-    div().size(size).child(
-        svg()
-            .path("assets/icons/loader.svg")
-            .size(size)
-            .text_color(color),
-    )
+    use crate::components::spinner::{Spinner, SpinnerSize};
+    let spinner_size = if size <= px(16.0) {
+        SpinnerSize::Sm
+    } else {
+        SpinnerSize::Md
+    };
+    Spinner::new().size(spinner_size).color(color)
 }
 
 /// A fully custom color set for [`ButtonVariant::Custom`], letting an app define any
