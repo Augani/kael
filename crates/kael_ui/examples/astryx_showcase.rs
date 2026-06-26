@@ -2,10 +2,14 @@ use kael::{prelude::FluentBuilder as _, *};
 use kael_ui::astryx::ControlSize;
 use kael_ui::components::alert::Alert;
 use kael_ui::components::button_group::{ButtonGroup, ButtonGroupItem};
+use kael_ui::components::number_input::{NumberInput, NumberInputState};
 use kael_ui::components::pagination::Pagination;
+use kael_ui::components::rating::{Rating, RatingState};
 use kael_ui::components::scrollable::scrollable_vertical;
 use kael_ui::components::segmented_nav::{SegmentedNav, SegmentedNavState};
+use kael_ui::components::select::{Select, SelectOption};
 use kael_ui::components::slider::{Slider, SliderState};
+use kael_ui::components::stepper::{StepItem, Stepper, StepperState};
 use kael_ui::components::text::{body, caption, code, h1, h2, h3, h4, h5, h6, label, muted};
 use kael_ui::components::tooltip::tooltip;
 use kael_ui::display::accordion::Accordion;
@@ -30,6 +34,10 @@ struct AstryxShowcase {
     acc_open: std::collections::HashSet<usize>,
     segmented: Entity<SegmentedNavState>,
     slider: Entity<SliderState>,
+    select: Entity<Select<String>>,
+    number: Entity<NumberInputState>,
+    rating: Entity<RatingState>,
+    stepper: Entity<StepperState>,
 }
 
 impl AstryxShowcase {
@@ -38,6 +46,23 @@ impl AstryxShowcase {
             let mut s = SliderState::new(cx);
             s.set_value(60.0, cx);
             s
+        });
+        let select = cx.new(|cx| {
+            Select::new(cx)
+                .placeholder("Select a country")
+                .options(vec![
+                    SelectOption::new("us".to_string(), "United States"),
+                    SelectOption::new("gh".to_string(), "Ghana"),
+                    SelectOption::new("jp".to_string(), "Japan"),
+                    SelectOption::new("se".to_string(), "Sweden"),
+                ])
+        });
+        let stepper = cx.new(|cx| {
+            StepperState::new(cx).with_steps(vec![
+                StepItem::new("Account"),
+                StepItem::new("Profile"),
+                StepItem::new("Confirm"),
+            ])
         });
         Self {
             terms: true,
@@ -49,6 +74,10 @@ impl AstryxShowcase {
             acc_open: std::collections::HashSet::from([0]),
             segmented: cx.new(|_cx| SegmentedNavState::new("grid")),
             slider,
+            select,
+            number: cx.new(NumberInputState::new),
+            rating: cx.new(RatingState::new),
+            stepper,
         }
     }
 }
@@ -748,6 +777,22 @@ impl Render for AstryxShowcase {
                 .open(true),
         );
 
+        let dropdowns = section(
+            "Select & number input",
+            "Dropdown and stepper input",
+            &theme,
+        )
+        .child(div().w(px(280.0)).child(self.select.clone()))
+        .child(
+            div()
+                .w(px(160.0))
+                .child(NumberInput::new(self.number.clone())),
+        );
+
+        let rating_stepper = section("Rating & stepper", "Feedback and multi-step flows", &theme)
+            .child(Rating::new(self.rating.clone()))
+            .child(Stepper::new(self.stepper.clone()));
+
         let col_a = div()
             .flex()
             .flex_col()
@@ -757,6 +802,7 @@ impl Render for AstryxShowcase {
             .child(badges)
             .child(inputs)
             .child(more_inputs)
+            .child(dropdowns)
             .child(selection)
             .child(controls)
             .child(nav_sec)
@@ -772,6 +818,7 @@ impl Render for AstryxShowcase {
             .child(extras)
             .child(misc)
             .child(details)
+            .child(rating_stepper)
             .child(data_table)
             .child(timeline_sec)
             .child(empty_disclosure)
