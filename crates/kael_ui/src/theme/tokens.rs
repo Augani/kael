@@ -1683,11 +1683,11 @@ impl ThemeTokens {
             warning: rgb(0x745B00).into(),
             warning_foreground: rgb(0xFFFFFF).into(),
             border: rgb(0xEBEBEB).into(),
-            input: rgb(0xDCDCDC).into(),
+            input: rgb(0xD4D4D4).into(),
             ring: rgb(0x262626).into(),
 
             radius_sm: px(4.0),
-            radius_md: px(8.0),
+            radius_md: px(10.0),
             radius_lg: px(12.0),
             radius_xl: px(16.0),
 
@@ -1730,11 +1730,11 @@ impl ThemeTokens {
             warning: rgb(0xFDCF4F).into(),
             warning_foreground: rgb(0x171717).into(),
             border: rgba(0xFFFFFF1A).into(),
-            input: rgba(0xFFFFFF26).into(),
+            input: rgba(0xFFFFFF40).into(),
             ring: rgb(0xEBEBEB).into(),
 
             radius_sm: px(4.0),
-            radius_md: px(8.0),
+            radius_md: px(10.0),
             radius_lg: px(12.0),
             radius_xl: px(16.0),
 

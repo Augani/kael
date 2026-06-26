@@ -101,23 +101,25 @@ impl RenderOnce for Toggle {
         let user_style = self.style;
 
         let (bg_width, bg_height, bar_width, inset) = match self.size {
-            ToggleSize::Sm => (px(28.0), px(16.0), px(12.0), px(2.0)),
-            ToggleSize::Md => (px(36.0), px(20.0), px(16.0), px(2.0)),
+            ToggleSize::Sm => (px(32.0), px(18.0), px(14.0), px(2.0)),
+            ToggleSize::Md => (px(40.0), px(24.0), px(20.0), px(2.0)),
         };
 
         let checked = self.checked;
+        let track_off = theme.tokens.muted_foreground.opacity(0.35);
+        let thumb = theme.tokens.card;
 
         let (bg, toggle_bg) = if self.disabled {
             let bg_color = if checked {
                 theme.tokens.primary.opacity(0.5)
             } else {
-                theme.tokens.muted
+                track_off.opacity(0.5)
             };
-            (bg_color, theme.tokens.background.opacity(0.35))
+            (bg_color, thumb.opacity(0.7))
         } else if checked {
-            (theme.tokens.primary, theme.tokens.background)
+            (theme.tokens.primary, thumb)
         } else {
-            (theme.tokens.muted, theme.tokens.background)
+            (track_off, thumb)
         };
 
         let radius = bg_height;
@@ -164,7 +166,7 @@ impl RenderOnce for Toggle {
                             if checked {
                                 style.bg(theme.tokens.primary.opacity(0.9))
                             } else {
-                                style.bg(theme.tokens.muted.opacity(0.8))
+                                style.bg(theme.tokens.muted_foreground.opacity(0.45))
                             }
                         })
                     })
