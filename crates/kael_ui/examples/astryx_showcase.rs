@@ -9,11 +9,14 @@ use kael_ui::components::slider::{Slider, SliderState};
 use kael_ui::components::text::{body, caption, code, h1, h2, h3, h4, h5, h6, label, muted};
 use kael_ui::components::tooltip::tooltip;
 use kael_ui::display::accordion::Accordion;
+use kael_ui::display::table::{Table, TableColumn, TableRow};
+use kael_ui::navigation::tabs::{TabItem, TabVariant, Tabs};
 use kael_ui::prelude::{
     Avatar, AvatarGroup, AvatarItem, AvatarSize, Badge, BadgeVariant, Banner, Button, ButtonSize,
-    ButtonVariant, Card, Checkbox, Hue, ProgressBar, Radio, RadioGroup, SelectableCard, Separator,
-    Skeleton, SkeletonVariant, Spinner, SpinnerSize, SpinnerVariant, StatusDot, StatusTone,
-    TextField, TextFieldSize, Toggle, KBD,
+    ButtonVariant, Card, Checkbox, Collapsible, EmptyState, Hue, IconButton, ProgressBar, Radio,
+    RadioGroup, SelectableCard, Separator, Skeleton, SkeletonVariant, Spinner, SpinnerSize,
+    SpinnerVariant, StatusDot, StatusTone, TextField, TextFieldSize, Textarea, Timeline,
+    TimelineItem, Toggle, KBD,
 };
 use kael_ui::theme::{install_theme, use_theme, Theme, ThemeTokens, ThemeVariant};
 
@@ -669,6 +672,82 @@ impl Render for AstryxShowcase {
         )
         .child(div().w(px(280.0)).child(Slider::new(self.slider.clone())));
 
+        let more_inputs = section("More inputs", "Textarea and icon buttons", &theme)
+            .child(
+                div().w(px(300.0)).child(
+                    Textarea::new("ta-demo")
+                        .placeholder("Write a description…")
+                        .rows(3),
+                ),
+            )
+            .child(
+                row()
+                    .child(IconButton::new("search"))
+                    .child(IconButton::new("settings"))
+                    .child(IconButton::new("plus")),
+            );
+
+        let nav_sec = section("Tabs", "Underline, enclosed and pill variants", &theme)
+            .child(
+                Tabs::new()
+                    .variant(TabVariant::Underline)
+                    .tabs(vec![
+                        TabItem::new("home", "Home"),
+                        TabItem::new("projects", "Projects"),
+                        TabItem::new("settings", "Settings"),
+                    ])
+                    .selected_index(0),
+            )
+            .child(
+                Tabs::new()
+                    .variant(TabVariant::Pills)
+                    .tabs(vec![
+                        TabItem::new("day", "Day"),
+                        TabItem::new("week", "Week"),
+                        TabItem::new("month", "Month"),
+                    ])
+                    .selected_index(1),
+            );
+
+        let data_table = section("Data table", "Headers, rows and dividers", &theme).child(
+            Table::new()
+                .columns(vec![
+                    TableColumn::new("Name").width(px(160.0)),
+                    TableColumn::new("Role").width(px(110.0)),
+                    TableColumn::new("Status").width(px(110.0)),
+                ])
+                .rows(vec![
+                    TableRow::new(vec!["Augustus Otu".into(), "Owner".into(), "Active".into()]),
+                    TableRow::new(vec!["Kael UI".into(), "Editor".into(), "Active".into()]),
+                    TableRow::new(vec!["Astryx".into(), "Viewer".into(), "Invited".into()]),
+                ]),
+        );
+
+        let timeline_sec = section("Timeline", "Activity feed", &theme).child(Timeline::new(vec![
+            TimelineItem::new("Project created").description("Repository initialized"),
+            TimelineItem::new("First release").description("v0.1.0 shipped"),
+            TimelineItem::new("Astryx redesign").description("Components matched to Astryx"),
+        ]));
+
+        let empty_disclosure = section(
+            "Empty state & collapsible",
+            "Placeholders & disclosure",
+            &theme,
+        )
+        .child(
+            EmptyState::new("empty-demo", "No projects yet")
+                .description("Create your first project to get started.")
+                .icon("inbox"),
+        )
+        .child(
+            Collapsible::new()
+                .trigger(body("Advanced settings".to_string()))
+                .content(muted(
+                    "These options are hidden until expanded.".to_string(),
+                ))
+                .open(true),
+        );
+
         let col_a = div()
             .flex()
             .flex_col()
@@ -677,8 +756,10 @@ impl Render for AstryxShowcase {
             .child(buttons)
             .child(badges)
             .child(inputs)
+            .child(more_inputs)
             .child(selection)
             .child(controls)
+            .child(nav_sec)
             .child(feedback)
             .child(nav_disclosure);
 
@@ -691,6 +772,9 @@ impl Render for AstryxShowcase {
             .child(extras)
             .child(misc)
             .child(details)
+            .child(data_table)
+            .child(timeline_sec)
+            .child(empty_disclosure)
             .child(cards);
 
         let content = div()

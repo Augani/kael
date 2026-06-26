@@ -760,7 +760,7 @@ impl RenderOnce for Input {
                             .rounded(theme.tokens.radius_md)
                             .items_center()
                             .text_size(font_size)
-                            .font_family(theme.tokens.font_mono.clone())
+                            .font_family(theme.tokens.font_family.clone())
                             .text_color(text_color)
                             .when(!self.disabled, |h| h.cursor(kael::CursorStyle::IBeam))
                             .when(!self.disabled, |h| {

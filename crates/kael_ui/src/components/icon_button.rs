@@ -41,7 +41,7 @@ impl IconButton {
             id: id.clone(),
             base: div().flex_shrink_0().id(id),
             icon_source,
-            variant: ButtonVariant::Default,
+            variant: ButtonVariant::Secondary,
             size: px(32.0),
             icon_size: None,
             disabled: false,

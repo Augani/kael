@@ -215,7 +215,7 @@ impl RenderOnce for Textarea {
                 div()
                     .size_full()
                     .text_size(px(14.0))
-                    .font_family(theme.tokens.font_mono.clone())
+                    .font_family(theme.tokens.font_family.clone())
                     .text_color(text_color)
                     .line_height(relative(1.4))
                     .child(if has_value {
