@@ -13,6 +13,13 @@ use kael::*;
 /// Astryx's signature snappy ease-out curve (`cubic-bezier(0.24, 1, 0.4, 1)`).
 pub const ASTRYX_EASE: [f32; 4] = [0.24, 1.0, 0.4, 1.0];
 
+/// Categorical chart-series palette — the saturated stops of the astryx hue
+/// palette, ordered for maximum adjacent contrast. Opaque RGB hex; cycle by
+/// `CHART_PALETTE[i % CHART_PALETTE.len()]`.
+pub const CHART_PALETTE: [u32; 8] = [
+    0x0064E0, 0x0D8626, 0xEB6E00, 0xE3193B, 0x5B08D8, 0x08A3A3, 0xC2185B, 0xC58600,
+];
+
 /// The element-height ladder shared by buttons, inputs, selects, and other
 /// interactive controls. Mirrors astryx `--size-element-{sm,md,lg}`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
