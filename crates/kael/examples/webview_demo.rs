@@ -212,7 +212,6 @@ impl Render for WebViewDemo {
                                 }
                             })
                             .on_navigate({
-                                let entity = entity.clone();
                                 move |url, _, cx| {
                                     entity.update(cx, |this, cx| {
                                         this.status = format!("Navigation requested: {}", url).into();
