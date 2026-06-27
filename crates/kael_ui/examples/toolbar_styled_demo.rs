@@ -65,7 +65,7 @@ impl ToolbarStyledDemo {
 }
 
 impl Render for ToolbarStyledDemo {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let theme = use_theme();
 
         div()
@@ -107,7 +107,7 @@ impl Render for ToolbarStyledDemo {
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("1. Default Toolbar (No Custom Styling)")
                     )
-                    .child(cx.new(|_| {
+                    .child(
                         Toolbar::new()
                             .size(ToolbarSize::Md)
                             .group(
@@ -136,7 +136,7 @@ impl Render for ToolbarStyledDemo {
                                             .tooltip("Redo")
                                     )
                             )
-                    }))
+                    )
                     .child(
                         div()
                             .px(px(32.0))
@@ -156,7 +156,7 @@ impl Render for ToolbarStyledDemo {
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("2. Custom Background Color")
                     )
-                    .child(cx.new(|_| {
+                    .child(
                         Toolbar::new()
                             .size(ToolbarSize::Md)
                             .group(
@@ -171,7 +171,7 @@ impl Render for ToolbarStyledDemo {
                                     .button(ToolbarButton::new("user", "user").tooltip("User"))
                             )
                             .bg(rgb(0x1e3a8a))  // Deep blue background
-                    }))
+                    )
                     .child(
                         div()
                             .px(px(32.0))
@@ -194,7 +194,7 @@ impl Render for ToolbarStyledDemo {
                     .child(
                         div()
                             .px(px(32.0))
-                            .child(cx.new(|_| {
+                            .child(
                                 Toolbar::new()
                                     .size(ToolbarSize::Lg)
                                     .group(
@@ -213,7 +213,7 @@ impl Render for ToolbarStyledDemo {
                                     .py(px(12.0))  // Extra vertical padding
                                     .rounded(px(12.0))  // Rounded corners
                                     .bg(theme.tokens.muted)
-                            }))
+                            )
                     )
                     .child(
                         div()
@@ -237,7 +237,7 @@ impl Render for ToolbarStyledDemo {
                     .child(
                         div()
                             .px(px(32.0))
-                            .child(cx.new(|_| {
+                            .child(
                                 Toolbar::new()
                                     .size(ToolbarSize::Md)
                                     .group(
@@ -250,7 +250,7 @@ impl Render for ToolbarStyledDemo {
                                     .border_color(rgb(0x8b5cf6))  // Purple border
                                     .rounded(px(8.0))
                                     .bg(kael::transparent_black())
-                            }))
+                            )
                     )
                     .child(
                         div()
@@ -274,7 +274,7 @@ impl Render for ToolbarStyledDemo {
                     .child(
                         div()
                             .px(px(32.0))
-                            .child(cx.new(|_| {
+                            .child(
                                 Toolbar::new()
                                     .size(ToolbarSize::Md)
                                     .group(
@@ -291,7 +291,7 @@ impl Render for ToolbarStyledDemo {
                                     .shadow_lg()  // Large shadow
                                     .rounded(px(8.0))
                                     .bg(theme.tokens.background)
-                            }))
+                            )
                     )
                     .child(
                         div()
@@ -315,7 +315,7 @@ impl Render for ToolbarStyledDemo {
                     .child(
                         div()
                             .px(px(32.0))
-                            .child(cx.new(|_| {
+                            .child(
                                 Toolbar::new()
                                     .size(ToolbarSize::Sm)
                                     .group(
@@ -326,7 +326,7 @@ impl Render for ToolbarStyledDemo {
                                     .w(px(300.0))  // Fixed width
                                     .bg(theme.tokens.accent)
                                     .rounded(px(8.0))
-                            }))
+                            )
                     )
                     .child(
                         div()
@@ -350,7 +350,7 @@ impl Render for ToolbarStyledDemo {
                     .child(
                         div()
                             .px(px(32.0))
-                            .child(cx.new(|_| {
+                            .child(
                                 Toolbar::new()
                                     .size(ToolbarSize::Lg)
                                     .group(
@@ -371,7 +371,7 @@ impl Render for ToolbarStyledDemo {
                                     .shadow_md()  // Medium shadow
                                     .border_1()  // Subtle border
                                     .border_color(rgb(0x10b981))
-                            }))
+                            )
                     )
                     .child(
                         div()
@@ -397,7 +397,7 @@ impl Render for ToolbarStyledDemo {
                             .px(px(32.0))
                             .flex()
                             .justify_center()
-                            .child(cx.new(|_| {
+                            .child(
                                 Toolbar::new()
                                     .size(ToolbarSize::Sm)
                                     .group(
@@ -411,7 +411,7 @@ impl Render for ToolbarStyledDemo {
                                     .bg(rgb(0xef4444))  // Red background
                                     .shadow_sm()
                                     .w(px(200.0))
-                            }))
+                            )
                     )
                     .child(
                         div()

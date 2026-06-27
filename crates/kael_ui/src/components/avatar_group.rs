@@ -41,38 +41,89 @@ impl Default for AvatarItem {
     }
 }
 
+#[derive(IntoElement)]
+pub struct AvatarGroupOverflow {
+    count: usize,
+    size: AvatarSize,
+    style: StyleRefinement,
+}
+
+impl AvatarGroupOverflow {
+    pub fn new(count: usize) -> Self {
+        Self {
+            count,
+            size: AvatarSize::default(),
+            style: StyleRefinement::default(),
+        }
+    }
+
+    pub fn size(mut self, size: AvatarSize) -> Self {
+        self.size = size;
+        self
+    }
+}
+
+impl Styled for AvatarGroupOverflow {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for AvatarGroupOverflow {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let theme = use_theme();
+        let size_px = get_size_px(self.size);
+        let text_size = get_text_size(self.size);
+        let user_style = self.style;
+
+        div()
+            .size(px(size_px))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .bg(theme.tokens.muted)
+            .text_color(theme.tokens.muted_foreground)
+            .text_size(px(text_size))
+            .font_weight(FontWeight::MEDIUM)
+            .font_family(theme.tokens.font_family.clone())
+            .border_2()
+            .border_color(theme.tokens.card)
+            .child(format!("+{}", self.count))
+            .map(|this| {
+                let mut div = this;
+                div.style().refine(&user_style);
+                div
+            })
+    }
+}
+
 fn get_overlap(size: AvatarSize, spacing: Option<f32>) -> f32 {
     if let Some(spacing) = spacing {
         return spacing;
     }
 
     match size {
-        AvatarSize::Xs => -8.0,
-        AvatarSize::Sm => -10.0,
-        AvatarSize::Md => -12.0,
-        AvatarSize::Lg => -14.0,
-        AvatarSize::Xl => -18.0,
+        AvatarSize::Xs => -(get_size_px(size) * 0.25).round(),
+        AvatarSize::Sm => -(get_size_px(size) * 0.25).round(),
+        AvatarSize::Md => -(get_size_px(size) * 0.25).round(),
+        AvatarSize::Lg => -(get_size_px(size) * 0.25).round(),
+        AvatarSize::Xl => -(get_size_px(size) * 0.25).round(),
     }
 }
 
 fn get_size_px(size: AvatarSize) -> f32 {
     match size {
-        AvatarSize::Xs => 24.0,
-        AvatarSize::Sm => 32.0,
-        AvatarSize::Md => 40.0,
+        AvatarSize::Xs => 20.0,
+        AvatarSize::Sm => 24.0,
+        AvatarSize::Md => 36.0,
         AvatarSize::Lg => 48.0,
-        AvatarSize::Xl => 64.0,
+        AvatarSize::Xl => 128.0,
     }
 }
 
 fn get_text_size(size: AvatarSize) -> f32 {
-    match size {
-        AvatarSize::Xs => 9.0,
-        AvatarSize::Sm => 11.0,
-        AvatarSize::Md => 13.0,
-        AvatarSize::Lg => 15.0,
-        AvatarSize::Xl => 18.0,
-    }
+    get_size_px(size) * 0.35
 }
 
 fn create_avatar(item: &AvatarItem, size: AvatarSize) -> Avatar {
@@ -94,7 +145,9 @@ fn create_avatar(item: &AvatarItem, size: AvatarSize) -> Avatar {
 #[derive(IntoElement)]
 pub struct AvatarGroup {
     items: Vec<AvatarItem>,
+    children: Vec<AnyElement>,
     size: AvatarSize,
+    aria_label: SharedString,
     max_visible: Option<usize>,
     show_tooltips: bool,
     spacing: Option<f32>,
@@ -105,7 +158,9 @@ impl AvatarGroup {
     pub fn new(items: Vec<AvatarItem>) -> Self {
         Self {
             items,
+            children: Vec::new(),
             size: AvatarSize::default(),
+            aria_label: "Avatars".into(),
             max_visible: None,
             show_tooltips: false,
             spacing: None,
@@ -116,6 +171,27 @@ impl AvatarGroup {
     pub fn size(mut self, size: AvatarSize) -> Self {
         self.size = size;
         self
+    }
+
+    pub fn child(mut self, child: impl IntoElement) -> Self {
+        self.children.push(child.into_any_element());
+        self
+    }
+
+    pub fn children(mut self, children: impl IntoIterator<Item = impl IntoElement>) -> Self {
+        self.children
+            .extend(children.into_iter().map(|child| child.into_any_element()));
+        self
+    }
+
+    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.aria_label = label.into();
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn ariaLabel(self, label: impl Into<SharedString>) -> Self {
+        self.aria_label(label)
     }
 
     pub fn max_visible(mut self, max: usize) -> Self {
@@ -155,11 +231,49 @@ impl RenderOnce for AvatarGroup {
         let spacing = self.spacing;
         let max_visible = self.max_visible;
         let items = self.items;
+        let composed_children = self.children;
+        let aria_label = self.aria_label;
         let user_style = self.style;
 
         let overlap = get_overlap(size, spacing);
         let size_px = get_size_px(size);
         let text_size = get_text_size(size);
+
+        if !composed_children.is_empty() {
+            let step = size_px + overlap;
+            let total_w = (composed_children.len() as f32 - 1.0).max(0.0) * step + size_px;
+            return div()
+                .relative()
+                .h(px(size_px))
+                .w(px(total_w))
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(-10000.0))
+                        .top(px(0.0))
+                        .size(px(1.0))
+                        .overflow_hidden()
+                        .child(aria_label),
+                )
+                .children(composed_children.into_iter().enumerate().rev().map(
+                    move |(index, child)| {
+                        div()
+                            .absolute()
+                            .left(px(index as f32 * step))
+                            .top_0()
+                            .rounded_full()
+                            .border_2()
+                            .border_color(theme.tokens.card)
+                            .child(child)
+                            .into_any_element()
+                    },
+                ))
+                .map(|this| {
+                    let mut div = this;
+                    div.style().refine(&user_style);
+                    div
+                });
+        }
 
         let total_count = items.len();
         let max_vis = max_visible.unwrap_or(total_count);
@@ -234,6 +348,15 @@ impl RenderOnce for AvatarGroup {
             .relative()
             .h(px(size_px))
             .w(px(total_w))
+            .child(
+                div()
+                    .absolute()
+                    .left(px(-10000.0))
+                    .top(px(0.0))
+                    .size(px(1.0))
+                    .overflow_hidden()
+                    .child(aria_label),
+            )
             .map(|this| {
                 let mut div = this;
                 div.style().refine(&user_style);

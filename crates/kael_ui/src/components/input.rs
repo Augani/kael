@@ -1,11 +1,16 @@
 //! Input component - Advanced text input with validation, masking, and accessibility.
 
 use crate::animations::{easings, shake_offset};
-use crate::components::icon::Icon;
+use crate::astryx;
 pub use crate::components::input_state::{
     Backspace, Copy, Cut, Delete, End, Enter, Escape, Home, InputEvent, InputMask, InputState,
     InputType, Left, Paste, Right, SelectAll, SelectLeft, SelectRight, ShiftTab, Tab,
     ValidationError, ValidationRules,
+};
+use crate::components::{
+    field::FieldStatusType,
+    icon::Icon,
+    spinner::{Spinner, SpinnerSize},
 };
 use crate::layout::{HStack, VStack};
 use crate::theme::use_theme;
@@ -108,11 +113,15 @@ pub enum InputSize {
 #[derive(IntoElement)]
 pub struct Input {
     state: Entity<InputState>,
+    label: Option<SharedString>,
+    label_hidden: bool,
+    optional: bool,
     placeholder: SharedString,
     variant: InputVariant,
     size: InputSize,
     disabled: bool,
     error: bool,
+    loading: bool,
     password: bool,
     clearable: bool,
     prefix: Option<AnyElement>,
@@ -150,11 +159,15 @@ impl Input {
     pub fn new(state: &Entity<InputState>) -> Self {
         Self {
             state: state.clone(),
+            label: None,
+            label_hidden: false,
+            optional: false,
             placeholder: "".into(),
             variant: InputVariant::Default,
             size: InputSize::default(),
             disabled: false,
             error: false,
+            loading: false,
             password: false,
             clearable: false,
             prefix: None,
@@ -194,6 +207,35 @@ impl Input {
         self
     }
 
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    pub fn is_label_hidden(mut self, hidden: bool) -> Self {
+        self.label_hidden = hidden;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isLabelHidden(self, hidden: bool) -> Self {
+        self.is_label_hidden(hidden)
+    }
+
+    pub fn description(self, description: impl Into<SharedString>) -> Self {
+        self.helper_text(description)
+    }
+
+    pub fn is_optional(mut self, optional: bool) -> Self {
+        self.optional = optional;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isOptional(self, optional: bool) -> Self {
+        self.is_optional(optional)
+    }
+
     /// Set placeholder text
     pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
         self.placeholder = placeholder.into();
@@ -203,6 +245,11 @@ impl Input {
     pub fn cleanable(mut self) -> Self {
         self.clearable = true;
         self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn hasClear(self, clearable: bool) -> Self {
+        self.clearable(clearable)
     }
 
     /// Set the input variant
@@ -229,16 +276,48 @@ impl Input {
         self
     }
 
+    #[allow(non_snake_case)]
+    pub fn isDisabled(self, disabled: bool) -> Self {
+        self.disabled(disabled)
+    }
+
     /// Set error state (shows error styling)
     pub fn error(mut self, error: bool) -> Self {
         self.error = error;
         self
     }
 
+    pub fn status(mut self, status: FieldStatusType, message: impl Into<SharedString>) -> Self {
+        self.error = matches!(status, FieldStatusType::Error | FieldStatusType::Warning);
+        self.helper_text = Some(message.into());
+        self
+    }
+
+    pub fn is_loading(mut self, loading: bool) -> Self {
+        self.loading = loading;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isLoading(self, loading: bool) -> Self {
+        self.is_loading(loading)
+    }
+
     /// Enable password masking
     pub fn password(mut self, password: bool) -> Self {
         self.password = password;
         self
+    }
+
+    pub fn text_type(mut self, input_type: InputType) -> Self {
+        self.input_type = Some(input_type);
+        self.password = input_type == InputType::Password;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn inputType(self, input_type: InputType) -> Self {
+        self.text_type(input_type)
     }
 
     /// Enable clear button when input has value
@@ -253,10 +332,28 @@ impl Input {
         self
     }
 
+    pub fn start_icon(self, icon: impl IntoElement) -> Self {
+        self.prefix(icon)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn startIcon(self, icon: impl IntoElement) -> Self {
+        self.start_icon(icon)
+    }
+
     /// Add a suffix element (icon, label, etc.)
     pub fn suffix(mut self, suffix: impl IntoElement) -> Self {
         self.suffix = Some(suffix.into_any_element());
         self
+    }
+
+    pub fn end_icon(self, icon: impl IntoElement) -> Self {
+        self.suffix(icon)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn endIcon(self, icon: impl IntoElement) -> Self {
+        self.end_icon(icon)
     }
 
     /// Set callback when value changes
@@ -268,6 +365,14 @@ impl Input {
         self
     }
 
+    #[allow(non_snake_case)]
+    pub fn onChange<F>(self, callback: F) -> Self
+    where
+        F: Fn(SharedString, &mut App) + 'static,
+    {
+        self.on_change(callback)
+    }
+
     /// Set callback when Enter key is pressed
     pub fn on_enter<F>(mut self, callback: F) -> Self
     where
@@ -275,6 +380,14 @@ impl Input {
     {
         self.on_enter = Some(Rc::new(callback));
         self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn onEnter<F>(self, callback: F) -> Self
+    where
+        F: Fn(SharedString, &mut App) + 'static,
+    {
+        self.on_enter(callback)
     }
 
     /// Set callback when input gains focus
@@ -339,6 +452,11 @@ impl Input {
             rules.required = required;
         }
         self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isRequired(self, required: bool) -> Self {
+        self.required(required)
     }
 
     /// Set helper text displayed below the input
@@ -686,7 +804,7 @@ impl RenderOnce for Input {
         };
 
         let has_value = !self.state.read(cx).content.is_empty();
-        let show_clear = self.clearable && has_value && !self.disabled;
+        let show_clear = self.clearable && has_value && !self.disabled && !self.loading;
         let state_for_clear = self.state.clone();
         let state_for_password = self.state.clone();
 
@@ -718,6 +836,38 @@ impl RenderOnce for Input {
         VStack::new()
             .w_full()
             .gap(px(4.0))
+            .when_some(
+                self.label.clone().filter(|_| !self.label_hidden),
+                |v, label| {
+                    v.child(
+                        HStack::new()
+                            .items_center()
+                            .gap(px(4.0))
+                            .px(px(2.0))
+                            .text_size(px(14.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .font_family(theme.tokens.font_family.clone())
+                            .text_color(if self.disabled {
+                                theme.tokens.muted_foreground
+                            } else {
+                                theme.tokens.foreground
+                            })
+                            .child(label)
+                            .when(self.required && !self.optional, |this| {
+                                this.child(div().text_color(theme.tokens.destructive).child("*"))
+                            })
+                            .when(self.optional && !self.required, |this| {
+                                this.child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .font_weight(FontWeight::NORMAL)
+                                        .text_color(theme.tokens.muted_foreground)
+                                        .child("(optional)"),
+                                )
+                            }),
+                    )
+                },
+            )
             .child({
                 let input_container = div()
                     .id(("input", self.state.entity_id()))
@@ -763,13 +913,15 @@ impl RenderOnce for Input {
                             .font_family(theme.tokens.font_family.clone())
                             .text_color(text_color)
                             .when(!self.disabled, |h| h.cursor(kael::CursorStyle::IBeam))
-                            .when(!self.disabled, |h| {
+                            .when(!self.disabled && !is_focused, |h| {
                                 h.hover(move |style| {
-                                    style.border_color(if self.error {
-                                        destructive_color
-                                    } else {
-                                        ring_color
-                                    })
+                                    style.shadow(smallvec::smallvec![astryx::input_hover_ring(
+                                        if self.error {
+                                            destructive_color
+                                        } else {
+                                            theme.tokens.input
+                                        },
+                                    )])
                                 })
                             })
                             .when(is_focused && !self.disabled, |h| {
@@ -790,8 +942,10 @@ impl RenderOnce for Input {
                                 h.child(
                                     div()
                                         .id(("input-clear", self.state.entity_id()))
-                                        .px(px(4.0))
-                                        .py(px(4.0))
+                                        .size(px(24.0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
                                         .rounded(theme.tokens.radius_sm)
                                         .cursor_pointer()
                                         .transition(theme.tokens.transition_fast)
@@ -801,8 +955,11 @@ impl RenderOnce for Input {
                                                 state.set_value("", window, cx);
                                             })
                                         })
-                                        .child("×")
-                                        .text_color(theme.tokens.muted_foreground),
+                                        .child(
+                                            Icon::new("x")
+                                                .size(px(14.0))
+                                                .color(theme.tokens.muted_foreground),
+                                        ),
                                 )
                             })
                             .when(self.password, |h| {
@@ -830,6 +987,16 @@ impl RenderOnce for Input {
                                                 .size(px(16.0))
                                                 .color(theme.tokens.muted_foreground),
                                         ),
+                                )
+                            })
+                            .when(self.loading, |h| {
+                                h.child(
+                                    div()
+                                        .size(px(24.0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(Spinner::new().size(SpinnerSize::Xs)),
                                 )
                             })
                             .children(self.suffix),
@@ -910,5 +1077,52 @@ impl RenderOnce for Input {
                 vstack.style().refine(&user_style);
                 vstack
             })
+    }
+}
+
+#[cfg(test)]
+mod typing_tests {
+    use super::{Input, InputState};
+    use kael::{
+        div, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled,
+        TestAppContext, Window,
+    };
+
+    struct Host {
+        field: Entity<InputState>,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _w: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(Input::new(&self.field))
+        }
+    }
+
+    #[kael::test]
+    fn typing_into_input_updates_state(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            super::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let field = cx.new(|cx| InputState::new(cx));
+
+        let (_host, cx) = cx.add_window_view({
+            let field = field.clone();
+            move |_, _| Host { field }
+        });
+
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+            let handle = field.read(cx).focus_handle(cx);
+            window.focus(&handle);
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        cx.simulate_input("hello");
+
+        let value = cx.update(|_window, cx| field.read(cx).content().to_string());
+        assert_eq!(value, "hello");
     }
 }

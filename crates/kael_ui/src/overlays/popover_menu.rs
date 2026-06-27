@@ -9,7 +9,9 @@ use std::rc::Rc;
 pub struct PopoverMenuItem {
     pub id: SharedString,
     pub label: SharedString,
+    pub description: Option<SharedString>,
     pub icon: Option<SharedString>,
+    pub end_content: Option<SharedString>,
     pub on_click: Option<Rc<dyn Fn(&mut Window, &mut App) + 'static>>,
     pub disabled: bool,
 }
@@ -19,7 +21,9 @@ impl PopoverMenuItem {
         Self {
             id: id.into(),
             label: label.into(),
+            description: None,
             icon: None,
+            end_content: None,
             on_click: None,
             disabled: false,
         }
@@ -28,6 +32,25 @@ impl PopoverMenuItem {
     pub fn icon(mut self, icon: impl Into<SharedString>) -> Self {
         self.icon = Some(icon.into());
         self
+    }
+
+    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn end_content(mut self, content: impl Into<SharedString>) -> Self {
+        self.end_content = Some(content.into());
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn endContent(self, content: impl Into<SharedString>) -> Self {
+        self.end_content(content)
+    }
+
+    pub fn shortcut(self, shortcut: impl Into<SharedString>) -> Self {
+        self.end_content(shortcut)
     }
 
     pub fn on_click<F>(mut self, handler: F) -> Self
@@ -82,6 +105,7 @@ impl RenderOnce for PopoverMenu {
         let theme = Theme::of(cx);
         let on_close_backdrop = self.on_close.clone();
         let user_style = self.style;
+        let overlay_hover = crate::astryx::overlay_hover(theme.tokens.background.l < 0.5);
 
         div()
             .absolute()
@@ -102,12 +126,11 @@ impl RenderOnce for PopoverMenu {
                                 .max_w(px(300.0))
                                 .flex()
                                 .flex_col()
+                                .gap(px(2.0))
                                 .bg(theme.tokens.popover)
                                 .text_color(theme.tokens.popover_foreground)
-                                .border_1()
-                                .border_color(theme.tokens.border)
                                 .rounded(theme.tokens.radius_lg)
-                                .shadow(theme.tokens.shadow_lg.to_vec())
+                                .shadow(theme.tokens.shadow_md.to_vec())
                                 .p(px(4.0))
                                 .map(|this| {
                                     let mut div = this;
@@ -125,8 +148,8 @@ impl RenderOnce for PopoverMenu {
                                         .flex()
                                         .items_center()
                                         .gap(px(8.0))
-                                        .px(px(12.0))
-                                        .py(px(8.0))
+                                        .px(px(8.0))
+                                        .py(px(6.0))
                                         .rounded(theme.tokens.radius_md)
                                         .cursor(if disabled {
                                             CursorStyle::Arrow
@@ -134,19 +157,62 @@ impl RenderOnce for PopoverMenu {
                                             CursorStyle::PointingHand
                                         })
                                         .when(!disabled, |this| {
-                                            this.hover(|style| {
-                                                style.bg(theme.tokens.accent.opacity(0.1))
-                                            })
+                                            this.hover(move |style| style.bg(overlay_hover))
                                         })
                                         .when(disabled, |this| this.opacity(0.5))
                                         .when_some(item.icon, |this, icon_name| {
                                             this.child(
-                                                Icon::new(icon_name)
-                                                    .size(px(16.0))
-                                                    .color(theme.tokens.foreground),
+                                                div()
+                                                    .size(px(20.0))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .flex_shrink_0()
+                                                    .child(
+                                                        Icon::new(icon_name)
+                                                            .size(px(16.0))
+                                                            .color(theme.tokens.foreground),
+                                                    ),
                                             )
                                         })
-                                        .child(div().text_size(px(14.0)).child(item.label))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .flex()
+                                                .flex_col()
+                                                .gap(px(1.0))
+                                                .overflow_hidden()
+                                                .child(
+                                                    div()
+                                                        .text_size(px(14.0))
+                                                        .line_height(px(20.0))
+                                                        .child(item.label),
+                                                )
+                                                .when_some(
+                                                    item.description,
+                                                    |this, description| {
+                                                        this.child(
+                                                            div()
+                                                                .text_size(px(12.0))
+                                                                .line_height(px(16.0))
+                                                                .text_color(
+                                                                    theme.tokens.muted_foreground,
+                                                                )
+                                                                .child(description),
+                                                        )
+                                                    },
+                                                ),
+                                        )
+                                        .when_some(item.end_content, |this, content| {
+                                            this.child(
+                                                div()
+                                                    .ml_auto()
+                                                    .text_size(px(12.0))
+                                                    .line_height(px(16.0))
+                                                    .text_color(theme.tokens.muted_foreground)
+                                                    .child(content),
+                                            )
+                                        })
                                         .when(!disabled && on_click.is_some(), |this| {
                                             this.on_mouse_down(
                                                 MouseButton::Left,

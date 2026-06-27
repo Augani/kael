@@ -97,6 +97,10 @@ version = "0.10"
 [dependencies.tempfile]
 version = "3.20.0"
 
+[dependencies.tokio]
+version = "1.52.3"
+features = ["rt-multi-thread"]
+
 [dependencies.url]
 version = "2.2"
 

@@ -93,8 +93,8 @@ impl<T: Clone + PartialEq + 'static> Sidebar<T> {
             selected_id: None,
             variant: SidebarVariant::default(),
             position: SidebarPosition::default(),
-            expanded_width: px(280.0),
-            collapsed_width: px(64.0),
+            expanded_width: px(260.0),
+            collapsed_width: px(48.0),
             is_expanded: true,
             show_toggle_button: true,
             on_select: None,
@@ -181,6 +181,7 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for Sidebar<T> {
         let theme = use_theme();
         let current_width = self.current_width();
         let is_collapsible = self.variant == SidebarVariant::Collapsible;
+        let overlay_hover = crate::astryx::overlay_hover(theme.tokens.background.l < 0.5);
 
         let on_toggle_for_button = self.on_toggle.clone();
         let on_toggle_for_keyboard = self.on_toggle.clone();
@@ -216,6 +217,7 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for Sidebar<T> {
                     is_focused,
                     is_expanded,
                     &theme,
+                    overlay_hover,
                     cx,
                 );
                 item_elements.push(item_element);
@@ -228,9 +230,7 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for Sidebar<T> {
             .flex()
             .flex_col()
             .h_full()
-            .bg(theme.tokens.card)
-            .border_r_1()
-            .border_color(theme.tokens.border)
+            .bg(transparent_black())
             .w(current_width);
 
         sidebar = match variant {
@@ -250,7 +250,7 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for Sidebar<T> {
                 .w_full()
                 .h(px(48.0))
                 .cursor(CursorStyle::PointingHand)
-                .hover(|style| style.bg(theme.tokens.muted.opacity(0.5)))
+                .hover(move |style| style.bg(overlay_hover))
                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                     if let Some(on_toggle) = on_toggle_for_button.clone() {
                         on_toggle(!is_expanded, window, cx);
@@ -277,7 +277,7 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for Sidebar<T> {
             .flex_1()
             .gap(px(2.0))
             .px(px(8.0))
-            .py(px(16.0));
+            .py(px(8.0));
 
         content = content.children(item_elements);
 
@@ -319,6 +319,7 @@ impl<T: Clone + PartialEq + 'static> Sidebar<T> {
         is_focused: bool,
         sidebar_expanded: bool,
         theme: &crate::theme::Theme,
+        overlay_hover: Hsla,
         _cx: &mut App,
     ) -> AnyElement {
         let on_select = self.on_select.clone();
@@ -327,9 +328,9 @@ impl<T: Clone + PartialEq + 'static> Sidebar<T> {
             .flex()
             .items_center()
             .w_full()
-            .h(px(36.0))
-            .px(px(12.0))
-            .rounded(theme.tokens.radius_sm)
+            .h(px(32.0))
+            .px(px(8.0))
+            .rounded(theme.tokens.radius_md)
             .transition(theme.tokens.transition_fast)
             .cursor(if item.disabled {
                 CursorStyle::Arrow
@@ -339,16 +340,16 @@ impl<T: Clone + PartialEq + 'static> Sidebar<T> {
 
         if is_selected {
             item_container = item_container
-                .bg(theme.tokens.primary.opacity(0.1))
-                .text_color(theme.tokens.primary);
+                .bg(theme.tokens.accent)
+                .text_color(theme.tokens.foreground);
         } else if is_focused {
             item_container = item_container
-                .bg(theme.tokens.accent.opacity(0.1))
-                .text_color(theme.tokens.accent_foreground);
+                .bg(overlay_hover)
+                .text_color(theme.tokens.foreground);
         } else {
             item_container = item_container
                 .text_color(theme.tokens.foreground)
-                .hover(|style| style.bg(theme.tokens.muted.opacity(0.5)));
+                .hover(move |style| style.bg(overlay_hover));
         }
 
         if item.disabled {
@@ -370,13 +371,11 @@ impl<T: Clone + PartialEq + 'static> Sidebar<T> {
 
         if let Some(icon) = &item.icon {
             let icon_element = Icon::new(icon.clone())
-                .size(px(18.0))
-                .color(if is_selected {
-                    theme.tokens.primary
-                } else if item.disabled {
+                .size(px(16.0))
+                .color(if item.disabled {
                     theme.tokens.muted_foreground
                 } else {
-                    theme.tokens.foreground
+                    theme.tokens.muted_foreground
                 });
 
             children.push(icon_element.into_any_element());
@@ -385,16 +384,17 @@ impl<T: Clone + PartialEq + 'static> Sidebar<T> {
         if sidebar_expanded {
             let label_element = div()
                 .flex_1()
-                .ml(px(12.0))
+                .ml(px(8.0))
                 .text_size(px(14.0))
+                .line_height(px(20.0))
                 .font_family(theme.tokens.font_family.clone())
                 .font_weight(if is_selected {
-                    FontWeight::SEMIBOLD
+                    FontWeight::MEDIUM
                 } else {
                     FontWeight::NORMAL
                 })
                 .text_color(if is_selected {
-                    theme.tokens.primary
+                    theme.tokens.foreground
                 } else if item.disabled {
                     theme.tokens.muted_foreground
                 } else {
@@ -409,19 +409,12 @@ impl<T: Clone + PartialEq + 'static> Sidebar<T> {
                     .px(px(6.0))
                     .py(px(2.0))
                     .rounded(theme.tokens.radius_sm)
-                    .bg(if is_selected {
-                        theme.tokens.primary.opacity(0.2)
-                    } else {
-                        theme.tokens.muted
-                    })
+                    .bg(theme.tokens.muted)
                     .text_size(px(10.0))
+                    .line_height(px(14.0))
                     .font_family(theme.tokens.font_family.clone())
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(if is_selected {
-                        theme.tokens.primary
-                    } else {
-                        theme.tokens.muted_foreground
-                    })
+                    .text_color(theme.tokens.muted_foreground)
                     .child(badge.clone());
 
                 children.push(badge_element.into_any_element());

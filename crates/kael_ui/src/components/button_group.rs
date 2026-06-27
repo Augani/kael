@@ -7,6 +7,13 @@ use crate::theme::use_theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub enum ButtonGroupOrientation {
+    #[default]
+    Horizontal,
+    Vertical,
+}
+
 pub struct ButtonGroupItem {
     label: SharedString,
     icon: Option<IconSource>,
@@ -38,6 +45,7 @@ pub struct ButtonGroup {
     id: ElementId,
     items: Vec<ButtonGroupItem>,
     size: ControlSize,
+    orientation: ButtonGroupOrientation,
     style: StyleRefinement,
 }
 
@@ -47,6 +55,7 @@ impl ButtonGroup {
             id: id.into(),
             items: Vec::new(),
             size: ControlSize::Md,
+            orientation: ButtonGroupOrientation::Horizontal,
             style: StyleRefinement::default(),
         }
     }
@@ -58,6 +67,11 @@ impl ButtonGroup {
 
     pub fn size(mut self, size: ControlSize) -> Self {
         self.size = size;
+        self
+    }
+
+    pub fn orientation(mut self, orientation: ButtonGroupOrientation) -> Self {
+        self.orientation = orientation;
         self
     }
 }
@@ -77,12 +91,17 @@ impl RenderOnce for ButtonGroup {
         let font_size = self.size.font_size();
         let icon_size = self.size.icon_size();
         let id = self.id.clone();
+        let orientation = self.orientation;
 
         let mut row = div()
             .id(id)
             .flex()
-            .items_center()
-            .h(height)
+            .when(orientation == ButtonGroupOrientation::Vertical, |this| {
+                this.flex_col().w_full()
+            })
+            .when(orientation == ButtonGroupOrientation::Horizontal, |this| {
+                this.flex_row().items_center().h(height)
+            })
             .bg(theme.tokens.secondary)
             .border_1()
             .border_color(theme.tokens.border)
@@ -99,15 +118,25 @@ impl RenderOnce for ButtonGroup {
                 .items_center()
                 .justify_center()
                 .gap(px(6.0))
-                .h_full()
+                .when(orientation == ButtonGroupOrientation::Horizontal, |this| {
+                    this.h_full()
+                })
+                .when(orientation == ButtonGroupOrientation::Vertical, |this| {
+                    this.h(height).w_full()
+                })
                 .px(padding_x)
                 .text_size(font_size)
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(theme.tokens.secondary_foreground)
                 .cursor(CursorStyle::PointingHand)
-                .when(index > 0, |this| {
-                    this.border_l_1().border_color(theme.tokens.border)
-                })
+                .when(
+                    index > 0 && orientation == ButtonGroupOrientation::Horizontal,
+                    |this| this.border_l_1().border_color(theme.tokens.border),
+                )
+                .when(
+                    index > 0 && orientation == ButtonGroupOrientation::Vertical,
+                    |this| this.border_t_1().border_color(theme.tokens.border),
+                )
                 .hover(|style| style.bg(theme.tokens.accent))
                 .when_some(icon, |this, icon_src| {
                     this.child(

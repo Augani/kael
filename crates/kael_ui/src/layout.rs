@@ -3,6 +3,7 @@
 use crate::animations::{easings, lerp_f32};
 use crate::components::scrollbar::{Scrollbar, ScrollbarAxis, ScrollbarState};
 use crate::scroll_physics::ScrollPhysics;
+use kael::prelude::FluentBuilder as _;
 use kael::*;
 use std::cell::RefCell;
 use std::panic::Location;
@@ -36,10 +37,21 @@ pub enum FlowDirection {
     Vertical,
 }
 
+fn apply_justify_div(div: Div, justify: Justify) -> Div {
+    match justify {
+        Justify::Start => div.justify_start(),
+        Justify::Center => div.justify_center(),
+        Justify::End => div.justify_end(),
+        Justify::Between => div.justify_between(),
+        Justify::Around | Justify::Evenly => div.justify_around(),
+    }
+}
+
 pub struct VStack {
     base: Div,
     spacing: Option<Pixels>,
     align: Option<Align>,
+    justify: Option<Justify>,
 }
 
 impl Default for VStack {
@@ -54,6 +66,7 @@ impl VStack {
             base: div().flex().flex_col(),
             spacing: None,
             align: None,
+            justify: None,
         }
     }
 
@@ -69,6 +82,29 @@ impl VStack {
     pub fn align(mut self, align: Align) -> Self {
         self.align = Some(align);
         self
+    }
+
+    pub fn h_align(self, align: Align) -> Self {
+        self.align(align)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn hAlign(self, align: Align) -> Self {
+        self.h_align(align)
+    }
+
+    pub fn v_align(mut self, justify: Justify) -> Self {
+        self.justify = Some(justify);
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn vAlign(self, justify: Justify) -> Self {
+        self.v_align(justify)
+    }
+
+    pub fn justify(self, justify: Justify) -> Self {
+        self.v_align(justify)
     }
 
     pub fn fill(mut self) -> Self {
@@ -139,6 +175,10 @@ impl IntoElement for VStack {
             };
         }
 
+        if let Some(justify) = self.justify {
+            self.base = apply_justify_div(self.base, justify);
+        }
+
         self.base
     }
 }
@@ -180,9 +220,27 @@ impl HStack {
         self
     }
 
+    pub fn v_align(self, align: Align) -> Self {
+        self.align(align)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn vAlign(self, align: Align) -> Self {
+        self.v_align(align)
+    }
+
     pub fn justify(mut self, justify: Justify) -> Self {
         self.justify = Some(justify);
         self
+    }
+
+    pub fn h_align(self, justify: Justify) -> Self {
+        self.justify(justify)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn hAlign(self, justify: Justify) -> Self {
+        self.h_align(justify)
     }
 
     pub fn fill(mut self) -> Self {
@@ -259,14 +317,7 @@ impl IntoElement for HStack {
         }
 
         if let Some(justify) = self.justify {
-            self.base = match justify {
-                Justify::Start => self.base.justify_start(),
-                Justify::Center => self.base.justify_center(),
-                Justify::End => self.base.justify_end(),
-                Justify::Between => self.base.justify_between(),
-                Justify::Around => self.base.justify_around(),
-                Justify::Evenly => self.base.justify_around(),
-            };
+            self.base = apply_justify_div(self.base, justify);
         }
 
         self.base
@@ -362,7 +413,20 @@ pub struct Grid {
     base: Div,
     columns: usize,
     gap: Option<Pixels>,
-    grid_children: Vec<AnyElement>,
+    row_gap: Option<Pixels>,
+    column_gap: Option<Pixels>,
+    align: Option<GridAlignment>,
+    justify: Option<GridAlignment>,
+}
+
+pub type GridColumns = usize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GridAlignment {
+    Start,
+    Center,
+    End,
+    Stretch,
 }
 
 impl Default for Grid {
@@ -374,10 +438,13 @@ impl Default for Grid {
 impl Grid {
     pub fn new() -> Self {
         Self {
-            base: div().flex().flex_col(),
+            base: div().grid(),
             columns: 1,
             gap: None,
-            grid_children: vec![],
+            row_gap: None,
+            column_gap: None,
+            align: None,
+            justify: None,
         }
     }
 
@@ -386,15 +453,50 @@ impl Grid {
         self
     }
 
+    pub fn grid_columns(mut self, columns: GridColumns) -> Self {
+        self.columns = columns.max(1);
+        self
+    }
+
+    pub fn alignment(mut self, alignment: GridAlignment) -> Self {
+        self.align = Some(alignment);
+        self.justify = Some(alignment);
+        self
+    }
+
+    pub fn align(mut self, alignment: GridAlignment) -> Self {
+        self.align = Some(alignment);
+        self
+    }
+
+    pub fn justify(mut self, alignment: GridAlignment) -> Self {
+        self.justify = Some(alignment);
+        self
+    }
+
     pub fn gap(mut self, gap: impl Into<Pixels>) -> Self {
         self.gap = Some(gap.into());
         self
     }
-}
 
-impl ParentElement for Grid {
-    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
-        self.grid_children.extend(elements);
+    pub fn row_gap(mut self, gap: impl Into<Pixels>) -> Self {
+        self.row_gap = Some(gap.into());
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn rowGap(self, gap: impl Into<Pixels>) -> Self {
+        self.row_gap(gap)
+    }
+
+    pub fn column_gap(mut self, gap: impl Into<Pixels>) -> Self {
+        self.column_gap = Some(gap.into());
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn columnGap(self, gap: impl Into<Pixels>) -> Self {
+        self.column_gap(gap)
     }
 }
 
@@ -416,37 +518,130 @@ impl IntoElement for Grid {
     type Element = Div;
 
     fn into_element(mut self) -> Self::Element {
+        self.base = self.base.grid_cols(self.columns as u16);
+
         if let Some(gap) = self.gap {
             self.base = self.base.gap(gap);
         }
 
-        let total_children = self.grid_children.len();
-        let mut rows = vec![];
-        let mut current_row = vec![];
-
-        for (i, child) in self.grid_children.into_iter().enumerate() {
-            current_row.push(child);
-            if (i + 1) % self.columns == 0 || i == total_children - 1 {
-                rows.push(current_row);
-                current_row = vec![];
-            }
+        if let Some(gap) = self.row_gap {
+            self.base = self.base.gap_y(gap);
         }
 
-        for row_children in rows {
-            let mut row = div().flex().flex_row().w_full();
+        if let Some(gap) = self.column_gap {
+            self.base = self.base.gap_x(gap);
+        }
 
-            if let Some(gap) = self.gap {
-                row = row.gap(gap);
-            }
+        if let Some(alignment) = self.align {
+            self.base = match alignment {
+                GridAlignment::Start => self.base.items_start(),
+                GridAlignment::Center => self.base.items_center(),
+                GridAlignment::End => self.base.items_end(),
+                GridAlignment::Stretch => self.base,
+            };
+        }
 
-            for child in row_children {
-                row = row.child(div().flex_1().child(child));
-            }
-
-            self.base = self.base.child(row);
+        if let Some(alignment) = self.justify {
+            self.base = match alignment {
+                GridAlignment::Start => self.base.justify_items_start(),
+                GridAlignment::Center => self.base.justify_items_center(),
+                GridAlignment::End => self.base.justify_items_end(),
+                GridAlignment::Stretch => self.base.justify_items_stretch(),
+            };
         }
 
         self.base
+    }
+}
+
+impl ParentElement for Grid {
+    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+        self.base.extend(elements);
+    }
+}
+
+#[derive(IntoElement)]
+pub struct GridSpan {
+    columns: Option<GridSpanColumns>,
+    rows: Option<u16>,
+    children: Vec<AnyElement>,
+    style: StyleRefinement,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GridSpanColumns {
+    Count(u16),
+    Full,
+}
+
+impl GridSpan {
+    pub fn new() -> Self {
+        Self {
+            columns: None,
+            rows: None,
+            children: Vec::new(),
+            style: StyleRefinement::default(),
+        }
+    }
+
+    pub fn columns(mut self, columns: u16) -> Self {
+        self.columns = Some(GridSpanColumns::Count(columns.max(1)));
+        self
+    }
+
+    pub fn full(mut self) -> Self {
+        self.columns = Some(GridSpanColumns::Full);
+        self
+    }
+
+    pub fn rows(mut self, rows: u16) -> Self {
+        self.rows = Some(rows.max(1));
+        self
+    }
+
+    pub fn child(mut self, child: impl IntoElement) -> Self {
+        self.children.push(child.into_any_element());
+        self
+    }
+}
+
+impl Default for GridSpan {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Styled for GridSpan {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl ParentElement for GridSpan {
+    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+        self.children.extend(elements);
+    }
+}
+
+impl RenderOnce for GridSpan {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let user_style = self.style;
+
+        div()
+            .grid()
+            .min_w(px(0.0))
+            .h_full()
+            .when_some(self.columns, |this, columns| match columns {
+                GridSpanColumns::Count(columns) => this.col_span(columns),
+                GridSpanColumns::Full => this.col_span_full(),
+            })
+            .when_some(self.rows, |this, rows| this.row_span(rows))
+            .children(self.children)
+            .map(|this| {
+                let mut div = this;
+                div.style().refine(&user_style);
+                div
+            })
     }
 }
 
@@ -697,6 +892,10 @@ impl PhysicsScrollState {
         inner.generation += 1;
         let gen = inner.generation;
 
+        let offset = handle.offset();
+        inner.physics_y.set_position(-f32::from(offset.y));
+        inner.physics_x.set_position(-f32::from(offset.x));
+
         match direction {
             ScrollDirection::Vertical => inner.physics_y.apply_delta(-delta_y),
             ScrollDirection::Horizontal => inner.physics_x.apply_delta(-delta_x),
@@ -705,10 +904,6 @@ impl PhysicsScrollState {
                 inner.physics_x.apply_delta(-delta_x);
             }
         }
-
-        let offset = handle.offset();
-        inner.physics_y.set_position(-f32::from(offset.y));
-        inner.physics_x.set_position(-f32::from(offset.x));
 
         inner.animating = true;
         inner.last_tick = None;

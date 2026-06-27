@@ -31,7 +31,8 @@ use crate::{
     ParentElement, PinchGesture, PinchGestureEvent, Pixels, Point, Render, Rgba, ScaledPixels,
     ScrollDelta, ScrollWheelEvent, SharedString, Size, Style, StyleRefinement, Styled,
     SwipeDirection, SwipeGesture, SwipeGestureEvent, TapGesture, TapGestureEvent, Task, TooltipId,
-    TouchPhase, TransformationMatrix, Visibility, Window, WindowControlArea, point, px, size,
+    TouchPhase, TransformationMatrix, Visibility, Window, WindowControlArea, point, px,
+    scroll_trace_enabled, size,
 };
 use collections::HashMap;
 use refineable::Refineable;
@@ -2244,7 +2245,16 @@ pub struct DivFrameState {
 pub struct DivPrepaintState {
     hitbox: Option<Hitbox>,
     auto_scrollbars: AutoScrollbarHitboxes,
+    /// One entry per child, in child order: `true` when the child was prepainted and must also be
+    /// painted, `false` when it was culled because it fell outside the visible content mask. Empty
+    /// means "no culling applied — paint every child" (e.g. elements with no children).
+    child_visibility: SmallVec<[bool; 8]>,
 }
+
+/// Extra margin, beyond the visible content mask, within which a scroll container's children are
+/// still prepainted/painted. Keeps content ready just outside the viewport so fast flings don't
+/// reveal blank space for a frame.
+const SCROLL_CULL_OVERDRAW: Pixels = Pixels(256.0);
 
 #[derive(Default)]
 struct AutoScrollbarHitboxes {
@@ -2393,9 +2403,27 @@ impl Element for Div {
             window,
             cx,
             |style, scroll_offset, hitbox, window, cx| {
+                let child_layout_ids = &request_layout.child_layout_ids;
+                let mut child_visibility =
+                    SmallVec::<[bool; 8]>::with_capacity(self.children.len());
                 window.with_element_offset(scroll_offset, |window| {
-                    for child in &mut self.children {
-                        child.prepaint(window, cx);
+                    // Cull children that fall entirely outside the active content mask (the
+                    // intersection of every ancestor clip, e.g. an enclosing scroll viewport).
+                    // Such children are clipped to nothing on the GPU anyway, so skipping their
+                    // prepaint/paint makes scrolling cost proportional to what is visible rather
+                    // than to the full content. The mask is dilated by an overdraw margin so
+                    // content just outside the viewport stays ready during fast scrolling.
+                    let visible_region = window.content_mask().bounds.dilate(SCROLL_CULL_OVERDRAW);
+                    for (child, child_layout_id) in
+                        self.children.iter_mut().zip(child_layout_ids.iter())
+                    {
+                        let visible = window
+                            .layout_bounds(*child_layout_id)
+                            .intersects(&visible_region);
+                        child_visibility.push(visible);
+                        if visible {
+                            child.prepaint(window, cx);
+                        }
                     }
                 });
 
@@ -2413,6 +2441,7 @@ impl Element for Div {
                 DivPrepaintState {
                     hitbox,
                     auto_scrollbars,
+                    child_visibility,
                 }
             },
         )
@@ -2465,27 +2494,48 @@ impl Element for Div {
                 window,
                 cx,
                 |_style, window, cx| {
+                    let child_visibility = &prepaint.child_visibility;
                     if let Some(node) = accessibility_node.as_ref() {
                         window.register_accessibility_node(node.clone());
                         if node.role.is_container() {
                             window.with_accessibility_parent(node.id, |window| {
-                                for child in &mut self.children {
-                                    child.paint(window, cx);
-                                }
+                                paint_visible_children(
+                                    &mut self.children,
+                                    child_visibility,
+                                    window,
+                                    cx,
+                                );
                             });
                         } else {
-                            for child in &mut self.children {
-                                child.paint(window, cx);
-                            }
+                            paint_visible_children(
+                                &mut self.children,
+                                child_visibility,
+                                window,
+                                cx,
+                            );
                         }
                     } else {
-                        for child in &mut self.children {
-                            child.paint(window, cx);
-                        }
+                        paint_visible_children(&mut self.children, child_visibility, window, cx);
                     }
                 },
             )
         });
+    }
+}
+
+fn paint_visible_children(
+    children: &mut [StackSafe<AnyElement>],
+    visibility: &[bool],
+    window: &mut Window,
+    cx: &mut App,
+) {
+    for (index, child) in children.iter_mut().enumerate() {
+        // A child is painted only if it was prepainted (`true`). Painting a culled child would
+        // violate the element draw-phase contract (paint requires a prior prepaint). When no
+        // visibility was recorded, fall back to painting every child.
+        if visibility.get(index).copied().unwrap_or(true) {
+            child.paint(window, cx);
+        }
     }
 }
 
@@ -3883,7 +3933,6 @@ impl Interactivity {
             let restrict_scroll_to_axis = style.restrict_scroll_to_axis;
             let line_height = window.line_height();
             let hitbox = hitbox.clone();
-            let current_view = window.current_view();
             window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
                     let mut scroll_offset = scroll_offset.borrow_mut();
@@ -3976,12 +4025,39 @@ impl Interactivity {
                         });
                     let handled_scroll =
                         *scroll_offset != old_scroll_offset || new_overscroll != old_overscroll;
+                    if scroll_trace_enabled() {
+                        eprintln!(
+                            "[kael-scroll:apply] event={} precise={} momentum={} phase={:?} line_h={:.2} px=({:.2},{:.2}) applied=({:.2},{:.2}) can=(x:{},y:{}) offset=({:.2},{:.2})->({:.2},{:.2}) max=({:.2},{:.2}) overscroll=({:.2},{:.2})->({:.2},{:.2}) handled={}",
+                            event.delta.trace_label(),
+                            event.delta.precise(),
+                            event.is_momentum,
+                            event.touch_phase,
+                            f32::from(line_height),
+                            f32::from(delta.x),
+                            f32::from(delta.y),
+                            f32::from(delta_x),
+                            f32::from(delta_y),
+                            can_scroll_x,
+                            can_scroll_y,
+                            f32::from(old_scroll_offset.x),
+                            f32::from(old_scroll_offset.y),
+                            f32::from(scroll_offset.x),
+                            f32::from(scroll_offset.y),
+                            f32::from(max_offset.width),
+                            f32::from(max_offset.height),
+                            f32::from(old_overscroll.x),
+                            f32::from(old_overscroll.y),
+                            f32::from(new_overscroll.x),
+                            f32::from(new_overscroll.y),
+                            handled_scroll,
+                        );
+                    }
                     if handled_scroll {
                         if let Some(scroll_elastic_state) = scroll_elastic_state.as_deref_mut() {
                             scroll_elastic_state.mark_scrolled();
                         }
                         cx.stop_propagation();
-                        cx.notify(current_view);
+                        window.refresh_preserving_caches();
                     }
                 }
             });
@@ -5740,6 +5816,74 @@ mod test {
 
     crate::actions!(context_menu_test, [PrimaryMenuAction, ShareViaLinkAction]);
 
+    struct CountingProbe {
+        height: crate::Pixels,
+        prepaints: Rc<Cell<usize>>,
+        paints: Rc<Cell<usize>>,
+    }
+
+    impl crate::Element for CountingProbe {
+        type RequestLayoutState = ();
+        type PrepaintState = ();
+
+        fn id(&self) -> Option<crate::ElementId> {
+            None
+        }
+
+        fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+            None
+        }
+
+        fn request_layout(
+            &mut self,
+            _: Option<&crate::GlobalElementId>,
+            _: Option<&crate::InspectorElementId>,
+            window: &mut Window,
+            _: &mut crate::App,
+        ) -> (crate::LayoutId, ()) {
+            let height = self.height;
+            (
+                window.request_measured_layout(crate::Style::default(), move |_, _, _, _| {
+                    crate::size(px(100.), height)
+                }),
+                (),
+            )
+        }
+
+        fn prepaint(
+            &mut self,
+            _: Option<&crate::GlobalElementId>,
+            _: Option<&crate::InspectorElementId>,
+            _: crate::Bounds<crate::Pixels>,
+            _: &mut (),
+            _: &mut Window,
+            _: &mut crate::App,
+        ) {
+            self.prepaints.set(self.prepaints.get() + 1);
+        }
+
+        fn paint(
+            &mut self,
+            _: Option<&crate::GlobalElementId>,
+            _: Option<&crate::InspectorElementId>,
+            bounds: crate::Bounds<crate::Pixels>,
+            _: &mut (),
+            _: &mut (),
+            window: &mut Window,
+            _: &mut crate::App,
+        ) {
+            window.paint_quad(crate::fill(bounds, crate::black()));
+            self.paints.set(self.paints.get() + 1);
+        }
+    }
+
+    impl crate::IntoElement for CountingProbe {
+        type Element = Self;
+        fn into_element(self) -> Self {
+            self
+        }
+    }
+
     #[test]
     fn scroll_elasticity_consumes_reverse_delta_before_scrolling_content() {
         let mut offset = px(0.0);
@@ -5824,6 +5968,201 @@ mod test {
     }
 
     #[kael::test]
+    fn wheel_scroll_reuses_cached_sibling_subtree(cx: &mut TestAppContext) {
+        let scroll_handle = ScrollHandle::new();
+        let prepaints = Rc::new(Cell::new(0));
+        let paints = Rc::new(Cell::new(0));
+
+        struct TestView {
+            scroll: ScrollHandle,
+            prepaints: Rc<Cell<usize>>,
+            paints: Rc<Cell<usize>>,
+        }
+
+        impl Render for TestView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div()
+                    .flex()
+                    .flex_col()
+                    .w(px(100.))
+                    .h(px(400.))
+                    .child(
+                        div()
+                            .w(px(100.))
+                            .h(px(100.))
+                            .id("keystone-scroll")
+                            .overflow_y_scroll()
+                            .track_scroll(&self.scroll)
+                            .child(div().w(px(100.)).h(px(300.))),
+                    )
+                    .child(
+                        crate::cached(CountingProbe {
+                            height: px(50.),
+                            prepaints: self.prepaints.clone(),
+                            paints: self.paints.clone(),
+                        })
+                        .id("keystone-probe"),
+                    )
+            }
+        }
+
+        let (_view, mut cx) = cx.add_window_view(|_, _| TestView {
+            scroll: scroll_handle.clone(),
+            prepaints: prepaints.clone(),
+            paints: paints.clone(),
+        });
+
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+        let baseline_prepaints = prepaints.get();
+        let baseline_paints = paints.get();
+        assert!(baseline_prepaints >= 1);
+        assert!(baseline_paints >= 1);
+
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(50.), px(50.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-40.))),
+            ..Default::default()
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        assert_eq!(scroll_handle.offset().y, px(-40.));
+        assert_eq!(
+            prepaints.get(),
+            baseline_prepaints,
+            "cached sibling subtree must not re-prepaint when a neighboring div scrolls"
+        );
+        assert_eq!(
+            paints.get(),
+            baseline_paints,
+            "cached sibling subtree must not re-paint when a neighboring div scrolls"
+        );
+    }
+
+    #[kael::test]
+    fn overflow_scroll_culls_offscreen_children(cx: &mut TestAppContext) {
+        let scroll_handle = ScrollHandle::new();
+        let probes: Vec<(Rc<Cell<usize>>, Rc<Cell<usize>>)> = (0..10)
+            .map(|_| (Rc::new(Cell::new(0)), Rc::new(Cell::new(0))))
+            .collect();
+
+        struct TestView {
+            scroll: ScrollHandle,
+            probes: Vec<(Rc<Cell<usize>>, Rc<Cell<usize>>)>,
+        }
+
+        impl Render for TestView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                let mut content = div().flex().flex_col().w(px(100.));
+                for (prepaints, paints) in &self.probes {
+                    content = content.child(CountingProbe {
+                        height: px(100.),
+                        prepaints: prepaints.clone(),
+                        paints: paints.clone(),
+                    });
+                }
+                div()
+                    .w(px(100.))
+                    .h(px(100.))
+                    .id("cull-scroll")
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
+                    .child(content)
+            }
+        }
+
+        let (_view, mut cx) = cx.add_window_view(|_, _| TestView {
+            scroll: scroll_handle.clone(),
+            probes: probes.clone(),
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        assert!(
+            probes[0].0.get() >= 1,
+            "the first, visible child should prepaint"
+        );
+        assert_eq!(
+            probes[9].0.get(),
+            0,
+            "an off-screen child must not prepaint"
+        );
+        assert_eq!(probes[9].1.get(), 0, "an off-screen child must not paint");
+
+        assert!(
+            scroll_handle.max_offset().height >= px(800.),
+            "scroll extent must reflect the full content height, not just visible children"
+        );
+
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(50.), px(50.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-900.))),
+            ..Default::default()
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+        assert!(
+            probes[9].0.get() >= 1,
+            "a child scrolled into view must prepaint"
+        );
+    }
+
+    #[kael::test]
+    fn scrolling_keeps_text_measured_for_visible_siblings(cx: &mut TestAppContext) {
+        let scroll_handle = ScrollHandle::new();
+
+        struct TestView(ScrollHandle);
+
+        impl Render for TestView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div()
+                    .flex()
+                    .flex_col()
+                    .w(px(200.))
+                    .h(px(260.))
+                    .child(div().child("Header title that must stay measured"))
+                    .child(
+                        div()
+                            .w(px(200.))
+                            .h(px(120.))
+                            .id("measure-scroll")
+                            .overflow_y_scroll()
+                            .track_scroll(&self.0)
+                            .child(
+                                div()
+                                    .w(px(200.))
+                                    .h(px(600.))
+                                    .child("scrollable content body"),
+                            ),
+                    )
+            }
+        }
+
+        let (_view, mut cx) = cx.add_window_view(|_, _| TestView(scroll_handle.clone()));
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        for _ in 0..3 {
+            cx.simulate_event(ScrollWheelEvent {
+                position: point(px(100.), px(90.)),
+                delta: ScrollDelta::Pixels(point(px(0.), px(-40.))),
+                ..Default::default()
+            });
+            cx.update(|window, cx| {
+                window.draw(cx).clear();
+            });
+        }
+
+        assert!(scroll_handle.offset().y < px(0.));
+    }
+
+    #[kael::test]
     fn scroll_restarts_frame_polling_after_idle(cx: &mut TestAppContext) {
         let scroll_handle = ScrollHandle::new();
 
@@ -5853,6 +6192,47 @@ mod test {
 
         assert_eq!(scroll_handle.offset().y, px(-40.));
         assert!(test_window.0.lock().frame_polling_active);
+    }
+
+    #[kael::test]
+    fn wheel_scroll_redraws_without_notifying_view(cx: &mut TestAppContext) {
+        let scroll_handle = ScrollHandle::new();
+
+        struct TestView(ScrollHandle);
+
+        impl Render for TestView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div()
+                    .w(px(100.))
+                    .h(px(100.))
+                    .id("scroll-notify-test")
+                    .overflow_y_scroll()
+                    .track_scroll(&self.0)
+                    .child(div().w(px(100.)).h(px(300.)))
+            }
+        }
+
+        let (view, cx) = cx.add_window_view(|_, _| TestView(scroll_handle.clone()));
+        let notification_count = Rc::new(Cell::new(0));
+
+        cx.cx.update({
+            let notification_count = notification_count.clone();
+            |app| {
+                app.observe(&view, move |_, _| {
+                    notification_count.set(notification_count.get() + 1);
+                })
+                .detach();
+            }
+        });
+
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(50.), px(50.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-40.))),
+            ..Default::default()
+        });
+
+        assert_eq!(scroll_handle.offset().y, px(-40.));
+        assert_eq!(notification_count.get(), 0);
     }
 
     #[kael::test]

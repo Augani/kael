@@ -79,10 +79,11 @@ impl RenderOnce for AnimatedProgress {
         };
 
         let bar_color = self.color.unwrap_or(match self.variant {
-            ProgressVariant::Default => theme.tokens.primary,
+            ProgressVariant::Default | ProgressVariant::Accent => theme.tokens.primary,
             ProgressVariant::Success => theme.tokens.success,
             ProgressVariant::Warning => theme.tokens.warning,
-            ProgressVariant::Destructive => theme.tokens.destructive,
+            ProgressVariant::Neutral => theme.tokens.muted_foreground,
+            ProgressVariant::Error | ProgressVariant::Destructive => theme.tokens.destructive,
             ProgressVariant::Custom(color) => color,
         });
 

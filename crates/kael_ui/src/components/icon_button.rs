@@ -120,29 +120,46 @@ impl RenderOnce for IconButton {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = use_theme();
 
-        let icon_size = self.icon_size.unwrap_or(self.size * 0.5);
+        let icon_size = self.icon_size.unwrap_or_else(|| {
+            if self.size > px(32.0) {
+                px(20.0)
+            } else {
+                px(16.0)
+            }
+        });
+        let dark = theme.tokens.background.l < 0.5;
+        let ink = |c: Hsla, amt: f32| {
+            if dark {
+                hsla(c.h, c.s, (c.l + amt).min(1.0), c.a)
+            } else {
+                hsla(c.h, c.s, (c.l - amt).max(0.0), c.a)
+            }
+        };
 
-        let (bg, fg, border, hover_bg, _hover_fg) = match self.variant {
+        let (bg, fg, border, hover_bg, hover_fg, has_border) = match self.variant {
             ButtonVariant::Default => (
                 theme.tokens.primary,
                 theme.tokens.primary_foreground,
-                theme.tokens.primary,
-                theme.tokens.primary.opacity(0.9),
+                kael::transparent_black(),
+                ink(theme.tokens.primary, 0.05),
                 theme.tokens.primary_foreground,
+                false,
             ),
             ButtonVariant::Secondary => (
                 theme.tokens.secondary,
-                theme.tokens.secondary_foreground,
-                theme.tokens.secondary,
-                theme.tokens.secondary.opacity(0.8),
-                theme.tokens.secondary_foreground,
+                theme.tokens.foreground,
+                kael::transparent_black(),
+                ink(theme.tokens.secondary, 0.04),
+                theme.tokens.foreground,
+                false,
             ),
             ButtonVariant::Destructive => (
                 theme.tokens.destructive,
                 theme.tokens.destructive_foreground,
-                theme.tokens.destructive,
-                theme.tokens.destructive.opacity(0.9),
+                kael::transparent_black(),
+                ink(theme.tokens.destructive, 0.05),
                 theme.tokens.destructive_foreground,
+                false,
             ),
             ButtonVariant::Outline => (
                 kael::transparent_black(),
@@ -150,6 +167,7 @@ impl RenderOnce for IconButton {
                 theme.tokens.border,
                 theme.tokens.accent,
                 theme.tokens.accent_foreground,
+                true,
             ),
             ButtonVariant::Ghost => (
                 kael::transparent_black(),
@@ -157,6 +175,7 @@ impl RenderOnce for IconButton {
                 kael::transparent_black(),
                 theme.tokens.accent,
                 theme.tokens.accent_foreground,
+                false,
             ),
             ButtonVariant::Link => (
                 kael::transparent_black(),
@@ -164,6 +183,7 @@ impl RenderOnce for IconButton {
                 kael::transparent_black(),
                 kael::transparent_black(),
                 theme.tokens.primary.opacity(0.8),
+                false,
             ),
             ButtonVariant::Custom(colors) => (
                 colors.background,
@@ -171,7 +191,13 @@ impl RenderOnce for IconButton {
                 colors.border,
                 colors.hover_background,
                 colors.hover_foreground,
+                colors.has_border,
             ),
+        };
+        let active_bg = if bg.a > 0.0 {
+            ink(bg, 0.1)
+        } else {
+            ink(theme.tokens.accent, 0.06)
         };
 
         let clickable = self.clickable();
@@ -186,6 +212,8 @@ impl RenderOnce for IconButton {
             .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
             .read(cx)
             .clone();
+        let is_focused = focus_handle.is_focused(window);
+        let focus_ring = crate::astryx::focus_ring_outer(theme.tokens.ring);
 
         self.base
             .when(!self.disabled, |this| {
@@ -201,9 +229,11 @@ impl RenderOnce for IconButton {
             .transition(theme.tokens.transition_fast)
             .when(!self.no_background, |this| {
                 this.bg(bg)
-                    .when(self.variant == ButtonVariant::Outline, |this| {
-                        this.border_1().border_color(border)
-                    })
+                    .text_color(fg)
+                    .when(has_border, |this| this.border_1().border_color(border))
+            })
+            .when(is_focused && !self.disabled, |this| {
+                this.shadow(smallvec::smallvec![focus_ring])
             })
             .when(self.disabled, |this| {
                 this.opacity(0.5).cursor(CursorStyle::Arrow)
@@ -211,12 +241,12 @@ impl RenderOnce for IconButton {
             .when(!self.disabled, |this| {
                 this.cursor(CursorStyle::PointingHand)
                     .when(!self.no_background, |this| {
-                        this.hover(|style| style.bg(hover_bg))
+                        this.hover(move |style| style.bg(hover_bg).text_color(hover_fg))
                     })
                     .when(self.no_background, |this| {
                         this.hover(|style| style.opacity(0.7))
                     })
-                    .active(|style| style.opacity(0.9))
+                    .active(move |style| style.bg(active_bg).scale(0.98))
             })
             .map(|this| {
                 let mut div = this;
@@ -244,16 +274,24 @@ impl RenderOnce for IconButton {
             })
             .when_some(svg_path, |this, path| {
                 this.child(
-                    svg()
-                        .path(path)
+                    div()
                         .size(icon_size)
-                        .text_color(if self.disabled {
-                            theme.tokens.muted_foreground
-                        } else if self.no_background {
-                            theme.tokens.primary
-                        } else {
-                            fg
-                        }),
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .line_height(px(0.0))
+                        .child(
+                            svg()
+                                .path(path)
+                                .size(icon_size)
+                                .text_color(if self.disabled {
+                                    theme.tokens.muted_foreground
+                                } else if self.no_background {
+                                    theme.tokens.primary
+                                } else {
+                                    fg
+                                }),
+                        ),
                 )
             })
     }

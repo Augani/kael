@@ -3,11 +3,29 @@ use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use kael::*;
 
+#[cfg(feature = "markdown")]
+use crate::display::rich_text::render_blocks;
 use crate::display::rich_text::LinkClickHandler;
 #[cfg(feature = "markdown")]
-use crate::display::rich_text::{render_blocks, ListItem, RichBlock, RichInline, TableAlignment};
+use crate::display::rich_text::TableAlignment;
+use crate::display::rich_text::{ListItem, RichBlock, RichInline};
 #[cfg(feature = "markdown")]
 use crate::theme::Theme;
+
+pub type MarkdownSource = SharedString;
+pub type BlockNode = RichBlock;
+pub type InlineNode = RichInline;
+pub type ListItemNode = ListItem;
+pub type TableCellNode = Vec<RichInline>;
+pub type MarkdownComponents = ();
+pub type MarkdownInlinePlugin = ();
+pub type IncrementalParseState = IncrementalState;
+
+#[derive(Debug, Clone, Default)]
+pub struct IncrementalState {
+    pub previous_source: SharedString,
+    pub blocks: Vec<BlockNode>,
+}
 
 #[derive(IntoElement)]
 pub struct Markdown {
@@ -81,11 +99,11 @@ fn inlines_to_plain_text(inlines: &[RichInline]) -> String {
 
 #[cfg(feature = "markdown")]
 impl RenderOnce for Markdown {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = Theme::of(cx);
         let base_size = self.base_font_size.unwrap_or(px(14.0));
 
-        let blocks = parse_markdown_with_urls(&self.source);
+        let blocks = parse_markdown(&self.source);
         let elements = render_blocks(&blocks, base_size, &self.on_link_click, "md");
 
         self.base
@@ -110,6 +128,63 @@ impl Styled for Markdown {
     fn style(&mut self) -> &mut StyleRefinement {
         self.base.style()
     }
+}
+
+#[cfg(feature = "markdown")]
+pub fn parse_markdown(source: &str) -> Vec<BlockNode> {
+    parse_markdown_with_urls(source)
+}
+
+#[cfg(not(feature = "markdown"))]
+pub fn parse_markdown(source: &str) -> Vec<BlockNode> {
+    vec![RichBlock::Paragraph(vec![RichInline::Text(
+        source.to_string(),
+    )])]
+}
+
+#[allow(non_snake_case)]
+pub fn parseMarkdown(source: &str) -> Vec<BlockNode> {
+    parse_markdown(source)
+}
+
+pub fn parse_inline(source: &str) -> Vec<InlineNode> {
+    parse_markdown(source)
+        .into_iter()
+        .flat_map(|block| match block {
+            RichBlock::Paragraph(inlines) => inlines,
+            RichBlock::Heading { content, .. } => content,
+            RichBlock::CodeBlock { code, .. } => vec![RichInline::Code(code)],
+            RichBlock::Image { alt, url } => vec![RichInline::Image { alt, url }],
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+#[allow(non_snake_case)]
+pub fn parseInline(source: &str) -> Vec<InlineNode> {
+    parse_inline(source)
+}
+
+pub fn create_incremental_state() -> IncrementalState {
+    IncrementalState::default()
+}
+
+#[allow(non_snake_case)]
+pub fn createIncrementalState() -> IncrementalState {
+    create_incremental_state()
+}
+
+pub fn parse_markdown_incremental(state: &mut IncrementalState, source: &str) -> Vec<BlockNode> {
+    if state.previous_source.as_ref() != source {
+        state.previous_source = SharedString::from(source.to_string());
+        state.blocks = parse_markdown(source);
+    }
+    state.blocks.clone()
+}
+
+#[allow(non_snake_case)]
+pub fn parseMarkdownIncremental(state: &mut IncrementalState, source: &str) -> Vec<BlockNode> {
+    parse_markdown_incremental(state, source)
 }
 
 #[cfg(feature = "markdown")]

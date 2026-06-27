@@ -1,10 +1,10 @@
 //! Search input component - Specialized search with filters and advanced capabilities.
 
 use crate::{
+    astryx,
     components::{
         icon::Icon,
         icon_source::IconSource,
-        input::Input,
         input_state::{InputEvent, InputState},
     },
     theme::Theme,
@@ -226,11 +226,18 @@ impl Styled for SearchInput {
 }
 
 impl Render for SearchInput {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
         let state = self.state.read(cx);
-        let has_query = !state.input.read(cx).content().is_empty();
+        let input = state.input.clone();
+        let input_state = input.read(cx);
+        let has_query = !input_state.content().is_empty();
+        let input_disabled = input_state.disabled;
         let user_style = self.style.clone();
+        let input_focus_handle = input_state.focus_handle(cx);
+        let is_focused = input_focus_handle.is_focused(window);
+        let focus_handle = input_focus_handle.clone();
+        let hover_ring = astryx::input_hover_ring(theme.tokens.input);
 
         div()
             .flex()
@@ -239,15 +246,60 @@ impl Render for SearchInput {
             // Main search input row
             .child(
                 div()
+                    .id("search-input")
+                    .key_context("SearchInput")
+                    .track_focus(&focus_handle.tab_index(0).tab_stop(true))
+                    .when(!input_disabled, {
+                        let input = input.clone();
+                        move |this| {
+                            this.on_action(window.listener_for(&input, InputState::backspace))
+                                .on_action(window.listener_for(&input, InputState::delete))
+                                .on_action(window.listener_for(&input, InputState::left))
+                                .on_action(window.listener_for(&input, InputState::right))
+                                .on_action(window.listener_for(&input, InputState::select_left))
+                                .on_action(window.listener_for(&input, InputState::select_right))
+                                .on_action(window.listener_for(&input, InputState::select_all))
+                                .on_action(window.listener_for(&input, InputState::home))
+                                .on_action(window.listener_for(&input, InputState::end))
+                                .on_action(window.listener_for(&input, InputState::copy))
+                                .on_action(window.listener_for(&input, InputState::cut))
+                                .on_action(window.listener_for(&input, InputState::paste))
+                                .on_action(window.listener_for(&input, InputState::enter))
+                                .on_action(window.listener_for(&input, InputState::tab))
+                                .on_action(window.listener_for(&input, InputState::shift_tab))
+                                .on_action(window.listener_for(&input, InputState::escape))
+                        }
+                    })
                     .flex()
                     .items_center()
                     .gap(px(8.0))
-                    .px(px(12.0))
-                    .py(px(8.0))
+                    .px(px(8.0))
+                    .h(px(32.0))
                     .bg(theme.tokens.card)
                     .border_1()
-                    .border_color(theme.tokens.border)
+                    .border_color(if is_focused {
+                        theme.tokens.primary
+                    } else {
+                        theme.tokens.input
+                    })
                     .rounded(theme.tokens.radius_md)
+                    .font_family(theme.tokens.font_family.clone())
+                    .transition(theme.tokens.transition_fast)
+                    .shadow(smallvec::smallvec![astryx::focus_ring(
+                        kael::transparent_black()
+                    )])
+                    .when(is_focused, |this| {
+                        this.shadow(smallvec::smallvec![astryx::focus_ring(
+                            theme.tokens.primary
+                        )])
+                    })
+                    .when(!is_focused, |this| {
+                        this.hover(|style| {
+                            style
+                                .border_color(theme.tokens.input)
+                                .shadow(smallvec::smallvec![hover_ring])
+                        })
+                    })
                     .child(
                         Icon::new(if state.loading {
                             IconSource::Named("loader".into())
@@ -257,23 +309,36 @@ impl Render for SearchInput {
                         .size(px(16.0))
                         .color(theme.tokens.muted_foreground),
                     )
-                    .child(div().flex_1().child(Input::new(&state.input)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .h_full()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .child(input.clone()),
+                    )
                     .when_some(state.results_count, |parent_div, count| {
                         parent_div.child(
                             div()
+                                .h(px(20.0))
+                                .flex()
+                                .items_center()
                                 .px(px(8.0))
-                                .py(px(2.0))
                                 .rounded(theme.tokens.radius_sm)
                                 .bg(theme.tokens.muted)
                                 .text_size(px(12.0))
+                                .line_height(px(16.0))
                                 .text_color(theme.tokens.muted_foreground)
                                 .child(format!("{} results", count)),
                         )
                     })
                     .child(
                         div()
-                            .px(px(8.0))
-                            .py(px(4.0))
+                            .h(px(20.0))
+                            .px(px(6.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
                             .rounded(theme.tokens.radius_sm)
                             .cursor(CursorStyle::PointingHand)
                             .when(state.case_sensitive, |div| div.bg(theme.tokens.accent))
@@ -291,6 +356,7 @@ impl Render for SearchInput {
                             .child(
                                 div()
                                     .text_size(px(12.0))
+                                    .line_height(px(16.0))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(if state.case_sensitive {
                                         theme.tokens.accent_foreground
@@ -302,8 +368,11 @@ impl Render for SearchInput {
                     )
                     .child(
                         div()
-                            .px(px(8.0))
-                            .py(px(4.0))
+                            .h(px(20.0))
+                            .px(px(6.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
                             .rounded(theme.tokens.radius_sm)
                             .cursor(CursorStyle::PointingHand)
                             .when(state.use_regex, |div| div.bg(theme.tokens.accent))
@@ -321,6 +390,7 @@ impl Render for SearchInput {
                             .child(
                                 div()
                                     .text_size(px(12.0))
+                                    .line_height(px(16.0))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(if state.use_regex {
                                         theme.tokens.accent_foreground
@@ -333,7 +403,10 @@ impl Render for SearchInput {
                     .when(has_query, |parent_div| {
                         parent_div.child(
                             div()
-                                .p(px(4.0))
+                                .size(px(20.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
                                 .rounded(theme.tokens.radius_sm)
                                 .cursor(CursorStyle::PointingHand)
                                 .hover(|style| style.bg(theme.tokens.muted))

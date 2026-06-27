@@ -2,7 +2,6 @@
 
 use crate::{
     components::icon::{Icon, IconSize as IconSizeEnum},
-    styled_ext::StyledExt,
     theme::use_theme,
 };
 use kael::{prelude::FluentBuilder as _, *};
@@ -109,12 +108,12 @@ impl RenderOnce for Checkbox {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = use_theme();
 
-        let size = match self.size {
-            CheckboxSize::Sm => px(18.0),
-            CheckboxSize::Md => px(22.0),
+        let (wrapper_size, checkbox_size) = match self.size {
+            CheckboxSize::Sm => (px(20.0), px(18.0)),
+            CheckboxSize::Md => (px(24.0), px(22.0)),
         };
 
-        let border_radius = px(6.0);
+        let border_radius = theme.tokens.radius_sm;
         let checked = self.checked;
         let indeterminate = self.indeterminate;
 
@@ -143,7 +142,8 @@ impl RenderOnce for Checkbox {
             .read(cx)
             .clone();
         let is_focused = focus_handle.is_focused(window);
-        let ring_color = theme.tokens.ring;
+        let focus_ring = crate::astryx::focus_ring(theme.tokens.primary);
+        let hover_ring = crate::astryx::input_hover_ring(theme.tokens.input);
 
         let user_style = self.style;
 
@@ -156,39 +156,53 @@ impl RenderOnce for Checkbox {
             .gap(px(8.0))
             .child(
                 div()
-                    .id(ElementId::Name(format!("{}-box", self.id).into()))
-                    .size(size)
+                    .id(ElementId::Name(format!("{}-wrapper", self.id).into()))
+                    .size(wrapper_size)
                     .flex()
                     .items_center()
                     .justify_center()
-                    .bg(bg)
-                    .border_1()
-                    .border_color(border)
+                    .flex_shrink_0()
                     .rounded(border_radius)
-                    .transition(theme.tokens.transition_fast)
                     .cursor(if self.disabled {
                         CursorStyle::Arrow
                     } else {
                         CursorStyle::PointingHand
                     })
-                    .when(self.disabled, |this| this.opacity(0.6))
-                    .when(!self.disabled && !checked && !indeterminate, |this| {
-                        this.hover(|style| style.border_color(theme.tokens.primary.opacity(0.5)))
-                    })
                     .when(is_focused && !self.disabled, |this| {
-                        this.inset_ring(ring_color.opacity(0.5), px(2.0))
+                        this.shadow(smallvec::smallvec![focus_ring])
                     })
-                    .child(checkbox_icon(
-                        self.id.clone(),
-                        checked,
-                        indeterminate,
-                        fg,
-                        self.size,
-                        self.checked_icon.clone(),
-                        self.indeterminate_icon.clone(),
-                        window,
-                        cx,
-                    )),
+                    .child(
+                        div()
+                            .id(ElementId::Name(format!("{}-box", self.id).into()))
+                            .size(checkbox_size)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(bg)
+                            .border_1()
+                            .border_color(border)
+                            .rounded(border_radius)
+                            .transition(theme.tokens.transition_fast)
+                            .when(self.disabled, |this| this.opacity(0.6))
+                            .when(!self.disabled && !checked && !indeterminate, |this| {
+                                this.hover(move |style| {
+                                    style
+                                        .border_color(theme.tokens.input)
+                                        .shadow(smallvec::smallvec![hover_ring])
+                                })
+                            })
+                            .child(checkbox_icon(
+                                self.id.clone(),
+                                checked,
+                                indeterminate,
+                                fg,
+                                self.size,
+                                self.checked_icon.clone(),
+                                self.indeterminate_icon.clone(),
+                                window,
+                                cx,
+                            )),
+                    ),
             )
             .when_some(self.label, |this, label| {
                 this.child(
@@ -259,7 +273,11 @@ fn checkbox_icon(
 
     let icon_size = match size {
         CheckboxSize::Sm => px(12.0),
-        CheckboxSize::Md => px(15.0),
+        CheckboxSize::Md => px(14.0),
+    };
+    let indeterminate_width = match size {
+        CheckboxSize::Sm => px(10.0),
+        CheckboxSize::Md => px(12.0),
     };
 
     let (prev_checked, prev_indeterminate) = *toggle_state.read(cx);
@@ -294,25 +312,34 @@ fn checkbox_icon(
         }
     };
 
-    let icon_name = if checked && !indeterminate {
-        Some(checked_icon)
-    } else if indeterminate {
-        Some(indeterminate_icon)
-    } else {
-        None
-    };
-
     div()
         .size_full()
         .flex()
         .items_center()
         .justify_center()
         .opacity(opacity)
-        .when_some(icon_name, |this, icon| {
+        .when(checked && !indeterminate, |this| {
             this.child(
-                Icon::new(icon.as_ref())
+                Icon::new(checked_icon.as_ref())
                     .size(IconSizeEnum::Custom(icon_size))
                     .color(color),
             )
+        })
+        .when(indeterminate, |this| {
+            if indeterminate_icon.as_ref() == "minus" {
+                this.child(
+                    div()
+                        .w(indeterminate_width)
+                        .h(px(2.0))
+                        .rounded(px(1.0))
+                        .bg(color),
+                )
+            } else {
+                this.child(
+                    Icon::new(indeterminate_icon.as_ref())
+                        .size(IconSizeEnum::Custom(icon_size))
+                        .color(color),
+                )
+            }
         })
 }

@@ -5,7 +5,11 @@ use std::rc::Rc;
 
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::calendar::{Calendar, CalendarLocale, DateRange, DateValue};
+use crate::components::field::{Field, FieldStatusType};
+use crate::components::field_status::FieldStatusVariant;
 use crate::components::icon::Icon;
+use crate::components::input::InputSize;
+use crate::components::spinner::{Spinner, SpinnerSize};
 use crate::overlays::popover::{Popover, PopoverContent};
 use crate::theme::{use_theme, Theme};
 
@@ -46,6 +50,48 @@ impl DateFormat {
             }
         }
     }
+
+    /// Format a range for trigger display, following ASTRYX's compact range
+    /// style for range inputs.
+    pub fn format_range(&self, range: &DateRange, locale: &CalendarLocale) -> String {
+        let range = DateRange::new(range.start, range.end);
+        match self {
+            DateFormat::LongDate => {
+                let start_month = if range.start.month >= 1 && range.start.month <= 12 {
+                    locale.months[(range.start.month - 1) as usize].clone()
+                } else {
+                    "Unknown".into()
+                };
+                let end_month = if range.end.month >= 1 && range.end.month <= 12 {
+                    locale.months[(range.end.month - 1) as usize].clone()
+                } else {
+                    "Unknown".into()
+                };
+
+                if range.start.year == range.end.year && range.start.month == range.end.month {
+                    format!(
+                        "{} {}-{}, {}",
+                        start_month, range.start.day, range.end.day, range.start.year
+                    )
+                } else {
+                    format!(
+                        "{} {}, {} - {} {}, {}",
+                        start_month,
+                        range.start.day,
+                        range.start.year,
+                        end_month,
+                        range.end.day,
+                        range.end.year
+                    )
+                }
+            }
+            _ => format!(
+                "{} - {}",
+                self.format(&range.start, locale),
+                self.format(&range.end, locale)
+            ),
+        }
+    }
 }
 
 /// Date selection mode
@@ -70,7 +116,7 @@ pub struct DatePickerState {
 
 impl DatePickerState {
     pub fn new(cx: &mut App) -> Self {
-        let today = DateValue::new(2025, 1, 23);
+        let today = DateValue::today();
         Self {
             selected_date: None,
             selected_range: None,
@@ -95,7 +141,7 @@ impl DatePickerState {
     }
 
     pub fn new_with_mode(mode: DateSelectionMode, cx: &mut App) -> Self {
-        let today = DateValue::new(2025, 1, 23);
+        let today = DateValue::today();
         Self {
             selected_date: None,
             selected_range: None,
@@ -172,7 +218,7 @@ impl DatePickerState {
     }
 
     pub fn jump_to_today(&mut self, _cx: &mut App) {
-        let today = DateValue::new(2025, 1, 23);
+        let today = DateValue::today();
         self.viewing_month = today;
     }
 }
@@ -204,13 +250,21 @@ pub fn init(cx: &mut App) {
 #[derive(IntoElement)]
 pub struct DatePicker {
     state: Entity<DatePickerState>,
+    label: Option<SharedString>,
+    label_hidden: bool,
+    description: Option<SharedString>,
     placeholder: SharedString,
     format: DateFormat,
     min_date: Option<DateValue>,
     max_date: Option<DateValue>,
     disabled_dates: Vec<DateValue>,
     disabled: bool,
+    optional: bool,
+    required: bool,
+    loading: bool,
+    size: InputSize,
     clearable: bool,
+    status: Option<(FieldStatusType, SharedString)>,
     show_today_button: bool,
     on_select: Option<Rc<dyn Fn(&DateValue, &mut Window, &mut App)>>,
     on_clear: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
@@ -222,19 +276,47 @@ impl DatePicker {
     pub fn new(state: Entity<DatePickerState>) -> Self {
         Self {
             state,
+            label: None,
+            label_hidden: false,
+            description: None,
             placeholder: "Select date...".into(),
             format: DateFormat::default(),
             min_date: None,
             max_date: None,
             disabled_dates: Vec::new(),
             disabled: false,
+            optional: false,
+            required: false,
+            loading: false,
+            size: InputSize::default(),
             clearable: true,
+            status: None,
             show_today_button: true,
             on_select: None,
             on_clear: None,
             locale: CalendarLocale::default(),
             style: StyleRefinement::default(),
         }
+    }
+
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    pub fn is_label_hidden(mut self, hidden: bool) -> Self {
+        self.label_hidden = hidden;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isLabelHidden(self, hidden: bool) -> Self {
+        self.is_label_hidden(hidden)
+    }
+
+    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
+        self.description = Some(description.into());
+        self
     }
 
     /// Set placeholder text
@@ -255,10 +337,18 @@ impl DatePicker {
         self
     }
 
+    pub fn min(self, date: DateValue) -> Self {
+        self.min_date(date)
+    }
+
     /// Set maximum selectable date
     pub fn max_date(mut self, date: DateValue) -> Self {
         self.max_date = Some(date);
         self
+    }
+
+    pub fn max(self, date: DateValue) -> Self {
+        self.max_date(date)
     }
 
     /// Add a disabled date
@@ -284,9 +374,59 @@ impl DatePicker {
         self
     }
 
+    #[allow(non_snake_case)]
+    pub fn isDisabled(self, disabled: bool) -> Self {
+        self.disabled(disabled)
+    }
+
+    pub fn optional(mut self, optional: bool) -> Self {
+        self.optional = optional;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isOptional(self, optional: bool) -> Self {
+        self.optional(optional)
+    }
+
+    pub fn required(mut self, required: bool) -> Self {
+        self.required = required;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isRequired(self, required: bool) -> Self {
+        self.required(required)
+    }
+
+    pub fn is_loading(mut self, loading: bool) -> Self {
+        self.loading = loading;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isLoading(self, loading: bool) -> Self {
+        self.is_loading(loading)
+    }
+
+    pub fn size(mut self, size: InputSize) -> Self {
+        self.size = size;
+        self
+    }
+
     /// Enable/disable clear button
     pub fn clearable(mut self, clearable: bool) -> Self {
         self.clearable = clearable;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn hasClear(self, clearable: bool) -> Self {
+        self.clearable(clearable)
+    }
+
+    pub fn status(mut self, status: FieldStatusType, message: impl Into<SharedString>) -> Self {
+        self.status = Some((status, message.into()));
         self
     }
 
@@ -328,30 +468,47 @@ impl Styled for DatePicker {
 }
 
 impl RenderOnce for DatePicker {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = Theme::of(cx);
         let state_entity = self.state.clone();
         let state = self.state.read(cx);
+        let focus_handle = state.focus_handle(cx);
+        let is_focused = focus_handle.is_focused(window);
 
         let selected_date = state.selected_date;
+        let selected_range = state.selected_range;
         let _viewing_month = state.viewing_month;
         let locale = self.locale.clone();
         let format = self.format;
-        let disabled = self.disabled;
+        let disabled = self.disabled || self.loading;
         let clearable = self.clearable;
         let show_today_button = self.show_today_button;
+        let status = self.status.clone();
 
-        let display_text = if let Some(date) = selected_date {
+        let display_text = if state.selection_mode == DateSelectionMode::Range {
+            if let Some(range) = selected_range {
+                format.format_range(&range, &locale)
+            } else {
+                self.placeholder.to_string()
+            }
+        } else if let Some(date) = selected_date {
             format.format(&date, &locale)
         } else {
             self.placeholder.to_string()
         };
 
-        let has_value = selected_date.is_some();
+        let has_value = selected_date.is_some() || selected_range.is_some();
         let text_color = if has_value {
             theme.tokens.foreground
         } else {
             theme.tokens.muted_foreground
+        };
+        let hover_ring = crate::astryx::input_hover_ring(theme.tokens.input);
+        let focus_ring = crate::astryx::focus_ring(theme.tokens.primary);
+        let (height, padding_x, text_size, icon_size) = match self.size {
+            InputSize::Sm => (px(28.0), px(12.0), px(14.0), px(16.0)),
+            InputSize::Md => (px(32.0), px(12.0), px(14.0), px(16.0)),
+            InputSize::Lg => (px(36.0), px(12.0), px(14.0), px(16.0)),
         };
 
         let state_for_clear = state_entity.clone();
@@ -369,38 +526,73 @@ impl RenderOnce for DatePicker {
             format!("date-picker-popover-{}", state_entity.entity_id().as_u64()).into(),
         );
 
-        Popover::new(popover_id.clone())
+        let control = Popover::new(popover_id.clone())
             .trigger(
                 div()
+                    .track_focus(&focus_handle.clone().tab_index(0).tab_stop(true))
                     .flex()
                     .items_center()
-                    .justify_between()
                     .w_full()
-                    .h(px(32.0))
-                    .px(px(12.0))
+                    .h(height)
+                    .min_w(px(180.0))
+                    .px(padding_x)
                     .gap(px(8.0))
                     .bg(theme.tokens.card)
                     .border_1()
-                    .border_color(theme.tokens.input)
+                    .border_color(if let Some((status, _)) = status {
+                        match status {
+                            FieldStatusType::Warning => theme.tokens.warning,
+                            FieldStatusType::Error => theme.tokens.destructive,
+                            FieldStatusType::Success => theme.tokens.success,
+                        }
+                    } else if is_focused {
+                        theme.tokens.primary
+                    } else {
+                        theme.tokens.input
+                    })
                     .rounded(theme.tokens.radius_md)
                     .transition(theme.tokens.transition_fast)
+                    .shadow(smallvec::smallvec![crate::astryx::focus_ring(
+                        kael::transparent_black()
+                    )])
                     .when(!disabled, |div| {
-                        div.cursor(CursorStyle::PointingHand)
-                            .hover(|style| style.border_color(theme.tokens.ring))
+                        div.cursor(CursorStyle::PointingHand).hover(move |style| {
+                            style
+                                .border_color(theme.tokens.input)
+                                .shadow(smallvec::smallvec![hover_ring])
+                        })
+                    })
+                    .when(is_focused && !disabled, |div| {
+                        div.shadow(smallvec::smallvec![focus_ring])
                     })
                     .when(disabled, |div| {
                         div.cursor(CursorStyle::OperationNotAllowed).opacity(0.5)
                     })
                     .child(
                         div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .flex_shrink_0()
+                            .child(
+                                Icon::new("calendar")
+                                    .size(icon_size)
+                                    .color(theme.tokens.muted_foreground),
+                            ),
+                    )
+                    .child(
+                        div()
                             .flex_1()
-                            .text_size(px(14.0))
+                            .min_w(px(0.0))
+                            .text_size(text_size)
+                            .line_height(px(20.0))
                             .text_color(text_color)
                             .child(display_text),
                     )
                     .child(
                         div()
                             .flex()
+                            .items_center()
                             .gap(px(4.0))
                             .when(clearable && has_value && !disabled, |parent_div| {
                                 let on_clear = on_clear_handler.clone();
@@ -411,7 +603,7 @@ impl RenderOnce for DatePicker {
                                         .p(px(2.0))
                                         .rounded(theme.tokens.radius_sm)
                                         .cursor_pointer()
-                                        .hover(move |style| style.bg(muted_bg))
+                                        .hover(move |style| style.bg(muted_bg.opacity(0.8)))
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             move |_event: &MouseDownEvent, window, cx| {
@@ -424,14 +616,26 @@ impl RenderOnce for DatePicker {
                                                 }
                                             },
                                         )
-                                        .child(Icon::new("x").size(px(16.0)).color(muted_fg)),
+                                        .child(Icon::new("x").size(icon_size).color(muted_fg)),
                                 )
                             })
-                            .child(
-                                Icon::new("calendar")
-                                    .size(px(16.0))
-                                    .color(theme.tokens.muted_foreground),
-                            ),
+                            .when(self.loading, |parent_div| {
+                                parent_div.child(Spinner::new().size(SpinnerSize::Sm))
+                            })
+                            .when_some(self.status.clone(), |parent_div, (status, _)| {
+                                let (icon, color) = match status {
+                                    FieldStatusType::Warning => {
+                                        ("triangle-alert", theme.tokens.warning)
+                                    }
+                                    FieldStatusType::Error => {
+                                        ("circle-alert", theme.tokens.destructive)
+                                    }
+                                    FieldStatusType::Success => {
+                                        ("circle-check", theme.tokens.success)
+                                    }
+                                };
+                                parent_div.child(Icon::new(icon).size(icon_size).color(color))
+                            }),
                     ),
             )
             .content(move |window: &mut Window, app_cx: &mut App| {
@@ -606,7 +810,7 @@ impl RenderOnce for DatePicker {
                                                     .variant(ButtonVariant::Outline)
                                                     .size(ButtonSize::Sm)
                                                     .on_click(move |_, window, app_cx| {
-                                                        let today = DateValue::new(2025, 1, 23);
+                                                        let today = DateValue::today();
                                                         state_today.update(app_cx, |state, cx| {
                                                             state.select_date(today, cx);
                                                             state.close(cx);
@@ -640,6 +844,28 @@ impl RenderOnce for DatePicker {
                 let mut popover = this;
                 popover.style().refine(&user_style);
                 popover
-            })
+            });
+
+        match self.label {
+            Some(label) => {
+                let mut field = Field::new(label, control)
+                    .hidden_label(self.label_hidden)
+                    .optional(self.optional)
+                    .required(self.required)
+                    .disabled(self.disabled)
+                    .status_variant(FieldStatusVariant::Detached);
+
+                if let Some(description) = self.description {
+                    field = field.description(description);
+                }
+
+                if let Some((status, message)) = self.status {
+                    field = field.status(status, message);
+                }
+
+                field.into_any_element()
+            }
+            None => control.into_any_element(),
+        }
     }
 }

@@ -1,5 +1,5 @@
 use crate::components::slider::{SliderAxis, SliderSize};
-use crate::theme::use_theme;
+use crate::{astryx, theme::use_theme};
 use kael::{prelude::*, *};
 use std::rc::Rc;
 
@@ -372,8 +372,6 @@ impl RangeSlider {
                             .h(thumb_height)
                             .rounded(thumb_height / 2.0)
                             .bg(thumb_bg)
-                            .border_2()
-                            .border_color(theme.tokens.background)
                             .when(!self.disabled, {
                                 let shadow = theme.tokens.shadow_sm.clone();
                                 move |this| {
@@ -418,8 +416,6 @@ impl RangeSlider {
                             .h(thumb_height)
                             .rounded(thumb_height / 2.0)
                             .bg(thumb_bg)
-                            .border_2()
-                            .border_color(theme.tokens.background)
                             .when(!self.disabled, {
                                 let shadow = theme.tokens.shadow_sm.clone();
                                 move |this| {
@@ -609,8 +605,6 @@ impl RangeSlider {
                             .h(thumb_height)
                             .rounded(thumb_width / 2.0)
                             .bg(thumb_bg)
-                            .border_2()
-                            .border_color(theme.tokens.background)
                             .when(!self.disabled, {
                                 let shadow = theme.tokens.shadow_sm.clone();
                                 move |this| {
@@ -655,8 +649,6 @@ impl RangeSlider {
                             .h(thumb_height)
                             .rounded(thumb_width / 2.0)
                             .bg(thumb_bg)
-                            .border_2()
-                            .border_color(theme.tokens.background)
                             .when(!self.disabled, {
                                 let shadow = theme.tokens.shadow_sm.clone();
                                 move |this| {
@@ -775,7 +767,7 @@ impl RenderOnce for RangeSlider {
             )
         };
 
-        let focus_ring = theme.tokens.focus_ring_light();
+        let focus_ring = astryx::focus_ring_outer(theme.tokens.primary);
         let user_style = self.style.clone();
 
         match self.axis {

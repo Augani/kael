@@ -22,6 +22,71 @@ pub fn resizable_panel() -> ResizablePanel {
     ResizablePanel::new()
 }
 
+#[derive(IntoElement)]
+pub struct ResizeHandle {
+    axis: Axis,
+    active: bool,
+    style: StyleRefinement,
+}
+
+impl ResizeHandle {
+    pub fn new(axis: Axis) -> Self {
+        Self {
+            axis,
+            active: false,
+            style: StyleRefinement::default(),
+        }
+    }
+
+    pub fn active(mut self, active: bool) -> Self {
+        self.active = active;
+        self
+    }
+}
+
+impl Styled for ResizeHandle {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for ResizeHandle {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let theme = use_theme();
+        let user_style = self.style;
+        let color = if self.active {
+            theme.tokens.accent
+        } else {
+            theme.tokens.border
+        };
+
+        div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .when(self.axis.is_horizontal(), |this| {
+                this.cursor_col_resize().h_full().w(px(9.0))
+            })
+            .when(self.axis.is_vertical(), |this| {
+                this.cursor_row_resize().w_full().h(px(9.0))
+            })
+            .child(
+                div()
+                    .bg(color)
+                    .rounded(px(9999.0))
+                    .when(self.axis.is_horizontal(), |this| {
+                        this.h_full().w(HANDLE_SIZE)
+                    })
+                    .when(self.axis.is_vertical(), |this| this.w_full().h(HANDLE_SIZE)),
+            )
+            .map(|this| {
+                let mut div = this;
+                div.style().refine(&user_style);
+                div
+            })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum ResizablePanelEvent {
     Resized {
@@ -478,7 +543,7 @@ impl RenderOnce for ResizablePanel {
                 let handle_index = self.index - 1;
                 let state = state.clone();
 
-                this.child(ResizeHandle::new(
+                this.child(ResizePanelHandle::new(
                     ("resizable-handle", handle_index),
                     self.axis,
                     DragPanel,
@@ -520,14 +585,14 @@ impl Render for DragPanel {
     }
 }
 
-struct ResizeHandle<T: 'static, E: 'static + Render> {
+struct ResizePanelHandle<T: 'static, E: 'static + Render> {
     id: ElementId,
     axis: Axis,
     drag_value: Rc<T>,
     on_drag: Rc<dyn Fn(Rc<T>, &Point<Pixels>, &mut Window, &mut App) -> Entity<E>>,
 }
 
-impl<T: 'static, E: 'static + Render> ResizeHandle<T, E> {
+impl<T: 'static, E: 'static + Render> ResizePanelHandle<T, E> {
     fn new(
         id: impl Into<ElementId>,
         axis: Axis,
@@ -558,15 +623,15 @@ impl ResizeHandleState {
     }
 }
 
-impl<T: 'static, E: 'static + Render> IntoElement for ResizeHandle<T, E> {
-    type Element = ResizeHandle<T, E>;
+impl<T: 'static, E: 'static + Render> IntoElement for ResizePanelHandle<T, E> {
+    type Element = ResizePanelHandle<T, E>;
 
     fn into_element(self) -> Self::Element {
         self
     }
 }
 
-impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
+impl<T: 'static, E: 'static + Render> Element for ResizePanelHandle<T, E> {
     type RequestLayoutState = AnyElement;
     type PrepaintState = ();
 

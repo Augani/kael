@@ -5,7 +5,7 @@ use crate::{
 use collections::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use stacksafe::{StackSafe, stacksafe};
-use std::{fmt::Debug, ops::Range};
+use std::{fmt::Debug, mem, ops::Range, time::Instant};
 use taffy::{
     TaffyTree,
     geometry::{Point as TaffyPoint, Rect as TaffyRect, Size as TaffySize},
@@ -31,6 +31,13 @@ pub struct TaffyLayoutEngine {
     taffy: TaffyTree<NodeContext>,
     absolute_layout_bounds: FxHashMap<LayoutId, Bounds<Pixels>>,
     computed_layouts: FxHashSet<LayoutId>,
+    layout_order: FxHashMap<LayoutId, usize>,
+    previous_layout_bounds: Vec<Option<Bounds<Pixels>>>,
+    current_layout_bounds: Vec<Option<Bounds<Pixels>>>,
+    previous_root_available_space: Option<Size<AvailableSpace>>,
+    current_root_available_space: Option<Size<AvailableSpace>>,
+    reuse_previous_layout_requested: bool,
+    reusing_previous_layout: bool,
 }
 
 const EXPECT_MESSAGE: &str = "we should avoid taffy layout errors by construction if possible";
@@ -43,13 +50,42 @@ impl TaffyLayoutEngine {
             taffy,
             absolute_layout_bounds: FxHashMap::default(),
             computed_layouts: FxHashSet::default(),
+            layout_order: FxHashMap::default(),
+            previous_layout_bounds: Vec::new(),
+            current_layout_bounds: Vec::new(),
+            previous_root_available_space: None,
+            current_root_available_space: None,
+            reuse_previous_layout_requested: false,
+            reusing_previous_layout: false,
         }
+    }
+
+    pub fn begin_frame(&mut self, reuse_previous_layout: bool) {
+        self.reuse_previous_layout_requested = reuse_previous_layout;
+        self.reusing_previous_layout = false;
+        self.current_root_available_space = None;
     }
 
     pub fn clear(&mut self) {
         self.taffy.clear();
         self.absolute_layout_bounds.clear();
         self.computed_layouts.clear();
+        self.layout_order.clear();
+        self.previous_layout_bounds = mem::take(&mut self.current_layout_bounds);
+        self.previous_root_available_space = self.current_root_available_space.take();
+        self.reuse_previous_layout_requested = false;
+        self.reusing_previous_layout = false;
+    }
+
+    pub fn is_reusing_previous_layout(&self) -> bool {
+        self.reusing_previous_layout
+    }
+
+    fn track_layout_id(&mut self, layout_id: LayoutId) -> LayoutId {
+        let order = self.current_layout_bounds.len();
+        self.layout_order.insert(layout_id, order);
+        self.current_layout_bounds.push(None);
+        layout_id
     }
 
     pub fn request_layout(
@@ -61,7 +97,7 @@ impl TaffyLayoutEngine {
     ) -> LayoutId {
         let taffy_style = style.to_taffy(rem_size, scale_factor);
 
-        if children.is_empty() {
+        let layout_id = if children.is_empty() {
             self.taffy
                 .new_leaf(taffy_style)
                 .expect(EXPECT_MESSAGE)
@@ -74,7 +110,9 @@ impl TaffyLayoutEngine {
                 })
                 .expect(EXPECT_MESSAGE)
                 .into()
-        }
+        };
+
+        self.track_layout_id(layout_id)
     }
 
     pub fn request_measured_layout(
@@ -92,7 +130,8 @@ impl TaffyLayoutEngine {
     ) -> LayoutId {
         let taffy_style = style.to_taffy(rem_size, scale_factor);
 
-        self.taffy
+        let layout_id = self
+            .taffy
             .new_leaf_with_context(
                 taffy_style,
                 NodeContext {
@@ -100,7 +139,9 @@ impl TaffyLayoutEngine {
                 },
             )
             .expect(EXPECT_MESSAGE)
-            .into()
+            .into();
+
+        self.track_layout_id(layout_id)
     }
 
     // Used to understand performance
@@ -153,6 +194,20 @@ impl TaffyLayoutEngine {
         window: &mut Window,
         cx: &mut App,
     ) {
+        self.current_root_available_space = Some(available_space);
+        if self.reuse_previous_layout_requested
+            && self.previous_root_available_space == Some(available_space)
+            && self.previous_layout_bounds.len() >= self.current_layout_bounds.len()
+            && self.previous_layout_bounds[..self.current_layout_bounds.len()]
+                .iter()
+                .all(Option::is_some)
+        {
+            self.reusing_previous_layout = true;
+            return;
+        }
+
+        self.reusing_previous_layout = false;
+
         // Leaving this here until we have a better instrumentation approach.
         // println!("Laying out {} children", self.count_all_children(id)?);
         // println!("Max layout depth: {}", self.max_depth(0, id)?);
@@ -220,8 +275,10 @@ impl TaffyLayoutEngine {
                         untransform(available_space.height),
                     );
 
+                    let measure_started_at = Instant::now();
                     let a: Size<Pixels> =
                         (node_context.measure)(known_dimensions, available_space, window, cx);
+                    window.record_layout_measure_duration(measure_started_at.elapsed());
                     size(a.width.0 * scale_factor, a.height.0 * scale_factor).into()
                 },
             )
@@ -231,6 +288,20 @@ impl TaffyLayoutEngine {
     pub fn layout_bounds(&mut self, id: LayoutId, scale_factor: f32) -> Bounds<Pixels> {
         if let Some(layout) = self.absolute_layout_bounds.get(&id).cloned() {
             return layout;
+        }
+
+        if self.reusing_previous_layout
+            && let Some(order) = self.layout_order.get(&id).copied()
+            && let Some(bounds) = self
+                .previous_layout_bounds
+                .get(order)
+                .and_then(|bounds| *bounds)
+        {
+            self.absolute_layout_bounds.insert(id, bounds);
+            if let Some(slot) = self.current_layout_bounds.get_mut(order) {
+                *slot = Some(bounds);
+            }
+            return bounds;
         }
 
         let layout = self.taffy.layout(id.into()).expect(EXPECT_MESSAGE);
@@ -250,6 +321,11 @@ impl TaffyLayoutEngine {
             bounds.origin += parent_bounds.origin;
         }
         self.absolute_layout_bounds.insert(id, bounds);
+        if let Some(order) = self.layout_order.get(&id).copied()
+            && let Some(slot) = self.current_layout_bounds.get_mut(order)
+        {
+            *slot = Some(bounds);
+        }
 
         bounds
     }

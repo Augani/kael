@@ -6,7 +6,7 @@ use crate::{
         LMGetKbdType, TISCopyCurrentKeyboardLayoutInputSource, TISGetInputSourceProperty,
         UCKeyTranslate, kTISPropertyUnicodeKeyLayoutData,
     },
-    point, px,
+    point, px, scroll_trace_enabled,
 };
 use core_foundation::data::{CFDataGetBytePtr, CFDataRef};
 use core_graphics::event::CGKeyCode;
@@ -275,6 +275,19 @@ impl PlatformInput {
                     } else {
                         ScrollDelta::Lines(raw_data)
                     };
+
+                    if scroll_trace_enabled() {
+                        eprintln!(
+                            "[kael-scroll:native] precise={} momentum={} phase={:?} momentum_phase={:?} raw=({:.2},{:.2}) delta={}",
+                            native_event.hasPreciseScrollingDeltas(),
+                            is_momentum,
+                            native_event.phase(),
+                            native_event.momentumPhase(),
+                            raw_data.x,
+                            raw_data.y,
+                            delta.trace_label(),
+                        );
+                    }
 
                     Self::ScrollWheel(ScrollWheelEvent {
                         position: point(

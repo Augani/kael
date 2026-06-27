@@ -207,11 +207,41 @@ fn flatten_tree<T: Clone + PartialEq + Eq + Hash>(
     flat
 }
 
-const ROW_HEIGHT: f32 = 32.0;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TreeListDensity {
+    Compact,
+    #[default]
+    Balanced,
+    Spacious,
+}
+
+impl TreeListDensity {
+    fn row_height(self) -> Pixels {
+        match self {
+            Self::Compact => px(28.0),
+            Self::Balanced => px(36.0),
+            Self::Spacious => px(44.0),
+        }
+    }
+
+    fn text_size(self) -> Pixels {
+        px(14.0)
+    }
+
+    fn indent(self) -> f32 {
+        match self {
+            Self::Compact => 14.0,
+            Self::Balanced => 16.0,
+            Self::Spacious => 20.0,
+        }
+    }
+}
 
 #[derive(IntoElement)]
 pub struct TreeList<T: Clone + PartialEq + Eq + Hash + 'static> {
     nodes: Vec<TreeNode<T>>,
+    header: Option<AnyElement>,
+    density: TreeListDensity,
     selected_id: Option<T>,
     expanded_ids: Vec<T>,
     filter: Option<String>,
@@ -234,6 +264,8 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> TreeList<T> {
     pub fn new() -> Self {
         Self {
             nodes: Vec::new(),
+            header: None,
+            density: TreeListDensity::Balanced,
             selected_id: None,
             expanded_ids: Vec::new(),
             filter: None,
@@ -248,6 +280,16 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> TreeList<T> {
 
     pub fn nodes(mut self, nodes: Vec<TreeNode<T>>) -> Self {
         self.nodes = nodes;
+        self
+    }
+
+    pub fn header(mut self, header: impl IntoElement) -> Self {
+        self.header = Some(header.into_any_element());
+        self
+    }
+
+    pub fn density(mut self, density: TreeListDensity) -> Self {
+        self.density = density;
         self
     }
 
@@ -306,13 +348,13 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> TreeList<T> {
     }
 
     fn render_highlighted_text(
-        &self,
         text: &str,
         match_ranges: &[(usize, usize)],
         theme: &crate::theme::Theme,
         is_selected: bool,
+        highlight_matches: bool,
     ) -> impl IntoElement {
-        if match_ranges.is_empty() || !self.highlight_matches {
+        if match_ranges.is_empty() || !highlight_matches {
             return div().child(text.to_string()).into_any_element();
         }
 
@@ -397,12 +439,17 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
         };
 
         let total_items = flat_nodes.len();
+        let density = self.density;
+        let row_height = density.row_height();
+        let text_size = density.text_size();
+        let indent_step = density.indent();
+        let overlay_hover = crate::astryx::overlay_hover(theme.tokens.background.l < 0.5);
 
         let _item_sizes: Rc<Vec<Size<Pixels>>> = Rc::new(
             (0..total_items)
                 .map(|_| Size {
                     width: px(0.), // Width will be determined by container
-                    height: px(ROW_HEIGHT),
+                    height: row_height,
                 })
                 .collect(),
         );
@@ -416,12 +463,16 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
         let on_right_click = self.on_right_click.clone();
         let highlight_matches = self.highlight_matches;
         let user_style = self.style.clone();
+        let header = self.header;
 
         div()
             .flex()
             .flex_col()
             .w_full()
             .bg(theme.tokens.background)
+            .when_some(header, |this, header| {
+                this.child(div().mb(px(8.0)).child(header))
+            })
             .map(|mut this| {
                 this.style().refine(&user_style);
                 this
@@ -434,11 +485,11 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                         let is_expanded = expanded_ids_rc.contains(&flat_node.node_id);
                         let has_children =
                             !flat_node.node.children.is_empty() || flat_node.node.has_lazy_children;
-                        let indent = px((flat_node.level as f32) * 16.0);
+                        let indent = px((flat_node.level as f32) * indent_step);
 
                         div()
                             .w_full()
-                            .h(px(ROW_HEIGHT))
+                            .h(row_height)
                             .flex()
                             .items_center()
                             .px(px(8.0))
@@ -456,16 +507,15 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                                 kael::transparent_black()
                             })
                             .text_color(if is_selected {
-                                theme.tokens.accent_foreground
+                                theme.tokens.foreground
                             } else if flat_node.node.disabled {
                                 theme.tokens.muted_foreground
                             } else {
-                                theme.tokens.primary
+                                theme.tokens.foreground
                             })
                             .when(!flat_node.node.disabled && !is_selected, |div| {
-                                div.hover(|mut style| {
-                                    style.background =
-                                        Some(theme.tokens.accent.opacity(0.5).into());
+                                div.hover(move |mut style| {
+                                    style.background = Some(overlay_hover.into());
                                     style
                                 })
                             })
@@ -496,14 +546,8 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                                     this.on_mouse_down(
                                         MouseButton::Right,
                                         move |event, window, cx| {
-                                            eprintln!("TreeList: Right mouse button down on node");
                                             if let Some(on_right_click) = on_right_click.clone() {
-                                                eprintln!(
-                                                    "TreeList: Calling on_right_click handler"
-                                                );
                                                 on_right_click(&node_id, event, window, cx);
-                                            } else {
-                                                eprintln!("TreeList: No on_right_click handler!");
                                             }
                                         },
                                     )
@@ -516,22 +560,28 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                                     .gap(px(8.0))
                                     .children(flat_node.node.icon.as_ref().map(|icon| {
                                         Icon::new(icon.clone()).size(px(16.0)).color(
-                                            if is_selected {
-                                                theme.tokens.accent_foreground
-                                            } else if flat_node.node.disabled {
+                                            if flat_node.node.disabled {
                                                 theme.tokens.muted_foreground
                                             } else {
-                                                theme.tokens.primary
+                                                flat_node
+                                                    .node
+                                                    .icon_color
+                                                    .unwrap_or(theme.tokens.muted_foreground)
                                             },
                                         )
                                     }))
                                     .child(
                                         div()
                                             .flex_1()
-                                            .text_size(px(14.0))
+                                            .min_w(px(0.0))
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .whitespace_nowrap()
+                                            .text_size(text_size)
+                                            .line_height(px(20.0))
                                             .font_family(theme.tokens.font_family.clone())
                                             .font_weight(if is_selected {
-                                                FontWeight::SEMIBOLD
+                                                FontWeight::MEDIUM
                                             } else {
                                                 FontWeight::NORMAL
                                             })
@@ -542,11 +592,12 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                                                     .unwrap_or(&[]);
 
                                                 if !ranges.is_empty() && highlight_matches {
-                                                    self.render_highlighted_text(
+                                                    Self::render_highlighted_text(
                                                         &flat_node.node.label,
                                                         ranges,
                                                         theme,
                                                         is_selected,
+                                                        highlight_matches,
                                                     )
                                                     .into_any_element()
                                                 } else {
@@ -571,7 +622,7 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
                                                         "arrow-right"
                                                     })
                                                     .size(px(12.0))
-                                                    .color(theme.tokens.primary),
+                                                    .color(theme.tokens.muted_foreground),
                                                 ),
                                         )
                                     } else {

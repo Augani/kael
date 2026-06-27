@@ -3,7 +3,167 @@
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
-use crate::theme::Theme;
+use crate::{
+    components::{
+        button::{Button, ButtonColors, ButtonSize, ButtonVariant},
+        icon::Icon,
+        icon_source::IconSource,
+    },
+    theme::Theme,
+};
+
+#[derive(IntoElement)]
+pub struct ToggleButton {
+    id: ElementId,
+    label: SharedString,
+    pressed: bool,
+    disabled: bool,
+    loading: bool,
+    icon_only: bool,
+    size: ButtonSize,
+    icon: Option<IconSource>,
+    pressed_icon: Option<IconSource>,
+    tooltip: Option<SharedString>,
+    on_pressed_change: Option<Rc<dyn Fn(bool, &mut Window, &mut App)>>,
+    style: StyleRefinement,
+}
+
+impl ToggleButton {
+    pub fn new(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            pressed: false,
+            disabled: false,
+            loading: false,
+            icon_only: false,
+            size: ButtonSize::Md,
+            icon: None,
+            pressed_icon: None,
+            tooltip: None,
+            on_pressed_change: None,
+            style: StyleRefinement::default(),
+        }
+    }
+
+    pub fn pressed(mut self, pressed: bool) -> Self {
+        self.pressed = pressed;
+        self
+    }
+
+    pub fn is_pressed(self, pressed: bool) -> Self {
+        self.pressed(pressed)
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    pub fn loading(mut self, loading: bool) -> Self {
+        self.loading = loading;
+        self
+    }
+
+    pub fn icon_only(mut self, icon_only: bool) -> Self {
+        self.icon_only = icon_only;
+        self
+    }
+
+    pub fn size(mut self, size: ButtonSize) -> Self {
+        self.size = size;
+        self
+    }
+
+    pub fn icon(mut self, icon: impl Into<IconSource>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
+    pub fn pressed_icon(mut self, icon: impl Into<IconSource>) -> Self {
+        self.pressed_icon = Some(icon.into());
+        self
+    }
+
+    pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
+        self.tooltip = Some(tooltip.into());
+        self
+    }
+
+    pub fn on_pressed_change(
+        mut self,
+        handler: impl Fn(bool, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_pressed_change = Some(Rc::new(handler));
+        self
+    }
+}
+
+impl Styled for ToggleButton {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for ToggleButton {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
+        let dark = theme.tokens.background.l < 0.5;
+        let pressed_bg = crate::astryx::overlay_pressed(dark);
+        let hover_bg = crate::astryx::overlay_hover(dark);
+        let icon = if self.pressed {
+            self.pressed_icon.clone().or(self.icon.clone())
+        } else {
+            self.icon.clone()
+        };
+
+        let mut button = Button::new(self.id, self.label.clone())
+            .variant(ButtonVariant::Ghost)
+            .size(if self.icon_only {
+                ButtonSize::Icon
+            } else {
+                self.size
+            })
+            .disabled(self.disabled)
+            .loading(self.loading)
+            .colors(if self.pressed {
+                ButtonColors {
+                    background: pressed_bg,
+                    foreground: theme.tokens.foreground,
+                    border: kael::transparent_black(),
+                    hover_background: hover_bg,
+                    hover_foreground: theme.tokens.foreground,
+                    has_shadow: false,
+                    has_border: false,
+                }
+            } else {
+                ButtonColors {
+                    background: kael::transparent_black(),
+                    foreground: theme.tokens.foreground,
+                    border: kael::transparent_black(),
+                    hover_background: hover_bg,
+                    hover_foreground: theme.tokens.foreground,
+                    has_shadow: false,
+                    has_border: false,
+                }
+            });
+
+        if let Some(icon) = icon {
+            button = button.icon(icon);
+        }
+        if let Some(tooltip) = self.tooltip {
+            button = button.tooltip(tooltip);
+        }
+        if let Some(handler) = self.on_pressed_change {
+            let next_pressed = !self.pressed;
+            button = button.on_click(move |_, window, cx| {
+                handler(next_pressed, window, cx);
+            });
+        }
+        button.style().refine(&self.style);
+        button
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ToggleGroupVariant {
@@ -194,7 +354,7 @@ impl RenderOnce for ToggleGroup {
             .items_center()
             .gap(px(2.0))
             .p(px(2.0))
-            .bg(theme.tokens.muted.opacity(0.3))
+            .bg(theme.tokens.muted)
             .rounded(theme.tokens.radius_md)
             .children(self.items.into_iter().map(move |item| {
                 let is_selected = match variant {
@@ -223,8 +383,9 @@ impl RenderOnce for ToggleGroup {
                     .when(is_selected, |this: Div| {
                         this.bg(theme.tokens.background)
                             .text_color(theme.tokens.foreground)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .shadow(smallvec::smallvec![BoxShadow {
-                                color: hsla(0.0, 0.0, 0.0, 0.05),
+                                color: hsla(0.0, 0.0, 0.0, 0.08),
                                 offset: point(px(0.0), px(1.0)),
                                 blur_radius: px(2.0),
                                 spread_radius: px(0.0),
@@ -250,8 +411,22 @@ impl RenderOnce for ToggleGroup {
                         })
                     })
                     .when_some(item.icon, |this: Div, _icon| {
-                        // TODO: Render icon when icon component is integrated
-                        this
+                        this.child(
+                            div()
+                                .size(px(16.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(
+                                    Icon::new(IconSource::Named(_icon.to_string()))
+                                        .size(px(16.0))
+                                        .color(if is_selected {
+                                            theme.tokens.foreground
+                                        } else {
+                                            theme.tokens.muted_foreground
+                                        }),
+                                ),
+                        )
                     })
                     .child(item.label)
             }))

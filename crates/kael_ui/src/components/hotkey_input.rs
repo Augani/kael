@@ -1,4 +1,4 @@
-use crate::theme::Theme;
+use crate::{astryx, components::icon::Icon, theme::Theme};
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
@@ -257,19 +257,13 @@ impl RenderOnce for HotkeyInput {
         let border_color = if recording {
             theme.tokens.primary
         } else if is_focused {
-            theme.tokens.ring
+            theme.tokens.primary
         } else {
             theme.tokens.input
         };
 
-        let focus_ring = theme.tokens.focus_ring_light();
-        let recording_ring = BoxShadow {
-            offset: point(px(0.0), px(0.0)),
-            blur_radius: px(0.0),
-            spread_radius: px(3.0),
-            inset: false,
-            color: theme.tokens.primary.opacity(0.3),
-        };
+        let hover_ring = astryx::input_hover_ring(theme.tokens.input);
+        let focus_ring = astryx::focus_ring(theme.tokens.primary);
 
         let text_color = if hotkey.is_some() && !recording {
             theme.tokens.foreground
@@ -281,9 +275,11 @@ impl RenderOnce for HotkeyInput {
             Some(
                 div()
                     .id("hotkey-clear")
-                    .ml(px(8.0))
-                    .px(px(6.0))
-                    .py(px(4.0))
+                    .ml(px(4.0))
+                    .size(px(20.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
                     .rounded(theme.tokens.radius_sm)
                     .text_color(theme.tokens.muted_foreground)
                     .hover(|s| s.bg(theme.tokens.muted).text_color(theme.tokens.foreground))
@@ -296,7 +292,11 @@ impl RenderOnce for HotkeyInput {
                         }
                         cx.stop_propagation();
                     })
-                    .child("×"),
+                    .child(
+                        Icon::new("x")
+                            .size(px(14.0))
+                            .color(theme.tokens.muted_foreground),
+                    ),
             )
         } else {
             None
@@ -313,24 +313,37 @@ impl RenderOnce for HotkeyInput {
                     .id(("hotkey-input", self.state.entity_id()))
                     .track_focus(&focus_handle.tab_index(0).tab_stop(true))
                     .h(px(32.0))
-                    .px(px(12.0))
+                    .px(px(8.0))
                     .flex()
                     .items_center()
                     .justify_between()
+                    .gap(px(8.0))
                     .bg(theme.tokens.card)
                     .border_1()
                     .border_color(border_color)
                     .rounded(theme.tokens.radius_md)
                     .font_family(theme.tokens.font_mono.clone())
                     .text_size(px(14.0))
+                    .line_height(px(20.0))
+                    .transition(theme.tokens.transition_fast)
+                    .shadow(smallvec::smallvec![astryx::focus_ring(
+                        kael::transparent_black()
+                    )])
                     .when(self.disabled, |d| d.opacity(0.5).cursor_not_allowed())
                     .when(!self.disabled, |d| d.cursor_pointer())
                     .when(is_focused && !recording, |d| {
-                        d.shadow(smallvec::smallvec![focus_ring])
+                        d.shadow(smallvec::smallvec![focus_ring.clone()])
                     })
                     .when(recording, |d| {
-                        d.shadow(smallvec::smallvec![recording_ring])
+                        d.shadow(smallvec::smallvec![focus_ring])
                             .border_color(theme.tokens.primary)
+                    })
+                    .when(!self.disabled && !is_focused && !recording, |d| {
+                        d.hover(move |style| {
+                            style
+                                .border_color(theme.tokens.input)
+                                .shadow(smallvec::smallvec![hover_ring])
+                        })
                     })
                     .when(!self.disabled, |d| {
                         d.on_click(move |_, window, cx| {

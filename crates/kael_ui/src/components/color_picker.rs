@@ -2,6 +2,7 @@
 
 use crate::components::text::{Text, TextVariant};
 use crate::overlays::popover::{Popover, PopoverContent};
+use crate::styled_ext::StyledExt;
 use crate::theme::{use_theme, Theme};
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
@@ -208,26 +209,27 @@ impl RenderOnce for ColorPicker {
         let disabled = self.disabled;
         let user_style = self.style;
         let picker_id = self.id.clone();
+        let hover_ring = crate::astryx::input_hover_ring(theme.tokens.input);
 
         let preview_button = div()
             .flex()
             .items_center()
-            .gap_2()
+            .gap(px(8.0))
             .h(px(32.0))
-            .px(px(12.0))
+            .px(px(8.0))
             .bg(theme.tokens.card)
             .border_1()
-            .border_color(theme.tokens.border)
+            .border_color(theme.tokens.input)
             .rounded(theme.tokens.radius_md)
             .transition(theme.tokens.transition_fast)
             .when(!disabled, |this| {
                 this.cursor(CursorStyle::PointingHand)
-                    .hover(|style| style.bg(theme.tokens.accent.opacity(0.1)))
+                    .hover(move |style| style.shadow(smallvec::smallvec![hover_ring]))
             })
             .when(disabled, |this| this.opacity(0.5))
             .child(
                 div()
-                    .size(px(24.0))
+                    .size(px(20.0))
                     .rounded(theme.tokens.radius_sm)
                     .bg(color)
                     .border_1()
@@ -270,7 +272,7 @@ impl RenderOnce for ColorPicker {
                         div()
                             .flex()
                             .flex_col()
-                            .gap_3()
+                            .gap(px(12.0))
                             .w(px(280.0))
                             .child(render_color_preview(current_color))
                             .child(render_mode_selector(
@@ -333,9 +335,14 @@ fn render_mode_selector(
     current_mode: ColorMode,
     state: Entity<ColorPickerState>,
 ) -> impl IntoElement {
+    let theme = use_theme();
+
     div()
         .flex()
         .gap_1()
+        .p(px(2.0))
+        .bg(theme.tokens.muted.opacity(0.35))
+        .rounded(theme.tokens.radius_md)
         .child(render_mode_button(
             "HSL",
             ColorMode::HSL,
@@ -367,8 +374,11 @@ fn render_mode_button(
 
     div()
         .flex_1()
-        .py(px(6.0))
-        .px(px(12.0))
+        .h(px(28.0))
+        .px(px(10.0))
+        .flex()
+        .items_center()
+        .justify_center()
         .rounded(theme.tokens.radius_sm)
         .text_size(px(12.0))
         .text_align(TextAlign::Center)
@@ -377,10 +387,13 @@ fn render_mode_button(
                 .text_color(theme.tokens.primary_foreground)
         })
         .when(!is_active, |this| {
-            this.bg(theme.tokens.muted.opacity(0.3))
-                .text_color(theme.tokens.foreground)
+            this.text_color(theme.tokens.foreground)
                 .cursor(CursorStyle::PointingHand)
-                .hover(|style| style.bg(theme.tokens.muted.opacity(0.5)))
+                .hover(|style| {
+                    style.bg(crate::astryx::overlay_hover(
+                        theme.tokens.background.l < 0.5,
+                    ))
+                })
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     state.update(cx, |state, cx| {
                         state.set_mode(mode);
@@ -415,8 +428,10 @@ fn render_color_value(color: Hsla, mode: ColorMode) -> impl IntoElement {
         .items_center()
         .justify_between()
         .p(px(8.0))
-        .bg(theme.tokens.muted.opacity(0.2))
+        .bg(theme.tokens.muted.opacity(0.35))
         .rounded(theme.tokens.radius_sm)
+        .border_1()
+        .border_color(theme.tokens.border.opacity(0.6))
         .child(
             Text::new(value)
                 .variant(TextVariant::Custom)
@@ -491,7 +506,7 @@ fn render_color_swatch(
         .border_1()
         .border_color(theme.tokens.border)
         .cursor(CursorStyle::PointingHand)
-        .hover(|style| style.shadow_sm())
+        .hover(|style| style.inset_ring(crate::astryx::overlay_hover(false), px(2.0)))
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
             state.update(cx, |state, _| {
                 state.set_color(color);
@@ -558,30 +573,14 @@ fn render_actions(
 }
 
 fn default_swatches() -> Vec<Hsla> {
-    vec![
-        hsla(0.0, 0.7, 0.5, 1.0),
-        hsla(0.0, 0.8, 0.4, 1.0),
-        hsla(0.0, 0.9, 0.3, 1.0),
-        hsla(30.0, 0.8, 0.5, 1.0),
-        hsla(40.0, 0.9, 0.5, 1.0),
-        hsla(60.0, 0.8, 0.5, 1.0),
-        hsla(50.0, 0.9, 0.6, 1.0),
-        hsla(120.0, 0.6, 0.4, 1.0),
-        hsla(140.0, 0.7, 0.4, 1.0),
-        hsla(160.0, 0.6, 0.4, 1.0),
-        hsla(180.0, 0.6, 0.5, 1.0),
-        hsla(190.0, 0.7, 0.5, 1.0),
-        hsla(210.0, 0.7, 0.5, 1.0),
-        hsla(220.0, 0.8, 0.5, 1.0),
-        hsla(240.0, 0.7, 0.5, 1.0),
-        hsla(270.0, 0.6, 0.5, 1.0),
-        hsla(290.0, 0.6, 0.5, 1.0),
-        hsla(310.0, 0.7, 0.5, 1.0),
-        hsla(330.0, 0.7, 0.5, 1.0),
-        hsla(0.0, 0.0, 0.2, 1.0),
-        hsla(0.0, 0.0, 0.4, 1.0),
-        hsla(0.0, 0.0, 0.6, 1.0),
-        hsla(0.0, 0.0, 0.8, 1.0),
-        hsla(0.0, 0.0, 0.95, 1.0),
-    ]
+    crate::astryx::CHART_PALETTE
+        .iter()
+        .map(|color| rgba((*color << 8) | 0xFF).into())
+        .chain([
+            rgba(0x0A1317FF).into(),
+            rgba(0x647685FF).into(),
+            rgba(0xE7EAEDFF).into(),
+            rgba(0xFFFFFFFF).into(),
+        ])
+        .collect()
 }

@@ -3,7 +3,7 @@ use crate::{
     Window, point, seal::Sealed,
 };
 use smallvec::SmallVec;
-use std::{any::Any, fmt::Debug, ops::Deref, path::PathBuf};
+use std::{any::Any, fmt::Debug, ops::Deref, path::PathBuf, sync::OnceLock};
 
 /// An event from a platform input source.
 pub trait InputEvent: Sealed + 'static {
@@ -447,6 +447,19 @@ impl ScrollDelta {
         }
     }
 
+    pub(crate) fn trace_label(&self) -> String {
+        match self {
+            ScrollDelta::Pixels(delta) => {
+                format!(
+                    "pixels({:.2},{:.2})",
+                    f32::from(delta.x),
+                    f32::from(delta.y)
+                )
+            }
+            ScrollDelta::Lines(delta) => format!("lines({:.2},{:.2})", delta.x, delta.y),
+        }
+    }
+
     /// Combines two scroll deltas into one.
     /// If the signs of the deltas are the same (both positive or both negative),
     /// the deltas are added together. If the signs are opposite, the second delta
@@ -488,6 +501,18 @@ impl ScrollDelta {
             _ => other,
         }
     }
+}
+
+pub(crate) fn scroll_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("KAEL_SCROLL_TRACE")
+            .map(|value| {
+                let value = value.trim().to_ascii_lowercase();
+                !value.is_empty() && value != "0" && value != "false" && value != "off"
+            })
+            .unwrap_or(false)
+    })
 }
 
 /// A mouse exit event from the platform, generated when the mouse leaves the window.

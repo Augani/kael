@@ -26,6 +26,16 @@ pub(crate) struct CachedSurface {
     pub(crate) device_bounds: Bounds<DevicePixels>,
 }
 
+/// Identity of a cached subtree's rendered output. A subtree replays its cached prepaint/paint only
+/// when this key is unchanged (and its tracked entities are unchanged).
+///
+/// Note: `bounds` is part of the key, so a `cached()` subtree placed *inside* a scrolling container
+/// invalidates as it translates with the scroll offset — its absolute bounds change every frame. The
+/// scroll-perf path does not rely on this: unchanged subtrees *outside* the scroll viewport replay
+/// from cache, and off-screen children inside it are skipped by viewport culling in `div`. Caching a
+/// scroll container's content as a single translatable surface would require storing the cached paint
+/// in content-local coordinates so a pure translation does not bust the key; that is a possible future
+/// enhancement, not needed for O(visible) scrolling.
 #[derive(Default, PartialEq)]
 pub(crate) struct SubtreeCacheKey {
     pub(crate) bounds: Bounds<Pixels>,

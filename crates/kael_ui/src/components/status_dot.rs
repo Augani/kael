@@ -15,20 +15,30 @@ pub enum StatusTone {
     Custom(Hsla),
 }
 
+pub type StatusDotVariant = StatusTone;
+pub type StatusDotVariantMap = StatusTone;
+pub type StatusDotProps = StatusDot;
+
 pub struct StatusDot {
     tone: StatusTone,
     size: Pixels,
     label: Option<SharedString>,
+    tooltip: Option<SharedString>,
     pulse: bool,
     style: StyleRefinement,
 }
 
 impl StatusDot {
+    pub fn default() -> Self {
+        Self::new(StatusTone::Neutral)
+    }
+
     pub fn new(tone: StatusTone) -> Self {
         Self {
             tone,
             size: px(8.0),
             label: None,
+            tooltip: None,
             pulse: false,
             style: StyleRefinement::default(),
         }
@@ -50,8 +60,21 @@ impl StatusDot {
         Self::new(StatusTone::Info)
     }
 
+    pub fn accent() -> Self {
+        Self::new(StatusTone::Info)
+    }
+
+    pub fn neutral() -> Self {
+        Self::new(StatusTone::Neutral)
+    }
+
     pub fn size(mut self, size: Pixels) -> Self {
         self.size = size;
+        self
+    }
+
+    pub fn variant(mut self, variant: StatusTone) -> Self {
+        self.tone = variant;
         self
     }
 
@@ -60,10 +83,24 @@ impl StatusDot {
         self
     }
 
+    pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
+        self.tooltip = Some(tooltip.into());
+        self
+    }
+
     /// Draw a soft halo behind the dot to signal an active/live status.
     pub fn pulse(mut self, pulse: bool) -> Self {
         self.pulse = pulse;
         self
+    }
+
+    pub fn is_pulsing(self, pulse: bool) -> Self {
+        self.pulse(pulse)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isPulsing(self, pulse: bool) -> Self {
+        self.is_pulsing(pulse)
     }
 }
 
@@ -80,13 +117,18 @@ impl IntoElement for StatusDot {
         let theme = use_theme();
         let dark = theme.tokens.background.l < 0.5;
         let user_style = self.style;
+        let accessible_label = self
+            .tooltip
+            .clone()
+            .or_else(|| self.label.clone())
+            .unwrap_or_else(|| "Status".into());
 
         let color = match self.tone {
             StatusTone::Neutral => theme.tokens.muted_foreground,
             StatusTone::Success => theme.tokens.success,
             StatusTone::Warning => theme.tokens.warning,
             StatusTone::Error => theme.tokens.destructive,
-            StatusTone::Info => theme.tokens.primary,
+            StatusTone::Info => theme.tokens.accent,
             StatusTone::Hue(hue) => hue.colors(dark).border,
             StatusTone::Custom(c) => c,
         };
@@ -110,19 +152,18 @@ impl IntoElement for StatusDot {
             .child(div().size(size).rounded_full().bg(color));
 
         div()
+            .relative()
             .flex()
-            .items_center()
-            .gap(px(6.0))
+            .flex_shrink_0()
+            .size(size)
             .child(dot)
-            .when_some(self.label.clone(), |this, label| {
-                this.child(
-                    div()
-                        .text_size(px(13.0))
-                        .font_family(theme.tokens.font_family.clone())
-                        .text_color(theme.tokens.foreground)
-                        .child(label),
-                )
-            })
+            .child(
+                div()
+                    .size(px(1.0))
+                    .overflow_hidden()
+                    .opacity(0.0)
+                    .child(accessible_label),
+            )
             .map(|this| {
                 let mut div = this;
                 div.style().refine(&user_style);

@@ -182,6 +182,12 @@ pub fn focus_ring(color: Hsla) -> BoxShadow {
     inset_ring(color.opacity(0.5), px(2.0))
 }
 
+/// Astryx shared input hover ring: a subtle 2px inset border-emphasis wash used
+/// by inputs, selectors, date/time triggers, and picker buttons.
+pub fn input_hover_ring(border: Hsla) -> BoxShadow {
+    inset_ring(border.opacity(0.30), px(2.0))
+}
+
 /// A soft, low-strength outer focus ring (Tailwind-style) for controls that
 /// read better with an outside halo than an inset stroke.
 pub fn focus_ring_outer(color: Hsla) -> BoxShadow {

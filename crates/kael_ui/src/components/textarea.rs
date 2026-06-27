@@ -1,6 +1,13 @@
 //! Textarea component - Multi-line text input component.
 
-use crate::components::input::{InputColors, InputVariant};
+use crate::astryx;
+use crate::components::{
+    field::{Field, FieldStatusType},
+    icon::Icon,
+    icon_source::IconSource,
+    input::{InputColors, InputSize, InputVariant},
+    spinner::{Spinner, SpinnerSize},
+};
 use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
@@ -8,18 +15,32 @@ use std::rc::Rc;
 #[derive(IntoElement)]
 pub struct Textarea {
     id: SharedString,
+    label: Option<SharedString>,
+    label_hidden: bool,
+    description: Option<SharedString>,
+    optional: bool,
+    required: bool,
     value: SharedString,
     placeholder: SharedString,
     variant: InputVariant,
+    size: InputSize,
     disabled: bool,
     error: bool,
+    loading: bool,
+    status: Option<(FieldStatusType, SharedString)>,
+    start_icon: Option<IconSource>,
     rows: usize,
     min_rows: Option<usize>,
     max_rows: Option<usize>,
     auto_grow: bool,
     resizable: bool,
+    max_length: Option<usize>,
+    spell_check: bool,
+    auto_focus: bool,
+    html_name: Option<SharedString>,
     on_change: Option<Rc<dyn Fn(SharedString, &mut Window, &mut App)>>,
     on_blur: Option<Rc<dyn Fn(SharedString, &mut Window, &mut App)>>,
+    on_focus: Option<Rc<dyn Fn(SharedString, &mut Window, &mut App)>>,
     style: StyleRefinement,
 }
 
@@ -27,20 +48,74 @@ impl Textarea {
     pub fn new(id: impl Into<SharedString>) -> Self {
         Self {
             id: id.into(),
+            label: None,
+            label_hidden: false,
+            description: None,
+            optional: false,
+            required: false,
             value: "".into(),
             placeholder: "".into(),
             variant: InputVariant::Default,
+            size: InputSize::default(),
             disabled: false,
             error: false,
+            loading: false,
+            status: None,
+            start_icon: None,
             rows: 3,
             min_rows: None,
             max_rows: None,
             auto_grow: false,
             resizable: true,
+            max_length: None,
+            spell_check: true,
+            auto_focus: false,
+            html_name: None,
             on_change: None,
             on_blur: None,
+            on_focus: None,
             style: StyleRefinement::default(),
         }
+    }
+
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    pub fn is_label_hidden(mut self, hidden: bool) -> Self {
+        self.label_hidden = hidden;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isLabelHidden(self, hidden: bool) -> Self {
+        self.is_label_hidden(hidden)
+    }
+
+    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn is_optional(mut self, optional: bool) -> Self {
+        self.optional = optional;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isOptional(self, optional: bool) -> Self {
+        self.is_optional(optional)
+    }
+
+    pub fn required(mut self, required: bool) -> Self {
+        self.required = required;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isRequired(self, required: bool) -> Self {
+        self.required(required)
     }
 
     pub fn value(mut self, value: impl Into<SharedString>) -> Self {
@@ -58,6 +133,11 @@ impl Textarea {
         self
     }
 
+    pub fn size(mut self, size: InputSize) -> Self {
+        self.size = size;
+        self
+    }
+
     /// Use a fully custom color set, setting the variant to [`InputVariant::Custom`].
     pub fn colors(mut self, colors: InputColors) -> Self {
         self.variant = InputVariant::Custom(colors);
@@ -69,9 +149,40 @@ impl Textarea {
         self
     }
 
+    #[allow(non_snake_case)]
+    pub fn isDisabled(self, disabled: bool) -> Self {
+        self.disabled(disabled)
+    }
+
     pub fn error(mut self, error: bool) -> Self {
         self.error = error;
         self
+    }
+
+    pub fn status(mut self, status: FieldStatusType, message: impl Into<SharedString>) -> Self {
+        self.error = matches!(status, FieldStatusType::Error | FieldStatusType::Warning);
+        self.status = Some((status, message.into()));
+        self
+    }
+
+    pub fn is_loading(mut self, loading: bool) -> Self {
+        self.loading = loading;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isLoading(self, loading: bool) -> Self {
+        self.is_loading(loading)
+    }
+
+    pub fn start_icon(mut self, icon: impl Into<IconSource>) -> Self {
+        self.start_icon = Some(icon.into());
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn startIcon(self, icon: impl Into<IconSource>) -> Self {
+        self.start_icon(icon)
     }
 
     pub fn rows(mut self, rows: usize) -> Self {
@@ -99,12 +210,60 @@ impl Textarea {
         self
     }
 
+    pub fn max_length(mut self, max_length: usize) -> Self {
+        self.max_length = Some(max_length);
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn maxLength(self, max_length: usize) -> Self {
+        self.max_length(max_length)
+    }
+
+    pub fn has_spell_check(mut self, spell_check: bool) -> Self {
+        self.spell_check = spell_check;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn hasSpellCheck(self, spell_check: bool) -> Self {
+        self.has_spell_check(spell_check)
+    }
+
+    pub fn has_auto_focus(mut self, auto_focus: bool) -> Self {
+        self.auto_focus = auto_focus;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn hasAutoFocus(self, auto_focus: bool) -> Self {
+        self.has_auto_focus(auto_focus)
+    }
+
+    pub fn html_name(mut self, name: impl Into<SharedString>) -> Self {
+        self.html_name = Some(name.into());
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn htmlName(self, name: impl Into<SharedString>) -> Self {
+        self.html_name(name)
+    }
+
     pub fn on_change<F>(mut self, callback: F) -> Self
     where
         F: Fn(SharedString, &mut Window, &mut App) + 'static,
     {
         self.on_change = Some(Rc::new(callback));
         self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn onChange<F>(self, callback: F) -> Self
+    where
+        F: Fn(SharedString, &mut Window, &mut App) + 'static,
+    {
+        self.on_change(callback)
     }
 
     pub fn on_blur<F>(mut self, callback: F) -> Self
@@ -115,10 +274,42 @@ impl Textarea {
         self
     }
 
+    pub fn on_focus<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(SharedString, &mut Window, &mut App) + 'static,
+    {
+        self.on_focus = Some(Rc::new(callback));
+        self
+    }
+
     fn calculate_height(&self) -> Pixels {
-        let line_height = 20.0;
-        let padding_y = 8.0;
+        let line_height = match self.size {
+            InputSize::Sm => 18.0,
+            InputSize::Md => 20.0,
+            InputSize::Lg => 22.0,
+        };
+        let padding_y = match self.size {
+            InputSize::Sm => 4.0,
+            InputSize::Md => 6.0,
+            InputSize::Lg => 8.0,
+        };
         px(self.rows as f32 * line_height + padding_y * 2.0)
+    }
+
+    fn padding_y(&self) -> Pixels {
+        match self.size {
+            InputSize::Sm => px(4.0),
+            InputSize::Md => px(6.0),
+            InputSize::Lg => px(8.0),
+        }
+    }
+
+    fn font_size(&self) -> Pixels {
+        match self.size {
+            InputSize::Sm => px(13.0),
+            InputSize::Md => px(14.0),
+            InputSize::Lg => px(16.0),
+        }
     }
 }
 
@@ -133,8 +324,12 @@ impl RenderOnce for Textarea {
         let theme = Theme::of(cx);
         let user_style = self.style.clone();
         let height = self.calculate_height();
+        let padding_y = self.padding_y();
+        let font_size = self.font_size();
+        let is_busy = self.loading;
+        let effectively_disabled = self.disabled || is_busy;
 
-        let (bg_color, border_color, text_color) = if self.disabled {
+        let (bg_color, border_color, text_color) = if effectively_disabled {
             (
                 theme.tokens.muted.opacity(0.5),
                 theme.tokens.border,
@@ -184,26 +379,55 @@ impl RenderOnce for Textarea {
 
         let textarea_id = self.id.clone();
         let has_value = !self.value.is_empty();
+        let value_len = self.value.chars().count();
+        let over_limit = self
+            .max_length
+            .is_some_and(|max_length| value_len > max_length);
+        let hover_ring = astryx::input_hover_ring(if self.error {
+            theme.tokens.destructive
+        } else {
+            theme.tokens.input
+        });
+        let focus_ring = astryx::focus_ring(if self.error {
+            theme.tokens.destructive
+        } else {
+            theme.tokens.primary
+        });
 
-        div()
+        let mut control = div()
             .id(textarea_id)
+            .relative()
             .w_full()
             .h(height)
             .when(self.auto_grow, |this| this.min_h(height))
-            .px(px(12.0))
-            .py(px(8.0))
+            .px(px(8.0))
+            .py(padding_y)
             .bg(bg_color)
             .border_1()
-            .border_color(border_color)
+            .border_color(if self.error {
+                theme.tokens.destructive
+            } else {
+                border_color
+            })
             .rounded(theme.tokens.radius_md)
-            .when(!self.disabled, |this| {
+            .font_family(theme.tokens.font_family.clone())
+            .transition(theme.tokens.transition_fast)
+            .shadow(smallvec::smallvec![astryx::focus_ring(
+                kael::transparent_black()
+            )])
+            .when(!effectively_disabled, |this| {
                 this.hover(|style| {
-                    style.border_color(if self.error {
-                        theme.tokens.destructive
-                    } else {
-                        theme.tokens.ring
-                    })
+                    style
+                        .border_color(if self.error {
+                            theme.tokens.destructive
+                        } else {
+                            theme.tokens.input
+                        })
+                        .shadow(smallvec::smallvec![hover_ring])
                 })
+            })
+            .when(self.error, |this| {
+                this.shadow(smallvec::smallvec![focus_ring])
             })
             .when(!self.resizable, |this| this)
             .map(|this| {
@@ -213,19 +437,111 @@ impl RenderOnce for Textarea {
             })
             .child(
                 div()
+                    .flex()
+                    .items_start()
+                    .gap(px(8.0))
                     .size_full()
-                    .text_size(px(14.0))
-                    .font_family(theme.tokens.font_family.clone())
-                    .text_color(text_color)
-                    .line_height(relative(1.4))
-                    .child(if has_value {
-                        self.value.to_string()
-                    } else {
-                        self.placeholder.to_string()
-                    })
-                    .when(!has_value, |this| {
-                        this.text_color(theme.tokens.muted_foreground)
-                    }),
+                    .child(
+                        div()
+                            .when_some(self.start_icon.clone(), |this, icon| {
+                                this.child(
+                                    Icon::new(icon)
+                                        .size(px(16.0))
+                                        .color(theme.tokens.muted_foreground),
+                                )
+                            })
+                            .mt(px(2.0)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(font_size)
+                            .font_family(theme.tokens.font_family.clone())
+                            .text_color(text_color)
+                            .line_height(relative(1.4))
+                            .child(if has_value {
+                                self.value.to_string()
+                            } else {
+                                self.placeholder.to_string()
+                            })
+                            .when(!has_value, |this| {
+                                this.text_color(theme.tokens.muted_foreground)
+                            }),
+                    ),
             )
+            .when(is_busy, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top(px(8.0))
+                        .right(px(8.0))
+                        .child(Spinner::new().size(SpinnerSize::Sm)),
+                )
+            });
+
+        if let Some((status, _)) = self.status.clone() {
+            let status_color = match status {
+                FieldStatusType::Warning => theme.tokens.warning,
+                FieldStatusType::Error => theme.tokens.destructive,
+                FieldStatusType::Success => theme.tokens.success,
+            };
+            let status_icon = match status {
+                FieldStatusType::Warning => "triangle-alert",
+                FieldStatusType::Error => "circle-alert",
+                FieldStatusType::Success => "circle-check",
+            };
+
+            control = control.child(
+                div()
+                    .absolute()
+                    .top(px(8.0))
+                    .right(px(8.0))
+                    .child(Icon::new(status_icon).size(px(16.0)).color(status_color)),
+            );
+        }
+
+        let control_with_counter = div()
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .child(control)
+            .when_some(self.max_length, |this, max_length| {
+                this.child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .text_size(px(12.0))
+                        .line_height(px(16.0))
+                        .font_family(theme.tokens.font_family.clone())
+                        .text_color(if over_limit {
+                            theme.tokens.destructive
+                        } else {
+                            theme.tokens.muted_foreground
+                        })
+                        .child(format!("{value_len}/{max_length}")),
+                )
+            });
+
+        match self.label {
+            Some(label) => {
+                let mut field = Field::new(label, control_with_counter)
+                    .hidden_label(self.label_hidden)
+                    .optional(self.optional)
+                    .required(self.required)
+                    .disabled(self.disabled);
+
+                if let Some(description) = self.description {
+                    field = field.description(description);
+                }
+
+                if let Some((status, message)) = self.status {
+                    field = field.status(status, message);
+                }
+
+                field.into_any_element()
+            }
+            None => control_with_counter.into_any_element(),
+        }
     }
 }

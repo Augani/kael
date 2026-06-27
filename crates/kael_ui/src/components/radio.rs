@@ -25,7 +25,14 @@
 //! - RadioGroup automatically manages checked state
 //!
 
-use crate::theme::Theme;
+use crate::{
+    components::{
+        checkbox::CheckboxSize,
+        field::{Field, FieldStatusType},
+        field_status::FieldStatusVariant,
+    },
+    theme::Theme,
+};
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
@@ -47,6 +54,7 @@ pub struct Radio {
     label: Option<SharedString>,
     checked: bool,
     disabled: bool,
+    size: CheckboxSize,
     on_click: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
     style: StyleRefinement,
 }
@@ -61,6 +69,7 @@ impl Radio {
             label: None,
             checked: false,
             disabled: false,
+            size: CheckboxSize::Md,
             on_click: None,
             style: StyleRefinement::default(),
         }
@@ -81,6 +90,11 @@ impl Radio {
     /// Set disabled state
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    pub fn size(mut self, size: CheckboxSize) -> Self {
+        self.size = size;
         self
     }
 
@@ -119,24 +133,28 @@ impl RenderOnce for Radio {
         let primary = tokens.primary;
         let input = tokens.input;
         let card = tokens.card;
-        let primary_foreground = tokens.primary_foreground;
         let muted_foreground = tokens.muted_foreground;
         let foreground = tokens.foreground;
         let font_family = tokens.font_family.clone();
         let radius_md = tokens.radius_md;
         let transition_fast = tokens.transition_fast;
-        let focus_ring = tokens.focus_ring_light();
+        let focus_ring = crate::astryx::focus_ring(primary);
+        let hover_ring = crate::astryx::input_hover_ring(input);
 
-        let (border_color, bg, dot_opacity) = if self.checked {
-            (primary, primary, 1.0)
+        let (border_color, bg, dot_color) = if self.checked {
+            (primary, primary, tokens.primary_foreground)
         } else {
-            (input, card, 0.0)
+            (input, card, kael::transparent_black())
         };
 
         let (border_color, bg) = if self.disabled {
             (border_color.opacity(0.5), bg.opacity(0.5))
         } else {
             (border_color, bg)
+        };
+        let (wrapper_size, circle_size, dot_size) = match self.size {
+            CheckboxSize::Sm => (px(20.0), px(18.0), px(8.0)),
+            CheckboxSize::Md => (px(24.0), px(22.0), px(10.0)),
         };
 
         self.base
@@ -153,30 +171,39 @@ impl RenderOnce for Radio {
             } else {
                 foreground
             })
-            .when(is_focused && !self.disabled, |this| {
-                this.shadow(smallvec::smallvec![focus_ring])
-            })
             .rounded(radius_md)
             .child(
                 div()
-                    .id(ElementId::Name(format!("{}-circle", self.id).into()))
-                    .relative()
-                    .size(px(20.0))
+                    .id(ElementId::Name(format!("{}-wrapper", self.id).into()))
+                    .size(wrapper_size)
+                    .flex()
+                    .items_center()
+                    .justify_center()
                     .flex_shrink_0()
                     .rounded_full()
-                    .border_1()
-                    .border_color(border_color)
-                    .bg(bg)
-                    .transition(transition_fast)
+                    .when(is_focused && !self.disabled, |this| {
+                        this.shadow(smallvec::smallvec![focus_ring])
+                    })
                     .child(
                         div()
-                            .absolute()
-                            .top(px(6.0))
-                            .left(px(6.0))
-                            .size(px(8.0))
+                            .id(ElementId::Name(format!("{}-circle", self.id).into()))
+                            .size(circle_size)
+                            .flex()
+                            .items_center()
+                            .justify_center()
                             .rounded_full()
-                            .bg(primary_foreground)
-                            .opacity(dot_opacity),
+                            .border_1()
+                            .border_color(border_color)
+                            .bg(bg)
+                            .transition(transition_fast)
+                            .when(!self.disabled && !self.checked, |this| {
+                                this.hover(move |style| {
+                                    style.shadow(smallvec::smallvec![hover_ring])
+                                })
+                            })
+                            .when(self.checked, |this| {
+                                this.child(div().size(dot_size).rounded_full().bg(dot_color))
+                            }),
                     ),
             )
             .when_some(self.label, |this, label| {
@@ -312,6 +339,293 @@ impl RenderOnce for RadioGroup {
                     },
                 )
             }))
+    }
+}
+
+#[derive(Clone)]
+pub struct RadioListItem {
+    pub value: SharedString,
+    pub label: SharedString,
+    pub description: Option<SharedString>,
+    pub end_content: Option<SharedString>,
+    pub disabled: bool,
+}
+
+impl RadioListItem {
+    pub fn new(value: impl Into<SharedString>, label: impl Into<SharedString>) -> Self {
+        Self {
+            value: value.into(),
+            label: label.into(),
+            description: None,
+            end_content: None,
+            disabled: false,
+        }
+    }
+
+    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isDisabled(self, disabled: bool) -> Self {
+        self.disabled(disabled)
+    }
+
+    pub fn end_content(mut self, content: impl Into<SharedString>) -> Self {
+        self.end_content = Some(content.into());
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn endContent(self, content: impl Into<SharedString>) -> Self {
+        self.end_content(content)
+    }
+}
+
+#[derive(IntoElement)]
+pub struct RadioList {
+    label: SharedString,
+    items: Vec<RadioListItem>,
+    selected_value: Option<SharedString>,
+    orientation: RadioLayout,
+    size: CheckboxSize,
+    description: Option<SharedString>,
+    status: Option<(FieldStatusType, SharedString)>,
+    disabled: bool,
+    required: bool,
+    optional: bool,
+    hidden_label: bool,
+    width: Option<Pixels>,
+    on_change: Option<Rc<dyn Fn(SharedString, &mut Window, &mut App)>>,
+    style: StyleRefinement,
+}
+
+impl RadioList {
+    pub fn new(label: impl Into<SharedString>) -> Self {
+        Self {
+            label: label.into(),
+            items: Vec::new(),
+            selected_value: None,
+            orientation: RadioLayout::Vertical,
+            size: CheckboxSize::Md,
+            description: None,
+            status: None,
+            disabled: false,
+            required: false,
+            optional: false,
+            hidden_label: false,
+            width: None,
+            on_change: None,
+            style: StyleRefinement::default(),
+        }
+    }
+
+    pub fn item(mut self, item: RadioListItem) -> Self {
+        self.items.push(item);
+        self
+    }
+
+    pub fn items(mut self, items: impl IntoIterator<Item = RadioListItem>) -> Self {
+        self.items.extend(items);
+        self
+    }
+
+    pub fn value(mut self, value: impl Into<SharedString>) -> Self {
+        self.selected_value = Some(value.into());
+        self
+    }
+
+    pub fn selected_value(self, value: impl Into<SharedString>) -> Self {
+        self.value(value)
+    }
+
+    pub fn orientation(mut self, orientation: RadioLayout) -> Self {
+        self.orientation = orientation;
+        self
+    }
+
+    pub fn layout(self, layout: RadioLayout) -> Self {
+        self.orientation(layout)
+    }
+
+    pub fn size(mut self, size: CheckboxSize) -> Self {
+        self.size = size;
+        self
+    }
+
+    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn status(mut self, status: FieldStatusType, message: impl Into<SharedString>) -> Self {
+        self.status = Some((status, message.into()));
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isDisabled(self, disabled: bool) -> Self {
+        self.disabled(disabled)
+    }
+
+    pub fn required(mut self, required: bool) -> Self {
+        self.required = required;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isRequired(self, required: bool) -> Self {
+        self.required(required)
+    }
+
+    pub fn optional(mut self, optional: bool) -> Self {
+        self.optional = optional;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isOptional(self, optional: bool) -> Self {
+        self.optional(optional)
+    }
+
+    pub fn hidden_label(mut self, hidden: bool) -> Self {
+        self.hidden_label = hidden;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isLabelHidden(self, hidden: bool) -> Self {
+        self.hidden_label(hidden)
+    }
+
+    pub fn width(mut self, width: Pixels) -> Self {
+        self.width = Some(width);
+        self
+    }
+
+    pub fn on_change(
+        mut self,
+        handler: impl Fn(SharedString, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_change = Some(Rc::new(handler));
+        self
+    }
+}
+
+impl Styled for RadioList {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for RadioList {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
+        let selected_value = self.selected_value.clone();
+        let disabled = self.disabled;
+        let size = self.size;
+        let on_change = self.on_change.clone();
+        let list = div()
+            .flex()
+            .when(self.orientation == RadioLayout::Vertical, |this| {
+                this.flex_col().gap(px(8.0))
+            })
+            .when(self.orientation == RadioLayout::Horizontal, |this| {
+                this.flex_row().flex_wrap().gap(px(20.0))
+            })
+            .children(self.items.into_iter().map(move |item| {
+                let is_disabled = disabled || item.disabled;
+                let checked = selected_value.as_ref() == Some(&item.value);
+                let item_value = item.value.clone();
+                let on_change = on_change.clone();
+
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .rounded(theme.tokens.radius_md)
+                    .when(!is_disabled, |this| this.cursor_pointer())
+                    .child(
+                        Radio::new(ElementId::Name(item.value.clone()))
+                            .checked(checked)
+                            .disabled(is_disabled)
+                            .size(size)
+                            .on_click(move |window, cx| {
+                                if let Some(handler) = on_change.as_ref() {
+                                    handler(item_value.clone(), window, cx);
+                                }
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap(px(1.0))
+                            .min_w(px(0.0))
+                            .child(
+                                div()
+                                    .text_size(px(14.0))
+                                    .line_height(px(20.0))
+                                    .text_color(if is_disabled {
+                                        theme.tokens.muted_foreground
+                                    } else {
+                                        theme.tokens.foreground
+                                    })
+                                    .child(item.label),
+                            )
+                            .when_some(item.description, |this, description| {
+                                this.child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .line_height(px(16.0))
+                                        .text_color(theme.tokens.muted_foreground)
+                                        .child(description),
+                                )
+                            }),
+                    )
+                    .when_some(item.end_content, |this, content| {
+                        this.child(
+                            div()
+                                .ml_auto()
+                                .text_size(px(12.0))
+                                .line_height(px(16.0))
+                                .text_color(theme.tokens.muted_foreground)
+                                .child(content),
+                        )
+                    })
+            }));
+
+        let field = Field::new(self.label, list)
+            .hidden_label(self.hidden_label)
+            .optional(self.optional)
+            .required(self.required)
+            .disabled(disabled)
+            .status_variant(FieldStatusVariant::Detached)
+            .when_some(self.description, |field, description| {
+                field.description(description)
+            })
+            .when_some(self.status, |field, (status, message)| {
+                field.status(status, message)
+            })
+            .when_some(self.width, |field, width| field.width(width));
+
+        field.map(|this| {
+            let mut field = this;
+            field.style().refine(&self.style);
+            field
+        })
     }
 }
 

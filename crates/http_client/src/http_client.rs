@@ -19,7 +19,10 @@ use parking_lot::Mutex;
 use parking_lot::RwLock;
 #[cfg(feature = "test-support")]
 use std::fmt;
-use std::{any::type_name, sync::Arc};
+use std::{
+    any::type_name,
+    sync::{Arc, OnceLock},
+};
 pub use url::Url;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
@@ -371,6 +374,34 @@ impl ReqwestClient {
 
         Ok(builder.body(AsyncBody::from(body.to_vec()))?)
     }
+
+    fn runtime() -> Result<&'static tokio::runtime::Runtime> {
+        static RUNTIME: OnceLock<std::result::Result<tokio::runtime::Runtime, String>> =
+            OnceLock::new();
+
+        RUNTIME
+            .get_or_init(|| {
+                tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .thread_name("kael-http")
+                    .build()
+                    .map_err(|err| err.to_string())
+            })
+            .as_ref()
+            .map_err(|err| anyhow!("failed to initialize HTTP runtime: {err}"))
+    }
+
+    async fn run_on_runtime<T>(
+        future: impl std::future::Future<Output = Result<T>> + Send + 'static,
+    ) -> Result<T>
+    where
+        T: Send + 'static,
+    {
+        Self::runtime()?
+            .spawn(future)
+            .await
+            .map_err(|err| anyhow!("HTTP runtime task failed: {err}"))?
+    }
 }
 
 impl HttpClient for ReqwestClient {
@@ -395,20 +426,23 @@ impl HttpClient for ReqwestClient {
                 .get::<RedirectPolicy>()
                 .cloned()
                 .unwrap_or_default();
-            let client = this.build_client(&redirect_policy)?;
             let url = parts.uri.to_string();
             let body = Self::read_body(body).await?;
 
-            let mut request = client.request(parts.method, url);
-            for (name, value) in &parts.headers {
-                request = request.header(name, value);
-            }
-            if !body.is_empty() {
-                request = request.body(body);
-            }
+            Self::run_on_runtime(async move {
+                let client = this.build_client(&redirect_policy)?;
+                let mut request = client.request(parts.method, url);
+                for (name, value) in &parts.headers {
+                    request = request.header(name, value);
+                }
+                if !body.is_empty() {
+                    request = request.body(body);
+                }
 
-            let response = request.send().await?;
-            Self::into_response(response).await
+                let response = request.send().await?;
+                Self::into_response(response).await
+            })
+            .await
         })
     }
 
@@ -425,9 +459,12 @@ impl HttpClient for ReqwestClient {
         let url = url.to_string();
 
         Box::pin(async move {
-            let client = this.build_client(&RedirectPolicy::FollowAll)?;
-            let response = client.post(url).multipart(form).send().await?;
-            Self::into_response(response).await
+            Self::run_on_runtime(async move {
+                let client = this.build_client(&RedirectPolicy::FollowAll)?;
+                let response = client.post(url).multipart(form).send().await?;
+                Self::into_response(response).await
+            })
+            .await
         })
     }
 }

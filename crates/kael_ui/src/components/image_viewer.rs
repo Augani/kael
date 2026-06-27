@@ -1,9 +1,9 @@
 //! ImageViewer/Lightbox component for displaying images in a fullscreen overlay.
 
 use kael::{prelude::FluentBuilder as _, *};
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
-use crate::components::button::{Button, ButtonSize, ButtonVariant};
+use crate::components::button::{Button, ButtonColors, ButtonSize};
 use crate::theme::Theme;
 
 actions!(
@@ -18,11 +18,22 @@ actions!(
     ]
 );
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum LightboxMediaType {
+    #[default]
+    Image,
+    Video,
+}
+
+pub type LightboxMedia = ImageItem;
+
 #[derive(Clone)]
 pub struct ImageItem {
     pub src: SharedString,
     pub alt: Option<SharedString>,
     pub caption: Option<SharedString>,
+    pub media_type: LightboxMediaType,
+    pub has_auto_play: bool,
 }
 
 impl ImageItem {
@@ -31,6 +42,8 @@ impl ImageItem {
             src: src.into(),
             alt: None,
             caption: None,
+            media_type: LightboxMediaType::Image,
+            has_auto_play: false,
         }
     }
 
@@ -42,6 +55,42 @@ impl ImageItem {
     pub fn caption(mut self, caption: impl Into<SharedString>) -> Self {
         self.caption = Some(caption.into());
         self
+    }
+
+    pub fn media_type(mut self, media_type: LightboxMediaType) -> Self {
+        self.media_type = media_type;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn mediaType(self, media_type: LightboxMediaType) -> Self {
+        self.media_type(media_type)
+    }
+
+    pub fn image(self) -> Self {
+        self.media_type(LightboxMediaType::Image)
+    }
+
+    pub fn video(self) -> Self {
+        self.media_type(LightboxMediaType::Video)
+    }
+
+    pub fn has_auto_play(mut self, has_auto_play: bool) -> Self {
+        self.has_auto_play = has_auto_play;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn hasAutoPlay(self, has_auto_play: bool) -> Self {
+        self.has_auto_play(has_auto_play)
+    }
+
+    pub fn lightbox_image(src: impl Into<SharedString>, alt: impl Into<SharedString>) -> Self {
+        Self::new(src).alt(alt).image()
+    }
+
+    pub fn lightbox_video(src: impl Into<SharedString>, alt: impl Into<SharedString>) -> Self {
+        Self::new(src).alt(alt).video()
     }
 }
 
@@ -68,6 +117,9 @@ pub struct ImageViewerState {
     _loading: bool,
     show_thumbnails: bool,
     _fit_mode: ImageViewerSize,
+    has_zoom: bool,
+    has_auto_play: bool,
+    on_index_change: Option<Rc<dyn Fn(usize, &mut App)>>,
 }
 
 impl ImageViewerState {
@@ -82,6 +134,9 @@ impl ImageViewerState {
             _loading: false,
             show_thumbnails: true,
             _fit_mode: ImageViewerSize::default(),
+            has_zoom: false,
+            has_auto_play: false,
+            on_index_change: None,
         }
     }
 
@@ -98,10 +153,26 @@ impl ImageViewerState {
         }
     }
 
+    pub fn go_to_with_notify(&mut self, index: usize, cx: &mut App) {
+        if index < self.images.len() {
+            self.current_index = index;
+            self.reset_view();
+            self.notify_index_change(cx);
+        }
+    }
+
     pub fn next(&mut self) {
         if self.current_index < self.images.len().saturating_sub(1) {
             self.current_index += 1;
             self.reset_view();
+        }
+    }
+
+    pub fn next_with_notify(&mut self, cx: &mut App) {
+        if self.current_index < self.images.len().saturating_sub(1) {
+            self.current_index += 1;
+            self.reset_view();
+            self.notify_index_change(cx);
         }
     }
 
@@ -112,11 +183,25 @@ impl ImageViewerState {
         }
     }
 
+    pub fn prev_with_notify(&mut self, cx: &mut App) {
+        if self.current_index > 0 {
+            self.current_index -= 1;
+            self.reset_view();
+            self.notify_index_change(cx);
+        }
+    }
+
     pub fn zoom_in(&mut self) {
+        if !self.has_zoom {
+            return;
+        }
         self.zoom = (self.zoom + ZOOM_STEP).min(MAX_ZOOM);
     }
 
     pub fn zoom_out(&mut self) {
+        if !self.has_zoom {
+            return;
+        }
         self.zoom = (self.zoom - ZOOM_STEP).max(MIN_ZOOM);
     }
 
@@ -126,7 +211,9 @@ impl ImageViewerState {
     }
 
     pub fn set_zoom(&mut self, zoom: f32) {
-        self.zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+        if self.has_zoom {
+            self.zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+        }
     }
 
     pub fn toggle_thumbnails(&mut self) {
@@ -165,6 +252,30 @@ impl ImageViewerState {
     pub fn is_zoomed(&self) -> bool {
         (self.zoom - 1.0).abs() > 0.01
     }
+
+    pub fn has_zoom(&mut self, has_zoom: bool) {
+        self.has_zoom = has_zoom;
+        if !has_zoom {
+            self.reset_zoom();
+        }
+    }
+
+    pub fn has_auto_play(&mut self, has_auto_play: bool) {
+        self.has_auto_play = has_auto_play;
+    }
+
+    pub fn on_index_change<F>(&mut self, handler: F)
+    where
+        F: Fn(usize, &mut App) + 'static,
+    {
+        self.on_index_change = Some(Rc::new(handler));
+    }
+
+    fn notify_index_change(&self, cx: &mut App) {
+        if let Some(handler) = &self.on_index_change {
+            handler(self.current_index, cx);
+        }
+    }
 }
 
 pub struct ImageViewer {
@@ -176,6 +287,9 @@ pub struct ImageViewer {
     show_controls: bool,
     show_counter: bool,
     show_thumbnails: bool,
+    is_open: bool,
+    has_zoom: bool,
+    has_auto_play: bool,
     style: StyleRefinement,
 }
 
@@ -190,6 +304,9 @@ impl ImageViewer {
             show_controls: true,
             show_counter: true,
             show_thumbnails: true,
+            is_open: true,
+            has_zoom: false,
+            has_auto_play: false,
             style: StyleRefinement::default(),
         }
     }
@@ -224,6 +341,36 @@ impl ImageViewer {
         self
     }
 
+    pub fn is_open(mut self, is_open: bool) -> Self {
+        self.is_open = is_open;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isOpen(self, is_open: bool) -> Self {
+        self.is_open(is_open)
+    }
+
+    pub fn has_zoom(mut self, has_zoom: bool) -> Self {
+        self.has_zoom = has_zoom;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn hasZoom(self, has_zoom: bool) -> Self {
+        self.has_zoom(has_zoom)
+    }
+
+    pub fn has_auto_play(mut self, has_auto_play: bool) -> Self {
+        self.has_auto_play = has_auto_play;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn hasAutoPlay(self, has_auto_play: bool) -> Self {
+        self.has_auto_play(has_auto_play)
+    }
+
     fn handle_close(&self, window: &mut Window, cx: &mut App) {
         if let Some(handler) = &self.on_close {
             (handler)(window, cx);
@@ -246,7 +393,15 @@ impl Focusable for ImageViewer {
 impl EventEmitter<()> for ImageViewer {}
 
 impl Render for ImageViewer {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    #[allow(refining_impl_trait)]
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        if !self.is_open {
+            return div().into_any_element();
+        }
+        cx.update_entity(&self.state, |state, _| {
+            state.has_zoom(self.has_zoom);
+            state.has_auto_play(self.has_auto_play);
+        });
         let theme = Theme::of(cx);
         let state = self.state.read(cx);
         let current_image = state.current_image().cloned();
@@ -255,18 +410,25 @@ impl Render for ImageViewer {
         let zoom = state.zoom();
         let has_prev = state.has_prev();
         let has_next = state.has_next();
-        let images = state.images.clone();
         let _pan_offset = state.pan_offset;
-        let show_thumbs = self.show_thumbnails && state.show_thumbnails && image_count > 1;
+        let has_auto_play = self.has_auto_play;
 
         let viewer_entity = cx.entity().clone();
         let state_entity = self.state.clone();
 
         window.focus(&self.focus_handle);
 
-        let close_handler = self.on_close.clone();
         let close_on_escape = self.close_on_escape;
         let close_on_backdrop = self.close_on_backdrop_click;
+        let on_dark_button = ButtonColors {
+            background: kael::transparent_black(),
+            foreground: kael::white(),
+            border: kael::transparent_black(),
+            hover_background: kael::white().opacity(0.12),
+            hover_foreground: kael::white(),
+            has_shadow: false,
+            has_border: false,
+        };
 
         div()
             .id("image-viewer-overlay")
@@ -276,7 +438,9 @@ impl Render for ImageViewer {
             .inset_0()
             .flex()
             .flex_col()
-            .bg(kael::black().opacity(0.9))
+            .items_center()
+            .justify_center()
+            .bg(kael::black().opacity(0.78))
             .on_action({
                 let viewer_entity = viewer_entity.clone();
                 move |_: &ImageViewerClose, window, cx| {
@@ -290,13 +454,13 @@ impl Render for ImageViewer {
             .on_action({
                 let state_entity = state_entity.clone();
                 move |_: &ImageViewerNext, _, cx| {
-                    cx.update_entity(&state_entity, |state, _| state.next());
+                    cx.update_entity(&state_entity, |state, cx| state.next_with_notify(cx));
                 }
             })
             .on_action({
                 let state_entity = state_entity.clone();
                 move |_: &ImageViewerPrev, _, cx| {
-                    cx.update_entity(&state_entity, |state, _| state.prev());
+                    cx.update_entity(&state_entity, |state, cx| state.prev_with_notify(cx));
                 }
             })
             .on_action({
@@ -317,235 +481,165 @@ impl Render for ImageViewer {
                     cx.update_entity(&state_entity, |state, _| state.reset_zoom());
                 }
             })
-            .child(
-                div()
-                    .id("image-viewer-header")
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .px(px(16.0))
-                    .py(px(12.0))
-                    .child(div().flex().items_center().gap(px(8.0)).when(
-                        self.show_counter && image_count > 1,
-                        |this| {
-                            this.child(
-                                div()
-                                    .text_size(px(14.0))
-                                    .text_color(kael::white())
-                                    .font_family(theme.tokens.font_family.clone())
-                                    .child(format!("{} of {}", current_index + 1, image_count)),
-                            )
-                        },
-                    ))
-                    .child(div().flex().items_center().gap(px(4.0)).when(
-                        self.show_controls,
-                        |this| {
-                            let state_entity = state_entity.clone();
-                            let state_entity2 = state_entity.clone();
-                            let state_entity3 = state_entity.clone();
-
-                            this.child(
-                                Button::new("zoom-out", "")
-                                    .variant(ButtonVariant::Ghost)
-                                    .size(ButtonSize::Icon)
-                                    .icon("zoom-out")
-                                    .on_click(move |_, _, cx| {
-                                        cx.update_entity(&state_entity, |state, _| {
-                                            state.zoom_out()
-                                        });
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .min_w(px(50.0))
-                                    .text_size(px(13.0))
-                                    .text_color(kael::white())
-                                    .font_family(theme.tokens.font_family.clone())
-                                    .text_center()
-                                    .child(format!("{}%", (zoom * 100.0) as i32)),
-                            )
-                            .child(
-                                Button::new("zoom-in", "")
-                                    .variant(ButtonVariant::Ghost)
-                                    .size(ButtonSize::Icon)
-                                    .icon("zoom-in")
-                                    .on_click(move |_, _, cx| {
-                                        cx.update_entity(&state_entity2, |state, _| {
-                                            state.zoom_in()
-                                        });
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .w(px(1.0))
-                                    .h(px(20.0))
-                                    .bg(kael::white().opacity(0.2))
-                                    .mx(px(8.0)),
-                            )
-                            .child(
-                                Button::new("reset-zoom", "Reset")
-                                    .variant(ButtonVariant::Ghost)
-                                    .size(ButtonSize::Sm)
-                                    .on_click(move |_, _, cx| {
-                                        cx.update_entity(&state_entity3, |state, _| {
-                                            state.reset_zoom()
-                                        });
-                                    }),
-                            )
-                        },
-                    ))
-                    .child({
-                        let viewer_entity = viewer_entity.clone();
+            .when(self.show_counter && image_count > 1, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top(px(12.0))
+                        .left(px(12.0))
+                        .text_size(px(14.0))
+                        .line_height(px(20.0))
+                        .text_color(kael::white())
+                        .font_family(theme.tokens.font_family.clone())
+                        .child(format!("{} / {}", current_index + 1, image_count)),
+                )
+            })
+            .when(self.show_controls, |this| {
+                let viewer_entity = viewer_entity.clone();
+                this.child(
+                    div().absolute().top(px(12.0)).right(px(12.0)).child(
                         Button::new("close-viewer", "")
-                            .variant(ButtonVariant::Ghost)
+                            .colors(on_dark_button)
                             .size(ButtonSize::Icon)
                             .icon("x")
                             .on_click(move |_, window, cx| {
                                 cx.update_entity(&viewer_entity, |viewer, cx| {
                                     viewer.handle_close(window, cx);
                                 });
-                            })
-                    }),
-            )
+                            }),
+                    ),
+                )
+            })
             .child(
                 div()
                     .id("image-viewer-content")
-                    .flex_1()
+                    .size_full()
                     .flex()
+                    .flex_col()
                     .items_center()
                     .justify_center()
                     .relative()
                     .overflow_hidden()
                     .when(close_on_backdrop, |this| {
-                        let close_handler = close_handler.clone();
+                        let viewer_entity = viewer_entity.clone();
                         this.on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                            if let Some(handler) = &close_handler {
-                                (handler)(window, cx);
-                            }
+                            cx.update_entity(&viewer_entity, |viewer, cx| {
+                                viewer.handle_close(window, cx);
+                            });
                         })
                     })
-                    .when(has_prev, |this| {
+                    .when(self.show_controls && has_prev, |this| {
                         let state_entity = state_entity.clone();
                         this.child(
                             div()
                                 .id("prev-button")
                                 .absolute()
-                                .left(px(16.0))
+                                .left(px(12.0))
                                 .top_0()
                                 .bottom_0()
                                 .flex()
                                 .items_center()
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation();
+                                })
                                 .child(
                                     Button::new("prev-image", "")
-                                        .variant(ButtonVariant::Secondary)
+                                        .colors(on_dark_button)
                                         .size(ButtonSize::Icon)
-                                        .icon("arrow-left")
+                                        .icon("chevron-left")
                                         .on_click(move |_, _, cx| {
-                                            cx.update_entity(&state_entity, |state, _| {
-                                                state.prev()
+                                            cx.update_entity(&state_entity, |state, cx| {
+                                                state.prev_with_notify(cx)
                                             });
                                         }),
                                 ),
                         )
                     })
-                    .when(has_next, |this| {
+                    .when(self.show_controls && has_next, |this| {
                         let state_entity = state_entity.clone();
                         this.child(
                             div()
                                 .id("next-button")
                                 .absolute()
-                                .right(px(16.0))
+                                .right(px(12.0))
                                 .top_0()
                                 .bottom_0()
                                 .flex()
                                 .items_center()
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation();
+                                })
                                 .child(
                                     Button::new("next-image", "")
-                                        .variant(ButtonVariant::Secondary)
+                                        .colors(on_dark_button)
                                         .size(ButtonSize::Icon)
-                                        .icon("arrow-right")
+                                        .icon("chevron-right")
                                         .on_click(move |_, _, cx| {
-                                            cx.update_entity(&state_entity, |state, _| {
-                                                state.next()
+                                            cx.update_entity(&state_entity, |state, cx| {
+                                                state.next_with_notify(cx)
                                             });
                                         }),
                                 ),
                         )
                     })
                     .when_some(current_image.clone(), |this, image| {
+                        let media_element = match image.media_type {
+                            LightboxMediaType::Image => img(image.src.clone())
+                                .max_w(relative(1.0 * zoom))
+                                .max_h(relative(1.0 * zoom))
+                                .object_fit(ObjectFit::Contain)
+                                .into_any_element(),
+                            LightboxMediaType::Video => {
+                                kael::video(Arc::<str>::from(image.src.as_ref()))
+                                    .object_fit(ObjectFit::Contain)
+                                    .when(image.has_auto_play || has_auto_play, |this| {
+                                        this.autoplay()
+                                    })
+                                    .into_any_element()
+                            }
+                        };
+
                         this.child(
                             div()
-                                .id("image-container")
+                                .id("media-group")
                                 .flex()
+                                .flex_col()
                                 .items_center()
                                 .justify_center()
+                                .max_w(relative(1.0))
+                                .max_h(relative(1.0))
+                                .overflow_hidden()
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                     cx.stop_propagation();
                                 })
                                 .child(
-                                    img(image.src.clone())
-                                        .max_w(relative(0.9 * zoom))
-                                        .max_h(relative(0.8 * zoom))
-                                        .object_fit(ObjectFit::Contain),
-                                ),
+                                    div()
+                                        .id("image-container")
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .overflow_hidden()
+                                        .child(media_element),
+                                )
+                                .when_some(image.caption.clone(), |this, caption| {
+                                    this.child(
+                                        div()
+                                            .id("image-caption")
+                                            .pt(px(8.0))
+                                            .px(px(12.0))
+                                            .max_w(px(600.0))
+                                            .text_size(px(18.0))
+                                            .line_height(px(28.0))
+                                            .text_color(kael::white())
+                                            .font_family(theme.tokens.font_family.clone())
+                                            .text_center()
+                                            .child(caption),
+                                    )
+                                }),
                         )
                     }),
             )
-            .when_some(current_image.as_ref().and_then(|i| i.caption.clone()), {
-                |this, caption| {
-                    this.child(
-                        div()
-                            .id("image-caption")
-                            .px(px(16.0))
-                            .py(px(8.0))
-                            .text_size(px(14.0))
-                            .text_color(kael::white().opacity(0.8))
-                            .font_family(theme.tokens.font_family.clone())
-                            .text_center()
-                            .child(caption),
-                    )
-                }
-            })
-            .when(show_thumbs, |this| {
-                this.child(
-                    div()
-                        .id("thumbnail-strip")
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .gap(px(8.0))
-                        .px(px(16.0))
-                        .py(px(12.0))
-                        .bg(kael::black().opacity(0.5))
-                        .children(images.iter().enumerate().map(|(idx, image)| {
-                            let is_current = idx == current_index;
-                            let state_entity = state_entity.clone();
-
-                            div()
-                                .id(ElementId::Name(format!("thumb-{}", idx).into()))
-                                .size(px(60.0))
-                                .rounded(px(4.0))
-                                .overflow_hidden()
-                                .border_2()
-                                .border_color(if is_current {
-                                    theme.tokens.primary
-                                } else {
-                                    kael::transparent_black()
-                                })
-                                .cursor(CursorStyle::PointingHand)
-                                .hover(|style| style.opacity(0.8))
-                                .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
-                                    cx.stop_propagation();
-                                    cx.update_entity(&state_entity, |state, _| state.go_to(idx));
-                                })
-                                .child(
-                                    img(image.src.clone())
-                                        .size_full()
-                                        .object_fit(ObjectFit::Cover),
-                                )
-                        })),
-                )
-            })
+            .into_any_element()
     }
 }
 
@@ -561,4 +655,8 @@ pub fn init_image_viewer(cx: &mut App) {
         KeyBinding::new("-", ImageViewerZoomOut, Some("ImageViewer")),
         KeyBinding::new("=", ImageViewerZoomIn, Some("ImageViewer")),
     ]);
+}
+
+pub fn init_lightbox(cx: &mut App) {
+    init_image_viewer(cx);
 }

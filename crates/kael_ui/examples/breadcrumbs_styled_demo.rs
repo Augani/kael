@@ -69,26 +69,10 @@ impl BreadcrumbsStyledDemo {
 
     fn create_sample_items() -> Vec<BreadcrumbItem<String>> {
         vec![
-            BreadcrumbItem {
-                id: "home".to_string(),
-                label: "Home".into(),
-                icon: None,
-            },
-            BreadcrumbItem {
-                id: "projects".to_string(),
-                label: "Projects".into(),
-                icon: None,
-            },
-            BreadcrumbItem {
-                id: "ui-library".to_string(),
-                label: "UI Library".into(),
-                icon: None,
-            },
-            BreadcrumbItem {
-                id: "components".to_string(),
-                label: "Components".into(),
-                icon: None,
-            },
+            BreadcrumbItem::new("home".to_string(), "Home"),
+            BreadcrumbItem::new("projects".to_string(), "Projects"),
+            BreadcrumbItem::new("ui-library".to_string(), "UI Library"),
+            BreadcrumbItem::new("components".to_string(), "Components"),
         ]
     }
 }

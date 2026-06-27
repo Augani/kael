@@ -15,7 +15,14 @@ fn render_icon(icon_src: IconSource, size: Pixels, color: Hsla) -> impl IntoElem
         IconSource::Named(name) => SharedString::from(resolve_icon_path(&name)),
     };
 
-    svg().path(svg_path).size(size).text_color(color)
+    div()
+        .size(size)
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_shrink_0()
+        .line_height(px(0.0))
+        .child(svg().path(svg_path).size(size).text_color(color))
 }
 
 /// Render an animated loading spinner that matches the button's text color.
@@ -353,7 +360,11 @@ impl RenderOnce for Button {
             .font(theme.tokens.font_family.clone())
             .color(fg);
 
-        let icon_size = text_size * 1.2;
+        let icon_size = if is_icon_only {
+            px(16.0)
+        } else {
+            text_size * 1.2
+        };
         let icon = self.icon.clone();
         let icon_pos = self.icon_position;
         let is_loading = self.loading;
@@ -369,7 +380,7 @@ impl RenderOnce for Button {
             .flex()
             .items_center()
             .justify_center()
-            .gap_2()
+            .when(!is_icon_only, |this| this.gap_2())
             .h(height)
             .px(px_h)
             .when(is_icon_only, |this| this.w(height))
@@ -426,33 +437,44 @@ impl RenderOnce for Button {
                         .max_size(size * 2.5),
                 )
             })
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .when(icon_pos == IconPosition::Start && !is_loading, |this| {
-                        this.when_some(icon.clone(), |this, icon_src| {
-                            this.child(render_icon(icon_src, icon_size, fg))
+            .when(is_icon_only, |this| {
+                this.child(if is_loading {
+                    render_loading_spinner(icon_size, fg).into_any_element()
+                } else if let Some(icon_src) = icon.clone() {
+                    render_icon(icon_src, icon_size, fg).into_any_element()
+                } else {
+                    div().size(icon_size).into_any_element()
+                })
+            })
+            .when(!is_icon_only, |this| {
+                this.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .when(icon_pos == IconPosition::Start && !is_loading, |this| {
+                            this.when_some(icon.clone(), |this, icon_src| {
+                                this.child(render_icon(icon_src, icon_size, fg))
+                            })
                         })
-                    })
-                    .when(is_loading && icon_pos == IconPosition::Start, |this| {
-                        this.child(render_loading_spinner(icon_size, fg))
-                    })
-                    .child(
-                        div()
-                            .when(self.variant == ButtonVariant::Link, |this| this.underline())
-                            .child(label_text),
-                    )
-                    .when(icon_pos == IconPosition::End && !is_loading, |this| {
-                        this.when_some(icon.clone(), |this, icon_src| {
-                            this.child(render_icon(icon_src, icon_size, fg))
+                        .when(is_loading && icon_pos == IconPosition::Start, |this| {
+                            this.child(render_loading_spinner(icon_size, fg))
                         })
-                    })
-                    .when(is_loading && icon_pos == IconPosition::End, |this| {
-                        this.child(render_loading_spinner(icon_size, fg))
-                    }),
-            )
+                        .child(
+                            div()
+                                .when(self.variant == ButtonVariant::Link, |this| this.underline())
+                                .child(label_text),
+                        )
+                        .when(icon_pos == IconPosition::End && !is_loading, |this| {
+                            this.when_some(icon.clone(), |this, icon_src| {
+                                this.child(render_icon(icon_src, icon_size, fg))
+                            })
+                        })
+                        .when(is_loading && icon_pos == IconPosition::End, |this| {
+                            this.child(render_loading_spinner(icon_size, fg))
+                        }),
+                )
+            })
     }
 }
 

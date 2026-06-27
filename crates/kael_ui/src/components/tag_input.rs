@@ -1,5 +1,4 @@
-use crate::styled_ext::StyledExt;
-use crate::theme::Theme;
+use crate::{astryx, components::token::Token, theme::Theme};
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
@@ -178,6 +177,14 @@ impl RenderOnce for TagInput {
         let focus_handle = state_data.focus_handle(cx);
         let is_focused = focus_handle.is_focused(window);
         let state = self.state.clone();
+        let has_tags = !tags.is_empty();
+        let max_tags_reached = state_data
+            .max_tags
+            .map(|max_tags| tags.len() >= max_tags)
+            .unwrap_or(false);
+        let disabled = self.disabled || max_tags_reached;
+        let hover_ring = astryx::input_hover_ring(theme.tokens.input);
+        let focus_ring = astryx::focus_ring(theme.tokens.primary);
 
         div()
             .map(|this| {
@@ -191,66 +198,54 @@ impl RenderOnce for TagInput {
                     .flex()
                     .flex_wrap()
                     .items_center()
-                    .gap(px(6.0))
+                    .gap(px(4.0))
                     .min_h(px(32.0))
-                    .px(px(10.0))
-                    .py(px(6.0))
+                    .when(!has_tags, |this| this.px(px(8.0)).py(px(4.0)))
+                    .when(has_tags, |this| this.p(px(3.0)))
                     .bg(theme.tokens.card)
                     .border_1()
                     .border_color(if is_focused {
-                        theme.tokens.ring
+                        theme.tokens.primary
                     } else {
                         theme.tokens.input
                     })
                     .rounded(theme.tokens.radius_md)
-                    .when(is_focused && !self.disabled, |d| {
-                        d.inset_ring(theme.tokens.ring.opacity(0.5), px(2.0))
+                    .font_family(theme.tokens.font_family.clone())
+                    .transition(theme.tokens.transition_fast)
+                    .shadow(smallvec::smallvec![astryx::focus_ring(
+                        kael::transparent_black()
+                    )])
+                    .when(is_focused && !disabled, |d| {
+                        d.shadow(smallvec::smallvec![focus_ring])
                     })
-                    .when(self.disabled, |d| d.opacity(0.5))
-                    .when(!self.disabled, |d| {
+                    .when(!is_focused && !disabled, |d| {
+                        d.hover(move |style| {
+                            style
+                                .border_color(theme.tokens.input)
+                                .shadow(smallvec::smallvec![hover_ring])
+                        })
+                    })
+                    .when(disabled, |d| d.opacity(0.5))
+                    .when(!disabled, |d| {
                         d.track_focus(&focus_handle.tab_index(0).tab_stop(true))
                     })
                     .children(tags.iter().enumerate().map(|(idx, tag)| {
                         let state_for_remove = state.clone();
                         let on_change = self.on_change.clone();
-                        let disabled = self.disabled;
 
-                        div()
-                            .id(SharedString::from(format!("tag-{}", idx)))
-                            .flex()
-                            .items_center()
-                            .gap(px(4.0))
-                            .px(px(8.0))
-                            .py(px(4.0))
-                            .bg(theme.tokens.primary.opacity(0.1))
-                            .text_color(theme.tokens.primary)
-                            .rounded(theme.tokens.radius_sm)
-                            .text_size(px(13.0))
-                            .font_family(theme.tokens.font_family.clone())
-                            .child(tag.clone())
-                            .when(!disabled, |d| {
-                                d.child(
-                                    div()
-                                        .id(SharedString::from(format!("tag-remove-{}", idx)))
-                                        .ml(px(2.0))
-                                        .cursor_pointer()
-                                        .rounded(px(2.0))
-                                        .transition(theme.tokens.transition_fast)
-                                        .hover(|s| s.bg(theme.tokens.primary.opacity(0.2)))
-                                        .text_size(px(12.0))
-                                        .on_click(move |_, window, cx| {
-                                            state_for_remove.update(cx, |s, cx| {
-                                                s.remove_tag(idx, cx);
-                                                if let Some(ref handler) = on_change {
-                                                    handler(&s.tags, window, cx);
-                                                }
-                                            });
-                                        })
-                                        .child("×"),
-                                )
+                        Token::new(tag.clone())
+                            .disabled(disabled)
+                            .on_remove(move |window, cx| {
+                                state_for_remove.update(cx, |s, cx| {
+                                    s.remove_tag(idx, cx);
+                                    if let Some(ref handler) = on_change {
+                                        handler(&s.tags, window, cx);
+                                    }
+                                });
                             })
+                            .into_any_element()
                     }))
-                    .when(!self.disabled, {
+                    .when(!disabled, {
                         let state_for_input = state.clone();
                         let on_change = self.on_change.clone();
                         let placeholder = self.placeholder.clone();
@@ -261,7 +256,9 @@ impl RenderOnce for TagInput {
                                     div()
                                         .id("tag-input-field")
                                         .min_w(px(60.0))
+                                        .when(has_tags, |this| this.pl(px(5.0)))
                                         .text_size(px(14.0))
+                                        .line_height(px(20.0))
                                         .text_color(if input_value.is_empty() {
                                             theme.tokens.muted_foreground
                                         } else {

@@ -1,6 +1,9 @@
 //! Avatar component - User profile image with fallback to initials or icon.
 
-use crate::theme::use_theme;
+use crate::{
+    components::{icon::Icon, icon_source::IconSource},
+    theme::use_theme,
+};
 use kael::{prelude::FluentBuilder as _, *};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -14,33 +17,152 @@ pub enum AvatarSize {
 }
 
 impl AvatarSize {
-    fn size_px(&self) -> f32 {
+    pub fn size_px(&self) -> f32 {
         match self {
-            Self::Xs => 24.0,
-            Self::Sm => 32.0,
-            Self::Md => 40.0,
+            Self::Xs => 20.0,
+            Self::Sm => 24.0,
+            Self::Md => 36.0,
             Self::Lg => 48.0,
-            Self::Xl => 64.0,
+            Self::Xl => 128.0,
         }
     }
 
     fn text_size_px(&self) -> f32 {
-        match self {
-            Self::Xs => 10.0,
-            Self::Sm => 13.0,
-            Self::Md => 16.0,
-            Self::Lg => 20.0,
-            Self::Xl => 26.0,
+        self.size_px() * 0.4
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub enum AvatarStatusDotVariant {
+    #[default]
+    Success,
+    Neutral,
+    Error,
+}
+
+#[derive(IntoElement)]
+pub struct AvatarStatusDot {
+    variant: AvatarStatusDotVariant,
+    avatar_size: AvatarSize,
+    label: Option<SharedString>,
+    icon: Option<IconSource>,
+    style: StyleRefinement,
+}
+
+impl AvatarStatusDot {
+    pub fn new() -> Self {
+        Self {
+            variant: AvatarStatusDotVariant::Success,
+            avatar_size: AvatarSize::Md,
+            label: None,
+            icon: None,
+            style: StyleRefinement::default(),
         }
+    }
+
+    pub fn variant(mut self, variant: AvatarStatusDotVariant) -> Self {
+        self.variant = variant;
+        self
+    }
+
+    pub fn avatar_size(mut self, size: AvatarSize) -> Self {
+        self.avatar_size = size;
+        self
+    }
+
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    pub fn icon(mut self, icon: impl Into<IconSource>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
+    fn metrics(avatar_size: AvatarSize) -> (Pixels, Pixels, Pixels) {
+        let size = avatar_size.size_px();
+        if size <= 36.0 {
+            (px(10.0), px(1.0), px(0.0))
+        } else if size <= 72.0 {
+            (px(20.0), px(2.0), px(12.0))
+        } else {
+            (px(32.0), px(4.0), px(18.0))
+        }
+    }
+}
+
+impl Default for AvatarStatusDot {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Styled for AvatarStatusDot {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for AvatarStatusDot {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let theme = use_theme();
+        let user_style = self.style;
+        let (dot_size, border_width, icon_size) = Self::metrics(self.avatar_size);
+        let color = match self.variant {
+            AvatarStatusDotVariant::Success => theme.tokens.success,
+            AvatarStatusDotVariant::Neutral => theme.tokens.muted_foreground,
+            AvatarStatusDotVariant::Error => theme.tokens.destructive,
+        };
+
+        div()
+            .relative()
+            .size(dot_size)
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .bg(color)
+            .border(border_width)
+            .border_color(theme.tokens.background)
+            .when_some(self.label, |this, label| {
+                this.child(
+                    div()
+                        .absolute()
+                        .left(px(-10000.0))
+                        .top(px(0.0))
+                        .size(px(1.0))
+                        .overflow_hidden()
+                        .child(label),
+                )
+            })
+            .when(icon_size > px(0.0), |this| {
+                this.when_some(self.icon, |this, icon| {
+                    this.child(
+                        Icon::new(icon)
+                            .size(icon_size)
+                            .color(theme.tokens.background),
+                    )
+                })
+            })
+            .map(|this| {
+                let mut div = this;
+                div.style().refine(&user_style);
+                div
+            })
     }
 }
 
 #[derive(IntoElement)]
 pub struct Avatar {
     src: Option<SharedString>,
+    fallback_src: Option<SharedString>,
+    alt: Option<SharedString>,
     name: Option<SharedString>,
     fallback_text: Option<SharedString>,
     size: AvatarSize,
+    status: Option<AnyElement>,
+    status_dot: Option<AvatarStatusDot>,
     colorful: bool,
     style: StyleRefinement,
 }
@@ -49,9 +171,13 @@ impl Avatar {
     pub fn new() -> Self {
         Self {
             src: None,
+            fallback_src: None,
+            alt: None,
             name: None,
             fallback_text: None,
             size: AvatarSize::default(),
+            status: None,
+            status_dot: None,
             colorful: false,
             style: StyleRefinement::default(),
         }
@@ -69,6 +195,21 @@ impl Avatar {
         self
     }
 
+    pub fn fallback_src(mut self, src: impl Into<SharedString>) -> Self {
+        self.fallback_src = Some(src.into());
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn fallbackSrc(self, src: impl Into<SharedString>) -> Self {
+        self.fallback_src(src)
+    }
+
+    pub fn alt(mut self, alt: impl Into<SharedString>) -> Self {
+        self.alt = Some(alt.into());
+        self
+    }
+
     pub fn name(mut self, name: impl Into<SharedString>) -> Self {
         self.name = Some(name.into());
         self
@@ -83,6 +224,17 @@ impl Avatar {
         self.size = size;
         self
     }
+
+    pub fn status(mut self, status: impl IntoElement) -> Self {
+        self.status = Some(status.into_any_element());
+        self
+    }
+
+    pub fn status_dot(mut self, status: AvatarStatusDot) -> Self {
+        self.status_dot = Some(status);
+        self
+    }
+
     fn extract_initials(name: &str) -> String {
         let words: Vec<&str> = name.split_whitespace().collect();
 
@@ -90,12 +242,18 @@ impl Avatar {
             format!(
                 "{}{}",
                 words[0].chars().next().unwrap_or('?').to_uppercase(),
-                words[1].chars().next().unwrap_or('?').to_uppercase()
+                words
+                    .last()
+                    .unwrap_or(&words[1])
+                    .chars()
+                    .next()
+                    .unwrap_or('?')
+                    .to_uppercase()
             )
         } else if let Some(first_word) = words.first() {
             first_word
                 .chars()
-                .take(2)
+                .take(1)
                 .collect::<String>()
                 .to_uppercase()
         } else {
@@ -142,7 +300,13 @@ impl RenderOnce for Avatar {
         let text_size_px = self.size.text_size_px();
         let user_style = self.style;
 
-        let (content, bg_color, text_color) = if let Some(src) = self.src {
+        let accessible_name = self
+            .alt
+            .clone()
+            .or_else(|| self.name.clone())
+            .unwrap_or_else(|| "Avatar".into());
+
+        let (content, bg_color, text_color) = if let Some(src) = self.src.or(self.fallback_src) {
             (
                 img(src)
                     .size(px(size_px))
@@ -160,10 +324,7 @@ impl RenderOnce for Avatar {
                     theme.tokens.background,
                 )
             } else {
-                (
-                    theme.tokens.muted_foreground.opacity(0.16),
-                    theme.tokens.foreground,
-                )
+                (theme.tokens.secondary, theme.tokens.muted_foreground)
             };
 
             (
@@ -183,37 +344,83 @@ impl RenderOnce for Avatar {
                     .child(fallback)
                     .into_any_element(),
                 theme.tokens.muted,
-                theme.tokens.foreground,
+                theme.tokens.muted_foreground,
             )
         } else {
             (
                 div()
                     .text_size(px(text_size_px * 0.7))
-                    .child("?")
+                    .child(Icon::new("user").size(px(size_px * 0.6)))
                     .into_any_element(),
                 theme.tokens.muted,
                 theme.tokens.muted_foreground,
             )
         };
 
+        let status = self.status;
+        let status_dot = self.status_dot;
+
         div()
+            .relative()
             .size(px(size_px))
             .flex()
             .flex_shrink_0()
             .items_center()
             .justify_center()
             .rounded_full()
-            .overflow_hidden()
             .bg(bg_color)
             .text_color(text_color)
             .font_family(theme.tokens.font_family.clone())
-            .border_2()
-            .border_color(theme.tokens.background)
+            .child(
+                div()
+                    .absolute()
+                    .left(px(-10000.0))
+                    .top(px(0.0))
+                    .size(px(1.0))
+                    .overflow_hidden()
+                    .child(accessible_name),
+            )
             .map(|this| {
                 let mut div = this;
                 div.style().refine(&user_style);
                 div
             })
-            .child(content)
+            .child(
+                div()
+                    .size(px(size_px))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .overflow_hidden()
+                    .child(content),
+            )
+            .when_some(status, |this, status| {
+                this.child(
+                    div()
+                        .absolute()
+                        .right(px(-2.0))
+                        .bottom(px(-2.0))
+                        .child(status),
+                )
+            })
+            .when_some(status_dot, |this, status| {
+                let edge_offset = size_px * ((1.0 - 1.0 / std::f32::consts::SQRT_2) / 2.0);
+                let dot_size = if size_px <= 36.0 {
+                    10.0
+                } else if size_px <= 72.0 {
+                    20.0
+                } else {
+                    32.0
+                };
+                let offset = edge_offset - dot_size / 2.0;
+                this.child(
+                    div()
+                        .absolute()
+                        .right(px(offset))
+                        .bottom(px(offset))
+                        .child(status.avatar_size(self.size)),
+                )
+            })
     }
 }

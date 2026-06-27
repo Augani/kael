@@ -31,6 +31,300 @@ pub struct Command {
     search_text: String,
 }
 
+pub type CommandPaletteItem = Command;
+
+#[derive(IntoElement)]
+pub struct CommandPaletteInput {
+    input: Entity<InputState>,
+    placeholder: SharedString,
+    end_content: Option<AnyElement>,
+    busy: bool,
+    style: StyleRefinement,
+}
+
+impl CommandPaletteInput {
+    pub fn new(input: Entity<InputState>) -> Self {
+        Self {
+            input,
+            placeholder: "Search...".into(),
+            end_content: None,
+            busy: false,
+            style: StyleRefinement::default(),
+        }
+    }
+
+    pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
+        self.placeholder = placeholder.into();
+        self
+    }
+
+    pub fn end_content(mut self, content: impl IntoElement) -> Self {
+        self.end_content = Some(content.into_any_element());
+        self
+    }
+
+    pub fn busy(mut self, busy: bool) -> Self {
+        self.busy = busy;
+        self
+    }
+}
+
+impl Styled for CommandPaletteInput {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for CommandPaletteInput {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
+        let user_style = self.style;
+
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .px(px(16.0))
+            .py(px(12.0))
+            .border_b_1()
+            .border_color(theme.tokens.border)
+            .child(
+                Icon::new("search")
+                    .size(px(18.0))
+                    .color(theme.tokens.muted_foreground),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .child(Input::new(&self.input).placeholder(self.placeholder)),
+            )
+            .when(self.busy, |this| {
+                this.child(
+                    crate::components::spinner::Spinner::new()
+                        .size(crate::components::spinner::SpinnerSize::Sm)
+                        .shade(crate::components::spinner::SpinnerShade::Subtle),
+                )
+            })
+            .children(self.end_content)
+            .map(|this| {
+                let mut div = this;
+                div.style().refine(&user_style);
+                div
+            })
+    }
+}
+
+#[derive(IntoElement)]
+pub struct CommandPaletteList {
+    children: Vec<AnyElement>,
+    style: StyleRefinement,
+}
+
+impl CommandPaletteList {
+    pub fn new() -> Self {
+        Self {
+            children: Vec::new(),
+            style: StyleRefinement::default(),
+        }
+    }
+
+    pub fn child(mut self, child: impl IntoElement) -> Self {
+        self.children.push(child.into_any_element());
+        self
+    }
+}
+
+impl Default for CommandPaletteList {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Styled for CommandPaletteList {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for CommandPaletteList {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let user_style = self.style;
+
+        div()
+            .flex_1()
+            .overflow_hidden()
+            .child(scrollable_vertical(
+                div().flex().flex_col().p(px(8.0)).children(self.children),
+            ))
+            .map(|this| {
+                let mut div = this;
+                div.style().refine(&user_style);
+                div
+            })
+    }
+}
+
+#[derive(IntoElement)]
+pub struct CommandPaletteGroup {
+    label: Option<SharedString>,
+    children: Vec<AnyElement>,
+    style: StyleRefinement,
+}
+
+impl CommandPaletteGroup {
+    pub fn new(label: impl Into<SharedString>) -> Self {
+        Self {
+            label: Some(label.into()),
+            children: Vec::new(),
+            style: StyleRefinement::default(),
+        }
+    }
+
+    pub fn unlabeled() -> Self {
+        Self {
+            label: None,
+            children: Vec::new(),
+            style: StyleRefinement::default(),
+        }
+    }
+
+    pub fn child(mut self, child: impl IntoElement) -> Self {
+        self.children.push(child.into_any_element());
+        self
+    }
+}
+
+impl Styled for CommandPaletteGroup {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for CommandPaletteGroup {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
+        let user_style = self.style;
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
+            .when_some(self.label, |this, label| {
+                this.child(
+                    label_small(label)
+                        .color(theme.tokens.muted_foreground)
+                        .px(px(12.0))
+                        .py(px(6.0)),
+                )
+            })
+            .children(self.children)
+            .map(|this| {
+                let mut div = this;
+                div.style().refine(&user_style);
+                div
+            })
+    }
+}
+
+#[derive(IntoElement)]
+pub struct CommandPaletteFooter {
+    children: Vec<AnyElement>,
+    style: StyleRefinement,
+}
+
+impl CommandPaletteFooter {
+    pub fn new() -> Self {
+        Self {
+            children: Vec::new(),
+            style: StyleRefinement::default(),
+        }
+    }
+
+    pub fn child(mut self, child: impl IntoElement) -> Self {
+        self.children.push(child.into_any_element());
+        self
+    }
+}
+
+impl Default for CommandPaletteFooter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Styled for CommandPaletteFooter {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for CommandPaletteFooter {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
+        let user_style = self.style;
+
+        div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .px(px(16.0))
+            .py(px(8.0))
+            .border_t_1()
+            .border_color(theme.tokens.border)
+            .bg(theme.tokens.muted.opacity(0.3))
+            .children(self.children)
+            .map(|this| {
+                let mut div = this;
+                div.style().refine(&user_style);
+                div
+            })
+    }
+}
+
+#[derive(IntoElement)]
+pub struct CommandPaletteEmpty {
+    message: SharedString,
+    style: StyleRefinement,
+}
+
+impl CommandPaletteEmpty {
+    pub fn new(message: impl Into<SharedString>) -> Self {
+        Self {
+            message: message.into(),
+            style: StyleRefinement::default(),
+        }
+    }
+}
+
+impl Styled for CommandPaletteEmpty {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for CommandPaletteEmpty {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
+        let user_style = self.style;
+
+        div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .h(px(160.0))
+            .px(px(16.0))
+            .text_size(px(13.0))
+            .line_height(relative(1.4))
+            .text_color(theme.tokens.muted_foreground)
+            .child(self.message)
+            .map(|this| {
+                let mut div = this;
+                div.style().refine(&user_style);
+                div
+            })
+    }
+}
+
 impl Command {
     pub fn new(id: impl Into<SharedString>, name: impl Into<SharedString>) -> Self {
         let id = id.into();
@@ -113,6 +407,16 @@ impl Command {
         }
 
         0
+    }
+}
+
+impl IntoElement for Command {
+    type Element = AnyElement;
+
+    fn into_element(self) -> Self::Element {
+        let theme = crate::theme::use_theme();
+        let overlay_hover = crate::astryx::overlay_hover(theme.tokens.background.l < 0.5);
+        render_command_item_with_theme(self, false, overlay_hover, &theme).into_any_element()
     }
 }
 
@@ -256,6 +560,7 @@ impl Render for CommandPalette {
         let filtered = state.filtered_commands();
         let selected_idx = state.selected_index();
         let user_style = self.style.clone();
+        let overlay_hover = crate::astryx::overlay_hover(theme.tokens.background.l < 0.5);
 
         div()
             .absolute()
@@ -304,13 +609,11 @@ impl Render for CommandPalette {
             }))
             .child(
                 div()
-                    .w(px(600.0))
-                    .max_h(px(500.0))
+                    .w(px(640.0))
+                    .max_h(px(480.0))
                     .flex()
                     .flex_col()
-                    .bg(theme.tokens.card)
-                    .border_1()
-                    .border_color(theme.tokens.border)
+                    .bg(theme.tokens.popover)
                     .rounded(theme.tokens.radius_lg)
                     .shadow(theme.tokens.shadow_lg.to_vec())
                     .overflow_hidden()
@@ -324,10 +627,16 @@ impl Render for CommandPalette {
                         div()
                             .flex()
                             .items_center()
+                            .gap(px(8.0))
                             .px(px(16.0))
                             .py(px(12.0))
                             .border_b_1()
                             .border_color(theme.tokens.border)
+                            .child(
+                                Icon::new("search")
+                                    .size(px(16.0))
+                                    .color(theme.tokens.muted_foreground),
+                            )
                             .child(
                                 Input::new(&self.search_input)
                                     .placeholder("Type a command or search..."),
@@ -353,7 +662,12 @@ impl Render for CommandPalette {
                                 }))
                                 .children(filtered.iter().enumerate().map(|(idx, command)| {
                                     let is_selected = idx == selected_idx;
-                                    render_command_item(command.clone(), is_selected, cx)
+                                    render_command_item(
+                                        command.clone(),
+                                        is_selected,
+                                        overlay_hover,
+                                        cx,
+                                    )
                                 })),
                         )),
                     )
@@ -366,7 +680,6 @@ impl Render for CommandPalette {
                             .py(px(8.0))
                             .border_t_1()
                             .border_color(theme.tokens.border)
-                            .bg(theme.tokens.muted.opacity(0.3))
                             .child(
                                 div()
                                     .flex()
@@ -389,20 +702,33 @@ impl Render for CommandPalette {
     }
 }
 
-fn render_command_item(command: Command, selected: bool, cx: &App) -> impl IntoElement {
+fn render_command_item(
+    command: Command,
+    selected: bool,
+    overlay_hover: Hsla,
+    cx: &App,
+) -> impl IntoElement {
     let theme = Theme::of(cx);
+    render_command_item_with_theme(command, selected, overlay_hover, &theme)
+}
 
+fn render_command_item_with_theme(
+    command: Command,
+    selected: bool,
+    overlay_hover: Hsla,
+    theme: &Theme,
+) -> impl IntoElement {
     div()
         .flex()
         .items_center()
-        .gap(px(12.0))
+        .gap(px(8.0))
         .px(px(12.0))
-        .py(px(10.0))
-        .rounded(theme.tokens.radius_sm)
+        .py(px(8.0))
+        .rounded(theme.tokens.radius_md)
         .cursor(CursorStyle::PointingHand)
         .when(selected, |div| div.bg(theme.tokens.accent))
         .when(!selected, |div| {
-            div.hover(|style| style.bg(theme.tokens.muted))
+            div.hover(move |style| style.bg(overlay_hover))
         })
         .when_some(command.on_select, |div, handler| {
             div.on_mouse_down(MouseButton::Left, move |_event, window, cx| {
@@ -410,11 +736,11 @@ fn render_command_item(command: Command, selected: bool, cx: &App) -> impl IntoE
             })
         })
         .when_some(command.icon, |div, icon| {
-            div.child(Icon::new(icon).size(px(18.0)).color(if selected {
-                theme.tokens.accent_foreground
-            } else {
-                theme.tokens.foreground
-            }))
+            div.child(
+                Icon::new(icon)
+                    .size(px(16.0))
+                    .color(theme.tokens.muted_foreground),
+            )
         })
         .child(
             div()
@@ -422,17 +748,9 @@ fn render_command_item(command: Command, selected: bool, cx: &App) -> impl IntoE
                 .flex()
                 .flex_col()
                 .gap(px(2.0))
-                .child(body(command.name).color(if selected {
-                    theme.tokens.accent_foreground
-                } else {
-                    theme.tokens.foreground
-                }))
+                .child(body(command.name).color(theme.tokens.foreground))
                 .when_some(command.description, |div, desc| {
-                    div.child(caption(desc).color(if selected {
-                        theme.tokens.accent_foreground.opacity(0.8)
-                    } else {
-                        theme.tokens.muted_foreground
-                    }))
+                    div.child(caption(desc).color(theme.tokens.muted_foreground))
                 }),
         )
         .children(command.shortcut.map(|shortcut| {
@@ -440,16 +758,8 @@ fn render_command_item(command: Command, selected: bool, cx: &App) -> impl IntoE
                 .px(px(8.0))
                 .py(px(4.0))
                 .rounded(theme.tokens.radius_sm)
-                .bg(if selected {
-                    theme.tokens.accent_foreground.opacity(0.2)
-                } else {
-                    theme.tokens.muted
-                })
-                .child(caption(shortcut).color(if selected {
-                    theme.tokens.accent_foreground
-                } else {
-                    theme.tokens.muted_foreground
-                }))
+                .bg(theme.tokens.muted)
+                .child(caption(shortcut).color(theme.tokens.muted_foreground))
                 .into_any_element()
         }))
 }

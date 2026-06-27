@@ -109,6 +109,18 @@ pub(crate) struct WindowInvalidator {
     inner: Rc<RefCell<WindowInvalidatorInner>>,
 }
 
+#[derive(Default)]
+struct DrawRootsTiming {
+    layout_us: u64,
+    view_render_us: u64,
+    taffy_compute_us: u64,
+    layout_nodes: u64,
+    layout_measure_count: u64,
+    layout_measure_us: u64,
+    layout_reused: bool,
+    paint_us: u64,
+}
+
 impl WindowInvalidator {
     pub fn new() -> Self {
         WindowInvalidator {
@@ -903,6 +915,12 @@ pub struct Window {
     frame_timeline: crate::FrameTimeline,
     #[cfg(any(feature = "inspector", debug_assertions))]
     frame_counter: u64,
+    frame_view_render_us: u64,
+    frame_taffy_compute_us: u64,
+    frame_layout_nodes: u64,
+    frame_layout_measure_count: u64,
+    frame_layout_measure_us: u64,
+    reuse_layout_on_next_frame: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1338,6 +1356,12 @@ impl Window {
             frame_timeline: crate::FrameTimeline::new(),
             #[cfg(any(feature = "inspector", debug_assertions))]
             frame_counter: 0,
+            frame_view_render_us: 0,
+            frame_taffy_compute_us: 0,
+            frame_layout_nodes: 0,
+            frame_layout_measure_count: 0,
+            frame_layout_measure_us: 0,
+            reuse_layout_on_next_frame: false,
         })
     }
 
@@ -1474,6 +1498,43 @@ impl Window {
             self.invalidator.set_dirty(true);
             self.update_frame_polling();
         }
+    }
+
+    /// Schedule a redraw that preserves the retained subtree caches.
+    ///
+    /// Unlike [`Window::refresh`], this deliberately does **not** set `self.refreshing`. The
+    /// `refreshing` flag disables every subtree cache (see `view.rs` and `cached.rs`, both gated
+    /// on `!window.refreshing`), so using `refresh()` here would force a full re-render + re-paint
+    /// of the entire tree on every scroll event. Scrolling only changes a scroll offset that is
+    /// applied at prepaint time, so unchanged sibling subtrees can replay straight from cache.
+    ///
+    /// It deliberately does **not** request taffy layout-solve reuse either. That fast-path
+    /// (`TaffyLayoutEngine::compute_layout` early-return) skips the per-element measure callbacks,
+    /// i.e. text shaping. A non-cached view re-renders fresh `StyledText` every frame and then
+    /// re-runs its prepaint (view.rs has no cache replay for non-`cached()` views), so reusing the
+    /// solve leaves that text unmeasured and panics at prepaint ("measurement has not been
+    /// performed"). A full layout is cheap here because only the visible content is in the tree.
+    pub(crate) fn refresh_preserving_caches(&mut self) {
+        if self.invalidator.not_drawing() {
+            self.invalidator.set_dirty(true);
+            self.update_frame_polling();
+        }
+    }
+
+    pub(crate) fn record_view_render_duration(&mut self, duration: Duration) {
+        let elapsed_us = duration.as_micros().min(u64::MAX as u128) as u64;
+        self.frame_view_render_us = self.frame_view_render_us.saturating_add(elapsed_us);
+    }
+
+    fn record_taffy_compute_duration(&mut self, duration: Duration) {
+        let elapsed_us = duration.as_micros().min(u64::MAX as u128) as u64;
+        self.frame_taffy_compute_us = self.frame_taffy_compute_us.saturating_add(elapsed_us);
+    }
+
+    pub(crate) fn record_layout_measure_duration(&mut self, duration: Duration) {
+        let elapsed_us = duration.as_micros().min(u64::MAX as u128) as u64;
+        self.frame_layout_measure_count = self.frame_layout_measure_count.saturating_add(1);
+        self.frame_layout_measure_us = self.frame_layout_measure_us.saturating_add(elapsed_us);
     }
 
     /// Enable or disable whole-frame damage skipping. When enabled, a frame whose scene
@@ -2283,9 +2344,16 @@ impl Window {
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
         #[cfg(any(feature = "inspector", debug_assertions))]
         let frame_started_at = Instant::now();
+        self.frame_view_render_us = 0;
+        self.frame_taffy_compute_us = 0;
+        self.frame_layout_nodes = 0;
+        self.frame_layout_measure_count = 0;
+        self.frame_layout_measure_us = 0;
         self.power_mode = cx.power_mode();
         self.reduce_motion = cx.reduce_motion();
         self.invalidate_entities();
+        let reuse_layout = mem::take(&mut self.reuse_layout_on_next_frame);
+        self.layout_engine_mut().begin_frame(reuse_layout);
         cx.entities.clear_accessed();
         debug_assert!(self.rendered_entity_stack.is_empty());
         self.invalidator.set_dirty(false);
@@ -2296,7 +2364,7 @@ impl Window {
         if let Some(input_handler) = self.platform_window.take_input_handler() {
             self.rendered_frame.input_handlers.push(Some(input_handler));
         }
-        self.draw_roots(cx);
+        let draw_roots_timing = self.draw_roots(cx);
         self.dirty_views.clear();
         self.next_frame.window_active = self.active.get();
 
@@ -2355,13 +2423,13 @@ impl Window {
         self.needs_present.set(true);
 
         #[cfg(any(feature = "inspector", debug_assertions))]
-        self.record_frame_timing(frame_started_at);
+        self.record_frame_timing(frame_started_at, draw_roots_timing);
 
         ArenaClearNeeded
     }
 
     #[cfg(any(feature = "inspector", debug_assertions))]
-    fn record_frame_timing(&mut self, frame_started_at: Instant) {
+    fn record_frame_timing(&mut self, frame_started_at: Instant, draw_roots: DrawRootsTiming) {
         let duration_us = frame_started_at.elapsed().as_micros().min(u64::MAX as u128) as u64;
         let start_us = self
             .last_frame_presented_at
@@ -2375,11 +2443,29 @@ impl Window {
             frame_number,
             start_us,
             duration_us,
-            layout_us: 0,
-            paint_us: 0,
+            layout_us: draw_roots.layout_us,
+            paint_us: draw_roots.paint_us,
             gpu_us: 0,
             element_count,
         });
+
+        if crate::scroll_trace_enabled() {
+            eprintln!(
+                "[kael-scroll:frame] no={} since_present_us={} duration_us={} layout_us={} view_render_us={} taffy_compute_us={} layout_nodes={} measure_count={} measure_us={} layout_reused={} paint_us={} hitboxes={}",
+                frame_number,
+                start_us,
+                duration_us,
+                draw_roots.layout_us,
+                draw_roots.view_render_us,
+                draw_roots.taffy_compute_us,
+                draw_roots.layout_nodes,
+                draw_roots.layout_measure_count,
+                draw_roots.layout_measure_us,
+                draw_roots.layout_reused,
+                draw_roots.paint_us,
+                element_count,
+            );
+        }
     }
 
     /// Returns the frame timing timeline recorded for this window.
@@ -2440,7 +2526,12 @@ impl Window {
         profiling::finish_frame!();
     }
 
-    fn draw_roots(&mut self, cx: &mut App) {
+    fn draw_roots(&mut self, cx: &mut App) -> DrawRootsTiming {
+        fn elapsed_us(start: Instant) -> u64 {
+            start.elapsed().as_micros().min(u64::MAX as u128) as u64
+        }
+
+        let layout_started_at = Instant::now();
         self.invalidator.set_phase(DrawPhase::Prepaint);
         self.tooltip_bounds.take();
 
@@ -2464,7 +2555,7 @@ impl Window {
 
         // Layout all root elements.
         let Some(root) = self.root.as_ref().cloned() else {
-            return;
+            return DrawRootsTiming::default();
         };
         let mut root_element = root.into_any();
         root_element.prepaint_as_root(Point::default(), root_size.into(), self, cx);
@@ -2496,8 +2587,10 @@ impl Window {
         }
 
         self.mouse_hit_test = self.next_frame.hit_test(self.mouse_position);
+        let layout_us = elapsed_us(layout_started_at);
 
         // Now actually paint the elements.
+        let paint_started_at = Instant::now();
         self.invalidator.set_phase(DrawPhase::Paint);
         root_element.paint(self, cx);
 
@@ -2516,6 +2609,17 @@ impl Window {
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         self.paint_inspector_hitbox(cx);
+
+        DrawRootsTiming {
+            layout_us,
+            view_render_us: self.frame_view_render_us,
+            taffy_compute_us: self.frame_taffy_compute_us,
+            layout_nodes: self.frame_layout_nodes,
+            layout_measure_count: self.frame_layout_measure_count,
+            layout_measure_us: self.frame_layout_measure_us,
+            layout_reused: self.layout_engine_mut().is_reusing_previous_layout(),
+            paint_us: elapsed_us(paint_started_at),
+        }
     }
 
     fn prepaint_tooltip(&mut self, cx: &mut App) -> Option<AnyElement> {
@@ -4225,6 +4329,7 @@ impl Window {
         cx.layout_id_buffer.extend(children);
         let rem_size = self.rem_size();
         let scale_factor = self.scale_factor();
+        self.frame_layout_nodes = self.frame_layout_nodes.saturating_add(1);
 
         self.layout_engine_mut()
             .request_layout(style, rem_size, scale_factor, &cx.layout_id_buffer)
@@ -4250,6 +4355,7 @@ impl Window {
 
         let rem_size = self.rem_size();
         let scale_factor = self.scale_factor();
+        self.frame_layout_nodes = self.frame_layout_nodes.saturating_add(1);
         self.layout_engine_mut()
             .request_measured_layout(style, rem_size, scale_factor, measure)
     }
@@ -4268,7 +4374,9 @@ impl Window {
         self.invalidator.debug_assert_prepaint();
 
         let mut layout_engine = self.take_layout_engine();
+        let started_at = Instant::now();
         layout_engine.compute_layout(layout_id, available_space, self, cx);
+        self.record_taffy_compute_duration(started_at.elapsed());
         self.layout_engine = Some(layout_engine);
     }
 

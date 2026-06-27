@@ -163,11 +163,10 @@ impl RenderOnce for Menu {
             .when_some(self.max_height, |div, h| div.max_h(h))
             .flex()
             .flex_col()
+            .gap(px(2.0))
             .bg(theme.tokens.popover)
-            .border_1()
-            .border_color(theme.tokens.border)
             .rounded(theme.tokens.radius_lg)
-            .shadow(theme.tokens.shadow_lg.to_vec())
+            .shadow(theme.tokens.shadow_md.to_vec())
             .p(px(4.0))
             .children(self.items.into_iter().map(render_menu_item))
             .map(|this| {
@@ -180,13 +179,14 @@ impl RenderOnce for Menu {
 
 fn render_menu_item(item: MenuItem) -> impl IntoElement {
     let theme = use_theme();
+    let overlay_hover = crate::astryx::overlay_hover(theme.tokens.background.l < 0.5);
 
     match item.kind {
         MenuItemKind::Separator => div()
             .h(px(1.0))
             .bg(theme.tokens.border)
             .my(px(4.0))
-            .mx(px(8.0)),
+            .mx(px(0.0)),
         _ => {
             let is_checked = matches!(
                 item.kind,
@@ -197,10 +197,12 @@ fn render_menu_item(item: MenuItem) -> impl IntoElement {
             div()
                 .flex()
                 .items_center()
-                .gap(px(12.0))
-                .px(px(12.0))
-                .py(px(8.0))
+                .gap(px(8.0))
+                .px(px(8.0))
+                .py(px(6.0))
                 .rounded(theme.tokens.radius_md)
+                .text_size(px(14.0))
+                .line_height(px(20.0))
                 .transition(theme.tokens.transition_fast)
                 .cursor(if item.disabled {
                     CursorStyle::Arrow
@@ -209,7 +211,7 @@ fn render_menu_item(item: MenuItem) -> impl IntoElement {
                 })
                 .when(item.disabled, |div| div.opacity(0.5))
                 .when(!item.disabled, |div| {
-                    div.hover(|style| style.bg(theme.tokens.accent))
+                    div.hover(move |style| style.bg(overlay_hover))
                 })
                 .when_some(item.on_click.filter(|_| !item.disabled), |div, handler| {
                     div.on_mouse_down(MouseButton::Left, move |_event, window, cx| {
@@ -218,25 +220,33 @@ fn render_menu_item(item: MenuItem) -> impl IntoElement {
                 })
                 .child(
                     div()
-                        .w(px(16.0))
-                        .h(px(16.0))
+                        .size(px(20.0))
                         .flex()
                         .items_center()
                         .justify_center()
+                        .flex_shrink_0()
                         .when(is_checked, |div| {
                             div.child(
                                 Icon::new("check")
-                                    .size(px(12.0))
+                                    .size(px(14.0))
                                     .color(theme.tokens.foreground),
                             )
                         }),
                 )
-                .when_some(item.icon, |div, icon| {
-                    div.child(Icon::new(icon).size(px(16.0)).color(if item.disabled {
-                        theme.tokens.muted_foreground
-                    } else {
-                        theme.tokens.foreground
-                    }))
+                .when_some(item.icon, |this, icon| {
+                    this.child(
+                        div()
+                            .size(px(20.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .flex_shrink_0()
+                            .child(Icon::new(icon).size(px(16.0)).color(if item.disabled {
+                                theme.tokens.muted_foreground
+                            } else {
+                                theme.tokens.foreground
+                            })),
+                    )
                 })
                 .child(
                     div()

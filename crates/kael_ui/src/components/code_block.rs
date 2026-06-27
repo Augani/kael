@@ -52,9 +52,19 @@ impl CodeBlock {
         self
     }
 
+    #[allow(non_snake_case)]
+    pub fn showLineNumbers(self, show: bool) -> Self {
+        self.show_line_numbers(show)
+    }
+
     pub fn highlight_lines(mut self, lines: Vec<usize>) -> Self {
         self.highlight_lines = lines;
         self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn highlightLines(self, lines: Vec<usize>) -> Self {
+        self.highlight_lines(lines)
     }
 
     pub fn max_height(mut self, height: Pixels) -> Self {
@@ -62,9 +72,19 @@ impl CodeBlock {
         self
     }
 
+    #[allow(non_snake_case)]
+    pub fn maxHeight(self, height: Pixels) -> Self {
+        self.max_height(height)
+    }
+
     pub fn show_copy_button(mut self, show: bool) -> Self {
         self.show_copy_button = show;
         self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn showCopyButton(self, show: bool) -> Self {
+        self.show_copy_button(show)
     }
 }
 

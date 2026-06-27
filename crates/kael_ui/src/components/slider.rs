@@ -1,4 +1,4 @@
-use crate::theme::use_theme;
+use crate::{astryx, theme::use_theme};
 use kael::{prelude::*, *};
 use std::rc::Rc;
 
@@ -17,27 +17,15 @@ pub enum SliderAxis {
 
 impl SliderSize {
     pub fn track_height(&self) -> Pixels {
-        match self {
-            SliderSize::Sm => px(2.0),
-            SliderSize::Md => px(4.0),
-            SliderSize::Lg => px(6.0),
-        }
+        px(4.0)
     }
 
     pub fn thumb_width(&self) -> Pixels {
-        match self {
-            SliderSize::Sm => px(16.0),
-            SliderSize::Md => px(20.0),
-            SliderSize::Lg => px(24.0),
-        }
+        px(20.0)
     }
 
     pub fn thumb_height(&self) -> Pixels {
-        match self {
-            SliderSize::Sm => px(12.0),
-            SliderSize::Md => px(16.0),
-            SliderSize::Lg => px(20.0),
-        }
+        px(20.0)
     }
 }
 
@@ -302,8 +290,6 @@ impl Slider {
                             .h(thumb_height)
                             .rounded(thumb_height / 2.0)
                             .bg(thumb_bg)
-                            .border_2()
-                            .border_color(theme.tokens.background)
                             .when(!self.disabled, |this| {
                                 this.shadow(theme.tokens.shadow_sm.to_vec())
                                     .cursor(CursorStyle::PointingHand)
@@ -474,8 +460,6 @@ impl Slider {
                             .h(thumb_height)
                             .rounded(thumb_width / 2.0)
                             .bg(thumb_bg)
-                            .border_2()
-                            .border_color(theme.tokens.background)
                             .when(!self.disabled, |this| {
                                 this.shadow(theme.tokens.shadow_sm.to_vec())
                                     .cursor(CursorStyle::PointingHand)
@@ -585,7 +569,7 @@ impl RenderOnce for Slider {
             )
         };
 
-        let focus_ring = theme.tokens.focus_ring_light();
+        let focus_ring = astryx::focus_ring_outer(theme.tokens.primary);
         let user_style = self.style.clone();
 
         match self.axis {

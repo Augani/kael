@@ -16,6 +16,55 @@ pub enum TabVariant {
     Pills,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TabsSize {
+    Sm,
+    #[default]
+    Md,
+    Lg,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TabsLayout {
+    #[default]
+    Hug,
+    Fill,
+}
+
+impl TabsSize {
+    fn padding_x(self) -> Pixels {
+        match self {
+            Self::Sm => px(10.0),
+            Self::Md => px(12.0),
+            Self::Lg => px(14.0),
+        }
+    }
+
+    fn height(self) -> Pixels {
+        match self {
+            Self::Sm => px(28.0),
+            Self::Md => px(32.0),
+            Self::Lg => px(36.0),
+        }
+    }
+
+    fn text_size(self) -> Pixels {
+        match self {
+            Self::Sm => px(12.0),
+            Self::Md => px(14.0),
+            Self::Lg => px(15.0),
+        }
+    }
+
+    fn icon_size(self) -> Pixels {
+        match self {
+            Self::Sm => px(14.0),
+            Self::Md => px(16.0),
+            Self::Lg => px(18.0),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct TabItem<T: Clone> {
     pub id: T,
@@ -27,9 +76,9 @@ pub struct TabItem<T: Clone> {
 }
 
 impl<T: Clone> TabItem<T> {
-    pub fn new(id: T, label: impl Into<SharedString>) -> Self {
+    pub fn new(id: impl Into<T>, label: impl Into<SharedString>) -> Self {
         Self {
-            id,
+            id: id.into(),
             label: label.into(),
             icon: None,
             badge: None,
@@ -85,6 +134,9 @@ pub struct Tabs<T: Clone + PartialEq + 'static> {
     panels: Vec<TabPanel>,
     selected_index: Option<usize>,
     variant: TabVariant,
+    size: TabsSize,
+    layout: TabsLayout,
+    has_divider: bool,
     on_change: Option<Arc<dyn Fn(&usize, &mut Window, &mut App) + Send + Sync + 'static>>,
     on_close: Option<Arc<dyn Fn(&T, &mut Window, &mut App) + Send + Sync + 'static>>,
     style: StyleRefinement,
@@ -103,6 +155,9 @@ impl<T: Clone + PartialEq + 'static> Tabs<T> {
             panels: Vec::new(),
             selected_index: Some(0),
             variant: TabVariant::default(),
+            size: TabsSize::default(),
+            layout: TabsLayout::default(),
+            has_divider: false,
             on_change: None,
             on_close: None,
             style: StyleRefinement::default(),
@@ -127,6 +182,26 @@ impl<T: Clone + PartialEq + 'static> Tabs<T> {
     pub fn variant(mut self, variant: TabVariant) -> Self {
         self.variant = variant;
         self
+    }
+
+    pub fn size(mut self, size: TabsSize) -> Self {
+        self.size = size;
+        self
+    }
+
+    pub fn layout(mut self, layout: TabsLayout) -> Self {
+        self.layout = layout;
+        self
+    }
+
+    pub fn has_divider(mut self, has_divider: bool) -> Self {
+        self.has_divider = has_divider;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn hasDivider(self, has_divider: bool) -> Self {
+        self.has_divider(has_divider)
     }
 
     pub fn selected_index(mut self, index: usize) -> Self {
@@ -165,6 +240,8 @@ impl<T: Clone + PartialEq + 'static> Tabs<T> {
 
     fn render_tab_button(
         variant: TabVariant,
+        size: TabsSize,
+        layout: TabsLayout,
         tab: &TabItem<T>,
         index: usize,
         is_active: bool,
@@ -175,12 +252,17 @@ impl<T: Clone + PartialEq + 'static> Tabs<T> {
         let base = div()
             .flex()
             .items_center()
-            .gap(px(6.0))
-            .px(px(12.0))
-            .py(px(8.0))
-            .text_size(px(14.0))
+            .justify_center()
+            .relative()
+            .gap(px(4.0))
+            .h(size.height())
+            .px(size.padding_x())
+            .text_size(size.text_size())
+            .line_height(px(20.0))
             .font_family(theme.tokens.font_family.clone())
+            .rounded(theme.tokens.radius_md)
             .transition(theme.tokens.transition_fast)
+            .when(layout == TabsLayout::Fill, |this| this.flex_1())
             .cursor(if tab.disabled {
                 CursorStyle::Arrow
             } else {
@@ -189,10 +271,17 @@ impl<T: Clone + PartialEq + 'static> Tabs<T> {
 
         let styled = match variant {
             TabVariant::Underline => base
+                .font_weight(if is_active {
+                    FontWeight::SEMIBOLD
+                } else {
+                    FontWeight::NORMAL
+                })
                 .text_color(if tab.disabled {
                     theme.tokens.muted_foreground
+                } else if is_active {
+                    theme.tokens.foreground
                 } else {
-                    theme.tokens.primary
+                    theme.tokens.muted_foreground
                 })
                 .border_b_2()
                 .border_color(if is_active {
@@ -201,7 +290,13 @@ impl<T: Clone + PartialEq + 'static> Tabs<T> {
                     kael::transparent_black()
                 })
                 .when(!tab.disabled && !is_active, |div| {
-                    div.hover(|style| style.text_color(theme.tokens.primary))
+                    div.hover(|style| {
+                        style
+                            .bg(crate::astryx::overlay_hover(
+                                theme.tokens.background.l < 0.5,
+                            ))
+                            .text_color(theme.tokens.foreground)
+                    })
                 }),
 
             TabVariant::Enclosed => base
@@ -219,11 +314,11 @@ impl<T: Clone + PartialEq + 'static> Tabs<T> {
                     theme.tokens.muted
                 })
                 .text_color(if is_active {
-                    theme.tokens.primary
+                    theme.tokens.foreground
                 } else if tab.disabled {
                     theme.tokens.muted_foreground
                 } else {
-                    theme.tokens.primary
+                    theme.tokens.muted_foreground
                 })
                 .when(!tab.disabled && !is_active, |div| {
                     div.hover(|mut style| {
@@ -257,13 +352,15 @@ impl<T: Clone + PartialEq + 'static> Tabs<T> {
         };
 
         let with_icon = styled.when_some(tab.icon.as_ref(), |div, icon| {
-            div.child(Icon::new(icon.clone()).size(px(14.0)).color(
+            div.child(Icon::new(icon.clone()).size(size.icon_size()).color(
                 if is_active && variant == TabVariant::Pills {
                     theme.tokens.primary_foreground
+                } else if is_active {
+                    theme.tokens.foreground
                 } else if tab.disabled {
                     theme.tokens.muted_foreground
                 } else {
-                    theme.tokens.primary
+                    theme.tokens.muted_foreground
                 },
             ))
         });
@@ -358,9 +455,11 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for Tabs<T> {
         let mut tab_list = div()
             .flex()
             .gap(px(4.0))
-            .when(self.variant == TabVariant::Underline, |div| {
-                div.border_b_1().border_color(theme.tokens.border)
-            })
+            .when(self.layout == TabsLayout::Fill, |div| div.w_full())
+            .when(
+                self.variant == TabVariant::Underline && self.has_divider,
+                |div| div.border_b_1().border_color(theme.tokens.border),
+            )
             .when(self.variant == TabVariant::Pills, |div| {
                 div.p(px(4.0))
                     .bg(theme.tokens.muted)
@@ -371,6 +470,8 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for Tabs<T> {
             let is_active = Some(index) == self.selected_index;
             tab_list = tab_list.child(Self::render_tab_button(
                 self.variant,
+                self.size,
+                self.layout,
                 tab,
                 index,
                 is_active,

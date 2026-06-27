@@ -14,7 +14,9 @@ pub struct AlertDialog {
     description: SharedString,
     cancel_text: SharedString,
     action_text: SharedString,
-    destructive: bool,
+    action_variant: ButtonVariant,
+    action_loading: bool,
+    width: Pixels,
     on_cancel: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
     on_action: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
     style: StyleRefinement,
@@ -28,7 +30,9 @@ impl AlertDialog {
             description: "This action cannot be undone.".into(),
             cancel_text: "Cancel".into(),
             action_text: "Continue".into(),
-            destructive: false,
+            action_variant: ButtonVariant::Default,
+            action_loading: false,
+            width: px(400.0),
             on_cancel: None,
             on_action: None,
             style: StyleRefinement::default(),
@@ -50,13 +54,52 @@ impl AlertDialog {
         self
     }
 
+    #[allow(non_snake_case)]
+    pub fn cancelLabel(self, text: impl Into<SharedString>) -> Self {
+        self.cancel_text(text)
+    }
+
     pub fn action_text(mut self, text: impl Into<SharedString>) -> Self {
         self.action_text = text.into();
         self
     }
 
+    #[allow(non_snake_case)]
+    pub fn actionLabel(self, text: impl Into<SharedString>) -> Self {
+        self.action_text(text)
+    }
+
+    pub fn action_variant(mut self, variant: ButtonVariant) -> Self {
+        self.action_variant = variant;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn actionVariant(self, variant: ButtonVariant) -> Self {
+        self.action_variant(variant)
+    }
+
+    pub fn action_loading(mut self, loading: bool) -> Self {
+        self.action_loading = loading;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isActionLoading(self, loading: bool) -> Self {
+        self.action_loading(loading)
+    }
+
+    pub fn width(mut self, width: Pixels) -> Self {
+        self.width = width;
+        self
+    }
+
     pub fn destructive(mut self, destructive: bool) -> Self {
-        self.destructive = destructive;
+        self.action_variant = if destructive {
+            ButtonVariant::Destructive
+        } else {
+            ButtonVariant::Default
+        };
         self
     }
 
@@ -98,7 +141,13 @@ impl AlertDialog {
     }
 }
 
-pub fn init_alert_dialog(_cx: &mut App) {}
+pub fn init_alert_dialog(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new(
+        "escape",
+        AlertDialogCancel,
+        Some("AlertDialog"),
+    )]);
+}
 
 impl Styled for AlertDialog {
     fn style(&mut self) -> &mut StyleRefinement {
@@ -114,7 +163,9 @@ impl Render for AlertDialog {
         let description = self.description.clone();
         let cancel_text = self.cancel_text.clone();
         let action_text = self.action_text.clone();
-        let destructive = self.destructive;
+        let action_variant = self.action_variant;
+        let action_loading = self.action_loading;
+        let width = self.width;
 
         div()
             .track_focus(&self.focus_handle)
@@ -127,10 +178,10 @@ impl Render for AlertDialog {
             .bg(hsla(0.0, 0.0, 0.0, 0.5))
             .child(
                 div()
-                    .w(px(500.0))
+                    .key_context("AlertDialog")
+                    .w(width)
+                    .max_w(relative(0.9))
                     .bg(theme.tokens.popover)
-                    .border_1()
-                    .border_color(theme.tokens.border)
                     .rounded(theme.tokens.radius_lg)
                     .shadow(theme.tokens.shadow_lg.to_vec())
                     .overflow_hidden()
@@ -143,6 +194,7 @@ impl Render for AlertDialog {
                             .child(
                                 div()
                                     .text_size(px(18.0))
+                                    .line_height(px(22.0))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme.tokens.foreground)
                                     .child(title),
@@ -151,17 +203,18 @@ impl Render for AlertDialog {
                                 div()
                                     .text_size(px(14.0))
                                     .text_color(theme.tokens.muted_foreground)
-                                    .line_height(relative(1.5))
+                                    .line_height(px(20.0))
                                     .child(description),
                             )
                             .child(
                                 div()
                                     .flex()
-                                    .gap(px(12.0))
+                                    .gap(px(8.0))
                                     .justify_end()
+                                    .items_center()
                                     .child(
                                         Button::new("alert-cancel-btn", cancel_text)
-                                            .variant(ButtonVariant::Outline)
+                                            .variant(ButtonVariant::Ghost)
                                             .size(ButtonSize::Md)
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.handle_cancel(window, cx);
@@ -169,12 +222,9 @@ impl Render for AlertDialog {
                                     )
                                     .child(
                                         Button::new("alert-action-btn", action_text)
-                                            .variant(if destructive {
-                                                ButtonVariant::Destructive
-                                            } else {
-                                                ButtonVariant::Default
-                                            })
+                                            .variant(action_variant)
                                             .size(ButtonSize::Md)
+                                            .loading(action_loading)
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.handle_action(window, cx);
                                             })),

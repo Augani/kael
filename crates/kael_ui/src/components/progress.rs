@@ -6,15 +6,20 @@ use kael::{prelude::FluentBuilder as _, *};
 pub enum ProgressVariant {
     /// Default blue progress bar
     Default,
+    Accent,
     /// Success/complete state (green)
     Success,
     /// Warning state (yellow/orange)
     Warning,
+    Neutral,
+    Error,
     /// Error/failure state (red)
     Destructive,
     /// An app-defined fill color.
     Custom(Hsla),
 }
+
+pub type ProgressBarVariant = ProgressVariant;
 
 /// Progress bar sizes
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -45,12 +50,15 @@ pub enum SpinnerType {
 pub struct ProgressBar {
     /// Progress value (0.0 to 1.0 for determinate, None for indeterminate)
     value: Option<f32>,
+    max: f32,
     variant: ProgressVariant,
     size: ProgressSize,
     /// Optional label to show percentage or custom text
     label: Option<SharedString>,
+    label_hidden: bool,
     /// Show percentage text overlay
     show_percentage: bool,
+    disabled: bool,
     style: StyleRefinement,
 }
 
@@ -59,10 +67,13 @@ impl ProgressBar {
     pub fn new(value: f32) -> Self {
         Self {
             value: Some(value.clamp(0.0, 1.0)),
+            max: 1.0,
             variant: ProgressVariant::Default,
             size: ProgressSize::Md,
             label: None,
+            label_hidden: false,
             show_percentage: false,
+            disabled: false,
             style: StyleRefinement::default(),
         }
     }
@@ -71,12 +82,28 @@ impl ProgressBar {
     pub fn indeterminate() -> Self {
         Self {
             value: None,
+            max: 1.0,
             variant: ProgressVariant::Default,
             size: ProgressSize::Md,
             label: None,
+            label_hidden: false,
             show_percentage: false,
+            disabled: false,
             style: StyleRefinement::default(),
         }
+    }
+
+    pub fn value(mut self, value: f32) -> Self {
+        self.value = Some(value.clamp(0.0, self.max));
+        self
+    }
+
+    pub fn max(mut self, max: f32) -> Self {
+        self.max = max.max(f32::EPSILON);
+        if let Some(value) = self.value {
+            self.value = Some(value.clamp(0.0, self.max));
+        }
+        self
     }
 
     /// Set the progress variant
@@ -103,10 +130,49 @@ impl ProgressBar {
         self
     }
 
+    pub fn is_label_hidden(mut self, hidden: bool) -> Self {
+        self.label_hidden = hidden;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isLabelHidden(self, hidden: bool) -> Self {
+        self.is_label_hidden(hidden)
+    }
+
     /// Show percentage text (only for determinate progress)
     pub fn show_percentage(mut self, show: bool) -> Self {
         self.show_percentage = show;
         self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn hasValueLabel(self, show: bool) -> Self {
+        self.show_percentage(show)
+    }
+
+    pub fn is_indeterminate(mut self, indeterminate: bool) -> Self {
+        if indeterminate {
+            self.value = None;
+        } else if self.value.is_none() {
+            self.value = Some(0.0);
+        }
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isIndeterminate(self, indeterminate: bool) -> Self {
+        self.is_indeterminate(indeterminate)
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isDisabled(self, disabled: bool) -> Self {
+        self.disabled(disabled)
     }
 }
 
@@ -123,7 +189,6 @@ impl RenderOnce for ProgressBar {
         let destructive = tokens.destructive;
         let foreground = tokens.foreground;
         let muted_foreground = tokens.muted_foreground;
-        let radius_lg = tokens.radius_lg;
         let user_style = self.style;
 
         let height = match self.size {
@@ -132,21 +197,27 @@ impl RenderOnce for ProgressBar {
             ProgressSize::Lg => px(12.0),
         };
 
-        let bar_color = match self.variant {
-            ProgressVariant::Default => primary,
+        let mut bar_color = match self.variant {
+            ProgressVariant::Default | ProgressVariant::Accent => primary,
             ProgressVariant::Success => tokens.success, // green-500
             ProgressVariant::Warning => tokens.warning, // amber-500
-            ProgressVariant::Destructive => destructive,
+            ProgressVariant::Neutral => tokens.muted_foreground,
+            ProgressVariant::Error | ProgressVariant::Destructive => destructive,
             ProgressVariant::Custom(color) => color,
         };
+        if self.disabled {
+            bar_color = tokens.muted_foreground;
+        }
 
         let progress_width = if let Some(value) = self.value {
-            relative(value)
+            relative((value / self.max).clamp(0.0, 1.0))
         } else {
-            relative(0.3) // Indeterminate shows 30% width animated
+            relative(0.4)
         };
 
-        let percentage_text = self.value.map(|v| format!("{}%", (v * 100.0) as u32));
+        let percentage_text = self
+            .value
+            .map(|v| format!("{}%", ((v / self.max) * 100.0).round() as u32));
 
         div()
             .flex()
@@ -154,19 +225,24 @@ impl RenderOnce for ProgressBar {
             .gap(px(8.0))
             .w_full()
             .when(
-                self.label.is_some() || (self.show_percentage && percentage_text.is_some()),
+                (self.label.is_some() && !self.label_hidden)
+                    || (self.show_percentage && percentage_text.is_some()),
                 |this| {
                     this.child(
                         div()
                             .flex()
                             .justify_between()
                             .items_center()
-                            .when_some(self.label, |this, label| {
+                            .when_some(self.label.filter(|_| !self.label_hidden), |this, label| {
                                 this.child(
                                     div()
                                         .text_sm()
                                         .font_weight(FontWeight::MEDIUM)
-                                        .text_color(foreground)
+                                        .text_color(if self.disabled {
+                                            muted_foreground
+                                        } else {
+                                            foreground
+                                        })
                                         .child(label),
                                 )
                             })
@@ -187,7 +263,7 @@ impl RenderOnce for ProgressBar {
                     .w_full()
                     .h(height)
                     .rounded_full()
-                    .bg(muted_foreground.opacity(0.25))
+                    .bg(tokens.muted)
                     .overflow_hidden()
                     .child(
                         div()
@@ -197,16 +273,18 @@ impl RenderOnce for ProgressBar {
                             .h_full()
                             .w(progress_width)
                             .bg(bar_color)
-                            .rounded(radius_lg)
+                            .rounded_full()
                             .map(|this| {
                                 if self.value.is_none() {
                                     this.with_animation(
                                         "indeterminate-progress",
-                                        Animation::new(std::time::Duration::from_secs(2))
+                                        Animation::new(std::time::Duration::from_millis(1500))
                                             .repeat_forever()
-                                            .with_easing(crate::animations::easings::linear),
+                                            .with_easing(
+                                                crate::animations::easings::ease_in_out_quad,
+                                            ),
                                         |div, delta| {
-                                            let offset = (delta - 0.5) * 2.0;
+                                            let offset = -1.0 + delta * 3.5;
                                             div.left(relative(offset))
                                         },
                                     )
@@ -303,10 +381,11 @@ impl RenderOnce for CircularProgress {
         let user_style = self.style;
 
         let stroke_color = match self.variant {
-            ProgressVariant::Default => primary,
+            ProgressVariant::Default | ProgressVariant::Accent => primary,
             ProgressVariant::Success => tokens.success,
             ProgressVariant::Warning => tokens.warning,
-            ProgressVariant::Destructive => destructive,
+            ProgressVariant::Neutral => tokens.muted_foreground,
+            ProgressVariant::Error | ProgressVariant::Destructive => destructive,
             ProgressVariant::Custom(color) => color,
         };
 

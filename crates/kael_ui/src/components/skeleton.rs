@@ -12,11 +12,38 @@ pub enum SkeletonVariant {
     Rect,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SkeletonRadius {
+    None,
+    R0,
+    R1,
+    R2,
+    #[default]
+    R3,
+    R4,
+    Rounded,
+}
+
+impl SkeletonRadius {
+    fn pixels(self, tokens: &crate::theme::ThemeTokens) -> Pixels {
+        match self {
+            Self::None | Self::R0 => px(0.0),
+            Self::R1 => tokens.radius_sm,
+            Self::R2 => tokens.radius_md,
+            Self::R3 => tokens.radius_lg,
+            Self::R4 => tokens.radius_xl,
+            Self::Rounded => px(9999.0),
+        }
+    }
+}
+
 #[derive(IntoElement)]
 pub struct Skeleton {
     base: Div,
     variant: SkeletonVariant,
     secondary: bool,
+    radius: Option<SkeletonRadius>,
+    index: usize,
 }
 
 impl Skeleton {
@@ -25,6 +52,8 @@ impl Skeleton {
             base: div(),
             variant: SkeletonVariant::default(),
             secondary: false,
+            radius: None,
+            index: 0,
         }
     }
 
@@ -37,18 +66,31 @@ impl Skeleton {
         self.secondary = secondary;
         self
     }
+
+    pub fn radius(mut self, radius: SkeletonRadius) -> Self {
+        self.radius = Some(radius);
+        self
+    }
+
+    /// Stagger this skeleton's pulse timing by its index in a loading group.
+    pub fn index(mut self, index: usize) -> Self {
+        self.index = index;
+        self
+    }
 }
 
 impl RenderOnce for Skeleton {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = &Theme::of(cx).tokens;
         let radius_md = tokens.radius_md;
+        let explicit_radius = self.radius.map(|radius| radius.pixels(tokens));
 
         let base_color = if self.secondary {
-            tokens.muted_foreground.opacity(0.10)
+            tokens.input.opacity(0.75)
         } else {
-            tokens.muted_foreground.opacity(0.16)
+            tokens.input
         };
+        let index = self.index;
 
         self.base
             .when(self.variant == SkeletonVariant::Text, |this| {
@@ -60,14 +102,23 @@ impl RenderOnce for Skeleton {
             .when(self.variant == SkeletonVariant::Rect, |this| {
                 this.rounded(radius_md)
             })
+            .when_some(explicit_radius, |this, radius| this.rounded(radius))
             .bg(base_color)
+            .opacity(0.25)
             .with_animation(
                 "skeleton-pulse",
-                Animation::new(Duration::from_secs(2))
+                Animation::new(Duration::from_millis(1100))
+                    .delay(Duration::from_millis(1000 + 100 * index as u64))
                     .repeat_forever()
-                    .with_easing(ease_in_out),
+                    .with_easing(crate::animations::easings::linear),
                 move |this, delta| {
-                    let opacity = 1.0 - (delta * 0.3);
+                    let stepped = (delta * 10.0).floor() / 10.0;
+                    let wave = if stepped <= 0.5 {
+                        stepped * 2.0
+                    } else {
+                        (1.0 - stepped) * 2.0
+                    };
+                    let opacity = 0.25 + wave * 0.75;
                     this.opacity(opacity)
                 },
             )

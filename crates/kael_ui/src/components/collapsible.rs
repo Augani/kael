@@ -16,6 +16,74 @@ pub struct Collapsible {
     style: StyleRefinement,
 }
 
+#[derive(IntoElement)]
+pub struct CollapsibleGroup {
+    children: Vec<AnyElement>,
+    divided: bool,
+    style: StyleRefinement,
+}
+
+impl CollapsibleGroup {
+    pub fn new() -> Self {
+        Self {
+            children: Vec::new(),
+            divided: true,
+            style: StyleRefinement::default(),
+        }
+    }
+
+    pub fn child(mut self, child: impl IntoElement) -> Self {
+        self.children.push(child.into_any_element());
+        self
+    }
+
+    pub fn divided(mut self, divided: bool) -> Self {
+        self.divided = divided;
+        self
+    }
+}
+
+impl Default for CollapsibleGroup {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Styled for CollapsibleGroup {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for CollapsibleGroup {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx);
+        let user_style = self.style;
+
+        div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .bg(theme.tokens.card)
+            .border_1()
+            .border_color(theme.tokens.border)
+            .rounded(theme.tokens.radius_lg)
+            .overflow_hidden()
+            .children(self.children.into_iter().enumerate().map(|(ix, child)| {
+                div()
+                    .when(self.divided && ix > 0, |this| {
+                        this.border_t_1().border_color(theme.tokens.border)
+                    })
+                    .child(child)
+            }))
+            .map(|this| {
+                let mut div = this;
+                div.style().refine(&user_style);
+                div
+            })
+    }
+}
+
 impl Collapsible {
     pub fn new() -> Self {
         Self {

@@ -8,18 +8,28 @@ use std::rc::Rc;
 pub struct DropdownItem {
     id: SharedString,
     label: SharedString,
+    description: Option<SharedString>,
     icon: Option<IconSource>,
+    end_content: Option<SharedString>,
     disabled: bool,
     destructive: bool,
     on_click: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
 }
+
+pub type DropdownMenuItem = DropdownItem;
+pub type DropdownMenuDivider = DropdownItem;
+pub type DropdownMenuOption = DropdownItem;
+pub type DropdownMenuSection = Vec<DropdownItem>;
+pub type DropdownMenuItemData = DropdownItem;
 
 impl DropdownItem {
     pub fn new(id: impl Into<SharedString>, label: impl Into<SharedString>) -> Self {
         Self {
             id: id.into(),
             label: label.into(),
+            description: None,
             icon: None,
+            end_content: None,
             disabled: false,
             destructive: false,
             on_click: None,
@@ -30,7 +40,9 @@ impl DropdownItem {
         Self {
             id: "__separator__".into(),
             label: "".into(),
+            description: None,
             icon: None,
+            end_content: None,
             disabled: true,
             destructive: false,
             on_click: None,
@@ -40,6 +52,25 @@ impl DropdownItem {
     pub fn icon(mut self, icon: impl Into<IconSource>) -> Self {
         self.icon = Some(icon.into());
         self
+    }
+
+    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn end_content(mut self, content: impl Into<SharedString>) -> Self {
+        self.end_content = Some(content.into());
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn endContent(self, content: impl Into<SharedString>) -> Self {
+        self.end_content(content)
+    }
+
+    pub fn shortcut(self, shortcut: impl Into<SharedString>) -> Self {
+        self.end_content(shortcut)
     }
 
     pub fn disabled(mut self, disabled: bool) -> Self {
@@ -163,6 +194,8 @@ impl RenderOnce for Dropdown {
         let user_style = self.style;
         let is_open = self.state.read(cx).open;
         let state = self.state.clone();
+        let dark = theme.tokens.background.l < 0.5;
+        let overlay_hover = crate::astryx::overlay_hover(dark);
 
         div()
             .relative()
@@ -188,22 +221,14 @@ impl RenderOnce for Dropdown {
                         .when(self.align == DropdownAlign::End, |d| d.right_0())
                         .when_some(self.min_width, |d, w| d.min_w(w))
                         .bg(theme.tokens.popover)
-                        .border_1()
-                        .border_color(theme.tokens.border)
                         .rounded(theme.tokens.radius_lg)
-                        .shadow(smallvec::smallvec![BoxShadow {
-                            color: hsla(0.0, 0.0, 0.0, 0.15),
-                            offset: point(px(0.0), px(4.0)),
-                            blur_radius: px(12.0),
-                            spread_radius: px(0.0),
-                            inset: false,
-                        }])
-                        .py(px(4.0))
+                        .shadow(theme.tokens.shadow_md.to_vec())
+                        .p(px(4.0))
+                        .gap(px(2.0))
                         .children(self.items.iter().map(|item| {
                             if item.is_separator() {
                                 return div()
                                     .h(px(1.0))
-                                    .mx(px(8.0))
                                     .my(px(4.0))
                                     .bg(theme.tokens.border)
                                     .into_any_element();
@@ -220,7 +245,7 @@ impl RenderOnce for Dropdown {
                             let hover_bg = if item.destructive {
                                 theme.tokens.destructive.opacity(0.1)
                             } else {
-                                theme.tokens.accent
+                                overlay_hover
                             };
 
                             let on_click = item.on_click.clone();
@@ -232,14 +257,14 @@ impl RenderOnce for Dropdown {
                                 .flex()
                                 .items_center()
                                 .gap(px(8.0))
-                                .px(px(12.0))
-                                .py(px(8.0))
-                                .mx(px(4.0))
-                                .rounded(theme.tokens.radius_sm)
+                                .px(px(8.0))
+                                .py(px(6.0))
+                                .rounded(theme.tokens.radius_md)
                                 .text_size(px(14.0))
                                 .text_color(text_color)
                                 .font_family(theme.tokens.font_family.clone())
                                 .transition(theme.tokens.transition_fast)
+                                .when(disabled, |d| d.opacity(0.5))
                                 .when(!disabled, |d| {
                                     d.cursor_pointer().hover(move |s| s.bg(hover_bg))
                                 })
@@ -253,10 +278,52 @@ impl RenderOnce for Dropdown {
                                 })
                                 .when_some(item.icon.as_ref(), |d, icon| {
                                     d.child(
-                                        Icon::new(icon.clone()).size(px(16.0)).color(text_color),
+                                        div()
+                                            .size(px(20.0))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .flex_shrink_0()
+                                            .child(
+                                                Icon::new(icon.clone())
+                                                    .size(px(16.0))
+                                                    .color(text_color),
+                                            ),
                                     )
                                 })
-                                .child(item.label.clone())
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(1.0))
+                                        .overflow_hidden()
+                                        .child(
+                                            div()
+                                                .line_height(px(20.0))
+                                                .text_color(text_color)
+                                                .child(item.label.clone()),
+                                        )
+                                        .when_some(item.description.clone(), |d, description| {
+                                            d.child(
+                                                div()
+                                                    .text_size(px(12.0))
+                                                    .line_height(px(16.0))
+                                                    .text_color(theme.tokens.muted_foreground)
+                                                    .child(description),
+                                            )
+                                        }),
+                                )
+                                .when_some(item.end_content.clone(), |d, content| {
+                                    d.child(
+                                        div()
+                                            .ml_auto()
+                                            .text_size(px(12.0))
+                                            .line_height(px(16.0))
+                                            .text_color(theme.tokens.muted_foreground)
+                                            .child(content),
+                                    )
+                                })
                                 .into_any_element()
                         })),
                 )

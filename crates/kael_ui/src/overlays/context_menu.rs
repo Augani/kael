@@ -5,24 +5,38 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::animations::easings;
+use crate::components::icon::Icon;
 use crate::theme::Theme;
 
 #[derive(Clone)]
 pub struct ContextMenuItem {
-    label: SharedString,
-    icon: Option<SharedString>,
-    disabled: bool,
-    divider: bool,
-    on_click: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    pub label: SharedString,
+    pub description: Option<SharedString>,
+    pub icon: Option<SharedString>,
+    pub end_content: Option<SharedString>,
+    pub disabled: bool,
+    pub divider: bool,
+    pub destructive: bool,
+    pub on_click: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
 }
+
+pub type ContextMenuProps = ContextMenu;
+pub type ContextMenuItemProps = ContextMenuItem;
+pub type ContextMenuItemData = ContextMenuItem;
+pub type ContextMenuDivider = ContextMenuItem;
+pub type ContextMenuOption = ContextMenuItem;
+pub type ContextMenuSection = Vec<ContextMenuItem>;
 
 impl ContextMenuItem {
     pub fn new(_id: impl Into<SharedString>, label: impl Into<SharedString>) -> Self {
         Self {
             label: label.into(),
+            description: None,
             icon: None,
+            end_content: None,
             disabled: false,
             divider: false,
+            destructive: false,
             on_click: None,
         }
     }
@@ -32,8 +46,32 @@ impl ContextMenuItem {
         self
     }
 
+    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn end_content(mut self, content: impl Into<SharedString>) -> Self {
+        self.end_content = Some(content.into());
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn endContent(self, content: impl Into<SharedString>) -> Self {
+        self.end_content(content)
+    }
+
+    pub fn shortcut(self, shortcut: impl Into<SharedString>) -> Self {
+        self.end_content(shortcut)
+    }
+
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    pub fn destructive(mut self, destructive: bool) -> Self {
+        self.destructive = destructive;
         self
     }
 
@@ -53,9 +91,12 @@ impl ContextMenuItem {
     pub fn separator() -> Self {
         Self {
             label: "".into(),
+            description: None,
             icon: None,
+            end_content: None,
             disabled: true,
             divider: true,
+            destructive: false,
             on_click: None,
         }
     }
@@ -65,6 +106,7 @@ impl ContextMenuItem {
 pub struct ContextMenu {
     position: Point<Pixels>,
     items: Vec<ContextMenuItem>,
+    min_width: Pixels,
     on_close: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
     dismissing: bool,
     style: StyleRefinement,
@@ -75,6 +117,7 @@ impl ContextMenu {
         Self {
             position,
             items: Vec::new(),
+            min_width: px(160.0),
             on_close: None,
             dismissing: false,
             style: StyleRefinement::default(),
@@ -96,6 +139,16 @@ impl ContextMenu {
         self
     }
 
+    pub fn menu_width(mut self, width: Pixels) -> Self {
+        self.min_width = width;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn menuWidth(self, width: Pixels) -> Self {
+        self.menu_width(width)
+    }
+
     pub fn on_close<F>(mut self, handler: F) -> Self
     where
         F: Fn(&mut Window, &mut App) + 'static,
@@ -115,9 +168,11 @@ impl RenderOnce for ContextMenu {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = Theme::of(cx);
         let position = self.position;
+        let min_width = self.min_width;
         let on_close_handler = self.on_close.clone();
         let user_style = self.style;
         let dismissing = self.dismissing;
+        let overlay_hover = crate::astryx::overlay_hover(theme.tokens.background.l < 0.5);
 
         div()
             .absolute()
@@ -138,13 +193,12 @@ impl RenderOnce for ContextMenu {
                     .occlude()
                     .left(position.x)
                     .top(position.y)
-                    .min_w(px(200.0))
+                    .min_w(min_width)
                     .bg(theme.tokens.popover)
-                    .border_1()
-                    .border_color(theme.tokens.border)
                     .rounded(theme.tokens.radius_lg)
-                    .shadow(theme.tokens.shadow_lg.to_vec())
+                    .shadow(theme.tokens.shadow_md.to_vec())
                     .p(px(4.0))
+                    .gap(px(2.0))
                     .map(|this| {
                         let mut div = this;
                         div.style().refine(&user_style);
@@ -163,6 +217,7 @@ impl RenderOnce for ContextMenu {
                         let on_close = self.on_close.clone();
                         let handler = item.on_click.clone();
                         let disabled = item.disabled;
+                        let destructive = item.destructive;
 
                         div()
                             .flex()
@@ -172,6 +227,7 @@ impl RenderOnce for ContextMenu {
                             .py(px(6.0))
                             .rounded(theme.tokens.radius_md)
                             .text_size(px(14.0))
+                            .line_height(px(20.0))
                             .cursor(if disabled {
                                 CursorStyle::Arrow
                             } else {
@@ -181,8 +237,12 @@ impl RenderOnce for ContextMenu {
                                 this.text_color(theme.tokens.muted_foreground).opacity(0.5)
                             })
                             .when(!disabled, |this: Div| {
-                                this.text_color(theme.tokens.popover_foreground)
-                                    .hover(|style| style.bg(theme.tokens.accent.opacity(0.1)))
+                                this.text_color(if destructive {
+                                    theme.tokens.destructive
+                                } else {
+                                    theme.tokens.popover_foreground
+                                })
+                                .hover(move |style| style.bg(overlay_hover))
                             })
                             .when(!disabled && handler.is_some(), |this: Div| {
                                 let handler = handler.unwrap();
@@ -194,8 +254,64 @@ impl RenderOnce for ContextMenu {
                                     }
                                 })
                             })
-                            .when_some(item.icon, |this: Div, _icon| this)
-                            .child(item.label)
+                            .when_some(item.icon, |this: Div, icon| {
+                                this.child(
+                                    div()
+                                        .size(px(20.0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .flex_shrink_0()
+                                        .child(Icon::new(icon.to_string()).size(px(16.0)).color(
+                                            if disabled {
+                                                theme.tokens.muted_foreground
+                                            } else if destructive {
+                                                theme.tokens.destructive
+                                            } else {
+                                                theme.tokens.popover_foreground
+                                            },
+                                        )),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(1.0))
+                                    .overflow_hidden()
+                                    .child(
+                                        div()
+                                            .line_height(px(20.0))
+                                            .text_color(if disabled {
+                                                theme.tokens.muted_foreground
+                                            } else if destructive {
+                                                theme.tokens.destructive
+                                            } else {
+                                                theme.tokens.popover_foreground
+                                            })
+                                            .child(item.label),
+                                    )
+                                    .when_some(item.description, |this, description| {
+                                        this.child(
+                                            div()
+                                                .text_size(px(12.0))
+                                                .line_height(px(16.0))
+                                                .text_color(theme.tokens.muted_foreground)
+                                                .child(description),
+                                        )
+                                    }),
+                            )
+                            .when_some(item.end_content, |this, content| {
+                                this.child(
+                                    div()
+                                        .ml_auto()
+                                        .text_size(px(12.0))
+                                        .line_height(px(16.0))
+                                        .text_color(theme.tokens.muted_foreground)
+                                        .child(content),
+                                )
+                            })
                             .into_any_element()
                     }))
                     .with_animation(

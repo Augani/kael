@@ -1,3 +1,6 @@
+use crate::astryx;
+use crate::components::field::{Field, FieldStatusType};
+use crate::components::field_status::FieldStatusVariant;
 use crate::components::icon::Icon;
 use crate::components::spinner::{Spinner, SpinnerSize, SpinnerVariant};
 use crate::theme::Theme;
@@ -148,20 +151,27 @@ pub enum FileUploadSize {
     Lg,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum FileUploadMode {
+    Input,
+    #[default]
+    Dropzone,
+}
+
 impl FileUploadSize {
     fn min_height(&self) -> Pixels {
         match self {
-            FileUploadSize::Sm => px(120.0),
-            FileUploadSize::Md => px(180.0),
-            FileUploadSize::Lg => px(240.0),
+            FileUploadSize::Sm => px(96.0),
+            FileUploadSize::Md => px(128.0),
+            FileUploadSize::Lg => px(160.0),
         }
     }
 
     fn icon_size(&self) -> Pixels {
         match self {
-            FileUploadSize::Sm => px(32.0),
-            FileUploadSize::Md => px(48.0),
-            FileUploadSize::Lg => px(64.0),
+            FileUploadSize::Sm => px(20.0),
+            FileUploadSize::Md => px(24.0),
+            FileUploadSize::Lg => px(28.0),
         }
     }
 
@@ -170,6 +180,14 @@ impl FileUploadSize {
             FileUploadSize::Sm => px(13.0),
             FileUploadSize::Md => px(14.0),
             FileUploadSize::Lg => px(16.0),
+        }
+    }
+
+    fn input_height(&self) -> Pixels {
+        match self {
+            FileUploadSize::Sm => px(28.0),
+            FileUploadSize::Md => px(32.0),
+            FileUploadSize::Lg => px(36.0),
         }
     }
 }
@@ -224,11 +242,20 @@ pub struct FileUpload {
     _id: ElementId,
     base: Stateful<Div>,
     state: Entity<FileUploadState>,
+    label: Option<SharedString>,
+    hidden_label: bool,
+    description: Option<SharedString>,
+    optional: bool,
+    required: bool,
     size: FileUploadSize,
+    mode: FileUploadMode,
     multiple: bool,
     max_file_size: Option<u64>,
     file_types: Option<FileTypeFilter>,
     disabled: bool,
+    loading: bool,
+    status: Option<FieldStatusType>,
+    status_message: Option<SharedString>,
     show_file_list: bool,
     show_previews: bool,
     placeholder_text: Option<SharedString>,
@@ -245,11 +272,20 @@ impl FileUpload {
             _id: id.clone(),
             base: div().id(id),
             state,
+            label: None,
+            hidden_label: false,
+            description: None,
+            optional: false,
+            required: false,
             size: FileUploadSize::Md,
+            mode: FileUploadMode::default(),
             multiple: false,
             max_file_size: None,
             file_types: None,
             disabled: false,
+            loading: false,
+            status: None,
+            status_message: None,
             show_file_list: true,
             show_previews: true,
             placeholder_text: None,
@@ -260,8 +296,53 @@ impl FileUpload {
         }
     }
 
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    pub fn is_label_hidden(mut self, hidden: bool) -> Self {
+        self.hidden_label = hidden;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isLabelHidden(self, hidden: bool) -> Self {
+        self.is_label_hidden(hidden)
+    }
+
+    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn optional(mut self, optional: bool) -> Self {
+        self.optional = optional;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isOptional(self, optional: bool) -> Self {
+        self.optional(optional)
+    }
+
+    pub fn required(mut self, required: bool) -> Self {
+        self.required = required;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isRequired(self, required: bool) -> Self {
+        self.required(required)
+    }
+
     pub fn size(mut self, size: FileUploadSize) -> Self {
         self.size = size;
+        self
+    }
+
+    pub fn mode(mut self, mode: FileUploadMode) -> Self {
+        self.mode = mode;
         self
     }
 
@@ -270,9 +351,19 @@ impl FileUpload {
         self
     }
 
+    #[allow(non_snake_case)]
+    pub fn isMultiple(self, multiple: bool) -> Self {
+        self.multiple(multiple)
+    }
+
     pub fn max_file_size(mut self, bytes: u64) -> Self {
         self.max_file_size = Some(bytes);
         self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn maxSize(self, bytes: u64) -> Self {
+        self.max_file_size(bytes)
     }
 
     pub fn max_file_size_mb(mut self, mb: u64) -> Self {
@@ -295,6 +386,31 @@ impl FileUpload {
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isDisabled(self, disabled: bool) -> Self {
+        self.disabled(disabled)
+    }
+
+    pub fn loading(mut self, loading: bool) -> Self {
+        self.loading = loading;
+        self
+    }
+
+    pub fn is_loading(self, loading: bool) -> Self {
+        self.loading(loading)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isLoading(self, loading: bool) -> Self {
+        self.loading(loading)
+    }
+
+    pub fn status(mut self, status: FieldStatusType, message: impl Into<SharedString>) -> Self {
+        self.status = Some(status);
+        self.status_message = Some(message.into());
         self
     }
 
@@ -369,28 +485,36 @@ impl RenderOnce for FileUpload {
         let theme = Theme::of(cx);
         let state = self.state.read(cx);
         let is_dragging = state.is_dragging;
-        let is_uploading = state.is_uploading;
+        let is_uploading = state.is_uploading || self.loading;
         let has_files = state.has_files();
         let files = state.files.clone();
         let errors = state.errors.clone();
         let user_style = self.style;
+        let mode = self.mode;
 
         let disabled = self.disabled || is_uploading;
+        let status_color = self.status.map(|status| match status {
+            FieldStatusType::Warning => theme.tokens.warning,
+            FieldStatusType::Error => theme.tokens.destructive,
+            FieldStatusType::Success => theme.tokens.success,
+        });
 
         let border_color = if disabled {
-            theme.tokens.border.opacity(0.5)
+            theme.tokens.input
+        } else if let Some(color) = status_color {
+            color
         } else if is_dragging {
             theme.tokens.primary
         } else {
-            theme.tokens.border
+            theme.tokens.input
         };
 
         let bg_color = if disabled {
-            theme.tokens.muted.opacity(0.3)
+            theme.tokens.card
         } else if is_dragging {
-            theme.tokens.primary.opacity(0.1)
+            astryx::status_muted(theme.tokens.primary)
         } else {
-            theme.tokens.background
+            theme.tokens.card
         };
 
         let placeholder_text = self
@@ -411,8 +535,11 @@ impl RenderOnce for FileUpload {
         let show_file_list = self.show_file_list;
         let show_previews = self.show_previews;
         let size = self.size.clone();
+        let hover_ring = crate::astryx::input_hover_ring(theme.tokens.primary);
+        let focus_ring = crate::astryx::focus_ring(theme.tokens.primary);
 
-        self.base
+        let control = self
+            .base
             .flex()
             .flex_col()
             .gap(px(12.0))
@@ -428,36 +555,54 @@ impl RenderOnce for FileUpload {
                     .flex_col()
                     .items_center()
                     .justify_center()
-                    .gap(px(12.0))
+                    .gap(px(8.0))
                     .w_full()
-                    .min_h(size.min_height())
-                    .px(px(24.0))
-                    .py(px(24.0))
-                    .rounded(theme.tokens.radius_lg)
-                    .border_2()
+                    .when(mode == FileUploadMode::Dropzone, |this| {
+                        this.flex_col()
+                            .min_h(size.min_height())
+                            .px(px(16.0))
+                            .py(px(24.0))
+                            .border_dashed()
+                    })
+                    .when(mode == FileUploadMode::Input, |this| {
+                        this.flex_row()
+                            .h(size.input_height())
+                            .px(px(12.0))
+                            .py(px(0.0))
+                    })
+                    .rounded(theme.tokens.radius_md)
+                    .border_1()
                     .border_color(border_color)
                     .bg(bg_color)
                     .transition(theme.tokens.transition_fast)
+                    .when(is_dragging && !disabled, |this| {
+                        this.shadow(smallvec::smallvec![focus_ring])
+                    })
                     .when(!disabled, |this| {
                         this.cursor(CursorStyle::PointingHand).hover(move |style| {
                             style
-                                .border_color(theme.tokens.primary.opacity(0.7))
-                                .bg(theme.tokens.primary.opacity(0.05))
+                                .border_color(theme.tokens.primary)
+                                .shadow(smallvec::smallvec![hover_ring])
                         })
                     })
                     .when(disabled, |this| {
-                        this.cursor(CursorStyle::Arrow).opacity(0.6)
+                        this.cursor(CursorStyle::Arrow).opacity(0.5)
                     })
                     .when(is_uploading, |this| {
                         this.child(
                             div()
                                 .flex()
-                                .flex_col()
+                                .when(mode == FileUploadMode::Dropzone, |this| this.flex_col())
+                                .when(mode == FileUploadMode::Input, |this| this.flex_row())
                                 .items_center()
                                 .gap(px(12.0))
                                 .child(
                                     Spinner::new()
-                                        .size(SpinnerSize::Lg)
+                                        .size(if mode == FileUploadMode::Input {
+                                            SpinnerSize::Sm
+                                        } else {
+                                            SpinnerSize::Lg
+                                        })
                                         .variant(SpinnerVariant::Primary),
                                 )
                                 .child(
@@ -472,20 +617,30 @@ impl RenderOnce for FileUpload {
                         this.child(
                             div()
                                 .flex()
-                                .flex_col()
+                                .when(mode == FileUploadMode::Dropzone, |this| this.flex_col())
+                                .when(mode == FileUploadMode::Input, |this| this.flex_row())
                                 .items_center()
                                 .gap(px(8.0))
                                 .child(
-                                    Icon::new(placeholder_icon.to_string())
+                                    div()
                                         .size(size.icon_size())
-                                        .color(if is_dragging {
-                                            theme.tokens.primary
-                                        } else {
-                                            theme.tokens.muted_foreground
-                                        }),
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(
+                                            Icon::new(placeholder_icon.to_string())
+                                                .size(size.icon_size())
+                                                .color(if is_dragging {
+                                                    theme.tokens.primary
+                                                } else {
+                                                    theme.tokens.muted_foreground
+                                                }),
+                                        ),
                                 )
                                 .child(
                                     div()
+                                        .flex_1()
+                                        .min_w(px(0.0))
                                         .text_size(size.text_size())
                                         .text_color(if is_dragging {
                                             theme.tokens.primary
@@ -493,31 +648,40 @@ impl RenderOnce for FileUpload {
                                             theme.tokens.foreground
                                         })
                                         .font_weight(FontWeight::MEDIUM)
+                                        .when(mode == FileUploadMode::Input, |this| {
+                                            this.overflow_hidden()
+                                                .text_ellipsis()
+                                                .whitespace_nowrap()
+                                        })
                                         .child(placeholder_text.clone()),
                                 )
-                                .when_some(file_types.clone(), |this, filter| {
-                                    this.child(
-                                        div()
-                                            .text_size(px(12.0))
-                                            .text_color(theme.tokens.muted_foreground)
-                                            .child(if filter.extensions.is_empty() {
-                                                "All file types supported".to_string()
-                                            } else {
-                                                format!(
-                                                    "Accepted: {}",
-                                                    filter.extensions.join(", ")
-                                                )
-                                            }),
-                                    )
+                                .when(mode == FileUploadMode::Dropzone, |this| {
+                                    this.when_some(file_types.clone(), |this, filter| {
+                                        this.child(
+                                            div()
+                                                .text_size(px(12.0))
+                                                .text_color(theme.tokens.muted_foreground)
+                                                .child(if filter.extensions.is_empty() {
+                                                    "All file types supported".to_string()
+                                                } else {
+                                                    format!(
+                                                        "Accepted: {}",
+                                                        filter.extensions.join(", ")
+                                                    )
+                                                }),
+                                        )
+                                    })
                                 })
-                                .when_some(max_file_size, |this, max_size| {
-                                    let max_mb = max_size as f64 / (1024.0 * 1024.0);
-                                    this.child(
-                                        div()
-                                            .text_size(px(12.0))
-                                            .text_color(theme.tokens.muted_foreground)
-                                            .child(format!("Max size: {:.0} MB", max_mb)),
-                                    )
+                                .when(mode == FileUploadMode::Dropzone, |this| {
+                                    this.when_some(max_file_size, |this, max_size| {
+                                        let max_mb = max_size as f64 / (1024.0 * 1024.0);
+                                        this.child(
+                                            div()
+                                                .text_size(px(12.0))
+                                                .text_color(theme.tokens.muted_foreground)
+                                                .child(format!("Max size: {:.0} MB", max_mb)),
+                                        )
+                                    })
                                 }),
                         )
                     })
@@ -652,123 +816,148 @@ impl RenderOnce for FileUpload {
                         })),
                 )
             })
-            .when(show_file_list && has_files, |this| {
-                let state_entity = state_entity.clone();
-                let on_files_changed = on_files_changed.clone();
+            .when(
+                show_file_list && has_files && mode == FileUploadMode::Dropzone,
+                |this| {
+                    let state_entity = state_entity.clone();
+                    let on_files_changed = on_files_changed.clone();
 
-                this.child(div().flex().flex_col().gap(px(8.0)).children(
-                    files.iter().enumerate().map(|(index, file)| {
-                        let state_entity = state_entity.clone();
-                        let on_files_changed = on_files_changed.clone();
-                        let file_name = file.name.clone();
-                        let file_size = file.formatted_size();
-                        let is_image = file.is_image;
-                        let file_path = file.path.clone();
+                    this.child(div().flex().flex_col().gap(px(8.0)).children(
+                        files.iter().enumerate().map(|(index, file)| {
+                            let state_entity = state_entity.clone();
+                            let on_files_changed = on_files_changed.clone();
+                            let file_name = file.name.clone();
+                            let file_size = file.formatted_size();
+                            let is_image = file.is_image;
+                            let file_path = file.path.clone();
 
-                        div()
-                            .id(("file-item", index))
-                            .flex()
-                            .items_center()
-                            .gap(px(12.0))
-                            .px(px(12.0))
-                            .py(px(8.0))
-                            .rounded(theme.tokens.radius_md)
-                            .bg(theme.tokens.card)
-                            .border_1()
-                            .border_color(theme.tokens.border)
-                            .when(show_previews && is_image, |this| {
-                                this.child(
+                            div()
+                                .id(("file-item", index))
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .px(px(8.0))
+                                .py(px(6.0))
+                                .rounded(theme.tokens.radius_md)
+                                .bg(theme.tokens.card)
+                                .border_1()
+                                .border_color(theme.tokens.input)
+                                .when(show_previews && is_image, |this| {
+                                    this.child(
+                                        div()
+                                            .w(px(36.0))
+                                            .h(px(36.0))
+                                            .rounded(theme.tokens.radius_sm)
+                                            .bg(theme.tokens.muted)
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .overflow_hidden()
+                                            .child(
+                                                img(file_path.to_string_lossy().to_string())
+                                                    .w(px(36.0))
+                                                    .h(px(36.0))
+                                                    .object_fit(ObjectFit::Cover),
+                                            ),
+                                    )
+                                })
+                                .when(!show_previews || !is_image, |this| {
+                                    this.child(
+                                        div()
+                                            .w(px(32.0))
+                                            .h(px(32.0))
+                                            .rounded(theme.tokens.radius_sm)
+                                            .bg(theme.tokens.muted)
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(
+                                                Icon::new(if is_image { "image" } else { "file" })
+                                                    .size(px(16.0))
+                                                    .color(theme.tokens.muted_foreground),
+                                            ),
+                                    )
+                                })
+                                .child(
                                     div()
-                                        .w(px(48.0))
-                                        .h(px(48.0))
-                                        .rounded(theme.tokens.radius_sm)
-                                        .bg(theme.tokens.muted)
+                                        .flex_1()
                                         .flex()
-                                        .items_center()
-                                        .justify_center()
+                                        .flex_col()
+                                        .gap(px(2.0))
                                         .overflow_hidden()
                                         .child(
-                                            img(file_path.to_string_lossy().to_string())
-                                                .w(px(48.0))
-                                                .h(px(48.0))
-                                                .object_fit(ObjectFit::Cover),
-                                        ),
-                                )
-                            })
-                            .when(!show_previews || !is_image, |this| {
-                                this.child(
-                                    div()
-                                        .w(px(40.0))
-                                        .h(px(40.0))
-                                        .rounded(theme.tokens.radius_sm)
-                                        .bg(theme.tokens.muted)
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child(
-                                            Icon::new(if is_image { "image" } else { "file" })
-                                                .size(px(20.0))
-                                                .color(theme.tokens.muted_foreground),
-                                        ),
-                                )
-                            })
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(2.0))
-                                    .overflow_hidden()
-                                    .child(
-                                        div()
-                                            .text_size(px(13.0))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.tokens.foreground)
-                                            .overflow_hidden()
-                                            .text_ellipsis()
-                                            .whitespace_nowrap()
-                                            .child(file_name),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(12.0))
-                                            .text_color(theme.tokens.muted_foreground)
-                                            .child(file_size),
-                                    ),
-                            )
-                            .when(!disabled, |this| {
-                                this.child(
-                                    div()
-                                        .id(("remove-btn", index))
-                                        .w(px(28.0))
-                                        .h(px(28.0))
-                                        .rounded(theme.tokens.radius_sm)
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .cursor(CursorStyle::PointingHand)
-                                        .transition(theme.tokens.transition_fast)
-                                        .hover(|style| {
-                                            style.bg(theme.tokens.destructive.opacity(0.1))
-                                        })
-                                        .child(
-                                            Icon::new("x")
-                                                .size(px(16.0))
-                                                .color(theme.tokens.muted_foreground),
+                                            div()
+                                                .text_size(px(13.0))
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(theme.tokens.foreground)
+                                                .overflow_hidden()
+                                                .text_ellipsis()
+                                                .whitespace_nowrap()
+                                                .child(file_name),
                                         )
-                                        .on_click(move |_, window, cx| {
-                                            state_entity.update(cx, |state, _| {
-                                                state.remove_file(index);
-                                            });
-                                            if let Some(ref handler) = on_files_changed {
-                                                let files = state_entity.read(cx).files.clone();
-                                                handler(&files, window, cx);
-                                            }
-                                        }),
+                                        .child(
+                                            div()
+                                                .text_size(px(12.0))
+                                                .text_color(theme.tokens.muted_foreground)
+                                                .child(file_size),
+                                        ),
                                 )
-                            })
-                    }),
-                ))
-            })
+                                .when(!disabled, |this| {
+                                    this.child(
+                                        div()
+                                            .id(("remove-btn", index))
+                                            .w(px(20.0))
+                                            .h(px(20.0))
+                                            .rounded_full()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .cursor(CursorStyle::PointingHand)
+                                            .transition(theme.tokens.transition_fast)
+                                            .hover(|style| {
+                                                style.bg(theme.tokens.destructive.opacity(0.1))
+                                            })
+                                            .child(
+                                                Icon::new("x")
+                                                    .size(px(14.0))
+                                                    .color(theme.tokens.muted_foreground),
+                                            )
+                                            .on_click(move |_, window, cx| {
+                                                state_entity.update(cx, |state, _| {
+                                                    state.remove_file(index);
+                                                });
+                                                if let Some(ref handler) = on_files_changed {
+                                                    let files = state_entity.read(cx).files.clone();
+                                                    handler(&files, window, cx);
+                                                }
+                                            }),
+                                    )
+                                })
+                        }),
+                    ))
+                },
+            );
+
+        match self.label {
+            Some(label) => {
+                let mut field = Field::new(label, control)
+                    .hidden_label(self.hidden_label)
+                    .optional(self.optional)
+                    .required(self.required)
+                    .disabled(self.disabled)
+                    .status_variant(FieldStatusVariant::Detached);
+
+                if let Some(description) = self.description {
+                    field = field.description(description);
+                }
+
+                if let Some((status, message)) = self.status.zip(self.status_message) {
+                    field = field.status(status, message);
+                }
+
+                field.into_any_element()
+            }
+            None => control.into_any_element(),
+        }
     }
 }

@@ -9,7 +9,7 @@
 //! - Clear button to reset selection
 //! - Full Styled trait support for customization
 
-use crate::components::icon::Icon;
+use crate::components::{icon::Icon, input::InputSize};
 use crate::theme::Theme;
 use kael::{prelude::*, *};
 
@@ -107,6 +107,7 @@ pub struct Combobox<T: Clone + 'static> {
     disabled: bool,
     clearable: bool,
     multi_select: bool,
+    size: InputSize,
     max_height: Pixels,
 
     filter_fn: Box<dyn Fn(&T, &str) -> bool>,
@@ -132,6 +133,7 @@ impl<T: Clone + 'static> Combobox<T> {
             disabled: false,
             clearable: true,
             multi_select: false,
+            size: InputSize::default(),
             max_height: px(300.0),
             filter_fn: Box::new(|_, _| true),
             render_item: Box::new(|_| "Item".into()),
@@ -164,6 +166,12 @@ impl<T: Clone + 'static> Combobox<T> {
     /// Enable multiple selection mode
     pub fn multi_select(mut self, multi_select: bool) -> Self {
         self.multi_select = multi_select;
+        self
+    }
+
+    /// Set the control size using the Astryx input height scale.
+    pub fn size(mut self, size: InputSize) -> Self {
+        self.size = size;
         self
     }
 
@@ -399,6 +407,18 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
 
         let bounds = self.bounds;
         let is_searching = !search_text.is_empty();
+        let hover_ring = crate::astryx::input_hover_ring(theme.tokens.input);
+        let focus_ring = crate::astryx::focus_ring(theme.tokens.primary);
+        let (height, padding_x, text_size, icon_size) = match self.size {
+            InputSize::Sm => (px(28.0), px(8.0), px(14.0), px(16.0)),
+            InputSize::Md => (px(32.0), px(8.0), px(14.0), px(16.0)),
+            InputSize::Lg => (px(36.0), px(8.0), px(14.0), px(16.0)),
+        };
+        let item_padding_y = match self.size {
+            InputSize::Sm => px(4.0),
+            InputSize::Md => px(6.0),
+            InputSize::Lg => px(8.0),
+        };
 
         let trigger = div()
             .id("combobox-trigger")
@@ -406,12 +426,13 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
             .flex()
             .items_center()
             .justify_between()
-            .h(px(32.0))
-            .px(px(12.0))
+            .gap(px(8.0))
+            .h(height)
+            .px(padding_x)
             .bg(theme.tokens.card)
             .border_1()
             .border_color(if is_open {
-                theme.tokens.ring
+                theme.tokens.primary
             } else {
                 theme.tokens.input
             })
@@ -421,7 +442,7 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
             } else {
                 theme.tokens.muted_foreground
             })
-            .text_size(px(14.0))
+            .text_size(text_size)
             .font_family(theme.tokens.font_family.clone())
             .cursor(if self.disabled {
                 CursorStyle::Arrow
@@ -429,10 +450,17 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                 CursorStyle::PointingHand
             })
             .transition(theme.tokens.transition_fast)
+            .shadow(smallvec::smallvec![crate::astryx::focus_ring(
+                kael::transparent_black()
+            )])
+            .when(is_open && !self.disabled, |div| {
+                div.shadow(smallvec::smallvec![focus_ring])
+            })
             .when(!self.disabled, |div: Stateful<Div>| {
-                div.hover(|mut style| {
-                    style.border_color = Some(theme.tokens.ring);
+                div.hover(move |style| {
                     style
+                        .border_color(theme.tokens.input)
+                        .shadow(smallvec::smallvec![hover_ring])
                 })
             })
             .on_mouse_down(
@@ -449,7 +477,7 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                     }
                 }),
             )
-            .child(div().flex_1().child(display_text))
+            .child(div().flex_1().min_w(px(0.0)).child(display_text))
             .child(
                 div()
                     .flex()
@@ -460,16 +488,16 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                         |this_div| {
                             this_div.child(
                                 div()
-                                    .w(px(20.0))
-                                    .h(px(20.0))
+                                    .size(px(24.0))
                                     .flex()
                                     .items_center()
                                     .justify_center()
                                     .rounded(theme.tokens.radius_sm)
                                     .cursor(CursorStyle::PointingHand)
-                                    .hover(|mut style| {
-                                        style.background = Some(theme.tokens.muted.into());
-                                        style
+                                    .hover(|style| {
+                                        style.bg(crate::astryx::overlay_hover(
+                                            theme.tokens.background.l < 0.5,
+                                        ))
                                     })
                                     .on_mouse_down(
                                         MouseButton::Left,
@@ -479,20 +507,27 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                                     )
                                     .child(
                                         Icon::new("x")
-                                            .size(px(14.0))
+                                            .size(icon_size)
                                             .color(theme.tokens.muted_foreground),
                                     ),
                             )
                         },
                     )
                     .child(
-                        Icon::new(if is_open {
-                            "chevron-up"
-                        } else {
-                            "chevron-down"
-                        })
-                        .size(px(14.0))
-                        .color(theme.tokens.muted_foreground),
+                        div()
+                            .size(px(24.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                Icon::new(if is_open {
+                                    "chevron-up"
+                                } else {
+                                    "chevron-down"
+                                })
+                                .size(icon_size)
+                                .color(theme.tokens.muted_foreground),
+                            ),
                     ),
             )
             .child({
@@ -567,10 +602,10 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                                             .occlude()
                                             .mt(DROPDOWN_MARGIN)
                                             .bg(theme.tokens.popover)
-                                            .border_2()
-                                            .border_color(theme.tokens.ring)
+                                            .border_1()
+                                            .border_color(theme.tokens.border)
                                             .rounded(theme.tokens.radius_lg)
-                                            .shadow_xl()
+                                            .shadow(theme.tokens.shadow_lg.to_vec())
                                             .overflow_hidden()
                                             .child({
                                                 let filtered = self.filtered_items(cx);
@@ -603,38 +638,50 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
 
                                                                 div()
                                                                     .px(px(12.0))
-                                                                    .py(px(8.0))
+                                                                    .py(item_padding_y)
                                                                     .flex()
                                                                     .items_center()
                                                                     .justify_between()
-                                                                    .text_color(if is_selected {
-                                                                        theme.tokens.primary
-                                                                    } else {
-                                                                        theme.tokens.popover_foreground
-                                                                    })
+                                                                    .gap(px(8.0))
+                                                                    .rounded(theme.tokens.radius_md)
+                                                                    .text_color(theme.tokens.popover_foreground)
                                                                     .bg(if is_focused {
-                                                                        theme.tokens.accent
+                                                                        crate::astryx::overlay_hover(theme.tokens.background.l < 0.5)
+                                                                    } else if is_selected {
+                                                                        theme.tokens.primary.opacity(0.12)
                                                                     } else {
                                                                         kael::transparent_black()
                                                                     })
-                                                                    .hover(|mut style| {
-                                                                        style.background = Some(theme.tokens.accent.into());
-                                                                        style
+                                                                    .hover(|style| {
+                                                                        style.bg(crate::astryx::overlay_hover(
+                                                                            theme.tokens.background.l < 0.5,
+                                                                        ))
                                                                     })
                                                                     .cursor(CursorStyle::PointingHand)
-                                                                    .text_size(px(14.0))
+                                                                    .text_size(text_size)
+                                                                    .when(is_selected, |this| {
+                                                                        this.font_weight(FontWeight::MEDIUM)
+                                                                    })
                                                                     .font_family(theme.tokens.font_family.clone())
                                                                     .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
                                                                         this.select_item(display_idx, window, cx);
                                                                     }))
-                                                                    .child(item_text)
-                                                                    .when(is_selected, |div| {
-                                                                        div.child(
-                                                                            Icon::new("check")
-                                                                                .size(px(14.0))
-                                                                                .color(theme.tokens.primary)
-                                                                        )
-                                                                    })
+                                                                    .child(div().flex_1().min_w(px(0.0)).child(item_text))
+                                                                    .child(
+                                                                        div()
+                                                                            .size(px(16.0))
+                                                                            .flex()
+                                                                            .items_center()
+                                                                            .justify_center()
+                                                                            .flex_shrink_0()
+                                                                            .when(is_selected, |slot| {
+                                                                                slot.child(
+                                                                                    Icon::new("check")
+                                                                                        .size(px(16.0))
+                                                                                        .color(theme.tokens.primary)
+                                                                                )
+                                                                            })
+                                                                    )
                                                             })
                                                         )
                                                     })
