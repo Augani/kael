@@ -20,7 +20,7 @@ path = "src/media.rs"
 doctest = false
 
 [dependencies.anyhow]
-version = "1.0.86"
+workspace = true
 
 
 [build-dependencies.bindgen]
@@ -45,23 +45,5 @@ version = "0.29"
 [target.'cfg(target_os = "macos")'.dependencies.objc]
 version = "0.2"
 
-[lints.clippy]
-dbg_macro = "deny"
-declare_interior_mutable_const = "deny"
-disallowed_methods = "deny"
-large_enum_variant = "allow"
-let_underscore_future = "allow"
-nonminimal_bool = "allow"
-redundant_clone = "deny"
-single_range_in_vec_init = "allow"
-todo = "deny"
-too_many_arguments = "allow"
-type_complexity = "allow"
-
-[lints.clippy.style]
-level = "allow"
-priority = -1
-
-[lints.rust.unexpected_cfgs]
-level = "allow"
-priority = 0
+[lints]
+workspace = true

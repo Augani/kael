@@ -22,7 +22,7 @@ path = "src/http_client.rs"
 doctest = true
 
 [dependencies.anyhow]
-version = "1.0.86"
+workspace = true
 
 [dependencies.async-compression]
 version = "0.4"
@@ -45,7 +45,7 @@ version = "2"
 features = ["full"]
 
 [dependencies.futures]
-version = "0.3"
+workspace = true
 
 [dependencies.http]
 version = "1.1"
@@ -54,7 +54,7 @@ version = "1.1"
 version = "1.0"
 
 [dependencies.log]
-version = "0.4.16"
+workspace = true
 features = [
     "kv_unstable_serde",
     "serde",
@@ -78,14 +78,14 @@ default-features = false
 package = "zed-reqwest"
 
 [dependencies.serde]
-version = "1.0.221"
+workspace = true
 features = [
     "derive",
     "rc",
 ]
 
 [dependencies.serde_json]
-version = "1.0.144"
+workspace = true
 features = [
     "preserve_order",
     "raw_value",
@@ -110,23 +110,5 @@ package = "kael_util"
 version = "0.3.0"
 
 
-[lints.clippy]
-dbg_macro = "deny"
-declare_interior_mutable_const = "deny"
-disallowed_methods = "deny"
-large_enum_variant = "allow"
-let_underscore_future = "allow"
-nonminimal_bool = "allow"
-redundant_clone = "deny"
-single_range_in_vec_init = "allow"
-todo = "deny"
-too_many_arguments = "allow"
-type_complexity = "allow"
-
-[lints.clippy.style]
-level = "allow"
-priority = -1
-
-[lints.rust.unexpected_cfgs]
-level = "allow"
-priority = 0
+[lints]
+workspace = true
