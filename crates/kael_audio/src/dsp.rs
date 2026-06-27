@@ -407,8 +407,8 @@ mod tests {
     fn stereo_pan_distributes_power() {
         let mut center = [1.0, 1.0];
         apply_stereo_pan(&mut center, 0.0);
-        assert!((center[0] - 0.7071).abs() < 1e-3);
-        assert!((center[1] - 0.7071).abs() < 1e-3);
+        assert!((center[0] - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-3);
+        assert!((center[1] - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-3);
 
         let mut left = [1.0, 1.0];
         apply_stereo_pan(&mut left, -1.0);

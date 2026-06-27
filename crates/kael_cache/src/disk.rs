@@ -94,7 +94,7 @@ impl DiskCache {
         let metadata = fs::metadata(&path)
             .with_context(|| format!("failed to stat cache entry: {}", path.display()))?;
         self.record_index_entry(
-            path.clone(),
+            path,
             metadata.len(),
             metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
         );

@@ -242,8 +242,6 @@ impl Render for PrintDemo {
                                 }
                             }))
                             .child(button("Direct Print", {
-                                let entity = entity.clone();
-                                let preview_image = preview_image.clone();
                                 move |window, cx| {
                                     let result = window.print(build_print_job(preview_image.clone(), false), cx);
                                     entity.update(cx, |this, cx| {

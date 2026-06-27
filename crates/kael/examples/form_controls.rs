@@ -603,7 +603,6 @@ impl Render for FormControlsExample {
                                         }
                                     })
                                     .on_change({
-                                        let example = example.clone();
                                         move |open, _, cx| {
                                             example.update(cx, |this, cx| {
                                                 this.reset_modal_open = *open;

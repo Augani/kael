@@ -399,7 +399,7 @@ impl NotificationCenter {
         let scheduler_queue: Arc<(Mutex<BinaryHeap<SchedulerEntry>>, Condvar)> =
             Arc::new((Mutex::new(BinaryHeap::new()), Condvar::new()));
 
-        let queue_ref = scheduler_queue.clone();
+        let queue_ref = scheduler_queue;
 
         let state = Arc::new_cyclic(|weak: &std::sync::Weak<NotificationCenterState>| {
             let weak_inner = weak.clone();

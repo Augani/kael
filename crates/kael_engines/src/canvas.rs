@@ -530,9 +530,9 @@ mod tests {
 
     #[test]
     fn canvas_point_serialization() {
-        let p = pt(3.14, 2.72);
+        let p = pt(3.25, 2.72);
         let json = serde_json::to_string(&p).unwrap();
         let deser: CanvasPoint = serde_json::from_str(&json).unwrap();
-        assert!((deser.x - 3.14).abs() < f64::EPSILON);
+        assert!((deser.x - 3.25).abs() < f64::EPSILON);
     }
 }

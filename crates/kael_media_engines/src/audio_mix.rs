@@ -656,9 +656,14 @@ mod tests {
         let (left, right) = pan_gains(0.0, PanLaw::Linear);
         assert!(close(left, 0.5) && close(right, 0.5));
         let (left, right) = pan_gains(0.0, PanLaw::ConstantPower);
-        assert!(close(left, 0.70711) && close(right, 0.70711));
+        assert!(
+            close(left, std::f32::consts::FRAC_1_SQRT_2)
+                && close(right, std::f32::consts::FRAC_1_SQRT_2)
+        );
         let (left, right) = pan_gains(0.0, PanLaw::Minus4_5dB);
-        assert!(close(left, (0.5_f32 * 0.70711).sqrt()) && close(left, right));
+        assert!(
+            close(left, (0.5_f32 * std::f32::consts::FRAC_1_SQRT_2).sqrt()) && close(left, right)
+        );
 
         // Hard left / right.
         let (left, right) = pan_gains(-1.0, PanLaw::ConstantPower);
