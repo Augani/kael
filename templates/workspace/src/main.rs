@@ -96,7 +96,6 @@ fn main() {
 
 struct WorkspaceApp {
     editor: Entity<EditorState>,
-    toolbar: Entity<Toolbar>,
     status_bar: Entity<StatusBar>,
     selected_file: PathBuf,
 }
@@ -108,23 +107,6 @@ impl WorkspaceApp {
             state.set_content(SAMPLE_RS, cx);
             state.set_language(Language::Rust);
             state
-        });
-
-        let toolbar = cx.new(|_| {
-            Toolbar::new()
-                .group(
-                    ToolbarGroup::new()
-                        .button(ToolbarButton::new("save", "save").tooltip("Save"))
-                        .button(ToolbarButton::new("undo", "undo").tooltip("Undo"))
-                        .button(ToolbarButton::new("redo", "redo").tooltip("Redo")),
-                )
-                .group(
-                    ToolbarGroup::new()
-                        .button(ToolbarButton::new("run", "play").tooltip("Run"))
-                        .button(
-                            ToolbarButton::new("terminal", "terminal").tooltip("Toggle terminal"),
-                        ),
-                )
         });
 
         let status_bar = cx.new(|_| {
@@ -143,10 +125,24 @@ impl WorkspaceApp {
 
         Self {
             editor,
-            toolbar,
             status_bar,
             selected_file: PathBuf::from("/project/src/main.rs"),
         }
+    }
+
+    fn toolbar(&self) -> Toolbar {
+        Toolbar::new()
+            .group(
+                ToolbarGroup::new()
+                    .button(ToolbarButton::new("save", "save").tooltip("Save"))
+                    .button(ToolbarButton::new("undo", "undo").tooltip("Undo"))
+                    .button(ToolbarButton::new("redo", "redo").tooltip("Redo")),
+            )
+            .group(
+                ToolbarGroup::new()
+                    .button(ToolbarButton::new("run", "play").tooltip("Run"))
+                    .button(ToolbarButton::new("terminal", "terminal").tooltip("Toggle terminal")),
+            )
     }
 
     fn file_tree(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -261,7 +257,7 @@ impl Render for WorkspaceApp {
                     .py(px(4.0))
                     .border_b_1()
                     .border_color(tokens.border)
-                    .child(self.toolbar.clone()),
+                    .child(self.toolbar()),
             )
             .child(tab_strip)
             .child(
