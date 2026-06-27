@@ -22,7 +22,7 @@ path = "src/http_client.rs"
 doctest = true
 
 [dependencies.anyhow]
-version = "1.0.86"
+workspace = true
 
 [dependencies.async-compression]
 version = "0.4"
@@ -45,7 +45,7 @@ version = "2"
 features = ["full"]
 
 [dependencies.futures]
-version = "0.3"
+workspace = true
 
 [dependencies.http]
 version = "1.1"
@@ -54,7 +54,7 @@ version = "1.1"
 version = "1.0"
 
 [dependencies.log]
-version = "0.4.16"
+workspace = true
 features = [
     "kv_unstable_serde",
     "serde",
@@ -78,14 +78,14 @@ default-features = false
 package = "zed-reqwest"
 
 [dependencies.serde]
-version = "1.0.221"
+workspace = true
 features = [
     "derive",
     "rc",
 ]
 
 [dependencies.serde_json]
-version = "1.0.144"
+workspace = true
 features = [
     "preserve_order",
     "raw_value",

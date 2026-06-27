@@ -18,10 +18,10 @@ name = "kael_semantic_version"
 path = "src/semantic_version.rs"
 
 [dependencies.anyhow]
-version = "1.0.86"
+workspace = true
 
 [dependencies.serde]
-version = "1.0.221"
+workspace = true
 features = [
     "derive",
     "rc",

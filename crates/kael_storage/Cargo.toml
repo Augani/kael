@@ -26,23 +26,23 @@ version = "0.32.1"
 features = ["bundled"]
 
 [dependencies.serde]
-version = "1.0.221"
+workspace = true
 features = ["derive"]
 
 [dependencies.serde_json]
-version = "1.0.144"
+workspace = true
 
 [dependencies.smol]
-version = "2.0"
+workspace = true
 
 [dependencies.thiserror]
-version = "2.0.12"
+workspace = true
 
 [dev-dependencies.tempfile]
 version = "3.20.0"
 
 [dev-dependencies.futures]
-version = "0.3"
+workspace = true
 
 [lints.clippy]
 dbg_macro = "deny"

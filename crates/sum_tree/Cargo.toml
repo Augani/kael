@@ -22,7 +22,7 @@ doctest = false
 version = "0.7.1"
 
 [dependencies.log]
-version = "0.4.16"
+workspace = true
 features = [
     "kv_unstable_serde",
     "serde",

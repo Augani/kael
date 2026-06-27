@@ -28,7 +28,7 @@ version = "0.12.1"
 version = "0.20"
 
 [dependencies.thiserror]
-version = "2.0.12"
+workspace = true
 
 [lints.clippy]
 dbg_macro = "deny"

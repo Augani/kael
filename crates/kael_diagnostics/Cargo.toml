@@ -29,7 +29,7 @@ path = "src/bin/crash_helper.rs"
 required-features = ["_crash_test_helper"]
 
 [dependencies.anyhow]
-version = "1.0.86"
+workspace = true
 
 [dependencies.http_client]
 path = "../http_client"
@@ -37,11 +37,11 @@ package = "kael_http_client"
 version = "0.3.0"
 
 [dependencies.serde]
-version = "1.0.221"
+workspace = true
 features = ["derive"]
 
 [dependencies.serde_json]
-version = "1.0.144"
+workspace = true
 
 [target.'cfg(unix)'.dependencies.libc]
 version = "0.2"

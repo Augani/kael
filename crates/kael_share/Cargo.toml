@@ -19,13 +19,13 @@ path = "src/lib.rs"
 doctest = false
 
 [dependencies.anyhow]
-version = "1.0.86"
+workspace = true
 
 [dependencies.url]
 version = "2.5.4"
 
 [dev-dependencies.futures]
-version = "0.3"
+workspace = true
 
 [dev-dependencies.tempfile]
 version = "3"

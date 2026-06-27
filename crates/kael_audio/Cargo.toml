@@ -19,13 +19,13 @@ path = "src/lib.rs"
 doctest = false
 
 [dependencies.anyhow]
-version = "1.0.86"
+workspace = true
 
 [dependencies.cpal]
 version = "0.15"
 
 [dependencies.log]
-version = "0.4"
+workspace = true
 
 [dependencies.kael_media]
 path = "../kael-media"
@@ -36,10 +36,10 @@ version = "0.3.0"
 version = "0.12.1"
 
 [dependencies.smol]
-version = "2.0"
+workspace = true
 
 [dev-dependencies.futures]
-version = "0.3"
+workspace = true
 
 [lints.clippy]
 dbg_macro = "deny"

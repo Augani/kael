@@ -19,7 +19,7 @@ path = "src/lib.rs"
 doctest = false
 
 [dependencies.anyhow]
-version = "1.0.86"
+workspace = true
 
 [dependencies.kael_storage]
 path = "../kael_storage"
@@ -30,20 +30,20 @@ version = "0.3.0"
 version = "0.12.1"
 
 [dependencies.serde]
-version = "1.0.221"
+workspace = true
 features = ["derive"]
 
 [dependencies.serde_json]
-version = "1.0.144"
+workspace = true
 
 [dependencies.sha2]
 version = "0.10"
 
 [dependencies.smol]
-version = "2.0"
+workspace = true
 
 [dev-dependencies.futures]
-version = "0.3"
+workspace = true
 
 [dev-dependencies.tempfile]
 version = "3.20.0"

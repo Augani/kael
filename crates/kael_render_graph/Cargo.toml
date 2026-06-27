@@ -18,7 +18,7 @@ path = "src/lib.rs"
 doctest = false
 
 [dependencies.anyhow]
-version = "1.0.86"
+workspace = true
 
 [lints.clippy]
 dbg_macro = "deny"

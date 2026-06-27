@@ -126,7 +126,7 @@ name = "action_macros"
 path = "tests/action_macros.rs"
 
 [dependencies.anyhow]
-version = "1.0.86"
+workspace = true
 
 [dependencies.async-task]
 version = "4.7"
@@ -195,7 +195,7 @@ features = ["full"]
 version = "0.2"
 
 [dependencies.futures]
-version = "0.3"
+workspace = true
 
 [dependencies.pin-project-lite]
 version = "0.2"
@@ -277,7 +277,7 @@ version = "0.14.0"
 version = "0.2"
 
 [dependencies.log]
-version = "0.4.16"
+workspace = true
 features = [
     "kv_unstable_serde",
     "serde",
@@ -332,7 +332,7 @@ features = [
 default-features = false
 
 [dependencies.unicode-segmentation]
-version = "1.10"
+workspace = true
 
 [dependencies.schemars]
 version = "1.0"
@@ -347,14 +347,14 @@ package = "kael_semantic_version"
 version = "0.3.0"
 
 [dependencies.serde]
-version = "1.0.221"
+workspace = true
 features = [
     "derive",
     "rc",
 ]
 
 [dependencies.serde_json]
-version = "1.0.144"
+workspace = true
 features = [
     "preserve_order",
     "raw_value",
@@ -367,11 +367,11 @@ version = "1"
 version = "1.0.6"
 
 [dependencies.smallvec]
-version = "1.6"
+workspace = true
 features = ["union", "serde"]
 
 [dependencies.smol]
-version = "2.0"
+workspace = true
 
 [dependencies.stacksafe]
 version = "0.1"
@@ -392,7 +392,7 @@ version = "=0.9.0"
 version = "0.3"
 
 [dependencies.thiserror]
-version = "2.0.12"
+workspace = true
 
 [dependencies.usvg]
 version = "0.45.0"
@@ -458,7 +458,7 @@ features = ["unstable"]
 version = "0.9"
 
 [dev-dependencies.unicode-segmentation]
-version = "1.10"
+workspace = true
 
 [dev-dependencies.util]
 path = "../util"
@@ -673,7 +673,7 @@ package = "zed-font-kit"
 version = "0.5"
 
 [target.'cfg(target_os = "macos")'.dependencies.log]
-version = "0.4.16"
+workspace = true
 features = [
     "kv_unstable_serde",
     "serde",
@@ -721,7 +721,7 @@ version = "0.2"
 version = "0.9"
 
 [target.'cfg(target_os = "windows")'.dependencies.windows]
-version = "0.62"
+workspace = true
 features = [
     "Foundation",
     "Foundation_Collections",

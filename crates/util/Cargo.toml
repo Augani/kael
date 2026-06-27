@@ -26,7 +26,7 @@ path = "src/util.rs"
 doctest = true
 
 [dependencies.anyhow]
-version = "1.0.86"
+workspace = true
 
 [dependencies.async-fs]
 version = "2.1"
@@ -50,7 +50,7 @@ version = "4.0"
 version = "1.0"
 
 [dependencies.futures]
-version = "0.3"
+workspace = true
 
 [dependencies.futures-lite]
 version = "1.13"
@@ -67,7 +67,7 @@ version = "0.4"
 version = "0.14.0"
 
 [dependencies.log]
-version = "0.4.16"
+workspace = true
 features = [
     "kv_unstable_serde",
     "serde",
@@ -89,14 +89,14 @@ version = "1.0"
 features = ["indexmap2"]
 
 [dependencies.serde]
-version = "1.0.221"
+workspace = true
 features = [
     "derive",
     "rc",
 ]
 
 [dependencies.serde_json]
-version = "1.0.144"
+workspace = true
 features = [
     "preserve_order",
     "raw_value",
@@ -113,7 +113,7 @@ features = [
 version = "1.3.0"
 
 [dependencies.smol]
-version = "2.0"
+workspace = true
 
 [dependencies.take-until]
 version = "0.2.0"

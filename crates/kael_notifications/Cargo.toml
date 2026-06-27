@@ -19,7 +19,7 @@ path = "src/lib.rs"
 doctest = false
 
 [dependencies.anyhow]
-version = "1.0.86"
+workspace = true
 
 [dependencies.notify-rust]
 version = "4.12.0"
@@ -28,11 +28,11 @@ version = "4.12.0"
 version = "0.12.1"
 
 [dependencies.serde]
-version = "1.0.221"
+workspace = true
 features = ["derive"]
 
 [dev-dependencies.futures]
-version = "0.3"
+workspace = true
 
 [lints.clippy]
 dbg_macro = "deny"
