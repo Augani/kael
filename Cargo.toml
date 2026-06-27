@@ -59,3 +59,24 @@ smol = "2.0"
 thiserror = "2.0.12"
 unicode-segmentation = "1.10"
 windows = "0.62"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+declare_interior_mutable_const = "deny"
+disallowed_methods = "deny"
+large_enum_variant = "allow"
+let_underscore_future = "allow"
+nonminimal_bool = "allow"
+redundant_clone = "deny"
+single_range_in_vec_init = "allow"
+todo = "deny"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[workspace.lints.clippy.style]
+level = "allow"
+priority = -1
+
+[workspace.lints.rust.unexpected_cfgs]
+level = "allow"
+priority = 0
