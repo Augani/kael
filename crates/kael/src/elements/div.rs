@@ -23,16 +23,17 @@ use crate::scroll_elasticity::{
 use crate::{
     AbsoluteLength, Action, AnyDrag, AnyElement, AnyTooltip, AnyView, App, AppContext, Background,
     Bounds, BoxShadow, ClickEvent, Context, Corners, CursorStyle, DispatchPhase, Element,
-    ElementId, Entity, Fill, FocusHandle, GestureRecognizer, Global, GlobalElementId, Hitbox,
-    HitboxBehavior, HitboxId, Hsla, InspectorElementId, IntoElement, IsZero, KeyContext,
-    KeyDownEvent, KeyUpEvent, KeyboardButton, KeyboardClickEvent, LayoutId, LongPressGesture,
-    LongPressGestureEvent, MagnifyEvent, ModifiersChangedEvent, MouseButton, MouseClickEvent,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Overflow, PanGesture, PanGestureEvent, PanState,
-    ParentElement, PinchGesture, PinchGestureEvent, Pixels, Point, Render, Rgba, ScaledPixels,
-    ScrollDelta, ScrollWheelEvent, SharedString, Size, Style, StyleRefinement, Styled,
-    SwipeDirection, SwipeGesture, SwipeGestureEvent, TapGesture, TapGestureEvent, Task, TooltipId,
-    TouchPhase, TransformationMatrix, Visibility, Window, WindowControlArea, point, px,
-    scroll_trace_enabled, size,
+    ElementId, Entity, ExternalDropData, ExternalPaths, FileDropFilter, Fill, FocusHandle,
+    GestureRecognizer, Global, GlobalElementId, Hitbox, HitboxBehavior, HitboxId, Hsla,
+    InspectorElementId, IntoElement, IsZero, KeyContext, KeyDownEvent, KeyUpEvent, KeyboardButton,
+    KeyboardClickEvent, LayoutId, LongPressGesture, LongPressGestureEvent, MagnifyEvent,
+    ModifiersChangedEvent, MouseButton, MouseClickEvent, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Overflow, PanGesture, PanGestureEvent, PanState, ParentElement, PinchGesture,
+    PinchGestureEvent, Pixels, Point, Render, Rgba, ScaledPixels, ScrollDelta, ScrollWheelEvent,
+    SharedString, Size, Style, StyleRefinement, Styled, SwipeDirection, SwipeGesture,
+    SwipeGestureEvent, TapGesture, TapGestureEvent, Task, TooltipId, TouchPhase,
+    TransformationMatrix, Visibility, Window, WindowControlArea, point, px, scroll_trace_enabled,
+    size,
 };
 use collections::HashMap;
 use refineable::Refineable;
@@ -1002,6 +1003,26 @@ impl Interactivity {
         ));
     }
 
+    /// Bind a callback to external OS/WebView-style drops, normalizing file-only
+    /// [`ExternalPaths`] and browser-like [`ExternalDropData`] payloads.
+    ///
+    /// The callback sees one `ExternalDropData` value either way, so drop zones
+    /// can handle files, text, and URLs with the same code path.
+    pub fn on_external_drop(
+        &mut self,
+        listener: impl Fn(&ExternalDropData, &mut Window, &mut App) + 'static,
+    ) {
+        let listener = Rc::new(listener);
+        let data_listener = listener.clone();
+        self.on_drop(move |data: &ExternalDropData, window, cx| {
+            data_listener(data, window, cx);
+        });
+        self.on_drop(move |paths: &ExternalPaths, window, cx| {
+            let data = paths.clone().into_drop_data();
+            listener(&data, window, cx);
+        });
+    }
+
     /// Use the given predicate to determine whether or not a drop event should be dispatched to this element
     /// The imperative API equivalent to [`InteractiveElement::can_drop`]
     pub fn can_drop(
@@ -1009,6 +1030,15 @@ impl Interactivity {
         predicate: impl Fn(&dyn Any, &mut Window, &mut App) -> bool + 'static,
     ) {
         self.can_drop_predicate = Some(Box::new(predicate));
+    }
+
+    /// Accept external drops whose file paths match the filter, or whose payload
+    /// contains text/URLs and no files. This mirrors browser `DataTransfer`
+    /// ergonomics while preserving file-only compatibility.
+    pub fn can_drop_external(&mut self, filter: FileDropFilter) {
+        self.can_drop(move |value, _, _| {
+            ExternalDropData::from_drag_value(value).is_some_and(|data| data.accepted_by(&filter))
+        });
     }
 
     /// Bind the given callback to click events of this element
@@ -1662,6 +1692,18 @@ pub trait InteractiveElement: Sized {
         self
     }
 
+    /// Bind a callback to external file/text/URL drops, normalized as [`ExternalDropData`].
+    ///
+    /// Handles both file-only [`ExternalPaths`] and browser-like
+    /// [`ExternalDropData`] payloads.
+    fn on_external_drop(
+        mut self,
+        listener: impl Fn(&ExternalDropData, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.interactivity().on_external_drop(listener);
+        self
+    }
+
     /// Use the given predicate to determine whether or not a drop event should be dispatched to this element
     /// The fluent API equivalent to [`Interactivity::can_drop`]
     fn can_drop(
@@ -1669,6 +1711,12 @@ pub trait InteractiveElement: Sized {
         predicate: impl Fn(&dyn Any, &mut Window, &mut App) -> bool + 'static,
     ) -> Self {
         self.interactivity().can_drop(predicate);
+        self
+    }
+
+    /// Accept external drops whose files match the filter, plus text/URL-only payloads.
+    fn can_drop_external(mut self, filter: FileDropFilter) -> Self {
+        self.interactivity().can_drop_external(filter);
         self
     }
 

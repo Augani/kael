@@ -56,6 +56,8 @@ mod global;
 /// Golden-image pixel-diff comparison for the headless render pipeline.
 pub mod golden;
 pub mod gpu;
+/// Capability reporting for native graphics and visual escape hatches.
+pub mod graphics_capabilities;
 /// Headless off-screen rendering for benchmarks and golden-image tests.
 pub mod headless_render;
 mod icons;
@@ -169,6 +171,7 @@ pub use geometry::*;
 pub use gesture::*;
 pub use global::*;
 pub use gpu::*;
+pub use graphics_capabilities::*;
 pub use headless_render::*;
 pub use http_client;
 pub use input::*;
@@ -176,6 +179,11 @@ pub use inspector::*;
 pub use interactive::*;
 pub use ipc_transport::*;
 pub use kael_macros::{AppContext, IntoElement, Render, VisualContext, register_action, test};
+#[cfg(feature = "share")]
+pub use kael_share::{
+    PlatformShareSupport, ShareFileType, ShareImage, ShareItem, ShareReceiver, ShareResult,
+    ShareSheet, ShareSheetBuilder, ShareType, cleanup_share_temps,
+};
 use key_dispatch::*;
 pub use keymap::*;
 pub use lottie::*;

@@ -18,13 +18,30 @@ You get this for free when using the built-in widgets.
 For custom div-based interactive elements, add accessibility attributes:
 
 ```rust
+let accessibility = AccessibilityAttributes::switch("Enable dark mode", self.is_on);
+accessibility.validate()?;
+
 div()
     .id("custom-toggle")
-    .role(AccessibilityRole::Switch)
-    .aria_checked(self.is_on)
-    .aria_label("Enable dark mode")
+    .accessibility(accessibility)
     .on_click(|_, _, cx| { /* toggle */ })
 ```
+
+Semantic recipes are available for common custom controls:
+
+```rust
+AccessibilityAttributes::button("Save")
+AccessibilityAttributes::link("Open documentation")
+AccessibilityAttributes::checkbox("Email notifications", enabled)
+AccessibilityAttributes::switch("Enable sync", enabled)
+AccessibilityAttributes::radio_button("Compact", selected)
+AccessibilityAttributes::slider("Volume", value, 0.0, 100.0, Some(1.0))
+AccessibilityAttributes::progress_bar("Upload progress", progress, 0.0, 100.0)
+AccessibilityAttributes::text_input("Search", query.clone())
+```
+
+Use `.validate()?` in tests or builder code to catch unlabeled interactive
+controls, missing actions, and invalid ranges before the UI renders.
 
 ## Keyboard navigation
 
@@ -59,6 +76,123 @@ div()
     .id("second-field")
     .tab_index(2)
 ```
+
+### Focus traps
+
+For custom modals, popovers, command palettes, and inspector panels, use the
+headless `FocusTrapController` so `Tab`, `Shift-Tab`, and `Escape` behave like
+users expect without tying the behavior to one visual component:
+
+```rust
+use kael_ui::prelude::{FocusTrapAction, FocusTrapController};
+
+let trap = FocusTrapController::modal();
+let root_focus = cx.focus_handle();
+
+if trap.should_autofocus() {
+    window.focus(&root_focus);
+}
+
+div()
+    .id("settings-dialog")
+    .track_focus(&root_focus)
+    .tab_index(0)
+    .on_key_down(move |event, window, cx| {
+        match trap.action_for_keystroke(&event.keystroke) {
+            Some(FocusTrapAction::FocusNext) => {
+                window.focus_next_in_group();
+                cx.stop_propagation();
+                window.prevent_default();
+            }
+            Some(FocusTrapAction::FocusPrevious) => {
+                window.focus_prev_in_group();
+                cx.stop_propagation();
+                window.prevent_default();
+            }
+            Some(FocusTrapAction::Dismiss) => {
+                close_settings(window, cx);
+            }
+            Some(FocusTrapAction::FocusFirst) | None => {}
+        }
+    })
+    .child(/* first focusable child */)
+    .child(/* second focusable child */)
+```
+
+Use `FocusTrapController::persistent()` for surfaces where Escape should not
+dismiss, or `.dismiss_on_escape(false)` / `.autofocus(false)` to tune a trap.
+
+## Assistive-technology actions
+
+Advertised actions tell screen readers and other assistive technologies what a
+custom element can do:
+
+```rust
+let attrs = AccessibilityAttributes::switch("Enable sync", enabled)
+    .action(AccessibilityAction::Toggle);
+```
+
+When a platform adapter or custom integration receives a native action request,
+Kael normalizes it into its action vocabulary. Apps can register handlers on
+the window:
+
+```rust
+window.on_accessibility_action(
+    accessibility_id,
+    AccessibilityAction::Toggle,
+    |request| {
+        assert_eq!(request.action, AccessibilityAction::Toggle);
+        toggle_sync();
+    },
+);
+
+let requests = window.drain_accessibility_actions();
+```
+
+Value-setting actions carry payload data:
+
+```rust
+window.on_accessibility_action(
+    slider_id,
+    AccessibilityAction::SetValue,
+    |request| {
+        if let Some(AccessibilityActionPayload::NumericValue(value)) = request.payload {
+            set_volume(value);
+        }
+    },
+);
+
+window.on_accessibility_action(
+    search_id,
+    AccessibilityAction::SetValue,
+    |request| {
+        if let Some(AccessibilityActionPayload::Value(value)) = request.payload {
+            set_search_query(value);
+        }
+    },
+);
+```
+
+For custom test harnesses or non-window integrations, route normalized requests
+through `AccessibilityActionRouter`:
+
+```rust
+let node = attrs.to_node(accessibility_id);
+let mut router = AccessibilityActionRouter::new();
+
+router.on_action(accessibility_id, AccessibilityAction::Toggle, |request| {
+    assert_eq!(request.action, AccessibilityAction::Toggle);
+    toggle_sync();
+});
+
+router.dispatch_accesskit(accessibility_id, &node, accesskit::Action::Click);
+```
+
+`AccessibilityActionRequest::from_accesskit_for_node(...)` uses the node's
+advertised actions to recover Kael-specific meaning when a platform action is
+coarser than Kael's vocabulary. For example, AccessKit `Click` can normalize to
+`Toggle` for a switch or `ShowMenu` for a combobox when that is what the node
+declared.
 
 ## Label association
 
@@ -123,9 +257,13 @@ Notes:
 - **Linux** uses `accesskit_unix`'s default `async-io` executor, which owns its
   own background thread for the zbus/AT-SPI2 connection — kael's executors are
   not involved. AT-SPI2 needs no special permission.
-- Assistive-technology action requests (e.g. focus, click, increment) are
-  delivered to the adapters and surfaced for the window; application-level
-  routing of those requests is not wired yet.
+- Assistive-technology action requests can be normalized with
+  `AccessibilityActionRequest` and routed with `AccessibilityActionRouter`.
+  macOS and Linux adapter drains now normalize pending AccessKit requests
+  against the current tree so Kael-specific actions such as `Toggle`,
+  `ShowMenu`, and `Dismiss` survive platform delivery. Windows feeds standard
+  UIA focus, invoke, toggle, expand/collapse, and range-value pattern calls
+  into the same window route.
 
 [`accesskit_macos`]: https://crates.io/crates/accesskit_macos
 [`accesskit_unix`]: https://crates.io/crates/accesskit_unix

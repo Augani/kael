@@ -951,15 +951,18 @@ impl X11Client {
                     return Some(());
                 };
                 if let Ok(file_list) = str::from_utf8(&reply.value) {
-                    let paths: SmallVec<[_; 2]> = file_list
-                        .lines()
-                        .filter_map(|path| Url::parse(path).log_err())
-                        .filter_map(|url| url.to_file_path().log_err())
-                        .collect();
-                    let input = PlatformInput::FileDrop(FileDropEvent::Entered {
-                        position: state.xdnd_state.position,
-                        paths: crate::ExternalPaths(paths),
-                    });
+                    let data = crate::ExternalDropData::from_uri_list(file_list);
+                    let input = if data.has_urls() || data.has_text() {
+                        PlatformInput::FileDrop(FileDropEvent::DataEntered {
+                            position: state.xdnd_state.position,
+                            data,
+                        })
+                    } else {
+                        PlatformInput::FileDrop(FileDropEvent::Entered {
+                            position: state.xdnd_state.position,
+                            paths: data.paths().clone(),
+                        })
+                    };
                     drop(state);
                     window.handle_input(input);
                     self.0.borrow_mut().xdnd_state.retrieved = true;

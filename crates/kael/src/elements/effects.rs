@@ -135,7 +135,7 @@ impl IntoElement for EffectLayer {
 #[cfg(test)]
 mod tests {
     use super::effect_layer;
-    use crate::{BoxShadow, ParentElement, Styled, div, hsla, point, px};
+    use crate::{BoxShadow, ParentElement, div, hsla, point, px};
 
     #[test]
     fn effect_layer_defaults_to_no_effects() {
@@ -169,7 +169,7 @@ mod render_tests {
     use crate::{
         BoxShadow, Context, IntoElement, POLYCHROME_SPRITE_KIND_CONTENT_BLURRED,
         POLYCHROME_SPRITE_KIND_CONTENT_SHADOW, POLYCHROME_SPRITE_KIND_PREMULTIPLIED, ParentElement,
-        Render, Styled, TestAppContext, VisualContext, Window, div, hsla, point, px,
+        Render, Styled, TestAppContext, Window, div, hsla, point, px,
     };
 
     struct BlurView;

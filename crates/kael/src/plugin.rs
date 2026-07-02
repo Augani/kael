@@ -6,7 +6,7 @@
 //! the main application via typed IPC.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
@@ -60,18 +60,21 @@ pub enum ExecutionModel {
 impl PluginManifest {
     /// Validate the manifest for well-formedness.
     pub fn validate(&self) -> Result<()> {
-        if self.id.is_empty() {
-            anyhow::bail!("plugin manifest: id must not be empty");
+        validate_plugin_id(&self.id, "plugin id")?;
+        validate_plugin_label(&self.name, "plugin name")?;
+        validate_plugin_version(&self.version, "plugin version")?;
+        validate_plugin_version(&self.api_version, "plugin api version")?;
+        validate_plugin_path_text(&self.entry_point, "plugin entry point")?;
+        if let Some(description) = &self.description {
+            validate_optional_plugin_text(description, "plugin description")?;
         }
-        if self.name.is_empty() {
-            anyhow::bail!("plugin manifest: name must not be empty");
+        if let Some(author) = &self.author {
+            validate_optional_plugin_text(author, "plugin author")?;
         }
-        if self.version.is_empty() {
-            anyhow::bail!("plugin manifest: version must not be empty");
+        for arg in &self.args {
+            validate_optional_plugin_text(arg, "plugin argument")?;
         }
-        if self.entry_point.is_empty() {
-            anyhow::bail!("plugin manifest: entry_point must not be empty");
-        }
+        self.contributions.validate()?;
         Ok(())
     }
 
@@ -281,6 +284,148 @@ pub enum PanelPosition {
     Bottom,
     /// Float as a separate window or overlay.
     Floating,
+}
+
+impl Contributions {
+    /// Validate contributed commands, menus, panels, and settings schema.
+    pub fn validate(&self) -> Result<()> {
+        let mut command_ids = HashSet::new();
+        for command in &self.commands {
+            command.validate()?;
+            anyhow::ensure!(
+                command_ids.insert(command.id.as_str()),
+                "plugin command id is duplicated: {}",
+                command.id
+            );
+        }
+
+        for menu_item in &self.menu_items {
+            menu_item.validate()?;
+            anyhow::ensure!(
+                command_ids.contains(menu_item.command_id.as_str()),
+                "plugin menu item references unknown command id: {}",
+                menu_item.command_id
+            );
+        }
+
+        let mut panel_ids = HashSet::new();
+        for panel in &self.panels {
+            panel.validate()?;
+            anyhow::ensure!(
+                panel_ids.insert(panel.id.as_str()),
+                "plugin panel id is duplicated: {}",
+                panel.id
+            );
+        }
+
+        if let Some(schema) = &self.settings_schema {
+            anyhow::ensure!(
+                schema.is_object(),
+                "plugin settings schema must be a JSON object"
+            );
+        }
+
+        Ok(())
+    }
+}
+
+impl ContributedCommand {
+    /// Validate a command contribution.
+    pub fn validate(&self) -> Result<()> {
+        validate_plugin_id(&self.id, "plugin command id")?;
+        validate_plugin_label(&self.title, "plugin command title")?;
+        if let Some(keybinding) = &self.keybinding {
+            validate_optional_plugin_text(keybinding, "plugin command keybinding")?;
+        }
+        Ok(())
+    }
+}
+
+impl ContributedMenuItem {
+    /// Validate a menu item contribution.
+    pub fn validate(&self) -> Result<()> {
+        validate_plugin_id(&self.target_menu, "plugin menu target")?;
+        validate_plugin_label(&self.label, "plugin menu item label")?;
+        validate_plugin_id(&self.command_id, "plugin menu command id")?;
+        Ok(())
+    }
+}
+
+impl ContributedPanel {
+    /// Validate a panel contribution.
+    pub fn validate(&self) -> Result<()> {
+        validate_plugin_id(&self.id, "plugin panel id")?;
+        validate_plugin_label(&self.title, "plugin panel title")?;
+        Ok(())
+    }
+}
+
+fn validate_plugin_id(value: &str, label: &str) -> Result<()> {
+    anyhow::ensure!(!value.trim().is_empty(), "{label} cannot be empty");
+    anyhow::ensure!(
+        value == value.trim(),
+        "{label} cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        value.len() <= 128,
+        "{label} cannot be longer than 128 bytes"
+    );
+    anyhow::ensure!(
+        value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | ':' | '-' | '_' | '/')),
+        "{label} must contain only ASCII letters, numbers, '.', ':', '-', '_' or '/'"
+    );
+    Ok(())
+}
+
+fn validate_plugin_label(value: &str, label: &str) -> Result<()> {
+    anyhow::ensure!(!value.trim().is_empty(), "{label} cannot be empty");
+    anyhow::ensure!(
+        value == value.trim(),
+        "{label} cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        value.chars().count() <= 128,
+        "{label} cannot be longer than 128 characters"
+    );
+    anyhow::ensure!(
+        !value.chars().any(char::is_control),
+        "{label} cannot contain control characters"
+    );
+    Ok(())
+}
+
+fn validate_plugin_version(value: &str, label: &str) -> Result<()> {
+    validate_plugin_label(value, label)?;
+    anyhow::ensure!(
+        value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '+')),
+        "{label} must be a portable version string"
+    );
+    Ok(())
+}
+
+fn validate_plugin_path_text(value: &str, label: &str) -> Result<()> {
+    validate_plugin_label(value, label)?;
+    anyhow::ensure!(
+        !value.contains('\0'),
+        "{label} cannot contain NUL characters"
+    );
+    Ok(())
+}
+
+fn validate_optional_plugin_text(value: &str, label: &str) -> Result<()> {
+    anyhow::ensure!(
+        value.chars().count() <= 512,
+        "{label} cannot be longer than 512 characters"
+    );
+    anyhow::ensure!(
+        !value.chars().any(char::is_control),
+        "{label} cannot contain control characters"
+    );
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -792,6 +937,22 @@ impl Default for CrashPolicy {
     }
 }
 
+impl CrashPolicy {
+    /// Validate the restart policy before applying it to an extension host.
+    pub fn validate(&self) -> Result<()> {
+        if self.max_restarts > 0 && self.restart_delay_ms == 0 {
+            anyhow::bail!("crash policy restart delay must be greater than zero");
+        }
+        if !self.backoff_factor.is_finite() {
+            anyhow::bail!("crash policy backoff factor must be finite");
+        }
+        if self.backoff_factor < 1.0 {
+            anyhow::bail!("crash policy backoff factor must be at least 1.0");
+        }
+        Ok(())
+    }
+}
+
 /// Tracks crash history for a single extension.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CrashRecord {
@@ -816,6 +977,27 @@ impl CrashRecord {
         }
     }
 
+    /// Create a validated crash record for the given extension.
+    pub fn new_checked(extension_id: impl Into<String>) -> Result<Self> {
+        let record = Self::new(extension_id);
+        record.validate()?;
+        Ok(record)
+    }
+
+    /// Validate the crash record before using it in extension host decisions.
+    pub fn validate(&self) -> Result<()> {
+        validate_plugin_id(&self.extension_id, "crash record extension id")?;
+        anyhow::ensure!(
+            !self.extension_id.contains('/'),
+            "crash record extension id cannot contain path separators"
+        );
+        anyhow::ensure!(
+            !self.extension_id.split('.').any(|segment| segment == ".."),
+            "crash record extension id cannot contain parent-directory segments"
+        );
+        Ok(())
+    }
+
     /// Record a new crash occurrence, disabling the extension if it exceeds
     /// the maximum restart count.
     pub fn record_crash(&mut self, policy: &CrashPolicy) {
@@ -831,9 +1013,24 @@ impl CrashRecord {
         }
     }
 
+    /// Validate the policy and record before recording a crash.
+    pub fn record_crash_checked(&mut self, policy: &CrashPolicy) -> Result<()> {
+        self.validate()?;
+        policy.validate()?;
+        self.record_crash(policy);
+        Ok(())
+    }
+
     /// Determine whether the extension should be restarted based on the policy.
     pub fn should_restart(&self, policy: &CrashPolicy) -> bool {
         !self.disabled && self.crash_count <= policy.max_restarts
+    }
+
+    /// Validate the policy and record before deciding whether to restart.
+    pub fn should_restart_checked(&self, policy: &CrashPolicy) -> Result<bool> {
+        self.validate()?;
+        policy.validate()?;
+        Ok(self.should_restart(policy))
     }
 
     /// Calculate the delay before the next restart attempt using exponential
@@ -845,6 +1042,24 @@ impl CrashRecord {
         let exponent = (self.crash_count - 1) as f64;
         let delay = policy.restart_delay_ms as f64 * policy.backoff_factor.powf(exponent);
         delay as u64
+    }
+
+    /// Validate inputs and calculate the next restart delay.
+    ///
+    /// Extremely large backoff values saturate to `u64::MAX` so restart
+    /// scheduling remains deterministic instead of wrapping.
+    pub fn next_restart_delay_checked(&self, policy: &CrashPolicy) -> Result<u64> {
+        self.validate()?;
+        policy.validate()?;
+        if self.crash_count == 0 {
+            return Ok(policy.restart_delay_ms);
+        }
+        let exponent = (self.crash_count - 1) as f64;
+        let delay = policy.restart_delay_ms as f64 * policy.backoff_factor.powf(exponent);
+        if !delay.is_finite() || delay >= u64::MAX as f64 {
+            return Ok(u64::MAX);
+        }
+        Ok(delay as u64)
     }
 }
 
@@ -893,6 +1108,152 @@ mod tests {
         };
         assert!(invalid.validate().is_err());
         assert!(valid.high_risk_capabilities().is_empty());
+    }
+
+    #[test]
+    fn test_manifest_validation_rejects_generated_footguns() {
+        let valid = PluginManifest {
+            id: "com.example.plugin".to_string(),
+            name: "Example".to_string(),
+            version: "1.0.0".to_string(),
+            api_version: "1.0.0".to_string(),
+            description: Some("Example plugin".to_string()),
+            author: Some("Example Author".to_string()),
+            entry_point: "plugin.wasm".to_string(),
+            execution_model: ExecutionModel::Wasm,
+            capabilities: vec![],
+            args: vec!["--verbose".to_string()],
+            contributions: Contributions {
+                commands: vec![ContributedCommand {
+                    id: "example.say-hello".to_string(),
+                    title: "Say Hello".to_string(),
+                    keybinding: Some("cmd+shift+h".to_string()),
+                }],
+                menu_items: vec![ContributedMenuItem {
+                    target_menu: "tools".to_string(),
+                    label: "Say Hello".to_string(),
+                    command_id: "example.say-hello".to_string(),
+                }],
+                panels: vec![ContributedPanel {
+                    id: "example.panel".to_string(),
+                    title: "Example Panel".to_string(),
+                    default_position: PanelPosition::Right,
+                }],
+                settings_schema: Some(serde_json::json!({ "type": "object" })),
+            },
+        };
+        assert!(valid.validate().is_ok());
+
+        assert!(
+            PluginManifest {
+                id: " com.example.plugin".to_string(),
+                ..valid.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            PluginManifest {
+                name: "Example\nPlugin".to_string(),
+                ..valid.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            PluginManifest {
+                version: "1.0.0 beta".to_string(),
+                ..valid.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            PluginManifest {
+                entry_point: " plugin.wasm".to_string(),
+                ..valid.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            PluginManifest {
+                args: vec!["--flag\nbad".to_string()],
+                ..valid.clone()
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_contribution_validation_rejects_ambiguous_entries() {
+        let valid_command = ContributedCommand {
+            id: "example.say-hello".to_string(),
+            title: "Say Hello".to_string(),
+            keybinding: None,
+        };
+
+        assert!(
+            Contributions {
+                commands: vec![valid_command.clone(), valid_command.clone()],
+                ..Contributions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Contributions {
+                commands: vec![valid_command.clone()],
+                menu_items: vec![ContributedMenuItem {
+                    target_menu: "tools".to_string(),
+                    label: "Missing Command".to_string(),
+                    command_id: "example.missing".to_string(),
+                }],
+                ..Contributions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Contributions {
+                panels: vec![
+                    ContributedPanel {
+                        id: "example.panel".to_string(),
+                        title: "Panel".to_string(),
+                        default_position: PanelPosition::Right,
+                    },
+                    ContributedPanel {
+                        id: "example.panel".to_string(),
+                        title: "Panel 2".to_string(),
+                        default_position: PanelPosition::Left,
+                    },
+                ],
+                ..Contributions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Contributions {
+                commands: vec![ContributedCommand {
+                    id: "bad command".to_string(),
+                    title: "Bad".to_string(),
+                    keybinding: None,
+                }],
+                ..Contributions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Contributions {
+                settings_schema: Some(serde_json::json!("not an object")),
+                ..Contributions::default()
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[test]
@@ -1436,6 +1797,34 @@ mod tests {
         assert_eq!(policy.max_restarts, 3);
         assert_eq!(policy.restart_delay_ms, 1000);
         assert!((policy.backoff_factor - 2.0).abs() < f64::EPSILON);
+        policy.validate().unwrap();
+    }
+
+    #[test]
+    fn test_crash_policy_validate_rejects_zero_restart_delay() {
+        let policy = CrashPolicy {
+            max_restarts: 1,
+            restart_delay_ms: 0,
+            backoff_factor: 2.0,
+        };
+        assert!(policy.validate().is_err());
+    }
+
+    #[test]
+    fn test_crash_policy_validate_rejects_bad_backoff() {
+        let low = CrashPolicy {
+            max_restarts: 1,
+            restart_delay_ms: 100,
+            backoff_factor: 0.5,
+        };
+        assert!(low.validate().is_err());
+
+        let infinite = CrashPolicy {
+            max_restarts: 1,
+            restart_delay_ms: 100,
+            backoff_factor: f64::INFINITY,
+        };
+        assert!(infinite.validate().is_err());
     }
 
     #[test]
@@ -1448,6 +1837,12 @@ mod tests {
     }
 
     #[test]
+    fn test_crash_record_new_checked_validates_id() {
+        assert!(CrashRecord::new_checked("com.example.ext").is_ok());
+        assert!(CrashRecord::new_checked("../bad").is_err());
+    }
+
+    #[test]
     fn test_crash_record_single_crash() {
         let policy = CrashPolicy::default();
         let mut record = CrashRecord::new("ext-1");
@@ -1456,6 +1851,23 @@ mod tests {
         assert!(record.last_crash.is_some());
         assert!(!record.disabled);
         assert!(record.should_restart(&policy));
+    }
+
+    #[test]
+    fn test_crash_record_checked_methods_validate_policy_and_id() {
+        let bad_policy = CrashPolicy {
+            max_restarts: 1,
+            restart_delay_ms: 0,
+            backoff_factor: 2.0,
+        };
+        let mut record = CrashRecord::new("com.example.ext");
+        assert!(record.record_crash_checked(&bad_policy).is_err());
+
+        let policy = CrashPolicy::default();
+        let mut bad_record = CrashRecord::new("bad/id");
+        assert!(bad_record.record_crash_checked(&policy).is_err());
+        assert!(bad_record.should_restart_checked(&policy).is_err());
+        assert!(bad_record.next_restart_delay_checked(&policy).is_err());
     }
 
     #[test]
@@ -1496,6 +1908,21 @@ mod tests {
         assert_eq!(record.next_restart_delay(&policy), 2000);
         record.crash_count = 3;
         assert_eq!(record.next_restart_delay(&policy), 4000);
+    }
+
+    #[test]
+    fn test_crash_record_next_restart_delay_checked_saturates() {
+        let policy = CrashPolicy {
+            max_restarts: u32::MAX,
+            restart_delay_ms: 1000,
+            backoff_factor: 10.0,
+        };
+        let mut record = CrashRecord::new_checked("com.example.ext").unwrap();
+        record.crash_count = u32::MAX;
+        assert_eq!(
+            record.next_restart_delay_checked(&policy).unwrap(),
+            u64::MAX
+        );
     }
 
     #[test]

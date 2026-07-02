@@ -1,6 +1,6 @@
 use crate::{
     App, Bounds, Edges, ObjectFit, Pixels, Point, RenderImage, Rgba, SharedString, Size, point, px,
-    rgb,
+    rgb, size,
 };
 use anyhow::{Result, anyhow};
 use std::sync::Arc;
@@ -13,6 +13,88 @@ pub struct PrintJob {
     margins: Edges<Pixels>,
 }
 
+/// How a native print job should be dispatched.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PrintDialogMode {
+    /// Show the platform print dialog before dispatching the job.
+    ShowDialog,
+    /// Send the job directly to the platform print system.
+    Silent,
+}
+
+/// A checked print request for native print jobs or WebView-hosted documents.
+pub enum PrintRequest {
+    /// Print a Kael-rendered native print job.
+    NativeJob {
+        /// The native print job to render and dispatch.
+        job: PrintJob,
+        /// Whether the platform print dialog should be shown.
+        mode: PrintDialogMode,
+    },
+    /// Open the print dialog for a WebView-hosted document.
+    WebView {
+        /// The WebView identifier to print.
+        id: SharedString,
+    },
+}
+
+impl PrintRequest {
+    /// Create a native print request that shows the platform print dialog.
+    pub fn dialog(job: PrintJob) -> Self {
+        Self::NativeJob {
+            job,
+            mode: PrintDialogMode::ShowDialog,
+        }
+    }
+
+    /// Create a native print request that sends directly to the platform print system.
+    pub fn silent(job: PrintJob) -> Self {
+        Self::NativeJob {
+            job,
+            mode: PrintDialogMode::Silent,
+        }
+    }
+
+    /// Create a WebView print request by WebView id.
+    pub fn webview(id: impl Into<SharedString>) -> Self {
+        Self::WebView { id: id.into() }
+    }
+
+    /// Return true when this request prints a native Kael-rendered job.
+    pub fn is_native_job(&self) -> bool {
+        matches!(self, Self::NativeJob { .. })
+    }
+
+    /// Return true when this request prints a WebView-hosted document.
+    pub fn is_webview(&self) -> bool {
+        matches!(self, Self::WebView { .. })
+    }
+
+    /// Return the native print dialog mode when this request owns a native job.
+    pub fn dialog_mode(&self) -> Option<PrintDialogMode> {
+        match self {
+            Self::NativeJob { mode, .. } => Some(*mode),
+            Self::WebView { .. } => None,
+        }
+    }
+
+    /// Return the WebView id when this request targets hosted browser content.
+    pub fn webview_id(&self) -> Option<&SharedString> {
+        match self {
+            Self::WebView { id } => Some(id),
+            Self::NativeJob { .. } => None,
+        }
+    }
+
+    /// Validate the print request before showing native UI or dispatching to a printer.
+    pub fn validate(&self) -> Result<()> {
+        match self {
+            Self::NativeJob { job, .. } => job.validate(),
+            Self::WebView { id } => validate_webview_print_id(id),
+        }
+    }
+}
+
 impl PrintJob {
     /// Creates a new print job with a title.
     pub fn new(title: impl Into<SharedString>) -> Self {
@@ -22,6 +104,22 @@ impl PrintJob {
             orientation: PrintOrientation::Portrait,
             margins: Edges::all(px(36.)),
         }
+    }
+
+    /// Creates a new single-page letter-sized print job.
+    pub fn letter(
+        title: impl Into<SharedString>,
+        render: impl Fn(&mut PrintContext, &mut App) + 'static,
+    ) -> Self {
+        Self::new(title).page(PrintPage::letter(render))
+    }
+
+    /// Creates a new single-page A4 print job.
+    pub fn a4(
+        title: impl Into<SharedString>,
+        render: impl Fn(&mut PrintContext, &mut App) + 'static,
+    ) -> Self {
+        Self::new(title).page(PrintPage::a4(render))
     }
 
     /// Appends a page to the print job.
@@ -48,21 +146,59 @@ impl PrintJob {
         self
     }
 
-    pub(crate) fn into_platform_job(self, cx: &mut App) -> Result<PlatformPrintJob> {
+    /// Return the print job title.
+    pub fn title(&self) -> &SharedString {
+        &self.title
+    }
+
+    /// Return the pages configured for this print job.
+    pub fn pages_ref(&self) -> &[PrintPage] {
+        &self.pages
+    }
+
+    /// Return the configured orientation.
+    pub fn orientation_ref(&self) -> PrintOrientation {
+        self.orientation
+    }
+
+    /// Return the configured margins.
+    pub fn margins_ref(&self) -> Edges<Pixels> {
+        self.margins
+    }
+
+    /// Validate the print job before showing OS print UI.
+    pub fn validate(&self) -> Result<()> {
+        validate_print_title(&self.title)?;
+
         if self.pages.is_empty() {
             return Err(anyhow!("print jobs must contain at least one page"));
         }
 
         let first_page_size = self.pages[0].size;
-        let mut rendered_pages = Vec::with_capacity(self.pages.len());
+        validate_print_page_size(first_page_size)?;
+        validate_print_margins(self.margins)?;
 
-        for page in self.pages {
+        for page in &self.pages {
+            validate_print_page_size(page.size)?;
             if page.size != first_page_size {
                 return Err(anyhow!(
                     "all pages in a print job must use the same page size"
                 ));
             }
 
+            content_size_for_page(page.size, self.margins)?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn into_platform_job(self, cx: &mut App) -> Result<PlatformPrintJob> {
+        self.validate()?;
+
+        let first_page_size = self.pages[0].size;
+        let mut rendered_pages = Vec::with_capacity(self.pages.len());
+
+        for page in self.pages {
             let content_size = content_size_for_page(page.size, self.margins)?;
             let mut context = PrintContext::new(page.size, content_size);
             (page.render)(&mut context, cx);
@@ -81,6 +217,20 @@ impl PrintJob {
     }
 }
 
+fn validate_webview_print_id(id: &SharedString) -> Result<()> {
+    let id = id.as_ref();
+    anyhow::ensure!(!id.trim().is_empty(), "WebView print id cannot be empty");
+    anyhow::ensure!(
+        id == id.trim(),
+        "WebView print id cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        !id.chars().any(char::is_control),
+        "WebView print id cannot contain control characters"
+    );
+    Ok(())
+}
+
 /// A single page in a print job.
 pub struct PrintPage {
     size: Size<Pixels>,
@@ -93,6 +243,40 @@ impl PrintPage {
         Self {
             size,
             render: Box::new(render),
+        }
+    }
+
+    /// Creates a US Letter page (8.5 x 11 inches at 72 points per inch).
+    pub fn letter(render: impl Fn(&mut PrintContext, &mut App) + 'static) -> Self {
+        Self::new(PrintPaperSize::Letter.size(), render)
+    }
+
+    /// Creates an A4 page (210 x 297mm at 72 points per inch).
+    pub fn a4(render: impl Fn(&mut PrintContext, &mut App) + 'static) -> Self {
+        Self::new(PrintPaperSize::A4.size(), render)
+    }
+
+    /// Return this page's paper size.
+    pub fn size(&self) -> Size<Pixels> {
+        self.size
+    }
+}
+
+/// Common paper sizes expressed in print points.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PrintPaperSize {
+    /// US Letter, 8.5 x 11 inches.
+    Letter,
+    /// A4, 210 x 297 millimeters.
+    A4,
+}
+
+impl PrintPaperSize {
+    /// Return the paper size in print points.
+    pub fn size(self) -> Size<Pixels> {
+        match self {
+            Self::Letter => size(px(612.), px(792.)),
+            Self::A4 => size(px(595.), px(842.)),
         }
     }
 }
@@ -126,6 +310,11 @@ impl PrintStroke {
     pub fn color(mut self, color: impl Into<Rgba>) -> Self {
         self.color = color.into();
         self
+    }
+
+    /// Validate stroke settings before printing.
+    pub fn validate(&self) -> Result<()> {
+        validate_positive_pixels(self.width, "print stroke width")
     }
 
     #[cfg(target_os = "macos")]
@@ -167,6 +356,14 @@ impl PrintTextStyle {
     pub fn color(mut self, color: impl Into<Rgba>) -> Self {
         self.color = color.into();
         self
+    }
+
+    /// Validate text style settings before printing.
+    pub fn validate(&self) -> Result<()> {
+        if let Some(font_family) = &self.font_family {
+            validate_print_label(font_family, "print font family", 128)?;
+        }
+        validate_positive_pixels(self.font_size, "print font size")
     }
 
     #[cfg(target_os = "macos")]
@@ -246,6 +443,11 @@ impl PrintImageStyle {
         self
     }
 
+    /// Validate image style settings before printing.
+    pub fn validate(&self) -> Result<()> {
+        Ok(())
+    }
+
     #[cfg(target_os = "macos")]
     pub(crate) fn object_fit_ref(&self) -> PrintImageFit {
         self.object_fit
@@ -295,6 +497,9 @@ impl PrintContext {
 
     /// Fills a rectangle with a solid color.
     pub fn fill_rect(&mut self, bounds: Bounds<Pixels>, color: impl Into<Rgba>) {
+        if validate_print_bounds(bounds, "print fill rectangle").is_err() {
+            return;
+        }
         self.commands.push(PrintCommand::FillRect {
             bounds,
             color: color.into(),
@@ -308,15 +513,26 @@ impl PrintContext {
         radius: impl Into<Pixels>,
         color: impl Into<Rgba>,
     ) {
+        let radius = radius.into();
+        if validate_print_bounds(bounds, "print rounded fill rectangle").is_err()
+            || validate_non_negative_pixels(radius, "print corner radius").is_err()
+        {
+            return;
+        }
         self.commands.push(PrintCommand::FillRoundedRect {
             bounds,
-            radius: radius.into(),
+            radius,
             color: color.into(),
         });
     }
 
     /// Strokes a rectangle outline.
     pub fn stroke_rect(&mut self, bounds: Bounds<Pixels>, stroke: PrintStroke) {
+        if validate_print_bounds(bounds, "print stroke rectangle").is_err()
+            || stroke.validate().is_err()
+        {
+            return;
+        }
         self.commands
             .push(PrintCommand::StrokeRect { bounds, stroke });
     }
@@ -328,15 +544,28 @@ impl PrintContext {
         radius: impl Into<Pixels>,
         stroke: PrintStroke,
     ) {
+        let radius = radius.into();
+        if validate_print_bounds(bounds, "print rounded stroke rectangle").is_err()
+            || validate_non_negative_pixels(radius, "print corner radius").is_err()
+            || stroke.validate().is_err()
+        {
+            return;
+        }
         self.commands.push(PrintCommand::StrokeRoundedRect {
             bounds,
-            radius: radius.into(),
+            radius,
             stroke,
         });
     }
 
     /// Draws a single stroked line.
     pub fn stroke_line(&mut self, from: Point<Pixels>, to: Point<Pixels>, stroke: PrintStroke) {
+        if validate_print_point(from, "print line start").is_err()
+            || validate_print_point(to, "print line end").is_err()
+            || stroke.validate().is_err()
+        {
+            return;
+        }
         self.commands
             .push(PrintCommand::StrokeLine { from, to, stroke });
     }
@@ -348,9 +577,16 @@ impl PrintContext {
         origin: Point<Pixels>,
         style: PrintTextStyle,
     ) {
+        let text = text.into();
+        if validate_print_text(&text).is_err()
+            || validate_print_point(origin, "print text origin").is_err()
+            || style.validate().is_err()
+        {
+            return;
+        }
         self.commands.push(PrintCommand::Text {
             origin,
-            text: text.into(),
+            text,
             style,
         });
     }
@@ -362,9 +598,16 @@ impl PrintContext {
         bounds: Bounds<Pixels>,
         style: PrintTextStyle,
     ) {
+        let text = text.into();
+        if validate_print_text(&text).is_err()
+            || validate_print_bounds(bounds, "print text block").is_err()
+            || style.validate().is_err()
+        {
+            return;
+        }
         self.commands.push(PrintCommand::TextBlock {
             bounds,
-            text: text.into(),
+            text,
             style,
         });
     }
@@ -382,6 +625,10 @@ impl PrintContext {
         style: PrintImageStyle,
     ) {
         if image.frame_count() == 0 {
+            return;
+        }
+        if validate_print_bounds(bounds, "print image bounds").is_err() || style.validate().is_err()
+        {
             return;
         }
 
@@ -468,6 +715,86 @@ fn content_size_for_page(page_size: Size<Pixels>, margins: Edges<Pixels>) -> Res
     Ok(Size::new(px(content_width), px(content_height)))
 }
 
+fn validate_print_title(title: &SharedString) -> Result<()> {
+    validate_print_label(title, "print job title", 256)
+}
+
+fn validate_print_label(value: &SharedString, label: &str, max_len: usize) -> Result<()> {
+    let value = value.as_ref();
+    if value.trim().is_empty() {
+        return Err(anyhow!("{label} cannot be empty"));
+    }
+    if value != value.trim() {
+        return Err(anyhow!(
+            "{label} cannot have leading or trailing whitespace"
+        ));
+    }
+    if value.len() > max_len {
+        return Err(anyhow!("{label} cannot be longer than {max_len} bytes"));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(anyhow!("{label} cannot contain control characters"));
+    }
+    Ok(())
+}
+
+fn validate_print_text(text: &SharedString) -> Result<()> {
+    if text
+        .as_ref()
+        .chars()
+        .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err(anyhow!("print text cannot contain control characters"));
+    }
+    Ok(())
+}
+
+fn validate_print_page_size(size: Size<Pixels>) -> Result<()> {
+    validate_positive_pixels(size.width, "print page width")?;
+    validate_positive_pixels(size.height, "print page height")
+}
+
+fn validate_print_margins(margins: Edges<Pixels>) -> Result<()> {
+    validate_non_negative_pixels(margins.top, "print top margin")?;
+    validate_non_negative_pixels(margins.right, "print right margin")?;
+    validate_non_negative_pixels(margins.bottom, "print bottom margin")?;
+    validate_non_negative_pixels(margins.left, "print left margin")
+}
+
+fn validate_print_bounds(bounds: Bounds<Pixels>, label: &str) -> Result<()> {
+    validate_print_point(bounds.origin, label)?;
+    validate_positive_pixels(bounds.size.width, label)?;
+    validate_positive_pixels(bounds.size.height, label)
+}
+
+fn validate_print_point(point: Point<Pixels>, label: &str) -> Result<()> {
+    validate_finite_pixels(point.x, label)?;
+    validate_finite_pixels(point.y, label)
+}
+
+fn validate_positive_pixels(value: Pixels, label: &str) -> Result<()> {
+    validate_finite_pixels(value, label)?;
+    if value.0 <= 0.0 {
+        return Err(anyhow!("{label} must be greater than zero"));
+    }
+    Ok(())
+}
+
+fn validate_non_negative_pixels(value: Pixels, label: &str) -> Result<()> {
+    validate_finite_pixels(value, label)?;
+    if value.0 < 0.0 {
+        return Err(anyhow!("{label} cannot be negative"));
+    }
+    Ok(())
+}
+
+fn validate_finite_pixels(value: Pixels, label: &str) -> Result<()> {
+    if !value.0.is_finite() {
+        return Err(anyhow!("{label} must be finite"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -525,6 +852,141 @@ mod tests {
         let result = content_size_for_page(size(px(40.), px(40.)), Edges::all(px(20.)));
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn print_job_validates_title_pages_and_page_size() {
+        let page = || PrintPage::new(size(px(612.), px(792.)), |_, _| {});
+
+        let job = PrintJob::new("Document").page(page());
+        assert!(job.validate().is_ok());
+        assert_eq!(job.title().as_ref(), "Document");
+        assert_eq!(job.pages_ref().len(), 1);
+        assert_eq!(job.pages_ref()[0].size(), size(px(612.), px(792.)));
+        assert_eq!(job.orientation_ref(), PrintOrientation::Portrait);
+
+        assert!(PrintJob::new(" ").page(page()).validate().is_err());
+        assert!(PrintJob::new("Document").validate().is_err());
+        assert!(
+            PrintJob::new("Document")
+                .page(page())
+                .page(PrintPage::new(size(px(595.), px(842.)), |_, _| {}))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            PrintJob::new("Document")
+                .page(page())
+                .margins(Edges::all(px(396.)))
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn print_job_supports_named_paper_sizes() {
+        let letter = PrintPaperSize::Letter.size();
+        let a4 = PrintPaperSize::A4.size();
+
+        assert_eq!(letter, size(px(612.), px(792.)));
+        assert_eq!(a4, size(px(595.), px(842.)));
+
+        let letter_job = PrintJob::letter("Letter", |_, _| {});
+        let a4_job = PrintJob::a4("A4", |_, _| {});
+
+        assert_eq!(letter_job.pages_ref()[0].size(), letter);
+        assert_eq!(a4_job.pages_ref()[0].size(), a4);
+        assert!(letter_job.validate().is_ok());
+        assert!(a4_job.validate().is_ok());
+    }
+
+    #[test]
+    fn print_request_validates_native_and_webview_targets() {
+        let dialog = PrintRequest::dialog(PrintJob::letter("Document", |_, _| {}));
+        assert!(dialog.validate().is_ok());
+        assert!(dialog.is_native_job());
+        assert!(!dialog.is_webview());
+        assert_eq!(dialog.dialog_mode(), Some(PrintDialogMode::ShowDialog));
+        assert_eq!(dialog.webview_id(), None);
+
+        let silent = PrintRequest::silent(PrintJob::a4("Receipt", |_, _| {}));
+        assert!(silent.validate().is_ok());
+        assert_eq!(silent.dialog_mode(), Some(PrintDialogMode::Silent));
+
+        let webview = PrintRequest::webview("invoice-preview");
+        assert!(webview.validate().is_ok());
+        assert!(!webview.is_native_job());
+        assert!(webview.is_webview());
+        assert_eq!(webview.dialog_mode(), None);
+        assert_eq!(webview.webview_id().unwrap().as_ref(), "invoice-preview");
+    }
+
+    #[test]
+    fn print_request_rejects_generated_invalid_values() {
+        assert!(
+            PrintRequest::dialog(PrintJob::new("Missing pages"))
+                .validate()
+                .is_err()
+        );
+        assert!(PrintRequest::webview("").validate().is_err());
+        assert!(PrintRequest::webview(" invoice").validate().is_err());
+        assert!(
+            PrintRequest::webview("invoice\npreview")
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn print_job_rejects_generated_invalid_values() {
+        let page = || PrintPage::letter(|_, _| {});
+
+        assert!(PrintJob::new(" Document").page(page()).validate().is_err());
+        assert!(PrintJob::new("Doc\0ument").page(page()).validate().is_err());
+        assert!(
+            PrintJob::new("Document")
+                .page(PrintPage::new(size(px(0.), px(792.)), |_, _| {}))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            PrintJob::new("Document")
+                .page(page())
+                .margins(Edges {
+                    top: px(-1.),
+                    right: px(36.),
+                    bottom: px(36.),
+                    left: px(36.),
+                })
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn print_context_rejects_invalid_generated_commands() {
+        let mut context = PrintContext::new(size(px(612.), px(792.)), size(px(540.), px(720.)));
+
+        context.fill_rect(
+            Bounds::new(point(px(0.), px(0.)), size(px(0.), px(50.))),
+            rgb(0xff0000),
+        );
+        context.stroke_rect(
+            Bounds::new(point(px(0.), px(0.)), size(px(100.), px(50.))),
+            PrintStroke::new(px(0.)),
+        );
+        context.draw_text(
+            "bad\0text",
+            point(px(12.), px(24.)),
+            PrintTextStyle::default(),
+        );
+        context.draw_text(
+            "bad font",
+            point(px(12.), px(24.)),
+            PrintTextStyle::new(px(0.)),
+        );
+
+        assert!(context.finish().is_empty());
     }
 
     #[test]

@@ -26,6 +26,10 @@ let manifest = PluginManifest::builder(
 ```
 
 Manifests can also be loaded from disk with `PluginManifest::from_json`, `PluginManifest::from_toml`, or `PluginManifest::load(path)`.
+Manifest validation rejects empty, padded, control-character, overly long, or
+non-portable IDs/names/versions, unsafe entry-point text, duplicate command or
+panel IDs, menu items that reference missing commands, and non-object settings
+schemas before the extension is loaded.
 
 ## Loading and activating
 
@@ -44,6 +48,31 @@ for ext in runtime.all().iter().map(|e| e.manifest.id.clone()).collect::<Vec<_>>
 ```
 
 Other runtime operations: `load_from_directory` (dev mode), `install_from_path`, `uninstall`, `activate` / `deactivate`, `unload`, `send_command`, `broadcast_notification`, and `all` (returns `&ExtensionInfo` with `manifest`, `is_active`, `process_id`, `load_path`, `dev_mode`).
+
+## Crash and restart policy
+
+Extension hosts should keep crash state outside the extension process. Use
+`CrashPolicy::validate`, `CrashRecord::new_checked`,
+`record_crash_checked`, `should_restart_checked`, and
+`next_restart_delay_checked` when wiring restart loops. The checked helpers
+reject invalid extension IDs, zero-delay restart loops, non-finite backoff
+values, and backoff factors below `1.0`; extremely large restart delays
+saturate to `u64::MAX`.
+
+```rust
+use kael::{CrashPolicy, CrashRecord};
+
+let policy = CrashPolicy::default();
+policy.validate()?;
+
+let mut crashes = CrashRecord::new_checked("com.example.mock")?;
+crashes.record_crash_checked(&policy)?;
+
+if crashes.should_restart_checked(&policy)? {
+    let delay_ms = crashes.next_restart_delay_checked(&policy)?;
+    // Schedule the extension restart after delay_ms.
+}
+```
 
 ## Contribution points
 

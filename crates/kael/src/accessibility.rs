@@ -11,7 +11,10 @@
 //! [`AccessibilityAttributes`]. The framework collects these declarations
 //! during layout and exposes them to the platform accessibility layer.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 // ---------------------------------------------------------------------------
 // Identity
@@ -239,6 +242,8 @@ pub enum AccessibilityAction {
     Increment,
     /// Decrement a ranged value.
     Decrement,
+    /// Set a form or ranged value to a specific value.
+    SetValue,
     /// Open the element's associated menu.
     ShowMenu,
     /// Dismiss the element (e.g., close a dialog).
@@ -260,6 +265,7 @@ impl AccessibilityAction {
             Self::Collapse => Action::Collapse,
             Self::Increment => Action::Increment,
             Self::Decrement => Action::Decrement,
+            Self::SetValue => Action::SetValue,
             Self::ShowMenu => Action::Click,
             Self::Dismiss => Action::Collapse,
             Self::Custom(_) => Action::CustomAction,
@@ -278,8 +284,202 @@ impl AccessibilityAction {
             Action::Collapse => Some(Self::Collapse),
             Action::Increment => Some(Self::Increment),
             Action::Decrement => Some(Self::Decrement),
+            Action::SetValue => Some(Self::SetValue),
             _ => None,
         }
+    }
+}
+
+/// Extra data supplied with an accessibility action request.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AccessibilityActionPayload {
+    /// A string value, such as replacement text for a text input.
+    Value(String),
+    /// A numeric value, such as a slider position.
+    NumericValue(f64),
+}
+
+/// A normalized assistive-technology action request for one accessibility node.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccessibilityActionRequest {
+    /// The node targeted by the request.
+    pub node_id: AccessibilityId,
+    /// The action requested on that node.
+    pub action: AccessibilityAction,
+    /// Optional value data supplied by the platform action.
+    pub payload: Option<AccessibilityActionPayload>,
+}
+
+impl AccessibilityActionRequest {
+    /// Create a normalized action request.
+    pub fn new(node_id: AccessibilityId, action: AccessibilityAction) -> Self {
+        Self {
+            node_id,
+            action,
+            payload: None,
+        }
+    }
+
+    /// Create a normalized action request with extra action data.
+    pub fn with_payload(
+        node_id: AccessibilityId,
+        action: AccessibilityAction,
+        payload: AccessibilityActionPayload,
+    ) -> Self {
+        Self {
+            node_id,
+            action,
+            payload: Some(payload),
+        }
+    }
+
+    /// Create a request from a raw AccessKit action without node context.
+    pub fn from_accesskit(node_id: AccessibilityId, action: accesskit::Action) -> Option<Self> {
+        AccessibilityAction::from_accesskit(action).map(|action| Self::new(node_id, action))
+    }
+
+    /// Create a request from an AccessKit action and optional payload.
+    pub fn from_accesskit_with_data(
+        node_id: AccessibilityId,
+        action: accesskit::Action,
+        data: Option<accesskit::ActionData>,
+    ) -> Option<Self> {
+        let action = AccessibilityAction::from_accesskit(action)?;
+        Some(match data {
+            Some(accesskit::ActionData::Value(value))
+                if action == AccessibilityAction::SetValue =>
+            {
+                Self::with_payload(
+                    node_id,
+                    action,
+                    AccessibilityActionPayload::Value(value.into()),
+                )
+            }
+            Some(accesskit::ActionData::NumericValue(value))
+                if action == AccessibilityAction::SetValue =>
+            {
+                Self::with_payload(
+                    node_id,
+                    action,
+                    AccessibilityActionPayload::NumericValue(value),
+                )
+            }
+            _ => Self::new(node_id, action),
+        })
+    }
+
+    /// Create a request from a raw AccessKit action, using the node's advertised
+    /// actions to recover Kael-specific semantics when several Kael actions map
+    /// to the same platform action.
+    pub fn from_accesskit_for_node(
+        node_id: AccessibilityId,
+        node: &AccessibilityNode,
+        action: accesskit::Action,
+    ) -> Option<Self> {
+        Self::from_accesskit_for_node_with_data(node_id, node, action, None)
+    }
+
+    /// Create a request from a raw AccessKit action and optional payload, using
+    /// the node's advertised actions to recover Kael-specific semantics when
+    /// several Kael actions map to the same platform action.
+    pub fn from_accesskit_for_node_with_data(
+        node_id: AccessibilityId,
+        node: &AccessibilityNode,
+        action: accesskit::Action,
+        data: Option<accesskit::ActionData>,
+    ) -> Option<Self> {
+        let mut request = Self::from_accesskit_with_data(node_id, action, data)?;
+
+        if request.action == AccessibilityAction::Click {
+            if node.actions.contains(&AccessibilityAction::Toggle)
+                && !node.actions.contains(&AccessibilityAction::Click)
+            {
+                request.action = AccessibilityAction::Toggle;
+            } else if node.actions.contains(&AccessibilityAction::ShowMenu)
+                && !node.actions.contains(&AccessibilityAction::Click)
+            {
+                request.action = AccessibilityAction::ShowMenu;
+            }
+        } else if request.action == AccessibilityAction::Collapse
+            && node.actions.contains(&AccessibilityAction::Dismiss)
+            && !node.actions.contains(&AccessibilityAction::Collapse)
+        {
+            request.action = AccessibilityAction::Dismiss;
+        }
+
+        if node.actions.contains(&request.action) {
+            Some(request)
+        } else {
+            None
+        }
+    }
+}
+
+/// Routes normalized accessibility action requests to application handlers.
+///
+/// Platform adapters can feed this router after converting native action
+/// callbacks into [`AccessibilityActionRequest`]. Applications can also use it
+/// directly in tests or custom accessibility integrations.
+#[derive(Default)]
+pub struct AccessibilityActionRouter {
+    handlers: HashMap<(AccessibilityId, AccessibilityAction), AccessibilityActionHandler>,
+}
+
+type AccessibilityActionHandler = Box<dyn FnMut(AccessibilityActionRequest) + 'static>;
+
+impl AccessibilityActionRouter {
+    /// Create an empty router.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a handler for one node/action pair.
+    pub fn on_action(
+        &mut self,
+        node_id: AccessibilityId,
+        action: AccessibilityAction,
+        handler: impl FnMut(AccessibilityActionRequest) + 'static,
+    ) {
+        self.handlers.insert((node_id, action), Box::new(handler));
+    }
+
+    /// Remove a handler for one node/action pair.
+    pub fn remove_action(
+        &mut self,
+        node_id: AccessibilityId,
+        action: AccessibilityAction,
+    ) -> Option<AccessibilityActionHandler> {
+        self.handlers.remove(&(node_id, action))
+    }
+
+    /// Return whether a handler is registered for one node/action pair.
+    pub fn has_handler(&self, node_id: AccessibilityId, action: AccessibilityAction) -> bool {
+        self.handlers.contains_key(&(node_id, action))
+    }
+
+    /// Dispatch a normalized action request. Returns true when a handler ran.
+    pub fn dispatch(&mut self, request: AccessibilityActionRequest) -> bool {
+        let Some(handler) = self.handlers.get_mut(&(request.node_id, request.action)) else {
+            return false;
+        };
+        handler(request);
+        true
+    }
+
+    /// Dispatch a raw AccessKit action against a node. Returns true when the
+    /// action was supported by the node and a matching handler ran.
+    pub fn dispatch_accesskit(
+        &mut self,
+        node_id: AccessibilityId,
+        node: &AccessibilityNode,
+        action: accesskit::Action,
+    ) -> bool {
+        let Some(request) =
+            AccessibilityActionRequest::from_accesskit_for_node(node_id, node, action)
+        else {
+            return false;
+        };
+        self.dispatch(request)
     }
 }
 
@@ -551,6 +751,64 @@ impl AccessibilityTree {
         })
     }
 
+    /// Audit this tree for common accessibility issues before platform export.
+    pub fn audit_report(&self) -> AccessibilityAuditReport {
+        let mut issues = Vec::new();
+
+        if !self.nodes.contains_key(&self.root) {
+            issues.push(accessibility_audit_issue(
+                AccessibilityAuditSeverity::Error,
+                AccessibilityAuditIssueKind::MissingRoot,
+                None,
+                None,
+                "accessibility tree root is missing from the node map",
+            ));
+            return AccessibilityAuditReport { issues };
+        }
+
+        let mut focused_nodes = Vec::new();
+        for (id, node) in &self.nodes {
+            audit_accessibility_node(*id, node, &mut issues);
+            if node.states.contains(AccessibilityState::FOCUSED) {
+                focused_nodes.push(*id);
+            }
+            for child in &node.children {
+                match self.nodes.get(child) {
+                    Some(child_node) => {
+                        if child_node.parent != Some(*id) {
+                            issues.push(accessibility_audit_issue(
+                                AccessibilityAuditSeverity::Warning,
+                                AccessibilityAuditIssueKind::ParentMismatch,
+                                Some(*child),
+                                Some(child_node.role),
+                                "accessibility child node parent link does not match its container",
+                            ));
+                        }
+                    }
+                    None => issues.push(accessibility_audit_issue(
+                        AccessibilityAuditSeverity::Error,
+                        AccessibilityAuditIssueKind::MissingChildNode,
+                        Some(*child),
+                        None,
+                        "accessibility node references a child that is missing from the tree",
+                    )),
+                }
+            }
+        }
+
+        if focused_nodes.len() > 1 {
+            issues.push(accessibility_audit_issue(
+                AccessibilityAuditSeverity::Error,
+                AccessibilityAuditIssueKind::MultipleFocusedNodes,
+                focused_nodes.first().copied(),
+                self.nodes.get(&focused_nodes[0]).map(|node| node.role),
+                "accessibility tree has more than one focused node",
+            ));
+        }
+
+        AccessibilityAuditReport { issues }
+    }
+
     /// Build a full AccessKit [`accesskit::TreeUpdate`] from this tree.
     ///
     /// Only nodes reachable from the root are emitted, and every parent's child
@@ -631,6 +889,247 @@ impl AccessibilityTree {
             focus,
         }
     }
+}
+
+/// Severity of an accessibility audit issue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AccessibilityAuditSeverity {
+    /// The tree or attributes are likely invalid or unusable.
+    Error,
+    /// The tree or attributes are valid but likely lower quality.
+    Warning,
+}
+
+/// Common accessibility issue categories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AccessibilityAuditIssueKind {
+    /// The tree root id is not present in the node map.
+    MissingRoot,
+    /// Attribute metadata omitted a role.
+    MissingRole,
+    /// A node uses `Unknown` for a role.
+    UnknownRole,
+    /// An interactive node has no accessible name.
+    MissingAccessibleName,
+    /// An interactive node advertises no actions.
+    MissingInteractiveAction,
+    /// A range value has invalid or non-finite bounds.
+    InvalidRange,
+    /// Mutually exclusive state flags are present together.
+    ConflictingStates,
+    /// A focused node is hidden from assistive technology.
+    HiddenFocusedNode,
+    /// A child id is missing from the tree.
+    MissingChildNode,
+    /// A child node's parent pointer disagrees with its container.
+    ParentMismatch,
+    /// More than one node is marked focused.
+    MultipleFocusedNodes,
+}
+
+/// One accessibility audit finding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccessibilityAuditIssue {
+    severity: AccessibilityAuditSeverity,
+    kind: AccessibilityAuditIssueKind,
+    node_id: Option<AccessibilityId>,
+    role: Option<AccessibilityRole>,
+    message: String,
+}
+
+impl AccessibilityAuditIssue {
+    /// Issue severity.
+    pub fn severity(&self) -> AccessibilityAuditSeverity {
+        self.severity
+    }
+
+    /// Issue category.
+    pub fn kind(&self) -> AccessibilityAuditIssueKind {
+        self.kind
+    }
+
+    /// Related node id, when available.
+    pub fn node_id(&self) -> Option<AccessibilityId> {
+        self.node_id
+    }
+
+    /// Related node role, when available.
+    pub fn role(&self) -> Option<AccessibilityRole> {
+        self.role
+    }
+
+    /// Human-readable issue message.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+/// Non-throwing accessibility audit report for app and agent checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccessibilityAuditReport {
+    issues: Vec<AccessibilityAuditIssue>,
+}
+
+impl AccessibilityAuditReport {
+    /// All audit issues.
+    pub fn issues(&self) -> &[AccessibilityAuditIssue] {
+        &self.issues
+    }
+
+    /// Blocking audit errors.
+    pub fn errors(&self) -> Vec<&AccessibilityAuditIssue> {
+        self.issues
+            .iter()
+            .filter(|issue| issue.severity == AccessibilityAuditSeverity::Error)
+            .collect()
+    }
+
+    /// Non-blocking audit warnings.
+    pub fn warnings(&self) -> Vec<&AccessibilityAuditIssue> {
+        self.issues
+            .iter()
+            .filter(|issue| issue.severity == AccessibilityAuditSeverity::Warning)
+            .collect()
+    }
+
+    /// Whether no blocking errors were found.
+    pub fn is_ready(&self) -> bool {
+        self.errors().is_empty()
+    }
+
+    /// Compact summary for logs, diagnostics, and agent output.
+    pub fn summary(&self) -> String {
+        let errors = self.errors().len();
+        let warnings = self.warnings().len();
+        match (errors, warnings) {
+            (0, 0) => "accessibility audit passed".to_string(),
+            (0, warnings) => format!("accessibility audit passed with {warnings} warning(s)"),
+            (errors, warnings) => {
+                format!("accessibility audit found {errors} error(s), {warnings} warning(s)")
+            }
+        }
+    }
+}
+
+fn audit_accessibility_node(
+    node_id: AccessibilityId,
+    node: &AccessibilityNode,
+    issues: &mut Vec<AccessibilityAuditIssue>,
+) {
+    if node.role == AccessibilityRole::Unknown {
+        issues.push(accessibility_audit_issue(
+            AccessibilityAuditSeverity::Warning,
+            AccessibilityAuditIssueKind::UnknownRole,
+            Some(node_id),
+            Some(node.role),
+            "accessibility node uses an unknown role",
+        ));
+    }
+
+    if node.role.is_interactive() {
+        let has_name = non_empty_accessibility_text(node.label.as_deref())
+            || non_empty_accessibility_text(node.description.as_deref())
+            || non_empty_accessibility_text(node.placeholder.as_deref());
+        if !has_name {
+            issues.push(accessibility_audit_issue(
+                AccessibilityAuditSeverity::Error,
+                AccessibilityAuditIssueKind::MissingAccessibleName,
+                Some(node_id),
+                Some(node.role),
+                "interactive accessibility node needs a label, description, or placeholder",
+            ));
+        }
+        if node.actions.is_empty() {
+            issues.push(accessibility_audit_issue(
+                AccessibilityAuditSeverity::Error,
+                AccessibilityAuditIssueKind::MissingInteractiveAction,
+                Some(node_id),
+                Some(node.role),
+                "interactive accessibility node needs at least one action",
+            ));
+        }
+    }
+
+    if let Some(AccessibilityValue::Range {
+        current,
+        min,
+        max,
+        step,
+    }) = node.value.as_ref()
+    {
+        let valid = current.is_finite()
+            && min.is_finite()
+            && max.is_finite()
+            && min <= max
+            && current >= min
+            && current <= max
+            && step.is_none_or(|step| step.is_finite() && step > 0.0);
+        if !valid {
+            issues.push(accessibility_audit_issue(
+                AccessibilityAuditSeverity::Error,
+                AccessibilityAuditIssueKind::InvalidRange,
+                Some(node_id),
+                Some(node.role),
+                "accessibility range value must be finite and within min/max bounds",
+            ));
+        }
+    }
+
+    if node.states.contains(AccessibilityState::EXPANDED)
+        && node.states.contains(AccessibilityState::COLLAPSED)
+    {
+        issues.push(accessibility_audit_issue(
+            AccessibilityAuditSeverity::Error,
+            AccessibilityAuditIssueKind::ConflictingStates,
+            Some(node_id),
+            Some(node.role),
+            "accessibility node cannot be both expanded and collapsed",
+        ));
+    }
+
+    if node.states.contains(AccessibilityState::CHECKED)
+        && node.states.contains(AccessibilityState::INDETERMINATE)
+    {
+        issues.push(accessibility_audit_issue(
+            AccessibilityAuditSeverity::Error,
+            AccessibilityAuditIssueKind::ConflictingStates,
+            Some(node_id),
+            Some(node.role),
+            "accessibility node cannot be both checked and indeterminate",
+        ));
+    }
+
+    if node.states.contains(AccessibilityState::FOCUSED)
+        && node.states.contains(AccessibilityState::HIDDEN)
+    {
+        issues.push(accessibility_audit_issue(
+            AccessibilityAuditSeverity::Error,
+            AccessibilityAuditIssueKind::HiddenFocusedNode,
+            Some(node_id),
+            Some(node.role),
+            "hidden accessibility node cannot also be focused",
+        ));
+    }
+}
+
+fn accessibility_audit_issue(
+    severity: AccessibilityAuditSeverity,
+    kind: AccessibilityAuditIssueKind,
+    node_id: Option<AccessibilityId>,
+    role: Option<AccessibilityRole>,
+    message: impl Into<String>,
+) -> AccessibilityAuditIssue {
+    AccessibilityAuditIssue {
+        severity,
+        kind,
+        node_id,
+        role,
+        message: message.into(),
+    }
+}
+
+fn non_empty_accessibility_text(value: Option<&str>) -> bool {
+    value.is_some_and(|value| !value.trim().is_empty())
 }
 
 fn apply_value(node: &mut accesskit::Node, source: &AccessibilityNode) {
@@ -717,6 +1216,101 @@ impl AccessibilityAttributes {
         }
     }
 
+    /// Create a clickable button with a label and standard focus/click actions.
+    pub fn button(label: impl Into<String>) -> Self {
+        Self::new(AccessibilityRole::Button)
+            .label(label)
+            .actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click])
+    }
+
+    /// Create a hyperlink with a label and standard focus/click actions.
+    pub fn link(label: impl Into<String>) -> Self {
+        Self::new(AccessibilityRole::Link)
+            .label(label)
+            .actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click])
+    }
+
+    /// Create a checkbox with a label and checked state.
+    pub fn checkbox(label: impl Into<String>, checked: bool) -> Self {
+        Self::new(AccessibilityRole::CheckBox)
+            .label(label)
+            .toggle_state(checked)
+            .value(AccessibilityValue::Toggle(checked))
+            .actions(vec![
+                AccessibilityAction::Focus,
+                AccessibilityAction::Toggle,
+                AccessibilityAction::Click,
+            ])
+    }
+
+    /// Create an on/off switch with a label and current state.
+    pub fn switch(label: impl Into<String>, on: bool) -> Self {
+        Self::new(AccessibilityRole::Switch)
+            .label(label)
+            .toggle_state(on)
+            .value(AccessibilityValue::Toggle(on))
+            .actions(vec![
+                AccessibilityAction::Focus,
+                AccessibilityAction::Toggle,
+                AccessibilityAction::Click,
+            ])
+    }
+
+    /// Create a radio button with a label and selection state.
+    pub fn radio_button(label: impl Into<String>, selected: bool) -> Self {
+        Self::new(AccessibilityRole::RadioButton)
+            .label(label)
+            .selected(selected)
+            .actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click])
+    }
+
+    /// Create a slider with a labelled range value.
+    pub fn slider(
+        label: impl Into<String>,
+        current: f64,
+        min: f64,
+        max: f64,
+        step: Option<f64>,
+    ) -> Self {
+        Self::new(AccessibilityRole::Slider)
+            .label(label)
+            .value(AccessibilityValue::Range {
+                current,
+                min,
+                max,
+                step,
+            })
+            .actions(vec![
+                AccessibilityAction::Focus,
+                AccessibilityAction::Increment,
+                AccessibilityAction::Decrement,
+                AccessibilityAction::SetValue,
+            ])
+    }
+
+    /// Create a progress bar with a labelled range value.
+    pub fn progress_bar(label: impl Into<String>, current: f64, min: f64, max: f64) -> Self {
+        Self::new(AccessibilityRole::ProgressBar)
+            .label(label)
+            .value(AccessibilityValue::Range {
+                current,
+                min,
+                max,
+                step: None,
+            })
+    }
+
+    /// Create a text input with a label and current text value.
+    pub fn text_input(label: impl Into<String>, value: impl Into<String>) -> Self {
+        Self::new(AccessibilityRole::TextInput)
+            .label(label)
+            .value(AccessibilityValue::Text(value.into()))
+            .actions(vec![
+                AccessibilityAction::Focus,
+                AccessibilityAction::SetValue,
+            ])
+    }
+
     /// Set the label.
     pub fn label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
@@ -747,9 +1341,84 @@ impl AccessibilityAttributes {
         self
     }
 
+    /// Add or remove one state flag.
+    pub fn state(mut self, state: AccessibilityState, enabled: bool) -> Self {
+        if enabled {
+            self.states |= state;
+        } else {
+            self.states.remove(state);
+        }
+        self
+    }
+
+    /// Mark the element focused.
+    pub fn focused(self, focused: bool) -> Self {
+        self.state(AccessibilityState::FOCUSED, focused)
+    }
+
+    /// Mark the element disabled.
+    pub fn disabled(self, disabled: bool) -> Self {
+        self.state(AccessibilityState::DISABLED, disabled)
+    }
+
+    /// Mark the element selected.
+    pub fn selected(self, selected: bool) -> Self {
+        self.state(AccessibilityState::SELECTED, selected)
+    }
+
+    /// Mark the element expanded or collapsed.
+    pub fn expanded(mut self, expanded: bool) -> Self {
+        self.states
+            .remove(AccessibilityState::EXPANDED | AccessibilityState::COLLAPSED);
+        if expanded {
+            self.states |= AccessibilityState::EXPANDED;
+        } else {
+            self.states |= AccessibilityState::COLLAPSED;
+        }
+        self
+    }
+
+    /// Mark a toggle-like element checked or unchecked.
+    pub fn toggle_state(self, checked: bool) -> Self {
+        self.state(AccessibilityState::CHECKED, checked)
+    }
+
+    /// Mark the element as indeterminate.
+    pub fn indeterminate(self, indeterminate: bool) -> Self {
+        self.state(AccessibilityState::INDETERMINATE, indeterminate)
+    }
+
+    /// Mark the element pressed.
+    pub fn pressed(self, pressed: bool) -> Self {
+        self.state(AccessibilityState::PRESSED, pressed)
+    }
+
+    /// Mark the element required.
+    pub fn required(self, required: bool) -> Self {
+        self.state(AccessibilityState::REQUIRED, required)
+    }
+
+    /// Mark the element invalid.
+    pub fn invalid(self, invalid: bool) -> Self {
+        self.state(AccessibilityState::INVALID, invalid)
+    }
+
+    /// Mark the element busy.
+    pub fn busy(self, busy: bool) -> Self {
+        self.state(AccessibilityState::BUSY, busy)
+    }
+
     /// Set the available actions.
     pub fn actions(mut self, actions: Vec<AccessibilityAction>) -> Self {
         self.actions = actions;
+        self
+    }
+
+    /// Add one available action if it is not already present.
+    pub fn action(mut self, action: AccessibilityAction) -> Self {
+        if !self.actions.contains(&action) {
+            self.actions.push(action);
+        }
         self
     }
 
@@ -757,6 +1426,81 @@ impl AccessibilityAttributes {
     pub fn hidden(mut self, hidden: bool) -> Self {
         self.hidden = hidden;
         self
+    }
+
+    /// Validate common accessibility requirements for custom elements.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let Some(role) = self.role else {
+            anyhow::bail!("accessibility role is required");
+        };
+
+        if role.is_interactive() {
+            let has_name = self
+                .label
+                .as_ref()
+                .is_some_and(|label| !label.trim().is_empty())
+                || self
+                    .description
+                    .as_ref()
+                    .is_some_and(|description| !description.trim().is_empty())
+                || self
+                    .placeholder
+                    .as_ref()
+                    .is_some_and(|placeholder| !placeholder.trim().is_empty());
+            anyhow::ensure!(
+                has_name,
+                "interactive accessibility role {role:?} needs a label, description, or placeholder"
+            );
+            anyhow::ensure!(
+                !self.actions.is_empty(),
+                "interactive accessibility role {role:?} needs at least one action"
+            );
+        }
+
+        if let Some(AccessibilityValue::Range {
+            current,
+            min,
+            max,
+            step,
+        }) = self.value.as_ref()
+        {
+            anyhow::ensure!(
+                current.is_finite() && min.is_finite() && max.is_finite(),
+                "accessibility range values must be finite"
+            );
+            anyhow::ensure!(min <= max, "accessibility range min cannot exceed max");
+            anyhow::ensure!(
+                current >= min && current <= max,
+                "accessibility range current value must be within min and max"
+            );
+            if let Some(step) = *step {
+                anyhow::ensure!(
+                    step.is_finite() && step > 0.0,
+                    "accessibility range step must be finite and positive"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Return a non-throwing audit report for these attributes.
+    pub fn audit_report(&self) -> AccessibilityAuditReport {
+        if self.role.is_none() {
+            return AccessibilityAuditReport {
+                issues: vec![accessibility_audit_issue(
+                    AccessibilityAuditSeverity::Error,
+                    AccessibilityAuditIssueKind::MissingRole,
+                    None,
+                    None,
+                    "accessibility role is required",
+                )],
+            };
+        };
+        let node = self.to_node(AccessibilityId::new());
+        let mut issues = Vec::new();
+        audit_accessibility_node(node.id, &node, &mut issues);
+        AccessibilityAuditReport { issues }
     }
 
     /// Convert these attributes into a full [`AccessibilityNode`] with the given id.
@@ -880,6 +1624,116 @@ mod tests {
     }
 
     #[test]
+    fn test_semantic_accessibility_recipes_set_required_fields() {
+        let button = AccessibilityAttributes::button("Save");
+        assert_eq!(button.role, Some(AccessibilityRole::Button));
+        assert_eq!(button.label.as_deref(), Some("Save"));
+        assert_eq!(
+            button.actions,
+            vec![AccessibilityAction::Focus, AccessibilityAction::Click]
+        );
+        assert!(button.validate().is_ok());
+
+        let switch = AccessibilityAttributes::switch("Enable sync", true);
+        assert_eq!(switch.role, Some(AccessibilityRole::Switch));
+        assert_eq!(switch.value, Some(AccessibilityValue::Toggle(true)));
+        assert!(switch.states.contains(AccessibilityState::CHECKED));
+        assert!(switch.actions.contains(&AccessibilityAction::Toggle));
+        assert!(switch.validate().is_ok());
+
+        let slider = AccessibilityAttributes::slider("Volume", 50.0, 0.0, 100.0, Some(5.0));
+        assert_eq!(slider.role, Some(AccessibilityRole::Slider));
+        assert!(slider.actions.contains(&AccessibilityAction::Increment));
+        assert!(slider.actions.contains(&AccessibilityAction::Decrement));
+        assert!(slider.validate().is_ok());
+    }
+
+    #[test]
+    fn test_accessibility_state_helpers_are_chainable() {
+        let attrs = AccessibilityAttributes::button("Upload")
+            .disabled(true)
+            .pressed(true)
+            .busy(true)
+            .disabled(false);
+
+        assert!(!attrs.states.contains(AccessibilityState::DISABLED));
+        assert!(attrs.states.contains(AccessibilityState::PRESSED));
+        assert!(attrs.states.contains(AccessibilityState::BUSY));
+    }
+
+    #[test]
+    fn test_accessibility_validation_catches_common_custom_control_errors() {
+        assert!(
+            AccessibilityAttributes::new(AccessibilityRole::Button)
+                .action(AccessibilityAction::Click)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            AccessibilityAttributes::new(AccessibilityRole::Button)
+                .label("Do thing")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            AccessibilityAttributes::slider("Volume", 120.0, 0.0, 100.0, Some(1.0))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            AccessibilityAttributes::slider("Volume", 50.0, 0.0, 100.0, Some(0.0))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            AccessibilityAttributes::slider("Volume", f64::NAN, 0.0, 100.0, Some(1.0))
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_accessibility_attributes_audit_reports_all_common_errors() {
+        let attrs = AccessibilityAttributes::new(AccessibilityRole::Button)
+            .states(AccessibilityState::EXPANDED | AccessibilityState::COLLAPSED)
+            .value(AccessibilityValue::Range {
+                current: f64::NAN,
+                min: 0.0,
+                max: 100.0,
+                step: Some(1.0),
+            });
+
+        let report = attrs.audit_report();
+        assert!(!report.is_ready());
+        assert!(report.summary().contains("error"));
+        assert!(report.issues().iter().any(|issue| {
+            issue.kind() == AccessibilityAuditIssueKind::MissingAccessibleName
+                && issue.severity() == AccessibilityAuditSeverity::Error
+        }));
+        assert!(report.issues().iter().any(|issue| {
+            issue.kind() == AccessibilityAuditIssueKind::MissingInteractiveAction
+        }));
+        assert!(
+            report
+                .issues()
+                .iter()
+                .any(|issue| { issue.kind() == AccessibilityAuditIssueKind::InvalidRange })
+        );
+        assert!(
+            report
+                .issues()
+                .iter()
+                .any(|issue| { issue.kind() == AccessibilityAuditIssueKind::ConflictingStates })
+        );
+
+        let missing_role = AccessibilityAttributes::default().audit_report();
+        assert_eq!(
+            missing_role.issues()[0].kind(),
+            AccessibilityAuditIssueKind::MissingRole
+        );
+    }
+
+    #[test]
     fn test_value_variants() {
         let text = AccessibilityValue::Text("hello".to_string());
         let num = AccessibilityValue::Number(42.0);
@@ -910,6 +1764,59 @@ mod tests {
         assert_eq!(tree.nodes.len(), 2);
         assert_eq!(tree.get(button_id).unwrap().role, AccessibilityRole::Button);
         assert!(tree.get(tree.root).unwrap().children.contains(&button_id));
+    }
+
+    #[test]
+    fn test_accessibility_tree_audit_reports_structural_issues() {
+        let root = AccessibilityNode::new(AccessibilityRole::Window);
+        let mut tree = AccessibilityTree::new(root);
+
+        let focused_hidden = AccessibilityNode::new(AccessibilityRole::Button)
+            .with_label("Hidden")
+            .with_actions(vec![AccessibilityAction::Click])
+            .with_states(AccessibilityState::FOCUSED | AccessibilityState::HIDDEN);
+        let focused_hidden_id = focused_hidden.id;
+        tree.insert(focused_hidden);
+        tree.set_parent(focused_hidden_id, tree.root);
+
+        let second_focused = AccessibilityNode::new(AccessibilityRole::TextInput)
+            .with_label("Search")
+            .with_actions(vec![AccessibilityAction::Focus])
+            .with_states(AccessibilityState::FOCUSED);
+        let second_focused_id = second_focused.id;
+        tree.insert(second_focused);
+        tree.set_parent(second_focused_id, tree.root);
+
+        let orphan = AccessibilityNode::new(AccessibilityRole::Button)
+            .with_label("Orphan")
+            .with_actions(vec![AccessibilityAction::Click]);
+        let orphan_id = orphan.id;
+        tree.insert(orphan);
+        tree.get_mut(tree.root).unwrap().add_child(orphan_id);
+
+        let missing_id = AccessibilityId::new();
+        tree.get_mut(tree.root).unwrap().add_child(missing_id);
+
+        let report = tree.audit_report();
+        assert!(!report.is_ready());
+        assert!(report.issues().iter().any(|issue| {
+            issue.kind() == AccessibilityAuditIssueKind::HiddenFocusedNode
+                && issue.node_id() == Some(focused_hidden_id)
+        }));
+        assert!(
+            report
+                .issues()
+                .iter()
+                .any(|issue| { issue.kind() == AccessibilityAuditIssueKind::MultipleFocusedNodes })
+        );
+        assert!(report.issues().iter().any(|issue| {
+            issue.kind() == AccessibilityAuditIssueKind::ParentMismatch
+                && issue.node_id() == Some(orphan_id)
+        }));
+        assert!(report.issues().iter().any(|issue| {
+            issue.kind() == AccessibilityAuditIssueKind::MissingChildNode
+                && issue.node_id() == Some(missing_id)
+        }));
     }
 
     #[test]
@@ -1139,6 +2046,146 @@ mod accesskit_spike_tests {
             AccessibilityAction::from_accesskit(AccessibilityAction::Increment.to_accesskit()),
             Some(AccessibilityAction::Increment)
         );
+    }
+
+    #[test]
+    fn action_request_uses_node_actions_to_recover_semantics() {
+        let node_id = AccessibilityId::new();
+        let toggle_only = AccessibilityNode::new(AccessibilityRole::Switch).with_actions(vec![
+            AccessibilityAction::Focus,
+            AccessibilityAction::Toggle,
+        ]);
+        let menu_only = AccessibilityNode::new(AccessibilityRole::ComboBox).with_actions(vec![
+            AccessibilityAction::Focus,
+            AccessibilityAction::ShowMenu,
+        ]);
+        let dismiss_only = AccessibilityNode::new(AccessibilityRole::Dialog)
+            .with_actions(vec![AccessibilityAction::Dismiss]);
+
+        assert_eq!(
+            AccessibilityActionRequest::from_accesskit_for_node(
+                node_id,
+                &toggle_only,
+                accesskit::Action::Click,
+            ),
+            Some(AccessibilityActionRequest::new(
+                node_id,
+                AccessibilityAction::Toggle,
+            ))
+        );
+        assert_eq!(
+            AccessibilityActionRequest::from_accesskit_for_node(
+                node_id,
+                &menu_only,
+                accesskit::Action::Click,
+            ),
+            Some(AccessibilityActionRequest::new(
+                node_id,
+                AccessibilityAction::ShowMenu,
+            ))
+        );
+        assert_eq!(
+            AccessibilityActionRequest::from_accesskit_for_node(
+                node_id,
+                &dismiss_only,
+                accesskit::Action::Collapse,
+            ),
+            Some(AccessibilityActionRequest::new(
+                node_id,
+                AccessibilityAction::Dismiss,
+            ))
+        );
+        assert_eq!(
+            AccessibilityActionRequest::from_accesskit_for_node(
+                node_id,
+                &toggle_only,
+                accesskit::Action::Increment,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn action_request_preserves_set_value_payloads() {
+        let node_id = AccessibilityId::new();
+        let slider = AccessibilityNode::new(AccessibilityRole::Slider).with_actions(vec![
+            AccessibilityAction::Focus,
+            AccessibilityAction::Increment,
+            AccessibilityAction::Decrement,
+            AccessibilityAction::SetValue,
+        ]);
+
+        assert_eq!(
+            AccessibilityActionRequest::from_accesskit_for_node_with_data(
+                node_id,
+                &slider,
+                accesskit::Action::SetValue,
+                Some(accesskit::ActionData::NumericValue(42.0)),
+            ),
+            Some(AccessibilityActionRequest::with_payload(
+                node_id,
+                AccessibilityAction::SetValue,
+                AccessibilityActionPayload::NumericValue(42.0),
+            ))
+        );
+
+        assert_eq!(
+            AccessibilityActionRequest::from_accesskit_for_node_with_data(
+                node_id,
+                &slider,
+                accesskit::Action::SetValue,
+                Some(accesskit::ActionData::Value("medium".into())),
+            ),
+            Some(AccessibilityActionRequest::with_payload(
+                node_id,
+                AccessibilityAction::SetValue,
+                AccessibilityActionPayload::Value("medium".into()),
+            ))
+        );
+    }
+
+    #[test]
+    fn text_input_recipe_supports_set_value() {
+        let attrs = AccessibilityAttributes::text_input("Search", "kael");
+        let node = attrs.to_node(AccessibilityId::new());
+
+        assert_eq!(node.value, Some(AccessibilityValue::Text("kael".into())));
+        assert!(node.actions.contains(&AccessibilityAction::Focus));
+        assert!(node.actions.contains(&AccessibilityAction::SetValue));
+        attrs.validate().unwrap();
+    }
+
+    #[test]
+    fn action_router_dispatches_registered_handlers() {
+        use std::{cell::RefCell, rc::Rc};
+
+        let node_id = AccessibilityId::new();
+        let node = AccessibilityNode::new(AccessibilityRole::Button)
+            .with_actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seen_handler = seen.clone();
+        let mut router = AccessibilityActionRouter::new();
+
+        router.on_action(node_id, AccessibilityAction::Click, move |request| {
+            seen_handler.borrow_mut().push(request);
+        });
+
+        assert!(router.has_handler(node_id, AccessibilityAction::Click));
+        assert!(router.dispatch_accesskit(node_id, &node, accesskit::Action::Click));
+        assert_eq!(
+            seen.borrow().as_slice(),
+            &[AccessibilityActionRequest::new(
+                node_id,
+                AccessibilityAction::Click,
+            )]
+        );
+        assert!(!router.dispatch_accesskit(node_id, &node, accesskit::Action::Focus));
+        assert!(
+            router
+                .remove_action(node_id, AccessibilityAction::Click)
+                .is_some()
+        );
+        assert!(!router.has_handler(node_id, AccessibilityAction::Click));
     }
 
     #[test]

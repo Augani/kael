@@ -81,6 +81,68 @@ impl BenchmarkScenario {
         }
     }
 
+    /// Return the comparable workload contract for this scenario.
+    pub fn workload_spec(&self) -> BenchmarkWorkloadSpec {
+        let required_metrics = match self {
+            Self::Messaging | Self::Chat => vec![
+                BenchmarkMetric::ColdStart,
+                BenchmarkMetric::IdleMemory,
+                BenchmarkMetric::InputLatency,
+                BenchmarkMetric::ScrollLatency,
+                BenchmarkMetric::LongSessionCpu,
+            ],
+            Self::Workspace | Self::Ide | Self::Document => vec![
+                BenchmarkMetric::ColdStart,
+                BenchmarkMetric::FirstInteractiveFrame,
+                BenchmarkMetric::IdleMemory,
+                BenchmarkMetric::InputLatency,
+                BenchmarkMetric::FrameTimeP95,
+                BenchmarkMetric::MemoryGrowth,
+            ],
+            Self::Canvas | Self::VideoEditor | Self::MediaControl => vec![
+                BenchmarkMetric::ColdStart,
+                BenchmarkMetric::IdleMemory,
+                BenchmarkMetric::FrameTimeP95,
+                BenchmarkMetric::FrameTimeP99,
+                BenchmarkMetric::GpuUsage,
+                BenchmarkMetric::LongSessionCpu,
+            ],
+            Self::Dashboard => vec![
+                BenchmarkMetric::ColdStart,
+                BenchmarkMetric::FirstInteractiveFrame,
+                BenchmarkMetric::IdleMemory,
+                BenchmarkMetric::FrameTimeP95,
+                BenchmarkMetric::LongSessionCpu,
+                BenchmarkMetric::WakeupsPerSecond,
+            ],
+        };
+
+        let required_interactions = match self {
+            Self::Messaging | Self::Chat => {
+                vec!["scroll history", "send message", "receive update"]
+            }
+            Self::Workspace | Self::Ide => {
+                vec!["open file", "switch tab", "type in editor", "toggle panel"]
+            }
+            Self::Document => vec!["scroll document", "edit block", "undo edit"],
+            Self::Canvas => vec!["pan canvas", "zoom canvas", "select node"],
+            Self::VideoEditor => vec!["scrub timeline", "play preview", "select clip"],
+            Self::MediaControl => vec!["switch scene", "toggle source", "adjust slider"],
+            Self::Dashboard => vec!["sort table", "filter data", "receive live update"],
+        }
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+
+        BenchmarkWorkloadSpec {
+            scenario: *self,
+            description: self.description().to_string(),
+            min_complexity_score: self.complexity_score(),
+            required_metrics,
+            required_interactions,
+        }
+    }
+
     /// Returns all defined benchmark scenarios.
     pub fn all() -> &'static [BenchmarkScenario] {
         &[
@@ -95,6 +157,73 @@ impl BenchmarkScenario {
             Self::Dashboard,
         ]
     }
+}
+
+/// Comparable workload contract for one benchmark scenario.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchmarkWorkloadSpec {
+    /// Scenario this contract describes.
+    pub scenario: BenchmarkScenario,
+    /// Human-readable workload description.
+    pub description: String,
+    /// Minimum scenario complexity score expected for comparable samples.
+    pub min_complexity_score: u32,
+    /// Metrics that should be present before comparing against Electron.
+    pub required_metrics: Vec<BenchmarkMetric>,
+    /// Interactions both the Kael and Electron sample should exercise.
+    pub required_interactions: Vec<String>,
+}
+
+impl BenchmarkWorkloadSpec {
+    /// Validate one result against this workload contract.
+    pub fn validate_result(&self, result: &BenchmarkResult) -> Vec<BenchmarkEvidenceIssue> {
+        let mut issues = Vec::new();
+
+        if result.scenario != self.scenario {
+            issues.push(BenchmarkEvidenceIssue::ScenarioMismatch {
+                expected: self.scenario,
+                actual: result.scenario,
+            });
+            return issues;
+        }
+
+        for metric in &self.required_metrics {
+            if !result
+                .measurements
+                .iter()
+                .any(|measurement| measurement.metric == *metric)
+            {
+                issues.push(BenchmarkEvidenceIssue::MissingMetric {
+                    scenario: self.scenario,
+                    metric: *metric,
+                    subject: result.subject.clone(),
+                });
+            }
+        }
+
+        issues
+    }
+}
+
+/// Evidence issue found before comparing benchmark result sets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BenchmarkEvidenceIssue {
+    /// A result was recorded under the wrong scenario.
+    ScenarioMismatch {
+        /// Expected scenario.
+        expected: BenchmarkScenario,
+        /// Actual scenario.
+        actual: BenchmarkScenario,
+    },
+    /// A required metric is missing from a result.
+    MissingMetric {
+        /// Scenario being validated.
+        scenario: BenchmarkScenario,
+        /// Missing metric.
+        metric: BenchmarkMetric,
+        /// Subject missing the metric.
+        subject: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1094,6 +1223,191 @@ impl CiReport {
 }
 
 // ---------------------------------------------------------------------------
+// Electron Comparison Report
+// ---------------------------------------------------------------------------
+
+/// A benchmark comparison where Electron is the baseline and Kael is the candidate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ElectronComparisonReport {
+    /// Electron baseline results.
+    pub electron_results: Vec<BenchmarkResult>,
+    /// Kael candidate results.
+    pub kael_results: Vec<BenchmarkResult>,
+    /// Per-metric comparisons for matching scenarios.
+    pub comparisons: Vec<ElectronMetricComparison>,
+    /// Evidence issues found before comparison.
+    pub evidence_issues: Vec<BenchmarkEvidenceIssue>,
+    /// Path to the attached Chrome Trace file, if any.
+    pub trace_file: Option<String>,
+}
+
+impl ElectronComparisonReport {
+    /// Generate an Electron-vs-Kael report from matching scenario result sets.
+    pub fn generate(
+        electron_results: &[BenchmarkResult],
+        kael_results: &[BenchmarkResult],
+        trace_file: Option<String>,
+    ) -> Self {
+        let mut comparisons = Vec::new();
+        let mut evidence_issues = Vec::new();
+
+        for kael_result in kael_results {
+            if let Some(electron_result) = electron_results
+                .iter()
+                .find(|result| result.scenario == kael_result.scenario)
+            {
+                let spec = kael_result.scenario.workload_spec();
+                evidence_issues.extend(spec.validate_result(electron_result));
+                evidence_issues.extend(spec.validate_result(kael_result));
+                comparisons.extend(
+                    compare_results(electron_result, kael_result)
+                        .into_iter()
+                        .map(|comparison| ElectronMetricComparison {
+                            scenario: kael_result.scenario,
+                            metric: comparison.metric,
+                            electron: comparison.baseline,
+                            kael: comparison.candidate,
+                            delta: comparison.delta,
+                            percent_change: comparison.percent_change,
+                            unit: comparison.unit,
+                            lower_is_better: comparison.lower_is_better,
+                        }),
+                );
+            }
+        }
+
+        Self {
+            electron_results: electron_results.to_vec(),
+            kael_results: kael_results.to_vec(),
+            comparisons,
+            evidence_issues,
+            trace_file,
+        }
+    }
+
+    /// Return comparisons where Kael is better than the Electron baseline.
+    pub fn kael_wins(&self) -> impl Iterator<Item = &ElectronMetricComparison> {
+        self.comparisons
+            .iter()
+            .filter(|comparison| comparison.kael_is_better())
+    }
+
+    /// Return comparisons where Electron is better than Kael.
+    pub fn electron_wins(&self) -> impl Iterator<Item = &ElectronMetricComparison> {
+        self.comparisons
+            .iter()
+            .filter(|comparison| comparison.electron_is_better())
+    }
+
+    /// Serialize the report to JSON.
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+
+    /// Generate a human-readable summary of the report.
+    pub fn summary(&self) -> String {
+        let kael_wins = self.kael_wins().count();
+        let electron_wins = self.electron_wins().count();
+        let ties = self
+            .comparisons
+            .iter()
+            .filter(|comparison| comparison.is_tie())
+            .count();
+
+        let mut out = String::new();
+        out.push_str("Electron Comparison Report\n");
+        out.push_str(&format!(
+            "Compared metrics: {} (Kael wins: {kael_wins}, Electron wins: {electron_wins}, ties: {ties})\n",
+            self.comparisons.len()
+        ));
+        if !self.evidence_issues.is_empty() {
+            out.push_str(&format!(
+                "Evidence issues: {} (do not publish parity claims until resolved)\n",
+                self.evidence_issues.len()
+            ));
+            for issue in &self.evidence_issues {
+                out.push_str(&format!("  {issue:?}\n"));
+            }
+        }
+
+        for comparison in &self.comparisons {
+            let winner = if comparison.kael_is_better() {
+                "Kael"
+            } else if comparison.electron_is_better() {
+                "Electron"
+            } else {
+                "Tie"
+            };
+            out.push_str(&format!(
+                "  {:?}/{:?}: Electron {:.1}{}, Kael {:.1}{} ({:+.1}%) => {}\n",
+                comparison.scenario,
+                comparison.metric,
+                comparison.electron,
+                comparison.unit,
+                comparison.kael,
+                comparison.unit,
+                comparison.percent_change,
+                winner,
+            ));
+        }
+
+        if let Some(trace) = &self.trace_file {
+            out.push_str(&format!("Trace: {}\n", trace));
+        }
+
+        out
+    }
+}
+
+/// One Electron-vs-Kael metric comparison.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ElectronMetricComparison {
+    /// Scenario being compared.
+    pub scenario: BenchmarkScenario,
+    /// Metric being compared.
+    pub metric: BenchmarkMetric,
+    /// Electron baseline value.
+    pub electron: f64,
+    /// Kael candidate value.
+    pub kael: f64,
+    /// Absolute difference (`kael - electron`).
+    pub delta: f64,
+    /// Percentage change from Electron to Kael.
+    pub percent_change: f64,
+    /// Unit of measurement.
+    pub unit: MetricUnit,
+    /// Whether lower values are better for this metric.
+    pub lower_is_better: bool,
+}
+
+impl ElectronMetricComparison {
+    /// Return true when Kael beats the Electron baseline.
+    pub fn kael_is_better(&self) -> bool {
+        if self.is_tie() {
+            return false;
+        }
+        if self.lower_is_better {
+            self.kael < self.electron
+        } else {
+            self.kael > self.electron
+        }
+    }
+
+    /// Return true when Electron beats Kael.
+    pub fn electron_is_better(&self) -> bool {
+        if self.is_tie() {
+            return false;
+        }
+        !self.kael_is_better()
+    }
+
+    /// Return true when both values are equal.
+    pub fn is_tie(&self) -> bool {
+        (self.kael - self.electron).abs() < f64::EPSILON
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
 
@@ -1572,6 +1886,10 @@ mod tests {
         for scenario in BenchmarkScenario::all() {
             assert!(!scenario.description().is_empty());
             assert!(scenario.complexity_score() > 0);
+            let spec = scenario.workload_spec();
+            assert_eq!(spec.scenario, *scenario);
+            assert!(!spec.required_metrics.is_empty());
+            assert!(!spec.required_interactions.is_empty());
         }
     }
 
@@ -1666,6 +1984,95 @@ mod tests {
         assert!(report.regressions.is_empty());
         assert!(!report.summary().is_empty());
         assert!(report.to_json().is_ok());
+    }
+
+    #[test]
+    fn test_electron_comparison_report_classifies_wins() {
+        let electron = vec![BenchmarkResult {
+            scenario: BenchmarkScenario::Dashboard,
+            subject: "electron".to_string(),
+            measurements: vec![
+                BenchmarkMeasurement {
+                    metric: BenchmarkMetric::IdleMemory,
+                    value: 300.0,
+                    unit: MetricUnit::Megabytes,
+                    elapsed: Duration::default(),
+                },
+                BenchmarkMeasurement {
+                    metric: BenchmarkMetric::AssetCacheHitRate,
+                    value: 80.0,
+                    unit: MetricUnit::Percent,
+                    elapsed: Duration::default(),
+                },
+            ],
+            started_at: Instant::now(),
+            duration: Duration::default(),
+            environment: BenchmarkEnvironment::current(),
+        }];
+
+        let kael = vec![BenchmarkResult {
+            scenario: BenchmarkScenario::Dashboard,
+            subject: "kael".to_string(),
+            measurements: vec![
+                BenchmarkMeasurement {
+                    metric: BenchmarkMetric::IdleMemory,
+                    value: 120.0,
+                    unit: MetricUnit::Megabytes,
+                    elapsed: Duration::default(),
+                },
+                BenchmarkMeasurement {
+                    metric: BenchmarkMetric::AssetCacheHitRate,
+                    value: 70.0,
+                    unit: MetricUnit::Percent,
+                    elapsed: Duration::default(),
+                },
+            ],
+            started_at: Instant::now(),
+            duration: Duration::default(),
+            environment: BenchmarkEnvironment::current(),
+        }];
+
+        let report =
+            ElectronComparisonReport::generate(&electron, &kael, Some("trace.json".into()));
+
+        assert_eq!(report.comparisons.len(), 2);
+        assert_eq!(report.kael_wins().count(), 1);
+        assert_eq!(report.electron_wins().count(), 1);
+        assert!(!report.evidence_issues.is_empty());
+        assert!(report.to_json().is_ok());
+        let summary = report.summary();
+        assert!(summary.contains("Electron Comparison Report"));
+        assert!(summary.contains("Kael wins: 1"));
+        assert!(summary.contains("Electron wins: 1"));
+        assert!(summary.contains("Evidence issues"));
+        assert!(summary.contains("trace.json"));
+    }
+
+    #[test]
+    fn test_workload_spec_validates_missing_metrics() {
+        let spec = BenchmarkScenario::Dashboard.workload_spec();
+        let result = BenchmarkResult {
+            scenario: BenchmarkScenario::Dashboard,
+            subject: "kael".to_string(),
+            measurements: vec![BenchmarkMeasurement {
+                metric: BenchmarkMetric::ColdStart,
+                value: 100.0,
+                unit: MetricUnit::Milliseconds,
+                elapsed: Duration::default(),
+            }],
+            started_at: Instant::now(),
+            duration: Duration::default(),
+            environment: BenchmarkEnvironment::current(),
+        };
+
+        let issues = spec.validate_result(&result);
+        assert!(issues.iter().any(|issue| matches!(
+            issue,
+            BenchmarkEvidenceIssue::MissingMetric {
+                metric: BenchmarkMetric::IdleMemory,
+                ..
+            }
+        )));
     }
 
     #[test]

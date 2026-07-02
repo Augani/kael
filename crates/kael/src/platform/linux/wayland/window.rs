@@ -1393,18 +1393,13 @@ impl PlatformWindow for WaylandWindow {
         self.borrow().display_refresh_rate()
     }
 
-    fn update_accessibility_tree(&mut self, tree: &crate::AccessibilityTree) {
+    fn update_accessibility_tree(
+        &mut self,
+        tree: &crate::AccessibilityTree,
+    ) -> Vec<crate::AccessibilityActionRequest> {
         let state = self.borrow();
         state.accessibility_root.update_tree(tree);
-        let actions = state.accessibility_root.drain_actions();
-        drop(state);
-        for (target, action) in actions {
-            log::debug!(
-                "AccessKit action request: {:?} on node {}",
-                action,
-                target.0
-            );
-        }
+        state.accessibility_root.drain_actions(tree)
     }
 }
 

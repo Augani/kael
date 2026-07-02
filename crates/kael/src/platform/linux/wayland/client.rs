@@ -2216,23 +2216,26 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                                 }
                             };
 
-                            let paths: SmallVec<[_; 2]> = file_list
-                                .lines()
-                                .filter_map(|path| Url::parse(path).log_err())
-                                .filter_map(|url| url.to_file_path().log_err())
-                                .collect();
+                            let data = crate::ExternalDropData::from_uri_list(&file_list);
                             let position = Point::new(x.into(), y.into());
 
                             // Prevent dropping text from other programs.
-                            if paths.is_empty() {
+                            if !data.has_paths() && !data.has_urls() && !data.has_text() {
                                 data_offer.destroy();
                                 return;
                             }
 
-                            let input = PlatformInput::FileDrop(FileDropEvent::Entered {
-                                position,
-                                paths: crate::ExternalPaths(paths),
-                            });
+                            let input = if data.has_urls() || data.has_text() {
+                                PlatformInput::FileDrop(FileDropEvent::DataEntered {
+                                    position,
+                                    data,
+                                })
+                            } else {
+                                PlatformInput::FileDrop(FileDropEvent::Entered {
+                                    position,
+                                    paths: data.paths().clone(),
+                                })
+                            };
 
                             let client = this.get_client();
                             let mut state = client.borrow_mut();

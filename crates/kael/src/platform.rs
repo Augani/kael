@@ -55,7 +55,7 @@ use crate::{
     FontRun, ForegroundExecutor, GlyphId, GpuSpecs, ImageSource, Keymap, LineLayout, Pixels,
     PlatformInput, Point, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams,
     Scene, ShapedGlyph, ShapedRun, SharedString, Size, SvgRenderer, SvgSize, SystemWindowTab, Task,
-    TaskLabel, Window, WindowControlArea, hash, point,
+    TaskLabel, Window, WindowControlArea, WindowPlacement, hash, point,
     print::PlatformPrintJob,
     px, size,
     webview::{PlatformWebView, PlatformWebViewCommand},
@@ -89,6 +89,7 @@ use uuid::Uuid;
 pub use app_menu::*;
 pub use keyboard::*;
 pub use keystroke::*;
+pub use single_instance::*;
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub(crate) use linux::*;
@@ -794,7 +795,15 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     }
 
     /// Update the platform accessibility backend with the current accessibility tree.
-    fn update_accessibility_tree(&mut self, _tree: &crate::AccessibilityTree) {}
+    ///
+    /// Returns any normalized assistive-technology action requests that were
+    /// delivered by the platform adapter while synchronizing the tree.
+    fn update_accessibility_tree(
+        &mut self,
+        _tree: &crate::AccessibilityTree,
+    ) -> Vec<crate::AccessibilityActionRequest> {
+        Vec::new()
+    }
 
     #[cfg(any(test, feature = "test-support"))]
     fn as_test(&mut self) -> Option<&mut TestWindow> {
@@ -1652,6 +1661,529 @@ impl Default for WindowOptions {
     }
 }
 
+/// Builder for [`WindowOptions`].
+#[derive(Debug)]
+pub struct WindowOptionsBuilder {
+    options: WindowOptions,
+}
+
+impl WindowOptionsBuilder {
+    /// Create a builder with [`WindowOptions::default`] values.
+    pub fn new() -> Self {
+        Self {
+            options: WindowOptions::default(),
+        }
+    }
+
+    /// Start from an existing raw options value.
+    pub fn from_options(options: WindowOptions) -> Self {
+        Self { options }
+    }
+
+    /// Set the window bounds/state.
+    pub fn bounds(mut self, bounds: WindowBounds) -> Self {
+        self.options.window_bounds = Some(bounds);
+        self
+    }
+
+    /// Open as a normal window using the given screen bounds.
+    pub fn windowed(self, bounds: Bounds<Pixels>) -> Self {
+        self.bounds(WindowBounds::Windowed(bounds))
+    }
+
+    /// Open maximized while preserving the given restore bounds.
+    pub fn maximized(self, restore_bounds: Bounds<Pixels>) -> Self {
+        self.bounds(WindowBounds::Maximized(restore_bounds))
+    }
+
+    /// Open fullscreen while preserving the given restore bounds.
+    pub fn fullscreen(self, restore_bounds: Bounds<Pixels>) -> Self {
+        self.bounds(WindowBounds::Fullscreen(restore_bounds))
+    }
+
+    /// Open centered on the primary display.
+    pub fn centered(self, size: Size<Pixels>, cx: &App) -> Self {
+        self.bounds(WindowBounds::centered(size, cx))
+    }
+
+    /// Open using resolved monitor-aware placement bounds.
+    pub fn placement(self, placement: &WindowPlacement) -> Self {
+        let builder = self.windowed(placement.bounds());
+        if let Some(display_id) = placement.display_id() {
+            builder.display_id(display_id)
+        } else {
+            builder
+        }
+    }
+
+    /// Set the initial window title.
+    pub fn title(mut self, title: impl Into<SharedString>) -> Self {
+        self.ensure_titlebar().title = Some(title.into());
+        self
+    }
+
+    /// Replace the entire titlebar configuration.
+    pub fn titlebar(mut self, titlebar: Option<TitlebarOptions>) -> Self {
+        self.options.titlebar = titlebar;
+        self
+    }
+
+    /// Hide the default system titlebar where the platform supports it.
+    pub fn transparent_titlebar(mut self, transparent: bool) -> Self {
+        self.ensure_titlebar().appears_transparent = transparent;
+        self
+    }
+
+    /// Remove the titlebar configuration.
+    pub fn no_titlebar(mut self) -> Self {
+        self.options.titlebar = None;
+        self
+    }
+
+    /// Set the macOS traffic-light position.
+    pub fn traffic_light_position(mut self, position: Point<Pixels>) -> Self {
+        self.ensure_titlebar().traffic_light_position = Some(position);
+        self
+    }
+
+    /// Set whether the window should be focused when created.
+    pub fn focused(mut self, focus: bool) -> Self {
+        self.options.focus = focus;
+        self
+    }
+
+    /// Create the window without focusing it.
+    pub fn unfocused(self) -> Self {
+        self.focused(false)
+    }
+
+    /// Set whether the window should be shown when created.
+    pub fn show(mut self, show: bool) -> Self {
+        self.options.show = show;
+        self
+    }
+
+    /// Create the window hidden.
+    pub fn hidden(self) -> Self {
+        self.show(false)
+    }
+
+    /// Set the platform window kind.
+    pub fn kind(mut self, kind: WindowKind) -> Self {
+        self.options.kind = kind;
+        self
+    }
+
+    /// Create a pop-up window.
+    pub fn popup(self) -> Self {
+        self.kind(WindowKind::PopUp)
+    }
+
+    /// Create a floating window.
+    pub fn floating(self) -> Self {
+        self.kind(WindowKind::Floating)
+    }
+
+    /// Create an overlay window.
+    pub fn overlay(self) -> Self {
+        self.kind(WindowKind::Overlay)
+    }
+
+    /// Set whether the window is movable by the user.
+    pub fn movable(mut self, movable: bool) -> Self {
+        self.options.is_movable = movable;
+        self
+    }
+
+    /// Set whether the window is resizable by the user.
+    pub fn resizable(mut self, resizable: bool) -> Self {
+        self.options.is_resizable = resizable;
+        self
+    }
+
+    /// Set whether the window is minimizable by the user.
+    pub fn minimizable(mut self, minimizable: bool) -> Self {
+        self.options.is_minimizable = minimizable;
+        self
+    }
+
+    /// Pin window creation to a display.
+    pub fn display_id(mut self, display_id: DisplayId) -> Self {
+        self.options.display_id = Some(display_id);
+        self
+    }
+
+    /// Set the window background appearance.
+    pub fn background(mut self, background: WindowBackgroundAppearance) -> Self {
+        self.options.window_background = background;
+        self
+    }
+
+    /// Use a transparent window background.
+    pub fn transparent_background(self) -> Self {
+        self.background(WindowBackgroundAppearance::Transparent)
+    }
+
+    /// Use a blurred window background when the platform supports it.
+    pub fn blurred_background(self) -> Self {
+        self.background(WindowBackgroundAppearance::Blurred)
+    }
+
+    /// Set the desktop application identifier used for grouping on some DEs.
+    pub fn app_id(mut self, app_id: impl Into<String>) -> Self {
+        self.options.app_id = Some(app_id.into());
+        self
+    }
+
+    /// Set the minimum window size.
+    pub fn min_size(mut self, size: Size<Pixels>) -> Self {
+        self.options.window_min_size = Some(size);
+        self
+    }
+
+    /// Set the window decoration preference.
+    pub fn decorations(mut self, decorations: WindowDecorations) -> Self {
+        self.options.window_decorations = Some(decorations);
+        self
+    }
+
+    /// Prefer client-side decorations.
+    pub fn client_decorations(self) -> Self {
+        self.decorations(WindowDecorations::Client)
+    }
+
+    /// Prefer server-side decorations.
+    pub fn server_decorations(self) -> Self {
+        self.decorations(WindowDecorations::Server)
+    }
+
+    /// Set the native tab group identifier.
+    pub fn tabbing_identifier(mut self, identifier: impl Into<String>) -> Self {
+        self.options.tabbing_identifier = Some(identifier.into());
+        self
+    }
+
+    /// Set whether mouse events pass through to windows behind this one.
+    pub fn mouse_passthrough(mut self, passthrough: bool) -> Self {
+        self.options.mouse_passthrough = passthrough;
+        self
+    }
+
+    /// Set the parent window for child-window creation.
+    pub fn parent(mut self, parent: AnyWindowHandle) -> Self {
+        self.options.parent = Some(parent);
+        self
+    }
+
+    /// Consume the builder into raw window options.
+    pub fn build(self) -> WindowOptions {
+        self.options
+    }
+
+    fn ensure_titlebar(&mut self) -> &mut TitlebarOptions {
+        self.options.titlebar.get_or_insert_with(Default::default)
+    }
+}
+
+impl Default for WindowOptionsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl From<WindowOptionsBuilder> for WindowOptions {
+    fn from(value: WindowOptionsBuilder) -> Self {
+        value.build()
+    }
+}
+
+/// High-level intent for a native window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WindowIntentKind {
+    /// Main application/document window.
+    Main,
+    /// Command palette, launcher, or transient search window.
+    Palette,
+    /// Tool/inspector/sidebar utility window.
+    Utility,
+    /// Child modal or dialog-like window.
+    Modal,
+    /// Context popup or short-lived popover window.
+    Popup,
+    /// Overlay/HUD window.
+    Overlay,
+}
+
+/// Checked builder for BrowserWindow-style window intent presets.
+#[derive(Debug)]
+pub struct WindowIntentBuilder {
+    kind: WindowIntentKind,
+    options: WindowOptionsBuilder,
+}
+
+impl WindowIntentBuilder {
+    /// Create a window intent from a kind.
+    pub fn new(kind: WindowIntentKind) -> Self {
+        Self {
+            kind,
+            options: window_intent_defaults(kind),
+        }
+    }
+
+    /// Main application/document window intent.
+    pub fn main() -> Self {
+        Self::new(WindowIntentKind::Main)
+    }
+
+    /// Command palette or launcher intent.
+    pub fn palette() -> Self {
+        Self::new(WindowIntentKind::Palette)
+    }
+
+    /// Tool, inspector, or utility window intent.
+    pub fn utility() -> Self {
+        Self::new(WindowIntentKind::Utility)
+    }
+
+    /// Modal/child window intent.
+    pub fn modal(parent: AnyWindowHandle) -> Self {
+        Self::new(WindowIntentKind::Modal).parent(parent)
+    }
+
+    /// Context popup/popover intent.
+    pub fn popup() -> Self {
+        Self::new(WindowIntentKind::Popup)
+    }
+
+    /// Overlay/HUD intent.
+    pub fn overlay() -> Self {
+        Self::new(WindowIntentKind::Overlay)
+    }
+
+    /// Return this intent kind.
+    pub fn kind(&self) -> WindowIntentKind {
+        self.kind
+    }
+
+    /// Refine the underlying window options builder.
+    pub fn configure(
+        mut self,
+        configure: impl FnOnce(WindowOptionsBuilder) -> WindowOptionsBuilder,
+    ) -> Self {
+        self.options = configure(self.options);
+        self
+    }
+
+    /// Set initial title.
+    pub fn title(self, title: impl Into<SharedString>) -> Self {
+        self.configure(|options| options.title(title))
+    }
+
+    /// Set explicit bounds.
+    pub fn windowed(self, bounds: Bounds<Pixels>) -> Self {
+        self.configure(|options| options.windowed(bounds))
+    }
+
+    /// Apply resolved monitor-aware placement.
+    pub fn placement(self, placement: &WindowPlacement) -> Self {
+        self.configure(|options| options.placement(placement))
+    }
+
+    /// Set minimum size.
+    pub fn min_size(self, size: Size<Pixels>) -> Self {
+        self.configure(|options| options.min_size(size))
+    }
+
+    /// Override focus behavior.
+    pub fn focused(self, focus: bool) -> Self {
+        self.configure(|options| options.focused(focus))
+    }
+
+    /// Create the window hidden.
+    pub fn hidden(self) -> Self {
+        self.configure(WindowOptionsBuilder::hidden)
+    }
+
+    /// Set parent window for modal/child windows.
+    pub fn parent(self, parent: AnyWindowHandle) -> Self {
+        self.configure(|options| options.parent(parent))
+    }
+
+    /// Override app id.
+    pub fn app_id(self, app_id: impl Into<String>) -> Self {
+        self.configure(|options| options.app_id(app_id))
+    }
+
+    /// Validate the intent and composed options.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let options = &self.options.options;
+        if let Some(bounds) = options.window_bounds {
+            validate_window_bounds(bounds)?;
+        }
+        if let Some(min_size) = options.window_min_size {
+            validate_window_size(min_size, "window minimum size")?;
+        }
+        if let Some(titlebar) = &options.titlebar
+            && let Some(title) = &titlebar.title
+        {
+            validate_window_text(title.as_ref(), "window title", 512)?;
+        }
+        if let Some(app_id) = &options.app_id {
+            validate_window_text(app_id, "window app id", 128)?;
+            anyhow::ensure!(
+                !app_id.contains('/') && !app_id.contains('\\'),
+                "window app id cannot contain path separators"
+            );
+        }
+        if let Some(identifier) = &options.tabbing_identifier {
+            validate_window_text(identifier, "window tabbing identifier", 128)?;
+        }
+
+        match self.kind {
+            WindowIntentKind::Main => {
+                anyhow::ensure!(
+                    options.kind == WindowKind::Normal,
+                    "main window intent must use a normal window kind"
+                );
+                anyhow::ensure!(options.is_resizable, "main window intent must be resizable");
+            }
+            WindowIntentKind::Palette => {
+                anyhow::ensure!(
+                    matches!(options.kind, WindowKind::Floating | WindowKind::PopUp),
+                    "palette window intent must use floating or popup kind"
+                );
+                anyhow::ensure!(
+                    !options.is_minimizable,
+                    "palette window intent should not be minimizable"
+                );
+            }
+            WindowIntentKind::Utility => {
+                anyhow::ensure!(
+                    matches!(options.kind, WindowKind::Floating | WindowKind::Normal),
+                    "utility window intent must use floating or normal kind"
+                );
+            }
+            WindowIntentKind::Modal => {
+                anyhow::ensure!(
+                    options.parent.is_some(),
+                    "modal window intent requires a parent window"
+                );
+                anyhow::ensure!(
+                    matches!(options.kind, WindowKind::Floating | WindowKind::PopUp),
+                    "modal window intent must use floating or popup kind"
+                );
+                anyhow::ensure!(
+                    !options.is_minimizable,
+                    "modal window intent should not be minimizable"
+                );
+            }
+            WindowIntentKind::Popup => {
+                anyhow::ensure!(
+                    options.kind == WindowKind::PopUp,
+                    "popup window intent must use popup kind"
+                );
+                anyhow::ensure!(
+                    !options.is_resizable,
+                    "popup window intent should not be resizable"
+                );
+            }
+            WindowIntentKind::Overlay => {
+                anyhow::ensure!(
+                    options.kind == WindowKind::Overlay,
+                    "overlay window intent must use overlay kind"
+                );
+                anyhow::ensure!(
+                    !options.is_minimizable,
+                    "overlay window intent should not be minimizable"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Build checked raw window options.
+    pub fn build_checked(self) -> anyhow::Result<WindowOptions> {
+        self.validate()?;
+        Ok(self.options.build())
+    }
+}
+
+fn window_intent_defaults(kind: WindowIntentKind) -> WindowOptionsBuilder {
+    match kind {
+        WindowIntentKind::Main => WindowOptionsBuilder::new(),
+        WindowIntentKind::Palette => WindowOptionsBuilder::new()
+            .floating()
+            .resizable(false)
+            .minimizable(false)
+            .transparent_titlebar(true)
+            .client_decorations(),
+        WindowIntentKind::Utility => WindowOptionsBuilder::new()
+            .floating()
+            .transparent_titlebar(true)
+            .client_decorations(),
+        WindowIntentKind::Modal => WindowOptionsBuilder::new()
+            .floating()
+            .resizable(false)
+            .minimizable(false)
+            .client_decorations(),
+        WindowIntentKind::Popup => WindowOptionsBuilder::new()
+            .popup()
+            .resizable(false)
+            .minimizable(false)
+            .movable(false)
+            .client_decorations(),
+        WindowIntentKind::Overlay => WindowOptionsBuilder::new()
+            .overlay()
+            .resizable(false)
+            .minimizable(false)
+            .movable(false)
+            .transparent_background()
+            .no_titlebar(),
+    }
+}
+
+fn validate_window_bounds(bounds: WindowBounds) -> anyhow::Result<()> {
+    validate_window_rect(bounds.get_bounds(), "window bounds")
+}
+
+fn validate_window_rect(bounds: Bounds<Pixels>, label: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        bounds.origin.x.0.is_finite()
+            && bounds.origin.y.0.is_finite()
+            && bounds.size.width.0.is_finite()
+            && bounds.size.height.0.is_finite(),
+        "{label} must use finite values"
+    );
+    validate_window_size(bounds.size, label)
+}
+
+fn validate_window_size(size: Size<Pixels>, label: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        size.width.0.is_finite() && size.height.0.is_finite(),
+        "{label} size must use finite values"
+    );
+    anyhow::ensure!(
+        size.width.0 > 0.0 && size.height.0 > 0.0,
+        "{label} size must be greater than zero"
+    );
+    Ok(())
+}
+
+fn validate_window_text(value: &str, label: &str, max_len: usize) -> anyhow::Result<()> {
+    anyhow::ensure!(!value.is_empty(), "{label} cannot be empty");
+    anyhow::ensure!(
+        value.trim() == value,
+        "{label} cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(value.len() <= max_len, "{label} is too long");
+    anyhow::ensure!(
+        !value.chars().any(char::is_control),
+        "{label} cannot contain control characters"
+    );
+    Ok(())
+}
+
 /// The options that can be configured for a window's titlebar
 #[derive(Debug, Default)]
 pub struct TitlebarOptions {
@@ -1714,6 +2246,23 @@ pub enum WindowAppearance {
     VibrantDark,
 }
 
+impl WindowAppearance {
+    /// Return true when the appearance is dark.
+    pub fn is_dark(self) -> bool {
+        matches!(self, Self::Dark | Self::VibrantDark)
+    }
+
+    /// Return true when the appearance is light.
+    pub fn is_light(self) -> bool {
+        matches!(self, Self::Light | Self::VibrantLight)
+    }
+
+    /// Return true when the appearance uses platform vibrancy/material effects.
+    pub fn is_vibrant(self) -> bool {
+        matches!(self, Self::VibrantLight | Self::VibrantDark)
+    }
+}
+
 /// The appearance of the background of the window itself, when there is
 /// no content or the content is transparent.
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
@@ -1747,7 +2296,7 @@ pub enum TrayIconEvent {
 }
 
 /// A menu item for a system tray context menu.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrayMenuItem {
     /// A clickable action item.
     Action {
@@ -1776,8 +2325,755 @@ pub enum TrayMenuItem {
     },
 }
 
+impl TrayMenuItem {
+    /// Create a clickable tray menu action.
+    pub fn action(label: impl Into<SharedString>, id: impl Into<SharedString>) -> Self {
+        Self::Action {
+            label: label.into(),
+            id: id.into(),
+        }
+    }
+
+    /// Create a visual tray menu separator.
+    pub fn separator() -> Self {
+        Self::Separator
+    }
+
+    /// Create a nested tray submenu.
+    pub fn submenu(label: impl Into<SharedString>, items: impl Into<Vec<TrayMenuItem>>) -> Self {
+        Self::Submenu {
+            label: label.into(),
+            items: items.into(),
+        }
+    }
+
+    /// Create a toggleable tray menu item.
+    pub fn toggle(
+        label: impl Into<SharedString>,
+        checked: bool,
+        id: impl Into<SharedString>,
+    ) -> Self {
+        Self::Toggle {
+            label: label.into(),
+            checked,
+            id: id.into(),
+        }
+    }
+
+    /// Validate a native tray/context menu item tree.
+    pub fn validate_items(items: &[TrayMenuItem]) -> Result<()> {
+        validate_tray_menu_items(items)
+    }
+}
+
+/// Builder for a system tray menu.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TrayMenuBuilder {
+    items: Vec<TrayMenuItem>,
+}
+
+impl TrayMenuBuilder {
+    /// Create an empty tray menu builder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a clickable action item.
+    pub fn action(mut self, label: impl Into<SharedString>, id: impl Into<SharedString>) -> Self {
+        self.items.push(TrayMenuItem::action(label, id));
+        self
+    }
+
+    /// Add a visual separator.
+    pub fn separator(mut self) -> Self {
+        self.items.push(TrayMenuItem::separator());
+        self
+    }
+
+    /// Add a nested submenu.
+    pub fn submenu(
+        mut self,
+        label: impl Into<SharedString>,
+        items: impl Into<Vec<TrayMenuItem>>,
+    ) -> Self {
+        self.items.push(TrayMenuItem::submenu(label, items));
+        self
+    }
+
+    /// Add a toggleable menu item.
+    pub fn toggle(
+        mut self,
+        label: impl Into<SharedString>,
+        checked: bool,
+        id: impl Into<SharedString>,
+    ) -> Self {
+        self.items.push(TrayMenuItem::toggle(label, checked, id));
+        self
+    }
+
+    /// Return the configured tray menu items.
+    pub fn items(&self) -> &[TrayMenuItem] {
+        &self.items
+    }
+
+    /// Validate labels and action IDs before installing the menu.
+    pub fn validate(&self) -> Result<()> {
+        validate_tray_menu_items(&self.items)
+    }
+
+    /// Build the validated tray menu item tree.
+    pub fn build(self) -> Result<Vec<TrayMenuItem>> {
+        self.validate()?;
+        Ok(self.items)
+    }
+
+    /// Consume the builder into tray menu items.
+    pub fn into_items(self) -> Vec<TrayMenuItem> {
+        self.items
+    }
+}
+
+impl From<TrayMenuBuilder> for Vec<TrayMenuItem> {
+    fn from(value: TrayMenuBuilder) -> Self {
+        value.into_items()
+    }
+}
+
+/// Builder for a native context menu.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NativeContextMenuBuilder {
+    items: Vec<TrayMenuItem>,
+}
+
+impl NativeContextMenuBuilder {
+    /// Create an empty context menu builder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a clickable action item.
+    pub fn action(mut self, label: impl Into<SharedString>, id: impl Into<SharedString>) -> Self {
+        self.items.push(TrayMenuItem::action(label, id));
+        self
+    }
+
+    /// Add a visual separator.
+    pub fn separator(mut self) -> Self {
+        self.items.push(TrayMenuItem::separator());
+        self
+    }
+
+    /// Add a nested submenu.
+    pub fn submenu(
+        mut self,
+        label: impl Into<SharedString>,
+        items: impl Into<Vec<TrayMenuItem>>,
+    ) -> Self {
+        self.items.push(TrayMenuItem::submenu(label, items));
+        self
+    }
+
+    /// Add a toggleable menu item.
+    pub fn toggle(
+        mut self,
+        label: impl Into<SharedString>,
+        checked: bool,
+        id: impl Into<SharedString>,
+    ) -> Self {
+        self.items.push(TrayMenuItem::toggle(label, checked, id));
+        self
+    }
+
+    /// Return the configured context menu items.
+    pub fn items(&self) -> &[TrayMenuItem] {
+        &self.items
+    }
+
+    /// Validate labels and action IDs before showing the menu.
+    pub fn validate(&self) -> Result<()> {
+        validate_tray_menu_items(&self.items)
+    }
+
+    /// Build the validated context menu item tree.
+    pub fn build(self) -> Result<Vec<TrayMenuItem>> {
+        self.validate()?;
+        Ok(self.items)
+    }
+
+    /// Consume the builder into native menu items.
+    pub fn into_items(self) -> Vec<TrayMenuItem> {
+        self.items
+    }
+}
+
+impl From<NativeContextMenuBuilder> for Vec<TrayMenuItem> {
+    fn from(value: NativeContextMenuBuilder) -> Self {
+        value.into_items()
+    }
+}
+
+fn validate_tray_menu_items(items: &[TrayMenuItem]) -> Result<()> {
+    anyhow::ensure!(!items.is_empty(), "menu must contain at least one item");
+    let mut action_ids = std::collections::HashSet::new();
+    validate_tray_menu_items_inner(items, &mut action_ids)
+}
+
+fn validate_tray_menu_items_inner<'a>(
+    items: &'a [TrayMenuItem],
+    action_ids: &mut std::collections::HashSet<&'a str>,
+) -> Result<()> {
+    for item in items {
+        match item {
+            TrayMenuItem::Action { label, id } => {
+                validate_menu_label(label)?;
+                validate_menu_action_id(id, action_ids)?;
+            }
+            TrayMenuItem::Separator => {}
+            TrayMenuItem::Submenu { label, items } => {
+                validate_menu_label(label)?;
+                anyhow::ensure!(
+                    !items.is_empty(),
+                    "submenu '{}' must contain at least one item",
+                    label
+                );
+                validate_tray_menu_items_inner(items, action_ids)?;
+            }
+            TrayMenuItem::Toggle { label, id, .. } => {
+                validate_menu_label(label)?;
+                validate_menu_action_id(id, action_ids)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_menu_label(label: &SharedString) -> Result<()> {
+    anyhow::ensure!(
+        !label.as_ref().trim().is_empty(),
+        "menu label cannot be empty"
+    );
+    Ok(())
+}
+
+fn validate_menu_action_id<'a>(
+    id: &'a SharedString,
+    action_ids: &mut std::collections::HashSet<&'a str>,
+) -> Result<()> {
+    let id = id.as_ref();
+    anyhow::ensure!(!id.trim().is_empty(), "menu action id cannot be empty");
+    anyhow::ensure!(
+        action_ids.insert(id),
+        "menu action id must be unique: {}",
+        id
+    );
+    Ok(())
+}
+
+/// A platform shell target that can be opened or revealed by the OS.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShellTarget {
+    /// Open a URL with the system default browser or registered URL handler.
+    Url(String),
+    /// Open a file or directory with the system default application.
+    Path(PathBuf),
+    /// Reveal a file or directory in the platform file manager.
+    RevealPath(PathBuf),
+}
+
+impl ShellTarget {
+    /// Create a URL shell target.
+    pub fn url(url: impl Into<String>) -> Self {
+        Self::Url(url.into())
+    }
+
+    /// Create a path shell target.
+    pub fn path(path: impl Into<PathBuf>) -> Self {
+        Self::Path(path.into())
+    }
+
+    /// Create a reveal-in-folder shell target.
+    pub fn reveal_path(path: impl Into<PathBuf>) -> Self {
+        Self::RevealPath(path.into())
+    }
+
+    /// Validate this shell target before dispatching it to the OS shell.
+    pub fn validate(&self) -> Result<()> {
+        match self {
+            ShellTarget::Url(url) => validate_shell_url(url),
+            ShellTarget::Path(path) | ShellTarget::RevealPath(path) => {
+                validate_shell_path(path, false)
+            }
+        }
+    }
+}
+
+/// Builder for opening or revealing multiple platform shell targets.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShellTargetsBuilder {
+    targets: Vec<ShellTarget>,
+    require_existing_paths: bool,
+    canonicalize_paths: bool,
+}
+
+impl ShellTargetsBuilder {
+    /// Create an empty shell-target builder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add one typed shell target.
+    pub fn target(mut self, target: ShellTarget) -> Self {
+        self.targets.push(target);
+        self
+    }
+
+    /// Add a URL target.
+    pub fn url(self, url: impl Into<String>) -> Self {
+        self.target(ShellTarget::url(url))
+    }
+
+    /// Add a file or directory target.
+    pub fn path(self, path: impl Into<PathBuf>) -> Self {
+        self.target(ShellTarget::path(path))
+    }
+
+    /// Add a reveal-in-folder target.
+    pub fn reveal_path(self, path: impl Into<PathBuf>) -> Self {
+        self.target(ShellTarget::reveal_path(path))
+    }
+
+    /// Add multiple typed shell targets.
+    pub fn targets(mut self, targets: impl IntoIterator<Item = ShellTarget>) -> Self {
+        self.targets.extend(targets);
+        self
+    }
+
+    /// Require path and reveal targets to exist before building.
+    pub fn require_existing_paths(mut self) -> Self {
+        self.require_existing_paths = true;
+        self
+    }
+
+    /// Canonicalize path and reveal targets before dispatching them.
+    pub fn canonicalize_paths(mut self) -> Self {
+        self.canonicalize_paths = true;
+        self.require_existing_paths = true;
+        self
+    }
+
+    /// Return the configured shell targets.
+    pub fn configured_targets(&self) -> &[ShellTarget] {
+        &self.targets
+    }
+
+    /// Validate that at least one shell target was configured.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.targets.is_empty(),
+            "at least one shell target must be configured"
+        );
+        for target in &self.targets {
+            validate_shell_target(target, self.require_existing_paths)?;
+        }
+        Ok(())
+    }
+
+    /// Build the validated shell-target list.
+    pub fn build(mut self) -> Result<Vec<ShellTarget>> {
+        self.validate()?;
+        if self.canonicalize_paths {
+            for target in &mut self.targets {
+                match target {
+                    ShellTarget::Path(path) | ShellTarget::RevealPath(path) => {
+                        *path = path.canonicalize().map_err(|error| {
+                            anyhow::anyhow!(
+                                "could not canonicalize shell target path {}: {error}",
+                                path.display()
+                            )
+                        })?;
+                    }
+                    ShellTarget::Url(_) => {}
+                }
+            }
+        }
+        Ok(self.targets)
+    }
+}
+
+impl From<ShellTarget> for ShellTargetsBuilder {
+    fn from(value: ShellTarget) -> Self {
+        Self::new().target(value)
+    }
+}
+
+/// Checked request to move a file or directory to the platform trash/recycle bin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrashRequest {
+    path: PathBuf,
+    require_existing_path: bool,
+    canonicalized: bool,
+    allow_relative_path: bool,
+}
+
+impl TrashRequest {
+    /// Create a builder for a trash request.
+    pub fn builder(path: impl Into<PathBuf>) -> TrashRequestBuilder {
+        TrashRequestBuilder::new(path)
+    }
+
+    /// Path requested for trash/recycle.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Whether the request required the path to exist.
+    pub fn requires_existing_path(&self) -> bool {
+        self.require_existing_path
+    }
+
+    /// Whether the built path was canonicalized.
+    pub fn is_canonicalized(&self) -> bool {
+        self.canonicalized
+    }
+
+    /// Whether the request explicitly allowed a relative path.
+    pub fn allows_relative_path(&self) -> bool {
+        self.allow_relative_path
+    }
+}
+
+/// Builder for checked platform trash/recycle requests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrashRequestBuilder {
+    path: PathBuf,
+    require_existing_path: bool,
+    canonicalize_path: bool,
+    allow_relative_path: bool,
+}
+
+impl TrashRequestBuilder {
+    /// Create a trash request for a file or directory path.
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            require_existing_path: true,
+            canonicalize_path: false,
+            allow_relative_path: false,
+        }
+    }
+
+    /// Require the path to exist before trashing.
+    pub fn require_existing_path(mut self) -> Self {
+        self.require_existing_path = true;
+        self
+    }
+
+    /// Canonicalize the path before trashing.
+    pub fn canonicalize_path(mut self) -> Self {
+        self.canonicalize_path = true;
+        self.require_existing_path = true;
+        self
+    }
+
+    /// Allow relative paths for app-owned sandbox directories.
+    pub fn allow_relative_path(mut self) -> Self {
+        self.allow_relative_path = true;
+        self
+    }
+
+    /// Validate this trash request without mutating the filesystem.
+    pub fn validate(&self) -> Result<()> {
+        validate_trash_path(
+            &self.path,
+            self.require_existing_path,
+            self.allow_relative_path,
+        )
+    }
+
+    /// Build a checked trash request.
+    pub fn build_checked(mut self) -> Result<TrashRequest> {
+        self.validate()?;
+        let mut canonicalized = false;
+        if self.canonicalize_path {
+            self.path = self.path.canonicalize().map_err(|error| {
+                anyhow::anyhow!(
+                    "could not canonicalize trash request path {}: {error}",
+                    self.path.display()
+                )
+            })?;
+            canonicalized = true;
+        }
+        Ok(TrashRequest {
+            path: self.path,
+            require_existing_path: self.require_existing_path,
+            canonicalized,
+            allow_relative_path: self.allow_relative_path,
+        })
+    }
+}
+
+fn validate_shell_target(target: &ShellTarget, require_existing_paths: bool) -> Result<()> {
+    match target {
+        ShellTarget::Url(url) => validate_shell_url(url),
+        ShellTarget::Path(path) | ShellTarget::RevealPath(path) => {
+            validate_shell_path(path, require_existing_paths)
+        }
+    }
+}
+
+fn validate_shell_url(url: &str) -> Result<()> {
+    anyhow::ensure!(!url.trim().is_empty(), "shell URL cannot be empty");
+    anyhow::ensure!(
+        url == url.trim(),
+        "shell URL cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        !url.chars().any(char::is_control),
+        "shell URL cannot contain control characters"
+    );
+    let parsed = http_client::Url::parse(url)
+        .map_err(|error| anyhow::anyhow!("shell URL is invalid: {error}"))?;
+    anyhow::ensure!(
+        matches!(parsed.scheme(), "http" | "https" | "mailto"),
+        "shell URL must use http, https, or mailto"
+    );
+    if matches!(parsed.scheme(), "http" | "https") {
+        anyhow::ensure!(parsed.host_str().is_some(), "shell URL must include a host");
+    }
+    Ok(())
+}
+
+fn validate_shell_path(path: &Path, require_existing_path: bool) -> Result<()> {
+    anyhow::ensure!(!path.as_os_str().is_empty(), "shell path cannot be empty");
+    if let Some(text) = path.to_str() {
+        anyhow::ensure!(!text.contains('\0'), "shell path cannot contain NUL bytes");
+    }
+    if require_existing_path {
+        std::fs::metadata(path).map_err(|error| {
+            anyhow::anyhow!("shell path does not exist {}: {error}", path.display())
+        })?;
+    }
+    Ok(())
+}
+
+fn validate_trash_path(
+    path: &Path,
+    require_existing_path: bool,
+    allow_relative_path: bool,
+) -> Result<()> {
+    validate_shell_path(path, false)?;
+    anyhow::ensure!(
+        allow_relative_path || path.is_absolute(),
+        "trash request path must be absolute unless relative paths are explicitly allowed"
+    );
+    anyhow::ensure!(
+        path.file_name().is_some(),
+        "trash request path must not target a filesystem root"
+    );
+    if require_existing_path {
+        std::fs::metadata(path).map_err(|error| {
+            anyhow::anyhow!(
+                "trash request path does not exist {}: {error}",
+                path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// A global hotkey registration with an application-owned identifier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlobalHotkey {
+    id: u32,
+    keystroke: Keystroke,
+    name: Option<SharedString>,
+}
+
+impl GlobalHotkey {
+    /// Create a global hotkey from a parsed keystroke.
+    pub fn new(id: u32, keystroke: Keystroke) -> Self {
+        Self {
+            id,
+            keystroke,
+            name: None,
+        }
+    }
+
+    /// Create a global hotkey by parsing a keystroke string.
+    pub fn parse(id: u32, keystroke: &str) -> std::result::Result<Self, InvalidKeystrokeError> {
+        Ok(Self::new(id, Keystroke::parse(keystroke)?))
+    }
+
+    /// Attach a human-readable name for logs, settings, or callbacks.
+    pub fn named(mut self, name: impl Into<SharedString>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// The application-owned hotkey identifier.
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+
+    /// The parsed keystroke registered with the platform.
+    pub fn keystroke(&self) -> &Keystroke {
+        &self.keystroke
+    }
+
+    /// Optional human-readable name.
+    pub fn name(&self) -> Option<&SharedString> {
+        self.name.as_ref()
+    }
+}
+
+/// A collection of global hotkeys ready to register.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GlobalHotkeySet {
+    hotkeys: Vec<GlobalHotkey>,
+}
+
+impl GlobalHotkeySet {
+    /// Create an empty global hotkey set.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a parsed global hotkey.
+    pub fn hotkey(mut self, hotkey: GlobalHotkey) -> Self {
+        self.hotkeys.push(hotkey);
+        self
+    }
+
+    /// Return registered hotkeys.
+    pub fn hotkeys(&self) -> &[GlobalHotkey] {
+        &self.hotkeys
+    }
+
+    /// Validate the set before registering it with the platform.
+    pub fn validate(&self) -> Result<()> {
+        validate_global_hotkeys(&self.hotkeys)
+    }
+
+    /// Consume the set into its hotkeys.
+    pub fn into_hotkeys(self) -> Vec<GlobalHotkey> {
+        self.hotkeys
+    }
+}
+
+impl From<GlobalHotkey> for GlobalHotkeySet {
+    fn from(value: GlobalHotkey) -> Self {
+        Self::new().hotkey(value)
+    }
+}
+
+impl From<GlobalHotkeyBuilder> for GlobalHotkeySet {
+    fn from(value: GlobalHotkeyBuilder) -> Self {
+        value.build()
+    }
+}
+
+/// Builder for global hotkey registrations.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GlobalHotkeyBuilder {
+    hotkeys: Vec<GlobalHotkey>,
+}
+
+impl GlobalHotkeyBuilder {
+    /// Create an empty global hotkey builder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a global hotkey from a parsed keystroke.
+    pub fn hotkey(mut self, id: u32, keystroke: Keystroke) -> Self {
+        self.hotkeys.push(GlobalHotkey::new(id, keystroke));
+        self
+    }
+
+    /// Add a named global hotkey from a parsed keystroke.
+    pub fn named_hotkey(
+        mut self,
+        id: u32,
+        name: impl Into<SharedString>,
+        keystroke: Keystroke,
+    ) -> Self {
+        self.hotkeys
+            .push(GlobalHotkey::new(id, keystroke).named(name));
+        self
+    }
+
+    /// Add a global hotkey by parsing a keystroke string.
+    pub fn parse_hotkey(
+        mut self,
+        id: u32,
+        keystroke: &str,
+    ) -> std::result::Result<Self, InvalidKeystrokeError> {
+        self.hotkeys.push(GlobalHotkey::parse(id, keystroke)?);
+        Ok(self)
+    }
+
+    /// Add a named global hotkey by parsing a keystroke string.
+    pub fn parse_named_hotkey(
+        mut self,
+        id: u32,
+        name: impl Into<SharedString>,
+        keystroke: &str,
+    ) -> std::result::Result<Self, InvalidKeystrokeError> {
+        self.hotkeys
+            .push(GlobalHotkey::parse(id, keystroke)?.named(name));
+        Ok(self)
+    }
+
+    /// Return configured hotkeys.
+    pub fn hotkeys(&self) -> &[GlobalHotkey] {
+        &self.hotkeys
+    }
+
+    /// Validate the configured hotkeys.
+    pub fn validate(&self) -> Result<()> {
+        validate_global_hotkeys(&self.hotkeys)
+    }
+
+    /// Build a validated hotkey set.
+    pub fn build_checked(self) -> Result<GlobalHotkeySet> {
+        self.validate()?;
+        Ok(self.build())
+    }
+
+    /// Build the hotkey set.
+    pub fn build(self) -> GlobalHotkeySet {
+        GlobalHotkeySet {
+            hotkeys: self.hotkeys,
+        }
+    }
+}
+
+fn validate_global_hotkeys(hotkeys: &[GlobalHotkey]) -> Result<()> {
+    anyhow::ensure!(
+        !hotkeys.is_empty(),
+        "at least one global hotkey must be configured"
+    );
+
+    let mut ids = std::collections::HashSet::new();
+    let mut keystrokes = std::collections::HashSet::new();
+    for hotkey in hotkeys {
+        anyhow::ensure!(
+            ids.insert(hotkey.id()),
+            "global hotkey id must be unique: {}",
+            hotkey.id()
+        );
+        anyhow::ensure!(
+            keystrokes.insert(hotkey.keystroke()),
+            "global hotkey keystroke must be unique: {}",
+            hotkey.keystroke()
+        );
+    }
+
+    Ok(())
+}
+
 /// Information about the currently focused window from any application.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FocusedWindowInfo {
     /// The name of the application that owns the focused window.
     pub app_name: String,
@@ -1787,6 +3083,255 @@ pub struct FocusedWindowInfo {
     pub bundle_id: Option<String>,
     /// The process ID of the application.
     pub pid: Option<u32>,
+}
+
+impl FocusedWindowInfo {
+    /// Returns true when this focused window belongs to the current process.
+    pub fn is_current_process(&self) -> bool {
+        self.pid == Some(std::process::id())
+    }
+
+    /// Returns true when this focused window belongs to another process.
+    pub fn is_external_process(&self) -> bool {
+        self.pid.is_some_and(|pid| pid != std::process::id())
+    }
+
+    /// Validate metadata shape supplied by a platform backend or test fixture.
+    pub fn validate(&self) -> Result<()> {
+        validate_focused_window_text("focused window app name", &self.app_name, true)?;
+        validate_focused_window_text("focused window title", &self.window_title, false)?;
+        if let Some(bundle_id) = &self.bundle_id {
+            validate_focused_window_text("focused window bundle id", bundle_id, true)?;
+        }
+        anyhow::ensure!(self.pid != Some(0), "focused window pid cannot be zero");
+        Ok(())
+    }
+
+    /// Return whether this focused-window record satisfies a checked query.
+    pub fn matches_query(&self, query: &FocusedWindowQuery) -> bool {
+        if self.validate().is_err() {
+            return false;
+        }
+        if query.require_title && self.window_title.trim().is_empty() {
+            return false;
+        }
+        if query.require_pid && self.pid.is_none() {
+            return false;
+        }
+        if query.external_only && !self.is_external_process() {
+            return false;
+        }
+        if query.current_process_only && !self.is_current_process() {
+            return false;
+        }
+        if let Some(pid) = query.pid
+            && self.pid != Some(pid)
+        {
+            return false;
+        }
+        if let Some(app_name) = &query.app_name
+            && !self.app_name.eq_ignore_ascii_case(app_name)
+        {
+            return false;
+        }
+        if let Some(contains) = &query.app_name_contains
+            && !self
+                .app_name
+                .to_ascii_lowercase()
+                .contains(&contains.to_ascii_lowercase())
+        {
+            return false;
+        }
+        if let Some(bundle_id) = &query.bundle_id
+            && self.bundle_id.as_deref() != Some(bundle_id.as_str())
+        {
+            return false;
+        }
+        true
+    }
+}
+
+/// A checked filter for querying the currently focused external window.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FocusedWindowQuery {
+    require_title: bool,
+    require_pid: bool,
+    external_only: bool,
+    current_process_only: bool,
+    app_name: Option<String>,
+    app_name_contains: Option<String>,
+    bundle_id: Option<String>,
+    pid: Option<u32>,
+}
+
+impl FocusedWindowQuery {
+    /// Create a focused-window query builder.
+    pub fn builder() -> FocusedWindowQueryBuilder {
+        FocusedWindowQueryBuilder::new()
+    }
+
+    /// Return whether a focused window title is required.
+    pub fn requires_title(&self) -> bool {
+        self.require_title
+    }
+
+    /// Return whether a process id is required.
+    pub fn requires_pid(&self) -> bool {
+        self.require_pid
+    }
+
+    /// Return whether only windows outside the current process should match.
+    pub fn external_only(&self) -> bool {
+        self.external_only
+    }
+
+    /// Return whether only windows in the current process should match.
+    pub fn current_process_only(&self) -> bool {
+        self.current_process_only
+    }
+
+    /// Return the exact app-name filter, if any.
+    pub fn app_name(&self) -> Option<&str> {
+        self.app_name.as_deref()
+    }
+
+    /// Return the app-name substring filter, if any.
+    pub fn app_name_contains(&self) -> Option<&str> {
+        self.app_name_contains.as_deref()
+    }
+
+    /// Return the exact bundle-id filter, if any.
+    pub fn bundle_id(&self) -> Option<&str> {
+        self.bundle_id.as_deref()
+    }
+
+    /// Return the exact process-id filter, if any.
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
+    }
+
+    /// Validate the query before reading platform state.
+    pub fn validate(&self) -> Result<()> {
+        if let Some(app_name) = &self.app_name {
+            validate_focused_window_text("focused window app filter", app_name, true)?;
+        }
+        if let Some(app_name_contains) = &self.app_name_contains {
+            validate_focused_window_text(
+                "focused window app contains filter",
+                app_name_contains,
+                true,
+            )?;
+        }
+        if let Some(bundle_id) = &self.bundle_id {
+            validate_focused_window_text("focused window bundle id filter", bundle_id, true)?;
+        }
+        anyhow::ensure!(
+            !(self.external_only && self.current_process_only),
+            "focused window query cannot require both external and current process"
+        );
+        anyhow::ensure!(
+            !(self.app_name.is_some() && self.app_name_contains.is_some()),
+            "focused window query cannot use exact and contains app-name filters together"
+        );
+        anyhow::ensure!(
+            self.pid != Some(0),
+            "focused window pid filter cannot be zero"
+        );
+        Ok(())
+    }
+}
+
+/// Builder for checked focused-window queries.
+#[derive(Debug, Clone, Default)]
+pub struct FocusedWindowQueryBuilder {
+    query: FocusedWindowQuery,
+}
+
+impl FocusedWindowQueryBuilder {
+    /// Create an empty query that accepts any valid focused-window record.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Require a non-empty window title.
+    pub fn require_title(mut self) -> Self {
+        self.query.require_title = true;
+        self
+    }
+
+    /// Require process id metadata from the platform backend.
+    pub fn require_pid(mut self) -> Self {
+        self.query.require_pid = true;
+        self
+    }
+
+    /// Match only windows owned by another process.
+    pub fn external_only(mut self) -> Self {
+        self.query.external_only = true;
+        self
+    }
+
+    /// Match only windows owned by the current process.
+    pub fn current_process_only(mut self) -> Self {
+        self.query.current_process_only = true;
+        self
+    }
+
+    /// Match an exact application name.
+    pub fn app_name(mut self, app_name: impl Into<String>) -> Self {
+        self.query.app_name = Some(app_name.into());
+        self
+    }
+
+    /// Match application names containing the given text, case-insensitively.
+    pub fn app_name_contains(mut self, app_name: impl Into<String>) -> Self {
+        self.query.app_name_contains = Some(app_name.into());
+        self
+    }
+
+    /// Match an exact bundle identifier. This is primarily useful on macOS.
+    pub fn bundle_id(mut self, bundle_id: impl Into<String>) -> Self {
+        self.query.bundle_id = Some(bundle_id.into());
+        self
+    }
+
+    /// Match an exact process id.
+    pub fn pid(mut self, pid: u32) -> Self {
+        self.query.pid = Some(pid);
+        self
+    }
+
+    /// Validate the configured query.
+    pub fn validate(&self) -> Result<()> {
+        self.query.validate()
+    }
+
+    /// Build the checked query.
+    pub fn build_checked(self) -> Result<FocusedWindowQuery> {
+        self.query.validate()?;
+        Ok(self.query)
+    }
+}
+
+impl From<FocusedWindowQuery> for FocusedWindowQueryBuilder {
+    fn from(query: FocusedWindowQuery) -> Self {
+        Self { query }
+    }
+}
+
+fn validate_focused_window_text(label: &str, value: &str, require_non_empty: bool) -> Result<()> {
+    if require_non_empty {
+        anyhow::ensure!(!value.trim().is_empty(), "{label} cannot be empty");
+    }
+    anyhow::ensure!(
+        value == value.trim(),
+        "{label} cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        !value.chars().any(char::is_control),
+        "{label} cannot contain control characters"
+    );
+    Ok(())
 }
 
 /// The status of a system permission.
@@ -1890,6 +3435,44 @@ pub enum ProgressBarState {
     Paused(f64),
 }
 
+impl ProgressBarState {
+    /// Create a normal progress bar state after validating the fraction.
+    pub fn normal(fraction: f64) -> Result<Self> {
+        validate_progress_fraction(fraction)?;
+        Ok(Self::Normal(fraction))
+    }
+
+    /// Create an error progress bar state after validating the fraction.
+    pub fn error(fraction: f64) -> Result<Self> {
+        validate_progress_fraction(fraction)?;
+        Ok(Self::Error(fraction))
+    }
+
+    /// Create a paused progress bar state after validating the fraction.
+    pub fn paused(fraction: f64) -> Result<Self> {
+        validate_progress_fraction(fraction)?;
+        Ok(Self::Paused(fraction))
+    }
+
+    /// Validate this progress state before passing it to the platform backend.
+    pub fn validate(&self) -> Result<()> {
+        match *self {
+            Self::None | Self::Indeterminate => Ok(()),
+            Self::Normal(fraction) | Self::Error(fraction) | Self::Paused(fraction) => {
+                validate_progress_fraction(fraction)
+            }
+        }
+    }
+}
+
+fn validate_progress_fraction(fraction: f64) -> Result<()> {
+    anyhow::ensure!(
+        fraction.is_finite() && (0.0..=1.0).contains(&fraction),
+        "progress fraction must be finite and between 0.0 and 1.0"
+    );
+    Ok(())
+}
+
 /// The kind of a native dialog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogKind {
@@ -1914,6 +3497,293 @@ pub struct DialogOptions {
     pub detail: Option<SharedString>,
     /// The button labels for the dialog.
     pub buttons: Vec<SharedString>,
+    /// Optional default button index for platforms that expose default actions.
+    pub default_button: Option<usize>,
+    /// Optional cancel button index for escape/close behavior.
+    pub cancel_button: Option<usize>,
+}
+
+/// Builder for native message/confirmation dialogs.
+#[derive(Debug, Clone)]
+pub struct MessageDialogBuilder {
+    options: DialogOptions,
+}
+
+impl MessageDialogBuilder {
+    /// Create a message dialog with an `OK` button.
+    pub fn new(
+        kind: DialogKind,
+        title: impl Into<SharedString>,
+        message: impl Into<SharedString>,
+    ) -> Self {
+        Self {
+            options: DialogOptions {
+                kind,
+                title: title.into(),
+                message: message.into(),
+                detail: None,
+                buttons: vec!["OK".into()],
+                default_button: Some(0),
+                cancel_button: None,
+            },
+        }
+    }
+
+    /// Create an informational message dialog.
+    pub fn info(title: impl Into<SharedString>, message: impl Into<SharedString>) -> Self {
+        Self::new(DialogKind::Info, title, message)
+    }
+
+    /// Create a warning message dialog.
+    pub fn warning(title: impl Into<SharedString>, message: impl Into<SharedString>) -> Self {
+        Self::new(DialogKind::Warning, title, message)
+    }
+
+    /// Create an error message dialog.
+    pub fn error(title: impl Into<SharedString>, message: impl Into<SharedString>) -> Self {
+        Self::new(DialogKind::Error, title, message)
+    }
+
+    /// Create a two-button confirmation dialog.
+    ///
+    /// The returned button indexes are `0` for Cancel and `1` for OK.
+    pub fn confirm(title: impl Into<SharedString>, message: impl Into<SharedString>) -> Self {
+        Self::warning(title, message)
+            .buttons(["Cancel", "OK"])
+            .cancel_button(0)
+            .default_button(1)
+    }
+
+    /// Create a confirmation dialog for destructive actions.
+    ///
+    /// The returned button indexes are `0` for Cancel and `1` for the
+    /// destructive action.
+    pub fn destructive_confirm(
+        title: impl Into<SharedString>,
+        message: impl Into<SharedString>,
+        destructive_label: impl Into<SharedString>,
+    ) -> Self {
+        Self::warning(title, message)
+            .buttons(["Cancel".into(), destructive_label.into()])
+            .cancel_button(0)
+            .default_button(0)
+    }
+
+    /// Create a standard unsaved-changes confirmation dialog.
+    ///
+    /// The returned button indexes are `0` for Cancel, `1` for Don't Save,
+    /// and `2` for Save.
+    pub fn save_discard_cancel(
+        title: impl Into<SharedString>,
+        message: impl Into<SharedString>,
+    ) -> Self {
+        Self::warning(title, message)
+            .buttons(["Cancel", "Don't Save", "Save"])
+            .cancel_button(0)
+            .default_button(2)
+    }
+
+    /// Set the optional detail text.
+    pub fn detail(mut self, detail: impl Into<SharedString>) -> Self {
+        self.options.detail = Some(detail.into());
+        self
+    }
+
+    /// Replace the dialog buttons.
+    pub fn buttons(mut self, buttons: impl IntoIterator<Item = impl Into<SharedString>>) -> Self {
+        self.options.buttons = buttons.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Append one button to the dialog.
+    pub fn button(mut self, label: impl Into<SharedString>) -> Self {
+        self.options.buttons.push(label.into());
+        self
+    }
+
+    /// Set the default button index.
+    pub fn default_button(mut self, index: usize) -> Self {
+        self.options.default_button = Some(index);
+        self
+    }
+
+    /// Set the cancel button index used for escape/close behavior.
+    pub fn cancel_button(mut self, index: usize) -> Self {
+        self.options.cancel_button = Some(index);
+        self
+    }
+
+    /// Returns the raw dialog kind.
+    pub fn kind(&self) -> DialogKind {
+        self.options.kind
+    }
+
+    /// Returns the dialog title.
+    pub fn title(&self) -> &SharedString {
+        &self.options.title
+    }
+
+    /// Returns the primary message.
+    pub fn message(&self) -> &SharedString {
+        &self.options.message
+    }
+
+    /// Returns the optional detail text.
+    pub fn detail_text(&self) -> Option<&SharedString> {
+        self.options.detail.as_ref()
+    }
+
+    /// Returns the configured button labels.
+    pub fn buttons_list(&self) -> &[SharedString] {
+        &self.options.buttons
+    }
+
+    /// Returns the configured default button index.
+    pub fn default_button_index(&self) -> Option<usize> {
+        self.options.default_button
+    }
+
+    /// Returns the configured cancel button index.
+    pub fn cancel_button_index(&self) -> Option<usize> {
+        self.options.cancel_button
+    }
+
+    /// Validate required fields before showing the dialog.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        validate_message_dialog_text(&self.options.title, "message dialog title", 256, false)?;
+        validate_message_dialog_text(&self.options.message, "message dialog message", 2048, true)?;
+        if let Some(detail) = &self.options.detail {
+            validate_message_dialog_text(detail, "message dialog detail", 4096, true)?;
+        }
+        anyhow::ensure!(
+            !self.options.buttons.is_empty(),
+            "message dialog must contain at least one button"
+        );
+        anyhow::ensure!(
+            self.options.buttons.len() <= 6,
+            "message dialog cannot contain more than 6 buttons"
+        );
+        let mut button_labels = std::collections::HashSet::new();
+        for button in &self.options.buttons {
+            validate_message_dialog_text(button, "message dialog button label", 128, false)?;
+            anyhow::ensure!(
+                button_labels.insert(button.as_ref()),
+                "message dialog button labels must be unique: {}",
+                button
+            );
+        }
+        if let Some(index) = self.options.default_button {
+            anyhow::ensure!(
+                index < self.options.buttons.len(),
+                "message dialog default button index is out of range"
+            );
+        }
+        if let Some(index) = self.options.cancel_button {
+            anyhow::ensure!(
+                index < self.options.buttons.len(),
+                "message dialog cancel button index is out of range"
+            );
+        }
+        Ok(())
+    }
+
+    /// Return a clone of the raw options for inspection or lower-level APIs.
+    pub fn options(&self) -> DialogOptions {
+        self.options.clone()
+    }
+
+    /// Consume the builder into raw dialog options.
+    pub fn into_options(self) -> DialogOptions {
+        self.options
+    }
+}
+
+fn validate_message_dialog_text(
+    value: &SharedString,
+    label: &str,
+    max_len: usize,
+    allow_multiline: bool,
+) -> Result<()> {
+    let value = value.as_ref();
+    anyhow::ensure!(!value.trim().is_empty(), "{label} cannot be empty");
+    anyhow::ensure!(
+        value.trim() == value,
+        "{label} cannot have leading or trailing whitespace: {value:?}"
+    );
+    anyhow::ensure!(
+        value.len() <= max_len,
+        "{label} cannot be longer than {max_len} bytes"
+    );
+    anyhow::ensure!(
+        !value.chars().any(|character| {
+            character.is_control() && !(allow_multiline && matches!(character, '\n' | '\r' | '\t'))
+        }),
+        "{label} cannot contain control characters"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod message_dialog_tests {
+    use super::*;
+
+    #[test]
+    fn message_dialog_save_discard_cancel_preserves_button_contract() {
+        let dialog = MessageDialogBuilder::save_discard_cancel(
+            "Save changes?",
+            "This document has unsaved changes.",
+        );
+
+        assert!(dialog.validate().is_ok());
+        assert_eq!(
+            dialog.buttons_list(),
+            &[
+                SharedString::from("Cancel"),
+                SharedString::from("Don't Save"),
+                SharedString::from("Save")
+            ]
+        );
+        assert_eq!(dialog.cancel_button_index(), Some(0));
+        assert_eq!(dialog.default_button_index(), Some(2));
+    }
+
+    #[test]
+    fn message_dialog_rejects_ambiguous_generated_copy() {
+        assert!(
+            MessageDialogBuilder::info(" Title", "Message")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            MessageDialogBuilder::info("Title", "Message\0")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            MessageDialogBuilder::info("Title", "Message")
+                .detail(" detail")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            MessageDialogBuilder::info("Title", "Message")
+                .buttons(["OK", "OK"])
+                .validate()
+                .is_err()
+        );
+        assert!(
+            MessageDialogBuilder::info("Title", "Message")
+                .buttons(["A", "B", "C", "D", "E", "F", "G"])
+                .validate()
+                .is_err()
+        );
+        assert!(
+            MessageDialogBuilder::info("Title", "Message")
+                .button(" Later")
+                .validate()
+                .is_err()
+        );
+    }
 }
 
 /// Information about the operating system.
@@ -2002,6 +3872,301 @@ pub struct NotificationAction {
     pub label: String,
 }
 
+impl NotificationAction {
+    /// Create a notification action button.
+    pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+        }
+    }
+
+    /// A conventional action id for opening the related item.
+    pub const OPEN_ID: &'static str = "open";
+
+    /// A conventional action id for dismissing or deferring the notification.
+    pub const DISMISS_ID: &'static str = "dismiss";
+
+    /// A conventional action id for retrying the related operation.
+    pub const RETRY_ID: &'static str = "retry";
+
+    /// A conventional action id for opening related settings or preferences.
+    pub const SETTINGS_ID: &'static str = "settings";
+
+    /// Create a conventional "Open" action.
+    pub fn open(label: impl Into<String>) -> Self {
+        Self::new(Self::OPEN_ID, label)
+    }
+
+    /// Create a conventional "Dismiss" action.
+    pub fn dismiss(label: impl Into<String>) -> Self {
+        Self::new(Self::DISMISS_ID, label)
+    }
+
+    /// Create a conventional "Retry" action.
+    pub fn retry(label: impl Into<String>) -> Self {
+        Self::new(Self::RETRY_ID, label)
+    }
+
+    /// Create a conventional "Settings" action.
+    pub fn settings(label: impl Into<String>) -> Self {
+        Self::new(Self::SETTINGS_ID, label)
+    }
+}
+
+/// Builder for an OS-level notification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotificationBuilder {
+    title: String,
+    body: String,
+    actions: Vec<NotificationAction>,
+}
+
+impl NotificationBuilder {
+    /// Create a notification with a title and body.
+    pub fn new(title: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            body: body.into(),
+            actions: Vec::new(),
+        }
+    }
+
+    /// Add an action button.
+    pub fn action(mut self, id: impl Into<String>, label: impl Into<String>) -> Self {
+        self.actions.push(NotificationAction::new(id, label));
+        self
+    }
+
+    /// Add a conventional action for opening the related item.
+    pub fn open_action(self, label: impl Into<String>) -> Self {
+        self.actions([NotificationAction::open(label)])
+    }
+
+    /// Add a conventional action for dismissing or deferring the notification.
+    pub fn dismiss_action(self, label: impl Into<String>) -> Self {
+        self.actions([NotificationAction::dismiss(label)])
+    }
+
+    /// Add a conventional action for retrying the related operation.
+    pub fn retry_action(self, label: impl Into<String>) -> Self {
+        self.actions([NotificationAction::retry(label)])
+    }
+
+    /// Add a conventional action for opening related settings or preferences.
+    pub fn settings_action(self, label: impl Into<String>) -> Self {
+        self.actions([NotificationAction::settings(label)])
+    }
+
+    /// Add conventional open and dismiss actions in the platform display order.
+    pub fn open_and_dismiss_actions(
+        self,
+        open_label: impl Into<String>,
+        dismiss_label: impl Into<String>,
+    ) -> Self {
+        self.actions([
+            NotificationAction::open(open_label),
+            NotificationAction::dismiss(dismiss_label),
+        ])
+    }
+
+    /// Add several action buttons.
+    pub fn actions(mut self, actions: impl IntoIterator<Item = NotificationAction>) -> Self {
+        self.actions.extend(actions);
+        self
+    }
+
+    /// The notification title.
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    /// The notification body.
+    pub fn body(&self) -> &str {
+        &self.body
+    }
+
+    /// The action buttons attached to this notification.
+    pub fn action_buttons(&self) -> &[NotificationAction] {
+        &self.actions
+    }
+
+    /// The configured notification action IDs in display order.
+    pub fn action_ids(&self) -> impl Iterator<Item = &str> {
+        self.actions.iter().map(|action| action.id.as_str())
+    }
+
+    /// Whether this notification has action buttons.
+    pub fn has_actions(&self) -> bool {
+        !self.actions.is_empty()
+    }
+
+    /// Validate the notification before dispatching it to the platform backend.
+    pub fn validate(&self) -> Result<()> {
+        validate_notification_title(&self.title)?;
+        validate_notification_body(&self.body)?;
+
+        anyhow::ensure!(
+            self.actions.len() <= 4,
+            "notification cannot have more than 4 action buttons"
+        );
+
+        for action in &self.actions {
+            validate_notification_action_id(&action.id)?;
+            validate_notification_action_label(&action.label)?;
+
+            if self
+                .actions
+                .iter()
+                .filter(|candidate| candidate.id == action.id)
+                .count()
+                > 1
+            {
+                anyhow::bail!("notification action id must be unique: {}", action.id);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Convert this builder into its raw platform parts.
+    pub fn into_parts(self) -> (String, String, Vec<NotificationAction>) {
+        (self.title, self.body, self.actions)
+    }
+}
+
+fn validate_notification_title(title: &str) -> Result<()> {
+    validate_notification_text(title, "notification title", 256, false)
+}
+
+fn validate_notification_body(body: &str) -> Result<()> {
+    validate_notification_text(body, "notification body", 2048, true)
+}
+
+fn validate_notification_action_label(label: &str) -> Result<()> {
+    validate_notification_text(label, "notification action label", 128, false)
+}
+
+fn validate_notification_text(
+    value: &str,
+    label: &str,
+    max_len: usize,
+    allow_multiline: bool,
+) -> Result<()> {
+    anyhow::ensure!(!value.trim().is_empty(), "{label} cannot be empty");
+    anyhow::ensure!(
+        value.trim() == value,
+        "{label} cannot have leading or trailing whitespace: {value:?}"
+    );
+    anyhow::ensure!(
+        value.len() <= max_len,
+        "{label} cannot be longer than {max_len} bytes"
+    );
+    anyhow::ensure!(
+        !value.chars().any(|character| {
+            character.is_control() && !(allow_multiline && matches!(character, '\n' | '\r' | '\t'))
+        }),
+        "{label} cannot contain control characters"
+    );
+    Ok(())
+}
+
+fn validate_notification_action_id(id: &str) -> Result<()> {
+    anyhow::ensure!(
+        !id.trim().is_empty(),
+        "notification action id cannot be empty"
+    );
+    anyhow::ensure!(
+        id.trim() == id,
+        "notification action id cannot have leading or trailing whitespace: {id:?}"
+    );
+    anyhow::ensure!(
+        id.len() <= 64,
+        "notification action id cannot be longer than 64 bytes: {id:?}"
+    );
+    anyhow::ensure!(
+        id.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':')
+        }),
+        "notification action id may only contain ASCII letters, digits, '-', '_', '.', or ':': {id:?}"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::*;
+
+    #[test]
+    fn notification_builder_common_actions_validate() {
+        let notification = NotificationBuilder::new("Sync failed", "Could not reach the server")
+            .retry_action("Retry")
+            .settings_action("Settings")
+            .dismiss_action("Later");
+
+        assert!(notification.validate().is_ok());
+        assert_eq!(
+            notification.action_ids().collect::<Vec<_>>(),
+            vec!["retry", "settings", "dismiss"]
+        );
+
+        let notification = NotificationBuilder::new("Update available", "Version 2.0 is ready")
+            .open_and_dismiss_actions("Install", "Later");
+        assert_eq!(
+            notification.action_buttons(),
+            &[
+                NotificationAction::open("Install"),
+                NotificationAction::dismiss("Later")
+            ]
+        );
+    }
+
+    #[test]
+    fn notification_builder_rejects_ambiguous_generated_copy() {
+        assert!(
+            NotificationBuilder::new(" Build", "Done")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            NotificationBuilder::new("Build", "Done\0")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            NotificationBuilder::new("Build", "Done")
+                .action("bad id", "Open")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            NotificationBuilder::new("Build", "Done")
+                .action("open", " Open")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            NotificationBuilder::new("Build", "Done")
+                .action("open", "Open")
+                .action("open", "Open again")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            NotificationBuilder::new("Build", "Done")
+                .actions([
+                    NotificationAction::new("a", "A"),
+                    NotificationAction::new("b", "B"),
+                    NotificationAction::new("c", "C"),
+                    NotificationAction::new("d", "D"),
+                    NotificationAction::new("e", "E"),
+                ])
+                .validate()
+                .is_err()
+        );
+    }
+}
+
 /// Information collected for a crash report.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrashReport {
@@ -2015,6 +4180,90 @@ pub struct CrashReport {
     pub app_version: Option<String>,
 }
 
+/// A named file-extension filter for native file dialogs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileDialogFilter {
+    /// User-facing filter name.
+    pub name: SharedString,
+    /// File extensions without leading dots, such as `png` or `pdf`.
+    pub extensions: Vec<SharedString>,
+}
+
+impl FileDialogFilter {
+    /// Create a named extension filter.
+    pub fn new(
+        name: impl Into<SharedString>,
+        extensions: impl IntoIterator<Item = impl Into<SharedString>>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            extensions: extensions
+                .into_iter()
+                .map(|extension| normalize_file_dialog_extension(extension.into()))
+                .collect(),
+        }
+    }
+
+    /// Match common image files.
+    pub fn images() -> Self {
+        Self::new(
+            "Images",
+            ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff"],
+        )
+    }
+
+    /// Match common audio files.
+    pub fn audio() -> Self {
+        Self::new("Audio", ["mp3", "wav", "flac", "aac", "ogg", "m4a"])
+    }
+
+    /// Match common video files.
+    pub fn video() -> Self {
+        Self::new("Video", ["mp4", "mov", "mkv", "webm", "avi", "m4v"])
+    }
+
+    /// Match PDF documents.
+    pub fn pdf() -> Self {
+        Self::new("PDF", ["pdf"])
+    }
+
+    /// Match common text documents.
+    pub fn text() -> Self {
+        Self::new(
+            "Text",
+            ["txt", "md", "markdown", "log", "csv", "json", "toml"],
+        )
+    }
+
+    /// Validate the filter name and extensions.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.name.as_ref().trim().is_empty(),
+            "file dialog filter name cannot be empty"
+        );
+        anyhow::ensure!(
+            !self.extensions.is_empty(),
+            "file dialog filter must include at least one extension"
+        );
+        anyhow::ensure!(
+            self.extensions
+                .iter()
+                .all(|extension| !extension.as_ref().trim().is_empty()),
+            "file dialog filter extensions cannot be empty"
+        );
+        Ok(())
+    }
+}
+
+fn normalize_file_dialog_extension(extension: SharedString) -> SharedString {
+    extension
+        .as_ref()
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase()
+        .into()
+}
+
 /// The options that can be configured for a file dialog prompt
 #[derive(Clone, Debug)]
 pub struct PathPromptOptions {
@@ -2026,6 +4275,303 @@ pub struct PathPromptOptions {
     pub multiple: bool,
     /// The prompt to show to a user when selecting a path
     pub prompt: Option<SharedString>,
+    /// Named extension filters shown by file-capable dialogs.
+    pub filters: Vec<FileDialogFilter>,
+}
+
+/// Builder for native open-file/open-directory dialogs.
+#[derive(Clone, Debug)]
+pub struct OpenDialogBuilder {
+    options: PathPromptOptions,
+}
+
+impl OpenDialogBuilder {
+    /// Create a dialog that selects a single file.
+    pub fn new() -> Self {
+        Self {
+            options: PathPromptOptions {
+                files: true,
+                directories: false,
+                multiple: false,
+                prompt: None,
+                filters: Vec::new(),
+            },
+        }
+    }
+
+    /// Create a dialog that selects a single file.
+    pub fn file() -> Self {
+        Self::new()
+    }
+
+    /// Create a dialog that selects multiple files.
+    pub fn files() -> Self {
+        Self::new().multiple(true)
+    }
+
+    /// Create a dialog that selects a single directory.
+    pub fn directory() -> Self {
+        Self::new().files_allowed(false).directories_allowed(true)
+    }
+
+    /// Create a dialog that selects multiple directories.
+    pub fn directories() -> Self {
+        Self::directory().multiple(true)
+    }
+
+    /// Set whether files can be selected.
+    pub fn files_allowed(mut self, files: bool) -> Self {
+        self.options.files = files;
+        self
+    }
+
+    /// Set whether directories can be selected.
+    pub fn directories_allowed(mut self, directories: bool) -> Self {
+        self.options.directories = directories;
+        self
+    }
+
+    /// Alias for [`Self::directories_allowed`].
+    pub fn allow_directories(self, directories: bool) -> Self {
+        self.directories_allowed(directories)
+    }
+
+    /// Set whether multiple paths can be selected.
+    pub fn multiple(mut self, multiple: bool) -> Self {
+        self.options.multiple = multiple;
+        self
+    }
+
+    /// Set the native dialog prompt label.
+    pub fn prompt(mut self, prompt: impl Into<SharedString>) -> Self {
+        self.options.prompt = Some(prompt.into());
+        self
+    }
+
+    /// Add a named extension filter.
+    pub fn filter(
+        mut self,
+        name: impl Into<SharedString>,
+        extensions: impl IntoIterator<Item = impl Into<SharedString>>,
+    ) -> Self {
+        self.options
+            .filters
+            .push(FileDialogFilter::new(name, extensions));
+        self
+    }
+
+    /// Add an already-built extension filter.
+    pub fn file_filter(mut self, filter: FileDialogFilter) -> Self {
+        self.options.filters.push(filter);
+        self
+    }
+
+    /// Add a common image-file filter.
+    pub fn image_files(self) -> Self {
+        self.file_filter(FileDialogFilter::images())
+    }
+
+    /// Add a common audio-file filter.
+    pub fn audio_files(self) -> Self {
+        self.file_filter(FileDialogFilter::audio())
+    }
+
+    /// Add a common video-file filter.
+    pub fn video_files(self) -> Self {
+        self.file_filter(FileDialogFilter::video())
+    }
+
+    /// Add a PDF filter.
+    pub fn pdf_files(self) -> Self {
+        self.file_filter(FileDialogFilter::pdf())
+    }
+
+    /// Add a common text-file filter.
+    pub fn text_files(self) -> Self {
+        self.file_filter(FileDialogFilter::text())
+    }
+
+    /// Validate required dialog options before showing the dialog.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.options.files || self.options.directories,
+            "open dialog must allow files, directories, or both"
+        );
+        if let Some(prompt) = &self.options.prompt {
+            validate_file_dialog_text(prompt, "open dialog prompt", 256)?;
+        }
+        for filter in &self.options.filters {
+            filter.validate()?;
+        }
+        Ok(())
+    }
+
+    /// Return the underlying path prompt options.
+    pub fn options(&self) -> &PathPromptOptions {
+        &self.options
+    }
+
+    /// Consume the builder into path prompt options.
+    pub fn into_options(self) -> PathPromptOptions {
+        self.options
+    }
+}
+
+impl Default for OpenDialogBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl From<OpenDialogBuilder> for PathPromptOptions {
+    fn from(value: OpenDialogBuilder) -> Self {
+        value.into_options()
+    }
+}
+
+/// Builder for native save dialogs.
+#[derive(Clone, Debug)]
+pub struct SaveDialogBuilder {
+    directory: PathBuf,
+    suggested_name: Option<String>,
+    default_extension: Option<SharedString>,
+}
+
+impl SaveDialogBuilder {
+    /// Create a save dialog rooted at a directory.
+    pub fn new(directory: impl Into<PathBuf>) -> Self {
+        Self {
+            directory: directory.into(),
+            suggested_name: None,
+            default_extension: None,
+        }
+    }
+
+    /// Set the suggested filename.
+    pub fn suggested_name(mut self, suggested_name: impl Into<String>) -> Self {
+        self.suggested_name = Some(suggested_name.into());
+        self
+    }
+
+    /// Set the extension appended when the suggested name has none.
+    pub fn default_extension(mut self, extension: impl Into<SharedString>) -> Self {
+        self.default_extension = Some(normalize_file_dialog_extension(extension.into()));
+        self
+    }
+
+    /// Use `pdf` as the default extension.
+    pub fn pdf(self) -> Self {
+        self.default_extension("pdf")
+    }
+
+    /// Use `txt` as the default extension.
+    pub fn text(self) -> Self {
+        self.default_extension("txt")
+    }
+
+    /// Use `json` as the default extension.
+    pub fn json(self) -> Self {
+        self.default_extension("json")
+    }
+
+    /// The initial directory used by the dialog.
+    pub fn directory_path(&self) -> &Path {
+        &self.directory
+    }
+
+    /// The suggested filename, if configured.
+    pub fn suggested_name_value(&self) -> Option<&str> {
+        self.suggested_name.as_deref()
+    }
+
+    /// The default extension, if configured.
+    pub fn default_extension_value(&self) -> Option<&str> {
+        self.default_extension
+            .as_ref()
+            .map(|extension| extension.as_ref())
+    }
+
+    /// Validate the save dialog options.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.directory.as_os_str().is_empty(),
+            "save dialog directory cannot be empty"
+        );
+        if let Some(name) = &self.suggested_name {
+            validate_save_dialog_suggested_name(name)?;
+        }
+        if let Some(extension) = &self.default_extension {
+            anyhow::ensure!(
+                !extension.as_ref().trim().is_empty(),
+                "save dialog default extension cannot be empty"
+            );
+            validate_file_dialog_extension(extension)?;
+        }
+        Ok(())
+    }
+
+    /// Consume the builder into the raw save dialog parts.
+    pub fn into_parts(self) -> (PathBuf, Option<String>) {
+        let extension = self
+            .default_extension
+            .as_ref()
+            .map(|extension| extension.as_ref().to_string());
+        let suggested_name = self
+            .suggested_name
+            .map(|name| append_default_extension(name, extension.as_deref()));
+        (self.directory, suggested_name)
+    }
+}
+
+fn append_default_extension(name: String, extension: Option<&str>) -> String {
+    let Some(extension) = extension else {
+        return name;
+    };
+    if extension.is_empty() || Path::new(&name).extension().is_some() {
+        name
+    } else {
+        format!("{name}.{extension}")
+    }
+}
+
+fn validate_file_dialog_text(value: &str, label: &str, max_len: usize) -> Result<()> {
+    anyhow::ensure!(!value.trim().is_empty(), "{label} cannot be empty");
+    anyhow::ensure!(
+        value == value.trim(),
+        "{label} cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        value.chars().count() <= max_len,
+        "{label} cannot be longer than {max_len} characters"
+    );
+    anyhow::ensure!(
+        !value.chars().any(char::is_control),
+        "{label} cannot contain control characters"
+    );
+    Ok(())
+}
+
+fn validate_save_dialog_suggested_name(name: &str) -> Result<()> {
+    validate_file_dialog_text(name, "save dialog suggested name", 255)?;
+    anyhow::ensure!(
+        !name.contains(['/', '\\']),
+        "save dialog suggested name cannot contain path separators"
+    );
+    anyhow::ensure!(
+        name != "." && name != "..",
+        "save dialog suggested name cannot be a relative path segment"
+    );
+    Ok(())
+}
+
+fn validate_file_dialog_extension(extension: &str) -> Result<()> {
+    anyhow::ensure!(
+        extension
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '+')),
+        "save dialog default extension must contain only ASCII letters, numbers, '-', '_' or '+'"
+    );
+    Ok(())
 }
 
 /// What kind of prompt styling to show
@@ -2190,6 +4736,27 @@ pub struct ClipboardItem {
     entries: Vec<ClipboardEntry>,
 }
 
+/// Metadata attached to an HTML clipboard string.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ClipboardHtmlMetadata {
+    /// Metadata discriminator for rich HTML clipboard entries.
+    pub kind: String,
+    /// The HTML fragment associated with the plain-text fallback.
+    pub html: String,
+}
+
+impl ClipboardHtmlMetadata {
+    /// Create metadata for an HTML clipboard entry.
+    pub fn new(html: impl Into<String>) -> Result<Self> {
+        let html = html.into();
+        validate_clipboard_html(&html)?;
+        Ok(Self {
+            kind: "html".to_string(),
+            html,
+        })
+    }
+}
+
 /// Either a ClipboardString or a ClipboardImage
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClipboardEntry {
@@ -2200,6 +4767,11 @@ pub enum ClipboardEntry {
 }
 
 impl ClipboardItem {
+    /// Create a builder for multi-entry clipboard payloads.
+    pub fn builder() -> ClipboardItemBuilder {
+        ClipboardItemBuilder::new()
+    }
+
     /// Create a new ClipboardItem::String with no associated metadata
     pub fn new_string(text: String) -> Self {
         Self {
@@ -2231,6 +4803,16 @@ impl ClipboardItem {
         Self {
             entries: vec![ClipboardEntry::Image(image.clone())],
         }
+    }
+
+    /// Create a clipboard item from one or more entries.
+    pub fn from_entries(entries: impl IntoIterator<Item = ClipboardEntry>) -> Result<Self> {
+        let entries = entries.into_iter().collect::<Vec<_>>();
+        anyhow::ensure!(
+            !entries.is_empty(),
+            "clipboard item must contain at least one entry"
+        );
+        Ok(Self { entries })
     }
 
     /// Concatenates together all the ClipboardString entries in the item.
@@ -2265,9 +4847,170 @@ impl ClipboardItem {
         &self.entries
     }
 
+    /// Iterate over string entries.
+    pub fn strings(&self) -> impl Iterator<Item = &ClipboardString> {
+        self.entries.iter().filter_map(|entry| match entry {
+            ClipboardEntry::String(string) => Some(string),
+            ClipboardEntry::Image(_) => None,
+        })
+    }
+
+    /// Iterate over image entries.
+    pub fn images(&self) -> impl Iterator<Item = &Image> {
+        self.entries.iter().filter_map(|entry| match entry {
+            ClipboardEntry::String(_) => None,
+            ClipboardEntry::Image(image) => Some(image),
+        })
+    }
+
+    /// Return the first image entry, if any.
+    pub fn first_image(&self) -> Option<&Image> {
+        self.images().next()
+    }
+
+    /// Return true when any text entry exists.
+    pub fn has_text(&self) -> bool {
+        self.strings().next().is_some()
+    }
+
+    /// Return true when any image entry exists.
+    pub fn has_image(&self) -> bool {
+        self.first_image().is_some()
+    }
+
+    /// Return the first HTML string entry, if any.
+    pub fn html(&self) -> Option<String> {
+        self.strings().find_map(ClipboardString::html)
+    }
+
+    /// Return true when any string entry carries HTML metadata.
+    pub fn has_html(&self) -> bool {
+        self.html().is_some()
+    }
+
+    /// Decode the metadata of a single string entry as JSON.
+    pub fn metadata_json<T>(&self) -> Option<T>
+    where
+        T: for<'a> Deserialize<'a>,
+    {
+        match self.entries().first() {
+            Some(ClipboardEntry::String(clipboard_string)) if self.entries.len() == 1 => {
+                clipboard_string.metadata_json()
+            }
+            _ => None,
+        }
+    }
+
     /// Get owned versions of the item's entries
     pub fn into_entries(self) -> impl Iterator<Item = ClipboardEntry> {
         self.entries.into_iter()
+    }
+}
+
+/// Builder for rich clipboard payloads containing text, metadata, and images.
+#[derive(Clone, Debug, Default)]
+pub struct ClipboardItemBuilder {
+    entries: Vec<ClipboardEntry>,
+}
+
+impl ClipboardItemBuilder {
+    /// Create an empty clipboard item builder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a plain text entry.
+    pub fn text(mut self, text: impl Into<String>) -> Self {
+        self.entries
+            .push(ClipboardEntry::String(ClipboardString::new(text.into())));
+        self
+    }
+
+    /// Add a text entry with raw metadata.
+    pub fn text_with_metadata(
+        mut self,
+        text: impl Into<String>,
+        metadata: impl Into<String>,
+    ) -> Self {
+        self.entries.push(ClipboardEntry::String(ClipboardString {
+            text: text.into(),
+            metadata: Some(metadata.into()),
+        }));
+        self
+    }
+
+    /// Add a text entry with JSON metadata.
+    pub fn text_with_json_metadata<T: Serialize>(
+        mut self,
+        text: impl Into<String>,
+        metadata: T,
+    ) -> Self {
+        self.entries.push(ClipboardEntry::String(
+            ClipboardString::new(text.into()).with_json_metadata(metadata),
+        ));
+        self
+    }
+
+    /// Add a text entry with JSON metadata, reporting serialization errors.
+    pub fn try_text_with_json_metadata<T: Serialize>(
+        mut self,
+        text: impl Into<String>,
+        metadata: T,
+    ) -> Result<Self> {
+        self.entries.push(ClipboardEntry::String(
+            ClipboardString::new(text.into()).try_with_json_metadata(metadata)?,
+        ));
+        Ok(self)
+    }
+
+    /// Add a rich HTML entry with a plain-text fallback.
+    pub fn html(mut self, plain_text: impl Into<String>, html: impl Into<String>) -> Result<Self> {
+        self.entries
+            .push(ClipboardEntry::String(ClipboardString::from_html(
+                plain_text.into(),
+                html.into(),
+            )?));
+        Ok(self)
+    }
+
+    /// Add an image entry.
+    pub fn image(mut self, image: Image) -> Self {
+        self.entries.push(ClipboardEntry::Image(image));
+        self
+    }
+
+    /// Add an image entry by cloning an existing image.
+    pub fn image_ref(mut self, image: &Image) -> Self {
+        self.entries.push(ClipboardEntry::Image(image.clone()));
+        self
+    }
+
+    /// Return the configured entries.
+    pub fn entries(&self) -> &[ClipboardEntry] {
+        &self.entries
+    }
+
+    /// Validate the builder configuration.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.entries.is_empty(),
+            "clipboard item must contain at least one entry"
+        );
+        for entry in &self.entries {
+            match entry {
+                ClipboardEntry::String(string) => string.validate()?,
+                ClipboardEntry::Image(image) => image.validate()?,
+            }
+        }
+        Ok(())
+    }
+
+    /// Build the clipboard item.
+    pub fn build(self) -> Result<ClipboardItem> {
+        self.validate()?;
+        Ok(ClipboardItem {
+            entries: self.entries,
+        })
     }
 }
 
@@ -2397,6 +5140,15 @@ impl Image {
         self.id
     }
 
+    /// Validate this image for clipboard use.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.bytes.is_empty(),
+            "clipboard image bytes cannot be empty"
+        );
+        Ok(())
+    }
+
     /// Use the GPUI `use_asset` API to make this image renderable
     pub fn use_render_image(
         self: Arc<Self>,
@@ -2502,6 +5254,21 @@ impl ClipboardString {
         }
     }
 
+    /// Create an HTML clipboard string with a plain-text fallback.
+    pub fn from_html(text: String, html: String) -> Result<Self> {
+        validate_clipboard_text(&text)?;
+        let metadata = ClipboardHtmlMetadata::new(html)?;
+        ClipboardString::new(text).try_with_json_metadata(metadata)
+    }
+
+    /// Return a new clipboard string with HTML metadata.
+    pub fn with_html_metadata(mut self, html: impl Into<String>) -> Result<Self> {
+        self.validate()?;
+        let metadata = ClipboardHtmlMetadata::new(html)?;
+        self.metadata = Some(serde_json::to_string(&metadata)?);
+        Ok(self)
+    }
+
     /// Return a new clipboard item with the metadata replaced by the given metadata,
     /// after serializing it as JSON.
     pub fn with_json_metadata<T: Serialize>(mut self, metadata: T) -> Self {
@@ -2509,9 +5276,31 @@ impl ClipboardString {
         self
     }
 
+    /// Return a new clipboard item with JSON metadata, reporting serialization errors.
+    pub fn try_with_json_metadata<T: Serialize>(mut self, metadata: T) -> Result<Self> {
+        self.metadata = Some(serde_json::to_string(&metadata)?);
+        Ok(self)
+    }
+
     /// Get the text of the clipboard string
     pub fn text(&self) -> &String {
         &self.text
+    }
+
+    /// Get the raw metadata string, if present.
+    pub fn metadata(&self) -> Option<&str> {
+        self.metadata.as_deref()
+    }
+
+    /// Return this string's HTML metadata, if present.
+    pub fn html(&self) -> Option<String> {
+        self.metadata_json::<ClipboardHtmlMetadata>()
+            .and_then(|metadata| (metadata.kind == "html").then_some(metadata.html))
+    }
+
+    /// Return whether this string has HTML metadata.
+    pub fn has_html(&self) -> bool {
+        self.html().is_some()
     }
 
     /// Get the owned text of the clipboard string
@@ -2529,12 +5318,60 @@ impl ClipboardString {
             .and_then(|m| serde_json::from_str(m).ok())
     }
 
+    /// Validate this string entry.
+    pub fn validate(&self) -> Result<()> {
+        validate_clipboard_text(&self.text)?;
+        if let Some(metadata) = &self.metadata {
+            validate_clipboard_metadata(metadata)?;
+            if let Some(html) = self.html() {
+                validate_clipboard_html(&html)?;
+            }
+        }
+        Ok(())
+    }
+
     #[cfg_attr(any(target_os = "linux", target_os = "freebsd"), allow(dead_code))]
     pub(crate) fn text_hash(text: &str) -> u64 {
         let mut hasher = SeaHasher::new();
         text.hash(&mut hasher);
         hasher.finish()
     }
+}
+
+fn validate_clipboard_text(text: &str) -> Result<()> {
+    anyhow::ensure!(!text.is_empty(), "clipboard text cannot be empty");
+    anyhow::ensure!(
+        !text.contains('\0'),
+        "clipboard text cannot contain NUL bytes"
+    );
+    Ok(())
+}
+
+fn validate_clipboard_metadata(metadata: &str) -> Result<()> {
+    anyhow::ensure!(
+        !metadata.trim().is_empty(),
+        "clipboard metadata cannot be empty"
+    );
+    anyhow::ensure!(
+        !metadata.contains('\0'),
+        "clipboard metadata cannot contain NUL bytes"
+    );
+    Ok(())
+}
+
+fn validate_clipboard_html(html: &str) -> Result<()> {
+    anyhow::ensure!(!html.trim().is_empty(), "clipboard HTML cannot be empty");
+    anyhow::ensure!(
+        !html.contains('\0'),
+        "clipboard HTML cannot contain NUL bytes"
+    );
+    anyhow::ensure!(
+        !html
+            .chars()
+            .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t')),
+        "clipboard HTML cannot contain control characters"
+    );
+    Ok(())
 }
 
 impl From<String> for ClipboardString {

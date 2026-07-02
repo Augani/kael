@@ -13,10 +13,10 @@ use crate::{
     POLYCHROME_SPRITE_KIND_CONTENT_SHADOW, POLYCHROME_SPRITE_KIND_PREMULTIPLIED,
     POLYCHROME_SPRITE_KIND_SUBPIXEL_TEXT, Path, Pixels, PlatformAtlas, PlatformDisplay,
     PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite, PowerMode,
-    PrintJob, ProgressBarState, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams,
-    RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
-    StrikethroughStyle, Style, SubscriberSet, Subscription, SystemWindowTab,
+    PrintDialogMode, PrintJob, PrintRequest, ProgressBarState, PromptButton, PromptLevel, Quad,
+    Render, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge,
+    SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow,
+    SharedString, Size, StrikethroughStyle, Style, SubscriberSet, Subscription, SystemWindowTab,
     SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextStyle, TextStyleRefinement,
     TransformationMatrix, Underline, UnderlineStyle, UndoRedoManager, WindowAppearance,
     WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations, WindowOptions,
@@ -49,6 +49,7 @@ use std::{
     marker::PhantomData,
     mem,
     ops::{DerefMut, Range},
+    path::{Path as StdPath, PathBuf},
     rc::Rc,
     sync::{
         Arc, Weak,
@@ -66,6 +67,1017 @@ use crate::util::atomic_incr_if_not_zero;
 pub use prompts::*;
 
 pub(crate) const DEFAULT_WINDOW_SIZE: Size<Pixels> = size(px(1536.), px(864.));
+
+/// Builder for validated platform window titles.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowTitleBuilder {
+    title: String,
+}
+
+impl WindowTitleBuilder {
+    /// Create a window title from user-facing text.
+    pub fn new(title: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+        }
+    }
+
+    /// Return the configured title.
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    /// Validate the title before passing it to platform chrome.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.title.trim().is_empty(),
+            "window title cannot be empty"
+        );
+        anyhow::ensure!(
+            self.title == self.title.trim(),
+            "window title cannot have leading or trailing whitespace"
+        );
+        anyhow::ensure!(
+            !self.title.chars().any(char::is_control),
+            "window title cannot contain control characters"
+        );
+        anyhow::ensure!(
+            self.title.chars().count() <= 512,
+            "window title cannot be longer than 512 characters"
+        );
+        Ok(())
+    }
+
+    /// Build the validated title.
+    pub fn build_checked(self) -> Result<String> {
+        self.validate()?;
+        Ok(self.title)
+    }
+}
+
+/// Checked document chrome state for editor and document windows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowDocumentState {
+    title: Option<String>,
+    document_path: Option<PathBuf>,
+    edited: bool,
+}
+
+impl WindowDocumentState {
+    /// Return the validated title to apply to the platform window, if any.
+    pub fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+
+    /// Return the optional document path associated with the window.
+    pub fn document_path(&self) -> Option<&StdPath> {
+        self.document_path.as_deref()
+    }
+
+    /// Return whether the window should be marked as having unsaved changes.
+    pub fn edited(&self) -> bool {
+        self.edited
+    }
+}
+
+/// Builder for checked document-window chrome state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowDocumentStateBuilder {
+    title: Option<String>,
+    document_path: Option<PathBuf>,
+    edited: bool,
+    require_existing_path: bool,
+    canonicalize_path: bool,
+}
+
+impl WindowDocumentStateBuilder {
+    /// Create an empty document-window state builder.
+    pub fn new() -> Self {
+        Self {
+            title: None,
+            document_path: None,
+            edited: false,
+            require_existing_path: false,
+            canonicalize_path: false,
+        }
+    }
+
+    /// Create document-window state from a document path.
+    pub fn document(path: impl Into<PathBuf>) -> Self {
+        Self::new().document_path(path)
+    }
+
+    /// Set a user-facing document title.
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Set the path this window represents.
+    pub fn document_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.document_path = Some(path.into());
+        self
+    }
+
+    /// Mark the document as edited or clean.
+    pub fn edited(mut self, edited: bool) -> Self {
+        self.edited = edited;
+        self
+    }
+
+    /// Mark the document as having unsaved changes.
+    pub fn unsaved_changes(self) -> Self {
+        self.edited(true)
+    }
+
+    /// Mark the document as clean.
+    pub fn clean(self) -> Self {
+        self.edited(false)
+    }
+
+    /// Require the configured document path to exist.
+    pub fn require_existing_path(mut self) -> Self {
+        self.require_existing_path = true;
+        self
+    }
+
+    /// Canonicalize the configured document path before building.
+    pub fn canonicalize_path(mut self) -> Self {
+        self.canonicalize_path = true;
+        self.require_existing_path = true;
+        self
+    }
+
+    /// Return the configured title, if any.
+    pub fn configured_title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+
+    /// Return the configured document path, if any.
+    pub fn configured_document_path(&self) -> Option<&StdPath> {
+        self.document_path.as_deref()
+    }
+
+    /// Return whether the document should be marked edited.
+    pub fn is_edited(&self) -> bool {
+        self.edited
+    }
+
+    /// Validate the configured state.
+    pub fn validate(&self) -> Result<()> {
+        if let Some(title) = &self.title {
+            WindowTitleBuilder::new(title.clone()).validate()?;
+        }
+        if let Some(path) = &self.document_path {
+            validate_document_state_path(path, self.require_existing_path)?;
+            if self.title.is_none() {
+                let derived = document_title_from_path(path)?;
+                WindowTitleBuilder::new(derived).validate()?;
+            }
+        }
+        anyhow::ensure!(
+            self.title.is_some() || self.document_path.is_some(),
+            "document window state requires a title or document path"
+        );
+        Ok(())
+    }
+
+    /// Build checked document-window state.
+    pub fn build_checked(mut self) -> Result<WindowDocumentState> {
+        self.validate()?;
+        if self.canonicalize_path
+            && let Some(path) = &self.document_path
+        {
+            self.document_path = Some(path.canonicalize().map_err(|error| {
+                anyhow!(
+                    "could not canonicalize document window path {}: {error}",
+                    path.display()
+                )
+            })?);
+        }
+        let title = match self.title {
+            Some(title) => Some(WindowTitleBuilder::new(title).build_checked()?),
+            None => self
+                .document_path
+                .as_deref()
+                .map(document_title_from_path)
+                .transpose()?,
+        };
+        Ok(WindowDocumentState {
+            title,
+            document_path: self.document_path,
+            edited: self.edited,
+        })
+    }
+}
+
+impl Default for WindowDocumentStateBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn validate_document_state_path(path: &StdPath, require_existing_path: bool) -> Result<()> {
+    anyhow::ensure!(
+        !path.as_os_str().is_empty(),
+        "document window path cannot be empty"
+    );
+    if let Some(text) = path.to_str() {
+        anyhow::ensure!(
+            !text.contains('\0'),
+            "document window path cannot contain NUL bytes"
+        );
+    }
+    if require_existing_path {
+        std::fs::metadata(path).map_err(|error| {
+            anyhow!(
+                "document window path does not exist {}: {error}",
+                path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn document_title_from_path(path: &StdPath) -> Result<String> {
+    let title = path
+        .file_name()
+        .or_else(|| {
+            path.components()
+                .next_back()
+                .map(|component| component.as_os_str())
+        })
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            anyhow!(
+                "document window path cannot produce a title: {}",
+                path.display()
+            )
+        })?;
+    WindowTitleBuilder::new(title).build_checked()
+}
+
+/// Builder for validated platform window app identifiers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowAppIdBuilder {
+    app_id: String,
+}
+
+impl WindowAppIdBuilder {
+    /// Create a window app identifier used by platform grouping.
+    pub fn new(app_id: impl Into<String>) -> Self {
+        Self {
+            app_id: app_id.into(),
+        }
+    }
+
+    /// Return the configured app identifier.
+    pub fn app_id(&self) -> &str {
+        &self.app_id
+    }
+
+    /// Validate the app identifier before passing it to platform grouping APIs.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.app_id.trim().is_empty(),
+            "window app id cannot be empty"
+        );
+        anyhow::ensure!(
+            self.app_id == self.app_id.trim(),
+            "window app id cannot have leading or trailing whitespace"
+        );
+        anyhow::ensure!(
+            !self
+                .app_id
+                .chars()
+                .any(|ch| ch.is_control() || ch.is_whitespace()),
+            "window app id cannot contain whitespace or control characters"
+        );
+        Ok(())
+    }
+
+    /// Build the validated app identifier.
+    pub fn build_checked(self) -> Result<String> {
+        self.validate()?;
+        Ok(self.app_id)
+    }
+}
+
+/// Builder for validated platform window tabbing identifiers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowTabbingIdentifierBuilder {
+    identifier: Option<String>,
+}
+
+impl WindowTabbingIdentifierBuilder {
+    /// Clear the tabbing identifier.
+    pub fn clear() -> Self {
+        Self { identifier: None }
+    }
+
+    /// Create a tabbing identifier used to group compatible windows.
+    pub fn new(identifier: impl Into<String>) -> Self {
+        Self {
+            identifier: Some(identifier.into()),
+        }
+    }
+
+    /// Return the configured tabbing identifier, or `None` when clearing it.
+    pub fn identifier(&self) -> Option<&str> {
+        self.identifier.as_deref()
+    }
+
+    /// Return whether this builder clears the tabbing identifier.
+    pub fn is_clear(&self) -> bool {
+        self.identifier.is_none()
+    }
+
+    /// Validate the tabbing identifier before passing it to platform APIs.
+    pub fn validate(&self) -> Result<()> {
+        let Some(identifier) = &self.identifier else {
+            return Ok(());
+        };
+
+        anyhow::ensure!(
+            !identifier.trim().is_empty(),
+            "window tabbing identifier cannot be empty"
+        );
+        anyhow::ensure!(
+            identifier == identifier.trim(),
+            "window tabbing identifier cannot have leading or trailing whitespace"
+        );
+        anyhow::ensure!(
+            !identifier
+                .chars()
+                .any(|ch| ch.is_control() || ch.is_whitespace()),
+            "window tabbing identifier cannot contain whitespace or control characters"
+        );
+        Ok(())
+    }
+
+    /// Build the validated tabbing identifier.
+    pub fn build_checked(self) -> Result<Option<String>> {
+        self.validate()?;
+        Ok(self.identifier)
+    }
+}
+
+impl Default for WindowTabbingIdentifierBuilder {
+    fn default() -> Self {
+        Self::clear()
+    }
+}
+
+/// Desired capture/privacy behavior for a native window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowContentProtectionMode {
+    /// Allow normal OS capture behavior.
+    Disabled,
+    /// Request that the OS exclude the window from screenshots and screen capture.
+    ExcludeFromCapture,
+    /// Request that captured output is obscured when full exclusion is unavailable.
+    ObscureWhenCaptured,
+}
+
+impl WindowContentProtectionMode {
+    /// Whether this mode requests capture protection.
+    pub fn is_protected(self) -> bool {
+        self != Self::Disabled
+    }
+
+    /// Stable key for diagnostics, docs, and generated policies.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::ExcludeFromCapture => "exclude-from-capture",
+            Self::ObscureWhenCaptured => "obscure-when-captured",
+        }
+    }
+}
+
+/// Checked content-protection policy for a native window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowContentProtection {
+    mode: WindowContentProtectionMode,
+    reason: Option<String>,
+    block_app_window_capture: bool,
+}
+
+impl WindowContentProtection {
+    /// Requested protection mode.
+    pub fn mode(&self) -> WindowContentProtectionMode {
+        self.mode
+    }
+
+    /// User-facing or diagnostic reason for protected states.
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    /// Whether the policy requests protection.
+    pub fn is_protected(&self) -> bool {
+        self.mode.is_protected()
+    }
+
+    /// Whether app-owned window capture should also skip this window.
+    pub fn blocks_app_window_capture(&self) -> bool {
+        self.block_app_window_capture
+    }
+}
+
+/// Builder for checked window content-protection policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowContentProtectionBuilder {
+    mode: WindowContentProtectionMode,
+    reason: Option<String>,
+    block_app_window_capture: bool,
+}
+
+impl WindowContentProtectionBuilder {
+    /// Clear capture protection for the window.
+    pub fn disabled() -> Self {
+        Self {
+            mode: WindowContentProtectionMode::Disabled,
+            reason: None,
+            block_app_window_capture: false,
+        }
+    }
+
+    /// Request exclusion from screenshots and screen capture.
+    pub fn exclude_from_capture(reason: impl Into<String>) -> Self {
+        Self {
+            mode: WindowContentProtectionMode::ExcludeFromCapture,
+            reason: Some(reason.into()),
+            block_app_window_capture: true,
+        }
+    }
+
+    /// Request obscuring in captured output when full exclusion is unavailable.
+    pub fn obscure_when_captured(reason: impl Into<String>) -> Self {
+        Self {
+            mode: WindowContentProtectionMode::ObscureWhenCaptured,
+            reason: Some(reason.into()),
+            block_app_window_capture: true,
+        }
+    }
+
+    /// Override whether app-owned window capture should skip this window.
+    pub fn block_app_window_capture(mut self, block: bool) -> Self {
+        self.block_app_window_capture = block;
+        self
+    }
+
+    /// Return the configured mode.
+    pub fn mode(&self) -> WindowContentProtectionMode {
+        self.mode
+    }
+
+    /// Return the configured reason.
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    /// Validate the configured content-protection policy.
+    pub fn validate(&self) -> Result<()> {
+        match self.mode {
+            WindowContentProtectionMode::Disabled => {
+                anyhow::ensure!(
+                    self.reason.is_none(),
+                    "disabled window content protection cannot include a reason"
+                );
+                anyhow::ensure!(
+                    !self.block_app_window_capture,
+                    "disabled window content protection cannot block app window capture"
+                );
+            }
+            WindowContentProtectionMode::ExcludeFromCapture
+            | WindowContentProtectionMode::ObscureWhenCaptured => {
+                let reason = self.reason.as_deref().unwrap_or_default();
+                validate_window_content_protection_reason(reason)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Build the checked content-protection policy.
+    pub fn build_checked(self) -> Result<WindowContentProtection> {
+        self.validate()?;
+        Ok(WindowContentProtection {
+            mode: self.mode,
+            reason: self.reason,
+            block_app_window_capture: self.block_app_window_capture,
+        })
+    }
+}
+
+fn validate_window_content_protection_reason(reason: &str) -> Result<()> {
+    anyhow::ensure!(
+        !reason.trim().is_empty(),
+        "window content protection reason cannot be empty"
+    );
+    anyhow::ensure!(
+        reason == reason.trim(),
+        "window content protection reason cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        !reason.chars().any(char::is_control),
+        "window content protection reason cannot contain control characters"
+    );
+    anyhow::ensure!(
+        reason.chars().count() <= 256,
+        "window content protection reason cannot be longer than 256 characters"
+    );
+    Ok(())
+}
+
+/// Desired presentation behavior for a native window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowPresentationMode {
+    /// Normal windowed behavior.
+    Windowed,
+    /// Fullscreen presentation while preserving normal user exit behavior.
+    Fullscreen,
+    /// Kiosk-style fullscreen intent for controlled presentation/POS flows.
+    Kiosk,
+}
+
+impl WindowPresentationMode {
+    /// Whether this mode should put the platform window in fullscreen.
+    pub fn wants_fullscreen(self) -> bool {
+        matches!(self, Self::Fullscreen | Self::Kiosk)
+    }
+
+    /// Stable key for diagnostics, docs, and generated policies.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Windowed => "windowed",
+            Self::Fullscreen => "fullscreen",
+            Self::Kiosk => "kiosk",
+        }
+    }
+}
+
+/// Checked presentation/kiosk policy for a native window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowPresentationPolicy {
+    mode: WindowPresentationMode,
+    reason: Option<String>,
+    allow_user_exit: bool,
+    hide_chrome: bool,
+}
+
+impl WindowPresentationPolicy {
+    /// Requested presentation mode.
+    pub fn mode(&self) -> WindowPresentationMode {
+        self.mode
+    }
+
+    /// User-facing or diagnostic reason for fullscreen/kiosk states.
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    /// Whether users should retain the normal platform exit gesture.
+    pub fn allows_user_exit(&self) -> bool {
+        self.allow_user_exit
+    }
+
+    /// Whether chrome should be hidden by platform backends where supported.
+    pub fn hides_chrome(&self) -> bool {
+        self.hide_chrome
+    }
+}
+
+/// Builder for checked window presentation/kiosk policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowPresentationPolicyBuilder {
+    mode: WindowPresentationMode,
+    reason: Option<String>,
+    allow_user_exit: bool,
+    hide_chrome: bool,
+}
+
+impl WindowPresentationPolicyBuilder {
+    /// Restore normal windowed behavior.
+    pub fn windowed() -> Self {
+        Self {
+            mode: WindowPresentationMode::Windowed,
+            reason: None,
+            allow_user_exit: true,
+            hide_chrome: false,
+        }
+    }
+
+    /// Request fullscreen presentation.
+    pub fn fullscreen(reason: impl Into<String>) -> Self {
+        Self {
+            mode: WindowPresentationMode::Fullscreen,
+            reason: Some(reason.into()),
+            allow_user_exit: true,
+            hide_chrome: false,
+        }
+    }
+
+    /// Request kiosk-style fullscreen presentation.
+    pub fn kiosk(reason: impl Into<String>) -> Self {
+        Self {
+            mode: WindowPresentationMode::Kiosk,
+            reason: Some(reason.into()),
+            allow_user_exit: false,
+            hide_chrome: true,
+        }
+    }
+
+    /// Set whether users retain the normal platform exit gesture.
+    pub fn allow_user_exit(mut self, allow: bool) -> Self {
+        self.allow_user_exit = allow;
+        self
+    }
+
+    /// Set whether chrome should be hidden by platform backends where supported.
+    pub fn hide_chrome(mut self, hide: bool) -> Self {
+        self.hide_chrome = hide;
+        self
+    }
+
+    /// Return the configured mode.
+    pub fn mode(&self) -> WindowPresentationMode {
+        self.mode
+    }
+
+    /// Return the configured reason.
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    /// Validate the configured presentation policy.
+    pub fn validate(&self) -> Result<()> {
+        match self.mode {
+            WindowPresentationMode::Windowed => {
+                anyhow::ensure!(
+                    self.reason.is_none(),
+                    "windowed presentation policy cannot include a reason"
+                );
+                anyhow::ensure!(
+                    self.allow_user_exit,
+                    "windowed presentation policy must allow user exit"
+                );
+                anyhow::ensure!(
+                    !self.hide_chrome,
+                    "windowed presentation policy cannot hide chrome"
+                );
+            }
+            WindowPresentationMode::Fullscreen | WindowPresentationMode::Kiosk => {
+                let reason = self.reason.as_deref().unwrap_or_default();
+                validate_window_presentation_reason(reason)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Build the checked presentation policy.
+    pub fn build_checked(self) -> Result<WindowPresentationPolicy> {
+        self.validate()?;
+        Ok(WindowPresentationPolicy {
+            mode: self.mode,
+            reason: self.reason,
+            allow_user_exit: self.allow_user_exit,
+            hide_chrome: self.hide_chrome,
+        })
+    }
+}
+
+fn validate_window_presentation_reason(reason: &str) -> Result<()> {
+    anyhow::ensure!(
+        !reason.trim().is_empty(),
+        "window presentation reason cannot be empty"
+    );
+    anyhow::ensure!(
+        reason == reason.trim(),
+        "window presentation reason cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        !reason.chars().any(char::is_control),
+        "window presentation reason cannot contain control characters"
+    );
+    anyhow::ensure!(
+        reason.chars().count() <= 256,
+        "window presentation reason cannot be longer than 256 characters"
+    );
+    Ok(())
+}
+
+/// Window-level interaction command for Electron-style window show/hide/focus flows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowInteractionCommandKind {
+    /// Focus and raise the current window.
+    Activate,
+    /// Minimize the current window.
+    Minimize,
+    /// Show the current window.
+    Show,
+    /// Hide the current window.
+    Hide,
+    /// Enable or disable mouse-event pass-through for overlay windows.
+    MousePassthrough {
+        /// Whether mouse events should pass through the window.
+        enabled: bool,
+    },
+}
+
+/// Checked window interaction command for visibility, focus, and mouse pass-through.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowInteractionCommand {
+    kind: WindowInteractionCommandKind,
+    reason: Option<String>,
+}
+
+impl WindowInteractionCommand {
+    /// Focus and raise the current window.
+    pub fn activate() -> Self {
+        Self {
+            kind: WindowInteractionCommandKind::Activate,
+            reason: None,
+        }
+    }
+
+    /// Minimize the current window.
+    pub fn minimize() -> Self {
+        Self {
+            kind: WindowInteractionCommandKind::Minimize,
+            reason: None,
+        }
+    }
+
+    /// Show the current window.
+    pub fn show() -> Self {
+        Self {
+            kind: WindowInteractionCommandKind::Show,
+            reason: None,
+        }
+    }
+
+    /// Hide the current window.
+    pub fn hide() -> Self {
+        Self {
+            kind: WindowInteractionCommandKind::Hide,
+            reason: None,
+        }
+    }
+
+    /// Enable mouse-event pass-through for an overlay or click-through window.
+    pub fn mouse_passthrough(reason: impl Into<String>) -> Self {
+        Self {
+            kind: WindowInteractionCommandKind::MousePassthrough { enabled: true },
+            reason: Some(reason.into()),
+        }
+    }
+
+    /// Disable mouse-event pass-through and make the window receive mouse input again.
+    pub fn receive_mouse_events() -> Self {
+        Self {
+            kind: WindowInteractionCommandKind::MousePassthrough { enabled: false },
+            reason: None,
+        }
+    }
+
+    /// Attach a diagnostic reason to the command.
+    pub fn reason(mut self, reason: impl Into<String>) -> Self {
+        self.reason = Some(reason.into());
+        self
+    }
+
+    /// The command kind.
+    pub fn kind(&self) -> WindowInteractionCommandKind {
+        self.kind
+    }
+
+    /// Optional diagnostic reason for the command.
+    pub fn reason_text(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    /// Validate the command before dispatching it to the platform window.
+    pub fn validate(&self) -> Result<()> {
+        if matches!(
+            self.kind,
+            WindowInteractionCommandKind::MousePassthrough { enabled: true }
+        ) {
+            anyhow::ensure!(
+                self.reason.is_some(),
+                "enabling mouse pass-through requires a reason"
+            );
+        }
+
+        if let Some(reason) = &self.reason {
+            validate_window_interaction_reason(reason)?;
+        }
+
+        Ok(())
+    }
+}
+
+fn validate_window_interaction_reason(reason: &str) -> Result<()> {
+    anyhow::ensure!(
+        !reason.trim().is_empty(),
+        "window interaction reason cannot be empty"
+    );
+    anyhow::ensure!(
+        reason == reason.trim(),
+        "window interaction reason cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        !reason.chars().any(char::is_control),
+        "window interaction reason cannot contain control characters"
+    );
+    anyhow::ensure!(
+        reason.chars().count() <= 256,
+        "window interaction reason cannot be longer than 256 characters"
+    );
+    Ok(())
+}
+
+/// Window-manager/custom-chrome command for Electron-style frameless windows.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WindowChromeCommandKind {
+    /// Request server-side or client-side platform decorations.
+    RequestDecorations(WindowDecorations),
+    /// Show the native titlebar/window context menu at a window-space point.
+    ShowWindowMenu(Point<Pixels>),
+    /// Ask the compositor to begin moving the window.
+    StartMove,
+    /// Ask the compositor to begin resizing the window from an edge/corner.
+    StartResize(ResizeEdge),
+}
+
+/// Checked custom-window-chrome command for titlebars, menus, move, and resize.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowChromeCommand {
+    kind: WindowChromeCommandKind,
+    reason: Option<String>,
+}
+
+impl WindowChromeCommand {
+    /// Request server-side or client-side platform decorations.
+    pub fn request_decorations(decorations: WindowDecorations) -> Self {
+        Self {
+            kind: WindowChromeCommandKind::RequestDecorations(decorations),
+            reason: None,
+        }
+    }
+
+    /// Show the native titlebar/window context menu at a window-space point.
+    pub fn show_window_menu(position: Point<Pixels>) -> Self {
+        Self {
+            kind: WindowChromeCommandKind::ShowWindowMenu(position),
+            reason: None,
+        }
+    }
+
+    /// Ask the compositor to begin moving the window.
+    pub fn start_move() -> Self {
+        Self {
+            kind: WindowChromeCommandKind::StartMove,
+            reason: None,
+        }
+    }
+
+    /// Ask the compositor to begin resizing the window from an edge/corner.
+    pub fn start_resize(edge: ResizeEdge) -> Self {
+        Self {
+            kind: WindowChromeCommandKind::StartResize(edge),
+            reason: None,
+        }
+    }
+
+    /// Attach a diagnostic reason to the command.
+    pub fn reason(mut self, reason: impl Into<String>) -> Self {
+        self.reason = Some(reason.into());
+        self
+    }
+
+    /// The command kind.
+    pub fn kind(&self) -> &WindowChromeCommandKind {
+        &self.kind
+    }
+
+    /// Optional diagnostic reason for the command.
+    pub fn reason_text(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    /// Validate the command before dispatching it to the platform window.
+    pub fn validate(&self) -> Result<()> {
+        if let WindowChromeCommandKind::ShowWindowMenu(position) = &self.kind {
+            anyhow::ensure!(
+                position.x.0.is_finite() && position.y.0.is_finite(),
+                "window menu position must use finite values"
+            );
+        }
+
+        if let Some(reason) = &self.reason {
+            validate_window_interaction_reason(reason)?;
+        }
+
+        Ok(())
+    }
+}
+
+const MAX_CHECKED_ATLAS_BUDGET_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+
+/// Checked memory budget for a window's glyph/sprite atlas.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowAtlasBudget {
+    max_bytes: Option<u64>,
+    reason: Option<String>,
+}
+
+impl WindowAtlasBudget {
+    /// The atlas byte budget to apply, or `None` to clear the budget.
+    pub fn max_bytes(&self) -> Option<u64> {
+        self.max_bytes
+    }
+
+    /// Whether this request clears any existing atlas budget.
+    pub fn is_clear(&self) -> bool {
+        self.max_bytes.is_none()
+    }
+
+    /// Optional diagnostic reason for setting or clearing the budget.
+    pub fn reason_text(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+}
+
+/// Builder for checked window atlas memory budgets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowAtlasBudgetBuilder {
+    max_bytes: Option<u64>,
+    reason: Option<String>,
+}
+
+impl WindowAtlasBudgetBuilder {
+    /// Clear any atlas budget and disable renderer-side atlas eviction.
+    pub fn clear() -> Self {
+        Self {
+            max_bytes: None,
+            reason: None,
+        }
+    }
+
+    /// Bound this window's glyph/sprite atlas to the given number of bytes.
+    pub fn bytes(max_bytes: u64) -> Self {
+        Self {
+            max_bytes: Some(max_bytes),
+            reason: None,
+        }
+    }
+
+    /// Attach a diagnostic reason to the budget change.
+    pub fn reason(mut self, reason: impl Into<String>) -> Self {
+        self.reason = Some(reason.into());
+        self
+    }
+
+    /// The atlas byte budget to apply, or `None` to clear the budget.
+    pub fn max_bytes(&self) -> Option<u64> {
+        self.max_bytes
+    }
+
+    /// Optional diagnostic reason for setting or clearing the budget.
+    pub fn reason_text(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    /// Validate the budget before it reaches the renderer backend.
+    pub fn validate(&self) -> Result<()> {
+        if let Some(max_bytes) = self.max_bytes {
+            anyhow::ensure!(
+                max_bytes > 0,
+                "window atlas byte budget must be greater than zero"
+            );
+            anyhow::ensure!(
+                max_bytes <= MAX_CHECKED_ATLAS_BUDGET_BYTES,
+                "window atlas byte budget cannot exceed 8 GiB"
+            );
+        }
+
+        if let Some(reason) = &self.reason {
+            validate_window_interaction_reason(reason)?;
+        }
+
+        Ok(())
+    }
+
+    /// Validate and build a window atlas budget descriptor.
+    pub fn build_checked(self) -> Result<WindowAtlasBudget> {
+        self.validate()?;
+        Ok(WindowAtlasBudget {
+            max_bytes: self.max_bytes,
+            reason: self.reason,
+        })
+    }
+}
 
 /// Represents the two different phases when dispatching events.
 #[derive(Default, Copy, Clone, Debug, Eq, PartialEq)]
@@ -889,6 +1901,8 @@ pub struct Window {
     pub(crate) bounds_observers: SubscriberSet<(), AnyObserver>,
     appearance: WindowAppearance,
     pub(crate) appearance_observers: SubscriberSet<(), AnyObserver>,
+    content_protection: Option<WindowContentProtection>,
+    presentation_policy: Option<WindowPresentationPolicy>,
     active: Rc<Cell<bool>>,
     hovered: Rc<Cell<bool>>,
     pub(crate) needs_present: Rc<Cell<bool>>,
@@ -909,6 +1923,8 @@ pub struct Window {
     pub(crate) accessibility_tree: crate::AccessibilityTree,
     accessibility_parent_stack: SmallVec<[crate::AccessibilityId; 16]>,
     pub(crate) accessibility_announcements: Vec<String>,
+    accessibility_action_router: crate::AccessibilityActionRouter,
+    pending_accessibility_actions: Vec<crate::AccessibilityActionRequest>,
     #[cfg(any(feature = "inspector", debug_assertions))]
     inspector: Option<Entity<Inspector>>,
     #[cfg(any(feature = "inspector", debug_assertions))]
@@ -1327,6 +2343,8 @@ impl Window {
             bounds_observers: SubscriberSet::new(),
             appearance,
             appearance_observers: SubscriberSet::new(),
+            content_protection: None,
+            presentation_policy: None,
             active,
             hovered,
             needs_present,
@@ -1349,6 +2367,8 @@ impl Window {
             )),
             accessibility_parent_stack: SmallVec::new(),
             accessibility_announcements: Vec::new(),
+            accessibility_action_router: crate::AccessibilityActionRouter::new(),
+            pending_accessibility_actions: Vec::new(),
             image_cache_stack: SmallVec::new(),
             #[cfg(any(feature = "inspector", debug_assertions))]
             inspector: None,
@@ -1744,6 +2764,48 @@ impl Window {
         self.accessibility_announcements.push(message.to_string());
     }
 
+    /// Register a handler for an assistive-technology action on one node.
+    ///
+    /// Handlers run after the platform accessibility adapter reports a
+    /// normalized action request for the current tree.
+    pub fn on_accessibility_action(
+        &mut self,
+        node_id: crate::AccessibilityId,
+        action: crate::AccessibilityAction,
+        handler: impl FnMut(crate::AccessibilityActionRequest) + 'static,
+    ) {
+        self.accessibility_action_router
+            .on_action(node_id, action, handler);
+    }
+
+    /// Return whether this window has a handler for one accessibility action.
+    pub fn has_accessibility_action_handler(
+        &self,
+        node_id: crate::AccessibilityId,
+        action: crate::AccessibilityAction,
+    ) -> bool {
+        self.accessibility_action_router
+            .has_handler(node_id, action)
+    }
+
+    /// Drain normalized accessibility action requests delivered since the last drain.
+    pub fn drain_accessibility_actions(&mut self) -> Vec<crate::AccessibilityActionRequest> {
+        mem::take(&mut self.pending_accessibility_actions)
+    }
+
+    fn dispatch_accessibility_actions(&mut self, actions: Vec<crate::AccessibilityActionRequest>) {
+        for request in actions {
+            self.pending_accessibility_actions.push(request.clone());
+            if !self.accessibility_action_router.dispatch(request.clone()) {
+                log::debug!(
+                    "Unhandled accessibility action request: {:?} on node {}",
+                    request.action,
+                    request.node_id.0
+                );
+            }
+        }
+    }
+
     /// Remove focus from all elements within this context's window.
     pub fn blur(&mut self) {
         if !self.focus_enabled {
@@ -1852,6 +2914,25 @@ impl Window {
     /// request a certain window decoration (Wayland)
     pub fn request_decorations(&self, decorations: WindowDecorations) {
         self.platform_window.request_decorations(decorations);
+    }
+
+    /// Validate and perform a custom-window-chrome command.
+    pub fn perform_window_chrome_command_checked(
+        &self,
+        command: WindowChromeCommand,
+    ) -> Result<WindowChromeCommand> {
+        command.validate()?;
+        match command.kind() {
+            WindowChromeCommandKind::RequestDecorations(decorations) => {
+                self.request_decorations(*decorations);
+            }
+            WindowChromeCommandKind::ShowWindowMenu(position) => {
+                self.show_window_menu(*position);
+            }
+            WindowChromeCommandKind::StartMove => self.start_window_move(),
+            WindowChromeCommandKind::StartResize(edge) => self.start_window_resize(*edge),
+        }
+        Ok(command)
     }
 
     /// Start a window resize operation (Wayland)
@@ -2204,9 +3285,23 @@ impl Window {
         self.platform_window.set_title(title);
     }
 
+    /// Validate and update the window's title at the platform level.
+    pub fn set_window_title_checked(&mut self, title: WindowTitleBuilder) -> Result<()> {
+        let title = title.build_checked()?;
+        self.set_window_title(&title);
+        Ok(())
+    }
+
     /// Sets the application identifier.
     pub fn set_app_id(&mut self, app_id: &str) {
         self.platform_window.set_app_id(app_id);
+    }
+
+    /// Validate and set the application identifier.
+    pub fn set_app_id_checked(&mut self, app_id: WindowAppIdBuilder) -> Result<()> {
+        let app_id = app_id.build_checked()?;
+        self.set_app_id(&app_id);
+        Ok(())
     }
 
     /// Sets the window background appearance.
@@ -2218,6 +3313,46 @@ impl Window {
     /// Mark the window as dirty at the platform level.
     pub fn set_window_edited(&mut self, edited: bool) {
         self.platform_window.set_edited(edited);
+    }
+
+    /// Validate and apply document-window chrome state.
+    pub fn set_document_state_checked(
+        &mut self,
+        state: WindowDocumentStateBuilder,
+    ) -> Result<WindowDocumentState> {
+        let state = state.build_checked()?;
+        if let Some(title) = state.title() {
+            self.set_window_title(title);
+        }
+        self.set_window_edited(state.edited());
+        Ok(state)
+    }
+
+    /// Return the current checked content-protection policy, if enabled.
+    pub fn content_protection(&self) -> Option<&WindowContentProtection> {
+        self.content_protection.as_ref()
+    }
+
+    /// Validate and apply native window content-protection intent.
+    ///
+    /// This records the checked policy on the window so platform backends,
+    /// capture flows, and diagnostics have one authoritative intent to consume.
+    pub fn set_content_protection_checked(
+        &mut self,
+        protection: WindowContentProtectionBuilder,
+    ) -> Result<WindowContentProtection> {
+        let protection = protection.build_checked()?;
+        if protection.is_protected() {
+            self.content_protection = Some(protection.clone());
+        } else {
+            self.content_protection = None;
+        }
+        Ok(protection)
+    }
+
+    /// Clear any checked content-protection policy.
+    pub fn clear_content_protection_checked(&mut self) -> Result<WindowContentProtection> {
+        self.set_content_protection_checked(WindowContentProtectionBuilder::disabled())
     }
 
     /// Determine the display on which the window is visible.
@@ -2383,8 +3518,10 @@ impl Window {
         mem::swap(&mut self.rendered_frame, &mut self.next_frame);
         self.next_frame.clear();
         self.update_accessibility_tree();
-        self.platform_window
+        let accessibility_actions = self
+            .platform_window
             .update_accessibility_tree(&self.accessibility_tree);
+        self.dispatch_accessibility_actions(accessibility_actions);
         self.accessibility_announcements.clear();
         let current_focus_path = self.rendered_frame.focus_path();
         let current_window_active = self.rendered_frame.window_active;
@@ -4230,6 +5367,34 @@ impl Window {
             })
     }
 
+    /// Navigate the WebView with the given identifier to a new URL with additional request headers.
+    pub fn navigate_webview_with_headers(
+        &mut self,
+        id: impl Into<SharedString>,
+        url: impl Into<SharedString>,
+        headers: http_client::http::HeaderMap,
+    ) -> Result<()> {
+        self.platform_window
+            .dispatch_webview_command(PlatformWebViewCommand::NavigateWithHeaders {
+                id: id.into(),
+                url: url.into(),
+                headers,
+            })
+    }
+
+    /// Load an HTML string into the WebView with the given identifier.
+    pub fn load_webview_html(
+        &mut self,
+        id: impl Into<SharedString>,
+        html: impl Into<SharedString>,
+    ) -> Result<()> {
+        self.platform_window
+            .dispatch_webview_command(PlatformWebViewCommand::LoadHtml {
+                id: id.into(),
+                html: html.into(),
+            })
+    }
+
     /// Evaluate JavaScript in the WebView with the given identifier.
     pub fn evaluate_webview_javascript(
         &mut self,
@@ -4241,6 +5406,22 @@ impl Window {
                 id: id.into(),
                 script: script.into(),
             })
+    }
+
+    /// Evaluate JavaScript in the WebView with the given identifier and receive its serialized result.
+    pub fn evaluate_webview_javascript_with_result(
+        &mut self,
+        id: impl Into<SharedString>,
+        script: impl Into<SharedString>,
+        callback: impl Fn(Result<SharedString, SharedString>) + Send + Sync + 'static,
+    ) -> Result<()> {
+        self.platform_window.dispatch_webview_command(
+            PlatformWebViewCommand::EvaluateJavaScriptWithResult {
+                id: id.into(),
+                script: script.into(),
+                callback: std::sync::Arc::new(callback),
+            },
+        )
     }
 
     /// Post a structured message into the WebView with the given identifier.
@@ -4262,6 +5443,33 @@ impl Window {
             .dispatch_webview_command(PlatformWebViewCommand::Reload { id: id.into() })
     }
 
+    /// Stop loading resources in the WebView with the given identifier.
+    pub fn stop_loading_webview(&mut self, id: impl Into<SharedString>) -> Result<()> {
+        self.evaluate_webview_javascript(id, "window.stop && window.stop();")
+    }
+
+    /// Pause every browser media element in the WebView with the given identifier.
+    pub fn pause_webview_media(&mut self, id: impl Into<SharedString>) -> Result<()> {
+        self.evaluate_webview_javascript(
+            id,
+            "(() => { for (const element of Array.from(document.querySelectorAll('audio,video'))) { if (typeof element.pause === 'function') element.pause(); } })();",
+        )
+    }
+
+    /// Mute or unmute every browser media element in the WebView with the given identifier.
+    pub fn set_webview_media_muted(
+        &mut self,
+        id: impl Into<SharedString>,
+        muted: bool,
+    ) -> Result<()> {
+        let script = if muted {
+            "(() => { for (const element of Array.from(document.querySelectorAll('audio,video'))) { element.muted = true; } })();"
+        } else {
+            "(() => { for (const element of Array.from(document.querySelectorAll('audio,video'))) { element.muted = false; } })();"
+        };
+        self.evaluate_webview_javascript(id, script)
+    }
+
     /// Navigate the WebView with the given identifier backward if possible.
     pub fn go_back_webview(&mut self, id: impl Into<SharedString>) -> Result<()> {
         self.platform_window
@@ -4274,6 +5482,140 @@ impl Window {
             .dispatch_webview_command(PlatformWebViewCommand::GoForward { id: id.into() })
     }
 
+    /// Open developer tools for the WebView with the given identifier when supported.
+    pub fn open_webview_devtools(&mut self, id: impl Into<SharedString>) -> Result<()> {
+        self.platform_window
+            .dispatch_webview_command(PlatformWebViewCommand::OpenDevTools { id: id.into() })
+    }
+
+    /// Close developer tools for the WebView with the given identifier when supported.
+    pub fn close_webview_devtools(&mut self, id: impl Into<SharedString>) -> Result<()> {
+        self.platform_window
+            .dispatch_webview_command(PlatformWebViewCommand::CloseDevTools { id: id.into() })
+    }
+
+    /// Read whether developer tools are open for the WebView with the given identifier.
+    pub fn is_webview_devtools_open(
+        &mut self,
+        id: impl Into<SharedString>,
+        callback: impl Fn(Result<bool, SharedString>) + 'static,
+    ) -> Result<()> {
+        self.platform_window
+            .dispatch_webview_command(PlatformWebViewCommand::IsDevToolsOpen {
+                id: id.into(),
+                callback: Rc::new(callback),
+            })
+    }
+
+    /// Open the platform print dialog for the WebView with the given identifier.
+    pub fn print_webview(&mut self, id: impl Into<SharedString>) -> Result<()> {
+        self.platform_window
+            .dispatch_webview_command(PlatformWebViewCommand::Print { id: id.into() })
+    }
+
+    /// Set the browser zoom factor for the WebView with the given identifier.
+    pub fn set_webview_zoom_factor(
+        &mut self,
+        id: impl Into<SharedString>,
+        factor: f64,
+    ) -> Result<()> {
+        self.platform_window
+            .dispatch_webview_command(PlatformWebViewCommand::SetZoomFactor {
+                id: id.into(),
+                factor,
+            })
+    }
+
+    /// Move focus into the WebView with the given identifier when supported.
+    pub fn focus_webview(&mut self, id: impl Into<SharedString>) -> Result<()> {
+        self.platform_window
+            .dispatch_webview_command(PlatformWebViewCommand::Focus { id: id.into() })
+    }
+
+    /// Move focus from the WebView back to the parent window when supported.
+    pub fn focus_webview_parent(&mut self, id: impl Into<SharedString>) -> Result<()> {
+        self.platform_window
+            .dispatch_webview_command(PlatformWebViewCommand::FocusParent { id: id.into() })
+    }
+
+    /// Clear cookies, cache, local storage, and other browsing data for the WebView profile.
+    pub fn clear_webview_browsing_data(&mut self, id: impl Into<SharedString>) -> Result<()> {
+        self.platform_window
+            .dispatch_webview_command(PlatformWebViewCommand::ClearBrowsingData { id: id.into() })
+    }
+
+    /// Read the current URL reported by the WebView with the given identifier.
+    pub fn read_webview_url(
+        &mut self,
+        id: impl Into<SharedString>,
+        callback: impl Fn(Result<SharedString, SharedString>) + 'static,
+    ) -> Result<()> {
+        self.platform_window
+            .dispatch_webview_command(PlatformWebViewCommand::ReadUrl {
+                id: id.into(),
+                callback: Rc::new(callback),
+            })
+    }
+
+    /// Read all cookies visible to the WebView with the given identifier.
+    pub fn read_webview_cookies(
+        &mut self,
+        id: impl Into<SharedString>,
+        callback: impl Fn(Result<Vec<crate::WebViewCookie>, SharedString>) + 'static,
+    ) -> Result<()> {
+        self.platform_window
+            .dispatch_webview_command(PlatformWebViewCommand::ReadCookies {
+                id: id.into(),
+                url: None,
+                callback: Rc::new(callback),
+            })
+    }
+
+    /// Read cookies for a URL from the WebView with the given identifier.
+    pub fn read_webview_cookies_for_url(
+        &mut self,
+        id: impl Into<SharedString>,
+        url: impl Into<SharedString>,
+        callback: impl Fn(Result<Vec<crate::WebViewCookie>, SharedString>) + 'static,
+    ) -> Result<()> {
+        self.platform_window
+            .dispatch_webview_command(PlatformWebViewCommand::ReadCookies {
+                id: id.into(),
+                url: Some(url.into()),
+                callback: Rc::new(callback),
+            })
+    }
+
+    /// Set a cookie in the WebView with the given identifier.
+    pub fn set_webview_cookie(
+        &mut self,
+        id: impl Into<SharedString>,
+        cookie: crate::WebViewCookie,
+        callback: impl Fn(Result<(), SharedString>) + 'static,
+    ) -> Result<()> {
+        self.platform_window
+            .dispatch_webview_command(PlatformWebViewCommand::SetCookie {
+                id: id.into(),
+                cookie,
+                callback: Rc::new(callback),
+            })
+    }
+
+    /// Delete a cookie from the WebView with the given identifier.
+    pub fn delete_webview_cookie(
+        &mut self,
+        id: impl Into<SharedString>,
+        cookie: crate::WebViewCookie,
+        callback: impl Fn(Result<(), SharedString>) + 'static,
+    ) -> Result<()> {
+        self.platform_window
+            .dispatch_webview_command(PlatformWebViewCommand::DeleteCookie {
+                id: id.into(),
+                cookie,
+                callback: Rc::new(callback),
+            })
+    }
+
     /// Sends a print job directly to the platform print system without showing the native print dialog.
     pub fn print(&mut self, job: PrintJob, cx: &mut App) -> Result<()> {
         self.platform_window.print(job.into_platform_job(cx)?)
@@ -4283,6 +5625,18 @@ impl Window {
     pub fn show_print_dialog(&mut self, job: PrintJob, cx: &mut App) -> Result<()> {
         self.platform_window
             .show_print_dialog(job.into_platform_job(cx)?)
+    }
+
+    /// Validate and dispatch a native or WebView print request.
+    pub fn print_checked(&mut self, request: PrintRequest, cx: &mut App) -> Result<()> {
+        request.validate()?;
+        match request {
+            PrintRequest::NativeJob { job, mode } => match mode {
+                PrintDialogMode::ShowDialog => self.show_print_dialog(job, cx),
+                PrintDialogMode::Silent => self.print(job, cx),
+            },
+            PrintRequest::WebView { id } => self.print_webview(id),
+        }
     }
 
     /// Removes an image from the sprite atlas.
@@ -4735,6 +6089,22 @@ impl Window {
                             cx.active_drag = Some(AnyDrag {
                                 value: Arc::new(paths.clone()),
                                 view: cx.new(|_| paths).into(),
+                                cursor_offset: position,
+                                cursor_style: None,
+                            });
+                        }
+                        PlatformInput::MouseMove(MouseMoveEvent {
+                            position,
+                            pressed_button: Some(MouseButton::Left),
+                            modifiers: Modifiers::default(),
+                        })
+                    }
+                    FileDropEvent::DataEntered { position, data } => {
+                        self.mouse_position = position;
+                        if cx.active_drag.is_none() {
+                            cx.active_drag = Some(AnyDrag {
+                                value: Arc::new(data.clone()),
+                                view: cx.new(|_| data).into(),
                                 cursor_offset: position,
                                 cursor_style: None,
                             });
@@ -5300,6 +6670,24 @@ impl Window {
         self.platform_window.set_mouse_passthrough(passthrough);
     }
 
+    /// Validate and perform a window-level visibility, focus, or interaction command.
+    pub fn perform_window_interaction_checked(
+        &self,
+        command: WindowInteractionCommand,
+    ) -> Result<WindowInteractionCommand> {
+        command.validate()?;
+        match command.kind() {
+            WindowInteractionCommandKind::Activate => self.activate_window(),
+            WindowInteractionCommandKind::Minimize => self.minimize_window(),
+            WindowInteractionCommandKind::Show => self.show_window(),
+            WindowInteractionCommandKind::Hide => self.hide_window(),
+            WindowInteractionCommandKind::MousePassthrough { enabled } => {
+                self.set_mouse_passthrough(enabled);
+            }
+        }
+        Ok(command)
+    }
+
     /// Set a soft byte budget for this window's glyph/sprite atlas. When set, the renderer
     /// evicts least-recently-used atlas tiles down to the budget at the end of each frame,
     /// bounding glyph-atlas growth on long-running, text-churning UIs. `None` (the default)
@@ -5308,14 +6696,63 @@ impl Window {
         self.platform_window.set_atlas_byte_budget(budget);
     }
 
+    /// Validate and set a soft byte budget for this window's glyph/sprite atlas.
+    pub fn set_atlas_byte_budget_checked(
+        &self,
+        budget: WindowAtlasBudgetBuilder,
+    ) -> Result<WindowAtlasBudget> {
+        let budget = budget.build_checked()?;
+        self.set_atlas_byte_budget(budget.max_bytes());
+        Ok(budget)
+    }
+
     /// Toggle full screen status on the current window at the platform level.
     pub fn toggle_fullscreen(&self) {
         self.platform_window.toggle_fullscreen();
     }
 
+    /// Return the current checked presentation/kiosk policy, if any.
+    pub fn presentation_policy(&self) -> Option<&WindowPresentationPolicy> {
+        self.presentation_policy.as_ref()
+    }
+
+    /// Validate and apply fullscreen/kiosk presentation intent.
+    ///
+    /// This toggles platform fullscreen to match the requested mode and records
+    /// the checked policy so platform backends can enforce stronger kiosk
+    /// behavior where supported.
+    pub fn set_presentation_policy_checked(
+        &mut self,
+        policy: WindowPresentationPolicyBuilder,
+    ) -> Result<WindowPresentationPolicy> {
+        let policy = policy.build_checked()?;
+        let wants_fullscreen = policy.mode().wants_fullscreen();
+        if self.platform_window.is_fullscreen() != wants_fullscreen {
+            self.platform_window.toggle_fullscreen();
+        }
+        if policy.mode() == WindowPresentationMode::Windowed {
+            self.presentation_policy = None;
+        } else {
+            self.presentation_policy = Some(policy.clone());
+        }
+        Ok(policy)
+    }
+
+    /// Restore normal windowed presentation behavior.
+    pub fn clear_presentation_policy_checked(&mut self) -> Result<WindowPresentationPolicy> {
+        self.set_presentation_policy_checked(WindowPresentationPolicyBuilder::windowed())
+    }
+
     /// Set the progress bar state for this window's taskbar/dock representation.
     pub fn set_progress_bar(&self, state: ProgressBarState) {
         self.platform_window.set_progress_bar(state);
+    }
+
+    /// Validate and set the progress bar state for this window's taskbar/dock representation.
+    pub fn set_progress_bar_checked(&self, state: ProgressBarState) -> Result<()> {
+        state.validate()?;
+        self.set_progress_bar(state);
+        Ok(())
     }
 
     /// Capture the current window state for save/restore.
@@ -5644,6 +7081,16 @@ impl Window {
     pub fn set_tabbing_identifier(&self, tabbing_identifier: Option<String>) {
         self.platform_window
             .set_tabbing_identifier(tabbing_identifier)
+    }
+
+    /// Validate and set the tabbing identifier for the window.
+    /// This is macOS specific.
+    pub fn set_tabbing_identifier_checked(
+        &self,
+        tabbing_identifier: WindowTabbingIdentifierBuilder,
+    ) -> Result<()> {
+        self.set_tabbing_identifier(tabbing_identifier.build_checked()?);
+        Ok(())
     }
 
     /// Toggles the inspector mode on this window.
@@ -6356,5 +7803,447 @@ pub fn outline(
         continuous_corners: true,
         transform: TransformationMatrix::unit(),
         blend_mode: BlendMode::Normal,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        WindowAppIdBuilder, WindowAtlasBudgetBuilder, WindowChromeCommand, WindowChromeCommandKind,
+        WindowContentProtectionBuilder, WindowContentProtectionMode, WindowDocumentStateBuilder,
+        WindowInteractionCommand, WindowInteractionCommandKind, WindowPresentationMode,
+        WindowPresentationPolicyBuilder, WindowTabbingIdentifierBuilder, WindowTitleBuilder,
+    };
+    use crate::{ResizeEdge, WindowDecorations, point, px};
+
+    #[test]
+    fn window_title_builder_validates_platform_chrome_text() {
+        let title = WindowTitleBuilder::new("Project - Report.md");
+        assert!(title.validate().is_ok());
+        assert_eq!(title.title(), "Project - Report.md");
+        assert_eq!(
+            title.build_checked().unwrap(),
+            "Project - Report.md".to_string()
+        );
+
+        assert!(WindowTitleBuilder::new("").validate().is_err());
+        assert!(WindowTitleBuilder::new(" ").validate().is_err());
+        assert!(WindowTitleBuilder::new(" Project").validate().is_err());
+        assert!(WindowTitleBuilder::new("Project ").validate().is_err());
+        assert!(
+            WindowTitleBuilder::new("Project\nDraft")
+                .validate()
+                .is_err()
+        );
+        assert!(WindowTitleBuilder::new("x".repeat(513)).validate().is_err());
+    }
+
+    #[test]
+    fn window_app_id_builder_validates_platform_grouping_id() {
+        let app_id = WindowAppIdBuilder::new("com.example.app");
+        assert!(app_id.validate().is_ok());
+        assert_eq!(app_id.app_id(), "com.example.app");
+        assert_eq!(app_id.build_checked().unwrap(), "com.example.app");
+
+        assert!(WindowAppIdBuilder::new("").validate().is_err());
+        assert!(WindowAppIdBuilder::new(" ").validate().is_err());
+        assert!(
+            WindowAppIdBuilder::new(" com.example.app")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowAppIdBuilder::new("com.example.app ")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowAppIdBuilder::new("com.example app")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowAppIdBuilder::new("com.example\napp")
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn window_tabbing_identifier_builder_validates_tab_group_id() {
+        let identifier = WindowTabbingIdentifierBuilder::new("workspace.main");
+        assert!(identifier.validate().is_ok());
+        assert_eq!(identifier.identifier(), Some("workspace.main"));
+        assert_eq!(
+            identifier.build_checked().unwrap(),
+            Some("workspace.main".to_string())
+        );
+
+        let clear = WindowTabbingIdentifierBuilder::clear();
+        assert!(clear.validate().is_ok());
+        assert!(clear.is_clear());
+        assert_eq!(clear.build_checked().unwrap(), None);
+
+        assert!(WindowTabbingIdentifierBuilder::new("").validate().is_err());
+        assert!(WindowTabbingIdentifierBuilder::new(" ").validate().is_err());
+        assert!(
+            WindowTabbingIdentifierBuilder::new(" workspace.main")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowTabbingIdentifierBuilder::new("workspace.main ")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowTabbingIdentifierBuilder::new("workspace main")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowTabbingIdentifierBuilder::new("workspace\nmain")
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn window_document_state_builder_derives_document_titles() {
+        let state = WindowDocumentStateBuilder::document("/Users/example/Report.md")
+            .unsaved_changes()
+            .build_checked()
+            .unwrap();
+
+        assert_eq!(state.title(), Some("Report.md"));
+        assert_eq!(
+            state.document_path().unwrap(),
+            std::path::Path::new("/Users/example/Report.md")
+        );
+        assert!(state.edited());
+
+        let titled = WindowDocumentStateBuilder::new()
+            .title("Project Notes")
+            .clean()
+            .build_checked()
+            .unwrap();
+        assert_eq!(titled.title(), Some("Project Notes"));
+        assert_eq!(titled.document_path(), None);
+        assert!(!titled.edited());
+    }
+
+    #[test]
+    fn window_document_state_builder_rejects_invalid_generated_state() {
+        assert!(WindowDocumentStateBuilder::new().validate().is_err());
+        assert!(
+            WindowDocumentStateBuilder::new()
+                .title(" Project")
+                .validate()
+                .is_err()
+        );
+        assert!(WindowDocumentStateBuilder::document("").validate().is_err());
+        assert!(
+            WindowDocumentStateBuilder::document("/tmp/report\0.md")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowDocumentStateBuilder::document("/tmp/kael-missing-document-state-file.md")
+                .require_existing_path()
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn window_document_state_builder_canonicalizes_existing_paths() {
+        let state = WindowDocumentStateBuilder::document(std::env::temp_dir())
+            .canonicalize_path()
+            .build_checked()
+            .unwrap();
+
+        assert_eq!(
+            state.title(),
+            std::env::temp_dir()
+                .file_name()
+                .and_then(|name| name.to_str())
+        );
+        assert!(state.document_path().unwrap().is_absolute());
+    }
+
+    #[test]
+    fn window_content_protection_builder_validates_capture_policy() {
+        let protection =
+            WindowContentProtectionBuilder::exclude_from_capture("Protect checkout secrets")
+                .build_checked()
+                .unwrap();
+
+        assert_eq!(
+            protection.mode(),
+            WindowContentProtectionMode::ExcludeFromCapture
+        );
+        assert_eq!(protection.mode().key(), "exclude-from-capture");
+        assert_eq!(protection.reason(), Some("Protect checkout secrets"));
+        assert!(protection.is_protected());
+        assert!(protection.blocks_app_window_capture());
+
+        let obscure =
+            WindowContentProtectionBuilder::obscure_when_captured("Hide unreleased designs")
+                .block_app_window_capture(false)
+                .build_checked()
+                .unwrap();
+        assert_eq!(
+            obscure.mode(),
+            WindowContentProtectionMode::ObscureWhenCaptured
+        );
+        assert_eq!(obscure.mode().key(), "obscure-when-captured");
+        assert!(!obscure.blocks_app_window_capture());
+
+        let disabled = WindowContentProtectionBuilder::disabled()
+            .build_checked()
+            .unwrap();
+        assert_eq!(disabled.mode(), WindowContentProtectionMode::Disabled);
+        assert_eq!(disabled.mode().key(), "disabled");
+        assert!(!disabled.is_protected());
+        assert!(!disabled.blocks_app_window_capture());
+    }
+
+    #[test]
+    fn window_content_protection_builder_rejects_generated_footguns() {
+        assert!(
+            WindowContentProtectionBuilder::exclude_from_capture("")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowContentProtectionBuilder::exclude_from_capture(" Protect secrets")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowContentProtectionBuilder::obscure_when_captured("Protect\nsecrets")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowContentProtectionBuilder::exclude_from_capture("x".repeat(257))
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn window_presentation_policy_builder_validates_modes() {
+        let fullscreen = WindowPresentationPolicyBuilder::fullscreen("Present onboarding")
+            .build_checked()
+            .unwrap();
+        assert_eq!(fullscreen.mode(), WindowPresentationMode::Fullscreen);
+        assert_eq!(fullscreen.mode().key(), "fullscreen");
+        assert!(fullscreen.mode().wants_fullscreen());
+        assert_eq!(fullscreen.reason(), Some("Present onboarding"));
+        assert!(fullscreen.allows_user_exit());
+        assert!(!fullscreen.hides_chrome());
+
+        let kiosk = WindowPresentationPolicyBuilder::kiosk("Point of sale checkout")
+            .build_checked()
+            .unwrap();
+        assert_eq!(kiosk.mode(), WindowPresentationMode::Kiosk);
+        assert_eq!(kiosk.mode().key(), "kiosk");
+        assert!(kiosk.mode().wants_fullscreen());
+        assert!(!kiosk.allows_user_exit());
+        assert!(kiosk.hides_chrome());
+
+        let windowed = WindowPresentationPolicyBuilder::windowed()
+            .build_checked()
+            .unwrap();
+        assert_eq!(windowed.mode(), WindowPresentationMode::Windowed);
+        assert_eq!(windowed.mode().key(), "windowed");
+        assert!(!windowed.mode().wants_fullscreen());
+        assert!(windowed.allows_user_exit());
+    }
+
+    #[test]
+    fn window_presentation_policy_builder_rejects_generated_footguns() {
+        assert!(
+            WindowPresentationPolicyBuilder::fullscreen("")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowPresentationPolicyBuilder::fullscreen(" Present")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowPresentationPolicyBuilder::kiosk("Line one\nLine two")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowPresentationPolicyBuilder::kiosk("x".repeat(257))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowPresentationPolicyBuilder::windowed()
+                .allow_user_exit(false)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowPresentationPolicyBuilder::windowed()
+                .hide_chrome(true)
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn window_interaction_command_validates_visibility_and_mouse_passthrough() {
+        let show = WindowInteractionCommand::show().reason("Restore project window");
+        assert!(show.validate().is_ok());
+        assert_eq!(show.kind(), WindowInteractionCommandKind::Show);
+        assert_eq!(show.reason_text(), Some("Restore project window"));
+
+        let click_through =
+            WindowInteractionCommand::mouse_passthrough("Heads-up overlay should not block clicks");
+        assert!(click_through.validate().is_ok());
+        assert_eq!(
+            click_through.kind(),
+            WindowInteractionCommandKind::MousePassthrough { enabled: true }
+        );
+
+        let receive_mouse = WindowInteractionCommand::receive_mouse_events();
+        assert!(receive_mouse.validate().is_ok());
+        assert_eq!(
+            receive_mouse.kind(),
+            WindowInteractionCommandKind::MousePassthrough { enabled: false }
+        );
+
+        assert!(WindowInteractionCommand::activate().validate().is_ok());
+        assert!(WindowInteractionCommand::minimize().validate().is_ok());
+        assert!(WindowInteractionCommand::hide().validate().is_ok());
+    }
+
+    #[test]
+    fn window_interaction_command_rejects_generated_footguns() {
+        assert!(
+            WindowInteractionCommand::mouse_passthrough("")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowInteractionCommand::mouse_passthrough(" Overlay")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowInteractionCommand::show()
+                .reason("Restore\nwindow")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowInteractionCommand::hide()
+                .reason("x".repeat(257))
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn window_chrome_command_validates_custom_titlebar_commands() {
+        let decorations = WindowChromeCommand::request_decorations(WindowDecorations::Client)
+            .reason("Custom titlebar owns drag regions");
+        assert!(decorations.validate().is_ok());
+        assert_eq!(
+            decorations.kind(),
+            &WindowChromeCommandKind::RequestDecorations(WindowDecorations::Client)
+        );
+        assert_eq!(
+            decorations.reason_text(),
+            Some("Custom titlebar owns drag regions")
+        );
+
+        let menu = WindowChromeCommand::show_window_menu(point(px(10.0), px(20.0)));
+        assert!(menu.validate().is_ok());
+        assert_eq!(
+            menu.kind(),
+            &WindowChromeCommandKind::ShowWindowMenu(point(px(10.0), px(20.0)))
+        );
+
+        let resize = WindowChromeCommand::start_resize(ResizeEdge::BottomRight);
+        assert!(resize.validate().is_ok());
+        assert_eq!(
+            resize.kind(),
+            &WindowChromeCommandKind::StartResize(ResizeEdge::BottomRight)
+        );
+        assert!(WindowChromeCommand::start_move().validate().is_ok());
+    }
+
+    #[test]
+    fn window_chrome_command_rejects_generated_footguns() {
+        assert!(
+            WindowChromeCommand::show_window_menu(point(px(f32::NAN), px(0.0)))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowChromeCommand::show_window_menu(point(px(0.0), px(f32::INFINITY)))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowChromeCommand::start_move()
+                .reason(" Drag")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowChromeCommand::request_decorations(WindowDecorations::Server)
+                .reason("Line one\nLine two")
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn window_atlas_budget_builder_validates_memory_caps() {
+        let budget = WindowAtlasBudgetBuilder::bytes(128 * 1024 * 1024)
+            .reason("Large text editor churns glyphs")
+            .build_checked()
+            .unwrap();
+        assert_eq!(budget.max_bytes(), Some(128 * 1024 * 1024));
+        assert_eq!(
+            budget.reason_text(),
+            Some("Large text editor churns glyphs")
+        );
+        assert!(!budget.is_clear());
+
+        let cleared = WindowAtlasBudgetBuilder::clear().build_checked().unwrap();
+        assert_eq!(cleared.max_bytes(), None);
+        assert!(cleared.is_clear());
+    }
+
+    #[test]
+    fn window_atlas_budget_builder_rejects_generated_footguns() {
+        assert!(WindowAtlasBudgetBuilder::bytes(0).validate().is_err());
+        assert!(
+            WindowAtlasBudgetBuilder::bytes(9 * 1024 * 1024 * 1024)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowAtlasBudgetBuilder::bytes(64 * 1024 * 1024)
+                .reason(" generated")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowAtlasBudgetBuilder::clear()
+                .reason("Line one\nLine two")
+                .validate()
+                .is_err()
+        );
     }
 }

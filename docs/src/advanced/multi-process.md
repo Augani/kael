@@ -15,31 +15,49 @@ ProcessClass::Media;     // media decode/playback
 ProcessClass::Extension; // sandboxed plugins (see Plugins & Extensions)
 ```
 
-A child process is described by a `ProcessInfo`, built fluently:
+A child process is described by a `ProcessInfo`. For generated host code,
+prefer `ProcessInfoBuilder` so empty names, missing executables, invalid
+environment keys, NUL-containing args, and missing required paths fail before
+the supervisor starts:
 
 ```rust
-use kael::{ProcessId, ProcessInfo};
+use kael::{ProcessId, ProcessInfoBuilder};
 
-let info = ProcessInfo::worker(ProcessId(0), "thumbnailer")
+let info = ProcessInfoBuilder::worker(ProcessId(0), "thumbnailer")
     .executable("/path/to/worker-binary")
+    .require_existing_executable()
     .arg("--quiet")
-    .env("RUST_LOG", "warn");
+    .env("RUST_LOG", "warn")
+    .build_checked()?;
 ```
 
-Constructors exist for each role: `ProcessInfo::worker`, `ProcessInfo::media`, and `ProcessInfo::extension`.
+Builders exist for each role: `ProcessInfoBuilder::worker`,
+`ProcessInfoBuilder::media`, and `ProcessInfoBuilder::extension`. The raw
+`ProcessInfo::worker`, `ProcessInfo::media`, and `ProcessInfo::extension`
+constructors remain available when an app owns lower-level validation.
 
 ## Spawning a worker (host side)
 
 `WorkerHost` owns the socket directory and supervises spawned children. `request` sends a typed payload and blocks for the response; `fire_and_forget` sends without waiting; `health_check` pings the child.
 
 ```rust
-use kael::{ProcessClass, ProcessId, ProcessInfo, WorkerHost};
+use kael::{
+    ProcessClass, ProcessId, ProcessInfoBuilder, ProcessSpawnOptionsBuilder,
+    WorkerHost,
+};
 
 let mut host = WorkerHost::with_temp_dir();
-let info = ProcessInfo::worker(ProcessId(0), "thumbnailer")
-    .executable(worker_binary_path);
+let info = ProcessInfoBuilder::worker(ProcessId(0), "thumbnailer")
+    .executable(worker_binary_path)
+    .require_existing_executable()
+    .build_checked()?;
+let spawn_options = ProcessSpawnOptionsBuilder::new()
+    .restart_on_failure(3, std::time::Duration::from_secs(1))
+    .heartbeat_interval(std::time::Duration::from_secs(5))
+    .missed_heartbeats_before_unhealthy(3)
+    .build_checked()?;
 
-let worker = host.spawn_worker(ProcessClass::Worker, info)?;
+let worker = host.spawn_worker_with_options(ProcessClass::Worker, info, spawn_options)?;
 
 worker.health_check()?; // round-trip ping
 
@@ -94,6 +112,11 @@ host.on_event(|event| match event {
 ```
 
 Each `WorkerHandle` exposes `id()` to correlate it with supervisor events.
+
+`ProcessSpawnOptionsBuilder` validates restart and heartbeat policy: restart
+counts must be non-zero when using `restart_on_failure`, backoff must be greater
+than zero, heartbeat intervals must be greater than zero, and the missed
+heartbeat threshold must be non-zero.
 
 ## Extension processes
 

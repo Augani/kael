@@ -6,7 +6,7 @@
 
 use std::{
     any::Any,
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fmt::Debug,
     path::{Path, PathBuf},
 };
@@ -61,6 +61,12 @@ impl<T: Serialize + for<'de> Deserialize<'de> + Default> SettingsStore<T> {
         }
     }
 
+    /// Create a new settings store after validating the backing path.
+    pub fn new_checked(path: impl AsRef<Path>) -> Result<Self> {
+        validate_settings_path(path.as_ref())?;
+        Ok(Self::new(path))
+    }
+
     /// Load settings from disk, applying migrations if needed.
     pub fn load(path: impl AsRef<Path>, migrations: &[Box<dyn SettingsMigration>]) -> Result<Self> {
         let path = path.as_ref();
@@ -101,6 +107,7 @@ impl<T: Serialize + for<'de> Deserialize<'de> + Default> SettingsStore<T> {
 
     /// Save the current settings to disk atomically.
     pub fn save(&self) -> Result<()> {
+        validate_settings_path(&self.path)?;
         let mut value = serde_json::to_value(&self.data).context("failed to serialize settings")?;
         if let Some(obj) = value.as_object_mut() {
             obj.insert(
@@ -172,6 +179,12 @@ impl<T: Serialize + for<'de> Deserialize<'de> + Default> SettingsStoreBuilder<T>
         self
     }
 
+    /// Validate the settings path and migration targets.
+    pub fn validate(&self) -> Result<()> {
+        validate_settings_path(&self.path)?;
+        validate_settings_migrations(&self.migrations)
+    }
+
     /// Load the store using the configured migrations.
     pub fn load(self) -> Result<SettingsStore<T>> {
         let Self {
@@ -181,6 +194,63 @@ impl<T: Serialize + for<'de> Deserialize<'de> + Default> SettingsStoreBuilder<T>
         } = self;
         SettingsStore::load(path, &migrations)
     }
+
+    /// Validate and load the store using the configured migrations.
+    pub fn load_checked(self) -> Result<SettingsStore<T>> {
+        self.validate()?;
+        self.load()
+    }
+}
+
+fn validate_settings_path(path: &Path) -> Result<()> {
+    anyhow::ensure!(
+        !path.as_os_str().is_empty(),
+        "settings path cannot be empty"
+    );
+    let path_text = path.to_string_lossy();
+    anyhow::ensure!(
+        !path_text.chars().any(char::is_control),
+        "settings path cannot contain control characters"
+    );
+    anyhow::ensure!(
+        path.file_name()
+            .is_some_and(|file_name| !file_name.is_empty()),
+        "settings path must include a file name"
+    );
+    if path.exists() {
+        anyhow::ensure!(
+            path.is_file(),
+            "settings path must point to a file: {}",
+            path.display()
+        );
+    }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+        && parent.exists()
+    {
+        anyhow::ensure!(
+            parent.is_dir(),
+            "settings parent path must be a directory: {}",
+            parent.display()
+        );
+    }
+    Ok(())
+}
+
+fn validate_settings_migrations(migrations: &[Box<dyn SettingsMigration>]) -> Result<()> {
+    let mut versions = HashSet::new();
+    for migration in migrations {
+        let target_version = migration.target_version();
+        anyhow::ensure!(
+            target_version > 0,
+            "settings migration target version must be greater than zero"
+        );
+        anyhow::ensure!(
+            versions.insert(target_version),
+            "settings migration target version {target_version} is registered more than once"
+        );
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +289,13 @@ impl ClosureCommand {
             name: name.into(),
             handler: Box::new(handler),
         }
+    }
+
+    /// Validate this command before registering it in generated app chrome.
+    pub fn validate(&self) -> Result<()> {
+        validate_command_id(&self.id)?;
+        validate_command_name(&self.name)?;
+        Ok(())
     }
 }
 
@@ -264,6 +341,19 @@ impl CommandRegistry {
         self.commands.insert(command.id().to_string(), command);
     }
 
+    /// Register a command after validating its id/name and checking duplicates.
+    pub fn register_checked(&mut self, command: Box<dyn AppCommand>) -> Result<()> {
+        validate_command_id(command.id())?;
+        validate_command_name(command.name())?;
+        anyhow::ensure!(
+            !self.commands.contains_key(command.id()),
+            "command id is already registered: {}",
+            command.id()
+        );
+        self.register(command);
+        Ok(())
+    }
+
     /// Register a closure-backed command.
     pub fn register_action(
         &mut self,
@@ -272,6 +362,16 @@ impl CommandRegistry {
         handler: impl Fn() + Send + Sync + 'static,
     ) {
         self.register(Box::new(ClosureCommand::new(id, name, handler)));
+    }
+
+    /// Register a closure-backed command after validating id/name and duplicates.
+    pub fn register_action_checked(
+        &mut self,
+        id: impl Into<String>,
+        name: impl Into<String>,
+        handler: impl Fn() + Send + Sync + 'static,
+    ) -> Result<()> {
+        self.register_checked(Box::new(ClosureCommand::new(id, name, handler)))
     }
 
     /// Unregister a command by identifier.
@@ -320,6 +420,41 @@ impl CommandRegistry {
             .map(|b| b.as_ref())
             .collect()
     }
+}
+
+fn validate_command_id(id: &str) -> Result<()> {
+    anyhow::ensure!(!id.trim().is_empty(), "command id cannot be empty");
+    anyhow::ensure!(
+        id == id.trim(),
+        "command id cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        id.len() <= 128,
+        "command id cannot be longer than 128 bytes"
+    );
+    anyhow::ensure!(
+        id.chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | ':' | '-' | '_' | '/')),
+        "command id must contain only ASCII letters, numbers, '.', ':', '-', '_' or '/'"
+    );
+    Ok(())
+}
+
+fn validate_command_name(name: &str) -> Result<()> {
+    anyhow::ensure!(!name.trim().is_empty(), "command name cannot be empty");
+    anyhow::ensure!(
+        name == name.trim(),
+        "command name cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        name.chars().count() <= 128,
+        "command name cannot be longer than 128 characters"
+    );
+    anyhow::ensure!(
+        !name.chars().any(char::is_control),
+        "command name cannot contain control characters"
+    );
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -408,6 +543,19 @@ impl UndoRedoManager {
         });
     }
 
+    /// Begin a grouped undo transaction after validating generated input.
+    pub fn begin_transaction_checked(&mut self, description: impl Into<String>) -> Result<()> {
+        anyhow::ensure!(self.transaction.is_none(), "undo transaction already open");
+        let description = description.into();
+        validate_undo_description(&description)?;
+        self.discard_redo();
+        self.transaction = Some(UndoTransaction {
+            description,
+            changes: Vec::new(),
+        });
+        Ok(())
+    }
+
     /// Commit the current grouped transaction, if any changes were recorded.
     pub fn end_transaction(&mut self) -> bool {
         let Some(transaction) = self.transaction.take() else {
@@ -420,6 +568,12 @@ impl UndoRedoManager {
 
         self.push_applied_change(Box::new(transaction));
         true
+    }
+
+    /// Commit the current grouped transaction, returning an error if none is open.
+    pub fn end_transaction_checked(&mut self) -> Result<bool> {
+        anyhow::ensure!(self.transaction.is_some(), "no undo transaction is open");
+        Ok(self.end_transaction())
     }
 
     /// Replace the most recent committed change without reapplying it.
@@ -530,6 +684,11 @@ impl UndoRedoManager {
         self.stack.is_empty()
     }
 
+    /// Whether a grouped transaction is currently open.
+    pub fn has_open_transaction(&self) -> bool {
+        self.transaction.is_some()
+    }
+
     /// Clear all changes.
     pub fn clear(&mut self) {
         self.stack.clear();
@@ -588,6 +747,26 @@ impl UndoRedoManager {
             .map(|c| c.description())
             .collect()
     }
+}
+
+fn validate_undo_description(description: &str) -> Result<()> {
+    anyhow::ensure!(
+        !description.trim().is_empty(),
+        "undo transaction description cannot be empty"
+    );
+    anyhow::ensure!(
+        description == description.trim(),
+        "undo transaction description cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        description.chars().count() <= 128,
+        "undo transaction description cannot be longer than 128 characters"
+    );
+    anyhow::ensure!(
+        !description.chars().any(char::is_control),
+        "undo transaction description cannot contain control characters"
+    );
+    Ok(())
 }
 
 impl UndoRedoManager {
@@ -878,6 +1057,80 @@ mod tests {
     }
 
     #[test]
+    fn test_checked_settings_store_validates_path() {
+        #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+        struct BuiltSettings {
+            enabled: bool,
+        }
+
+        assert!(SettingsStore::<BuiltSettings>::new_checked("").is_err());
+        assert!(
+            SettingsStore::<BuiltSettings>::builder("")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            SettingsStore::<BuiltSettings>::builder("settings\n.json")
+                .validate()
+                .is_err()
+        );
+
+        let dir =
+            std::env::temp_dir().join(format!("kael_settings_dir_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(
+            SettingsStore::<BuiltSettings>::builder(&dir)
+                .validate()
+                .is_err()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_checked_settings_store_validates_migrations() {
+        #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+        struct BuiltSettings {
+            enabled: bool,
+        }
+
+        struct Migration(u32);
+        impl SettingsMigration for Migration {
+            fn target_version(&self) -> u32 {
+                self.0
+            }
+
+            fn migrate(&self, _value: &mut serde_json::Value) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let temp =
+            std::env::temp_dir().join(format!("kael_checked_settings_test_{}", std::process::id()));
+
+        assert!(
+            SettingsStore::<BuiltSettings>::builder(&temp)
+                .migration(Migration(0))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            SettingsStore::<BuiltSettings>::builder(&temp)
+                .migration(Migration(1))
+                .migration(Migration(1))
+                .validate()
+                .is_err()
+        );
+
+        let store = SettingsStore::<BuiltSettings>::builder(&temp)
+            .migration(Migration(1))
+            .load_checked()
+            .unwrap();
+        assert_eq!(store.path(), temp.as_path());
+
+        let _ = std::fs::remove_file(&temp);
+    }
+
+    #[test]
     fn test_command_registry() {
         struct SayHello;
         impl AppCommand for SayHello {
@@ -919,6 +1172,84 @@ mod tests {
         assert_eq!(registry.command_ids(), vec!["save"]);
         registry.execute("save").unwrap();
         assert!(triggered.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_command_registry_checked_registration() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        let triggered = Arc::new(AtomicBool::new(false));
+        let mut registry = CommandRegistry::new();
+        registry
+            .register_action_checked("editor.save", "Save", {
+                let triggered = Arc::clone(&triggered);
+                move || {
+                    triggered.store(true, Ordering::Relaxed);
+                }
+            })
+            .unwrap();
+
+        assert!(registry.contains("editor.save"));
+        registry.execute("editor.save").unwrap();
+        assert!(triggered.load(Ordering::Relaxed));
+        assert!(
+            registry
+                .register_action_checked("editor.save", "Save Again", || {})
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_command_registry_validates_generated_ids_and_names() {
+        let mut registry = CommandRegistry::new();
+
+        assert!(registry.register_action_checked("", "Save", || {}).is_err());
+        assert!(
+            registry
+                .register_action_checked(" editor.save", "Save", || {})
+                .is_err()
+        );
+        assert!(
+            registry
+                .register_action_checked("editor save", "Save", || {})
+                .is_err()
+        );
+        assert!(
+            registry
+                .register_action_checked("editor\nsave", "Save", || {})
+                .is_err()
+        );
+        assert!(
+            registry
+                .register_action_checked("a".repeat(129), "Save", || {})
+                .is_err()
+        );
+        assert!(
+            registry
+                .register_action_checked("editor.save", "", || {})
+                .is_err()
+        );
+        assert!(
+            registry
+                .register_action_checked("editor.save", " Save", || {})
+                .is_err()
+        );
+        assert!(
+            registry
+                .register_action_checked("editor.save", "Save\nFile", || {})
+                .is_err()
+        );
+        assert!(
+            registry
+                .register_action_checked("editor.save", "a".repeat(129), || {})
+                .is_err()
+        );
+
+        let command = ClosureCommand::new("editor.open-recent", "Open Recent", || {});
+        assert!(command.validate().is_ok());
     }
 
     #[test]
@@ -1134,6 +1465,73 @@ mod tests {
         undo.undo();
         assert_eq!(*value.lock().unwrap(), 0);
 
+        undo.redo();
+        assert_eq!(*value.lock().unwrap(), 5);
+    }
+
+    #[test]
+    fn test_undo_redo_checked_transactions_validate_state_and_description() {
+        let value = Arc::new(Mutex::new(0));
+
+        struct AddChange {
+            value: Arc<Mutex<i32>>,
+            delta: i32,
+        }
+
+        impl Debug for AddChange {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct("AddChange")
+                    .field("delta", &self.delta)
+                    .finish()
+            }
+        }
+
+        impl UndoableChange for AddChange {
+            fn apply(&mut self) {
+                *self.value.lock().unwrap() += self.delta;
+            }
+
+            fn revert(&mut self) {
+                *self.value.lock().unwrap() -= self.delta;
+            }
+
+            fn description(&self) -> &str {
+                "add"
+            }
+
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+        }
+
+        let mut undo = UndoRedoManager::new(10);
+        assert!(undo.end_transaction_checked().is_err());
+        assert!(undo.begin_transaction_checked("").is_err());
+        assert!(undo.begin_transaction_checked(" edit").is_err());
+        assert!(undo.begin_transaction_checked("edit\nselection").is_err());
+        assert!(undo.begin_transaction_checked("a".repeat(129)).is_err());
+
+        undo.begin_transaction_checked("edit selection").unwrap();
+        assert!(undo.has_open_transaction());
+        assert!(undo.begin_transaction_checked("nested").is_err());
+        assert!(!undo.end_transaction_checked().unwrap());
+        assert!(!undo.has_open_transaction());
+
+        undo.begin_transaction_checked("compound add").unwrap();
+        undo.push(Box::new(AddChange {
+            value: value.clone(),
+            delta: 2,
+        }));
+        undo.push(Box::new(AddChange {
+            value: value.clone(),
+            delta: 3,
+        }));
+
+        assert!(undo.end_transaction_checked().unwrap());
+        assert_eq!(*value.lock().unwrap(), 5);
+        assert_eq!(undo.undo_descriptions(), vec!["compound add"]);
+        undo.undo();
+        assert_eq!(*value.lock().unwrap(), 0);
         undo.redo();
         assert_eq!(*value.lock().unwrap(), 5);
     }

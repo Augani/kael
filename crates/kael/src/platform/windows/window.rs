@@ -21,7 +21,7 @@ use windows::{
     Win32::{
         Foundation::*,
         Graphics::Gdi::*,
-        System::{Com::*, LibraryLoader::*, Ole::*, SystemServices::*},
+        System::{Com::*, LibraryLoader::*, Memory::*, Ole::*, SystemServices::*},
         UI::{Controls::*, HiDpi::*, Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
     },
     core::*,
@@ -1049,7 +1049,10 @@ impl PlatformWindow for WindowsWindow {
         self.0.tab_manager.tabbed_windows()
     }
 
-    fn update_accessibility_tree(&mut self, tree: &crate::AccessibilityTree) {
+    fn update_accessibility_tree(
+        &mut self,
+        tree: &crate::AccessibilityTree,
+    ) -> Vec<crate::AccessibilityActionRequest> {
         use super::accessibility::{AccessibleElementInfo, AccessibleRole};
         let provider = &self.0.uia_provider;
         provider.clear_elements();
@@ -1064,12 +1067,29 @@ impl PlatformWindow for WindowsWindow {
             }
             if let Some(ref value) = node.value {
                 info = info.with_value(match value {
-                    crate::AccessibilityValue::Text(text) => text.clone(),
+                    crate::AccessibilityValue::Text(text) => {
+                        info = info.with_text_value(text.clone());
+                        text.clone()
+                    }
                     crate::AccessibilityValue::Number(n) => n.to_string(),
-                    crate::AccessibilityValue::Range { current, .. } => current.to_string(),
+                    crate::AccessibilityValue::Range {
+                        current,
+                        min,
+                        max,
+                        step,
+                    } => {
+                        info = info.with_range_value(*current, *min, *max, *step);
+                        current.to_string()
+                    }
                     crate::AccessibilityValue::Toggle(v) => v.to_string(),
                 });
+                if let crate::AccessibilityValue::Toggle(value) = value {
+                    info = info.with_toggle_value(*value);
+                }
             }
+            info = info
+                .with_node_id(node.id)
+                .with_actions(node.actions.clone());
             info.element_id = node.id.0 as u32;
             provider.update_element(info);
         }
@@ -1078,6 +1098,7 @@ impl PlatformWindow for WindowsWindow {
         } else {
             provider.set_focused_element(None);
         }
+        provider.drain_actions()
     }
 }
 
@@ -1106,43 +1127,20 @@ impl IDropTarget_Impl for WindowsDragDropHandler_Impl {
     ) -> windows::core::Result<()> {
         unsafe {
             let idata_obj = pdataobj.ok()?;
-            let config = FORMATETC {
-                cfFormat: CF_HDROP.0,
-                ptd: std::ptr::null_mut() as _,
-                dwAspect: DVASPECT_CONTENT.0,
-                lindex: -1,
-                tymed: TYMED_HGLOBAL.0 as _,
-            };
             let cursor_position = POINT { x: pt.x, y: pt.y };
-            if idata_obj.QueryGetData(&config as _) == S_OK {
+            if let Some(data) = external_drop_data_from_data_object(&idata_obj) {
                 *pdweffect = DROPEFFECT_COPY;
-                let Some(mut idata) = idata_obj.GetData(&config as _).log_err() else {
-                    return Ok(());
-                };
-                if idata.u.hGlobal.is_invalid() {
-                    return Ok(());
-                }
-                let hdrop = idata.u.hGlobal.0 as *mut HDROP;
-                let mut paths = SmallVec::<[PathBuf; 2]>::new();
-                with_file_names(*hdrop, |file_name| {
-                    if let Some(path) = PathBuf::from_str(&file_name).log_err() {
-                        paths.push(path);
-                    }
-                });
-                ReleaseStgMedium(&mut idata);
                 let mut cursor_position = cursor_position;
                 ScreenToClient(self.0.hwnd, &mut cursor_position)
                     .ok()
                     .log_err();
                 let scale_factor = self.0.state.borrow().scale_factor;
-                let input = PlatformInput::FileDrop(FileDropEvent::Entered {
-                    position: logical_point(
-                        cursor_position.x as f32,
-                        cursor_position.y as f32,
-                        scale_factor,
-                    ),
-                    paths: ExternalPaths(paths),
-                });
+                let position = logical_point(
+                    cursor_position.x as f32,
+                    cursor_position.y as f32,
+                    scale_factor,
+                );
+                let input = file_drop_entered_event(position, data);
                 self.handle_drag_drop(input);
             } else {
                 *pdweffect = DROPEFFECT_NONE;
@@ -1225,6 +1223,99 @@ impl IDropTarget_Impl for WindowsDragDropHandler_Impl {
         self.handle_drag_drop(input);
 
         Ok(())
+    }
+}
+
+fn external_drop_data_from_data_object(idata_obj: &IDataObject) -> Option<ExternalDropData> {
+    let mut paths = SmallVec::<[PathBuf; 2]>::new();
+
+    if let Some(mut idata) = data_object_get_hglobal(idata_obj, CF_HDROP.0) {
+        if !idata.u.hGlobal.is_invalid() {
+            let hdrop = idata.u.hGlobal.0 as *mut HDROP;
+            unsafe {
+                with_file_names(*hdrop, |file_name| {
+                    if let Some(path) = PathBuf::from_str(&file_name).log_err() {
+                        paths.push(path);
+                    }
+                });
+            }
+        }
+        unsafe {
+            ReleaseStgMedium(&mut idata);
+        }
+    }
+
+    let text = data_object_unicode_text(idata_obj);
+    let mut data = ExternalDropData::from_paths(paths);
+    if let Some(text) = text {
+        let parsed_text = ExternalDropData::from_plain_text(text.clone());
+        data = data
+            .with_text(text)
+            .with_urls(parsed_text.urls().iter().cloned());
+    }
+
+    if data.has_paths() || data.has_text() || data.has_urls() {
+        Some(data)
+    } else {
+        None
+    }
+}
+
+fn data_object_get_hglobal(idata_obj: &IDataObject, clipboard_format: u16) -> Option<STGMEDIUM> {
+    let config = FORMATETC {
+        cfFormat: clipboard_format,
+        ptd: std::ptr::null_mut() as _,
+        dwAspect: DVASPECT_CONTENT.0,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as _,
+    };
+    unsafe {
+        if idata_obj.QueryGetData(&config as _) != S_OK {
+            return None;
+        }
+        idata_obj.GetData(&config as _).log_err()
+    }
+}
+
+fn data_object_unicode_text(idata_obj: &IDataObject) -> Option<String> {
+    let mut idata = data_object_get_hglobal(idata_obj, CF_UNICODETEXT.0)?;
+    let text = if idata.u.hGlobal.is_invalid() {
+        None
+    } else {
+        unsafe { hglobal_utf16_string(idata.u.hGlobal) }
+    };
+    unsafe {
+        ReleaseStgMedium(&mut idata);
+    }
+    text.filter(|text| !text.is_empty())
+}
+
+unsafe fn hglobal_utf16_string(hglobal: HGLOBAL) -> Option<String> {
+    let ptr = unsafe { GlobalLock(hglobal) } as *const u16;
+    if ptr.is_null() {
+        return None;
+    }
+
+    let mut len = 0;
+    while unsafe { *ptr.add(len) } != 0 {
+        len += 1;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
+    let text = String::from_utf16(slice).ok();
+    unsafe {
+        GlobalUnlock(hglobal).ok().log_err();
+    }
+    text
+}
+
+fn file_drop_entered_event(position: Point<Pixels>, data: ExternalDropData) -> PlatformInput {
+    if data.has_urls() || data.has_text() {
+        PlatformInput::FileDrop(FileDropEvent::DataEntered { position, data })
+    } else {
+        PlatformInput::FileDrop(FileDropEvent::Entered {
+            position,
+            paths: data.paths().clone(),
+        })
     }
 }
 

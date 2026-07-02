@@ -46,7 +46,9 @@ impl Render for Counter {
 
 fn main() {
     Application::new().run(|cx| {
-        cx.open_window(WindowOptions::default(), |_, cx| cx.new(|_| Counter { count: 0 }))
+        cx.open_window(WindowOptionsBuilder::new().title("Counter"), |_, cx| {
+            cx.new(|_| Counter { count: 0 })
+        })
             .unwrap();
     });
 }

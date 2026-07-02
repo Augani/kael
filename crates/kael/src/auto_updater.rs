@@ -7,6 +7,7 @@
 //! Supports Sparkle appcast XML and a simpler JSON feed format for update
 //! discovery.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,6 +22,8 @@ use sha2::{Digest as _, Sha256};
 use kael_release::update::{UpdateChannel, UpdateManifest, UpdatePolicy, verify_manifest};
 use semantic_version::SemanticVersion;
 
+use crate::NetworkPolicy;
+
 /// Configuration for the auto-updater.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutoUpdaterConfig {
@@ -31,6 +34,100 @@ pub struct AutoUpdaterConfig {
     pub check_interval: Duration,
     /// Whether to include pre-release versions.
     pub allow_prerelease: bool,
+}
+
+impl AutoUpdaterConfig {
+    /// Validate update feed configuration before creating an updater.
+    pub fn validate(&self) -> Result<()> {
+        validate_update_feed_url(&self.feed_url)?;
+        anyhow::ensure!(
+            self.check_interval > Duration::ZERO,
+            "update check interval must be greater than zero"
+        );
+        Ok(())
+    }
+}
+
+/// Builder for auto-updater configuration.
+#[derive(Debug, Clone)]
+pub struct AutoUpdaterConfigBuilder {
+    feed_url: String,
+    check_interval: Duration,
+    allow_prerelease: bool,
+}
+
+impl AutoUpdaterConfigBuilder {
+    /// Create an updater config builder with a feed URL.
+    pub fn new(feed_url: impl Into<String>) -> Self {
+        Self {
+            feed_url: feed_url.into(),
+            check_interval: Duration::from_secs(86_400),
+            allow_prerelease: false,
+        }
+    }
+
+    /// Set how often the host app should check for updates.
+    pub fn check_interval(mut self, interval: Duration) -> Self {
+        self.check_interval = interval;
+        self
+    }
+
+    /// Include pre-release versions in update checks.
+    pub fn allow_prerelease(mut self, allow: bool) -> Self {
+        self.allow_prerelease = allow;
+        self
+    }
+
+    /// Restrict update checks to stable releases.
+    pub fn stable_only(mut self) -> Self {
+        self.allow_prerelease = false;
+        self
+    }
+
+    /// Return the configured feed URL.
+    pub fn feed_url(&self) -> &str {
+        &self.feed_url
+    }
+
+    /// Return the configured check interval.
+    pub fn configured_check_interval(&self) -> Duration {
+        self.check_interval
+    }
+
+    /// Return whether pre-release updates are allowed.
+    pub fn allows_prerelease(&self) -> bool {
+        self.allow_prerelease
+    }
+
+    /// Validate the configured update settings.
+    pub fn validate(&self) -> Result<()> {
+        self.as_config().validate()
+    }
+
+    /// Build a validated updater config.
+    pub fn build_checked(self) -> Result<AutoUpdaterConfig> {
+        let config = self.as_config();
+        config.validate()?;
+        Ok(config)
+    }
+
+    fn as_config(&self) -> AutoUpdaterConfig {
+        AutoUpdaterConfig {
+            feed_url: self.feed_url.clone(),
+            check_interval: self.check_interval,
+            allow_prerelease: self.allow_prerelease,
+        }
+    }
+}
+
+impl From<AutoUpdaterConfig> for AutoUpdaterConfigBuilder {
+    fn from(config: AutoUpdaterConfig) -> Self {
+        Self {
+            feed_url: config.feed_url,
+            check_interval: config.check_interval,
+            allow_prerelease: config.allow_prerelease,
+        }
+    }
 }
 
 /// Information about an available update.
@@ -52,6 +149,109 @@ pub struct UpdateInfo {
     pub size_bytes: Option<u64>,
 }
 
+impl UpdateInfo {
+    /// Validate update metadata before offering or downloading it.
+    pub fn validate(&self) -> Result<()> {
+        validate_update_url(&self.download_url, "update download URL")?;
+        validate_optional_sha256(self.sha256.as_deref())?;
+        validate_optional_size(self.size_bytes)?;
+        validate_optional_signature(self.signature.as_deref())?;
+        Ok(())
+    }
+
+    /// Validate metadata required for signed update verification.
+    pub fn validate_signed_metadata(&self) -> Result<()> {
+        self.validate()?;
+        anyhow::ensure!(
+            self.signature.is_some(),
+            "signed update metadata requires a signature"
+        );
+        anyhow::ensure!(
+            self.sha256.is_some(),
+            "signed update metadata requires a sha256 hash"
+        );
+        anyhow::ensure!(
+            self.size_bytes.is_some(),
+            "signed update metadata requires a package size"
+        );
+        Ok(())
+    }
+}
+
+/// Builder for update metadata entries.
+#[derive(Debug, Clone)]
+pub struct UpdateInfoBuilder {
+    version: SemanticVersion,
+    release_notes: Option<String>,
+    download_url: String,
+    signature: Option<String>,
+    sha256: Option<String>,
+    size_bytes: Option<u64>,
+}
+
+impl UpdateInfoBuilder {
+    /// Create update metadata for a version and package URL.
+    pub fn new(version: SemanticVersion, download_url: impl Into<String>) -> Self {
+        Self {
+            version,
+            release_notes: None,
+            download_url: download_url.into(),
+            signature: None,
+            sha256: None,
+            size_bytes: None,
+        }
+    }
+
+    /// Set optional release notes.
+    pub fn release_notes(mut self, notes: impl Into<String>) -> Self {
+        self.release_notes = Some(notes.into());
+        self
+    }
+
+    /// Set the base64-encoded ed25519 signature.
+    pub fn signature(mut self, signature: impl Into<String>) -> Self {
+        self.signature = Some(signature.into());
+        self
+    }
+
+    /// Set the expected lowercase SHA-256 hex digest.
+    pub fn sha256(mut self, sha256: impl Into<String>) -> Self {
+        self.sha256 = Some(sha256.into());
+        self
+    }
+
+    /// Set the expected package size in bytes.
+    pub fn size_bytes(mut self, size_bytes: u64) -> Self {
+        self.size_bytes = Some(size_bytes);
+        self
+    }
+
+    /// Build update metadata without requiring signed-package fields.
+    pub fn build_checked(self) -> Result<UpdateInfo> {
+        let update = self.as_update_info();
+        update.validate()?;
+        Ok(update)
+    }
+
+    /// Build update metadata and require fields needed for signed verification.
+    pub fn build_signed_checked(self) -> Result<UpdateInfo> {
+        let update = self.as_update_info();
+        update.validate_signed_metadata()?;
+        Ok(update)
+    }
+
+    fn as_update_info(&self) -> UpdateInfo {
+        UpdateInfo {
+            version: self.version,
+            release_notes: self.release_notes.clone(),
+            download_url: self.download_url.clone(),
+            signature: self.signature.clone(),
+            sha256: self.sha256.clone(),
+            size_bytes: self.size_bytes,
+        }
+    }
+}
+
 /// Progress information during an update download.
 #[derive(Debug, Clone, Copy)]
 pub struct DownloadProgress {
@@ -67,6 +267,131 @@ impl DownloadProgress {
     pub fn fraction(&self) -> Option<f64> {
         self.total_bytes
             .map(|total| self.bytes_downloaded as f64 / total as f64)
+    }
+}
+
+/// A checked descriptor for an app-owned download.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadRequest {
+    /// URL to download.
+    pub url: String,
+    /// Destination path to write.
+    pub destination: PathBuf,
+    /// Optional expected SHA-256 (lowercase hex) of the downloaded bytes.
+    #[serde(default)]
+    pub sha256: Option<String>,
+    /// Optional expected size of the downloaded bytes.
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+    /// Whether parent directories may be created by the download worker.
+    pub create_parent_dirs: bool,
+    /// Optional outbound network policy to check before starting the download.
+    #[serde(default)]
+    pub network_policy: Option<NetworkPolicy>,
+}
+
+impl DownloadRequest {
+    /// Create a checked download request builder.
+    pub fn builder(
+        url: impl Into<String>,
+        destination: impl Into<PathBuf>,
+    ) -> DownloadRequestBuilder {
+        DownloadRequestBuilder::new(url, destination)
+    }
+
+    /// Validate URL, destination, expected metadata, and network policy.
+    pub fn validate(&self) -> Result<()> {
+        validate_update_url(&self.url, "download URL")?;
+        validate_download_destination(&self.destination)?;
+        validate_optional_sha256(self.sha256.as_deref())?;
+        validate_optional_size(self.size_bytes)?;
+        if let Some(policy) = &self.network_policy {
+            policy.validate()?;
+            anyhow::ensure!(
+                policy.check_url(&self.url)?,
+                "download URL is denied by network policy"
+            );
+        }
+        if !self.create_parent_dirs {
+            let parent = self.destination.parent().ok_or_else(|| {
+                anyhow::anyhow!("download destination must have a parent directory")
+            })?;
+            anyhow::ensure!(
+                parent.exists(),
+                "download destination parent directory must exist: {}",
+                parent.display()
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Builder for checked app-owned downloads.
+#[derive(Debug, Clone)]
+pub struct DownloadRequestBuilder {
+    url: String,
+    destination: PathBuf,
+    sha256: Option<String>,
+    size_bytes: Option<u64>,
+    create_parent_dirs: bool,
+    network_policy: Option<NetworkPolicy>,
+}
+
+impl DownloadRequestBuilder {
+    /// Create a builder from a URL and destination path.
+    pub fn new(url: impl Into<String>, destination: impl Into<PathBuf>) -> Self {
+        Self {
+            url: url.into(),
+            destination: destination.into(),
+            sha256: None,
+            size_bytes: None,
+            create_parent_dirs: false,
+            network_policy: None,
+        }
+    }
+
+    /// Set the expected lowercase SHA-256 hex digest.
+    pub fn sha256(mut self, sha256: impl Into<String>) -> Self {
+        self.sha256 = Some(sha256.into());
+        self
+    }
+
+    /// Set the expected size in bytes.
+    pub fn size_bytes(mut self, size_bytes: u64) -> Self {
+        self.size_bytes = Some(size_bytes);
+        self
+    }
+
+    /// Allow the download worker to create missing parent directories.
+    pub fn create_parent_dirs(mut self) -> Self {
+        self.create_parent_dirs = true;
+        self
+    }
+
+    /// Require the destination parent directory to already exist.
+    pub fn require_existing_parent(mut self) -> Self {
+        self.create_parent_dirs = false;
+        self
+    }
+
+    /// Attach an outbound network policy.
+    pub fn network_policy(mut self, policy: NetworkPolicy) -> Self {
+        self.network_policy = Some(policy);
+        self
+    }
+
+    /// Validate and build the request.
+    pub fn build_checked(self) -> Result<DownloadRequest> {
+        let request = DownloadRequest {
+            url: self.url,
+            destination: self.destination,
+            sha256: self.sha256,
+            size_bytes: self.size_bytes,
+            create_parent_dirs: self.create_parent_dirs,
+            network_policy: self.network_policy,
+        };
+        request.validate()?;
+        Ok(request)
     }
 }
 
@@ -138,6 +463,19 @@ impl AutoUpdater {
             require_signature: true,
             policy: None,
         }
+    }
+
+    /// Create a new auto-updater after validating its configuration.
+    pub fn new_checked(
+        config: impl Into<AutoUpdaterConfigBuilder>,
+        current_version: SemanticVersion,
+        http_client: Arc<dyn http_client::HttpClient>,
+    ) -> Result<Self> {
+        Ok(Self::new(
+            config.into().build_checked()?,
+            current_version,
+            http_client,
+        ))
     }
 
     /// Set the platform-specific installer backend.
@@ -452,6 +790,96 @@ fn channel_from_str(channel: &str) -> UpdateChannel {
     } else {
         UpdateChannel::Custom(trimmed.to_string())
     }
+}
+
+fn validate_update_feed_url(feed_url: &str) -> Result<()> {
+    validate_update_url(feed_url, "update feed URL")
+}
+
+fn validate_update_url(url: &str, label: &str) -> Result<()> {
+    anyhow::ensure!(!url.trim().is_empty(), "{} cannot be empty", label);
+    anyhow::ensure!(
+        url == url.trim(),
+        "{} cannot have leading or trailing whitespace",
+        label
+    );
+
+    let parsed = http_client::Url::parse(url).with_context(|| format!("{label} is invalid"))?;
+    anyhow::ensure!(
+        matches!(parsed.scheme(), "https" | "http"),
+        "{} must use http or https",
+        label
+    );
+    anyhow::ensure!(parsed.host_str().is_some(), "{} must include a host", label);
+    Ok(())
+}
+
+fn validate_optional_sha256(sha256: Option<&str>) -> Result<()> {
+    let Some(sha256) = sha256 else {
+        return Ok(());
+    };
+
+    anyhow::ensure!(
+        sha256.len() == 64 && sha256.chars().all(|ch| ch.is_ascii_hexdigit()),
+        "update sha256 must be a 64-character hex digest"
+    );
+    Ok(())
+}
+
+fn validate_optional_size(size_bytes: Option<u64>) -> Result<()> {
+    if let Some(size_bytes) = size_bytes {
+        anyhow::ensure!(
+            size_bytes > 0,
+            "update package size must be greater than zero"
+        );
+    }
+    Ok(())
+}
+
+fn validate_download_destination(destination: &std::path::Path) -> Result<()> {
+    let destination_text = destination.to_string_lossy();
+    anyhow::ensure!(
+        !destination_text.trim().is_empty(),
+        "download destination cannot be empty"
+    );
+    anyhow::ensure!(
+        destination.is_absolute(),
+        "download destination must be absolute: {}",
+        destination.display()
+    );
+    anyhow::ensure!(
+        !destination_text.chars().any(|ch| ch == '\0'),
+        "download destination cannot contain NUL characters"
+    );
+    anyhow::ensure!(
+        !destination.is_dir(),
+        "download destination cannot be an existing directory: {}",
+        destination.display()
+    );
+    Ok(())
+}
+
+fn validate_optional_signature(signature: Option<&str>) -> Result<()> {
+    let Some(signature) = signature else {
+        return Ok(());
+    };
+
+    anyhow::ensure!(
+        !signature.trim().is_empty(),
+        "update signature cannot be empty"
+    );
+    anyhow::ensure!(
+        signature == signature.trim(),
+        "update signature cannot have leading or trailing whitespace"
+    );
+    let signature_bytes = BASE64
+        .decode(signature)
+        .context("update signature is not valid base64")?;
+    anyhow::ensure!(
+        signature_bytes.len() == 64,
+        "update signature must decode to 64 bytes"
+    );
+    Ok(())
 }
 
 fn sanitize_package_filename(download_url: &str) -> String {
@@ -1428,6 +1856,97 @@ mod tests {
     }
 
     #[test]
+    fn download_request_builder_validates_common_downloads() {
+        let destination = std::env::temp_dir().join("kael-download-request.bin");
+        let request =
+            DownloadRequest::builder("https://example.com/files/report.pdf", &destination)
+                .sha256("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .size_bytes(1024)
+                .network_policy(
+                    crate::NetworkPolicyBuilder::new()
+                        .allow_host("example.com")
+                        .build_checked()
+                        .unwrap(),
+                )
+                .build_checked()
+                .unwrap();
+
+        assert_eq!(request.destination, destination);
+        assert_eq!(request.size_bytes, Some(1024));
+    }
+
+    #[test]
+    fn download_request_builder_rejects_generated_footguns() {
+        let destination = std::env::temp_dir().join("kael-download-request.bin");
+        assert!(
+            DownloadRequest::builder("file:///tmp/data.bin", &destination)
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadRequest::builder(" https://example.com/data.bin", &destination)
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadRequest::builder("https://example.com/data.bin", "relative.bin")
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadRequest::builder("https://example.com/data.bin", std::env::temp_dir())
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadRequest::builder("https://example.com/data.bin", &destination)
+                .sha256("bad")
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadRequest::builder("https://example.com/data.bin", &destination)
+                .size_bytes(0)
+                .build_checked()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn download_request_builder_checks_policy_and_parent_dirs() {
+        let missing_parent = std::env::temp_dir()
+            .join(format!(
+                "kael-missing-download-parent-{}",
+                std::process::id()
+            ))
+            .join("file.bin");
+
+        assert!(
+            DownloadRequest::builder("https://example.com/data.bin", &missing_parent)
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadRequest::builder("https://example.com/data.bin", &missing_parent)
+                .create_parent_dirs()
+                .build_checked()
+                .is_ok()
+        );
+        assert!(
+            DownloadRequest::builder("https://blocked.example.com/data.bin", missing_parent)
+                .network_policy(
+                    crate::NetworkPolicyBuilder::new()
+                        .allow_host("example.com")
+                        .build_checked()
+                        .unwrap(),
+                )
+                .create_parent_dirs()
+                .build_checked()
+                .is_err()
+        );
+    }
+
+    #[test]
     fn test_config_serialization_roundtrip() {
         let config = AutoUpdaterConfig {
             feed_url: "https://example.com/appcast.xml".to_string(),
@@ -1441,6 +1960,86 @@ mod tests {
         assert_eq!(deserialized.feed_url, config.feed_url);
         assert_eq!(deserialized.check_interval, config.check_interval);
         assert_eq!(deserialized.allow_prerelease, config.allow_prerelease);
+    }
+
+    #[test]
+    fn test_auto_updater_config_builder_validates_feed_and_interval() {
+        let config = AutoUpdaterConfigBuilder::new("https://example.com/feed.json")
+            .check_interval(Duration::from_secs(60))
+            .allow_prerelease(true)
+            .build_checked()
+            .unwrap();
+
+        assert_eq!(config.feed_url, "https://example.com/feed.json");
+        assert_eq!(config.check_interval, Duration::from_secs(60));
+        assert!(config.allow_prerelease);
+
+        let default_config = AutoUpdaterConfigBuilder::new("https://example.com/feed.json");
+        assert_eq!(default_config.feed_url(), "https://example.com/feed.json");
+        assert_eq!(
+            default_config.configured_check_interval(),
+            Duration::from_secs(86_400)
+        );
+        assert!(!default_config.allows_prerelease());
+
+        assert!(
+            AutoUpdaterConfigBuilder::new(" https://example.com/feed.json")
+                .validate()
+                .is_err()
+        );
+        assert!(AutoUpdaterConfigBuilder::new("").validate().is_err());
+        assert!(
+            AutoUpdaterConfigBuilder::new("file:///tmp/feed.json")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            AutoUpdaterConfigBuilder::new("https://example.com/feed.json")
+                .check_interval(Duration::ZERO)
+                .validate()
+                .is_err()
+        );
+
+        let raw = AutoUpdaterConfig {
+            feed_url: "https://example.com/feed.json".to_string(),
+            check_interval: Duration::from_secs(1),
+            allow_prerelease: false,
+        };
+        assert!(raw.validate().is_ok());
+        assert!(
+            AutoUpdaterConfig {
+                feed_url: "not a url".to_string(),
+                check_interval: Duration::from_secs(1),
+                allow_prerelease: false,
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_auto_updater_new_checked_validates_config() {
+        let client = http_client::FakeHttpClient::with_200_response();
+        let updater = AutoUpdater::new_checked(
+            AutoUpdaterConfigBuilder::new("https://example.com/feed.json"),
+            SemanticVersion::new(1, 0, 0),
+            client.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            updater.config().feed_url,
+            "https://example.com/feed.json".to_string()
+        );
+        assert!(
+            AutoUpdater::new_checked(
+                AutoUpdaterConfigBuilder::new("https://example.com/feed.json")
+                    .check_interval(Duration::ZERO),
+                SemanticVersion::new(1, 0, 0),
+                client,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1463,6 +2062,69 @@ mod tests {
         assert_eq!(deserialized.signature, info.signature);
         assert_eq!(deserialized.sha256, info.sha256);
         assert_eq!(deserialized.size_bytes, info.size_bytes);
+    }
+
+    #[test]
+    fn test_update_info_builder_validates_metadata() {
+        let signature = BASE64.encode([7u8; 64]);
+        let update = UpdateInfoBuilder::new(
+            SemanticVersion::new(2, 5, 1),
+            "https://example.com/v2.5.1.zip",
+        )
+        .release_notes("Fixed a bug")
+        .signature(signature.clone())
+        .sha256("a".repeat(64))
+        .size_bytes(4096)
+        .build_signed_checked()
+        .unwrap();
+
+        assert_eq!(update.version, SemanticVersion::new(2, 5, 1));
+        assert_eq!(update.release_notes.as_deref(), Some("Fixed a bug"));
+        assert_eq!(update.signature.as_deref(), Some(signature.as_str()));
+        assert!(update.validate_signed_metadata().is_ok());
+
+        assert!(
+            UpdateInfoBuilder::new(SemanticVersion::new(2, 5, 1), "file:///tmp/update.zip")
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            UpdateInfoBuilder::new(
+                SemanticVersion::new(2, 5, 1),
+                "https://example.com/update.zip",
+            )
+            .sha256("not-a-sha")
+            .build_checked()
+            .is_err()
+        );
+        assert!(
+            UpdateInfoBuilder::new(
+                SemanticVersion::new(2, 5, 1),
+                "https://example.com/update.zip",
+            )
+            .size_bytes(0)
+            .build_checked()
+            .is_err()
+        );
+        assert!(
+            UpdateInfoBuilder::new(
+                SemanticVersion::new(2, 5, 1),
+                "https://example.com/update.zip",
+            )
+            .signature("not-base64")
+            .build_checked()
+            .is_err()
+        );
+        assert!(
+            UpdateInfoBuilder::new(
+                SemanticVersion::new(2, 5, 1),
+                "https://example.com/update.zip",
+            )
+            .sha256("a".repeat(64))
+            .size_bytes(4096)
+            .build_signed_checked()
+            .is_err()
+        );
     }
 
     #[test]

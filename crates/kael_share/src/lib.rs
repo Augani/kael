@@ -84,6 +84,35 @@ impl ShareItem {
         Self::default()
     }
 
+    /// Creates a share item containing plain text.
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::new().with_text(text)
+    }
+
+    /// Creates a share item containing a URL.
+    pub fn url(url: impl Into<String>) -> Self {
+        Self::new().with_url(url)
+    }
+
+    /// Creates a share item containing one file attachment.
+    pub fn file(path: impl Into<PathBuf>) -> Self {
+        Self::new().with_file(path)
+    }
+
+    /// Creates a share item containing multiple file attachments.
+    pub fn files<I, P>(paths: I) -> Self
+    where
+        I: IntoIterator<Item = P>,
+        P: Into<PathBuf>,
+    {
+        Self::new().with_files(paths)
+    }
+
+    /// Creates a share item containing an in-memory image.
+    pub fn image(image: ShareImage) -> Self {
+        Self::new().with_image(image)
+    }
+
     /// Sets the plain text payload.
     pub fn with_text(mut self, text: impl Into<String>) -> Self {
         self.text = Some(text.into());
@@ -232,6 +261,35 @@ impl ShareSheet {
         }
     }
 
+    /// Creates a share sheet containing plain text.
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::new(vec![ShareItem::text(text)])
+    }
+
+    /// Creates a share sheet containing one URL.
+    pub fn url(url: impl Into<String>) -> Self {
+        Self::new(vec![ShareItem::url(url)])
+    }
+
+    /// Creates a share sheet containing one file attachment.
+    pub fn file(path: impl Into<PathBuf>) -> Self {
+        Self::new(vec![ShareItem::file(path)])
+    }
+
+    /// Creates a share sheet containing multiple file attachments.
+    pub fn files<I, P>(paths: I) -> Self
+    where
+        I: IntoIterator<Item = P>,
+        P: Into<PathBuf>,
+    {
+        Self::new(vec![ShareItem::files(paths)])
+    }
+
+    /// Creates a builder for composing share payloads incrementally.
+    pub fn builder() -> ShareSheetBuilder {
+        ShareSheetBuilder::new()
+    }
+
     /// Excludes specific destination types from backend selection.
     pub fn excluded_types(mut self, types: &[ShareType]) -> Self {
         self.excluded_types.extend(types.iter().copied());
@@ -325,7 +383,8 @@ impl ShareSheet {
         Some(uri)
     }
 
-    fn validate(&self) -> Result<()> {
+    /// Validate the configured payloads before invoking a platform backend.
+    pub fn validate(&self) -> Result<()> {
         if self.items.is_empty() {
             bail!("share sheet requires at least one item");
         }
@@ -358,6 +417,96 @@ impl ShareSheet {
         }
 
         Ok(())
+    }
+}
+
+/// Builder for composing a checked share sheet from common payload types.
+#[derive(Clone, Debug, Default)]
+pub struct ShareSheetBuilder {
+    items: Vec<ShareItem>,
+    pending_subject: Option<String>,
+    excluded_types: BTreeSet<ShareType>,
+}
+
+impl ShareSheetBuilder {
+    /// Creates an empty share sheet builder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a plain text item.
+    pub fn text(mut self, text: impl Into<String>) -> Self {
+        self.items.push(ShareItem::text(text));
+        self
+    }
+
+    /// Add a URL item.
+    pub fn url(mut self, url: impl Into<String>) -> Self {
+        self.items.push(ShareItem::url(url));
+        self
+    }
+
+    /// Add a file attachment item.
+    pub fn file(mut self, path: impl Into<PathBuf>) -> Self {
+        self.items.push(ShareItem::file(path));
+        self
+    }
+
+    /// Add a multi-file attachment item.
+    pub fn files<I, P>(mut self, paths: I) -> Self
+    where
+        I: IntoIterator<Item = P>,
+        P: Into<PathBuf>,
+    {
+        self.items.push(ShareItem::files(paths));
+        self
+    }
+
+    /// Add an in-memory image item.
+    pub fn image(mut self, image: ShareImage) -> Self {
+        self.items.push(ShareItem::image(image));
+        self
+    }
+
+    /// Set the subject used by mail-like share targets.
+    pub fn subject(mut self, subject: impl Into<String>) -> Self {
+        self.pending_subject = Some(subject.into());
+        self
+    }
+
+    /// Exclude one destination type.
+    pub fn exclude(mut self, share_type: ShareType) -> Self {
+        self.excluded_types.insert(share_type);
+        self
+    }
+
+    /// Exclude multiple destination types.
+    pub fn exclude_many(mut self, share_types: impl IntoIterator<Item = ShareType>) -> Self {
+        self.excluded_types.extend(share_types);
+        self
+    }
+
+    /// Returns the configured share items.
+    pub fn items(&self) -> &[ShareItem] {
+        &self.items
+    }
+
+    /// Validate and build the share sheet.
+    pub fn build_checked(mut self) -> Result<ShareSheet> {
+        if let Some(subject) = self.pending_subject.take() {
+            if let Some(first_item) = self.items.first_mut() {
+                first_item.subject = Some(subject);
+            } else {
+                self.items.push(ShareItem::new().with_subject(subject));
+            }
+        }
+
+        let sheet = ShareSheet {
+            items: self.items,
+            excluded_types: self.excluded_types,
+        };
+        sheet.validate()?;
+        Ok(sheet)
     }
 }
 
@@ -489,13 +638,79 @@ fn sanitize_file_name(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, path::Path};
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+    };
 
     #[test]
     fn share_sheet_rejects_empty_payloads() {
         let error = futures::executor::block_on(ShareSheet::new(vec![ShareItem::new()]).show())
             .expect_err("empty share sheet should fail validation");
         assert!(error.to_string().contains("non-empty payload"));
+    }
+
+    #[test]
+    fn share_item_convenience_constructors_create_payloads() {
+        assert_eq!(ShareItem::text("hello").text.as_deref(), Some("hello"));
+        assert_eq!(
+            ShareItem::url("https://example.com").url.as_deref(),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            ShareItem::file("/tmp/report.pdf").files,
+            vec![PathBuf::from("/tmp/report.pdf")]
+        );
+        assert_eq!(
+            ShareItem::files(["/tmp/a.txt", "/tmp/b.txt"]).files,
+            vec![PathBuf::from("/tmp/a.txt"), PathBuf::from("/tmp/b.txt")]
+        );
+        assert!(
+            ShareItem::image(ShareImage::new("image/png", vec![1]))
+                .image
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn share_sheet_builder_builds_checked_payloads() {
+        let sheet = ShareSheet::builder()
+            .subject("Sprint update")
+            .text("All checks passed")
+            .url("https://example.com/report")
+            .exclude(ShareType::Social)
+            .exclude_many([ShareType::Print])
+            .build_checked()
+            .expect("share sheet should be valid");
+
+        assert_eq!(sheet.items().len(), 2);
+        assert_eq!(sheet.items()[0].subject.as_deref(), Some("Sprint update"));
+        assert!(sheet.excluded().contains(&ShareType::Social));
+        assert!(sheet.excluded().contains(&ShareType::Print));
+    }
+
+    #[test]
+    fn share_sheet_builder_rejects_generated_bad_payloads() {
+        assert!(ShareSheet::builder().build_checked().is_err());
+        assert!(ShareSheet::builder().text("").build_checked().is_err());
+        assert!(
+            ShareSheet::builder()
+                .url("example.com/no-scheme")
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            ShareSheet::builder()
+                .image(ShareImage::new("", vec![1]))
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            ShareSheet::builder()
+                .image(ShareImage::new("image/png", Vec::<u8>::new()))
+                .build_checked()
+                .is_err()
+        );
     }
 
     #[test]

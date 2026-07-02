@@ -2,6 +2,28 @@
 
 Beyond the element tree, Kael gives you direct GPU drawing: an immediate-mode canvas, a vector path builder, gradients, backdrop blur, SVG, and Lottie playback. Everything renders through the same per-platform pipeline (Metal / DirectX 11 / Vulkan) with device-pixel snapping for crisp output at any DPI.
 
+## Visual escape-hatch ladder
+
+When porting an Electron app or giving an AI agent a graphics task, choose the
+lowest rung that solves the problem:
+
+| Need | Use today | Notes |
+| --- | --- | --- |
+| Product UI, dashboards, tool chrome | styled `div()` / `kael_ui` | Best memory and startup profile |
+| Charts, timelines, waveform views, custom controls | `canvas(...)`, `paint_quad`, `paint_path`, `PathBuilder` | Native immediate-mode drawing |
+| Icons, diagrams, generated vector assets | `svg()` / `PathBuilder` | Keep assets inspectable and themeable |
+| Motion graphics and loaders | `lottie(...)` | Decodes off the UI path |
+| Frosted or filtered subtrees | `backdrop_blur(...)` / `effect_layer(...)` | Effect layers are partial CSS-filter coverage, not arbitrary shaders |
+| Browser-only graphics such as WebGL/WebGPU demos | `webview(id, url)` | Treat as a WebView island with native Kael chrome around it |
+| Golden-image or benchmark evidence | `HeadlessRenderer` / `golden` | Off-screen rendering is for tests and measurements |
+| Native custom render target or custom shader | roadmap | Do not claim WebGL/WebGPU parity yet |
+
+The public `graphics_capability_report()` API exposes this same truth for
+readiness checks and agent planning. It reports full native coverage for styled
+elements, canvas, paths, gradients, SVG, and Lottie; partial coverage for clip
+shapes, effect layers, and headless rendering; WebView coverage for browser
+graphics fallback; and roadmap status for public render targets/custom shaders.
+
 ## Canvas
 
 `canvas` takes two closures — a prepaint pass (compute layout/state, returns a value) and a paint pass (draw into the bounds). Inside paint you call `window.paint_quad` and `window.paint_path`:

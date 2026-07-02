@@ -11,12 +11,14 @@ parameter. The macro builds the headless app context, seeds the RNG, and tears
 everything down afterward:
 
 ```rust
-use kael::TestAppContext;
+use kael::{TestAppContext, WindowOptionsBuilder};
 
 #[kael::test]
 fn opens_a_window(cx: &mut TestAppContext) {
     let window = cx.update(|cx| {
-        cx.open_window(Default::default(), |_, cx| cx.new(|_| MyView::default()))
+        cx.open_window(WindowOptionsBuilder::new().title("Test"), |_, cx| {
+            cx.new(|_| MyView::default())
+        })
             .unwrap()
     });
     window.update(cx, |view, _window, _cx| {

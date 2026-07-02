@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -114,6 +114,21 @@ impl Default for RetryPolicy {
     }
 }
 
+impl RetryPolicy {
+    /// Validate retry settings before scheduling generated jobs.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.delay_ms > 0 || self.max_retries == 0,
+            "retry delay must be greater than zero when retries are enabled"
+        );
+        anyhow::ensure!(
+            self.backoff_multiplier.is_finite() && self.backoff_multiplier >= 1.0,
+            "retry backoff multiplier must be finite and at least 1.0"
+        );
+        Ok(())
+    }
+}
+
 /// The current status of a background job.
 #[derive(Debug, Clone, PartialEq)]
 pub enum JobStatus {
@@ -196,6 +211,30 @@ impl JobDescriptor {
     pub fn with_dependencies(mut self, deps: Vec<String>) -> Self {
         self.dependencies = deps;
         self
+    }
+
+    /// Validate descriptor metadata before scheduling.
+    pub fn validate(&self) -> Result<()> {
+        validate_job_id(&self.id, "job id")?;
+        if let Some(policy) = &self.retry_policy {
+            policy.validate()?;
+        }
+
+        let mut seen = HashSet::new();
+        for dependency in &self.dependencies {
+            validate_job_id(dependency, "job dependency id")?;
+            anyhow::ensure!(
+                dependency != &self.id,
+                "job cannot depend on itself: {}",
+                self.id
+            );
+            anyhow::ensure!(
+                seen.insert(dependency.as_str()),
+                "job dependency id is duplicated: {dependency}"
+            );
+        }
+
+        Ok(())
     }
 }
 
@@ -295,6 +334,15 @@ impl JobScheduler {
         self.schedule_with_descriptor(job, descriptor)
     }
 
+    /// Schedules a job after validating generated job metadata.
+    pub fn schedule_checked<Job>(&self, job: Job) -> Result<String>
+    where
+        Job: BackgroundJob,
+    {
+        let descriptor = JobDescriptor::new(job.id());
+        self.schedule_with_descriptor_checked(job, descriptor)
+    }
+
     /// Schedules a job for execution with an explicit [`JobDescriptor`].
     pub fn schedule_with_descriptor<Job>(
         &self,
@@ -342,6 +390,25 @@ impl JobScheduler {
 
         self.try_execute(&id, job)?;
         Ok(id)
+    }
+
+    /// Schedules a job with an explicit descriptor after validating metadata.
+    pub fn schedule_with_descriptor_checked<Job>(
+        &self,
+        job: Job,
+        descriptor: JobDescriptor,
+    ) -> Result<String>
+    where
+        Job: BackgroundJob,
+    {
+        descriptor.validate()?;
+        anyhow::ensure!(
+            job.id() == descriptor.id,
+            "job descriptor id must match job id: descriptor={}, job={}",
+            descriptor.id,
+            job.id()
+        );
+        self.schedule_with_descriptor(job, descriptor)
     }
 
     /// Attempts to execute a job, respecting concurrency limits.
@@ -550,6 +617,21 @@ impl JobScheduler {
     }
 }
 
+fn validate_job_id(id: &str, label: &str) -> Result<()> {
+    anyhow::ensure!(!id.trim().is_empty(), "{label} cannot be empty");
+    anyhow::ensure!(
+        id == id.trim(),
+        "{label} cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(id.len() <= 128, "{label} cannot be longer than 128 bytes");
+    anyhow::ensure!(
+        id.chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | ':' | '-' | '_' | '/')),
+        "{label} must contain only ASCII letters, numbers, '.', ':', '-', '_' or '/'"
+    );
+    Ok(())
+}
+
 impl Default for JobScheduler {
     fn default() -> Self {
         Self::new()
@@ -694,6 +776,98 @@ mod tests {
         assert!(descriptor.retry_policy.is_some());
         assert_eq!(descriptor.retry_policy.unwrap().max_retries, 5);
         assert_eq!(descriptor.dependencies.len(), 2);
+    }
+
+    #[test]
+    fn test_job_descriptor_validates_generated_metadata() {
+        assert!(JobDescriptor::new("").validate().is_err());
+        assert!(JobDescriptor::new(" job").validate().is_err());
+        assert!(JobDescriptor::new("job id").validate().is_err());
+        assert!(JobDescriptor::new("job\nid").validate().is_err());
+        assert!(JobDescriptor::new("a".repeat(129)).validate().is_err());
+
+        assert!(
+            JobDescriptor::new("job")
+                .with_dependencies(vec!["job".to_string()])
+                .validate()
+                .is_err()
+        );
+        assert!(
+            JobDescriptor::new("job")
+                .with_dependencies(vec!["dep".to_string(), "dep".to_string()])
+                .validate()
+                .is_err()
+        );
+        assert!(
+            JobDescriptor::new("job")
+                .with_dependencies(vec!["bad dep".to_string()])
+                .validate()
+                .is_err()
+        );
+        assert!(
+            JobDescriptor::new("job")
+                .with_retry_policy(RetryPolicy {
+                    max_retries: 1,
+                    delay_ms: 0,
+                    backoff_multiplier: 2.0,
+                })
+                .validate()
+                .is_err()
+        );
+        assert!(
+            JobDescriptor::new("job")
+                .with_retry_policy(RetryPolicy {
+                    max_retries: 1,
+                    delay_ms: 100,
+                    backoff_multiplier: 0.5,
+                })
+                .validate()
+                .is_err()
+        );
+
+        assert!(
+            JobDescriptor::new("job")
+                .with_dependencies(vec!["parent".to_string()])
+                .with_retry_policy(RetryPolicy {
+                    max_retries: 0,
+                    delay_ms: 0,
+                    backoff_multiplier: 1.0,
+                })
+                .validate()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_schedule_checked_validates_descriptor_and_job_id() {
+        let scheduler = JobScheduler::new();
+        assert!(
+            scheduler
+                .schedule_checked(TestJob {
+                    id: "bad id".to_string(),
+                })
+                .is_err()
+        );
+
+        let descriptor = JobDescriptor::new("other-job");
+        assert!(
+            scheduler
+                .schedule_with_descriptor_checked(
+                    TestJob {
+                        id: "actual-job".to_string(),
+                    },
+                    descriptor,
+                )
+                .is_err()
+        );
+
+        let id = scheduler
+            .schedule_checked(TestJob {
+                id: "valid-job".to_string(),
+            })
+            .unwrap();
+        assert_eq!(id, "valid-job");
+        assert_eq!(scheduler.status(&id), Some(JobStatus::Failed));
     }
 
     #[test]

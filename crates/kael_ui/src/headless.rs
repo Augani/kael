@@ -6,6 +6,95 @@
 //! controller in your view state, drive it from events, and render whatever you like
 //! from the state it exposes. This is the escape hatch from same-looking apps.
 
+use kael::Keystroke;
+
+/// A focus-trap action requested by keyboard input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FocusTrapAction {
+    /// Move to the first focusable item in the trap.
+    FocusFirst,
+    /// Move to the next focusable item in the current tab group.
+    FocusNext,
+    /// Move to the previous focusable item in the current tab group.
+    FocusPrevious,
+    /// Dismiss the trapped surface.
+    Dismiss,
+}
+
+/// Keyboard behavior for modal surfaces that should keep focus inside themselves.
+///
+/// Render the trap root with a stable focus handle and tab index, put the
+/// trap's children in the same tab group, then call
+/// [`FocusTrapController::action_for_keystroke`] from `on_key_down`. Apply
+/// `FocusNext` with `window.focus_next_in_group()`, `FocusPrevious` with
+/// `window.focus_prev_in_group()`, and `Dismiss` with your close handler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FocusTrapController {
+    dismiss_on_escape: bool,
+    autofocus: bool,
+}
+
+impl Default for FocusTrapController {
+    fn default() -> Self {
+        Self::modal()
+    }
+}
+
+impl FocusTrapController {
+    /// Create the default modal focus-trap behavior.
+    pub fn modal() -> Self {
+        Self {
+            dismiss_on_escape: true,
+            autofocus: true,
+        }
+    }
+
+    /// Create a trap that keeps Tab navigation inside the group but does not dismiss on Escape.
+    pub fn persistent() -> Self {
+        Self {
+            dismiss_on_escape: false,
+            autofocus: true,
+        }
+    }
+
+    /// Set whether Escape should produce [`FocusTrapAction::Dismiss`].
+    pub fn dismiss_on_escape(mut self, dismiss_on_escape: bool) -> Self {
+        self.dismiss_on_escape = dismiss_on_escape;
+        self
+    }
+
+    /// Set whether the trap should focus itself when it opens.
+    pub fn autofocus(mut self, autofocus: bool) -> Self {
+        self.autofocus = autofocus;
+        self
+    }
+
+    /// Whether the trap should focus its root when it opens.
+    pub fn should_autofocus(&self) -> bool {
+        self.autofocus
+    }
+
+    /// Return the focus action for a platform keystroke, if this trap handles it.
+    pub fn action_for_keystroke(&self, keystroke: &Keystroke) -> Option<FocusTrapAction> {
+        self.action_for_key(keystroke.key.as_ref(), keystroke.modifiers.shift)
+    }
+
+    /// Return the focus action for a key name and shift state.
+    pub fn action_for_key(&self, key: &str, shift: bool) -> Option<FocusTrapAction> {
+        if key.eq_ignore_ascii_case("tab") {
+            if shift {
+                Some(FocusTrapAction::FocusPrevious)
+            } else {
+                Some(FocusTrapAction::FocusNext)
+            }
+        } else if self.dismiss_on_escape && key.eq_ignore_ascii_case("escape") {
+            Some(FocusTrapAction::Dismiss)
+        } else {
+            None
+        }
+    }
+}
+
 /// Open/closed disclosure state for accordions, collapsibles, and details/summary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct DisclosureController {
@@ -891,9 +980,60 @@ impl TreeController {
 mod tests {
     use super::{
         AccordionController, CarouselController, ComboboxController, DisclosureController,
-        PaginationController, RadioGroupController, SelectController, SliderController,
-        StepperController, TabsController, ToastQueueController, ToggleController, TreeController,
+        FocusTrapAction, FocusTrapController, PaginationController, RadioGroupController,
+        SelectController, SliderController, StepperController, TabsController,
+        ToastQueueController, ToggleController, TreeController,
     };
+
+    #[test]
+    fn focus_trap_maps_tab_escape_and_shift_tab() {
+        let trap = FocusTrapController::modal();
+
+        assert!(trap.should_autofocus());
+        assert_eq!(
+            trap.action_for_key("tab", false),
+            Some(FocusTrapAction::FocusNext)
+        );
+        assert_eq!(
+            trap.action_for_key("tab", true),
+            Some(FocusTrapAction::FocusPrevious)
+        );
+        assert_eq!(
+            trap.action_for_key("escape", false),
+            Some(FocusTrapAction::Dismiss)
+        );
+        assert_eq!(trap.action_for_key("enter", false), None);
+    }
+
+    #[test]
+    fn persistent_focus_trap_does_not_dismiss_on_escape() {
+        let trap = FocusTrapController::persistent().autofocus(false);
+
+        assert!(!trap.should_autofocus());
+        assert_eq!(
+            trap.action_for_key("tab", false),
+            Some(FocusTrapAction::FocusNext)
+        );
+        assert_eq!(trap.action_for_key("escape", false), None);
+    }
+
+    #[test]
+    fn focus_trap_reads_parsed_keystrokes() {
+        let trap = FocusTrapController::modal().dismiss_on_escape(false);
+        let tab = kael::Keystroke::parse("tab").unwrap();
+        let shift_tab = kael::Keystroke::parse("shift-tab").unwrap();
+        let escape = kael::Keystroke::parse("escape").unwrap();
+
+        assert_eq!(
+            trap.action_for_keystroke(&tab),
+            Some(FocusTrapAction::FocusNext)
+        );
+        assert_eq!(
+            trap.action_for_keystroke(&shift_tab),
+            Some(FocusTrapAction::FocusPrevious)
+        );
+        assert_eq!(trap.action_for_keystroke(&escape), None);
+    }
 
     #[test]
     fn disclosure_toggles() {

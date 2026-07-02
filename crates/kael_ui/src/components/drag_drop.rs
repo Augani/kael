@@ -290,6 +290,7 @@ impl<T: Clone + Debug + 'static> RenderOnce for DropZone<T> {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = Theme::of(cx);
         let user_style = self.user_style;
+        let on_drop = self.on_drop.clone();
 
         let (border_width, border_color, bg_color) = match (self.drop_style, self.active) {
             (DropZoneStyle::Dashed, false) => {
@@ -338,6 +339,12 @@ impl<T: Clone + Debug + 'static> RenderOnce for DropZone<T> {
                 let mut div = this;
                 div.style().refine(&user_style);
                 div
+            })
+            .can_drop(|value, _, _| value.downcast_ref::<DragData<T>>().is_some())
+            .on_drop(move |data: &DragData<T>, window, cx| {
+                if let Some(on_drop) = &on_drop {
+                    on_drop(data, window, cx);
+                }
             })
             .children(self.children)
     }

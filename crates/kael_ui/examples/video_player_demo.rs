@@ -170,7 +170,7 @@ impl Render for VideoPlayerDemoApp {
                         div()
                             .text_size(px(13.0))
                             .text_color(theme.tokens.accent_foreground)
-                            .child("The VideoPlayer provides UI controls. To play actual video:"),
+                            .child("For URL/file sources, use the built-in controller-backed player:"),
                     )
                     .child(
                         div()
@@ -181,10 +181,54 @@ impl Render for VideoPlayerDemoApp {
                             .bg(theme.tokens.background.opacity(0.3))
                             .rounded(px(6.0))
                             .child(
-r#"// 1. Create state
+r#"use std::time::Duration;
+
+let player = VideoPlayer::url(video_url, cx)
+    .object_fit(ObjectFit::Contain)
+    .playback_route(VideoPlayerRoute::Auto)
+    .content_type(content_type_header)
+    .preload(VideoPreload::Metadata)
+    .controls(true)
+    .volume(0.8)
+    .muted(false)
+    .playback_rate(1.0)
+    .looping(false)
+    .start_at(Duration::from_secs(0))
+    .show_captions(true)
+    .webvtt_text_track("en", "English", Some("en"), webvtt_source)
+    .select_text_track("en")
+    .caption_style(
+        VideoCaptionStyle::default()
+            .background(kael::black().opacity(0.82))
+            .font_size(px(16.0)),
+    )
+    .on_can_play(|_, _| println!("ready to play"))
+    .on_ready_state_change(|ready_state, _, _| println!("ready state: {ready_state:?}"))
+    .on_progress(|buffered_ranges, _, _| println!("buffered: {buffered_ranges:?}"))
+    .on_playing(|_, _| println!("playing"))
+    .on_paused(|_, _| println!("paused"))
+    .on_time_update(|current_time, _, _| println!("time {current_time:?}"))
+    .on_seeked(|current_time, _, _| println!("seeked to {current_time:?}"))
+    .on_volume_changed(|volume, muted, _, _| println!("volume {volume}, muted {muted}"))
+    .on_rate_change(|rate, _, _| println!("rate {rate}x"))
+    .on_cue_change(|cues, _, _| println!("active cues: {}", cues.len()))
+    .on_error(|error, _, _| eprintln!("{error}"));
+
+player
+
+// Auto routes normal files/URLs to Kael's native player and HLS/DASH manifests
+// or adaptive streaming content types to a WebView-hosted browser <video>.
+let hls_player = VideoPlayer::url("https://cdn.example.com/playback?id=stream", cx)
+    .content_type("application/vnd.apple.mpegurl")
+    .autoplay()
+    .muted(true);
+
+// For custom decoders, keep using the controls/state overlay:
+
+// 1. Create state
 let video_state = cx.new(|cx| VideoPlayerState::new(cx));
 
-// 2. Your video decoder updates our state
+// 2. Your video decoder or media controller updates our state
 decoder.on_frame(|frame_path, time| {
     video_state.update(cx, |s, cx| {
         s.set_frame(frame_path, cx);  // We render the frame
@@ -192,7 +236,7 @@ decoder.on_frame(|frame_path, time| {
     });
 });
 
-// 3. Handle playback events
+// 3. Handle playback events from the controls
 VideoPlayer::new(video_state)
     .on_play(|_, _| decoder.play())
     .on_pause(|_, _| decoder.pause())
@@ -203,7 +247,7 @@ VideoPlayer::new(video_state)
                         div()
                             .text_size(px(13.0))
                             .text_color(theme.tokens.accent_foreground)
-                            .child("Or use .overlay_only() for just controls over your own video rendering."),
+                            .child("Use .overlay_only() when you want these controls over your own video rendering surface."),
                     ),
             )
     }

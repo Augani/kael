@@ -96,6 +96,14 @@ impl MediaSource {
         Self::Bytes(Arc::<[u8]>::from(bytes))
     }
 
+    /// Return the cache key for a reader-backed media source.
+    pub fn reader_key(&self) -> Option<&str> {
+        match self {
+            Self::Reader(source) => Some(&source.key),
+            _ => None,
+        }
+    }
+
     fn open_reader(&self) -> Result<MediaReader, AudioPlaybackError> {
         match self {
             Self::File(path) => Ok(MediaReader::File(BufReader::new(File::open(path)?))),
@@ -362,7 +370,25 @@ impl VideoFrameStream {
 
     /// Restart decoding from the beginning of the media source.
     pub fn restart(&mut self) -> Result<(), MediaDecodeError> {
-        *self = Self::new(self.source.clone())?;
+        self.seek(Duration::ZERO)?;
+        Ok(())
+    }
+
+    /// Seek the stream near the requested playback position.
+    ///
+    /// FFmpeg seeks to a nearby keyframe, so callers should continue decoding
+    /// forward and select the closest frame for the exact requested position.
+    pub fn seek(&mut self, position: Duration) -> Result<(), MediaDecodeError> {
+        let timestamp =
+            duration_to_time_base(position, ffmpeg::util::mathematics::rescale::TIME_BASE);
+        let seek_margin = i64::from(ffmpeg::ffi::AV_TIME_BASE);
+        let min_timestamp = timestamp.saturating_sub(seek_margin);
+
+        self.input_context
+            .seek(timestamp, min_timestamp..timestamp)
+            .map_err(ffmpeg_decode_error)?;
+        self.decoder.flush();
+        self.sent_eof = false;
         Ok(())
     }
 
@@ -470,6 +496,7 @@ struct DecodedAudio {
 struct AudioHandleState {
     source: MediaSource,
     volume: f32,
+    speed: f32,
     duration: Option<Duration>,
     decoded_audio: Option<Arc<DecodedAudio>>,
     position: Duration,
@@ -483,6 +510,7 @@ struct AudioPlaybackRequest {
     generation: u64,
     source: MediaSource,
     volume: f32,
+    speed: f32,
     position: Duration,
     duration: Option<Duration>,
     decoded_audio: Option<Arc<DecodedAudio>>,
@@ -521,6 +549,7 @@ impl AudioHandle {
             state: Rc::new(Mutex::new(AudioHandleState {
                 source: source.into(),
                 volume: 1.0,
+                speed: 1.0,
                 duration: None,
                 decoded_audio: None,
                 position: Duration::ZERO,
@@ -564,6 +593,7 @@ impl AudioHandle {
                 generation: state.generation,
                 source: state.source.clone(),
                 volume: state.volume,
+                speed: state.speed,
                 position: requested_position,
                 duration: state.duration,
                 decoded_audio: state.decoded_audio.clone(),
@@ -574,6 +604,7 @@ impl AudioHandle {
         let (engine, duration, position, decoded_audio) = create_engine_with_cache(
             &request.source,
             request.volume,
+            request.speed,
             request.position,
             request.decoded_audio,
         )?;
@@ -592,6 +623,7 @@ impl AudioHandle {
         state.started_at = Some(Instant::now());
         state.state = PlaybackState::Playing;
         engine.sink.set_volume(state.volume.max(0.0));
+        engine.sink.set_speed(state.speed);
         state.engine = Some(engine);
         state.generation += 1;
         Ok(())
@@ -635,6 +667,7 @@ impl AudioHandle {
                 generation: state.generation,
                 source: state.source.clone(),
                 volume: state.volume,
+                speed: state.speed,
                 position,
                 duration: state.duration,
                 decoded_audio: state.decoded_audio.clone(),
@@ -655,6 +688,7 @@ impl AudioHandle {
                     create_engine_with_cache(
                         &request.source,
                         request.volume,
+                        request.speed,
                         clamped_position,
                         decoded_audio,
                     )?;
@@ -686,6 +720,7 @@ impl AudioHandle {
         };
         if let Some(engine) = engine {
             engine.sink.set_volume(state.volume.max(0.0));
+            engine.sink.set_speed(state.speed);
             state.engine = Some(engine);
         } else {
             state.engine = None;
@@ -703,6 +738,29 @@ impl AudioHandle {
         if let Some(engine) = state.engine.as_ref() {
             engine.sink.set_volume(clamped_volume);
         }
+    }
+
+    /// Set playback speed. Values less than or equal to zero are clamped to a
+    /// small positive value so playback can keep advancing.
+    pub fn set_speed(&self, speed: f32) {
+        let mut state = self.state.lock();
+        state.refresh_finished();
+        let speed = sanitize_playback_speed(speed);
+        state.position = state.current_position();
+        state.started_at = if state.state == PlaybackState::Playing {
+            Some(Instant::now())
+        } else {
+            None
+        };
+        state.speed = speed;
+        if let Some(engine) = state.engine.as_ref() {
+            engine.sink.set_speed(speed);
+        }
+    }
+
+    /// Return the current playback speed.
+    pub fn speed(&self) -> f32 {
+        self.state.lock().speed
     }
 
     /// Return the current playback volume.
@@ -769,9 +827,15 @@ pub fn probe_audio_duration(
 impl AudioHandleState {
     fn current_position(&self) -> Duration {
         let position = if self.state == PlaybackState::Playing {
-            self.started_at
-                .map(|started_at| self.position + started_at.elapsed())
-                .unwrap_or(self.position)
+            if let Some(engine) = self.engine.as_ref() {
+                self.position + engine.sink.get_pos()
+            } else {
+                self.started_at
+                    .map(|started_at| {
+                        self.position + scale_duration(started_at.elapsed(), self.speed)
+                    })
+                    .unwrap_or(self.position)
+            }
         } else {
             self.position
         };
@@ -829,6 +893,7 @@ fn probe_duration_with_cache(
 fn create_engine_with_cache(
     source: &MediaSource,
     volume: f32,
+    speed: f32,
     position: Duration,
     decoded_audio: Option<Arc<DecodedAudio>>,
 ) -> Result<
@@ -842,13 +907,14 @@ fn create_engine_with_cache(
 > {
     let mut decoded_audio = decoded_audio;
     let (engine, duration, clamped_position) =
-        create_engine(source, volume, position, &mut decoded_audio)?;
+        create_engine(source, volume, speed, position, &mut decoded_audio)?;
     Ok((engine, duration, clamped_position, decoded_audio))
 }
 
 fn create_engine(
     source: &MediaSource,
     volume: f32,
+    speed: f32,
     position: Duration,
     decoded_audio: &mut Option<Arc<DecodedAudio>>,
 ) -> Result<(AudioEngine, Option<Duration>, Duration), AudioPlaybackError> {
@@ -881,6 +947,7 @@ fn create_engine(
         }
     };
     sink.set_volume(volume.max(0.0));
+    sink.set_speed(sanitize_playback_speed(speed));
     Ok((
         AudioEngine {
             _stream: stream,
@@ -889,6 +956,18 @@ fn create_engine(
         duration,
         clamped_position,
     ))
+}
+
+fn sanitize_playback_speed(speed: f32) -> f32 {
+    if speed.is_finite() && speed > 0.0 {
+        speed
+    } else {
+        1.0
+    }
+}
+
+fn scale_duration(duration: Duration, factor: f32) -> Duration {
+    Duration::from_secs_f64(duration.as_secs_f64() * f64::from(sanitize_playback_speed(factor)))
 }
 
 fn ensure_decoded_audio(
@@ -1194,6 +1273,16 @@ fn duration_from_time_base(timestamp: i64, time_base: ffmpeg::Rational) -> Durat
     Duration::from_secs_f64((timestamp as f64) * f64::from(time_base))
 }
 
+fn duration_to_time_base(duration: Duration, time_base: ffmpeg::Rational) -> i64 {
+    let seconds = duration.as_secs_f64();
+    let units = seconds / f64::from(time_base);
+    if !units.is_finite() || units <= 0.0 {
+        return 0;
+    }
+
+    units.round().min(i64::MAX as f64) as i64
+}
+
 fn copy_bgra_frame(frame: &ffmpeg::util::frame::video::Video) -> Box<[u8]> {
     let width = frame.width() as usize;
     let height = frame.height() as usize;
@@ -1216,8 +1305,10 @@ fn copy_bgra_frame(frame: &ffmpeg::util::frame::video::Video) -> Box<[u8]> {
 mod tests {
     use super::{
         AudioHandle, MAX_DECODED_VIDEO_BYTES, MAX_DECODED_VIDEO_FRAMES, MediaDecodeError,
-        MediaDecoder, MediaSource, PlaybackState, VideoFrame, push_decoded_video_frame,
+        MediaDecoder, MediaSource, PlaybackState, VideoFrame, duration_from_time_base,
+        duration_to_time_base, push_decoded_video_frame,
     };
+    use ffmpeg_next as ffmpeg;
     use std::{io::Cursor, sync::Arc, time::Duration};
 
     #[test]
@@ -1237,6 +1328,22 @@ mod tests {
 
         assert_eq!(handle.state(), PlaybackState::Stopped);
         assert_eq!(handle.position(), Duration::from_millis(250));
+    }
+
+    #[test]
+    fn speed_updates_without_starting_playback() {
+        let handle = AudioHandle::new(MediaSource::bytes(silent_wav(8_000, 8_000)));
+
+        handle.seek(Duration::from_millis(250)).unwrap();
+        handle.set_speed(1.75);
+
+        assert_eq!(handle.speed(), 1.75);
+        assert_eq!(handle.position(), Duration::from_millis(250));
+        assert_eq!(handle.state(), PlaybackState::Stopped);
+
+        handle.set_speed(0.0);
+
+        assert_eq!(handle.speed(), 1.0);
     }
 
     #[test]
@@ -1260,6 +1367,17 @@ mod tests {
 
         assert_eq!(handle.position(), Duration::ZERO);
         assert_eq!(handle.state(), PlaybackState::Stopped);
+    }
+
+    #[test]
+    fn duration_time_base_conversion_round_trips() {
+        let time_base = ffmpeg::Rational(1, 1_000);
+        let duration = Duration::from_millis(1_234);
+        let timestamp = duration_to_time_base(duration, time_base);
+
+        assert_eq!(timestamp, 1_234);
+        assert_eq!(duration_from_time_base(timestamp, time_base), duration);
+        assert_eq!(duration_to_time_base(Duration::ZERO, time_base), 0);
     }
 
     #[test]

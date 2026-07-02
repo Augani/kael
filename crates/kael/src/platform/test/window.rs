@@ -308,8 +308,12 @@ impl PlatformWindow for TestWindow {
         None
     }
 
-    fn update_accessibility_tree(&mut self, tree: &crate::AccessibilityTree) {
+    fn update_accessibility_tree(
+        &mut self,
+        tree: &crate::AccessibilityTree,
+    ) -> Vec<crate::AccessibilityActionRequest> {
         self.0.lock().accessibility_tree = Some(tree.clone());
+        Vec::new()
     }
 }
 

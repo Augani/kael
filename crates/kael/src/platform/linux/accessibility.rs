@@ -101,14 +101,27 @@ impl AtSpiAccessibleRoot {
         self.adapter.borrow_mut().update_if_active(|| update);
     }
 
-    /// Drain action requests received from assistive technology, translated
-    /// into kael's [`crate::AccessibilityAction`] plus the target node id.
-    pub fn drain_actions(&self) -> Vec<(crate::AccessibilityId, crate::AccessibilityAction)> {
+    /// Drain action requests received from assistive technology, normalized
+    /// against the latest kael accessibility tree.
+    pub fn drain_actions(
+        &self,
+        tree: &crate::AccessibilityTree,
+    ) -> Vec<crate::AccessibilityActionRequest> {
         let mut out = Vec::new();
         if let Ok(mut pending) = self.pending_actions.lock() {
             for request in pending.drain(..) {
-                if let Some(action) = crate::AccessibilityAction::from_accesskit(request.action) {
-                    out.push((crate::AccessibilityId(request.target.0), action));
+                let node_id = crate::AccessibilityId(request.target.0);
+                if let Some(node) = tree.get(node_id) {
+                    if let Some(request) =
+                        crate::AccessibilityActionRequest::from_accesskit_for_node_with_data(
+                            node_id,
+                            node,
+                            request.action,
+                            request.data,
+                        )
+                    {
+                        out.push(request);
+                    }
                 }
             }
         }

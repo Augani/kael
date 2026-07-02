@@ -1875,17 +1875,12 @@ impl PlatformWindow for X11Window {
         })
     }
 
-    fn update_accessibility_tree(&mut self, tree: &crate::AccessibilityTree) {
+    fn update_accessibility_tree(
+        &mut self,
+        tree: &crate::AccessibilityTree,
+    ) -> Vec<crate::AccessibilityActionRequest> {
         let state = self.0.state.borrow();
         state.accessibility_root.update_tree(tree);
-        let actions = state.accessibility_root.drain_actions();
-        drop(state);
-        for (target, action) in actions {
-            log::debug!(
-                "AccessKit action request: {:?} on node {}",
-                action,
-                target.0
-            );
-        }
+        state.accessibility_root.drain_actions(tree)
     }
 }

@@ -1,9 +1,11 @@
 use crate::{
-    AnyWindowHandle, BackgroundExecutor, ClipboardItem, CursorStyle, DevicePixels,
-    DummyKeyboardMapper, ForegroundExecutor, Keymap, NoopTextSystem, PathPromptOptions, Platform,
-    PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem, PowerMode,
-    PromptButton, ScreenCaptureFrame, ScreenCaptureSource, ScreenCaptureStream, SourceMetadata,
-    SystemPowerEvent, Task, TestDisplay, TestWindow, WindowAppearance, WindowParams, size,
+    AnyWindowHandle, AttentionType, BackgroundExecutor, BiometricStatus, ClipboardItem,
+    CursorStyle, DevicePixels, DialogOptions, DummyKeyboardMapper, ForegroundExecutor, Keymap,
+    MediaKeyEvent, NetworkStatus, NoopTextSystem, PathPromptOptions, Platform, PlatformDisplay,
+    PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem, PowerMode,
+    PowerSaveBlockerKind, PromptButton, ScreenCaptureFrame, ScreenCaptureSource,
+    ScreenCaptureStream, SourceMetadata, SystemPowerEvent, Task, TestDisplay, TestWindow,
+    TrayMenuItem, WindowAppearance, WindowParams, size,
 };
 use anyhow::Result;
 use collections::VecDeque;
@@ -11,6 +13,7 @@ use futures::channel::oneshot;
 use parking_lot::Mutex;
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     path::{Path, PathBuf},
     rc::{Rc, Weak},
     sync::Arc,
@@ -30,16 +33,34 @@ pub(crate) struct TestPlatform {
     active_display: Rc<dyn PlatformDisplay>,
     active_cursor: Mutex<CursorStyle>,
     current_clipboard_item: Mutex<Option<ClipboardItem>>,
+    credentials: RefCell<HashMap<String, (String, Vec<u8>)>>,
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     current_primary_item: Mutex<Option<ClipboardItem>>,
     pub(crate) prompts: RefCell<TestPrompts>,
     screen_capture_sources: RefCell<Vec<TestScreenCaptureSource>>,
+    registered_url_schemes: RefCell<Vec<String>>,
+    recent_documents: RefCell<Vec<PathBuf>>,
+    tray_menu: RefCell<Vec<TrayMenuItem>>,
+    tray_tooltip: RefCell<String>,
+    tray_panel_mode: Cell<bool>,
+    keep_alive_without_windows: Cell<bool>,
+    auto_launch: RefCell<HashMap<String, bool>>,
     pub opened_url: RefCell<Option<String>>,
     pub text_system: Arc<dyn PlatformTextSystem>,
     power_mode: Cell<PowerMode>,
+    next_power_save_blocker_id: Cell<u32>,
+    power_save_blockers: RefCell<Vec<(u32, PowerSaveBlockerKind)>>,
+    user_attention: Cell<Option<AttentionType>>,
+    user_attention_cancel_count: Cell<usize>,
+    network_status: Cell<NetworkStatus>,
+    biometric_status: Cell<BiometricStatus>,
+    biometric_auth_success: Cell<bool>,
+    biometric_auth_reasons: RefCell<Vec<String>>,
     reduce_motion: Cell<bool>,
     open_urls_callback: RefCell<Option<Box<dyn FnMut(Vec<String>)>>>,
     system_power_callback: RefCell<Option<Box<dyn FnMut(SystemPowerEvent)>>>,
+    media_key_callback: RefCell<Option<Box<dyn FnMut(MediaKeyEvent)>>>,
+    network_status_callback: RefCell<Option<Box<dyn FnMut(NetworkStatus)>>>,
     #[cfg(target_os = "windows")]
     bitmap_factory: std::mem::ManuallyDrop<IWICImagingFactory>,
     weak: Weak<Self>,
@@ -117,18 +138,36 @@ impl TestPlatform {
             foreground_executor,
             prompts: Default::default(),
             screen_capture_sources: Default::default(),
+            registered_url_schemes: Default::default(),
+            recent_documents: Default::default(),
+            tray_menu: Default::default(),
+            tray_tooltip: Default::default(),
+            tray_panel_mode: Cell::new(false),
+            keep_alive_without_windows: Cell::new(false),
+            auto_launch: Default::default(),
             active_cursor: Default::default(),
             active_display: Rc::new(TestDisplay::new()),
             active_window: Default::default(),
             current_clipboard_item: Mutex::new(None),
+            credentials: Default::default(),
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             current_primary_item: Mutex::new(None),
             weak: weak.clone(),
             opened_url: Default::default(),
             power_mode: Cell::new(PowerMode::Performance),
+            next_power_save_blocker_id: Cell::new(1),
+            power_save_blockers: Default::default(),
+            user_attention: Cell::new(None),
+            user_attention_cancel_count: Cell::new(0),
+            network_status: Cell::new(NetworkStatus::Online),
+            biometric_status: Cell::new(BiometricStatus::Unavailable),
+            biometric_auth_success: Cell::new(false),
+            biometric_auth_reasons: Default::default(),
             reduce_motion: Cell::new(false),
             open_urls_callback: RefCell::new(None),
             system_power_callback: RefCell::new(None),
+            media_key_callback: RefCell::new(None),
+            network_status_callback: RefCell::new(None),
             #[cfg(target_os = "windows")]
             bitmap_factory,
             text_system,
@@ -198,6 +237,14 @@ impl TestPlatform {
         *self.screen_capture_sources.borrow_mut() = sources;
     }
 
+    pub(crate) fn registered_url_schemes(&self) -> Vec<String> {
+        self.registered_url_schemes.borrow().clone()
+    }
+
+    pub(crate) fn recent_documents(&self) -> Vec<PathBuf> {
+        self.recent_documents.borrow().clone()
+    }
+
     pub(crate) fn prompt(
         &self,
         msg: &str,
@@ -254,8 +301,45 @@ impl TestPlatform {
         self.power_mode.set(power_mode);
     }
 
+    pub(crate) fn power_save_blockers(&self) -> Vec<(u32, PowerSaveBlockerKind)> {
+        self.power_save_blockers.borrow().clone()
+    }
+
+    pub(crate) fn user_attention(&self) -> Option<AttentionType> {
+        self.user_attention.get()
+    }
+
+    pub(crate) fn user_attention_cancel_count(&self) -> usize {
+        self.user_attention_cancel_count.get()
+    }
+
     pub(crate) fn set_reduce_motion(&self, reduce_motion: bool) {
         self.reduce_motion.set(reduce_motion);
+    }
+
+    pub(crate) fn network_status(&self) -> NetworkStatus {
+        self.network_status.get()
+    }
+
+    pub(crate) fn simulate_network_status_change(&self, status: NetworkStatus) {
+        self.network_status.set(status);
+        let mut callback = self.network_status_callback.borrow_mut().take();
+        if let Some(ref mut callback) = callback {
+            callback(status);
+        }
+        *self.network_status_callback.borrow_mut() = callback;
+    }
+
+    pub(crate) fn set_biometric_status(&self, status: BiometricStatus) {
+        self.biometric_status.set(status);
+    }
+
+    pub(crate) fn set_biometric_auth_success(&self, success: bool) {
+        self.biometric_auth_success.set(success);
+    }
+
+    pub(crate) fn biometric_auth_reasons(&self) -> Vec<String> {
+        self.biometric_auth_reasons.borrow().clone()
     }
 
     pub(crate) fn simulate_system_power_event(&self, event: SystemPowerEvent) {
@@ -264,6 +348,30 @@ impl TestPlatform {
             callback(event);
         }
         *self.system_power_callback.borrow_mut() = callback;
+    }
+
+    pub(crate) fn simulate_media_key_event(&self, event: MediaKeyEvent) {
+        let mut callback = self.media_key_callback.borrow_mut().take();
+        if let Some(ref mut callback) = callback {
+            callback(event);
+        }
+        *self.media_key_callback.borrow_mut() = callback;
+    }
+
+    pub(crate) fn tray_menu(&self) -> Vec<TrayMenuItem> {
+        self.tray_menu.borrow().clone()
+    }
+
+    pub(crate) fn tray_tooltip(&self) -> String {
+        self.tray_tooltip.borrow().clone()
+    }
+
+    pub(crate) fn tray_panel_mode(&self) -> bool {
+        self.tray_panel_mode.get()
+    }
+
+    pub(crate) fn keep_alive_without_windows(&self) -> bool {
+        self.keep_alive_without_windows.get()
     }
 
     pub(crate) fn simulate_open_urls(&self, urls: Vec<String>) {
@@ -308,6 +416,21 @@ impl Platform for TestPlatform {
 
     fn activate(&self, _ignoring_other_apps: bool) {}
 
+    fn set_auto_launch(&self, app_id: &str, enabled: bool) -> Result<()> {
+        self.auto_launch
+            .borrow_mut()
+            .insert(app_id.to_string(), enabled);
+        Ok(())
+    }
+
+    fn is_auto_launch_enabled(&self, app_id: &str) -> bool {
+        self.auto_launch
+            .borrow()
+            .get(app_id)
+            .copied()
+            .unwrap_or(false)
+    }
+
     fn hide(&self) {}
 
     fn hide_other_apps(&self) {}
@@ -320,6 +443,28 @@ impl Platform for TestPlatform {
 
     fn primary_display(&self) -> Option<std::rc::Rc<dyn crate::PlatformDisplay>> {
         Some(self.active_display.clone())
+    }
+
+    fn show_dialog(&self, options: DialogOptions) -> oneshot::Receiver<usize> {
+        let buttons = options
+            .buttons
+            .into_iter()
+            .map(|button| {
+                let lower = button.to_lowercase();
+                if lower == "ok" {
+                    PromptButton::ok(button)
+                } else if lower == "cancel" {
+                    PromptButton::cancel(button)
+                } else {
+                    PromptButton::new(button)
+                }
+            })
+            .collect::<Vec<_>>();
+        self.prompt(
+            options.title.as_ref(),
+            options.detail.as_ref().map(|detail| detail.as_ref()),
+            &buttons,
+        )
     }
 
     #[cfg(feature = "screen-capture")]
@@ -349,6 +494,19 @@ impl Platform for TestPlatform {
             .map(|window| window.0.lock().handle)
     }
 
+    fn start_power_save_blocker(&self, kind: PowerSaveBlockerKind) -> Option<u32> {
+        let id = self.next_power_save_blocker_id.get();
+        self.next_power_save_blocker_id.set(id + 1);
+        self.power_save_blockers.borrow_mut().push((id, kind));
+        Some(id)
+    }
+
+    fn stop_power_save_blocker(&self, id: u32) {
+        self.power_save_blockers
+            .borrow_mut()
+            .retain(|(blocker_id, _)| *blocker_id != id);
+    }
+
     fn power_mode(&self) -> PowerMode {
         self.power_mode.get()
     }
@@ -357,8 +515,57 @@ impl Platform for TestPlatform {
         self.reduce_motion.get()
     }
 
+    fn network_status(&self) -> NetworkStatus {
+        self.network_status.get()
+    }
+
+    fn on_network_status_change(&self, callback: Box<dyn FnMut(NetworkStatus)>) {
+        *self.network_status_callback.borrow_mut() = Some(callback);
+    }
+
+    fn biometric_status(&self) -> BiometricStatus {
+        self.biometric_status.get()
+    }
+
+    fn authenticate_biometric(&self, reason: &str, callback: Box<dyn FnOnce(bool) + Send>) {
+        self.biometric_auth_reasons
+            .borrow_mut()
+            .push(reason.to_string());
+        callback(self.biometric_auth_success.get());
+    }
+
     fn on_system_power_event(&self, callback: Box<dyn FnMut(SystemPowerEvent)>) {
         *self.system_power_callback.borrow_mut() = Some(callback);
+    }
+
+    fn on_media_key_event(&self, callback: Box<dyn FnMut(MediaKeyEvent)>) {
+        *self.media_key_callback.borrow_mut() = Some(callback);
+    }
+
+    fn request_user_attention(&self, attention_type: AttentionType) {
+        self.user_attention.set(Some(attention_type));
+    }
+
+    fn cancel_user_attention(&self) {
+        self.user_attention.set(None);
+        self.user_attention_cancel_count
+            .set(self.user_attention_cancel_count.get() + 1);
+    }
+
+    fn set_keep_alive_without_windows(&self, keep_alive: bool) {
+        self.keep_alive_without_windows.set(keep_alive);
+    }
+
+    fn set_tray_menu(&self, menu: Vec<TrayMenuItem>) {
+        *self.tray_menu.borrow_mut() = menu;
+    }
+
+    fn set_tray_tooltip(&self, tooltip: &str) {
+        *self.tray_tooltip.borrow_mut() = tooltip.to_string();
+    }
+
+    fn set_tray_panel_mode(&self, enabled: bool) {
+        self.tray_panel_mode.set(enabled);
     }
 
     fn open_window(
@@ -427,7 +634,9 @@ impl Platform for TestPlatform {
     fn set_menus(&self, _menus: Vec<crate::Menu>, _keymap: &Keymap) {}
     fn set_dock_menu(&self, _menu: Vec<crate::MenuItem>, _keymap: &Keymap) {}
 
-    fn add_recent_document(&self, _paths: &Path) {}
+    fn add_recent_document(&self, path: &Path) {
+        self.recent_documents.borrow_mut().push(path.to_path_buf());
+    }
 
     fn on_app_menu_action(&self, _callback: Box<dyn FnMut(&dyn crate::Action)>) {}
 
@@ -473,19 +682,26 @@ impl Platform for TestPlatform {
         self.current_clipboard_item.lock().clone()
     }
 
-    fn write_credentials(&self, _url: &str, _username: &str, _password: &[u8]) -> Task<Result<()>> {
+    fn write_credentials(&self, url: &str, username: &str, password: &[u8]) -> Task<Result<()>> {
+        self.credentials
+            .borrow_mut()
+            .insert(url.to_string(), (username.to_string(), password.to_vec()));
         Task::ready(Ok(()))
     }
 
-    fn read_credentials(&self, _url: &str) -> Task<Result<Option<(String, Vec<u8>)>>> {
-        Task::ready(Ok(None))
+    fn read_credentials(&self, url: &str) -> Task<Result<Option<(String, Vec<u8>)>>> {
+        Task::ready(Ok(self.credentials.borrow().get(url).cloned()))
     }
 
-    fn delete_credentials(&self, _url: &str) -> Task<Result<()>> {
+    fn delete_credentials(&self, url: &str) -> Task<Result<()>> {
+        self.credentials.borrow_mut().remove(url);
         Task::ready(Ok(()))
     }
 
-    fn register_url_scheme(&self, _: &str) -> Task<anyhow::Result<()>> {
+    fn register_url_scheme(&self, scheme: &str) -> Task<anyhow::Result<()>> {
+        self.registered_url_schemes
+            .borrow_mut()
+            .push(scheme.to_string());
         Task::ready(Ok(()))
     }
 

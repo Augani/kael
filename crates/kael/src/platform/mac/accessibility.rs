@@ -15,7 +15,10 @@ use std::sync::{Arc, Mutex};
 use accesskit::{ActionHandler, ActionRequest, ActivationHandler, TreeUpdate};
 use accesskit_macos::SubclassingAdapter;
 
-use crate::{AccessibilityAction, AccessibilityRole, AccessibilityState, AccessibilityValue};
+use crate::{
+    AccessibilityAction, AccessibilityActionRequest, AccessibilityRole, AccessibilityState,
+    AccessibilityValue,
+};
 
 const TOOLKIT_NAME: &str = "Kael";
 const TOOLKIT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -88,6 +91,7 @@ pub fn action_to_ns_action(action: AccessibilityAction) -> &'static str {
         AccessibilityAction::Toggle => "NSAccessibilityPressAction",
         AccessibilityAction::Increment => "NSAccessibilityIncrementAction",
         AccessibilityAction::Decrement => "NSAccessibilityDecrementAction",
+        AccessibilityAction::SetValue => "NSAccessibilitySetValueAction",
         AccessibilityAction::ShowMenu => "NSAccessibilityShowMenuAction",
         AccessibilityAction::Dismiss => "NSAccessibilityCancelAction",
         AccessibilityAction::Custom(_) => "NSAccessibilityPressAction",
@@ -205,14 +209,27 @@ impl MacAccessibilityProvider {
         }
     }
 
-    /// Drain any action requests received from assistive technology, translated
-    /// into kael's [`AccessibilityAction`] plus the target node id.
-    pub fn drain_actions(&self) -> Vec<(crate::AccessibilityId, AccessibilityAction)> {
+    /// Drain any action requests received from assistive technology, normalized
+    /// against the latest kael accessibility tree.
+    pub fn drain_actions(
+        &self,
+        tree: &crate::AccessibilityTree,
+    ) -> Vec<AccessibilityActionRequest> {
         let mut out = Vec::new();
         if let Ok(mut pending) = self.pending_actions.lock() {
             for request in pending.drain(..) {
-                if let Some(action) = AccessibilityAction::from_accesskit(request.action) {
-                    out.push((crate::AccessibilityId(request.target.0), action));
+                let node_id = crate::AccessibilityId(request.target.0);
+                if let Some(node) = tree.get(node_id) {
+                    if let Some(request) =
+                        AccessibilityActionRequest::from_accesskit_for_node_with_data(
+                            node_id,
+                            node,
+                            request.action,
+                            request.data,
+                        )
+                    {
+                        out.push(request);
+                    }
                 }
             }
         }
@@ -301,6 +318,41 @@ mod tests {
     #[test]
     fn test_detached_provider_has_no_pending_actions() {
         let provider = MacAccessibilityProvider::detached("test-app");
-        assert!(provider.drain_actions().is_empty());
+        let tree =
+            crate::AccessibilityTree::new(crate::AccessibilityNode::new(AccessibilityRole::Window));
+        assert!(provider.drain_actions(&tree).is_empty());
+    }
+
+    #[test]
+    fn test_detached_provider_normalizes_pending_actions_against_tree() {
+        let provider = MacAccessibilityProvider::detached("test-app");
+        let root = crate::AccessibilityNode::new(AccessibilityRole::Window);
+        let mut tree = crate::AccessibilityTree::new(root);
+        let toggle = crate::AccessibilityNode::new(AccessibilityRole::Switch).with_actions(vec![
+            AccessibilityAction::Focus,
+            AccessibilityAction::Toggle,
+        ]);
+        let toggle_id = toggle.id;
+        tree.insert(toggle);
+        tree.set_parent(toggle_id, tree.root);
+
+        provider
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(accesskit::ActionRequest {
+                action: accesskit::Action::Click,
+                target: accesskit::NodeId(toggle_id.0),
+                data: None,
+            });
+
+        assert_eq!(
+            provider.drain_actions(&tree),
+            vec![AccessibilityActionRequest::new(
+                toggle_id,
+                AccessibilityAction::Toggle,
+            )]
+        );
+        assert!(provider.drain_actions(&tree).is_empty());
     }
 }

@@ -2,6 +2,7 @@ use crate::{
     Bounds, Capslock, Context, Empty, IntoElement, Keystroke, Modifiers, Pixels, Point, Render,
     Window, point, seal::Sealed,
 };
+use http_client::Url;
 use smallvec::SmallVec;
 use std::{any::Any, fmt::Debug, ops::Deref, path::PathBuf, sync::OnceLock};
 
@@ -543,13 +544,63 @@ impl Deref for MouseExitEvent {
 }
 
 /// A collection of paths from the platform, such as from a file drop.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExternalPaths(pub(crate) SmallVec<[PathBuf; 2]>);
 
 impl ExternalPaths {
+    /// Create an empty collection of external paths.
+    pub fn new() -> Self {
+        Self(SmallVec::new())
+    }
+
+    /// Create a collection from platform or test paths.
+    pub fn from_paths(paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self(paths.into_iter().collect())
+    }
+
     /// Convert this collection of paths into a slice.
     pub fn paths(&self) -> &[PathBuf] {
         &self.0
+    }
+
+    /// Iterate over the paths.
+    pub fn iter(&self) -> impl Iterator<Item = &PathBuf> {
+        self.0.iter()
+    }
+
+    /// Return the first path, if any.
+    pub fn first(&self) -> Option<&PathBuf> {
+        self.0.first()
+    }
+
+    /// Return the number of paths.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Return whether no paths are present.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Return an owned vector of paths.
+    pub fn to_vec(&self) -> Vec<PathBuf> {
+        self.0.to_vec()
+    }
+
+    /// Apply a drop-zone filter to this path collection.
+    pub fn filter_with(&self, filter: &FileDropFilter) -> FileDropMatch {
+        filter.evaluate(self)
+    }
+
+    /// Return accepted paths when every dropped path is accepted by the filter.
+    pub fn accepted_by(&self, filter: &FileDropFilter) -> Option<Vec<PathBuf>> {
+        self.filter_with(filter).into_clean_accept()
+    }
+
+    /// Convert this file-only payload into a general external drop payload.
+    pub fn into_drop_data(self) -> ExternalDropData {
+        ExternalDropData::from_paths(self.0)
     }
 }
 
@@ -558,6 +609,345 @@ impl Render for ExternalPaths {
         // the platform will render icons for the dragged files
         Empty
     }
+}
+
+/// Data dragged from outside the app, such as browser-style file, text, or URL payloads.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExternalDropData {
+    paths: ExternalPaths,
+    text: Option<String>,
+    urls: Vec<String>,
+}
+
+impl ExternalDropData {
+    /// Create an empty external drop payload.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a file-only external drop payload.
+    pub fn from_paths(paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self {
+            paths: ExternalPaths::from_paths(paths),
+            text: None,
+            urls: Vec::new(),
+        }
+    }
+
+    /// Create a text-only external drop payload.
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::new().with_text(text)
+    }
+
+    /// Create a URL-only external drop payload.
+    pub fn url(url: impl Into<String>) -> Self {
+        Self::new().with_url(url)
+    }
+
+    /// Normalize a typed drag payload into browser-style external drop data.
+    ///
+    /// This accepts both file-only [`ExternalPaths`] payloads and richer
+    /// [`ExternalDropData`] payloads emitted by native text/URL drops or custom
+    /// WebView bridges.
+    pub fn from_drag_value(value: &dyn Any) -> Option<Self> {
+        value.downcast_ref::<Self>().cloned().or_else(|| {
+            value
+                .downcast_ref::<ExternalPaths>()
+                .cloned()
+                .map(Into::into)
+        })
+    }
+
+    /// Parse `text/uri-list` data into file paths and URLs.
+    ///
+    /// Lines beginning with `#` are comments per the freedesktop/URI-list
+    /// convention. `file://` entries become paths; other URI schemes stay in
+    /// the URL list.
+    pub fn from_uri_list(uri_list: &str) -> Self {
+        let mut paths = SmallVec::<[PathBuf; 2]>::new();
+        let mut urls = Vec::new();
+
+        for line in uri_list.lines().map(str::trim) {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            match Url::parse(line) {
+                Ok(url) => match url.to_file_path() {
+                    Ok(path) => paths.push(path),
+                    Err(_) => urls.push(line.to_string()),
+                },
+                Err(_) => urls.push(line.to_string()),
+            }
+        }
+
+        Self {
+            paths: ExternalPaths(paths),
+            text: None,
+            urls,
+        }
+    }
+
+    /// Create a payload from plain text and extract URL-looking lines.
+    pub fn from_plain_text(text: impl Into<String>) -> Self {
+        let text = text.into();
+        let urls = text
+            .lines()
+            .map(str::trim)
+            .filter(|line| Url::parse(line).is_ok())
+            .map(str::to_string)
+            .collect();
+        Self {
+            paths: ExternalPaths::new(),
+            text: Some(text),
+            urls,
+        }
+    }
+
+    /// Set plain text carried by the drop.
+    pub fn with_text(mut self, text: impl Into<String>) -> Self {
+        self.text = Some(text.into());
+        self
+    }
+
+    /// Add one URL carried by the drop.
+    pub fn with_url(mut self, url: impl Into<String>) -> Self {
+        self.urls.push(url.into());
+        self
+    }
+
+    /// Add many URLs carried by the drop.
+    pub fn with_urls(mut self, urls: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.urls.extend(urls.into_iter().map(Into::into));
+        self
+    }
+
+    /// Return file paths carried by the drop.
+    pub fn paths(&self) -> &ExternalPaths {
+        &self.paths
+    }
+
+    /// Return plain text carried by the drop, if any.
+    pub fn text_value(&self) -> Option<&str> {
+        self.text.as_deref()
+    }
+
+    /// Return URLs carried by the drop.
+    pub fn urls(&self) -> &[String] {
+        &self.urls
+    }
+
+    /// Return true when file paths are present.
+    pub fn has_paths(&self) -> bool {
+        !self.paths.is_empty()
+    }
+
+    /// Return true when text is present and not empty.
+    pub fn has_text(&self) -> bool {
+        self.text_value().is_some_and(|text| !text.is_empty())
+    }
+
+    /// Return true when URLs are present.
+    pub fn has_urls(&self) -> bool {
+        !self.urls.is_empty()
+    }
+
+    /// Return accepted file paths when every dropped file path is accepted by the filter.
+    pub fn accepted_paths_by(&self, filter: &FileDropFilter) -> Option<Vec<PathBuf>> {
+        self.paths.accepted_by(filter)
+    }
+
+    /// Return whether this payload can be accepted by a file-oriented drop zone.
+    ///
+    /// File payloads must pass the filter. Text/URL-only payloads are accepted
+    /// because there are no file paths to reject.
+    pub fn accepted_by(&self, filter: &FileDropFilter) -> bool {
+        if self.has_paths() {
+            self.accepted_paths_by(filter).is_some()
+        } else {
+            self.has_text() || self.has_urls()
+        }
+    }
+}
+
+impl Render for ExternalDropData {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
+
+impl From<ExternalPaths> for ExternalDropData {
+    fn from(paths: ExternalPaths) -> Self {
+        paths.into_drop_data()
+    }
+}
+
+/// Builder for accepting dropped files by count and extension.
+#[derive(Debug, Clone, Default)]
+pub struct FileDropFilter {
+    allowed_extensions: Vec<String>,
+    max_files: Option<usize>,
+}
+
+impl FileDropFilter {
+    /// Create a filter that accepts any path count and extension.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Accept one file with any extension.
+    pub fn single_file() -> Self {
+        Self::new().max_files(1)
+    }
+
+    /// Accept common image file extensions.
+    pub fn images() -> Self {
+        Self::new().extensions([
+            "avif", "bmp", "gif", "heic", "heif", "jpg", "jpeg", "png", "webp",
+        ])
+    }
+
+    /// Accept common audio file extensions.
+    pub fn audio() -> Self {
+        Self::new().extensions(["aac", "aiff", "flac", "m4a", "mp3", "ogg", "opus", "wav"])
+    }
+
+    /// Accept common video file extensions.
+    pub fn video() -> Self {
+        Self::new().extensions([
+            "avi", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "ogv", "webm",
+        ])
+    }
+
+    /// Accept common audio and video file extensions.
+    pub fn media() -> Self {
+        Self::new().extensions([
+            "aac", "aiff", "avi", "flac", "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "mpeg", "mpg",
+            "ogg", "ogv", "opus", "wav", "webm",
+        ])
+    }
+
+    /// Accept only paths with one of the provided extensions.
+    ///
+    /// Extensions are matched case-insensitively and may be passed with or
+    /// without a leading dot.
+    pub fn extensions(mut self, extensions: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        self.allowed_extensions = extensions
+            .into_iter()
+            .map(|extension| normalize_file_extension(extension.as_ref()))
+            .filter(|extension| !extension.is_empty())
+            .collect();
+        self.allowed_extensions.sort();
+        self.allowed_extensions.dedup();
+        self
+    }
+
+    /// Accept at most this many paths.
+    pub fn max_files(mut self, max_files: usize) -> Self {
+        self.max_files = Some(max_files);
+        self
+    }
+
+    /// Return the allowed extensions.
+    pub fn allowed_extensions(&self) -> &[String] {
+        &self.allowed_extensions
+    }
+
+    /// Return the configured max file count.
+    pub fn configured_max_files(&self) -> Option<usize> {
+        self.max_files
+    }
+
+    /// Validate the filter configuration.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if let Some(max_files) = self.max_files {
+            anyhow::ensure!(
+                max_files > 0,
+                "file drop max_files must be greater than zero"
+            );
+        }
+        Ok(())
+    }
+
+    /// Return whether the given path would be accepted by this filter before
+    /// considering max file count.
+    pub fn accepts_path(&self, path: &std::path::Path) -> bool {
+        if self.allowed_extensions.is_empty() {
+            return true;
+        }
+
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(normalize_file_extension)
+            .is_some_and(|extension| self.allowed_extensions.contains(&extension))
+    }
+
+    /// Evaluate a set of dropped paths.
+    pub fn evaluate(&self, paths: &ExternalPaths) -> FileDropMatch {
+        let mut accepted = Vec::new();
+        let mut rejected = Vec::new();
+
+        for path in paths.iter() {
+            let allowed_by_extension = self.accepts_path(path);
+            let allowed_by_count = self
+                .max_files
+                .is_none_or(|max_files| accepted.len() < max_files);
+
+            if allowed_by_extension && allowed_by_count {
+                accepted.push(path.clone());
+            } else {
+                rejected.push(path.clone());
+            }
+        }
+
+        FileDropMatch { accepted, rejected }
+    }
+}
+
+/// Accepted and rejected paths from a file drop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileDropMatch {
+    accepted: Vec<PathBuf>,
+    rejected: Vec<PathBuf>,
+}
+
+impl FileDropMatch {
+    /// Paths accepted by the filter.
+    pub fn accepted(&self) -> &[PathBuf] {
+        &self.accepted
+    }
+
+    /// Paths rejected by the filter.
+    pub fn rejected(&self) -> &[PathBuf] {
+        &self.rejected
+    }
+
+    /// Consume this match into accepted paths.
+    pub fn into_accepted(self) -> Vec<PathBuf> {
+        self.accepted
+    }
+
+    /// Return true when all dropped paths were accepted and at least one path was present.
+    pub fn is_clean_accept(&self) -> bool {
+        !self.accepted.is_empty() && self.rejected.is_empty()
+    }
+
+    /// Return true when no path was accepted.
+    pub fn is_empty_accept(&self) -> bool {
+        self.accepted.is_empty()
+    }
+
+    /// Consume this match into accepted paths only when the drop was clean.
+    pub fn into_clean_accept(self) -> Option<Vec<PathBuf>> {
+        self.is_clean_accept().then_some(self.accepted)
+    }
+}
+
+fn normalize_file_extension(extension: &str) -> String {
+    extension
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase()
 }
 
 /// A file drop event from the platform, generated when files are dragged and dropped onto the window.
@@ -569,6 +959,13 @@ pub enum FileDropEvent {
         position: Point<Pixels>,
         /// The paths of the files that are being dragged.
         paths: ExternalPaths,
+    },
+    /// External drop data has entered the window.
+    DataEntered {
+        /// The position of the mouse relative to the window.
+        position: Point<Pixels>,
+        /// The browser-style files/text/URLs payload being dragged.
+        data: ExternalDropData,
     },
     /// The files are being dragged over the window
     Pending {
@@ -651,10 +1048,12 @@ impl PlatformInput {
 
 #[cfg(test)]
 mod test {
+    use std::path::PathBuf;
 
     use crate::{
-        AppContext as _, Context, FocusHandle, InteractiveElement, IntoElement, KeyBinding,
-        Keystroke, ParentElement, Render, TestAppContext, Window, div,
+        AppContext as _, Context, ExternalDropData, ExternalPaths, FileDropFilter, FocusHandle,
+        InteractiveElement, IntoElement, KeyBinding, Keystroke, ParentElement, Render,
+        TestAppContext, Window, div,
     };
 
     struct TestView {
@@ -690,7 +1089,7 @@ mod test {
     #[kael::test]
     fn test_on_events(cx: &mut TestAppContext) {
         let window = cx.update(|cx| {
-            cx.open_window(Default::default(), |_, cx| {
+            cx.open_window(crate::WindowOptions::default(), |_, cx| {
                 cx.new(|cx| TestView {
                     saw_key_down: false,
                     saw_action: false,
@@ -720,5 +1119,198 @@ mod test {
                 assert!(test_view.saw_action);
             })
             .unwrap();
+    }
+
+    #[test]
+    fn external_paths_exposes_path_helpers() {
+        let paths = ExternalPaths::from_paths([
+            PathBuf::from("/tmp/clip.mp4"),
+            PathBuf::from("/tmp/subtitles.vtt"),
+        ]);
+
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths.first().unwrap(), &PathBuf::from("/tmp/clip.mp4"));
+        assert_eq!(
+            paths.to_vec(),
+            vec![
+                PathBuf::from("/tmp/clip.mp4"),
+                PathBuf::from("/tmp/subtitles.vtt")
+            ]
+        );
+        assert!(!paths.is_empty());
+    }
+
+    #[test]
+    fn file_drop_filter_normalizes_extensions_and_limits_count() {
+        let filter = FileDropFilter::new()
+            .extensions([".MP4", "mov", "mp4"])
+            .max_files(2);
+        assert_eq!(
+            filter.allowed_extensions(),
+            &["mov".to_string(), "mp4".to_string()]
+        );
+        assert_eq!(filter.configured_max_files(), Some(2));
+        assert!(filter.validate().is_ok());
+
+        let paths = ExternalPaths::from_paths([
+            PathBuf::from("/tmp/a.MP4"),
+            PathBuf::from("/tmp/b.mov"),
+            PathBuf::from("/tmp/c.mp4"),
+            PathBuf::from("/tmp/readme.txt"),
+        ]);
+
+        let matched = paths.filter_with(&filter);
+        assert_eq!(
+            matched.accepted(),
+            &[PathBuf::from("/tmp/a.MP4"), PathBuf::from("/tmp/b.mov")]
+        );
+        assert_eq!(
+            matched.rejected(),
+            &[
+                PathBuf::from("/tmp/c.mp4"),
+                PathBuf::from("/tmp/readme.txt")
+            ]
+        );
+        assert!(!matched.is_clean_accept());
+        assert!(!matched.is_empty_accept());
+    }
+
+    #[test]
+    fn file_drop_filter_accepts_any_extension_by_default() {
+        let filter = FileDropFilter::new();
+        let paths = ExternalPaths::from_paths([PathBuf::from("/tmp/archive.unknown")]);
+        let matched = filter.evaluate(&paths);
+
+        assert!(matched.is_clean_accept());
+        assert_eq!(
+            matched.into_accepted(),
+            vec![PathBuf::from("/tmp/archive.unknown")]
+        );
+    }
+
+    #[test]
+    fn external_paths_can_return_clean_accepted_paths() {
+        let filter = FileDropFilter::video().max_files(2);
+        let clean = ExternalPaths::from_paths([
+            PathBuf::from("/tmp/trailer.mp4"),
+            PathBuf::from("/tmp/clip.MOV"),
+        ]);
+        let mixed = ExternalPaths::from_paths([
+            PathBuf::from("/tmp/trailer.mp4"),
+            PathBuf::from("/tmp/notes.txt"),
+        ]);
+
+        assert_eq!(
+            clean.accepted_by(&filter),
+            Some(vec![
+                PathBuf::from("/tmp/trailer.mp4"),
+                PathBuf::from("/tmp/clip.MOV")
+            ])
+        );
+        assert_eq!(mixed.accepted_by(&filter), None);
+    }
+
+    #[test]
+    fn external_drop_data_models_files_text_and_urls() {
+        let filter = FileDropFilter::images().max_files(1);
+        let data = ExternalDropData::from_paths([PathBuf::from("/tmp/poster.png")])
+            .with_text("Poster")
+            .with_url("https://example.com/poster.png");
+
+        assert!(data.has_paths());
+        assert!(data.has_text());
+        assert!(data.has_urls());
+        assert_eq!(data.text_value(), Some("Poster"));
+        assert_eq!(data.urls(), &["https://example.com/poster.png".to_string()]);
+        assert_eq!(
+            data.accepted_paths_by(&filter),
+            Some(vec![PathBuf::from("/tmp/poster.png")])
+        );
+    }
+
+    #[test]
+    fn external_drop_data_parses_uri_lists() {
+        let data = ExternalDropData::from_uri_list(
+            "# comment\nfile:///tmp/photo.png\nhttps://example.com/item\n\n",
+        );
+
+        assert_eq!(data.paths().paths(), &[PathBuf::from("/tmp/photo.png")]);
+        assert_eq!(data.urls(), &["https://example.com/item".to_string()]);
+        assert!(!data.has_text());
+    }
+
+    #[test]
+    fn external_drop_data_extracts_urls_from_plain_text() {
+        let data = ExternalDropData::from_plain_text(
+            "Read this:\nhttps://example.com/a\nnot a url\nfile:///tmp/local.txt",
+        );
+
+        assert_eq!(
+            data.text_value(),
+            Some("Read this:\nhttps://example.com/a\nnot a url\nfile:///tmp/local.txt")
+        );
+        assert_eq!(
+            data.urls(),
+            &[
+                "https://example.com/a".to_string(),
+                "file:///tmp/local.txt".to_string()
+            ]
+        );
+        assert!(data.paths().is_empty());
+    }
+
+    #[test]
+    fn external_paths_convert_to_general_drop_data() {
+        let paths = ExternalPaths::from_paths([PathBuf::from("/tmp/archive.zip")]);
+        let data = paths.clone().into_drop_data();
+
+        assert_eq!(ExternalDropData::from(paths), data);
+        assert_eq!(data.paths().paths(), &[PathBuf::from("/tmp/archive.zip")]);
+        assert!(!data.has_text());
+        assert!(!data.has_urls());
+    }
+
+    #[test]
+    fn external_drop_data_normalizes_drag_values() {
+        let paths = ExternalPaths::from_paths([PathBuf::from("/tmp/movie.mp4")]);
+        let from_paths = ExternalDropData::from_drag_value(&paths).unwrap();
+        assert_eq!(
+            from_paths.paths().paths(),
+            &[PathBuf::from("/tmp/movie.mp4")]
+        );
+
+        let data = ExternalDropData::url("https://example.com/movie");
+        let from_data = ExternalDropData::from_drag_value(&data).unwrap();
+        assert_eq!(from_data, data);
+
+        assert!(ExternalDropData::from_drag_value(&42usize).is_none());
+    }
+
+    #[test]
+    fn external_drop_data_accepts_text_or_url_without_files() {
+        let filter = FileDropFilter::video();
+
+        assert!(ExternalDropData::text("label").accepted_by(&filter));
+        assert!(ExternalDropData::url("https://example.com/video").accepted_by(&filter));
+        assert!(
+            ExternalDropData::from_paths([PathBuf::from("/tmp/trailer.mp4")]).accepted_by(&filter)
+        );
+        assert!(
+            !ExternalDropData::from_paths([PathBuf::from("/tmp/poster.png")]).accepted_by(&filter)
+        );
+    }
+
+    #[test]
+    fn file_drop_filter_presets_cover_common_media_extensions() {
+        assert!(FileDropFilter::images().accepts_path(std::path::Path::new("poster.webp")));
+        assert!(FileDropFilter::audio().accepts_path(std::path::Path::new("track.flac")));
+        assert!(FileDropFilter::video().accepts_path(std::path::Path::new("movie.mkv")));
+        assert!(FileDropFilter::media().accepts_path(std::path::Path::new("movie.mp4")));
+        assert!(FileDropFilter::media().accepts_path(std::path::Path::new("voice.opus")));
+        assert!(!FileDropFilter::video().accepts_path(std::path::Path::new("notes.txt")));
+        assert_eq!(
+            FileDropFilter::single_file().configured_max_files(),
+            Some(1)
+        );
     }
 }

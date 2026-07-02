@@ -2,6 +2,8 @@
 
 [Introduction](index.md)
 [Choosing Kael](why-kael.md)
+[Bridging the Electron Gap](electron-bridge.md)
+[Benchmarking Against Electron](benchmarking.md)
 
 # Guides
 

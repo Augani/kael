@@ -1,14 +1,13 @@
-use std::path::PathBuf;
-use std::time::Duration;
-
 use anyhow::{Context as _, Result, anyhow};
+use std::path::PathBuf;
 
 use crate::{
     Tracer,
     ipc_transport::TypedTransport,
     process_model::{
-        BootstrapMessage, HealthCheckConfig, ProcessClass, ProcessInfo, ProcessSpawnOptions,
-        RestartPolicy, SupervisorEvent, WorkerError, WorkerProgress, WorkerRequest, WorkerResponse,
+        BootstrapMessage, ProcessClass, ProcessInfo, ProcessSpawnOptions,
+        ProcessSpawnOptionsBuilder, SupervisorEvent, WorkerError, WorkerProgress, WorkerRequest,
+        WorkerResponse,
     },
     supervisor::ProcessSupervisor,
     worker_api::WorkerHandle,
@@ -50,11 +49,25 @@ impl WorkerHost {
     }
 
     /// Spawn a worker process and return a handle after bootstrap.
-    pub fn spawn_worker(
+    pub fn spawn_worker(&mut self, class: ProcessClass, info: ProcessInfo) -> Result<WorkerHandle> {
+        self.spawn_worker_with_options(
+            class,
+            info,
+            ProcessSpawnOptionsBuilder::new()
+                .restart_on_failure(3, std::time::Duration::from_secs(1))
+                .build_checked()?,
+        )
+    }
+
+    /// Spawn a worker process with explicit, validated supervision options.
+    pub fn spawn_worker_with_options(
         &mut self,
         class: ProcessClass,
         mut info: ProcessInfo,
+        options: ProcessSpawnOptions,
     ) -> Result<WorkerHandle> {
+        info.validate()?;
+        options.validate()?;
         let socket_name = format!("gpui-worker-{}", uuid::Uuid::new_v4());
 
         #[cfg(not(target_os = "windows"))]
@@ -83,16 +96,7 @@ impl WorkerHost {
                 .with_context(|| format!("failed to bind unix socket: {}", socket_path.display()))?
         };
 
-        let id = self.supervisor.spawn_with_options(
-            info,
-            ProcessSpawnOptions::new(
-                RestartPolicy::OnFailure {
-                    max_restarts: 3,
-                    backoff: Duration::from_secs(1),
-                },
-                HealthCheckConfig::default(),
-            ),
-        )?;
+        let id = self.supervisor.spawn_with_options(info, options)?;
 
         #[cfg(not(target_os = "windows"))]
         let transport = {

@@ -39,6 +39,13 @@ impl SessionStore {
         })
     }
 
+    /// Create a new session store after validating the application identifier.
+    pub fn new_checked(app_id: impl Into<String>) -> Result<Self> {
+        let app_id = app_id.into();
+        validate_session_app_id(&app_id)?;
+        Self::new(app_id)
+    }
+
     /// Returns the application identifier associated with this store.
     pub fn app_id(&self) -> &str {
         &self.app_id
@@ -90,6 +97,16 @@ impl SessionStore {
     /// Save the entire session snapshot, including optional application data.
     pub fn save_snapshot(&self, snapshot: &SessionSnapshot) -> Result<()> {
         write_json_atomically(&self.snapshot_path(), snapshot, "session snapshot")
+    }
+
+    /// Build, validate, save, and return a session snapshot.
+    pub fn save_snapshot_checked(
+        &self,
+        snapshot: SessionSnapshotBuilder,
+    ) -> Result<SessionSnapshot> {
+        let snapshot = snapshot.build_checked()?;
+        self.save_snapshot(&snapshot)?;
+        Ok(snapshot)
     }
 
     /// Load the full session snapshot.
@@ -197,6 +214,45 @@ fn session_storage_dir(app_id: &str) -> Result<PathBuf> {
     Ok(base.join(app_id).join("sessions"))
 }
 
+fn validate_session_app_id(app_id: &str) -> Result<()> {
+    validate_session_identifier(app_id, "session app id")?;
+    anyhow::ensure!(
+        !app_id.contains(std::path::MAIN_SEPARATOR),
+        "session app id cannot contain path separators: {app_id:?}"
+    );
+    anyhow::ensure!(
+        !app_id.contains('/') && !app_id.contains('\\'),
+        "session app id cannot contain path separators: {app_id:?}"
+    );
+    Ok(())
+}
+
+fn validate_session_window_id(id: &str) -> Result<()> {
+    validate_session_identifier(id, "session window id")?;
+    anyhow::ensure!(
+        !id.contains('/') && !id.contains('\\'),
+        "session window id cannot contain path separators: {id:?}"
+    );
+    Ok(())
+}
+
+fn validate_session_identifier(value: &str, label: &str) -> Result<()> {
+    anyhow::ensure!(!value.is_empty(), "{label} cannot be empty");
+    anyhow::ensure!(
+        value.trim() == value,
+        "{label} cannot have leading or trailing whitespace: {value:?}"
+    );
+    anyhow::ensure!(
+        value.len() <= 128,
+        "{label} cannot be longer than 128 bytes: {value:?}"
+    );
+    anyhow::ensure!(
+        !value.chars().any(char::is_control),
+        "{label} cannot contain control characters: {value:?}"
+    );
+    Ok(())
+}
+
 /// A persisted snapshot of the entire session.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SessionSnapshot {
@@ -205,6 +261,111 @@ pub struct SessionSnapshot {
     /// Optional application-specific session data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_data: Option<serde_json::Value>,
+}
+
+/// Builder for composing a persisted [`SessionSnapshot`].
+#[derive(Debug, Clone, Default)]
+pub struct SessionSnapshotBuilder {
+    window_states: HashMap<String, WindowState>,
+    app_data: Option<serde_json::Value>,
+}
+
+impl SessionSnapshotBuilder {
+    /// Create an empty session snapshot builder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Start from an existing snapshot.
+    pub fn from_snapshot(snapshot: SessionSnapshot) -> Self {
+        Self {
+            window_states: snapshot.window_states,
+            app_data: snapshot.app_data,
+        }
+    }
+
+    /// Add or replace one window state by an application-defined id.
+    pub fn window_state(mut self, id: impl Into<String>, state: WindowState) -> Self {
+        self.window_states.insert(id.into(), state);
+        self
+    }
+
+    /// Add or replace many window states.
+    pub fn window_states(
+        mut self,
+        states: impl IntoIterator<Item = (impl Into<String>, WindowState)>,
+    ) -> Self {
+        for (id, state) in states {
+            self.window_states.insert(id.into(), state);
+        }
+        self
+    }
+
+    /// Set arbitrary JSON-serializable application session data.
+    pub fn app_data<T: Serialize>(mut self, data: T) -> Result<Self> {
+        self.app_data =
+            Some(serde_json::to_value(data).context("failed to serialize session app data")?);
+        Ok(self)
+    }
+
+    /// Set already-serialized application session data.
+    pub fn app_data_value(mut self, value: serde_json::Value) -> Self {
+        self.app_data = Some(value);
+        self
+    }
+
+    /// Remove application-specific session data from the snapshot.
+    pub fn clear_app_data(mut self) -> Self {
+        self.app_data = None;
+        self
+    }
+
+    /// Return the configured window states.
+    pub fn configured_window_states(&self) -> &HashMap<String, WindowState> {
+        &self.window_states
+    }
+
+    /// Return the configured application data, if any.
+    pub fn configured_app_data(&self) -> Option<&serde_json::Value> {
+        self.app_data.as_ref()
+    }
+
+    /// Validate configured window IDs and application data shape.
+    pub fn validate(&self) -> Result<()> {
+        for id in self.window_states.keys() {
+            validate_session_window_id(id)?;
+        }
+        if matches!(self.app_data, Some(serde_json::Value::Null)) {
+            anyhow::bail!("session app data cannot be null; call clear_app_data() instead");
+        }
+        Ok(())
+    }
+
+    /// Build a validated session snapshot.
+    pub fn build_checked(self) -> Result<SessionSnapshot> {
+        self.validate()?;
+        Ok(self.build())
+    }
+
+    /// Build the session snapshot.
+    pub fn build(self) -> SessionSnapshot {
+        SessionSnapshot {
+            window_states: self.window_states,
+            app_data: self.app_data,
+        }
+    }
+}
+
+impl From<SessionSnapshot> for SessionSnapshotBuilder {
+    fn from(value: SessionSnapshot) -> Self {
+        Self::from_snapshot(value)
+    }
+}
+
+impl From<SessionSnapshotBuilder> for SessionSnapshot {
+    fn from(value: SessionSnapshotBuilder) -> Self {
+        value.build()
+    }
 }
 
 fn write_json_atomically<T: Serialize>(path: &Path, value: &T, label: &str) -> Result<()> {
@@ -293,6 +454,86 @@ mod tests {
     }
 
     #[test]
+    fn test_session_snapshot_builder_composes_window_and_app_data() {
+        let bounds = WindowBounds::Windowed(crate::Bounds::new(
+            crate::point(crate::px(100.0), crate::px(200.0)),
+            crate::size(crate::px(800.0), crate::px(600.0)),
+        ));
+        let state = WindowState {
+            bounds,
+            display_id: Some(DisplayId(1)),
+            fullscreen: false,
+        };
+
+        let snapshot = SessionSnapshotBuilder::new()
+            .window_state("main", state.clone())
+            .app_data(serde_json::json!({
+                "workspace": "project-a",
+                "sidebar": "files"
+            }))
+            .unwrap()
+            .build();
+
+        assert_eq!(snapshot.window_states["main"], state);
+        assert_eq!(
+            snapshot.app_data,
+            Some(serde_json::json!({
+                "workspace": "project-a",
+                "sidebar": "files"
+            }))
+        );
+    }
+
+    #[test]
+    fn test_session_snapshot_builder_checked_validation() {
+        let state = WindowState {
+            bounds: WindowBounds::Windowed(crate::Bounds::default()),
+            display_id: Some(DisplayId(1)),
+            fullscreen: false,
+        };
+
+        let checked = SessionSnapshotBuilder::new()
+            .window_state("main", state.clone())
+            .app_data(serde_json::json!({ "workspace": "project-a" }))
+            .unwrap()
+            .build_checked()
+            .unwrap();
+        assert_eq!(checked.window_states["main"], state);
+
+        assert!(
+            SessionSnapshotBuilder::new()
+                .window_state("", state.clone())
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            SessionSnapshotBuilder::new()
+                .window_state(" main", state.clone())
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            SessionSnapshotBuilder::new()
+                .window_state("workspace/main", state.clone())
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            SessionSnapshotBuilder::new()
+                .window_state("main\nwindow", state.clone())
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            SessionSnapshotBuilder::new()
+                .window_state("main", state)
+                .app_data_value(serde_json::Value::Null)
+                .build_checked()
+                .is_err()
+        );
+    }
+
+    #[test]
     fn test_session_store_snapshot_roundtrip() {
         let temp_dir =
             std::env::temp_dir().join(format!("gpui_session_snapshot_{}", std::process::id()));
@@ -307,6 +548,76 @@ mod tests {
             window_states: HashMap::new(),
             app_data: Some(serde_json::json!({ "theme": "dark" })),
         };
+
+        store.save_snapshot(&snapshot).unwrap();
+        let loaded = store.load_snapshot().unwrap();
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        assert_eq!(snapshot, loaded);
+    }
+
+    #[test]
+    fn test_session_store_checked_snapshot_roundtrip() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "gpui_session_checked_snapshot_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let store = SessionStore {
+            app_id: "test-app".to_string(),
+            storage_dir: temp_dir.clone(),
+        };
+        let snapshot = store
+            .save_snapshot_checked(
+                SessionSnapshotBuilder::new()
+                    .window_state(
+                        "main",
+                        WindowState {
+                            bounds: WindowBounds::Windowed(crate::Bounds::default()),
+                            display_id: Some(DisplayId(2)),
+                            fullscreen: false,
+                        },
+                    )
+                    .app_data(serde_json::json!({ "openProject": "kael" }))
+                    .unwrap(),
+            )
+            .unwrap();
+        let loaded = store.load_snapshot().unwrap();
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        assert_eq!(snapshot, loaded);
+        assert!(SessionStore::new_checked("").is_err());
+        assert!(SessionStore::new_checked(" bad").is_err());
+        assert!(SessionStore::new_checked("bad/app").is_err());
+    }
+
+    #[test]
+    fn test_session_store_builder_snapshot_roundtrip() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "gpui_session_builder_snapshot_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let store = SessionStore {
+            app_id: "test-app".to_string(),
+            storage_dir: temp_dir.clone(),
+        };
+        let snapshot = SessionSnapshotBuilder::new()
+            .window_state(
+                "main",
+                WindowState {
+                    bounds: WindowBounds::Windowed(crate::Bounds::default()),
+                    display_id: Some(DisplayId(2)),
+                    fullscreen: false,
+                },
+            )
+            .app_data(serde_json::json!({ "openProject": "kael" }))
+            .unwrap()
+            .build();
 
         store.save_snapshot(&snapshot).unwrap();
         let loaded = store.load_snapshot().unwrap();

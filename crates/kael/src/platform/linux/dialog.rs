@@ -51,6 +51,9 @@ fn try_zenity_open(options: &PathPromptOptions) -> Option<Option<Vec<PathBuf>>> 
         };
         cmd.args(["--title", title]);
     }
+    for filter in &options.filters {
+        cmd.arg(format!("--file-filter={}", zenity_filter_arg(filter)));
+    }
 
     let output = cmd.output().ok()?;
 
@@ -83,13 +86,13 @@ fn try_kdialog_open(options: &PathPromptOptions) -> Option<Option<Vec<PathBuf>>>
         if options.multiple {
             cmd.arg("--getopenfilename");
             cmd.arg(".");
-            cmd.arg("*");
+            cmd.arg(kdialog_filter_arg(options));
             cmd.arg("--multiple");
             cmd.args(["--separate-output"]);
         } else {
             cmd.arg("--getopenfilename");
             cmd.arg(".");
-            cmd.arg("*");
+            cmd.arg(kdialog_filter_arg(options));
         }
     }
 
@@ -120,6 +123,37 @@ fn try_kdialog_open(options: &PathPromptOptions) -> Option<Option<Vec<PathBuf>>>
     } else {
         Some(Some(paths))
     }
+}
+
+fn zenity_filter_arg(filter: &crate::FileDialogFilter) -> String {
+    let patterns = filter
+        .extensions
+        .iter()
+        .map(|extension| format!("*.{}", extension.as_ref()))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("{} | {}", filter.name.as_ref(), patterns)
+}
+
+fn kdialog_filter_arg(options: &PathPromptOptions) -> String {
+    if options.filters.is_empty() {
+        return "*".to_string();
+    }
+
+    options
+        .filters
+        .iter()
+        .map(|filter| {
+            let patterns = filter
+                .extensions
+                .iter()
+                .map(|extension| format!("*.{}", extension.as_ref()))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("{} ({})", filter.name.as_ref(), patterns)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn try_zenity_save(directory: &Path, suggested_name: Option<&str>) -> Option<Option<PathBuf>> {

@@ -248,8 +248,8 @@ pub use crate::components::typeahead::{
     TypeaheadItemProps, TypeaheadProps,
 };
 pub use crate::components::video_player::{
-    init_video_player, VideoPlaybackSpeed, VideoPlaybackState, VideoPlayer, VideoPlayerSize,
-    VideoPlayerState,
+    init_video_player, VideoCaptionStyle, VideoPlaybackSpeed, VideoPlaybackState, VideoPlayer,
+    VideoPlayerRoute, VideoPlayerSize, VideoPlayerState, VideoPreload,
 };
 pub use crate::display::accordion::{Accordion, AccordionItem};
 pub use crate::display::badge::{Badge, BadgeVariant};
@@ -274,8 +274,9 @@ pub use crate::display::table::{
 };
 pub use crate::headless::{
     AccordionController, CarouselController, ComboboxController, DisclosureController,
-    PaginationController, RadioGroupController, SelectController, SliderController,
-    StepperController, TabsController, ToastQueueController, ToggleController, TreeController,
+    FocusTrapAction, FocusTrapController, PaginationController, RadioGroupController,
+    SelectController, SliderController, StepperController, TabsController, ToastQueueController,
+    ToggleController, TreeController,
 };
 pub use crate::layout::{
     Align, Cluster, Container, Flow, FlowDirection, Grid, GridAlignment, GridColumns, GridSpan,
