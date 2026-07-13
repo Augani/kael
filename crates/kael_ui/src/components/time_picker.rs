@@ -3,6 +3,7 @@ use crate::components::{
     field_status::FieldStatusVariant,
     icon::Icon,
     input::InputSize,
+    scrollable::scrollable_vertical,
     spinner::{Spinner, SpinnerSize},
 };
 use crate::theme::Theme;
@@ -129,6 +130,7 @@ pub struct TimePickerState {
     open: bool,
     pending_input: Option<String>,
     focus_handle: FocusHandle,
+    trigger_bounds: Bounds<Pixels>,
 }
 
 impl TimePickerState {
@@ -140,6 +142,7 @@ impl TimePickerState {
             open: false,
             pending_input: None,
             focus_handle: cx.focus_handle(),
+            trigger_bounds: Bounds::default(),
         }
     }
 
@@ -250,7 +253,12 @@ impl TimePickerState {
     }
 
     pub fn toggle(&mut self, cx: &mut Context<Self>) {
-        self.open = false;
+        self.open = !self.open;
+        cx.notify();
+    }
+
+    pub fn open(&mut self, cx: &mut Context<Self>) {
+        self.open = true;
         cx.notify();
     }
 
@@ -525,6 +533,9 @@ impl RenderOnce for TimePicker {
         let state_data = self.state.read(cx);
         let format = state_data.format;
         let show_seconds = state_data.show_seconds;
+        let open = state_data.open;
+        let trigger_bounds = state_data.trigger_bounds;
+        let value = state_data.value;
         let pending_input = state_data.pending_input.clone();
         let focus_handle = state_data.focus_handle(cx);
         let is_focused = focus_handle.is_focused(window);
@@ -555,6 +566,7 @@ impl RenderOnce for TimePicker {
             .child(
                 div()
                     .id("time-picker-trigger")
+                    .relative()
                     .track_focus(&focus_handle.clone().tab_index(0).tab_stop(true))
                     .flex()
                     .items_center()
@@ -603,8 +615,10 @@ impl RenderOnce for TimePicker {
                         move |d| {
                             d.on_mouse_down(MouseButton::Left, {
                                 let focus_handle = focus_handle.clone();
-                                move |_, window, _| {
+                                let state = state.clone();
+                                move |_, window, cx| {
                                     window.focus(&focus_handle);
+                                    state.update(cx, |s, cx| s.toggle(cx));
                                 }
                             })
                             .on_key_down(move |event, window, cx| {
@@ -622,7 +636,10 @@ impl RenderOnce for TimePicker {
                                                 cx,
                                             );
                                         }
-                                        "escape" => s.cancel_pending(cx),
+                                        "escape" => {
+                                            s.cancel_pending(cx);
+                                            s.close(cx);
+                                        }
                                         "enter" => changed = s.commit_pending(cx),
                                         "up" => {
                                             s.adjust_minutes(1, cx);
@@ -718,8 +735,43 @@ impl RenderOnce for TimePicker {
                             FieldStatusType::Success => ("circle-check", theme.tokens.success),
                         };
                         this.child(Icon::new(icon).size(px(16.0)).color(color))
+                    })
+                    .child({
+                        let state = state.clone();
+                        canvas_with_prepaint(
+                            move |bounds, _, cx| {
+                                state.update(cx, |s, _| {
+                                    s.trigger_bounds = bounds;
+                                });
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full()
                     }),
-            );
+            )
+            .on_mouse_down_out({
+                let state = state.clone();
+                move |_, _, cx| {
+                    state.update(cx, |s, cx| {
+                        if s.open {
+                            s.close(cx);
+                        }
+                    });
+                }
+            })
+            .when(open && !effectively_disabled, |control| {
+                control.child(time_picker_popup(
+                    theme,
+                    &state,
+                    value,
+                    format,
+                    show_seconds,
+                    self.on_change.clone(),
+                    trigger_bounds,
+                    window.viewport_size(),
+                ))
+            });
 
         match self.label {
             Some(label) => {
@@ -743,6 +795,186 @@ impl RenderOnce for TimePicker {
             None => control.into_any_element(),
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum TimeCol {
+    Hour,
+    Minute,
+    Second,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn time_picker_popup(
+    theme: &Theme,
+    state: &Entity<TimePickerState>,
+    value: TimeValue,
+    format: TimeFormat,
+    show_seconds: bool,
+    on_change: Option<Rc<dyn Fn(&TimeValue, &mut Window, &mut App)>>,
+    trigger_bounds: Bounds<Pixels>,
+    viewport: Size<Pixels>,
+) -> AnyElement {
+    const GAP: Pixels = px(4.0);
+    let est_height = px(280.0);
+    let measured = trigger_bounds.size.width > px(0.0);
+    let space_below = viewport.height - trigger_bounds.bottom();
+    let space_above = trigger_bounds.top();
+    let open_up = space_below < est_height + GAP && space_above > space_below;
+    let (anchor_corner, anchor_pos) = if open_up {
+        (Corner::BottomLeft, trigger_bounds.corner(Corner::TopLeft))
+    } else {
+        (Corner::TopLeft, trigger_bounds.corner(Corner::BottomLeft))
+    };
+    let use_mb = measured && open_up;
+
+    let make_col = |prefix: &'static str, values: Vec<u8>, selected: u8, kind: TimeCol| {
+        div().flex().flex_col().child(div().max_h(px(220.0)).child(
+            scrollable_vertical(div().flex().flex_col().gap(px(2.0)).px(px(2.0)).children(
+                values.into_iter().map(|n| {
+                    let is_sel = n == selected;
+                    let state = state.clone();
+                    let on_change = on_change.clone();
+                    div()
+                        .id(SharedString::from(format!("{prefix}-{n}")))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .w(px(46.0))
+                        .h(px(30.0))
+                        .flex_shrink_0()
+                        .rounded(theme.tokens.radius_md)
+                        .text_size(px(13.0))
+                        .cursor_pointer()
+                        .font_family(theme.tokens.font_family.clone())
+                        .when(is_sel, |d| {
+                            d.bg(theme.tokens.primary)
+                                .text_color(theme.tokens.primary_foreground)
+                        })
+                        .when(!is_sel, |d| {
+                            d.text_color(theme.tokens.foreground)
+                                .hover(|s| s.bg(theme.tokens.accent))
+                        })
+                        .child(format!("{:02}", n))
+                        .on_click(move |_, window, cx| {
+                            state.update(cx, |s, cx| {
+                                match kind {
+                                    TimeCol::Hour => s.set_hour(n, cx),
+                                    TimeCol::Minute => s.set_minute(n, cx),
+                                    TimeCol::Second => s.set_second(n, cx),
+                                }
+                                if let Some(handler) = on_change.as_ref() {
+                                    handler(&s.value, window, cx);
+                                }
+                            });
+                        })
+                        .into_any_element()
+                }),
+            )),
+        ))
+    };
+
+    let hours: Vec<u8> = match format {
+        TimeFormat::Hour12 => (1..=12).collect(),
+        TimeFormat::Hour24 => (0..=23).collect(),
+    };
+    let minutes: Vec<u8> = (0..=59).collect();
+    let seconds: Vec<u8> = (0..=59).collect();
+
+    let mut anchor = anchored().snap_to_window_with_margin(Edges::all(GAP));
+    if measured {
+        anchor = anchor.anchor(anchor_corner).position(anchor_pos);
+    }
+
+    deferred(
+        anchor.child(
+            div()
+                .occlude()
+                .when(use_mb, |d| d.mb(GAP))
+                .when(!use_mb, |d| d.mt(GAP))
+                .flex()
+                .flex_row()
+                .gap(px(6.0))
+                .bg(theme.tokens.popover)
+                .border_1()
+                .border_color(theme.tokens.border)
+                .rounded(theme.tokens.radius_lg)
+                .shadow(theme.tokens.shadow_lg.to_vec())
+                .p(px(8.0))
+                .child(make_col("tp-hour", hours, value.hour, TimeCol::Hour))
+                .child(make_col("tp-min", minutes, value.minute, TimeCol::Minute))
+                .when(show_seconds, |d| {
+                    d.child(make_col(
+                        "tp-sec",
+                        seconds,
+                        value.second.unwrap_or(0),
+                        TimeCol::Second,
+                    ))
+                })
+                .when(format == TimeFormat::Hour12, |d| {
+                    d.child(period_col(theme, state, value, on_change.clone()))
+                }),
+        ),
+    )
+    .with_priority(1)
+    .into_any_element()
+}
+
+fn period_col(
+    theme: &Theme,
+    state: &Entity<TimePickerState>,
+    value: TimeValue,
+    on_change: Option<Rc<dyn Fn(&TimeValue, &mut Window, &mut App)>>,
+) -> AnyElement {
+    let btn = |label: &'static str, period: TimePeriod, selected: bool| {
+        let state = state.clone();
+        let on_change = on_change.clone();
+        div()
+            .id(SharedString::from(format!("tp-period-{label}")))
+            .flex()
+            .items_center()
+            .justify_center()
+            .w(px(46.0))
+            .h(px(30.0))
+            .rounded(theme.tokens.radius_md)
+            .text_size(px(13.0))
+            .cursor_pointer()
+            .font_family(theme.tokens.font_family.clone())
+            .when(selected, |d| {
+                d.bg(theme.tokens.primary)
+                    .text_color(theme.tokens.primary_foreground)
+            })
+            .when(!selected, |d| {
+                d.text_color(theme.tokens.foreground)
+                    .hover(|s| s.bg(theme.tokens.accent))
+            })
+            .child(label)
+            .on_click(move |_, window, cx| {
+                state.update(cx, |s, cx| {
+                    s.set_period(period, cx);
+                    if let Some(handler) = on_change.as_ref() {
+                        handler(&s.value, window, cx);
+                    }
+                });
+            })
+            .into_any_element()
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(2.0))
+        .child(btn(
+            "AM",
+            TimePeriod::AM,
+            value.period == Some(TimePeriod::AM),
+        ))
+        .child(btn(
+            "PM",
+            TimePeriod::PM,
+            value.period == Some(TimePeriod::PM),
+        ))
+        .into_any_element()
 }
 
 fn is_time_input_text(text: &str) -> bool {
