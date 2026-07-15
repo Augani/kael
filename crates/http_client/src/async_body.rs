@@ -6,7 +6,7 @@ use std::{
 
 use bytes::Bytes;
 use futures::AsyncRead;
-use http_body::{Body, Frame};
+use http_body::{Body, Frame, SizeHint};
 
 /// Based on the implementation of AsyncBody in
 /// <https://github.com/sagebind/isahc/blob/5c533f1ef4d6bdf1fd291b5103c22110f41d0bf0/src/body/mod.rs>.
@@ -41,6 +41,37 @@ impl AsyncBody {
 
     pub fn from_bytes(bytes: Bytes) -> Self {
         Self(Inner::Bytes(Cursor::new(bytes)))
+    }
+
+    /// Read the body into memory up to `max_bytes`, returning an error before the
+    /// buffer can grow beyond the caller's trust boundary.
+    pub async fn read_to_end_limited(&mut self, max_bytes: usize) -> std::io::Result<Vec<u8>> {
+        use futures::AsyncReadExt as _;
+
+        let mut output = Vec::new();
+        let mut chunk = [0u8; 8192];
+        loop {
+            let read = self.read(&mut chunk).await?;
+            if read == 0 {
+                return Ok(output);
+            }
+            let next_len = output.len().checked_add(read).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::OutOfMemory, "HTTP body size overflow")
+            })?;
+            if next_len > max_bytes {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("HTTP body exceeds {max_bytes} byte limit"),
+                ));
+            }
+            output.try_reserve(read).map_err(|error| {
+                std::io::Error::new(
+                    std::io::ErrorKind::OutOfMemory,
+                    format!("could not reserve HTTP body buffer: {error}"),
+                )
+            })?;
+            output.extend_from_slice(&chunk[..read]);
+        }
     }
 }
 
@@ -114,8 +145,7 @@ impl futures::AsyncRead for AsyncBody {
         cx: &mut std::task::Context<'_>,
         buf: &mut [u8],
     ) -> std::task::Poll<std::io::Result<usize>> {
-        // SAFETY: Standard Enum pin projection
-        let inner = unsafe { &mut self.get_unchecked_mut().0 };
+        let inner = &mut self.get_mut().0;
         match inner {
             Inner::Empty => Poll::Ready(Ok(0)),
             // Blocking call is over an in-memory buffer
@@ -145,5 +175,44 @@ impl Body for AsyncBody {
             Poll::Ready(Err(e)) => Poll::Ready(Some(Err(e))),
             Poll::Pending => Poll::Pending,
         }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        match &self.0 {
+            Inner::Empty => true,
+            Inner::Bytes(cursor) => cursor.position() >= cursor.get_ref().len() as u64,
+            Inner::AsyncReader(_) => false,
+        }
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        match &self.0 {
+            Inner::Empty => SizeHint::with_exact(0),
+            Inner::Bytes(cursor) => {
+                let remaining = (cursor.get_ref().len() as u64).saturating_sub(cursor.position());
+                SizeHint::with_exact(remaining)
+            }
+            Inner::AsyncReader(_) => SizeHint::default(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::executor::block_on;
+    use http_body::Body as _;
+
+    use super::*;
+
+    #[test]
+    fn bounded_read_and_size_hint_track_remaining_bytes() {
+        let mut body = AsyncBody::from(vec![1, 2, 3]);
+        assert_eq!(body.size_hint().exact(), Some(3));
+        let bytes = block_on(body.read_to_end_limited(3)).unwrap();
+        assert_eq!(bytes, [1, 2, 3]);
+        assert!(body.is_end_stream());
+
+        let mut oversized = AsyncBody::from(vec![0; 4]);
+        assert!(block_on(oversized.read_to_end_limited(3)).is_err());
     }
 }

@@ -9,6 +9,30 @@ type TrayActionCallback = Arc<Mutex<Option<Box<dyn Fn(SharedString) + Send>>>>;
 type TrayClickCallback = Arc<Mutex<Option<Box<dyn Fn(TrayIconEvent) + Send>>>>;
 type LastClickPosition = Arc<Mutex<Option<(i32, i32)>>>;
 
+fn invoke_click_callback(callbacks: &TrayClickCallback, event: TrayIconEvent) {
+    let callback = callbacks.lock().ok().and_then(|mut guard| guard.take());
+    if let Some(callback) = callback {
+        super::catch_platform_callback("tray icon", (), || callback(event));
+        if let Ok(mut guard) = callbacks.lock()
+            && guard.is_none()
+        {
+            *guard = Some(callback);
+        }
+    }
+}
+
+fn invoke_action_callback(callbacks: &TrayActionCallback, id: SharedString) {
+    let callback = callbacks.lock().ok().and_then(|mut guard| guard.take());
+    if let Some(callback) = callback {
+        super::catch_platform_callback("tray menu", (), || callback(id));
+        if let Ok(mut guard) = callbacks.lock()
+            && guard.is_none()
+        {
+            *guard = Some(callback);
+        }
+    }
+}
+
 /// Default assumed size for a tray icon on Linux panels.
 const TRAY_ICON_SIZE: i32 = 24;
 
@@ -63,22 +87,14 @@ impl ksni::Tray for GpuiTray {
         if let Ok(mut guard) = self.last_click_position.lock() {
             *guard = Some((x, y));
         }
-        if let Ok(guard) = self.click_callback.lock() {
-            if let Some(ref cb) = *guard {
-                cb(TrayIconEvent::LeftClick);
-            }
-        }
+        invoke_click_callback(&self.click_callback, TrayIconEvent::LeftClick);
     }
 
     fn secondary_activate(&mut self, x: i32, y: i32) {
         if let Ok(mut guard) = self.last_click_position.lock() {
             *guard = Some((x, y));
         }
-        if let Ok(guard) = self.click_callback.lock() {
-            if let Some(ref cb) = *guard {
-                cb(TrayIconEvent::RightClick);
-            }
-        }
+        invoke_click_callback(&self.click_callback, TrayIconEvent::RightClick);
     }
 
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
@@ -100,11 +116,7 @@ fn convert_menu_item(
             ksni::MenuItem::Standard(ksni::menu::StandardItem {
                 label: label.to_string(),
                 activate: Box::new(move |_tray: &mut GpuiTray| {
-                    if let Ok(guard) = cb.lock() {
-                        if let Some(ref callback) = *guard {
-                            callback(id_clone.clone());
-                        }
-                    }
+                    invoke_action_callback(&cb, id_clone.clone());
                 }),
                 ..Default::default()
             })
@@ -129,11 +141,7 @@ fn convert_menu_item(
                     String::new()
                 },
                 activate: Box::new(move |_tray: &mut GpuiTray| {
-                    if let Ok(guard) = cb.lock() {
-                        if let Some(ref callback) = *guard {
-                            callback(id_clone.clone());
-                        }
-                    }
+                    invoke_action_callback(&cb, id_clone.clone());
                 }),
                 ..Default::default()
             })

@@ -20,6 +20,17 @@ pub enum LayerPlacement {
     Anchored(LayerAnchor),
 }
 
+impl LayerPlacement {
+    /// Stable placement key for content-safe diagnostics.
+    pub fn to_text(&self) -> &'static str {
+        match self {
+            LayerPlacement::Centered => "centered",
+            LayerPlacement::Fullscreen => "fullscreen",
+            LayerPlacement::Anchored(_) => "anchored",
+        }
+    }
+}
+
 /// Anchored placement configuration for a layer.
 #[derive(Clone, Copy, PartialEq)]
 pub struct LayerAnchor {
@@ -84,6 +95,55 @@ impl LayerAnchor {
     pub fn snap_to_window_with_margin(mut self, edges: impl Into<Edges<Pixels>>) -> Self {
         self.fit_mode = AnchoredFitMode::SnapToWindowWithMargin(edges.into());
         self
+    }
+
+    /// Returns true when the caller supplied an anchor position.
+    pub fn has_anchor_position(&self) -> bool {
+        self.anchor_position.is_some()
+    }
+
+    /// Returns true when an offset is configured.
+    pub fn has_offset(&self) -> bool {
+        self.offset != Point::default()
+    }
+
+    /// Stable key for the configured anchor corner.
+    pub fn anchor_corner_key(&self) -> &'static str {
+        match self.anchor_corner {
+            Corner::TopLeft => "top_left",
+            Corner::TopRight => "top_right",
+            Corner::BottomLeft => "bottom_left",
+            Corner::BottomRight => "bottom_right",
+        }
+    }
+
+    /// Stable key for how the anchor position is interpreted.
+    pub fn position_mode_key(&self) -> &'static str {
+        match self.position_mode {
+            AnchoredPositionMode::Window => "window",
+            AnchoredPositionMode::Local => "local",
+        }
+    }
+
+    /// Stable key for the configured overflow fitting behavior.
+    pub fn fit_mode_key(&self) -> &'static str {
+        match self.fit_mode {
+            AnchoredFitMode::SwitchAnchor => "switch_anchor",
+            AnchoredFitMode::SnapToWindow => "snap_to_window",
+            AnchoredFitMode::SnapToWindowWithMargin(_) => "snap_to_window_with_margin",
+        }
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "layer_anchor(anchor_corner={}, position_mode={}, fit_mode={}, has_anchor_position={}, has_offset={})",
+            self.anchor_corner_key(),
+            self.position_mode_key(),
+            self.fit_mode_key(),
+            self.has_anchor_position(),
+            self.has_offset()
+        )
     }
 }
 
@@ -170,6 +230,58 @@ impl LayerOptions {
     fn needs_backdrop_capture(&self) -> bool {
         self.backdrop.is_some() || self.dismiss_on_click_outside
     }
+
+    /// Stable placement key for content-safe diagnostics.
+    pub fn placement_key(&self) -> &'static str {
+        self.placement.to_text()
+    }
+
+    /// Returns true when a backdrop color is configured.
+    pub fn has_backdrop(&self) -> bool {
+        self.backdrop.is_some()
+    }
+
+    /// Returns true when the layer captures the backdrop for paint or dismissal.
+    pub fn captures_backdrop(&self) -> bool {
+        self.needs_backdrop_capture()
+    }
+
+    /// Returns the configured draw priority.
+    pub fn priority_value(&self) -> usize {
+        self.priority
+    }
+
+    /// Coarse priority class for content-safe diagnostics.
+    pub fn priority_class(&self) -> &'static str {
+        match self.priority {
+            0 => "default",
+            1..=99 => "raised",
+            _ => "overlay",
+        }
+    }
+
+    /// Stable dismissal policy key.
+    pub fn dismissal_mode(&self) -> &'static str {
+        match (self.dismiss_on_click_outside, self.dismiss_on_escape) {
+            (false, false) => "none",
+            (true, false) => "click_outside",
+            (false, true) => "escape",
+            (true, true) => "click_outside_escape",
+        }
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "layer_options(placement={}, has_backdrop={}, captures_backdrop={}, priority={}, priority_class={}, dismissal={})",
+            self.placement_key(),
+            self.has_backdrop(),
+            self.captures_backdrop(),
+            self.priority_value(),
+            self.priority_class(),
+            self.dismissal_mode()
+        )
+    }
 }
 
 struct LayerEntry {
@@ -202,6 +314,64 @@ impl LayerStack {
     /// Returns whether the stack currently has no layers.
     pub fn is_empty(&self) -> bool {
         self.layers.is_empty()
+    }
+
+    /// Returns true when at least one layer is active.
+    pub fn has_layers(&self) -> bool {
+        !self.layers.is_empty()
+    }
+
+    /// Stable placement key for the top-most layer, when any layer exists.
+    pub fn top_placement_key(&self) -> Option<&'static str> {
+        self.layers
+            .last()
+            .map(|entry| entry.options.placement_key())
+    }
+
+    /// Counts layers with outside-click or escape dismissal enabled.
+    pub fn dismissible_layer_count(&self) -> usize {
+        self.layers
+            .iter()
+            .filter(|entry| entry.options.dismissal_mode() != "none")
+            .count()
+    }
+
+    /// Counts layers that paint or capture a backdrop.
+    pub fn backdrop_layer_count(&self) -> usize {
+        self.layers
+            .iter()
+            .filter(|entry| entry.options.captures_backdrop())
+            .count()
+    }
+
+    /// Counts anchored layers.
+    pub fn anchored_layer_count(&self) -> usize {
+        self.layers
+            .iter()
+            .filter(|entry| matches!(entry.options.placement, LayerPlacement::Anchored(_)))
+            .count()
+    }
+
+    /// Counts fullscreen layers.
+    pub fn fullscreen_layer_count(&self) -> usize {
+        self.layers
+            .iter()
+            .filter(|entry| matches!(entry.options.placement, LayerPlacement::Fullscreen))
+            .count()
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "layer_stack(len={}, empty={}, top_placement={}, dismissible_layers={}, backdrop_layers={}, anchored_layers={}, fullscreen_layers={})",
+            self.len(),
+            self.is_empty(),
+            self.top_placement_key().unwrap_or("none"),
+            self.dismissible_layer_count(),
+            self.backdrop_layer_count(),
+            self.anchored_layer_count(),
+            self.fullscreen_layer_count()
+        )
     }
 
     /// Pushes a managed view onto the stack and returns its layer identifier.
@@ -439,6 +609,109 @@ mod tests {
                 )
                 .child(self.layer_stack.clone())
         }
+    }
+
+    #[test]
+    fn layer_anchor_summary_is_content_safe() {
+        let anchor = LayerAnchor::at(point(px(180.), px(96.)))
+            .anchor(Corner::BottomRight)
+            .position_mode(AnchoredPositionMode::Local)
+            .offset(point(px(12.), px(8.)))
+            .snap_to_window_with_margin(px(16.));
+
+        assert!(anchor.has_anchor_position());
+        assert!(anchor.has_offset());
+        assert_eq!(anchor.anchor_corner_key(), "bottom_right");
+        assert_eq!(anchor.position_mode_key(), "local");
+        assert_eq!(anchor.fit_mode_key(), "snap_to_window_with_margin");
+
+        let summary = anchor.to_text();
+        assert!(summary.contains("anchor_corner=bottom_right"));
+        assert!(summary.contains("position_mode=local"));
+        assert!(summary.contains("fit_mode=snap_to_window_with_margin"));
+        assert!(!summary.contains("180"));
+        assert!(!summary.contains("96"));
+        assert!(!summary.contains("16"));
+    }
+
+    #[test]
+    fn layer_options_summary_is_content_safe() {
+        let options = LayerOptions::modal().anchored(
+            LayerAnchor::at(point(px(320.), px(180.)))
+                .offset(point(px(4.), px(2.)))
+                .snap_to_window(),
+        );
+
+        assert_eq!(options.placement_key(), "anchored");
+        assert!(options.has_backdrop());
+        assert!(options.captures_backdrop());
+        assert_eq!(options.priority_value(), 100);
+        assert_eq!(options.priority_class(), "overlay");
+        assert_eq!(options.dismissal_mode(), "click_outside_escape");
+
+        let summary = options.to_text();
+        assert!(summary.contains("placement=anchored"));
+        assert!(summary.contains("has_backdrop=true"));
+        assert!(summary.contains("dismissal=click_outside_escape"));
+        assert!(!summary.contains("320"));
+        assert!(!summary.contains("180"));
+        assert!(!summary.contains("0.32"));
+    }
+
+    #[kael::test]
+    fn layer_stack_summary_is_content_safe(cx: &mut TestAppContext) {
+        let panel_clicks = Rc::new(Cell::new(0));
+
+        let (root, cx) = cx.add_window_view({
+            let panel_clicks = panel_clicks.clone();
+            move |window, cx| {
+                let layer_stack = cx.new(|_| LayerStack::new());
+                let layer = cx.new(|cx| TestLayerView {
+                    focus: cx.focus_handle(),
+                    clicks: panel_clicks.clone(),
+                });
+                let popover = cx.new(|cx| TestLayerView {
+                    focus: cx.focus_handle(),
+                    clicks: panel_clicks.clone(),
+                });
+
+                layer_stack.update(cx, |stack, cx| {
+                    stack.push(layer, LayerOptions::modal(), window, cx);
+                    stack.push(
+                        popover,
+                        LayerOptions::default()
+                            .anchored(LayerAnchor::at(point(px(420.), px(64.))))
+                            .dismiss_on_escape(),
+                        window,
+                        cx,
+                    );
+                });
+
+                RootView {
+                    layer_stack,
+                    background_clicks: Rc::new(Cell::new(0)),
+                }
+            }
+        });
+
+        let layer_stack = cx.read_entity(&root, |root, _| root.layer_stack.clone());
+        cx.read_entity(&layer_stack, |stack, _| {
+            assert!(stack.has_layers());
+            assert_eq!(stack.len(), 2);
+            assert_eq!(stack.top_placement_key(), Some("anchored"));
+            assert_eq!(stack.dismissible_layer_count(), 2);
+            assert_eq!(stack.backdrop_layer_count(), 1);
+            assert_eq!(stack.anchored_layer_count(), 1);
+            assert_eq!(stack.fullscreen_layer_count(), 0);
+
+            let summary = stack.to_text();
+            assert!(summary.contains("len=2"));
+            assert!(summary.contains("top_placement=anchored"));
+            assert!(summary.contains("dismissible_layers=2"));
+            assert!(!summary.contains("panel"));
+            assert!(!summary.contains("420"));
+            assert!(!summary.contains("64"));
+        });
     }
 
     #[kael::test]

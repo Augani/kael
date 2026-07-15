@@ -1,4 +1,4 @@
-// Feature: platform-parity-electron-features, Property 13: OpenType feature tag tolerance
+// Feature: platform-parity-browser-runtime-features, Property 13: OpenType feature tag tolerance
 
 use proptest::prelude::*;
 

@@ -54,6 +54,9 @@ pub struct Spinner {
     variant: SpinnerVariant,
     shade: SpinnerShade,
     label: Option<SharedString>,
+    accessibility_label: SharedString,
+    decorative: bool,
+    animation_repeat: Repeat,
     style: StyleRefinement,
 }
 
@@ -64,6 +67,9 @@ impl Spinner {
             variant: SpinnerVariant::Default,
             shade: SpinnerShade::Default,
             label: None,
+            accessibility_label: "Loading".into(),
+            decorative: false,
+            animation_repeat: Repeat::Forever,
             style: StyleRefinement::default(),
         }
     }
@@ -90,7 +96,40 @@ impl Spinner {
     }
 
     pub fn label(mut self, label: impl Into<SharedString>) -> Self {
-        self.label = Some(label.into());
+        let label = label.into();
+        if label.trim().is_empty() {
+            self.accessibility_label = "Loading".into();
+            self.label = None;
+        } else {
+            self.accessibility_label = label.clone();
+            self.label = Some(label);
+        }
+        self
+    }
+
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        let label = label.into();
+        self.accessibility_label = if label.trim().is_empty() {
+            "Loading".into()
+        } else {
+            label
+        };
+        self
+    }
+
+    /// Hide the spinner from assistive technology when a semantic parent
+    /// already communicates the loading state.
+    pub fn decorative(mut self, decorative: bool) -> Self {
+        self.decorative = decorative;
+        self
+    }
+
+    /// Limit the spinner to a finite number of rotations.
+    ///
+    /// This is useful for previews and low-attention surfaces. Loading indicators
+    /// remain continuous by default.
+    pub fn animation_cycles(mut self, cycles: u32) -> Self {
+        self.animation_repeat = Repeat::Count(cycles.max(1));
         self
     }
 }
@@ -108,7 +147,7 @@ impl Styled for Spinner {
 }
 
 impl RenderOnce for Spinner {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = &Theme::of(cx).tokens;
         let muted_foreground = tokens.muted_foreground;
         let font_family = tokens.font_family.clone();
@@ -116,6 +155,7 @@ impl RenderOnce for Spinner {
         let frame_size = self.size.frame_pixels();
         let stroke_width = self.size.stroke_width();
         let inner_size = frame_size - stroke_width * 2.0;
+        let animation_repeat = self.animation_repeat;
 
         let active_color = match self.shade {
             SpinnerShade::OnMedia => white(),
@@ -153,7 +193,18 @@ impl RenderOnce for Spinner {
             ],
         );
 
+        let accessibility = if self.decorative {
+            AccessibilityAttributes::new(AccessibilityRole::Group)
+                .states(AccessibilityState::HIDDEN)
+        } else {
+            AccessibilityAttributes::new(AccessibilityRole::ProgressBar)
+                .label(self.accessibility_label.to_string())
+                .value(AccessibilityValue::Text("Loading".into()))
+                .busy(true)
+        };
+
         div()
+            .accessibility(accessibility)
             .flex()
             .flex_col()
             .items_center()
@@ -162,8 +213,8 @@ impl RenderOnce for Spinner {
                 this.style().refine(&user_style);
                 this
             })
-            .child(
-                div()
+            .child({
+                let spinner = div()
                     .size(frame_size)
                     .relative()
                     .overflow_hidden()
@@ -180,15 +231,22 @@ impl RenderOnce for Spinner {
                                 SpinnerShade::OnMedia => kael::transparent_black(),
                                 _ => tokens.background,
                             }),
-                    )
-                    .with_animation(
-                        "spinner-rotation",
-                        Animation::new(std::time::Duration::from_millis(730))
-                            .repeat_forever()
-                            .with_easing(crate::animations::easings::linear),
-                        |el, delta| el.rotate(delta * 360.0),
-                    ),
-            )
+                    );
+
+                if window.animations_enabled() {
+                    spinner
+                        .with_animation(
+                            "spinner-rotation",
+                            Animation::new(std::time::Duration::from_millis(730))
+                                .repeat(animation_repeat)
+                                .with_easing(crate::animations::easings::linear),
+                            |el, delta| el.rotate(delta * 360.0),
+                        )
+                        .into_any_element()
+                } else {
+                    spinner.into_any_element()
+                }
+            })
             .when_some(self.label, |d, label| {
                 d.child(
                     div()
@@ -201,19 +259,38 @@ impl RenderOnce for Spinner {
                             tokens.foreground
                         })
                         .font_family(font_family.clone())
-                        .child(label),
+                        .child(StyledText::new(label).accessibility_hidden(true)),
                 )
             })
     }
 }
 
 #[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn empty_labels_keep_a_meaningful_accessible_default() {
+        let spinner = Spinner::new().label(" ").accessibility_label("");
+        assert!(spinner.label.is_none());
+        assert_eq!(spinner.accessibility_label.as_ref(), "Loading");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{Spinner, SpinnerVariant};
+    use kael::Repeat;
 
     #[test]
     fn color_sets_custom_spinner_variant() {
         let spinner = Spinner::new().color(kael::black());
         assert!(matches!(spinner.variant, SpinnerVariant::Custom(_)));
+    }
+
+    #[test]
+    fn preview_cycles_are_finite_and_nonzero() {
+        let spinner = Spinner::new().animation_cycles(0);
+        assert_eq!(spinner.animation_repeat, Repeat::Count(1));
     }
 }

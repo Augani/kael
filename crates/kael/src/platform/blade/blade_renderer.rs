@@ -514,8 +514,8 @@ impl BladeRenderer {
             CVMetalTextureCache::new(
                 objc2::rc::Retained::as_ptr(&context.gpu.metal_device()) as *mut _
             )
-            .unwrap()
-        };
+        }
+        .map_err(|error| anyhow::anyhow!("failed to create CoreVideo texture cache: {error:#}"))?;
 
         Ok(Self {
             gpu: Arc::clone(&context.gpu),
@@ -711,11 +711,6 @@ impl BladeRenderer {
             driver_name: info.driver_name.clone(),
             driver_info: info.driver_info.clone(),
         }
-    }
-
-    #[cfg(target_os = "macos")]
-    pub fn layer(&self) -> metal::MetalLayer {
-        unsafe { foreign_types::ForeignType::from_ptr(self.layer_ptr()) }
     }
 
     #[cfg(target_os = "macos")]
@@ -961,7 +956,10 @@ impl BladeRenderer {
                     texture_id,
                     sprites,
                 } => {
-                    let tex_info = self.atlas.get_texture_info(texture_id);
+                    let Some(tex_info) = self.atlas.get_texture_info(texture_id) else {
+                        log::warn!("skipping monochrome sprites with a stale Blade atlas texture");
+                        continue;
+                    };
                     let instance_buf =
                         unsafe { self.instance_belt.alloc_typed(sprites, &self.gpu) };
                     let mut encoder = pass.with(&self.pipelines.mono_sprites);
@@ -984,7 +982,10 @@ impl BladeRenderer {
                     texture_id,
                     sprites,
                 } => {
-                    let tex_info = self.atlas.get_texture_info(texture_id);
+                    let Some(tex_info) = self.atlas.get_texture_info(texture_id) else {
+                        log::warn!("skipping polychrome sprites with a stale Blade atlas texture");
+                        continue;
+                    };
                     let instance_buf =
                         unsafe { self.instance_belt.alloc_typed(sprites, &self.gpu) };
                     let mut encoder = pass.with(&self.pipelines.poly_sprites);
@@ -1015,14 +1016,15 @@ impl BladeRenderer {
                                 use core_foundation::base::TCFType as _;
                                 use std::ptr;
 
-                                assert_eq!(
-                                        surface.image_buffer.get_pixel_format(),
-                                        core_video::pixel_buffer::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-                                    );
+                                if surface.image_buffer.get_pixel_format()
+                                    != core_video::pixel_buffer::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+                                {
+                                    log::warn!("skipping Blade surface with unsupported pixel format");
+                                    continue;
+                                }
 
-                                let y_texture = self
-                                    .core_video_texture_cache
-                                    .create_texture_from_image(
+                                let Ok(y_texture) =
+                                    self.core_video_texture_cache.create_texture_from_image(
                                         surface.image_buffer.as_concrete_TypeRef(),
                                         ptr::null(),
                                         metal::MTLPixelFormat::R8Unorm,
@@ -1030,10 +1032,12 @@ impl BladeRenderer {
                                         surface.image_buffer.get_height_of_plane(0),
                                         0,
                                     )
-                                    .unwrap();
-                                let cb_cr_texture = self
-                                    .core_video_texture_cache
-                                    .create_texture_from_image(
+                                else {
+                                    log::warn!("failed to create Blade Y-plane Metal texture");
+                                    continue;
+                                };
+                                let Ok(cb_cr_texture) =
+                                    self.core_video_texture_cache.create_texture_from_image(
                                         surface.image_buffer.as_concrete_TypeRef(),
                                         ptr::null(),
                                         metal::MTLPixelFormat::RG8Unorm,
@@ -1041,30 +1045,45 @@ impl BladeRenderer {
                                         surface.image_buffer.get_height_of_plane(1),
                                         1,
                                     )
-                                    .unwrap();
+                                else {
+                                    log::warn!("failed to create Blade chroma-plane Metal texture");
+                                    continue;
+                                };
+                                let Some(y_texture_ref) = y_texture.as_texture_ref() else {
+                                    log::warn!("CoreVideo Y-plane texture has no Metal texture");
+                                    continue;
+                                };
+                                let Some(cb_cr_texture_ref) = cb_cr_texture.as_texture_ref() else {
+                                    log::warn!(
+                                        "CoreVideo chroma-plane texture has no Metal texture"
+                                    );
+                                    continue;
+                                };
+                                let Some(y_texture) = objc2::rc::Retained::retain(
+                                    foreign_types::ForeignTypeRef::as_ptr(y_texture_ref)
+                                        as *mut objc2::runtime::ProtocolObject<
+                                            dyn objc2_metal::MTLTexture,
+                                        >,
+                                ) else {
+                                    log::warn!("failed to retain Blade Y-plane Metal texture");
+                                    continue;
+                                };
+                                let Some(cb_cr_texture) = objc2::rc::Retained::retain(
+                                    foreign_types::ForeignTypeRef::as_ptr(cb_cr_texture_ref)
+                                        as *mut objc2::runtime::ProtocolObject<
+                                            dyn objc2_metal::MTLTexture,
+                                        >,
+                                ) else {
+                                    log::warn!("failed to retain Blade chroma-plane Metal texture");
+                                    continue;
+                                };
                                 (
                                     gpu::TextureView::from_metal_texture(
-                                        &objc2::rc::Retained::retain(
-                                            foreign_types::ForeignTypeRef::as_ptr(
-                                                y_texture.as_texture_ref(),
-                                            )
-                                                as *mut objc2::runtime::ProtocolObject<
-                                                    dyn objc2_metal::MTLTexture,
-                                                >,
-                                        )
-                                        .unwrap(),
+                                        &y_texture,
                                         gpu::TexelAspects::COLOR,
                                     ),
                                     gpu::TextureView::from_metal_texture(
-                                        &objc2::rc::Retained::retain(
-                                            foreign_types::ForeignTypeRef::as_ptr(
-                                                cb_cr_texture.as_texture_ref(),
-                                            )
-                                                as *mut objc2::runtime::ProtocolObject<
-                                                    dyn objc2_metal::MTLTexture,
-                                                >,
-                                        )
-                                        .unwrap(),
+                                        &cb_cr_texture,
                                         gpu::TexelAspects::COLOR,
                                     ),
                                 )
@@ -1257,7 +1276,12 @@ impl BladeRenderer {
                         texture_id,
                         sprites,
                     } => {
-                        let tex_info = self.atlas.get_texture_info(texture_id);
+                        let Some(tex_info) = self.atlas.get_texture_info(texture_id) else {
+                            log::warn!(
+                                "skipping cached monochrome sprites with a stale Blade atlas texture"
+                            );
+                            continue;
+                        };
                         let instance_buf =
                             unsafe { self.instance_belt.alloc_typed(sprites, &self.gpu) };
                         let mut encoder = pass.with(&self.pipelines.mono_sprites);
@@ -1280,7 +1304,12 @@ impl BladeRenderer {
                         texture_id,
                         sprites,
                     } => {
-                        let tex_info = self.atlas.get_texture_info(texture_id);
+                        let Some(tex_info) = self.atlas.get_texture_info(texture_id) else {
+                            log::warn!(
+                                "skipping cached polychrome sprites with a stale Blade atlas texture"
+                            );
+                            continue;
+                        };
                         let instance_buf =
                             unsafe { self.instance_belt.alloc_typed(sprites, &self.gpu) };
                         let mut encoder = pass.with(&self.pipelines.poly_sprites);
@@ -1307,14 +1336,15 @@ impl BladeRenderer {
                                     use core_foundation::base::TCFType as _;
                                     use std::ptr;
 
-                                    assert_eq!(
-                                        surface.image_buffer.get_pixel_format(),
-                                        core_video::pixel_buffer::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-                                    );
+                                    if surface.image_buffer.get_pixel_format()
+                                        != core_video::pixel_buffer::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+                                    {
+                                        log::warn!("skipping Blade surface with unsupported pixel format");
+                                        continue;
+                                    }
 
-                                    let y_texture = self
-                                        .core_video_texture_cache
-                                        .create_texture_from_image(
+                                    let Ok(y_texture) =
+                                        self.core_video_texture_cache.create_texture_from_image(
                                             surface.image_buffer.as_concrete_TypeRef(),
                                             ptr::null(),
                                             metal::MTLPixelFormat::R8Unorm,
@@ -1322,10 +1352,12 @@ impl BladeRenderer {
                                             surface.image_buffer.get_height_of_plane(0),
                                             0,
                                         )
-                                        .unwrap();
-                                    let cb_cr_texture = self
-                                        .core_video_texture_cache
-                                        .create_texture_from_image(
+                                    else {
+                                        log::warn!("failed to create Blade Y-plane Metal texture");
+                                        continue;
+                                    };
+                                    let Ok(cb_cr_texture) =
+                                        self.core_video_texture_cache.create_texture_from_image(
                                             surface.image_buffer.as_concrete_TypeRef(),
                                             ptr::null(),
                                             metal::MTLPixelFormat::RG8Unorm,
@@ -1333,31 +1365,53 @@ impl BladeRenderer {
                                             surface.image_buffer.get_height_of_plane(1),
                                             1,
                                         )
-                                        .unwrap();
+                                    else {
+                                        log::warn!(
+                                            "failed to create Blade chroma-plane Metal texture"
+                                        );
+                                        continue;
+                                    };
+                                    let Some(y_texture_ref) = y_texture.as_texture_ref() else {
+                                        log::warn!(
+                                            "CoreVideo Y-plane texture has no Metal texture"
+                                        );
+                                        continue;
+                                    };
+                                    let Some(cb_cr_texture_ref) = cb_cr_texture.as_texture_ref()
+                                    else {
+                                        log::warn!(
+                                            "CoreVideo chroma-plane texture has no Metal texture"
+                                        );
+                                        continue;
+                                    };
+                                    let Some(y_texture) = objc2::rc::Retained::retain(
+                                        foreign_types::ForeignTypeRef::as_ptr(y_texture_ref)
+                                            as *mut objc2::runtime::ProtocolObject<
+                                                dyn objc2_metal::MTLTexture,
+                                            >,
+                                    ) else {
+                                        log::warn!("failed to retain Blade Y-plane Metal texture");
+                                        continue;
+                                    };
+                                    let Some(cb_cr_texture) = objc2::rc::Retained::retain(
+                                        foreign_types::ForeignTypeRef::as_ptr(cb_cr_texture_ref)
+                                            as *mut objc2::runtime::ProtocolObject<
+                                                dyn objc2_metal::MTLTexture,
+                                            >,
+                                    ) else {
+                                        log::warn!(
+                                            "failed to retain Blade chroma-plane Metal texture"
+                                        );
+                                        continue;
+                                    };
 
                                     (
                                         gpu::TextureView::from_metal_texture(
-                                            &objc2::rc::Retained::retain(
-                                                foreign_types::ForeignTypeRef::as_ptr(
-                                                    y_texture.as_texture_ref(),
-                                                )
-                                                    as *mut objc2::runtime::ProtocolObject<
-                                                        dyn objc2_metal::MTLTexture,
-                                                    >,
-                                            )
-                                            .unwrap(),
+                                            &y_texture,
                                             gpu::TexelAspects::COLOR,
                                         ),
                                         gpu::TextureView::from_metal_texture(
-                                            &objc2::rc::Retained::retain(
-                                                foreign_types::ForeignTypeRef::as_ptr(
-                                                    cb_cr_texture.as_texture_ref(),
-                                                )
-                                                    as *mut objc2::runtime::ProtocolObject<
-                                                        dyn objc2_metal::MTLTexture,
-                                                    >,
-                                            )
-                                            .unwrap(),
+                                            &cb_cr_texture,
                                             gpu::TexelAspects::COLOR,
                                         ),
                                     )
@@ -1385,7 +1439,10 @@ impl BladeRenderer {
             }
             drop(pass);
 
-            let texture_info = self.atlas.get_texture_info(snapshot.target.texture_id);
+            let Some(texture_info) = self.atlas.get_texture_info(snapshot.target.texture_id) else {
+                log::warn!("skipping cached-surface copy to a stale Blade atlas texture");
+                continue;
+            };
             let mut transfers = self.command_encoder.transfer("cached surface blit");
             transfers.copy_texture_to_texture(
                 gpu::TexturePiece {

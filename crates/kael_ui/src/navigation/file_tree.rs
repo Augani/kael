@@ -1,8 +1,10 @@
 use crate::components::icon::Icon;
 use crate::components::icon_source::IconSource;
+use crate::styled_ext::StyledExt;
 use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::collections::HashSet;
+use std::panic::Location;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -68,8 +70,32 @@ impl FileNode {
     }
 
     pub fn with_children(mut self, children: Vec<FileNode>) -> Self {
-        self.children = children;
+        self.children = children
+            .into_iter()
+            .map(|mut child| {
+                if child.path.is_relative() && !child.path.starts_with(&self.path) {
+                    let rebased = self.path.join(&child.path);
+                    child.rebase_to(rebased);
+                }
+                child
+            })
+            .collect();
         self
+    }
+
+    fn rebase_to(&mut self, path: PathBuf) {
+        let previous = std::mem::replace(&mut self.path, path.clone());
+        for child in &mut self.children {
+            if child.path.is_absolute() {
+                continue;
+            }
+            let suffix = child
+                .path
+                .strip_prefix(&previous)
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| child.path.clone());
+            child.rebase_to(path.join(suffix));
+        }
     }
 
     pub fn with_size(mut self, size: u64) -> Self {
@@ -227,6 +253,7 @@ const ROW_HEIGHT: f32 = 28.0;
 
 #[derive(IntoElement)]
 pub struct FileTree {
+    id: ElementId,
     nodes: Vec<FileNode>,
     selected_path: Option<PathBuf>,
     expanded_paths: Vec<PathBuf>,
@@ -241,8 +268,19 @@ pub struct FileTree {
 }
 
 impl FileTree {
+    #[track_caller]
     pub fn new() -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "file-tree:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             nodes: Vec::new(),
             selected_path: None,
             expanded_paths: Vec::new(),
@@ -259,6 +297,12 @@ impl FileTree {
     pub fn nodes(mut self, mut nodes: Vec<FileNode>) -> Self {
         sort_file_nodes(&mut nodes);
         self.nodes = nodes;
+        self
+    }
+
+    /// Set a stable identity when multiple file trees are rendered from one callsite.
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
         self
     }
 
@@ -316,6 +360,7 @@ impl FileTree {
 }
 
 impl Default for FileTree {
+    #[track_caller]
     fn default() -> Self {
         Self::new()
     }
@@ -341,8 +386,12 @@ impl RenderOnce for FileTree {
         let on_toggle = self.on_toggle;
         let on_context_menu = self.on_context_menu;
         let show_file_size = self.show_file_size;
+        let tree_id = self.id;
 
         div()
+            .id(tree_id.clone())
+            .accessibility(AccessibilityAttributes::new(AccessibilityRole::Tree).label("File tree"))
+            .tab_group()
             .flex()
             .flex_col()
             .w_full()
@@ -351,128 +400,260 @@ impl RenderOnce for FileTree {
                 this.style().refine(&user_style);
                 this
             })
-            .children(flat_nodes.into_iter().map(|flat_node| {
-                let is_selected = selected_path.as_ref() == Some(&flat_node.node.path);
-                let is_expanded = expanded_set.contains(&flat_node.node.path);
-                let has_children =
-                    !flat_node.node.children.is_empty() || flat_node.node.has_unloaded_children;
-                let indent = px((flat_node.level as f32) * 16.0);
-                let node = flat_node.node;
-                let path = node.path.clone();
+            .children(
+                flat_nodes
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, flat_node)| {
+                        let is_selected = selected_path.as_ref() == Some(&flat_node.node.path);
+                        let is_expanded = expanded_set.contains(&flat_node.node.path);
+                        let has_children = !flat_node.node.children.is_empty()
+                            || flat_node.node.has_unloaded_children;
+                        let indent = px((flat_node.level as f32) * 16.0);
+                        let node = flat_node.node;
+                        let path = node.path.clone();
+                        let row_id = ElementId::NamedChild(
+                            Box::new(tree_id.clone()),
+                            path.to_string_lossy().to_string().into(),
+                        );
 
-                let icon_color = node.file_icon_color(theme);
-                let node_icon = node.file_icon(is_expanded);
+                        let icon_color = node.file_icon_color(theme);
+                        let node_icon = node.file_icon(is_expanded);
 
-                div()
-                    .id(SharedString::from(path.to_string_lossy().to_string()))
-                    .w_full()
-                    .h(px(ROW_HEIGHT))
-                    .flex()
-                    .items_center()
-                    .mx(px(8.0))
-                    .px(px(8.0))
-                    .pl(indent + px(8.0))
-                    .rounded(theme.tokens.radius_sm)
-                    .cursor_pointer()
-                    .transition(theme.tokens.transition_fast)
-                    .bg(if is_selected {
-                        theme.tokens.accent
-                    } else {
-                        kael::transparent_black()
-                    })
-                    .text_color(if is_selected {
-                        theme.tokens.accent_foreground
-                    } else if node.is_hidden {
-                        theme.tokens.muted_foreground
-                    } else {
-                        theme.tokens.foreground
-                    })
-                    .when(!is_selected, |d| {
-                        d.hover(|s| s.bg(theme.tokens.accent.opacity(0.5)))
-                    })
-                    .on_click({
-                        let path = path.clone();
-                        let on_select = on_select.clone();
-                        let on_toggle = on_toggle.clone();
-                        let on_open = on_open.clone();
-                        let is_dir = node.is_directory();
-
-                        move |event, window, cx| {
-                            if let Some(ref handler) = on_select {
-                                handler(&path, window, cx);
-                            }
-
-                            if is_dir {
-                                if let Some(ref handler) = on_toggle {
-                                    handler(&path, !is_expanded, window, cx);
-                                }
-                            } else if event.click_count() == 2 {
-                                if let Some(ref handler) = on_open {
-                                    handler(&path, window, cx);
-                                }
-                            }
+                        let mut state = AccessibilityState::NONE;
+                        if is_selected {
+                            state |= AccessibilityState::SELECTED;
                         }
-                    })
-                    .on_mouse_down(MouseButton::Right, {
-                        let path = path.clone();
-                        let on_context_menu = on_context_menu.clone();
-
-                        move |event, window, cx| {
-                            if let Some(ref handler) = on_context_menu {
-                                handler(&path, event.position, window, cx);
-                            }
+                        if node.is_directory() {
+                            state |= if is_expanded {
+                                AccessibilityState::EXPANDED
+                            } else {
+                                AccessibilityState::COLLAPSED
+                            };
                         }
-                    })
-                    .child(
+                        let can_activate = on_select.is_some()
+                            || (node.is_directory() && on_toggle.is_some())
+                            || (!node.is_directory() && on_open.is_some());
+                        let mut accessibility =
+                            AccessibilityAttributes::new(AccessibilityRole::TreeItem)
+                                .label(node.name.clone())
+                                .states(state);
+                        if can_activate {
+                            accessibility = accessibility.actions(vec![
+                                AccessibilityAction::Focus,
+                                AccessibilityAction::Click,
+                            ]);
+                        }
+
                         div()
+                            .id(row_id)
+                            .accessibility(accessibility)
+                            .when(can_activate, |this| {
+                                this.focusable()
+                                    .tab_index(index as isize)
+                                    .tab_stop(true)
+                                    .focus_visible(|style| {
+                                        style.inset_ring(theme.tokens.ring, px(2.0))
+                                    })
+                            })
+                            .w_full()
+                            .h(px(ROW_HEIGHT))
                             .flex()
                             .items_center()
-                            .gap(px(6.0))
-                            .flex_1()
+                            .mx(px(8.0))
+                            .px(px(8.0))
+                            .pl(indent + px(8.0))
+                            .rounded(theme.tokens.radius_sm)
+                            .cursor(if can_activate {
+                                CursorStyle::PointingHand
+                            } else {
+                                CursorStyle::Arrow
+                            })
+                            .transition(theme.tokens.transition_fast)
+                            .bg(if is_selected {
+                                theme.tokens.accent
+                            } else {
+                                kael::transparent_black()
+                            })
+                            .text_color(if is_selected {
+                                theme.tokens.accent_foreground
+                            } else if node.is_hidden {
+                                theme.tokens.muted_foreground
+                            } else {
+                                theme.tokens.foreground
+                            })
+                            .when(!is_selected, |d| {
+                                d.hover(|s| s.bg(theme.tokens.accent.opacity(0.5)))
+                            })
+                            .on_click({
+                                let path = path.clone();
+                                let on_select = on_select.clone();
+                                let on_toggle = on_toggle.clone();
+                                let on_open = on_open.clone();
+                                let is_dir = node.is_directory();
+
+                                move |event, window, cx| {
+                                    if let Some(ref handler) = on_select {
+                                        handler(&path, window, cx);
+                                    }
+
+                                    if is_dir {
+                                        if let Some(ref handler) = on_toggle {
+                                            handler(&path, !is_expanded, window, cx);
+                                        }
+                                    } else if event.click_count() == 2 {
+                                        if let Some(ref handler) = on_open {
+                                            handler(&path, window, cx);
+                                        }
+                                    }
+                                }
+                            })
+                            .when(can_activate, |this| {
+                                let path = path.clone();
+                                let on_select = on_select.clone();
+                                let on_toggle = on_toggle.clone();
+                                let on_open = on_open.clone();
+                                let is_dir = node.is_directory();
+                                this.on_key_down(move |event, window, cx| {
+                                    if event.keystroke.modifiers.modified() {
+                                        return;
+                                    }
+                                    match event.keystroke.key.as_str() {
+                                        "space" => {
+                                            if let Some(handler) = &on_select {
+                                                handler(&path, window, cx);
+                                            }
+                                            cx.stop_propagation();
+                                            window.prevent_default();
+                                        }
+                                        "enter" => {
+                                            if let Some(handler) = &on_select {
+                                                handler(&path, window, cx);
+                                            }
+                                            if is_dir {
+                                                if let Some(handler) = &on_toggle {
+                                                    handler(&path, !is_expanded, window, cx);
+                                                }
+                                            } else if let Some(handler) = &on_open {
+                                                handler(&path, window, cx);
+                                            }
+                                            cx.stop_propagation();
+                                            window.prevent_default();
+                                        }
+                                        "arrowright" if is_dir && !is_expanded => {
+                                            if let Some(handler) = &on_toggle {
+                                                handler(&path, true, window, cx);
+                                                cx.stop_propagation();
+                                                window.prevent_default();
+                                            }
+                                        }
+                                        "arrowleft" if is_dir && is_expanded => {
+                                            if let Some(handler) = &on_toggle {
+                                                handler(&path, false, window, cx);
+                                                cx.stop_propagation();
+                                                window.prevent_default();
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                })
+                            })
+                            .on_mouse_down(MouseButton::Right, {
+                                let path = path.clone();
+                                let on_context_menu = on_context_menu.clone();
+
+                                move |event, window, cx| {
+                                    if let Some(ref handler) = on_context_menu {
+                                        handler(&path, event.position, window, cx);
+                                    }
+                                }
+                            })
                             .child(
                                 div()
-                                    .w(px(16.0))
-                                    .h(px(16.0))
                                     .flex()
                                     .items_center()
-                                    .justify_center()
-                                    .when(has_children, |d| {
-                                        d.child(
-                                            Icon::new(if is_expanded {
-                                                "chevron-down"
-                                            } else {
-                                                "chevron-right"
-                                            })
-                                            .size(px(12.0))
-                                            .color(theme.tokens.muted_foreground),
-                                        )
-                                    }),
-                            )
-                            .child(Icon::new(node_icon).size(px(16.0)).color(if is_selected {
-                                theme.tokens.accent_foreground
-                            } else {
-                                icon_color
-                            }))
-                            .child(
-                                div()
+                                    .gap(px(6.0))
                                     .flex_1()
-                                    .text_size(px(13.0))
-                                    .font_family(theme.tokens.font_family.clone())
-                                    .when(node.is_hidden, |d| d.opacity(0.6))
-                                    .child(node.name.clone()),
-                            )
-                            .when(
-                                show_file_size && node.size.is_some() && !node.is_directory(),
-                                |d| {
-                                    d.child(
+                                    .child(
                                         div()
-                                            .text_size(px(11.0))
-                                            .text_color(theme.tokens.muted_foreground)
-                                            .child(format_size(node.size.unwrap())),
+                                            .w(px(16.0))
+                                            .h(px(16.0))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .when(has_children, |d| {
+                                                d.child(
+                                                    Icon::new(if is_expanded {
+                                                        "chevron-down"
+                                                    } else {
+                                                        "chevron-right"
+                                                    })
+                                                    .size(px(12.0))
+                                                    .color(theme.tokens.muted_foreground),
+                                                )
+                                            }),
                                     )
-                                },
-                            ),
-                    )
-            }))
+                                    .child(Icon::new(node_icon).size(px(16.0)).color(
+                                        if is_selected {
+                                            theme.tokens.accent_foreground
+                                        } else {
+                                            icon_color
+                                        },
+                                    ))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .text_size(px(13.0))
+                                            .font_family(theme.tokens.font_family.clone())
+                                            .when(node.is_hidden, |d| d.opacity(0.6))
+                                            .child(
+                                                StyledText::new(node.name.clone())
+                                                    .accessibility_hidden(true),
+                                            ),
+                                    )
+                                    .when(
+                                        show_file_size
+                                            && node.size.is_some()
+                                            && !node.is_directory(),
+                                        |d| {
+                                            d.child(
+                                                div()
+                                                    .text_size(px(11.0))
+                                                    .text_color(theme.tokens.muted_foreground)
+                                                    .child(format_size(node.size.unwrap())),
+                                            )
+                                        },
+                                    ),
+                            )
+                    }),
+            )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn relative_child_paths_are_rebased_under_their_parent() {
+        let tree = FileNode::directory("src").with_children(vec![
+            FileNode::file("main.rs"),
+            FileNode::directory("ui").with_children(vec![FileNode::file("button.rs")]),
+        ]);
+
+        assert_eq!(tree.children[0].path, PathBuf::from("src/main.rs"));
+        assert_eq!(tree.children[1].path, PathBuf::from("src/ui"));
+        assert_eq!(
+            tree.children[1].children[0].path,
+            PathBuf::from("src/ui/button.rs")
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn absolute_child_paths_are_preserved() {
+        let tree = FileNode::directory("/project")
+            .with_children(vec![FileNode::file("/shared/readme.md")]);
+
+        assert_eq!(tree.children[0].path, PathBuf::from("/shared/readme.md"));
     }
 }

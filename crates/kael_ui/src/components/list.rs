@@ -148,6 +148,7 @@ impl RenderOnce for List {
         let start = self.start;
 
         let list = div()
+            .accessibility(AccessibilityAttributes::new(AccessibilityRole::List))
             .flex()
             .flex_col()
             .gap(if has_dividers { px(0.0) } else { density.gap() })
@@ -204,6 +205,7 @@ impl RenderOnce for List {
                 };
 
                 div()
+                    .accessibility(AccessibilityAttributes::new(AccessibilityRole::ListItem))
                     .when(has_dividers && idx + 1 < child_count, |this| {
                         this.border_b_1().border_color(theme.tokens.border)
                     })

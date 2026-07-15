@@ -161,10 +161,7 @@ pub fn add_recent_document(path: &Path) {
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    let app_name = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| "gpui-app".to_string());
+    let app_name = current_app_name();
 
     let xbel_path = get_recently_used_xbel_path();
     let Some(xbel_path) = xbel_path else {
@@ -236,6 +233,58 @@ pub fn add_recent_document(path: &Path) {
 
         let _ = std::fs::write(&xbel_path, content);
     }
+}
+
+/// Clear this app's entries from the freedesktop recent-documents list.
+pub fn clear_recent_documents() {
+    let Some(xbel_path) = get_recently_used_xbel_path() else {
+        return;
+    };
+    let Ok(existing) = std::fs::read_to_string(&xbel_path) else {
+        return;
+    };
+    let app_marker = format!(
+        "<bookmark:application name=\"{}\"",
+        escape_xml(&current_app_name())
+    );
+    let mut new_content = String::new();
+    let mut bookmark_block = String::new();
+    let mut in_bookmark = false;
+
+    for line in existing.lines() {
+        if line.contains("<bookmark ") {
+            in_bookmark = true;
+            bookmark_block.clear();
+        }
+
+        if in_bookmark {
+            bookmark_block.push_str(line);
+            bookmark_block.push('\n');
+            if line.contains("</bookmark>") {
+                if !bookmark_block.contains(&app_marker) {
+                    new_content.push_str(&bookmark_block);
+                }
+                in_bookmark = false;
+                bookmark_block.clear();
+            }
+        } else {
+            new_content.push_str(line);
+            new_content.push('\n');
+        }
+    }
+
+    if in_bookmark {
+        new_content.push_str(&bookmark_block);
+    }
+
+    let _ = std::fs::write(&xbel_path, new_content);
+}
+
+fn current_app_name() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "gpui-app".to_string())
 }
 
 /// Get the desktop file URI for the current application.

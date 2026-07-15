@@ -15,13 +15,20 @@ pub(crate) fn show_dialog_sync(hwnd: HWND, options: DialogOptions) -> usize {
         _ => MB_YESNOCANCEL,
     };
 
-    let mut message = options.message.to_string();
+    let mut message: String = options.message.chars().take(2_048).collect();
     if let Some(ref detail) = options.detail {
         message.push_str("\n\n");
-        message.push_str(detail);
+        message.extend(detail.chars().take(4_096));
     }
 
-    let title_wide: Vec<u16> = options.title.encode_utf16().chain(Some(0)).collect();
+    let title_wide: Vec<u16> = options
+        .title
+        .chars()
+        .take(256)
+        .collect::<String>()
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
     let message_wide: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
 
     let result = unsafe {

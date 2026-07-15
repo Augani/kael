@@ -10,7 +10,7 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Timecode {
     /// Hours.
-    pub hours: u32,
+    pub hours: u64,
     /// Minutes (`0..60`).
     pub minutes: u32,
     /// Seconds (`0..60`).
@@ -26,7 +26,7 @@ impl Timecode {
         let frames = (frame % fps) as u32;
         let total_seconds = frame / fps;
         Self {
-            hours: (total_seconds / 3600) as u32,
+            hours: total_seconds / 3600,
             minutes: ((total_seconds / 60) % 60) as u32,
             seconds: (total_seconds % 60) as u32,
             frames,
@@ -36,8 +36,13 @@ impl Timecode {
     /// The absolute frame number this timecode represents at `fps`.
     pub fn to_frame(&self, fps: u32) -> u64 {
         let fps = fps.max(1) as u64;
-        (((self.hours as u64 * 60 + self.minutes as u64) * 60) + self.seconds as u64) * fps
-            + self.frames as u64
+        self.hours
+            .saturating_mul(60)
+            .saturating_add(u64::from(self.minutes))
+            .saturating_mul(60)
+            .saturating_add(u64::from(self.seconds))
+            .saturating_mul(fps)
+            .saturating_add(u64::from(self.frames))
     }
 
     /// Parse an `HH:MM:SS:FF` timecode string. Returns `None` if it is not four
@@ -103,6 +108,8 @@ mod tests {
                 assert_eq!(tc.to_frame(fps), frame, "fps {fps} frame {frame} -> {tc}");
             }
         }
+        let max = Timecode::from_frame(u64::MAX, 1);
+        assert_eq!(max.to_frame(1), u64::MAX);
     }
 
     #[test]
@@ -124,5 +131,15 @@ mod tests {
         assert_eq!(Timecode::parse("01:00:60:00"), None); // second out of range
         assert_eq!(Timecode::parse("1:2:3"), None); // too few fields
         assert_eq!(Timecode::parse("aa:bb:cc:dd"), None);
+        assert_eq!(
+            Timecode {
+                hours: u64::MAX,
+                minutes: 59,
+                seconds: 59,
+                frames: 59,
+            }
+            .to_frame(60),
+            u64::MAX
+        );
     }
 }

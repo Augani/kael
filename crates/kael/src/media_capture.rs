@@ -42,6 +42,19 @@ pub enum CaptureDeviceKind {
     SystemAudio,
 }
 
+impl CaptureDeviceKind {
+    /// Stable lowercase key for generated logs and policies.
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::Screen => "screen",
+            Self::Window => "window",
+            Self::Microphone => "microphone",
+            Self::Camera => "camera",
+            Self::SystemAudio => "system-audio",
+        }
+    }
+}
+
 /// Information about an available capture device.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CaptureDeviceInfo {
@@ -53,6 +66,17 @@ pub struct CaptureDeviceInfo {
     pub kind: CaptureDeviceKind,
     /// Whether the device is currently available.
     pub is_available: bool,
+}
+
+impl CaptureDeviceInfo {
+    /// Content-safe summary that avoids logging device ids or display names.
+    pub fn to_text(&self) -> String {
+        format!(
+            "capture device {}: available {}",
+            self.kind.key(),
+            self.is_available
+        )
+    }
 }
 
 /// Checked catalog of capture sources for picker UI and generated agents.
@@ -82,6 +106,40 @@ impl CaptureSourceCatalog {
         self.devices.len()
     }
 
+    /// Number of catalog devices with a particular kind.
+    pub fn kind_count(&self, kind: CaptureDeviceKind) -> usize {
+        self.devices
+            .iter()
+            .filter(|device| device.kind == kind)
+            .count()
+    }
+
+    /// Number of currently available devices.
+    pub fn available_count(&self) -> usize {
+        self.devices
+            .iter()
+            .filter(|device| device.is_available)
+            .count()
+    }
+
+    /// Number of currently unavailable devices.
+    pub fn unavailable_count(&self) -> usize {
+        self.devices
+            .iter()
+            .filter(|device| !device.is_available)
+            .count()
+    }
+
+    /// Content-safe summary for source-picker previews and agent logs.
+    pub fn to_text(&self) -> String {
+        format!(
+            "capture source catalog: {} devices, {} available, {} unavailable",
+            self.len(),
+            self.available_count(),
+            self.unavailable_count()
+        )
+    }
+
     /// Build a capture config for the first matching device.
     pub fn first_config(&self, kind: CaptureDeviceKind) -> Result<CaptureConfig> {
         let Some(device) = self.first() else {
@@ -97,7 +155,7 @@ impl CaptureSourceCatalog {
     }
 }
 
-/// Builder for Electron `desktopCapturer`-style source catalog queries.
+/// Builder for native media capture source catalog queries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaptureSourceQueryBuilder {
     kinds: Vec<CaptureDeviceKind>,
@@ -185,6 +243,28 @@ impl CaptureSourceQueryBuilder {
     /// Return requested kinds.
     pub fn kinds(&self) -> &[CaptureDeviceKind] {
         &self.kinds
+    }
+
+    /// Whether this query filters device display names.
+    pub fn has_name_filter(&self) -> bool {
+        self.name_contains.is_some()
+    }
+
+    /// Whether this query limits the number of returned devices.
+    pub fn has_limit(&self) -> bool {
+        self.limit.is_some()
+    }
+
+    /// Content-safe summary that avoids logging source names or filters.
+    pub fn to_text(&self) -> String {
+        format!(
+            "capture source query: {} kinds, name-filter {}, require-available {}, include-unavailable {}, limit {}",
+            self.kinds.len(),
+            self.has_name_filter(),
+            self.require_available,
+            self.include_unavailable,
+            self.has_limit()
+        )
     }
 
     /// Validate this query without enumerating devices.
@@ -367,7 +447,7 @@ impl CaptureManager {
 
     /// Resolve a builder-shaped capture request into a concrete configuration.
     ///
-    /// This is the ergonomic path for Electron-style "capture the first
+    /// This is the ergonomic path for native desktop "capture the first
     /// available screen/camera/microphone" flows where app code should not need
     /// to enumerate devices and copy IDs by hand.
     pub fn config(&self, builder: impl Into<CaptureConfigBuilder>) -> Result<CaptureConfig> {
@@ -397,6 +477,39 @@ impl CaptureManager {
         builder: impl Into<CaptureConfigSetBuilder>,
     ) -> Result<Vec<CaptureConfig>> {
         builder.into().resolve(self)
+    }
+
+    /// Resolve a grouped capture request into a managed pipeline.
+    ///
+    /// This is the checked path for native media capture flows that
+    /// need screen + microphone, camera + microphone, or screen + system-audio
+    /// sessions without hand-writing the session creation loop.
+    pub fn pipeline_checked(
+        &self,
+        builder: impl Into<CaptureConfigSetBuilder>,
+        callback: FrameCallback,
+    ) -> Result<CapturePipeline> {
+        let configs = self.configs(builder)?;
+        let mut pipeline = CapturePipeline::new();
+        for config in configs {
+            let session = self.create_session(&config)?;
+            pipeline.add_session(session, config, Arc::clone(&callback));
+        }
+        Ok(pipeline)
+    }
+
+    /// Resolve, create, and start a grouped capture pipeline.
+    ///
+    /// The returned pipeline owns the started sessions and should be kept alive
+    /// until capture is stopped.
+    pub fn start_pipeline_checked(
+        &self,
+        builder: impl Into<CaptureConfigSetBuilder>,
+        callback: FrameCallback,
+    ) -> Result<CapturePipeline> {
+        let mut pipeline = self.pipeline_checked(builder, callback)?;
+        pipeline.start_all()?;
+        Ok(pipeline)
     }
 }
 
@@ -465,11 +578,38 @@ impl CaptureConfig {
         self.include_audio = include_audio;
         self
     }
+
+    /// Whether this config captures a video-like source.
+    pub fn is_video_source(&self) -> bool {
+        matches!(
+            self.kind,
+            CaptureDeviceKind::Screen | CaptureDeviceKind::Window | CaptureDeviceKind::Camera
+        )
+    }
+
+    /// Whether this config captures an audio-like source.
+    pub fn is_audio_source(&self) -> bool {
+        matches!(
+            self.kind,
+            CaptureDeviceKind::Microphone | CaptureDeviceKind::SystemAudio
+        ) || self.include_audio
+    }
+
+    /// Content-safe summary that avoids logging platform device ids.
+    pub fn to_text(&self) -> String {
+        format!(
+            "capture config {}: frame-rate {}, resolution {}, audio {}",
+            self.kind.key(),
+            self.frame_rate.is_some(),
+            self.resolution.is_some(),
+            self.include_audio
+        )
+    }
 }
 
 /// Builder for capture configurations that can resolve devices through a manager.
 ///
-/// Use this when an app wants the common Electron-style capture flow: pick a
+/// Use this when an app wants the common native desktop capture flow: pick a
 /// screen, window, camera, microphone, or system-audio source by intent, then
 /// let [`CaptureManager`] resolve the concrete device ID and enforce platform
 /// permissions.
@@ -571,6 +711,61 @@ impl CaptureConfigBuilder {
     /// Convenience alias for enabling audio capture.
     pub fn with_audio(self) -> Self {
         self.include_audio(true)
+    }
+
+    /// Requested capture kind.
+    pub fn kind(&self) -> CaptureDeviceKind {
+        self.kind
+    }
+
+    /// Whether an explicit platform device id was provided.
+    pub fn has_device_id(&self) -> bool {
+        self.device_id.is_some()
+    }
+
+    /// Whether a device-name filter was provided.
+    pub fn has_device_name_filter(&self) -> bool {
+        self.device_name_contains.is_some()
+    }
+
+    /// Whether a frame-rate preference was provided.
+    pub fn has_frame_rate(&self) -> bool {
+        self.frame_rate.is_some()
+    }
+
+    /// Whether a resolution preference was provided.
+    pub fn has_resolution(&self) -> bool {
+        self.resolution.is_some()
+    }
+
+    /// Whether this builder requests a video-like source.
+    pub fn is_video_source(&self) -> bool {
+        matches!(
+            self.kind,
+            CaptureDeviceKind::Screen | CaptureDeviceKind::Window | CaptureDeviceKind::Camera
+        )
+    }
+
+    /// Whether this builder requests or includes audio.
+    pub fn is_audio_source(&self) -> bool {
+        matches!(
+            self.kind,
+            CaptureDeviceKind::Microphone | CaptureDeviceKind::SystemAudio
+        ) || self.include_audio
+    }
+
+    /// Content-safe summary for generated capture plans.
+    pub fn to_text(&self) -> String {
+        format!(
+            "capture config builder {}: device-id {}, name-filter {}, require-available {}, frame-rate {}, resolution {}, audio {}",
+            self.kind.key(),
+            self.has_device_id(),
+            self.has_device_name_filter(),
+            self.require_available,
+            self.has_frame_rate(),
+            self.has_resolution(),
+            self.include_audio
+        )
     }
 
     /// Validate this builder without resolving a device.
@@ -798,6 +993,43 @@ impl CaptureConfigSetBuilder {
         &self.sources
     }
 
+    /// Number of configured source builders.
+    pub fn source_count(&self) -> usize {
+        self.sources.len()
+    }
+
+    /// Number of configured sources with a particular kind.
+    pub fn kind_count(&self, kind: CaptureDeviceKind) -> usize {
+        self.sources
+            .iter()
+            .filter(|source| source.kind == kind)
+            .count()
+    }
+
+    /// Whether any source captures video.
+    pub fn has_video(&self) -> bool {
+        self.sources
+            .iter()
+            .any(CaptureConfigBuilder::is_video_source)
+    }
+
+    /// Whether any source captures audio.
+    pub fn has_audio(&self) -> bool {
+        self.sources
+            .iter()
+            .any(CaptureConfigBuilder::is_audio_source)
+    }
+
+    /// Content-safe summary for grouped capture plans.
+    pub fn to_text(&self) -> String {
+        format!(
+            "capture config set: {} sources, video {}, audio {}",
+            self.source_count(),
+            self.has_video(),
+            self.has_audio()
+        )
+    }
+
     /// Validate the grouped capture request without resolving devices.
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
@@ -824,6 +1056,337 @@ impl From<CaptureConfigBuilder> for CaptureConfigSetBuilder {
     fn from(source: CaptureConfigBuilder) -> Self {
         Self::new().source(source)
     }
+}
+
+/// Runtime consent surfaces implied by a capture handoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureConsentKind {
+    /// Microphone input permission.
+    Microphone,
+    /// Camera/video input permission.
+    Camera,
+    /// Screen, window, or system-audio capture permission.
+    ScreenCapture,
+}
+
+impl CaptureConsentKind {
+    /// Stable lowercase key for generated setup logs.
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::Microphone => "microphone",
+            Self::Camera => "camera",
+            Self::ScreenCapture => "screen-capture",
+        }
+    }
+}
+
+/// The next product action needed before capture can start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureHandoffNextAction {
+    /// Review or request OS capture permissions before touching devices.
+    PreflightPermissions,
+    /// Present source picker UI from a checked capture source query.
+    ShowSourcePicker,
+    /// Resolve configured capture sources through a capture manager.
+    ResolveCaptureConfigs,
+    /// The handoff can be sent to `CaptureManager::pipeline_checked` or
+    /// `start_pipeline_checked`.
+    StartCapturePipeline,
+}
+
+impl CaptureHandoffNextAction {
+    /// Stable lowercase key for generated setup logs.
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::PreflightPermissions => "preflight-permissions",
+            Self::ShowSourcePicker => "show-source-picker",
+            Self::ResolveCaptureConfigs => "resolve-capture-configs",
+            Self::StartCapturePipeline => "start-capture-pipeline",
+        }
+    }
+}
+
+/// Builder-facing handoff for native media capture flows.
+///
+/// The handoff keeps Electron-style `mediaDevices` and `desktopCapturer`
+/// replacement work explicit: permission preflight, optional source picker,
+/// source resolution, and pipeline startup are separate checked steps.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CaptureHandoffBuilder {
+    source_query: Option<CaptureSourceQueryBuilder>,
+    config_set: CaptureConfigSetBuilder,
+    require_permission_preflight: bool,
+    require_source_picker: bool,
+    auto_start: bool,
+}
+
+impl CaptureHandoffBuilder {
+    /// Create a handoff from a grouped capture config set.
+    pub fn new(config_set: impl Into<CaptureConfigSetBuilder>) -> Self {
+        Self {
+            source_query: None,
+            config_set: config_set.into(),
+            require_permission_preflight: true,
+            require_source_picker: false,
+            auto_start: false,
+        }
+    }
+
+    /// Create a handoff for screen sharing with microphone audio.
+    pub fn screen_share_with_microphone() -> Self {
+        Self::new(CaptureConfigSetBuilder::screen_with_microphone())
+            .source_query(CaptureSourceQueryBuilder::screens_and_windows())
+            .require_source_picker(true)
+    }
+
+    /// Create a handoff for a camera call with microphone audio.
+    pub fn camera_call() -> Self {
+        Self::new(CaptureConfigSetBuilder::camera_with_microphone())
+            .source_query(CaptureSourceQueryBuilder::cameras())
+    }
+
+    /// Create a handoff for screen recording with system audio.
+    pub fn screen_recording_with_system_audio() -> Self {
+        Self::new(CaptureConfigSetBuilder::screen_with_system_audio())
+            .source_query(CaptureSourceQueryBuilder::screens_and_windows())
+            .require_source_picker(true)
+    }
+
+    /// Attach a source query for picker UI or source availability preflight.
+    pub fn source_query(mut self, query: CaptureSourceQueryBuilder) -> Self {
+        self.source_query = Some(query);
+        self
+    }
+
+    /// Require explicit source-picker UI before resolving configs.
+    pub fn require_source_picker(mut self, require: bool) -> Self {
+        self.require_source_picker = require;
+        self
+    }
+
+    /// Require permission preflight before source enumeration or capture start.
+    pub fn require_permission_preflight(mut self, require: bool) -> Self {
+        self.require_permission_preflight = require;
+        self
+    }
+
+    /// Mark this handoff as ready to start immediately after configs resolve.
+    pub fn auto_start(mut self, auto_start: bool) -> Self {
+        self.auto_start = auto_start;
+        self
+    }
+
+    /// Return the source query, when one is configured.
+    pub fn source_query_ref(&self) -> Option<&CaptureSourceQueryBuilder> {
+        self.source_query.as_ref()
+    }
+
+    /// Return the grouped capture config builder.
+    pub fn config_set_ref(&self) -> &CaptureConfigSetBuilder {
+        &self.config_set
+    }
+
+    /// Whether source picker UI is required before capture config resolution.
+    pub fn requires_source_picker(&self) -> bool {
+        self.require_source_picker
+    }
+
+    /// Whether OS permission preflight is required before capture work.
+    pub fn requires_permission_preflight(&self) -> bool {
+        self.require_permission_preflight
+    }
+
+    /// Whether this handoff should start the pipeline after resolution.
+    pub fn auto_starts(&self) -> bool {
+        self.auto_start
+    }
+
+    /// Consent surfaces implied by the configured capture sources.
+    pub fn required_consents(&self) -> Vec<CaptureConsentKind> {
+        capture_required_consents(&self.config_set)
+    }
+
+    /// The next product action implied by this handoff.
+    pub fn next_action(&self) -> CaptureHandoffNextAction {
+        if self.require_permission_preflight && !self.required_consents().is_empty() {
+            CaptureHandoffNextAction::PreflightPermissions
+        } else if self.require_source_picker {
+            CaptureHandoffNextAction::ShowSourcePicker
+        } else if self.auto_start {
+            CaptureHandoffNextAction::StartCapturePipeline
+        } else {
+            CaptureHandoffNextAction::ResolveCaptureConfigs
+        }
+    }
+
+    /// Content-safe summary for generated capture setup logs.
+    pub fn to_text(&self) -> String {
+        format!(
+            "capture handoff builder: sources {}, query {}, permission-preflight {}, source-picker {}, auto-start {}, consents {}, next action {}",
+            self.config_set.source_count(),
+            self.source_query.is_some(),
+            self.require_permission_preflight,
+            self.require_source_picker,
+            self.auto_start,
+            self.required_consents().len(),
+            self.next_action().key()
+        )
+    }
+
+    /// Validate the handoff before source enumeration or capture startup.
+    pub fn validate(&self) -> Result<()> {
+        self.config_set.validate()?;
+        if let Some(query) = &self.source_query {
+            query.validate()?;
+        }
+        anyhow::ensure!(
+            self.config_set.has_video() || self.config_set.has_audio(),
+            "capture handoff must include video or audio sources"
+        );
+        Ok(())
+    }
+
+    /// Validate and build the capture handoff.
+    pub fn build_checked(self) -> Result<CaptureHandoff> {
+        self.validate()?;
+        let next_action = self.next_action();
+        let required_consents = self.required_consents();
+        Ok(CaptureHandoff {
+            source_query: self.source_query,
+            config_set: self.config_set,
+            required_consents,
+            next_action,
+            require_permission_preflight: self.require_permission_preflight,
+            require_source_picker: self.require_source_picker,
+            auto_start: self.auto_start,
+        })
+    }
+}
+
+/// Checked native capture setup handoff for source picking, consent, and
+/// pipeline creation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CaptureHandoff {
+    source_query: Option<CaptureSourceQueryBuilder>,
+    config_set: CaptureConfigSetBuilder,
+    required_consents: Vec<CaptureConsentKind>,
+    next_action: CaptureHandoffNextAction,
+    require_permission_preflight: bool,
+    require_source_picker: bool,
+    auto_start: bool,
+}
+
+impl CaptureHandoff {
+    /// Build a checked screen-share handoff with microphone audio.
+    pub fn screen_share_with_microphone() -> Result<Self> {
+        CaptureHandoffBuilder::screen_share_with_microphone().build_checked()
+    }
+
+    /// Build a checked camera-call handoff with microphone audio.
+    pub fn camera_call() -> Result<Self> {
+        CaptureHandoffBuilder::camera_call().build_checked()
+    }
+
+    /// Build a checked screen-recording handoff with system audio.
+    pub fn screen_recording_with_system_audio() -> Result<Self> {
+        CaptureHandoffBuilder::screen_recording_with_system_audio().build_checked()
+    }
+
+    /// Return the source query, when one is configured.
+    pub fn source_query(&self) -> Option<&CaptureSourceQueryBuilder> {
+        self.source_query.as_ref()
+    }
+
+    /// Return the grouped capture config builder.
+    pub fn config_set(&self) -> &CaptureConfigSetBuilder {
+        &self.config_set
+    }
+
+    /// Return the consent surfaces implied by this handoff.
+    pub fn required_consents(&self) -> &[CaptureConsentKind] {
+        &self.required_consents
+    }
+
+    /// Return whether a consent surface is required.
+    pub fn requires_consent(&self, consent: CaptureConsentKind) -> bool {
+        self.required_consents.contains(&consent)
+    }
+
+    /// Whether source picker UI is required before capture config resolution.
+    pub fn requires_source_picker(&self) -> bool {
+        self.require_source_picker
+    }
+
+    /// Whether OS permission preflight is required before capture work.
+    pub fn requires_permission_preflight(&self) -> bool {
+        self.require_permission_preflight
+    }
+
+    /// Whether this handoff should start the pipeline after resolution.
+    pub fn auto_starts(&self) -> bool {
+        self.auto_start
+    }
+
+    /// The next product action implied by this checked handoff.
+    pub fn next_action(&self) -> CaptureHandoffNextAction {
+        self.next_action
+    }
+
+    /// Resolve source configs through a capture manager.
+    pub fn resolve_configs(&self, manager: &CaptureManager) -> Result<Vec<CaptureConfig>> {
+        self.config_set.clone().resolve(manager)
+    }
+
+    /// Build a capture pipeline through a capture manager without starting it.
+    pub fn pipeline_checked(
+        &self,
+        manager: &CaptureManager,
+        callback: FrameCallback,
+    ) -> Result<CapturePipeline> {
+        manager.pipeline_checked(self.config_set.clone(), callback)
+    }
+
+    /// Build and start a capture pipeline through a capture manager.
+    pub fn start_pipeline_checked(
+        &self,
+        manager: &CaptureManager,
+        callback: FrameCallback,
+    ) -> Result<CapturePipeline> {
+        manager.start_pipeline_checked(self.config_set.clone(), callback)
+    }
+
+    /// Content-safe summary for generated capture setup logs.
+    pub fn to_text(&self) -> String {
+        format!(
+            "capture handoff: sources {}, query {}, permission-preflight {}, source-picker {}, auto-start {}, consents {}, next action {}",
+            self.config_set.source_count(),
+            self.source_query.is_some(),
+            self.require_permission_preflight,
+            self.require_source_picker,
+            self.auto_start,
+            self.required_consents.len(),
+            self.next_action.key()
+        )
+    }
+}
+
+fn capture_required_consents(config_set: &CaptureConfigSetBuilder) -> Vec<CaptureConsentKind> {
+    let mut consents = Vec::new();
+    for source in config_set.sources() {
+        let consent = match source.kind() {
+            CaptureDeviceKind::Microphone => Some(CaptureConsentKind::Microphone),
+            CaptureDeviceKind::Camera => Some(CaptureConsentKind::Camera),
+            CaptureDeviceKind::Screen
+            | CaptureDeviceKind::Window
+            | CaptureDeviceKind::SystemAudio => Some(CaptureConsentKind::ScreenCapture),
+        };
+        if let Some(consent) = consent
+            && !consents.contains(&consent)
+        {
+            consents.push(consent);
+        }
+    }
+    consents
 }
 
 /// A single frame of captured media.
@@ -1397,7 +1960,22 @@ mod tests {
             .unwrap();
 
         assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog.available_count(), 1);
+        assert_eq!(catalog.unavailable_count(), 0);
+        assert_eq!(catalog.kind_count(CaptureDeviceKind::Screen), 1);
+        assert_eq!(
+            catalog.to_text(),
+            "capture source catalog: 1 devices, 1 available, 0 unavailable"
+        );
+        assert!(!catalog.to_text().contains("screen-main"));
+        assert!(!catalog.to_text().contains("Display"));
         assert_eq!(catalog.first().unwrap().id, "screen-main");
+        assert_eq!(
+            catalog.first().unwrap().to_text(),
+            "capture device screen: available true"
+        );
+        assert!(!catalog.first().unwrap().to_text().contains("screen-main"));
+        assert!(!catalog.first().unwrap().to_text().contains("Main Display"));
         let config = catalog.first_config(CaptureDeviceKind::Screen).unwrap();
         assert_eq!(config.device_id, "screen-main");
 
@@ -1439,7 +2017,23 @@ mod tests {
             query.kinds(),
             &[CaptureDeviceKind::Screen, CaptureDeviceKind::Window]
         );
+        assert_eq!(
+            query.to_text(),
+            "capture source query: 2 kinds, name-filter false, require-available true, include-unavailable false, limit false"
+        );
         assert!(query.validate().is_ok());
+
+        let filtered = CaptureSourceQueryBuilder::windows()
+            .name_contains("Code")
+            .include_unavailable()
+            .limit(2);
+        assert!(filtered.has_name_filter());
+        assert!(filtered.has_limit());
+        assert_eq!(
+            filtered.to_text(),
+            "capture source query: 1 kinds, name-filter true, require-available false, include-unavailable true, limit true"
+        );
+        assert!(!filtered.to_text().contains("Code"));
 
         let empty = CaptureSourceCatalog { devices: vec![] };
         assert!(empty.is_empty());
@@ -1513,6 +2107,11 @@ mod tests {
             .unwrap();
         assert_eq!(config.device_id, "screen-main");
         assert_eq!(config.frame_rate, Some(60.0));
+        assert_eq!(
+            config.to_text(),
+            "capture config screen: frame-rate true, resolution false, audio false"
+        );
+        assert!(!config.to_text().contains("screen-main"));
 
         let unavailable = CaptureConfigBuilder::screen()
             .device_id("screen-unavailable")
@@ -1648,6 +2247,366 @@ mod tests {
                 .validate()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn test_capture_builders_have_safe_summaries() {
+        assert_eq!(CaptureDeviceKind::SystemAudio.key(), "system-audio");
+
+        let builder = CaptureConfigBuilder::window()
+            .device_id("window-private")
+            .device_name_contains("Secret Project")
+            .frame_rate(30.0)
+            .resolution(1920, 1080)
+            .with_audio();
+        assert_eq!(builder.kind(), CaptureDeviceKind::Window);
+        assert!(builder.has_device_id());
+        assert!(builder.has_device_name_filter());
+        assert!(builder.has_frame_rate());
+        assert!(builder.has_resolution());
+        assert!(builder.is_video_source());
+        assert!(builder.is_audio_source());
+
+        let summary = builder.to_text();
+        assert_eq!(
+            summary,
+            "capture config builder window: device-id true, name-filter true, require-available true, frame-rate true, resolution true, audio true"
+        );
+        assert!(!summary.contains("window-private"));
+        assert!(!summary.contains("Secret Project"));
+        assert!(!summary.contains("1920"));
+
+        let config = CaptureConfig::new("camera-private", CaptureDeviceKind::Camera)
+            .frame_rate(24.0)
+            .resolution(1280, 720);
+        assert!(config.is_video_source());
+        assert!(!config.is_audio_source());
+        let config_summary = config.to_text();
+        assert_eq!(
+            config_summary,
+            "capture config camera: frame-rate true, resolution true, audio false"
+        );
+        assert!(!config_summary.contains("camera-private"));
+
+        let set = CaptureConfigSetBuilder::screen_with_microphone()
+            .source(CaptureConfigBuilder::system_audio());
+        assert_eq!(set.source_count(), 3);
+        assert_eq!(set.kind_count(CaptureDeviceKind::Screen), 1);
+        assert!(set.has_video());
+        assert!(set.has_audio());
+        assert_eq!(
+            set.to_text(),
+            "capture config set: 3 sources, video true, audio true"
+        );
+    }
+
+    #[test]
+    fn test_capture_handoff_guides_permission_picker_and_startup_actions() {
+        let builder = CaptureHandoffBuilder::screen_share_with_microphone()
+            .auto_start(true)
+            .source_query(
+                CaptureSourceQueryBuilder::screens_and_windows()
+                    .name_contains("Main Display")
+                    .limit(2),
+            );
+        assert_eq!(
+            builder.required_consents(),
+            vec![
+                CaptureConsentKind::ScreenCapture,
+                CaptureConsentKind::Microphone
+            ]
+        );
+        assert_eq!(
+            builder.next_action(),
+            CaptureHandoffNextAction::PreflightPermissions
+        );
+        assert!(builder.requires_permission_preflight());
+        assert!(builder.requires_source_picker());
+        assert!(builder.auto_starts());
+        assert_eq!(CaptureConsentKind::ScreenCapture.key(), "screen-capture");
+        assert_eq!(
+            CaptureHandoffNextAction::ShowSourcePicker.key(),
+            "show-source-picker"
+        );
+        let summary = builder.to_text();
+        assert_eq!(
+            summary,
+            "capture handoff builder: sources 2, query true, permission-preflight true, source-picker true, auto-start true, consents 2, next action preflight-permissions"
+        );
+        assert!(!summary.contains("Main Display"));
+
+        let handoff = builder.build_checked().unwrap();
+        assert_eq!(
+            handoff.next_action(),
+            CaptureHandoffNextAction::PreflightPermissions
+        );
+        assert!(handoff.source_query().is_some());
+        assert_eq!(handoff.config_set().source_count(), 2);
+        assert!(handoff.requires_consent(CaptureConsentKind::ScreenCapture));
+        assert!(handoff.requires_consent(CaptureConsentKind::Microphone));
+        assert!(!handoff.requires_consent(CaptureConsentKind::Camera));
+        assert_eq!(handoff.required_consents().len(), 2);
+        assert_eq!(
+            handoff.to_text(),
+            "capture handoff: sources 2, query true, permission-preflight true, source-picker true, auto-start true, consents 2, next action preflight-permissions"
+        );
+        assert!(!handoff.to_text().contains("Main Display"));
+
+        let picker = CaptureHandoffBuilder::screen_share_with_microphone()
+            .require_permission_preflight(false)
+            .build_checked()
+            .unwrap();
+        assert_eq!(
+            picker.next_action(),
+            CaptureHandoffNextAction::ShowSourcePicker
+        );
+
+        let resolve = CaptureHandoffBuilder::camera_call()
+            .require_permission_preflight(false)
+            .require_source_picker(false)
+            .build_checked()
+            .unwrap();
+        assert_eq!(
+            resolve.next_action(),
+            CaptureHandoffNextAction::ResolveCaptureConfigs
+        );
+        assert!(resolve.requires_consent(CaptureConsentKind::Camera));
+        assert!(resolve.requires_consent(CaptureConsentKind::Microphone));
+
+        let start = CaptureHandoffBuilder::new(CaptureConfigSetBuilder::camera_with_microphone())
+            .require_permission_preflight(false)
+            .auto_start(true)
+            .build_checked()
+            .unwrap();
+        assert_eq!(
+            start.next_action(),
+            CaptureHandoffNextAction::StartCapturePipeline
+        );
+    }
+
+    #[test]
+    fn test_capture_handoff_resolves_configs_and_pipeline() {
+        struct MockBackend;
+
+        impl DeviceEnumerator for MockBackend {
+            fn devices(&self, kind: CaptureDeviceKind) -> Result<Vec<CaptureDeviceInfo>> {
+                let (id, name) = match kind {
+                    CaptureDeviceKind::Screen => ("screen-main", "Main Display"),
+                    CaptureDeviceKind::Window => ("window-editor", "Editor Window"),
+                    CaptureDeviceKind::Microphone => ("mic-built-in", "Built-in Microphone"),
+                    CaptureDeviceKind::Camera => ("camera-front", "Front Camera"),
+                    CaptureDeviceKind::SystemAudio => ("system-audio", "System Audio"),
+                };
+                Ok(vec![CaptureDeviceInfo {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    kind,
+                    is_available: true,
+                }])
+            }
+        }
+
+        impl CaptureBackend for MockBackend {
+            fn create_session(&self, _config: &CaptureConfig) -> Result<Box<dyn CaptureSession>> {
+                struct MockSession {
+                    state: CaptureSessionState,
+                }
+
+                impl CaptureSession for MockSession {
+                    fn start(
+                        &mut self,
+                        _config: CaptureConfig,
+                        _callback: FrameCallback,
+                    ) -> Result<()> {
+                        self.state = CaptureSessionState::Running;
+                        Ok(())
+                    }
+
+                    fn pause(&mut self) -> Result<()> {
+                        self.state = CaptureSessionState::Paused;
+                        Ok(())
+                    }
+
+                    fn resume(&mut self) -> Result<()> {
+                        self.state = CaptureSessionState::Running;
+                        Ok(())
+                    }
+
+                    fn stop(&mut self) -> Result<()> {
+                        self.state = CaptureSessionState::Stopped;
+                        Ok(())
+                    }
+
+                    fn state(&self) -> CaptureSessionState {
+                        self.state
+                    }
+                }
+
+                Ok(Box::new(MockSession {
+                    state: CaptureSessionState::Idle,
+                }))
+            }
+        }
+
+        let mut manager = CaptureManager::new();
+        let backend = Arc::new(MockBackend);
+        for kind in [
+            CaptureDeviceKind::Camera,
+            CaptureDeviceKind::Microphone,
+            CaptureDeviceKind::Screen,
+        ] {
+            manager.register_backend(kind, backend.clone());
+        }
+
+        let handoff = CaptureHandoffBuilder::camera_call()
+            .require_permission_preflight(false)
+            .auto_start(true)
+            .build_checked()
+            .unwrap();
+        let configs = handoff.resolve_configs(&manager).unwrap();
+        assert_eq!(configs.len(), 2);
+        assert_eq!(configs[0].kind, CaptureDeviceKind::Camera);
+        assert_eq!(configs[1].kind, CaptureDeviceKind::Microphone);
+
+        let pipeline = handoff
+            .pipeline_checked(&manager, Arc::new(|_| {}))
+            .unwrap();
+        assert_eq!(pipeline.session_count(), 2);
+        assert!(!pipeline.is_running());
+
+        let started = handoff
+            .start_pipeline_checked(&manager, Arc::new(|_| {}))
+            .unwrap();
+        assert_eq!(started.session_count(), 2);
+        assert!(started.is_running());
+    }
+
+    #[test]
+    fn test_capture_handoff_rejects_invalid_generated_shapes() {
+        assert!(
+            CaptureHandoffBuilder::new(CaptureConfigSetBuilder::new())
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            CaptureHandoffBuilder::new(
+                CaptureConfigSetBuilder::new()
+                    .source(CaptureConfigBuilder::screen().frame_rate(f64::NAN))
+            )
+            .build_checked()
+            .is_err()
+        );
+        assert!(
+            CaptureHandoffBuilder::new(CaptureConfigSetBuilder::camera_with_microphone())
+                .source_query(CaptureSourceQueryBuilder::cameras().name_contains(" "))
+                .build_checked()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_capture_manager_starts_checked_pipeline() {
+        struct MockBackend;
+
+        impl DeviceEnumerator for MockBackend {
+            fn devices(&self, kind: CaptureDeviceKind) -> Result<Vec<CaptureDeviceInfo>> {
+                let (id, name) = match kind {
+                    CaptureDeviceKind::Screen => ("screen-main", "Main Display"),
+                    CaptureDeviceKind::Window => ("window-editor", "Editor Window"),
+                    CaptureDeviceKind::Microphone => ("mic-built-in", "Built-in Microphone"),
+                    CaptureDeviceKind::Camera => ("camera-front", "Front Camera"),
+                    CaptureDeviceKind::SystemAudio => ("system-audio", "System Audio"),
+                };
+                Ok(vec![CaptureDeviceInfo {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    kind,
+                    is_available: true,
+                }])
+            }
+        }
+
+        impl CaptureBackend for MockBackend {
+            fn create_session(&self, _config: &CaptureConfig) -> Result<Box<dyn CaptureSession>> {
+                struct MockSession {
+                    state: CaptureSessionState,
+                }
+
+                impl CaptureSession for MockSession {
+                    fn start(
+                        &mut self,
+                        _config: CaptureConfig,
+                        _callback: FrameCallback,
+                    ) -> Result<()> {
+                        self.state = CaptureSessionState::Running;
+                        Ok(())
+                    }
+
+                    fn pause(&mut self) -> Result<()> {
+                        self.state = CaptureSessionState::Paused;
+                        Ok(())
+                    }
+
+                    fn resume(&mut self) -> Result<()> {
+                        self.state = CaptureSessionState::Running;
+                        Ok(())
+                    }
+
+                    fn stop(&mut self) -> Result<()> {
+                        self.state = CaptureSessionState::Stopped;
+                        Ok(())
+                    }
+
+                    fn state(&self) -> CaptureSessionState {
+                        self.state
+                    }
+                }
+
+                Ok(Box::new(MockSession {
+                    state: CaptureSessionState::Idle,
+                }))
+            }
+        }
+
+        let mut manager = CaptureManager::new();
+        let backend = Arc::new(MockBackend);
+        for kind in [
+            CaptureDeviceKind::Screen,
+            CaptureDeviceKind::Microphone,
+            CaptureDeviceKind::Camera,
+        ] {
+            manager.register_backend(kind, backend.clone());
+        }
+
+        let pipeline = manager
+            .pipeline_checked(
+                CaptureConfigSetBuilder::camera_with_microphone(),
+                Arc::new(|_| {}),
+            )
+            .unwrap();
+        assert_eq!(pipeline.session_count(), 2);
+        assert!(!pipeline.is_running());
+        assert_eq!(
+            pipeline.session_states(),
+            vec![CaptureSessionState::Idle, CaptureSessionState::Idle]
+        );
+
+        let mut started = manager
+            .start_pipeline_checked(
+                CaptureConfigSetBuilder::screen_with_microphone()
+                    .video_frame_rate(30.0)
+                    .video_resolution(1280, 720),
+                Arc::new(|_| {}),
+            )
+            .unwrap();
+        assert_eq!(started.session_count(), 2);
+        assert!(started.is_running());
+        assert_eq!(
+            started.session_states(),
+            vec![CaptureSessionState::Running, CaptureSessionState::Running]
+        );
+        started.stop_all().unwrap();
+        assert!(!started.is_running());
     }
 
     #[test]

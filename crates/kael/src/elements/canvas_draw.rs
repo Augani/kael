@@ -139,6 +139,102 @@ impl DrawContext {
         self.bounds.size
     }
 
+    /// Number of queued draw commands that have not been flushed to the window.
+    pub fn command_count(&self) -> usize {
+        self.commands.len()
+    }
+
+    /// Whether there are no queued draw commands.
+    pub fn is_empty(&self) -> bool {
+        self.commands.is_empty()
+    }
+
+    /// Number of queued path commands.
+    pub fn path_count(&self) -> usize {
+        self.commands
+            .iter()
+            .filter(|command| matches!(command, DrawCommand::Path { .. }))
+            .count()
+    }
+
+    /// Number of queued quad commands.
+    pub fn quad_count(&self) -> usize {
+        self.commands
+            .iter()
+            .filter(|command| matches!(command, DrawCommand::Quad { .. }))
+            .count()
+    }
+
+    /// Number of queued filled quad commands.
+    pub fn filled_quad_count(&self) -> usize {
+        self.commands
+            .iter()
+            .filter(|command| {
+                matches!(
+                    command,
+                    DrawCommand::Quad { quad, .. } if quad.border_widths.top == px(0.)
+                        && quad.border_widths.right == px(0.)
+                        && quad.border_widths.bottom == px(0.)
+                        && quad.border_widths.left == px(0.)
+                )
+            })
+            .count()
+    }
+
+    /// Number of queued stroked quad commands.
+    pub fn stroked_quad_count(&self) -> usize {
+        self.commands
+            .iter()
+            .filter(|command| {
+                matches!(
+                    command,
+                    DrawCommand::Quad { quad, .. } if quad.border_widths.top != px(0.)
+                        || quad.border_widths.right != px(0.)
+                        || quad.border_widths.bottom != px(0.)
+                        || quad.border_widths.left != px(0.)
+                )
+            })
+            .count()
+    }
+
+    /// Number of queued text commands.
+    pub fn text_count(&self) -> usize {
+        self.commands
+            .iter()
+            .filter(|command| matches!(command, DrawCommand::Text { .. }))
+            .count()
+    }
+
+    /// Number of queued image commands.
+    pub fn image_count(&self) -> usize {
+        self.commands
+            .iter()
+            .filter(|command| matches!(command, DrawCommand::Image { .. }))
+            .count()
+    }
+
+    /// Number of saved drawing states waiting to be restored.
+    pub fn state_stack_depth(&self) -> usize {
+        self.state_stack.len()
+    }
+
+    /// Content-safe summary of queued canvas drawing work.
+    pub fn to_text(&self) -> String {
+        format!(
+            "canvas draw: {} commands, paths {}, quads {}, filled-quads {}, stroked-quads {}, text {}, images {}, saved-states {}, size {:.0}x{:.0}",
+            self.command_count(),
+            self.path_count(),
+            self.quad_count(),
+            self.filled_quad_count(),
+            self.stroked_quad_count(),
+            self.text_count(),
+            self.image_count(),
+            self.state_stack_depth(),
+            self.bounds.size.width.0,
+            self.bounds.size.height.0
+        )
+    }
+
     /// Fill an existing path with the given background.
     pub fn fill_path(&mut self, path: &Path<Pixels>, fill: impl Into<Background>) {
         self.commands.push(DrawCommand::Path {
@@ -816,12 +912,14 @@ mod tests {
         cx.translate(px(10.), px(20.));
         cx.set_global_alpha(0.5);
         cx.save();
+        assert_eq!(cx.state_stack_depth(), 1);
         cx.translate(px(5.), px(5.));
         cx.set_global_alpha(0.25);
         assert_eq!(cx.current_state.transform.translation, [15.0, 25.0]);
         assert_eq!(cx.current_state.opacity, 0.25);
 
         cx.restore();
+        assert_eq!(cx.state_stack_depth(), 0);
         assert_eq!(cx.current_state.transform.translation, [10.0, 20.0]);
         assert_eq!(cx.current_state.opacity, 0.5);
 
@@ -845,6 +943,13 @@ mod tests {
         );
 
         assert_eq!(cx.commands.len(), 1);
+        assert_eq!(cx.command_count(), 1);
+        assert_eq!(cx.image_count(), 1);
+        assert_eq!(cx.path_count(), 0);
+        assert_eq!(
+            cx.to_text(),
+            "canvas draw: 1 commands, paths 0, quads 0, filled-quads 0, stroked-quads 0, text 0, images 1, saved-states 0, size 10x10"
+        );
         match &cx.commands[0] {
             super::DrawCommand::Image {
                 state, bounds: b, ..
@@ -874,18 +979,41 @@ mod tests {
         let bounds = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(100.)));
         let mut cx = super::DrawContext::new(bounds, crate::ContentMask { bounds });
 
+        assert!(cx.is_empty());
+        assert_eq!(
+            cx.to_text(),
+            "canvas draw: 0 commands, paths 0, quads 0, filled-quads 0, stroked-quads 0, text 0, images 0, saved-states 0, size 100x100"
+        );
+
+        cx.fill_rect(
+            Bounds::new(point(px(0.), px(0.)), size(px(20.), px(20.))),
+            crate::white(),
+        );
+        assert_eq!(cx.command_count(), 1);
+        assert_eq!(cx.quad_count(), 1);
+        assert_eq!(cx.filled_quad_count(), 1);
+        assert_eq!(cx.stroked_quad_count(), 0);
+
         cx.stroke_rect(
             Bounds::new(point(px(10.), px(10.)), size(px(50.), px(40.))),
             stroke(px(2.), crate::black()),
         );
-        assert_eq!(cx.commands.len(), 1);
-        assert!(matches!(cx.commands[0], super::DrawCommand::Quad { .. }));
+        assert_eq!(cx.commands.len(), 2);
+        assert!(matches!(cx.commands[1], super::DrawCommand::Quad { .. }));
+        assert_eq!(cx.command_count(), 2);
+        assert_eq!(cx.quad_count(), 2);
+        assert_eq!(cx.filled_quad_count(), 1);
+        assert_eq!(cx.stroked_quad_count(), 1);
 
         cx.stroke_rect(
             Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.))),
             stroke(px(0.), crate::black()),
         );
-        assert_eq!(cx.commands.len(), 1);
+        assert_eq!(cx.commands.len(), 2);
+        assert_eq!(
+            cx.to_text(),
+            "canvas draw: 2 commands, paths 0, quads 2, filled-quads 1, stroked-quads 1, text 0, images 0, saved-states 0, size 100x100"
+        );
     }
 
     #[test]
@@ -896,6 +1024,10 @@ mod tests {
         cx.fill_ellipse(point(px(50.), px(50.)), px(30.), px(20.), crate::black());
         assert_eq!(cx.commands.len(), 1);
         assert!(matches!(cx.commands[0], super::DrawCommand::Path { .. }));
+        assert_eq!(cx.command_count(), 1);
+        assert_eq!(cx.path_count(), 1);
+        assert_eq!(cx.quad_count(), 0);
+        assert!(!cx.is_empty());
 
         cx.fill_ellipse(point(px(50.), px(50.)), px(0.), px(20.), crate::black());
         assert_eq!(cx.commands.len(), 1);

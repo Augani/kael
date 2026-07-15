@@ -1,11 +1,11 @@
 use kael_ui::prelude::*;
 
-fn main() {
-    Application::new().run(|cx| {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    Application::try_new()?.run(|cx| {
         kael_ui::init(cx);
         install_theme(cx, Theme::tokyo_night());
 
-        cx.open_window(
+        if let Err(error) = cx.open_window(
             WindowOptions {
                 titlebar: Some(TitlebarOptions {
                     title: Some("{{name}}".into()),
@@ -14,10 +14,14 @@ fn main() {
                 ..Default::default()
             },
             |_, cx| cx.new(|_| HelloView),
-        )
-        .unwrap();
+        ) {
+            eprintln!("failed to open the application window: {error}");
+            cx.quit();
+            return;
+        }
         cx.activate(true);
     });
+    Ok(())
 }
 
 struct HelloView;

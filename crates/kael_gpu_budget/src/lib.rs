@@ -42,8 +42,9 @@ impl GpuMemoryBudget {
 #[cfg(target_os = "macos")]
 fn platform_query() -> Option<GpuMemoryBudget> {
     let device = metal::Device::system_default()?;
-    Some(GpuMemoryBudget {
-        total_bytes: device.recommended_max_working_set_size(),
+    let total_bytes = device.recommended_max_working_set_size();
+    (total_bytes > 0).then(|| GpuMemoryBudget {
+        total_bytes,
         used_bytes: device.current_allocated_size(),
         has_unified_memory: device.has_unified_memory(),
     })
@@ -57,6 +58,8 @@ fn platform_query() -> Option<GpuMemoryBudget> {
     };
     use windows::core::Interface;
 
+    // SAFETY: All COM interfaces are created by DXGI, output structures are
+    // initialized, and their lifetimes remain within this function.
     unsafe {
         let factory: IDXGIFactory = CreateDXGIFactory().ok()?;
         let adapter = factory.EnumAdapters(0).ok()?;
@@ -65,7 +68,7 @@ fn platform_query() -> Option<GpuMemoryBudget> {
         adapter3
             .QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut info)
             .ok()?;
-        Some(GpuMemoryBudget {
+        (info.Budget > 0).then(|| GpuMemoryBudget {
             total_bytes: info.Budget,
             used_bytes: info.CurrentUsage,
             has_unified_memory: false,
@@ -77,40 +80,78 @@ fn platform_query() -> Option<GpuMemoryBudget> {
 fn platform_query() -> Option<GpuMemoryBudget> {
     use ash::vk;
 
+    // SAFETY: Vulkan handles are used only with the instance that created them,
+    // and the instance is destroyed after all queries complete.
     unsafe {
         let entry = ash::Entry::load().ok()?;
         let app_info = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_1);
         let create_info = vk::InstanceCreateInfo::default().application_info(&app_info);
         let instance = entry.create_instance(&create_info, None).ok()?;
 
-        let result = (|| {
-            let devices = instance.enumerate_physical_devices().ok()?;
-            let physical = *devices.first()?;
-
-            let mut budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
-            let memory_properties = {
-                let mut props2 =
-                    vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budget);
-                instance.get_physical_device_memory_properties2(physical, &mut props2);
-                props2.memory_properties
-            };
-
-            let heaps = memory_properties.memory_heap_count as usize;
-            let total: u64 = budget.heap_budget[..heaps].iter().sum();
-            let used: u64 = budget.heap_usage[..heaps].iter().sum();
-            if total == 0 {
-                return None;
-            }
-            let has_unified_memory = memory_properties.memory_heap_count == 1
-                && memory_properties.memory_heaps[..heaps]
+        let result = instance
+            .enumerate_physical_devices()
+            .ok()?
+            .into_iter()
+            .filter_map(|physical| {
+                let supports_budget = instance
+                    .enumerate_device_extension_properties(physical)
+                    .ok()?
                     .iter()
-                    .all(|heap| heap.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL));
-            Some(GpuMemoryBudget {
-                total_bytes: total,
-                used_bytes: used,
-                has_unified_memory,
+                    .any(|extension| {
+                        extension.extension_name_as_c_str().ok() == Some(vk::EXT_MEMORY_BUDGET_NAME)
+                    });
+                if !supports_budget {
+                    return None;
+                }
+
+                let mut budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
+                let memory_properties = {
+                    let mut props2 =
+                        vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budget);
+                    instance.get_physical_device_memory_properties2(physical, &mut props2);
+                    props2.memory_properties
+                };
+
+                let heap_count = (memory_properties.memory_heap_count as usize)
+                    .min(memory_properties.memory_heaps.len())
+                    .min(budget.heap_budget.len())
+                    .min(budget.heap_usage.len());
+                let local_heaps = memory_properties.memory_heaps[..heap_count]
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, heap)| heap.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL))
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>();
+                let total_bytes = local_heaps.iter().fold(0_u64, |total, &index| {
+                    total.saturating_add(budget.heap_budget[index])
+                });
+                if total_bytes == 0 {
+                    return None;
+                }
+                let used_bytes = local_heaps.iter().fold(0_u64, |used, &index| {
+                    used.saturating_add(budget.heap_usage[index])
+                });
+
+                let memory_type_count = (memory_properties.memory_type_count as usize)
+                    .min(memory_properties.memory_types.len());
+                let has_unified_memory = local_heaps.iter().all(|&heap_index| {
+                    memory_properties.memory_types[..memory_type_count]
+                        .iter()
+                        .any(|memory_type| {
+                            memory_type.heap_index as usize == heap_index
+                                && memory_type
+                                    .property_flags
+                                    .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
+                        })
+                });
+
+                Some(GpuMemoryBudget {
+                    total_bytes,
+                    used_bytes,
+                    has_unified_memory,
+                })
             })
-        })();
+            .max_by_key(|budget| budget.total_bytes);
 
         instance.destroy_instance(None);
         result
@@ -146,6 +187,18 @@ mod tests {
         };
         assert_eq!(budget.utilization(), 0.0);
         assert_eq!(budget.available_bytes(), 0);
+    }
+
+    #[test]
+    fn driver_usage_above_budget_is_safely_clamped() {
+        let budget = GpuMemoryBudget {
+            total_bytes: 100,
+            used_bytes: 150,
+            has_unified_memory: false,
+        };
+
+        assert_eq!(budget.available_bytes(), 0);
+        assert_eq!(budget.utilization(), 1.0);
     }
 
     #[test]

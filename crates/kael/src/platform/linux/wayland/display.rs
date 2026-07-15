@@ -15,6 +15,7 @@ pub(crate) struct WaylandDisplay {
     pub id: ObjectId,
     pub name: Option<String>,
     pub bounds: Bounds<Pixels>,
+    pub scale_factor: f32,
     /// Refresh rate in millihertz (mHz) reported by `wl_output::mode`, e.g. 60000 for 60Hz.
     pub refresh_mhz: Option<i32>,
 }
@@ -46,5 +47,9 @@ impl PlatformDisplay for WaylandDisplay {
         self.refresh_mhz
             .filter(|mhz| *mhz > 0)
             .map(|mhz| mhz as f32 / 1000.0)
+    }
+
+    fn scale_factor(&self) -> f32 {
+        self.scale_factor
     }
 }

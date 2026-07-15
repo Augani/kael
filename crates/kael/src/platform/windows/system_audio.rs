@@ -20,7 +20,7 @@ impl DeviceEnumerator for WindowsSystemAudioBackend {
                 id: "system-audio-0".to_string(),
                 name: "System Audio Loopback".to_string(),
                 kind: CaptureDeviceKind::SystemAudio,
-                is_available: true,
+                is_available: false,
             }]),
             _ => Ok(vec![]),
         }
@@ -42,7 +42,6 @@ impl CaptureBackend for WindowsSystemAudioBackend {
 }
 
 struct WindowsSystemAudioSession {
-    config: CaptureConfig,
     state: CaptureSessionState,
     dropped: AtomicU64,
     latency_ms: AtomicU64,
@@ -50,9 +49,8 @@ struct WindowsSystemAudioSession {
 }
 
 impl WindowsSystemAudioSession {
-    fn new(config: CaptureConfig) -> Self {
+    fn new(_config: CaptureConfig) -> Self {
         Self {
-            config,
             state: CaptureSessionState::Idle,
             dropped: AtomicU64::new(0),
             latency_ms: AtomicU64::new(0),
@@ -63,20 +61,26 @@ impl WindowsSystemAudioSession {
 
 impl CaptureSession for WindowsSystemAudioSession {
     fn start(&mut self, config: CaptureConfig, callback: FrameCallback) -> Result<()> {
-        self.config = config;
-        self.state = CaptureSessionState::Starting;
-        self.callback = Some(callback);
+        let _ = (config, callback);
+        self.state = CaptureSessionState::Idle;
+        self.callback = None;
         Err(anyhow!(
             "WASAPI loopback capture requires runtime initialization"
         ))
     }
 
     fn pause(&mut self) -> Result<()> {
+        if self.state != CaptureSessionState::Running {
+            return Err(anyhow!("system audio session is not running"));
+        }
         self.state = CaptureSessionState::Paused;
         Ok(())
     }
 
     fn resume(&mut self) -> Result<()> {
+        if self.state != CaptureSessionState::Paused {
+            return Err(anyhow!("system audio session is not paused"));
+        }
         self.state = CaptureSessionState::Running;
         Ok(())
     }

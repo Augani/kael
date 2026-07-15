@@ -349,7 +349,18 @@ impl<T: Clone + 'static> Select<T> {
             self.open = !self.open;
             if self.open {
                 window.focus(&self.focus_handle);
-                self.highlighted_index = self.selected_index.or(Some(0));
+                self.highlighted_index = self
+                    .selected_index
+                    .filter(|index| {
+                        self.options
+                            .get(*index)
+                            .is_some_and(|option| !option.disabled)
+                    })
+                    .or_else(|| {
+                        self.filtered_options()
+                            .into_iter()
+                            .find_map(|(index, option)| (!option.disabled).then_some(index))
+                    });
             }
             cx.notify();
         }
@@ -471,7 +482,7 @@ impl<T: Clone + 'static> Styled for Select<T> {
 }
 
 impl<T: Clone + 'static> Render for Select<T> {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
         let user_style = self.style.clone();
 
@@ -484,6 +495,8 @@ impl<T: Clone + 'static> Render for Select<T> {
         let open = self.open;
         let highlighted_idx = self.highlighted_index;
         let bounds = self.bounds;
+        let entity_id = cx.entity().entity_id().as_u64();
+        let is_focused = self.focus_handle.is_focused(window);
 
         let maybe_selected_icon: Option<IconSource> = self
             .selected_index
@@ -504,9 +517,59 @@ impl<T: Clone + 'static> Render for Select<T> {
             InputSize::Lg => (px(36.0), px(12.0), px(14.0), px(16.0)),
         };
 
+        let mut accessibility_state = if open {
+            AccessibilityState::EXPANDED
+        } else {
+            AccessibilityState::COLLAPSED
+        };
+        if self.disabled {
+            accessibility_state |= AccessibilityState::DISABLED;
+        }
+        if self.required {
+            accessibility_state |= AccessibilityState::REQUIRED;
+        }
+        if self.loading {
+            accessibility_state |= AccessibilityState::BUSY;
+        }
+        if is_focused {
+            accessibility_state |= AccessibilityState::FOCUSED;
+        }
+        if matches!(status.as_ref(), Some((FieldStatusType::Error, _))) {
+            accessibility_state |= AccessibilityState::INVALID;
+        }
+        let accessibility_label = self
+            .label
+            .clone()
+            .unwrap_or_else(|| SharedString::from("Select"));
+        let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::ComboBox)
+            .label(accessibility_label.to_string())
+            .placeholder(
+                self.placeholder
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "Select...".to_owned()),
+            )
+            .states(accessibility_state);
+        if self.selected_index.is_some() {
+            accessibility = accessibility.value(AccessibilityValue::Text(display_text.to_string()));
+        }
+        if !self.disabled && !self.loading {
+            accessibility = accessibility.actions(vec![
+                AccessibilityAction::Focus,
+                AccessibilityAction::Click,
+                if open {
+                    AccessibilityAction::Collapse
+                } else {
+                    AccessibilityAction::Expand
+                },
+            ]);
+        }
+
         let trigger = div()
-            .id("select-trigger")
+            .id(("select-trigger", entity_id))
             .relative()
+            .track_focus(&self.focus_handle.clone().tab_index(0).tab_stop(true))
+            .accessibility(accessibility)
             .flex()
             .items_center()
             .justify_between()
@@ -604,7 +667,13 @@ impl<T: Clone + 'static> Render for Select<T> {
                                     MouseButton::Left,
                                     cx.listener(|this, _event: &MouseDownEvent, window, cx| {
                                         this.clear_selection(window, cx);
+                                        cx.stop_propagation();
                                     }),
+                                )
+                                .accessibility(
+                                    AccessibilityAttributes::new(AccessibilityRole::Button)
+                                        .label("Clear selection")
+                                        .actions(vec![AccessibilityAction::Click]),
                                 )
                                 .child(
                                     Icon::new("x")
@@ -689,9 +758,9 @@ impl<T: Clone + 'static> Render for Select<T> {
                     else if event.keystroke.key.len() == 1 && !event.keystroke.modifiers.control && !event.keystroke.modifiers.platform {
                         this.search_query.push_str(&event.keystroke.key);
                         let filtered = this.filtered_options();
-                        if !filtered.is_empty() {
-                            this.highlighted_index = Some(filtered[0].0);
-                        }
+                        this.highlighted_index = filtered
+                            .into_iter()
+                            .find_map(|(index, option)| (!option.disabled).then_some(index));
                         cx.notify();
                     }
                 }))
@@ -839,9 +908,32 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                             let index = *index;
                                                                             let option_icon = option.icon.clone();
                                                                             let option_label = option.label.clone();
+                                                                            let mut option_state = AccessibilityState::NONE;
+                                                                            if is_selected {
+                                                                                option_state |= AccessibilityState::SELECTED;
+                                                                            }
+                                                                            if is_highlighted {
+                                                                                option_state |= AccessibilityState::FOCUSED;
+                                                                            }
+                                                                            if is_disabled {
+                                                                                option_state |= AccessibilityState::DISABLED;
+                                                                            }
 
                                                                             elements.push(
                                                                                 div()
+                                                                                    .id(ElementId::NamedInteger(
+                                                                                        format!("select-option-{entity_id}").into(),
+                                                                                        index as u64,
+                                                                                    ))
+                                                                                    .accessibility({
+                                                                                        let mut attributes = AccessibilityAttributes::new(AccessibilityRole::ListItem)
+                                                                                            .label(option_label.to_string())
+                                                                                            .states(option_state);
+                                                                                        if !is_disabled {
+                                                                                            attributes = attributes.actions(vec![AccessibilityAction::Click]);
+                                                                                        }
+                                                                                        attributes
+                                                                                    })
                                                                                     .px(item_padding_x)
                                                                                     .py(item_padding_y)
                                                                                     .flex()
@@ -930,6 +1022,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                     )
                                                                 })
                                                             })
+                                                            .id(("select-options", entity_id))
                                                         )
                                                     )
                                             ),

@@ -54,7 +54,7 @@ fn main() {
                     })),
                     ..Default::default()
                 },
-                |_, cx| cx.new(|cx| InputStyledDemo::new(cx)),
+                |_, cx| cx.new(InputStyledDemo::new),
             )
             .unwrap();
         });
@@ -78,18 +78,18 @@ struct InputStyledDemo {
 impl InputStyledDemo {
     fn new(cx: &mut Context<Self>) -> Self {
         Self {
-            input1: cx.new(|cx| InputState::new(cx)),
-            input2: cx.new(|cx| InputState::new(cx)),
-            input3: cx.new(|cx| InputState::new(cx)),
-            input4: cx.new(|cx| InputState::new(cx)),
-            input5: cx.new(|cx| InputState::new(cx)),
-            input6: cx.new(|cx| InputState::new(cx)),
-            input7: cx.new(|cx| InputState::new(cx)),
-            input8: cx.new(|cx| InputState::new(cx)),
-            input9: cx.new(|cx| InputState::new(cx)),
-            input10: cx.new(|cx| InputState::new(cx)),
-            input11: cx.new(|cx| InputState::new(cx)),
-            input12: cx.new(|cx| InputState::new(cx)),
+            input1: cx.new(InputState::new),
+            input2: cx.new(InputState::new),
+            input3: cx.new(InputState::new),
+            input4: cx.new(InputState::new),
+            input5: cx.new(InputState::new),
+            input6: cx.new(InputState::new),
+            input7: cx.new(InputState::new),
+            input8: cx.new(InputState::new),
+            input9: cx.new(InputState::new),
+            input10: cx.new(InputState::new),
+            input11: cx.new(InputState::new),
+            input12: cx.new(InputState::new),
         }
     }
 }

@@ -120,6 +120,16 @@ pub enum ListAlignment {
     Bottom,
 }
 
+impl ListAlignment {
+    /// Stable text key for diagnostics and generated tests.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+        }
+    }
+}
+
 /// A scroll event that has been converted to be in terms of the list's items.
 pub struct ListScrollEvent {
     /// The range of items currently visible in the list, after applying the scroll event.
@@ -132,6 +142,30 @@ pub struct ListScrollEvent {
     pub is_scrolled: bool,
 }
 
+impl ListScrollEvent {
+    /// Returns true when the event reports at least one visible item.
+    pub fn has_visible_items(&self) -> bool {
+        !self.visible_range.is_empty()
+    }
+
+    /// Number of items in the reported visible range.
+    pub fn visible_item_count(&self) -> usize {
+        self.visible_range.len()
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "list_scroll_event(visible_start={}, visible_end={}, visible_count={}, item_count={}, scrolled={})",
+            self.visible_range.start,
+            self.visible_range.end,
+            self.visible_item_count(),
+            self.count,
+            self.is_scrolled
+        )
+    }
+}
+
 /// The sizing behavior to apply during layout.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ListSizingBehavior {
@@ -142,6 +176,16 @@ pub enum ListSizingBehavior {
     Auto,
 }
 
+impl ListSizingBehavior {
+    /// Stable text key for diagnostics and generated tests.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Infer => "infer",
+            Self::Auto => "auto",
+        }
+    }
+}
+
 /// The horizontal sizing behavior to apply during layout.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ListHorizontalSizingBehavior {
@@ -150,6 +194,16 @@ pub enum ListHorizontalSizingBehavior {
     FitList,
     /// List items' width may go over the width of the list, if any item is wider.
     Unconstrained,
+}
+
+impl ListHorizontalSizingBehavior {
+    /// Stable text key for diagnostics and generated tests.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::FitList => "fit_list",
+            Self::Unconstrained => "unconstrained",
+        }
+    }
 }
 
 struct LayoutItemsResponse {
@@ -374,6 +428,83 @@ impl ListState {
     /// The number of items in this list.
     pub fn item_count(&self) -> usize {
         self.0.borrow().items.summary().count
+    }
+
+    /// Current list alignment.
+    pub fn alignment(&self) -> ListAlignment {
+        self.0.borrow().alignment
+    }
+
+    /// Returns true after the list has produced viewport bounds at least once.
+    pub fn has_viewport(&self) -> bool {
+        self.0.borrow().last_layout_bounds.is_some()
+    }
+
+    /// Returns the current visible item range when viewport bounds are available.
+    pub fn visible_range(&self) -> Option<Range<usize>> {
+        let state = self.0.borrow();
+        let height = state.last_layout_bounds?.size.height;
+        Some(state.visible_range(height, &state.logical_scroll_top()))
+    }
+
+    /// Number of currently visible items when viewport bounds are available.
+    pub fn visible_item_count(&self) -> Option<usize> {
+        self.visible_range().map(|range| range.len())
+    }
+
+    /// Returns true when the list has a non-default logical scroll position.
+    pub fn has_scroll_offset(&self) -> bool {
+        self.0.borrow().logical_scroll_top.is_some()
+    }
+
+    /// Returns true when measured content can overflow the viewport.
+    pub fn has_overflow(&self) -> bool {
+        let state = self.0.borrow();
+        let Some(bounds) = state.last_layout_bounds else {
+            return false;
+        };
+        state.items.summary().height > bounds.size.height
+    }
+
+    /// Coarse scroll position class for content-safe diagnostics.
+    pub fn scroll_position_class(&self) -> &'static str {
+        let state = self.0.borrow();
+        let Some(bounds) = state.last_layout_bounds else {
+            return "unknown";
+        };
+        let content_height = state.items.summary().height;
+        let scroll_max = (content_height - bounds.size.height).max(px(0.));
+        if scroll_max == Pixels::ZERO {
+            return "no_overflow";
+        }
+
+        let scroll_top = state.scroll_top(&state.logical_scroll_top());
+        if scroll_top <= Pixels::ZERO {
+            "start"
+        } else if (scroll_max - scroll_top).abs() <= px(0.5) {
+            "end"
+        } else if scroll_top < scroll_max / 2.0 {
+            "near_start"
+        } else if scroll_top > scroll_max / 2.0 {
+            "near_end"
+        } else {
+            "middle"
+        }
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "list_state(item_count={}, alignment={}, has_viewport={}, visible_count={}, has_scroll_offset={}, has_overflow={}, scroll_position_class={})",
+            self.item_count(),
+            self.alignment().to_text(),
+            self.has_viewport(),
+            self.visible_item_count()
+                .map_or_else(|| "unknown".to_string(), |count| count.to_string()),
+            self.has_scroll_offset(),
+            self.has_overflow(),
+            self.scroll_position_class()
+        )
     }
 
     /// Inform the list state that the items in `old_range` have been replaced
@@ -1229,7 +1360,8 @@ impl Element for List {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let list_node = crate::AccessibilityNode::new(crate::AccessibilityRole::List);
+        let mut list_node = crate::AccessibilityNode::new(crate::AccessibilityRole::List);
+        list_node.id = window.next_anonymous_accessibility_id();
         let list_id = list_node.id;
         window.register_accessibility_node_at(list_node, bounds);
 
@@ -1240,6 +1372,7 @@ impl Element for List {
                     let mut item_node =
                         crate::AccessibilityNode::new(crate::AccessibilityRole::ListItem)
                             .with_label(format!("Item {}", item.index));
+                    item_node.id = window.next_anonymous_accessibility_id();
                     if item.contains_focused {
                         item_node.states |= crate::AccessibilityState::FOCUSED;
                     }
@@ -1374,7 +1507,71 @@ mod test {
 
     use kael::{ScrollDelta, ScrollWheelEvent};
 
-    use crate::TestAppContext;
+    use crate::{TestAppContext, px};
+
+    #[test]
+    fn list_enum_text_keys_are_stable() {
+        assert_eq!(crate::ListAlignment::Top.to_text(), "top");
+        assert_eq!(crate::ListAlignment::Bottom.to_text(), "bottom");
+        assert_eq!(crate::ListSizingBehavior::Infer.to_text(), "infer");
+        assert_eq!(crate::ListSizingBehavior::Auto.to_text(), "auto");
+        assert_eq!(
+            crate::ListHorizontalSizingBehavior::FitList.to_text(),
+            "fit_list"
+        );
+        assert_eq!(
+            crate::ListHorizontalSizingBehavior::Unconstrained.to_text(),
+            "unconstrained"
+        );
+    }
+
+    #[test]
+    fn list_scroll_event_summary_is_content_safe() {
+        let event = crate::ListScrollEvent {
+            visible_range: 12..18,
+            count: 42,
+            is_scrolled: true,
+        };
+
+        assert!(event.has_visible_items());
+        assert_eq!(event.visible_item_count(), 6);
+
+        let summary = event.to_text();
+        assert!(summary.contains("visible_start=12"));
+        assert!(summary.contains("visible_end=18"));
+        assert!(summary.contains("visible_count=6"));
+        assert!(summary.contains("item_count=42"));
+        assert!(summary.contains("scrolled=true"));
+    }
+
+    #[test]
+    fn list_state_summary_is_content_safe() {
+        let state = crate::ListState::new(12, crate::ListAlignment::Bottom, px(48.0));
+        state.scroll_to(crate::ListOffset {
+            item_ix: 4,
+            offset_in_item: px(27.0),
+        });
+
+        assert_eq!(state.item_count(), 12);
+        assert_eq!(state.alignment(), crate::ListAlignment::Bottom);
+        assert!(!state.has_viewport());
+        assert_eq!(state.visible_range(), None);
+        assert_eq!(state.visible_item_count(), None);
+        assert!(state.has_scroll_offset());
+        assert!(!state.has_overflow());
+        assert_eq!(state.scroll_position_class(), "unknown");
+
+        let summary = state.to_text();
+        assert!(summary.contains("item_count=12"));
+        assert!(summary.contains("alignment=bottom"));
+        assert!(summary.contains("has_viewport=false"));
+        assert!(summary.contains("visible_count=unknown"));
+        assert!(summary.contains("has_scroll_offset=true"));
+        assert!(summary.contains("has_overflow=false"));
+        assert!(summary.contains("scroll_position_class=unknown"));
+        assert!(!summary.contains("27"));
+        assert!(!summary.contains("48"));
+    }
 
     #[kael::test]
     fn test_reset_after_paint_before_scroll(cx: &mut TestAppContext) {

@@ -19,6 +19,10 @@ use serde::{Deserialize, Serialize};
 
 static NEXT_THREAD_ID: AtomicU64 = AtomicU64::new(1);
 static GLOBAL_TRACER: OnceLock<Mutex<Option<Tracer>>> = OnceLock::new();
+const MAX_TRACE_EVENTS: usize = 100_000;
+const MAX_METRICS: usize = 10_000;
+const MAX_HISTOGRAM_SAMPLES: usize = 10_000;
+const MAX_NAME_BYTES: usize = 512;
 
 thread_local! {
     static TRACE_THREAD_ID: Cell<u64> = const { Cell::new(0) };
@@ -98,8 +102,8 @@ impl Tracer {
         Self {
             inner: Arc::new(Mutex::new(TracerInner {
                 enabled: false,
-                events: VecDeque::with_capacity(max_events.min(10_000)),
-                max_events,
+                events: VecDeque::new(),
+                max_events: max_events.min(MAX_TRACE_EVENTS),
                 process_id: std::process::id() as u64,
                 started_at: Instant::now(),
             })),
@@ -153,10 +157,10 @@ impl Tracer {
         }
 
         let event = TraceEvent {
-            name: name.into(),
-            category: category.into(),
+            name: bounded_string(name.into()),
+            category: bounded_string(category.into()),
             phase,
-            timestamp_us: inner.started_at.elapsed().as_micros() as u64,
+            timestamp_us: u64::try_from(inner.started_at.elapsed().as_micros()).unwrap_or(u64::MAX),
             process_id: inner.process_id,
             thread_id: current_thread_id(),
             duration_us: None,
@@ -232,10 +236,28 @@ impl Tracer {
     pub fn write_to_file(&self, path: impl Into<PathBuf>) -> Result<()> {
         let json = self.export_to_chrome_json()?;
         let path = path.into();
-        let mut file = fs::File::create(&path)
-            .with_context(|| format!("failed to create trace file: {}", path.display()))?;
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create trace directory: {}", parent.display())
+            })?;
+        }
+        let temp = path.with_extension(format!("tmp.{}", std::process::id()));
+        let mut file = fs::File::create(&temp)
+            .with_context(|| format!("failed to create trace file: {}", temp.display()))?;
         file.write_all(json.as_bytes())
-            .with_context(|| format!("failed to write trace file: {}", path.display()))?;
+            .with_context(|| format!("failed to write trace file: {}", temp.display()))?;
+        file.sync_all()
+            .with_context(|| format!("failed to sync trace file: {}", temp.display()))?;
+        fs::rename(&temp, &path).with_context(|| {
+            format!(
+                "failed to finalize trace file from {} to {}",
+                temp.display(),
+                path.display()
+            )
+        })?;
         Ok(())
     }
 }
@@ -266,33 +288,50 @@ pub struct MetricsRegistry {
 impl MetricsRegistry {
     /// Records a gauge value.
     pub fn record_gauge(&self, name: &str, value: f64) {
+        if !valid_metric(name, value) {
+            return;
+        }
         let mut inner = self
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        inner.gauges.insert(name.to_string(), value);
+        if inner.gauges.contains_key(name) || metric_count(&inner) < MAX_METRICS {
+            inner.gauges.insert(name.to_string(), value);
+        }
     }
 
     /// Increments a counter by `delta`.
     pub fn record_counter(&self, name: &str, delta: i64) {
+        if name.is_empty() || name.len() > MAX_NAME_BYTES {
+            return;
+        }
         let mut inner = self
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *inner.counters.entry(name.to_string()).or_default() += delta;
+        if inner.counters.contains_key(name) || metric_count(&inner) < MAX_METRICS {
+            let counter = inner.counters.entry(name.to_string()).or_default();
+            *counter = counter.saturating_add(delta);
+        }
     }
 
     /// Appends a histogram sample.
     pub fn record_histogram(&self, name: &str, value: f64) {
+        if !valid_metric(name, value) {
+            return;
+        }
         let mut inner = self
             .inner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        inner
-            .histograms
-            .entry(name.to_string())
-            .or_default()
-            .push(value);
+        if !inner.histograms.contains_key(name) && metric_count(&inner) >= MAX_METRICS {
+            return;
+        }
+        let samples = inner.histograms.entry(name.to_string()).or_default();
+        if samples.len() >= MAX_HISTOGRAM_SAMPLES {
+            samples.remove(0);
+        }
+        samples.push(value);
     }
 
     /// Returns a clone of the current metrics snapshot.
@@ -375,10 +414,37 @@ fn current_thread_id() -> u64 {
 }
 
 fn push_event(inner: &mut TracerInner, event: TraceEvent) {
+    if inner.max_events == 0 {
+        return;
+    }
     if inner.events.len() >= inner.max_events {
         inner.events.pop_front();
     }
     inner.events.push_back(event);
+}
+
+fn bounded_string(mut value: String) -> String {
+    if value.len() <= MAX_NAME_BYTES {
+        return value;
+    }
+    let mut boundary = MAX_NAME_BYTES;
+    while !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    value.truncate(boundary);
+    value
+}
+
+fn valid_metric(name: &str, value: f64) -> bool {
+    !name.is_empty() && name.len() <= MAX_NAME_BYTES && value.is_finite()
+}
+
+fn metric_count(snapshot: &MetricsSnapshot) -> usize {
+    snapshot
+        .gauges
+        .len()
+        .saturating_add(snapshot.counters.len())
+        .saturating_add(snapshot.histograms.len())
 }
 
 #[cfg(test)]
@@ -434,5 +500,26 @@ mod tests {
         assert_eq!(events.len(), 4);
         assert_eq!(events[0].phase, TracePhase::Begin);
         assert_eq!(events[3].phase, TracePhase::End);
+    }
+
+    #[test]
+    fn zero_capacity_tracer_retains_nothing() {
+        let tracer = Tracer::new(0);
+        tracer.enable();
+        tracer.record("event", "test", TracePhase::Instant);
+        assert!(tracer.events().is_empty());
+    }
+
+    #[test]
+    fn metrics_reject_non_finite_values_and_saturate_counters() {
+        let metrics = MetricsRegistry::default();
+        metrics.record_gauge("bad", f64::NAN);
+        metrics.record_histogram("bad", f64::INFINITY);
+        metrics.record_counter("requests", i64::MAX);
+        metrics.record_counter("requests", 1);
+        let snapshot = metrics.snapshot();
+        assert!(!snapshot.gauges.contains_key("bad"));
+        assert!(!snapshot.histograms.contains_key("bad"));
+        assert_eq!(snapshot.counters["requests"], i64::MAX);
     }
 }

@@ -1,6 +1,8 @@
 use anyhow::Result;
 use std::collections::HashMap;
 
+const MAX_CATALOG_JSON_BYTES: usize = 16 * 1024 * 1024;
+
 /// A collection of localized strings for a specific locale.
 #[derive(Debug, Clone)]
 pub struct StringCatalog {
@@ -19,13 +21,24 @@ impl StringCatalog {
 
     /// Creates a string catalog from a JSON string containing key-value pairs.
     pub fn from_json(locale: &str, json: &str) -> Result<Self> {
+        validate_catalog_size(json.len())?;
         let strings: HashMap<String, String> = serde_json::from_str(json)?;
         Ok(Self {
             locale: locale.to_string(),
             strings,
         })
     }
+}
 
+fn validate_catalog_size(size: usize) -> Result<()> {
+    anyhow::ensure!(
+        size <= MAX_CATALOG_JSON_BYTES,
+        "catalog JSON exceeds the {MAX_CATALOG_JSON_BYTES} byte limit"
+    );
+    Ok(())
+}
+
+impl StringCatalog {
     /// Returns the locale identifier for this catalog.
     pub fn locale(&self) -> &str {
         &self.locale
@@ -56,9 +69,11 @@ impl StringCatalog {
         self.strings.is_empty()
     }
 
-    /// Returns all keys in the catalog.
+    /// Returns all keys in the catalog in deterministic lexical order.
     pub fn keys(&self) -> Vec<&str> {
-        self.strings.keys().map(|k| k.as_str()).collect()
+        let mut keys = self.strings.keys().map(String::as_str).collect::<Vec<_>>();
+        keys.sort_unstable();
+        keys
     }
 }
 
@@ -118,8 +133,11 @@ mod tests {
         catalog.insert("a", "A");
         catalog.insert("b", "B");
 
-        let mut keys = catalog.keys();
-        keys.sort();
-        assert_eq!(keys, vec!["a", "b"]);
+        assert_eq!(catalog.keys(), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn rejects_oversized_catalogs_without_parsing() {
+        assert!(validate_catalog_size(MAX_CATALOG_JSON_BYTES + 1).is_err());
     }
 }

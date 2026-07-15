@@ -12,7 +12,7 @@
 //! during layout and exposes them to the platform accessibility layer.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -29,7 +29,13 @@ pub struct AccessibilityId(pub u64);
 impl AccessibilityId {
     /// Generate a new unique accessibility identifier.
     pub fn new() -> Self {
-        Self(NEXT_ACCESSIBILITY_ID.fetch_add(1, Ordering::Relaxed))
+        Self(
+            NEXT_ACCESSIBILITY_ID
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                    current.checked_add(1)
+                })
+                .expect("accessibility identifier space exhausted"),
+        )
     }
 }
 
@@ -59,6 +65,8 @@ pub enum AccessibilityRole {
     TextInput,
     /// Non-editable text content.
     StaticText,
+    /// A semantic document or section heading.
+    Heading,
     /// A generic grouping container.
     Group,
     /// A list of items.
@@ -110,6 +118,42 @@ pub enum AccessibilityRole {
 }
 
 impl AccessibilityRole {
+    /// Stable role key for content-safe diagnostics and automation traces.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Application => "application",
+            Self::Window => "window",
+            Self::Button => "button",
+            Self::TextInput => "text-input",
+            Self::StaticText => "static-text",
+            Self::Heading => "heading",
+            Self::Group => "group",
+            Self::List => "list",
+            Self::ListItem => "list-item",
+            Self::ScrollBar => "scroll-bar",
+            Self::Image => "image",
+            Self::Link => "link",
+            Self::Menu => "menu",
+            Self::MenuItem => "menu-item",
+            Self::Tab => "tab",
+            Self::TabPanel => "tab-panel",
+            Self::Toolbar => "toolbar",
+            Self::Tree => "tree",
+            Self::TreeItem => "tree-item",
+            Self::CheckBox => "check-box",
+            Self::RadioButton => "radio-button",
+            Self::Slider => "slider",
+            Self::ProgressBar => "progress-bar",
+            Self::Separator => "separator",
+            Self::Pane => "pane",
+            Self::Dialog => "dialog",
+            Self::Alert => "alert",
+            Self::ComboBox => "combo-box",
+            Self::Switch => "switch",
+            Self::Unknown => "unknown",
+        }
+    }
+
     /// Returns true if this role is typically interactive.
     pub fn is_interactive(&self) -> bool {
         matches!(
@@ -153,6 +197,7 @@ impl AccessibilityRole {
             Self::Button => Role::Button,
             Self::TextInput => Role::TextInput,
             Self::StaticText => Role::Label,
+            Self::Heading => Role::Heading,
             Self::Group | Self::Pane => Role::Group,
             Self::List => Role::List,
             Self::ListItem => Role::ListItem,
@@ -177,6 +222,34 @@ impl AccessibilityRole {
             Self::Switch => Role::Switch,
             Self::Unknown => Role::Unknown,
         }
+    }
+}
+
+impl AccessibilityState {
+    /// Number of enabled state flags.
+    pub fn enabled_count(self) -> usize {
+        self.iter().count()
+    }
+
+    /// Stable state summary for content-safe diagnostics.
+    pub fn to_text(self) -> String {
+        format!(
+            "accessibility_state(count={}, focused={}, disabled={}, selected={}, expanded={}, collapsed={}, checked={}, indeterminate={}, pressed={}, required={}, invalid={}, busy={}, hidden={}, read_only={})",
+            self.enabled_count(),
+            self.contains(Self::FOCUSED),
+            self.contains(Self::DISABLED),
+            self.contains(Self::SELECTED),
+            self.contains(Self::EXPANDED),
+            self.contains(Self::COLLAPSED),
+            self.contains(Self::CHECKED),
+            self.contains(Self::INDETERMINATE),
+            self.contains(Self::PRESSED),
+            self.contains(Self::REQUIRED),
+            self.contains(Self::INVALID),
+            self.contains(Self::BUSY),
+            self.contains(Self::HIDDEN),
+            self.contains(Self::READ_ONLY)
+        )
     }
 }
 
@@ -214,6 +287,8 @@ bitflags::bitflags! {
         const BUSY = 1 << 10;
         /// The element is hidden from the accessibility tree.
         const HIDDEN = 1 << 11;
+        /// The value can be reviewed and focused but not edited.
+        const READ_ONLY = 1 << 12;
     }
 }
 
@@ -253,6 +328,25 @@ pub enum AccessibilityAction {
 }
 
 impl AccessibilityAction {
+    /// Stable action key for content-safe diagnostics.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Click => "click",
+            Self::Focus => "focus",
+            Self::ScrollUp => "scroll-up",
+            Self::ScrollDown => "scroll-down",
+            Self::Expand => "expand",
+            Self::Collapse => "collapse",
+            Self::Toggle => "toggle",
+            Self::Increment => "increment",
+            Self::Decrement => "decrement",
+            Self::SetValue => "set-value",
+            Self::ShowMenu => "show-menu",
+            Self::Dismiss => "dismiss",
+            Self::Custom(_) => "custom",
+        }
+    }
+
     /// Map to the closest AccessKit [`accesskit::Action`].
     pub fn to_accesskit(self) -> accesskit::Action {
         use accesskit::Action;
@@ -297,6 +391,42 @@ pub enum AccessibilityActionPayload {
     Value(String),
     /// A numeric value, such as a slider position.
     NumericValue(f64),
+}
+
+impl AccessibilityActionPayload {
+    /// Stable payload kind for content-safe diagnostics.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Value(_) => "value",
+            Self::NumericValue(_) => "numeric-value",
+        }
+    }
+
+    /// Byte length of text payload data without exposing the payload text.
+    pub fn value_len_bytes(&self) -> usize {
+        match self {
+            Self::Value(value) => value.len(),
+            Self::NumericValue(_) => 0,
+        }
+    }
+
+    /// Whether the payload carries a finite numeric value.
+    pub fn has_finite_numeric_value(&self) -> bool {
+        match self {
+            Self::Value(_) => false,
+            Self::NumericValue(value) => value.is_finite(),
+        }
+    }
+
+    /// Content-safe payload summary.
+    pub fn to_text(&self) -> String {
+        format!(
+            "accessibility_action_payload(kind={}, value_len_bytes={}, finite_numeric={})",
+            self.kind(),
+            self.value_len_bytes(),
+            self.has_finite_numeric_value()
+        )
+    }
 }
 
 /// A normalized assistive-technology action request for one accessibility node.
@@ -413,6 +543,35 @@ impl AccessibilityActionRequest {
             None
         }
     }
+
+    /// Returns true when the request includes a payload.
+    pub fn has_payload(&self) -> bool {
+        self.payload.is_some()
+    }
+
+    /// Stable payload kind, or `none`.
+    pub fn payload_kind(&self) -> &'static str {
+        self.payload
+            .as_ref()
+            .map(AccessibilityActionPayload::kind)
+            .unwrap_or("none")
+    }
+
+    /// Content-safe action request summary.
+    pub fn to_text(&self) -> String {
+        let payload_summary = self
+            .payload
+            .as_ref()
+            .map(AccessibilityActionPayload::to_text)
+            .unwrap_or_else(|| "none".to_string());
+        format!(
+            "accessibility_action_request(action={}, has_payload={}, payload_kind={}, payload={})",
+            self.action.to_text(),
+            self.has_payload(),
+            self.payload_kind(),
+            payload_summary
+        )
+    }
 }
 
 /// Routes normalized accessibility action requests to application handlers.
@@ -457,6 +616,13 @@ impl AccessibilityActionRouter {
         self.handlers.contains_key(&(node_id, action))
     }
 
+    /// Remove handlers for nodes that are no longer present in the active tree.
+    pub fn retain_nodes(&mut self, node_ids: impl IntoIterator<Item = AccessibilityId>) {
+        let node_ids: HashSet<_> = node_ids.into_iter().collect();
+        self.handlers
+            .retain(|(node_id, _), _| node_ids.contains(node_id));
+    }
+
     /// Dispatch a normalized action request. Returns true when a handler ran.
     pub fn dispatch(&mut self, request: AccessibilityActionRequest) -> bool {
         let Some(handler) = self.handlers.get_mut(&(request.node_id, request.action)) else {
@@ -480,6 +646,19 @@ impl AccessibilityActionRouter {
             return false;
         };
         self.dispatch(request)
+    }
+
+    /// Number of registered action handlers.
+    pub fn handler_count(&self) -> usize {
+        self.handlers.len()
+    }
+
+    /// Content-safe router summary.
+    pub fn to_text(&self) -> String {
+        format!(
+            "accessibility_action_router(handler_count={})",
+            self.handler_count()
+        )
     }
 }
 
@@ -507,6 +686,64 @@ pub enum AccessibilityValue {
     },
     /// A boolean toggle value.
     Toggle(bool),
+}
+
+impl AccessibilityValue {
+    /// Stable value kind for content-safe diagnostics.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Text(_) => "text",
+            Self::Number(_) => "number",
+            Self::Range { .. } => "range",
+            Self::Toggle(_) => "toggle",
+        }
+    }
+
+    /// Text byte length without exposing text value content.
+    pub fn text_len_bytes(&self) -> usize {
+        match self {
+            Self::Text(text) => text.len(),
+            _ => 0,
+        }
+    }
+
+    /// Returns true when numeric content is finite and range content is valid.
+    pub fn is_finite_or_valid(&self) -> bool {
+        match self {
+            Self::Text(_) | Self::Toggle(_) => true,
+            Self::Number(number) => number.is_finite(),
+            Self::Range {
+                current,
+                min,
+                max,
+                step,
+            } => {
+                current.is_finite()
+                    && min.is_finite()
+                    && max.is_finite()
+                    && min <= max
+                    && current >= min
+                    && current <= max
+                    && step.is_none_or(|step| step.is_finite() && step > 0.0)
+            }
+        }
+    }
+
+    /// Returns true when the value is a range with an explicit step.
+    pub fn has_step(&self) -> bool {
+        matches!(self, Self::Range { step: Some(_), .. })
+    }
+
+    /// Content-safe value summary.
+    pub fn to_text(&self) -> String {
+        format!(
+            "accessibility_value(kind={}, text_len_bytes={}, finite_or_valid={}, has_step={})",
+            self.kind(),
+            self.text_len_bytes(),
+            self.is_finite_or_valid(),
+            self.has_step()
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -560,6 +797,36 @@ impl AccessibilityRect {
             y1: self.y + self.height,
         }
     }
+
+    /// Coarse size class for content-safe geometry summaries.
+    pub fn size_class(&self) -> &'static str {
+        let max_axis = self.width.max(self.height);
+        if self.width <= 0.0 || self.height <= 0.0 {
+            "empty"
+        } else if max_axis < 24.0 {
+            "tiny"
+        } else if max_axis < 96.0 {
+            "small"
+        } else if max_axis < 320.0 {
+            "medium"
+        } else {
+            "large"
+        }
+    }
+
+    /// Returns true when the rect has positive area.
+    pub fn has_area(&self) -> bool {
+        self.width > 0.0 && self.height > 0.0
+    }
+
+    /// Content-safe geometry summary that avoids exact coordinates and sizes.
+    pub fn to_text(&self) -> String {
+        format!(
+            "accessibility_rect(size_class={}, has_area={})",
+            self.size_class(),
+            self.has_area()
+        )
+    }
 }
 
 /// A single node in the accessibility tree.
@@ -579,6 +846,8 @@ pub struct AccessibilityNode {
     pub value: Option<AccessibilityValue>,
     /// Placeholder text for inputs.
     pub placeholder: Option<String>,
+    /// Hierarchical level for semantic headings and tree-like items.
+    pub level: Option<usize>,
     /// Screen-space bounds, once produced by layout.
     pub bounds: Option<AccessibilityRect>,
     /// Actions that can be invoked on this element.
@@ -600,6 +869,7 @@ impl AccessibilityNode {
             description: None,
             value: None,
             placeholder: None,
+            level: None,
             bounds: None,
             actions: Vec::new(),
             children: Vec::new(),
@@ -622,6 +892,9 @@ impl AccessibilityNode {
         }
         if let Some(placeholder) = &self.placeholder {
             node.set_placeholder(placeholder.as_str());
+        }
+        if let Some(level) = self.level {
+            node.set_level(level);
         }
         if let Some(bounds) = &self.bounds {
             node.set_bounds(bounds.to_accesskit());
@@ -659,6 +932,12 @@ impl AccessibilityNode {
         self
     }
 
+    /// Set a semantic hierarchy level.
+    pub fn with_level(mut self, level: usize) -> Self {
+        self.level = Some(level);
+        self
+    }
+
     /// Set the screen-space bounds for this node.
     pub fn with_bounds(mut self, bounds: AccessibilityRect) -> Self {
         self.bounds = Some(bounds);
@@ -680,6 +959,101 @@ impl AccessibilityNode {
     /// Add a child identifier to this node.
     pub fn add_child(&mut self, child_id: AccessibilityId) {
         self.children.push(child_id);
+    }
+
+    /// Byte length of the accessible label, without exposing label text.
+    pub fn label_len_bytes(&self) -> usize {
+        self.label.as_ref().map_or(0, |label| label.len())
+    }
+
+    /// Byte length of the accessible description, without exposing it.
+    pub fn description_len_bytes(&self) -> usize {
+        self.description
+            .as_ref()
+            .map_or(0, |description| description.len())
+    }
+
+    /// Byte length of the placeholder, without exposing placeholder text.
+    pub fn placeholder_len_bytes(&self) -> usize {
+        self.placeholder
+            .as_ref()
+            .map_or(0, |placeholder| placeholder.len())
+    }
+
+    /// Returns true when the node has an accessible label.
+    pub fn has_label(&self) -> bool {
+        self.label.is_some()
+    }
+
+    /// Returns true when the node has an accessible description.
+    pub fn has_description(&self) -> bool {
+        self.description.is_some()
+    }
+
+    /// Returns true when the node has an accessible value.
+    pub fn has_value(&self) -> bool {
+        self.value.is_some()
+    }
+
+    /// Returns true when the node has placeholder text.
+    pub fn has_placeholder(&self) -> bool {
+        self.placeholder.is_some()
+    }
+
+    /// Returns true when the node has layout bounds.
+    pub fn has_bounds(&self) -> bool {
+        self.bounds.is_some()
+    }
+
+    /// Returns true when the node has a parent id.
+    pub fn has_parent(&self) -> bool {
+        self.parent.is_some()
+    }
+
+    /// Number of advertised accessibility actions.
+    pub fn action_count(&self) -> usize {
+        self.actions.len()
+    }
+
+    /// Number of child node ids.
+    pub fn child_count(&self) -> usize {
+        self.children.len()
+    }
+
+    /// Content-safe node summary for diagnostics and automation traces.
+    pub fn to_text(&self) -> String {
+        let value_summary = self
+            .value
+            .as_ref()
+            .map(AccessibilityValue::to_text)
+            .unwrap_or_else(|| "none".to_string());
+        let bounds_summary = self
+            .bounds
+            .as_ref()
+            .map(AccessibilityRect::to_text)
+            .unwrap_or_else(|| "none".to_string());
+        format!(
+            "accessibility_node(role={}, interactive={}, container={}, states={}, has_label={}, label_len_bytes={}, has_description={}, description_len_bytes={}, has_value={}, value={}, has_placeholder={}, placeholder_len_bytes={}, level={}, has_bounds={}, bounds={}, action_count={}, child_count={}, has_parent={})",
+            self.role.to_text(),
+            self.role.is_interactive(),
+            self.role.is_container(),
+            self.states.to_text(),
+            self.has_label(),
+            self.label_len_bytes(),
+            self.has_description(),
+            self.description_len_bytes(),
+            self.has_value(),
+            value_summary,
+            self.has_placeholder(),
+            self.placeholder_len_bytes(),
+            self.level
+                .map_or_else(|| "none".to_string(), |level| level.to_string()),
+            self.has_bounds(),
+            bounds_summary,
+            self.action_count(),
+            self.child_count(),
+            self.has_parent()
+        )
     }
 }
 
@@ -749,6 +1123,71 @@ impl AccessibilityTree {
                 None
             }
         })
+    }
+
+    /// Returns true when the root id is present in the node map.
+    pub fn has_root_node(&self) -> bool {
+        self.nodes.contains_key(&self.root)
+    }
+
+    /// Number of nodes in the tree.
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Number of interactive nodes.
+    pub fn interactive_node_count(&self) -> usize {
+        self.nodes
+            .values()
+            .filter(|node| node.role.is_interactive())
+            .count()
+    }
+
+    /// Number of nodes with at least one action.
+    pub fn actionable_node_count(&self) -> usize {
+        self.nodes
+            .values()
+            .filter(|node| !node.actions.is_empty())
+            .count()
+    }
+
+    /// Number of hidden nodes.
+    pub fn hidden_node_count(&self) -> usize {
+        self.nodes
+            .values()
+            .filter(|node| node.states.contains(AccessibilityState::HIDDEN))
+            .count()
+    }
+
+    /// Number of focused nodes, even if malformed.
+    pub fn focused_node_count(&self) -> usize {
+        self.nodes
+            .values()
+            .filter(|node| node.states.contains(AccessibilityState::FOCUSED))
+            .count()
+    }
+
+    /// Number of edges implied by node children.
+    pub fn edge_count(&self) -> usize {
+        self.nodes.values().map(|node| node.children.len()).sum()
+    }
+
+    /// Content-safe tree summary for diagnostics and automation traces.
+    pub fn to_text(&self) -> String {
+        let report = self.audit_report();
+        format!(
+            "accessibility_tree(nodes={}, edges={}, has_root={}, focused_nodes={}, interactive_nodes={}, actionable_nodes={}, hidden_nodes={}, audit_errors={}, audit_warnings={}, ready={})",
+            self.node_count(),
+            self.edge_count(),
+            self.has_root_node(),
+            self.focused_node_count(),
+            self.interactive_node_count(),
+            self.actionable_node_count(),
+            self.hidden_node_count(),
+            report.error_count(),
+            report.warning_count(),
+            report.is_ready()
+        )
     }
 
     /// Audit this tree for common accessibility issues before platform export.
@@ -889,6 +1328,114 @@ impl AccessibilityTree {
             focus,
         }
     }
+
+    /// Build a full AccessKit update ordered safely relative to the previous tree.
+    ///
+    /// AccessKit applies node records sequentially. When a retained node moves
+    /// between parents, the old parent must release it before the new parent
+    /// claims it. Otherwise the consumer can transiently orphan a newly added
+    /// node and panic while emitting platform change events. This is especially
+    /// easy to trigger when scrolling changes which semantic containers are
+    /// painted in a frame.
+    pub fn to_accesskit_tree_update_after(
+        &self,
+        previous: Option<&Self>,
+        app_name: Option<&str>,
+        toolkit_name: Option<&str>,
+        toolkit_version: Option<&str>,
+    ) -> accesskit::TreeUpdate {
+        let mut update = self.to_accesskit_tree_update(app_name, toolkit_name, toolkit_version);
+        let Some(previous) = previous else {
+            return update;
+        };
+
+        let base_index: HashMap<_, _> = update
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(index, (id, _))| (AccessibilityId(id.0), index))
+            .collect();
+        let mut outgoing: HashMap<AccessibilityId, HashSet<AccessibilityId>> = HashMap::new();
+        let mut indegree: HashMap<AccessibilityId, usize> =
+            base_index.keys().copied().map(|id| (id, 0)).collect();
+
+        for (id, node) in &self.nodes {
+            let Some(previous_node) = previous.nodes.get(id) else {
+                continue;
+            };
+            if previous_node.parent == node.parent {
+                continue;
+            }
+
+            let mut release_parent = previous_node.parent;
+            while let Some(parent) = release_parent {
+                if self.nodes.contains_key(&parent) {
+                    break;
+                }
+                release_parent = previous.nodes.get(&parent).and_then(|node| node.parent);
+            }
+            let (Some(release_parent), Some(claim_parent)) = (release_parent, node.parent) else {
+                continue;
+            };
+            if release_parent == claim_parent
+                || !base_index.contains_key(&release_parent)
+                || !base_index.contains_key(&claim_parent)
+            {
+                continue;
+            }
+            if outgoing
+                .entry(release_parent)
+                .or_default()
+                .insert(claim_parent)
+            {
+                *indegree.entry(claim_parent).or_default() += 1;
+            }
+        }
+
+        if outgoing.is_empty() {
+            return update;
+        }
+
+        let mut ready: Vec<_> = indegree
+            .iter()
+            .filter_map(|(id, degree)| (*degree == 0).then_some(*id))
+            .collect();
+        ready.sort_by_key(|id| std::cmp::Reverse(base_index[id]));
+        let mut ordered_ids = Vec::with_capacity(update.nodes.len());
+        while let Some(id) = ready.pop() {
+            ordered_ids.push(id);
+            if let Some(children) = outgoing.get(&id) {
+                for child in children {
+                    let degree = indegree
+                        .get_mut(child)
+                        .expect("transition node must have an indegree entry");
+                    *degree -= 1;
+                    if *degree == 0 {
+                        ready.push(*child);
+                        ready.sort_by_key(|id| std::cmp::Reverse(base_index[id]));
+                    }
+                }
+            }
+        }
+
+        // A cyclic reparent (for example two containers swapping children) has
+        // no safe single-update ordering. Keep the full parent-first order in
+        // that rare case; platform providers may choose to reset their adapter.
+        if ordered_ids.len() != update.nodes.len() {
+            return update;
+        }
+
+        let mut nodes_by_id: HashMap<_, _> = update.nodes.drain(..).collect();
+        update.nodes = ordered_ids
+            .into_iter()
+            .filter_map(|id| {
+                nodes_by_id
+                    .remove(&accesskit::NodeId(id.0))
+                    .map(|node| (accesskit::NodeId(id.0), node))
+            })
+            .collect();
+        update
+    }
 }
 
 /// Severity of an accessibility audit issue.
@@ -898,6 +1445,16 @@ pub enum AccessibilityAuditSeverity {
     Error,
     /// The tree or attributes are valid but likely lower quality.
     Warning,
+}
+
+impl AccessibilityAuditSeverity {
+    /// Stable severity key for content-safe diagnostics.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warning => "warning",
+        }
+    }
 }
 
 /// Common accessibility issue categories.
@@ -925,6 +1482,25 @@ pub enum AccessibilityAuditIssueKind {
     ParentMismatch,
     /// More than one node is marked focused.
     MultipleFocusedNodes,
+}
+
+impl AccessibilityAuditIssueKind {
+    /// Stable issue kind key for content-safe diagnostics.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::MissingRoot => "missing-root",
+            Self::MissingRole => "missing-role",
+            Self::UnknownRole => "unknown-role",
+            Self::MissingAccessibleName => "missing-accessible-name",
+            Self::MissingInteractiveAction => "missing-interactive-action",
+            Self::InvalidRange => "invalid-range",
+            Self::ConflictingStates => "conflicting-states",
+            Self::HiddenFocusedNode => "hidden-focused-node",
+            Self::MissingChildNode => "missing-child-node",
+            Self::ParentMismatch => "parent-mismatch",
+            Self::MultipleFocusedNodes => "multiple-focused-nodes",
+        }
+    }
 }
 
 /// One accessibility audit finding.
@@ -962,6 +1538,23 @@ impl AccessibilityAuditIssue {
     pub fn message(&self) -> &str {
         &self.message
     }
+
+    /// Byte length of the human-readable message without exposing it.
+    pub fn message_len_bytes(&self) -> usize {
+        self.message.len()
+    }
+
+    /// Content-safe issue summary.
+    pub fn to_text(&self) -> String {
+        format!(
+            "accessibility_audit_issue(severity={}, kind={}, has_node_id={}, role={}, message_len_bytes={})",
+            self.severity.to_text(),
+            self.kind.to_text(),
+            self.node_id.is_some(),
+            self.role.map(AccessibilityRole::to_text).unwrap_or("none"),
+            self.message_len_bytes()
+        )
+    }
 }
 
 /// Non-throwing accessibility audit report for app and agent checks.
@@ -974,6 +1567,27 @@ impl AccessibilityAuditReport {
     /// All audit issues.
     pub fn issues(&self) -> &[AccessibilityAuditIssue] {
         &self.issues
+    }
+
+    /// Total number of audit issues.
+    pub fn issue_count(&self) -> usize {
+        self.issues.len()
+    }
+
+    /// Number of blocking audit errors.
+    pub fn error_count(&self) -> usize {
+        self.issues
+            .iter()
+            .filter(|issue| issue.severity == AccessibilityAuditSeverity::Error)
+            .count()
+    }
+
+    /// Number of non-blocking audit warnings.
+    pub fn warning_count(&self) -> usize {
+        self.issues
+            .iter()
+            .filter(|issue| issue.severity == AccessibilityAuditSeverity::Warning)
+            .count()
     }
 
     /// Blocking audit errors.
@@ -994,13 +1608,13 @@ impl AccessibilityAuditReport {
 
     /// Whether no blocking errors were found.
     pub fn is_ready(&self) -> bool {
-        self.errors().is_empty()
+        self.error_count() == 0
     }
 
     /// Compact summary for logs, diagnostics, and agent output.
     pub fn summary(&self) -> String {
-        let errors = self.errors().len();
-        let warnings = self.warnings().len();
+        let errors = self.error_count();
+        let warnings = self.warning_count();
         match (errors, warnings) {
             (0, 0) => "accessibility audit passed".to_string(),
             (0, warnings) => format!("accessibility audit passed with {warnings} warning(s)"),
@@ -1009,6 +1623,373 @@ impl AccessibilityAuditReport {
             }
         }
     }
+
+    /// Return a stable content-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "accessibility audit: {} issues, {} errors, {} warnings, ready {}",
+            self.issue_count(),
+            self.error_count(),
+            self.warning_count(),
+            self.is_ready()
+        )
+    }
+}
+
+/// Next action for a checked accessibility and automation handoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccessibilityAutomationNextAction {
+    /// Audit or export a native accessibility tree.
+    AuditAccessibilityTree,
+    /// Validate element attributes before rendering custom controls.
+    ValidateAttributes,
+    /// Route an accessibility action request to app-owned handlers.
+    RouteActionRequest,
+    /// Send an assistive-technology announcement.
+    AnnounceStatus,
+    /// Move accessibility focus to an existing visible node.
+    FocusAccessibilityNode,
+    /// Use hosted DOM accessibility or selector automation for an explicit WebView island.
+    UseHostedDomAutomation,
+}
+
+impl AccessibilityAutomationNextAction {
+    /// Stable key for logs, tests, and generated-agent routing.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::AuditAccessibilityTree => "audit-accessibility-tree",
+            Self::ValidateAttributes => "validate-attributes",
+            Self::RouteActionRequest => "route-action-request",
+            Self::AnnounceStatus => "announce-status",
+            Self::FocusAccessibilityNode => "focus-accessibility-node",
+            Self::UseHostedDomAutomation => "use-hosted-dom-automation",
+        }
+    }
+}
+
+/// Checked request inside an accessibility and automation handoff.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AccessibilityAutomationRequest {
+    /// Audit a native accessibility tree.
+    Tree(AccessibilityTree),
+    /// Validate accessibility attributes before attaching them to a custom element.
+    Attributes(AccessibilityAttributes),
+    /// Route a normalized accessibility action request.
+    ActionRequest(AccessibilityActionRequest),
+    /// Send a status announcement to assistive technology.
+    Announcement {
+        /// User-facing announcement text.
+        message: String,
+    },
+    /// Focus an existing visible node in a native accessibility tree.
+    FocusTarget {
+        /// Tree that must contain the focus target.
+        tree: AccessibilityTree,
+        /// Node that should receive focus.
+        node_id: AccessibilityId,
+    },
+    /// Use hosted DOM/selector automation for an explicit WebView island.
+    HostedDomAutomation {
+        /// Stable hosted surface id.
+        surface_id: String,
+    },
+}
+
+impl AccessibilityAutomationRequest {
+    /// Return the next action implied by this request.
+    pub fn next_action(&self) -> AccessibilityAutomationNextAction {
+        match self {
+            Self::Tree(_) => AccessibilityAutomationNextAction::AuditAccessibilityTree,
+            Self::Attributes(_) => AccessibilityAutomationNextAction::ValidateAttributes,
+            Self::ActionRequest(_) => AccessibilityAutomationNextAction::RouteActionRequest,
+            Self::Announcement { .. } => AccessibilityAutomationNextAction::AnnounceStatus,
+            Self::FocusTarget { .. } => AccessibilityAutomationNextAction::FocusAccessibilityNode,
+            Self::HostedDomAutomation { .. } => {
+                AccessibilityAutomationNextAction::UseHostedDomAutomation
+            }
+        }
+    }
+
+    /// Validate without mutating focus, routing actions, or invoking platform APIs.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        match self {
+            Self::Tree(tree) => {
+                let report = tree.audit_report();
+                anyhow::ensure!(
+                    report.is_ready(),
+                    "accessibility automation tree has {} audit error(s)",
+                    report.error_count()
+                );
+                Ok(())
+            }
+            Self::Attributes(attributes) => attributes.validate(),
+            Self::ActionRequest(request) => {
+                anyhow::ensure!(
+                    request.node_id.0 > 0,
+                    "accessibility action request node id must be non-zero"
+                );
+                Ok(())
+            }
+            Self::Announcement { message } => {
+                validate_accessibility_handoff_text(message, "accessibility announcement", 256)
+            }
+            Self::FocusTarget { tree, node_id } => {
+                validate_accessibility_focus_target(tree, *node_id)
+            }
+            Self::HostedDomAutomation { surface_id } => validate_accessibility_handoff_id(
+                surface_id,
+                "hosted DOM automation surface id",
+                128,
+            ),
+        }
+    }
+}
+
+/// Checked handoff for native accessibility and automation readiness.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccessibilityAutomationHandoff {
+    requests: Vec<AccessibilityAutomationRequest>,
+    next_action: AccessibilityAutomationNextAction,
+}
+
+impl AccessibilityAutomationHandoff {
+    /// Requests included in this handoff.
+    pub fn requests(&self) -> &[AccessibilityAutomationRequest] {
+        &self.requests
+    }
+
+    /// Number of checked accessibility requests.
+    pub fn request_count(&self) -> usize {
+        self.requests.len()
+    }
+
+    /// Next action builders or agents should take.
+    pub fn next_action(&self) -> AccessibilityAutomationNextAction {
+        self.next_action
+    }
+
+    /// Whether this handoff audits a native accessibility tree.
+    pub fn audits_tree(&self) -> bool {
+        self.requests
+            .iter()
+            .any(|request| matches!(request, AccessibilityAutomationRequest::Tree(_)))
+    }
+
+    /// Whether this handoff validates custom element attributes.
+    pub fn validates_attributes(&self) -> bool {
+        self.requests
+            .iter()
+            .any(|request| matches!(request, AccessibilityAutomationRequest::Attributes(_)))
+    }
+
+    /// Whether this handoff routes an action request.
+    pub fn routes_action_request(&self) -> bool {
+        self.requests
+            .iter()
+            .any(|request| matches!(request, AccessibilityAutomationRequest::ActionRequest(_)))
+    }
+
+    /// Whether this handoff sends an assistive-technology announcement.
+    pub fn announces_status(&self) -> bool {
+        self.requests
+            .iter()
+            .any(|request| matches!(request, AccessibilityAutomationRequest::Announcement { .. }))
+    }
+
+    /// Whether this handoff moves accessibility focus.
+    pub fn focuses_node(&self) -> bool {
+        self.requests
+            .iter()
+            .any(|request| matches!(request, AccessibilityAutomationRequest::FocusTarget { .. }))
+    }
+
+    /// Whether this handoff delegates to hosted DOM/selector automation.
+    pub fn uses_hosted_dom_automation(&self) -> bool {
+        self.requests.iter().any(|request| {
+            matches!(
+                request,
+                AccessibilityAutomationRequest::HostedDomAutomation { .. }
+            )
+        })
+    }
+
+    /// Content-safe summary for tests, diagnostics, and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "accessibility automation handoff: {} requests, next action {}, tree {}, attributes {}, action {}, announcement {}, focus {}, hosted dom {}",
+            self.request_count(),
+            self.next_action.key(),
+            self.audits_tree(),
+            self.validates_attributes(),
+            self.routes_action_request(),
+            self.announces_status(),
+            self.focuses_node(),
+            self.uses_hosted_dom_automation()
+        )
+    }
+}
+
+/// Builder for checked accessibility and automation handoffs.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AccessibilityAutomationHandoffBuilder {
+    requests: Vec<AccessibilityAutomationRequest>,
+}
+
+impl AccessibilityAutomationHandoffBuilder {
+    /// Create an empty accessibility automation handoff builder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a native accessibility tree audit.
+    pub fn tree(mut self, tree: AccessibilityTree) -> Self {
+        self.requests
+            .push(AccessibilityAutomationRequest::Tree(tree));
+        self
+    }
+
+    /// Add custom accessibility attributes.
+    pub fn attributes(mut self, attributes: AccessibilityAttributes) -> Self {
+        self.requests
+            .push(AccessibilityAutomationRequest::Attributes(attributes));
+        self
+    }
+
+    /// Add a normalized accessibility action request.
+    pub fn action_request(mut self, request: AccessibilityActionRequest) -> Self {
+        self.requests
+            .push(AccessibilityAutomationRequest::ActionRequest(request));
+        self
+    }
+
+    /// Add an assistive-technology announcement.
+    pub fn announcement(mut self, message: impl Into<String>) -> Self {
+        self.requests
+            .push(AccessibilityAutomationRequest::Announcement {
+                message: message.into(),
+            });
+        self
+    }
+
+    /// Add an accessibility focus target.
+    pub fn focus_target(mut self, tree: AccessibilityTree, node_id: AccessibilityId) -> Self {
+        self.requests
+            .push(AccessibilityAutomationRequest::FocusTarget { tree, node_id });
+        self
+    }
+
+    /// Add a hosted DOM/selector automation fallback.
+    pub fn hosted_dom_automation(mut self, surface_id: impl Into<String>) -> Self {
+        self.requests
+            .push(AccessibilityAutomationRequest::HostedDomAutomation {
+                surface_id: surface_id.into(),
+            });
+        self
+    }
+
+    /// Validate without consuming this builder.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.requests.is_empty(),
+            "accessibility automation handoff must include at least one request"
+        );
+        anyhow::ensure!(
+            self.requests.len() <= 32,
+            "accessibility automation handoff cannot include more than 32 requests"
+        );
+        for request in &self.requests {
+            request.validate()?;
+        }
+        Ok(())
+    }
+
+    /// Build the checked accessibility automation handoff.
+    pub fn build_checked(self) -> anyhow::Result<AccessibilityAutomationHandoff> {
+        self.validate()?;
+        let next_action = accessibility_automation_next_action(&self.requests);
+        Ok(AccessibilityAutomationHandoff {
+            requests: self.requests,
+            next_action,
+        })
+    }
+}
+
+fn accessibility_automation_next_action(
+    requests: &[AccessibilityAutomationRequest],
+) -> AccessibilityAutomationNextAction {
+    [
+        AccessibilityAutomationNextAction::AuditAccessibilityTree,
+        AccessibilityAutomationNextAction::ValidateAttributes,
+        AccessibilityAutomationNextAction::RouteActionRequest,
+        AccessibilityAutomationNextAction::AnnounceStatus,
+        AccessibilityAutomationNextAction::FocusAccessibilityNode,
+        AccessibilityAutomationNextAction::UseHostedDomAutomation,
+    ]
+    .into_iter()
+    .find(|action| {
+        requests
+            .iter()
+            .any(|request| request.next_action() == *action)
+    })
+    .unwrap_or(AccessibilityAutomationNextAction::AuditAccessibilityTree)
+}
+
+fn validate_accessibility_focus_target(
+    tree: &AccessibilityTree,
+    node_id: AccessibilityId,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        node_id.0 > 0,
+        "accessibility focus target node id must be non-zero"
+    );
+    let Some(node) = tree.get(node_id) else {
+        anyhow::bail!(
+            "accessibility focus target {} is not present in the tree",
+            node_id.0
+        );
+    };
+    anyhow::ensure!(
+        !node.states.contains(AccessibilityState::HIDDEN),
+        "accessibility focus target {} is hidden",
+        node_id.0
+    );
+    Ok(())
+}
+
+fn validate_accessibility_handoff_text(
+    value: &str,
+    label: &str,
+    max_chars: usize,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(!value.trim().is_empty(), "{label} cannot be empty");
+    anyhow::ensure!(
+        value == value.trim(),
+        "{label} cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        !value.chars().any(char::is_control),
+        "{label} cannot contain control characters"
+    );
+    anyhow::ensure!(
+        value.chars().count() <= max_chars,
+        "{label} cannot be longer than {max_chars} characters"
+    );
+    Ok(())
+}
+
+fn validate_accessibility_handoff_id(
+    value: &str,
+    label: &str,
+    max_chars: usize,
+) -> anyhow::Result<()> {
+    validate_accessibility_handoff_text(value, label, max_chars)?;
+    anyhow::ensure!(
+        value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')),
+        "{label} can only contain ASCII letters, numbers, '.', '-' or '_'"
+    );
+    Ok(())
 }
 
 fn audit_accessibility_node(
@@ -1177,6 +2158,9 @@ fn apply_states(node: &mut accesskit::Node, states: AccessibilityState) {
     } else if states.contains(AccessibilityState::CHECKED) {
         node.set_toggled(accesskit::Toggled::True);
     }
+    if states.contains(AccessibilityState::READ_ONLY) {
+        node.set_read_only();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1199,6 +2183,8 @@ pub struct AccessibilityAttributes {
     pub value: Option<AccessibilityValue>,
     /// Placeholder text for inputs.
     pub placeholder: Option<String>,
+    /// Hierarchical level for semantic headings and tree-like items.
+    pub level: Option<usize>,
     /// State flags.
     pub states: AccessibilityState,
     /// Actions available on this element.
@@ -1335,6 +2321,17 @@ impl AccessibilityAttributes {
         self
     }
 
+    /// Set a semantic hierarchy level.
+    pub fn level(mut self, level: usize) -> Self {
+        self.level = Some(level);
+        self
+    }
+
+    /// Set and clamp a semantic heading level to the supported 1–6 range.
+    pub fn heading_level(self, level: usize) -> Self {
+        self.level(level.clamp(1, 6))
+    }
+
     /// Set the state flags.
     pub fn states(mut self, states: AccessibilityState) -> Self {
         self.states = states;
@@ -1457,6 +2454,19 @@ impl AccessibilityAttributes {
             );
         }
 
+        if role == AccessibilityRole::Heading {
+            anyhow::ensure!(
+                self.label
+                    .as_ref()
+                    .is_some_and(|label| !label.trim().is_empty()),
+                "heading accessibility role needs a label"
+            );
+            anyhow::ensure!(
+                self.level.is_some_and(|level| (1..=6).contains(&level)),
+                "heading accessibility role needs a level between 1 and 6"
+            );
+        }
+
         if let Some(AccessibilityValue::Range {
             current,
             min,
@@ -1517,11 +2527,86 @@ impl AccessibilityAttributes {
             description: self.description.clone(),
             value: self.value.clone(),
             placeholder: self.placeholder.clone(),
+            level: self.level,
             bounds: None,
             actions: self.actions.clone(),
             children: Vec::new(),
             parent: None,
         }
+    }
+
+    /// Byte length of the label without exposing label text.
+    pub fn label_len_bytes(&self) -> usize {
+        self.label.as_ref().map_or(0, |label| label.len())
+    }
+
+    /// Byte length of the description without exposing description text.
+    pub fn description_len_bytes(&self) -> usize {
+        self.description
+            .as_ref()
+            .map_or(0, |description| description.len())
+    }
+
+    /// Byte length of the placeholder without exposing placeholder text.
+    pub fn placeholder_len_bytes(&self) -> usize {
+        self.placeholder
+            .as_ref()
+            .map_or(0, |placeholder| placeholder.len())
+    }
+
+    /// Returns true when a label is configured.
+    pub fn has_label(&self) -> bool {
+        self.label.is_some()
+    }
+
+    /// Returns true when a description is configured.
+    pub fn has_description(&self) -> bool {
+        self.description.is_some()
+    }
+
+    /// Returns true when a value is configured.
+    pub fn has_value(&self) -> bool {
+        self.value.is_some()
+    }
+
+    /// Returns true when placeholder text is configured.
+    pub fn has_placeholder(&self) -> bool {
+        self.placeholder.is_some()
+    }
+
+    /// Number of configured accessibility actions.
+    pub fn action_count(&self) -> usize {
+        self.actions.len()
+    }
+
+    /// Content-safe attribute summary for diagnostics and generated checks.
+    pub fn to_text(&self) -> String {
+        let value_summary = self
+            .value
+            .as_ref()
+            .map(AccessibilityValue::to_text)
+            .unwrap_or_else(|| "none".to_string());
+        let report = self.audit_report();
+        format!(
+            "accessibility_attributes(role={}, has_label={}, label_len_bytes={}, has_description={}, description_len_bytes={}, has_value={}, value={}, has_placeholder={}, placeholder_len_bytes={}, level={}, states={}, action_count={}, hidden={}, audit_errors={}, audit_warnings={}, ready={})",
+            self.role.map(AccessibilityRole::to_text).unwrap_or("none"),
+            self.has_label(),
+            self.label_len_bytes(),
+            self.has_description(),
+            self.description_len_bytes(),
+            self.has_value(),
+            value_summary,
+            self.has_placeholder(),
+            self.placeholder_len_bytes(),
+            self.level
+                .map_or_else(|| "none".to_string(), |level| level.to_string()),
+            self.states.to_text(),
+            self.action_count(),
+            self.hidden,
+            report.error_count(),
+            report.warning_count(),
+            report.is_ready()
+        )
     }
 }
 
@@ -1662,6 +2747,35 @@ mod tests {
     }
 
     #[test]
+    fn heading_attributes_preserve_a_valid_semantic_level() {
+        let attributes = AccessibilityAttributes::new(AccessibilityRole::Heading)
+            .label("Component settings")
+            .heading_level(2);
+        assert!(attributes.validate().is_ok());
+
+        let node = attributes.to_node(AccessibilityId::new());
+        assert_eq!(node.role, AccessibilityRole::Heading);
+        assert_eq!(node.level, Some(2));
+        let accesskit = node.to_accesskit_node();
+        assert_eq!(accesskit.role(), accesskit::Role::Heading);
+        assert_eq!(accesskit.level(), Some(2));
+
+        assert!(
+            AccessibilityAttributes::new(AccessibilityRole::Heading)
+                .label("Invalid heading")
+                .level(0)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            AccessibilityAttributes::new(AccessibilityRole::Heading)
+                .heading_level(3)
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
     fn test_accessibility_validation_catches_common_custom_control_errors() {
         assert!(
             AccessibilityAttributes::new(AccessibilityRole::Button)
@@ -1706,6 +2820,13 @@ mod tests {
         let report = attrs.audit_report();
         assert!(!report.is_ready());
         assert!(report.summary().contains("error"));
+        assert_eq!(report.issue_count(), 4);
+        assert_eq!(report.error_count(), 4);
+        assert_eq!(report.warning_count(), 0);
+        assert_eq!(
+            report.to_text(),
+            "accessibility audit: 4 issues, 4 errors, 0 warnings, ready false"
+        );
         assert!(report.issues().iter().any(|issue| {
             issue.kind() == AccessibilityAuditIssueKind::MissingAccessibleName
                 && issue.severity() == AccessibilityAuditSeverity::Error
@@ -1731,6 +2852,10 @@ mod tests {
             missing_role.issues()[0].kind(),
             AccessibilityAuditIssueKind::MissingRole
         );
+        assert_eq!(
+            missing_role.to_text(),
+            "accessibility audit: 1 issues, 1 errors, 0 warnings, ready false"
+        );
     }
 
     #[test]
@@ -1752,6 +2877,61 @@ mod tests {
     }
 
     #[test]
+    fn accessibility_primitives_summary_is_content_safe() {
+        let state = AccessibilityState::FOCUSED
+            | AccessibilityState::CHECKED
+            | AccessibilityState::REQUIRED;
+        let payload = AccessibilityActionPayload::Value("private replacement text".to_string());
+        let request = AccessibilityActionRequest::with_payload(
+            AccessibilityId::new(),
+            AccessibilityAction::SetValue,
+            payload.clone(),
+        );
+        let text_value = AccessibilityValue::Text("private field value".to_string());
+        let range_value = AccessibilityValue::Range {
+            current: 5.0,
+            min: 0.0,
+            max: 10.0,
+            step: Some(1.0),
+        };
+        let rect = AccessibilityRect::new(12.0, 24.0, 160.0, 40.0);
+
+        assert_eq!(AccessibilityRole::TextInput.to_text(), "text-input");
+        assert_eq!(AccessibilityAction::SetValue.to_text(), "set-value");
+        assert_eq!(AccessibilityAction::Custom(42).to_text(), "custom");
+        assert_eq!(AccessibilityAuditSeverity::Warning.to_text(), "warning");
+        assert_eq!(
+            AccessibilityAuditIssueKind::MissingAccessibleName.to_text(),
+            "missing-accessible-name"
+        );
+        assert_eq!(state.enabled_count(), 3);
+        assert!(state.to_text().contains("focused=true"));
+        assert!(state.to_text().contains("required=true"));
+
+        assert_eq!(payload.kind(), "value");
+        assert_eq!(payload.value_len_bytes(), "private replacement text".len());
+        assert!(!payload.to_text().contains("private replacement"));
+
+        assert!(request.has_payload());
+        assert_eq!(request.payload_kind(), "value");
+        let request_summary = request.to_text();
+        assert!(request_summary.contains("action=set-value"));
+        assert!(!request_summary.contains("private replacement"));
+
+        assert_eq!(text_value.kind(), "text");
+        assert_eq!(text_value.text_len_bytes(), "private field value".len());
+        assert!(text_value.is_finite_or_valid());
+        assert!(range_value.has_step());
+        assert!(range_value.to_text().contains("kind=range"));
+        assert!(!text_value.to_text().contains("private field"));
+
+        assert_eq!(rect.size_class(), "medium");
+        assert!(rect.has_area());
+        assert!(!rect.to_text().contains("160"));
+        assert!(!rect.to_text().contains("12"));
+    }
+
+    #[test]
     fn test_tree_construction() {
         let root = AccessibilityNode::new(AccessibilityRole::Window);
         let mut tree = AccessibilityTree::new(root);
@@ -1764,6 +2944,73 @@ mod tests {
         assert_eq!(tree.nodes.len(), 2);
         assert_eq!(tree.get(button_id).unwrap().role, AccessibilityRole::Button);
         assert!(tree.get(tree.root).unwrap().children.contains(&button_id));
+    }
+
+    #[test]
+    fn accessibility_node_tree_and_attributes_summary_is_content_safe() {
+        let root = AccessibilityNode::new(AccessibilityRole::Window).with_label("Private App");
+        let root_id = root.id;
+        let mut tree = AccessibilityTree::new(root);
+
+        let input = AccessibilityNode::new(AccessibilityRole::TextInput)
+            .with_label("Secret Search")
+            .with_description("Internal customer search field")
+            .with_value(AccessibilityValue::Text("customer@example.com".to_string()))
+            .with_bounds(AccessibilityRect::new(10.0, 20.0, 240.0, 32.0))
+            .with_states(AccessibilityState::FOCUSED)
+            .with_actions(vec![
+                AccessibilityAction::Focus,
+                AccessibilityAction::SetValue,
+            ]);
+        let input_id = input.id;
+        tree.insert(input);
+        tree.set_parent(input_id, root_id);
+
+        let hidden = AccessibilityNode::new(AccessibilityRole::Button)
+            .with_label("Hidden Delete")
+            .with_actions(vec![AccessibilityAction::Click])
+            .with_states(AccessibilityState::HIDDEN);
+        let hidden_id = hidden.id;
+        tree.insert(hidden);
+        tree.set_parent(hidden_id, root_id);
+
+        let input_summary = tree.get(input_id).unwrap().to_text();
+        assert!(input_summary.contains("role=text-input"));
+        assert!(input_summary.contains("has_label=true"));
+        assert!(input_summary.contains("has_description=true"));
+        assert!(input_summary.contains("has_value=true"));
+        assert!(input_summary.contains("action_count=2"));
+        assert!(input_summary.contains("has_bounds=true"));
+        assert!(!input_summary.contains("Secret Search"));
+        assert!(!input_summary.contains("customer@example"));
+        assert!(!input_summary.contains("Internal customer"));
+        assert!(!input_summary.contains("240"));
+
+        assert_eq!(tree.node_count(), 3);
+        assert_eq!(tree.interactive_node_count(), 2);
+        assert_eq!(tree.actionable_node_count(), 2);
+        assert_eq!(tree.hidden_node_count(), 1);
+        assert_eq!(tree.focused_node_count(), 1);
+        assert_eq!(tree.edge_count(), 2);
+        let tree_summary = tree.to_text();
+        assert!(tree_summary.contains("nodes=3"));
+        assert!(tree_summary.contains("interactive_nodes=2"));
+        assert!(tree_summary.contains("hidden_nodes=1"));
+        assert!(!tree_summary.contains("Private App"));
+        assert!(!tree_summary.contains("Hidden Delete"));
+
+        let attrs = AccessibilityAttributes::text_input("Private Prompt", "secret draft")
+            .description("Private description")
+            .placeholder("Sensitive placeholder");
+        let attrs_summary = attrs.to_text();
+        assert!(attrs_summary.contains("role=text-input"));
+        assert!(attrs_summary.contains("has_label=true"));
+        assert!(attrs_summary.contains("has_value=true"));
+        assert!(attrs_summary.contains("ready=true"));
+        assert!(!attrs_summary.contains("Private Prompt"));
+        assert!(!attrs_summary.contains("secret draft"));
+        assert!(!attrs_summary.contains("Private description"));
+        assert!(!attrs_summary.contains("Sensitive placeholder"));
     }
 
     #[test]
@@ -1799,6 +3046,16 @@ mod tests {
 
         let report = tree.audit_report();
         assert!(!report.is_ready());
+        assert_eq!(report.issue_count(), 4);
+        assert_eq!(report.error_count(), 3);
+        assert_eq!(report.warning_count(), 1);
+        assert_eq!(
+            report.to_text(),
+            "accessibility audit: 4 issues, 3 errors, 1 warnings, ready false"
+        );
+        assert!(!report.to_text().contains("Hidden"));
+        assert!(!report.to_text().contains("Search"));
+        assert!(!report.to_text().contains("Orphan"));
         assert!(report.issues().iter().any(|issue| {
             issue.kind() == AccessibilityAuditIssueKind::HiddenFocusedNode
                 && issue.node_id() == Some(focused_hidden_id)
@@ -1817,6 +3074,12 @@ mod tests {
             issue.kind() == AccessibilityAuditIssueKind::MissingChildNode
                 && issue.node_id() == Some(missing_id)
         }));
+
+        let issue_summary = report.issues()[0].to_text();
+        assert!(issue_summary.contains("accessibility_audit_issue("));
+        assert!(issue_summary.contains("message_len_bytes="));
+        assert!(!issue_summary.contains("hidden accessibility"));
+        assert!(!issue_summary.contains("Hidden"));
     }
 
     #[test]
@@ -1948,7 +3211,11 @@ mod accesskit_spike_tests {
                 max: 10.0,
                 step: Some(1.0),
             })
-            .with_states(AccessibilityState::DISABLED | AccessibilityState::SELECTED)
+            .with_states(
+                AccessibilityState::DISABLED
+                    | AccessibilityState::SELECTED
+                    | AccessibilityState::READ_ONLY,
+            )
             .with_actions(vec![
                 AccessibilityAction::Increment,
                 AccessibilityAction::Focus,
@@ -1959,6 +3226,7 @@ mod accesskit_spike_tests {
         assert_eq!(ak.max_numeric_value(), Some(10.0));
         assert!(ak.is_disabled());
         assert!(ak.is_selected().unwrap_or(false));
+        assert!(ak.is_read_only());
         assert!(ak.supports_action(accesskit::Action::Increment));
         assert!(ak.supports_action(accesskit::Action::Focus));
     }
@@ -1995,6 +3263,48 @@ mod accesskit_spike_tests {
                 .iter()
                 .any(|(id, _)| *id == accesskit::NodeId(button_id.0))
         );
+    }
+
+    #[test]
+    fn transition_update_releases_reparented_nodes_before_claiming_them() {
+        let root = AccessibilityNode::new(AccessibilityRole::Window);
+        let root_id = root.id;
+        let first_parent = AccessibilityNode::new(AccessibilityRole::Group);
+        let first_parent_id = first_parent.id;
+        let second_parent = AccessibilityNode::new(AccessibilityRole::Group);
+        let second_parent_id = second_parent.id;
+        let child = AccessibilityNode::new(AccessibilityRole::Button);
+        let child_id = child.id;
+
+        let mut previous = AccessibilityTree::new(root.clone());
+        previous.insert(second_parent.clone());
+        previous.set_parent(second_parent_id, root_id);
+        previous.insert(first_parent.clone());
+        previous.set_parent(first_parent_id, root_id);
+        previous.insert(child.clone());
+        previous.set_parent(child_id, first_parent_id);
+
+        // Keep the current root order as second, then first. A plain BFS update
+        // would let the new parent claim the child before the old parent
+        // releases it, which can orphan the node inside AccessKit.
+        let mut current = AccessibilityTree::new(root);
+        current.insert(second_parent);
+        current.set_parent(second_parent_id, root_id);
+        current.insert(first_parent);
+        current.set_parent(first_parent_id, root_id);
+        current.insert(child);
+        current.set_parent(child_id, second_parent_id);
+
+        let update =
+            current.to_accesskit_tree_update_after(Some(&previous), None, Some("Kael"), None);
+        let position = |id: AccessibilityId| {
+            update
+                .nodes
+                .iter()
+                .position(|(candidate, _)| *candidate == accesskit::NodeId(id.0))
+                .expect("node should be present")
+        };
+        assert!(position(first_parent_id) < position(second_parent_id));
     }
 
     #[test]
@@ -2189,6 +3499,21 @@ mod accesskit_spike_tests {
     }
 
     #[test]
+    fn action_router_prunes_handlers_for_nodes_outside_the_active_tree() {
+        let retained = AccessibilityId::new();
+        let removed = AccessibilityId::new();
+        let mut router = AccessibilityActionRouter::new();
+        router.on_action(retained, AccessibilityAction::Click, |_| {});
+        router.on_action(removed, AccessibilityAction::Focus, |_| {});
+
+        router.retain_nodes([retained]);
+
+        assert!(router.has_handler(retained, AccessibilityAction::Click));
+        assert!(!router.has_handler(removed, AccessibilityAction::Focus));
+        assert_eq!(router.handler_count(), 1);
+    }
+
+    #[test]
     fn form_like_tree_maps_roles_values_and_states() {
         let root = AccessibilityNode::new(AccessibilityRole::Window);
         let root_id = root.id;
@@ -2255,5 +3580,124 @@ mod accesskit_spike_tests {
 
         let root_children = lookup(root_id).children().len();
         assert_eq!(root_children, 4);
+    }
+
+    #[test]
+    fn accessibility_automation_handoff_validates_native_actionability() {
+        let root = AccessibilityNode::new(AccessibilityRole::Window);
+        let root_id = root.id;
+        let mut tree = AccessibilityTree::new(root);
+        let button = AccessibilityNode::new(AccessibilityRole::Button)
+            .with_label("Run audit")
+            .with_actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click])
+            .with_states(AccessibilityState::FOCUSED);
+        let button_id = button.id;
+        tree.insert(button);
+        tree.set_parent(button_id, root_id);
+
+        let handoff = AccessibilityAutomationHandoffBuilder::new()
+            .tree(tree.clone())
+            .attributes(AccessibilityAttributes::button("Run audit"))
+            .action_request(AccessibilityActionRequest::new(
+                button_id,
+                AccessibilityAction::Click,
+            ))
+            .announcement("Audit complete")
+            .focus_target(tree, button_id)
+            .hosted_dom_automation("hosted-preview")
+            .build_checked()
+            .unwrap();
+
+        assert_eq!(handoff.request_count(), 6);
+        assert_eq!(
+            handoff.next_action(),
+            AccessibilityAutomationNextAction::AuditAccessibilityTree
+        );
+        assert!(handoff.audits_tree());
+        assert!(handoff.validates_attributes());
+        assert!(handoff.routes_action_request());
+        assert!(handoff.announces_status());
+        assert!(handoff.focuses_node());
+        assert!(handoff.uses_hosted_dom_automation());
+        assert_eq!(
+            AccessibilityAutomationNextAction::UseHostedDomAutomation.key(),
+            "use-hosted-dom-automation"
+        );
+        assert_eq!(
+            handoff.to_text(),
+            "accessibility automation handoff: 6 requests, next action audit-accessibility-tree, tree true, attributes true, action true, announcement true, focus true, hosted dom true"
+        );
+
+        let hosted = AccessibilityAutomationHandoffBuilder::new()
+            .hosted_dom_automation("hosted-editor")
+            .build_checked()
+            .unwrap();
+        assert_eq!(
+            hosted.next_action(),
+            AccessibilityAutomationNextAction::UseHostedDomAutomation
+        );
+    }
+
+    #[test]
+    fn accessibility_automation_handoff_rejects_invalid_generated_inputs() {
+        let root = AccessibilityNode::new(AccessibilityRole::Window);
+        let root_id = root.id;
+        let mut tree = AccessibilityTree::new(root);
+        let hidden = AccessibilityNode::new(AccessibilityRole::Button)
+            .with_label("Hidden")
+            .with_actions(vec![AccessibilityAction::Click])
+            .with_states(AccessibilityState::HIDDEN);
+        let hidden_id = hidden.id;
+        tree.insert(hidden);
+        tree.set_parent(hidden_id, root_id);
+
+        assert!(
+            AccessibilityAutomationHandoffBuilder::new()
+                .attributes(AccessibilityAttributes::new(AccessibilityRole::Button))
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            AccessibilityAutomationHandoffBuilder::new()
+                .announcement(" missing trim ")
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            AccessibilityAutomationHandoffBuilder::new()
+                .hosted_dom_automation("bad surface")
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            AccessibilityAutomationHandoffBuilder::new()
+                .action_request(AccessibilityActionRequest::new(
+                    AccessibilityId(0),
+                    AccessibilityAction::Click,
+                ))
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            AccessibilityAutomationHandoffBuilder::new()
+                .focus_target(tree.clone(), hidden_id)
+                .build_checked()
+                .is_err()
+        );
+
+        let mut invalid_tree =
+            AccessibilityTree::new(AccessibilityNode::new(AccessibilityRole::Window));
+        invalid_tree.root = AccessibilityId(999_999);
+        assert!(
+            AccessibilityAutomationHandoffBuilder::new()
+                .tree(invalid_tree)
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            AccessibilityAutomationHandoffBuilder::new()
+                .build_checked()
+                .is_err()
+        );
     }
 }

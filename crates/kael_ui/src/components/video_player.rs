@@ -1,7 +1,14 @@
-use crate::theme::Theme;
+use crate::{
+    components::{
+        button::{Button, ButtonSize, ButtonVariant},
+        icon_button::IconButton,
+    },
+    theme::Theme,
+};
 use kael::{prelude::FluentBuilder as _, *};
 use std::{
     io::{Read, Seek},
+    panic::Location,
     path::PathBuf,
     rc::Rc,
     sync::Arc,
@@ -17,6 +24,17 @@ pub enum VideoPlaybackState {
     Buffering,
 }
 
+impl VideoPlaybackState {
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Stopped => "stopped",
+            Self::Playing => "playing",
+            Self::Paused => "paused",
+            Self::Buffering => "buffering",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum VideoPlayerSize {
     Sm,
@@ -27,6 +45,15 @@ pub enum VideoPlayerSize {
 }
 
 impl VideoPlayerSize {
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Sm => "small",
+            Self::Md => "medium",
+            Self::Lg => "large",
+            Self::Full => "full",
+        }
+    }
+
     pub fn dimensions(&self) -> (Pixels, Pixels) {
         match self {
             Self::Sm => (px(400.0), px(225.0)),
@@ -68,6 +95,18 @@ pub enum VideoPlaybackSpeed {
 }
 
 impl VideoPlaybackSpeed {
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Quarter => "quarter",
+            Self::Half => "half",
+            Self::ThreeQuarter => "three-quarter",
+            Self::Normal => "normal",
+            Self::OneAndQuarter => "one-and-quarter",
+            Self::OneAndHalf => "one-and-half",
+            Self::Double => "double",
+        }
+    }
+
     pub fn multiplier(&self) -> f32 {
         match self {
             Self::Quarter => 0.25,
@@ -142,6 +181,16 @@ pub enum VideoPreload {
     Auto,
 }
 
+impl VideoPreload {
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Metadata => "metadata",
+            Self::Auto => "auto",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum VideoPlayerRoute {
     /// Use Kael's native media element for normal files/URLs, and automatically
@@ -153,6 +202,16 @@ pub enum VideoPlayerRoute {
     Native,
     /// Prefer a WebView-hosted browser `<video>` element for URL/file sources.
     WebView,
+}
+
+impl VideoPlayerRoute {
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Native => "native",
+            Self::WebView => "webview",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -175,6 +234,14 @@ impl Default for VideoCaptionStyle {
 }
 
 impl VideoCaptionStyle {
+    pub fn to_text(&self) -> String {
+        format!(
+            "video caption style: text color true, background true, font {}, line height {}",
+            media_dimension_class(self.font_size / px(1.0)),
+            media_dimension_class(self.line_height / px(1.0))
+        )
+    }
+
     pub fn text_color(mut self, color: Hsla) -> Self {
         self.text_color = color;
         self
@@ -215,6 +282,8 @@ pub struct VideoPlayerState {
     show_speed_menu: bool,
     show_text_track_menu: bool,
     focus_handle: FocusHandle,
+    progress_focus_handle: FocusHandle,
+    volume_focus_handle: FocusHandle,
     current_frame: Option<SharedString>,
     video_title: Option<SharedString>,
 }
@@ -240,6 +309,8 @@ impl VideoPlayerState {
             show_speed_menu: false,
             show_text_track_menu: false,
             focus_handle: cx.focus_handle(),
+            progress_focus_handle: cx.focus_handle(),
+            volume_focus_handle: cx.focus_handle(),
             current_frame: None,
             video_title: None,
         }
@@ -259,6 +330,10 @@ impl VideoPlayerState {
         self.current_frame.as_ref()
     }
 
+    pub fn has_frame(&self) -> bool {
+        self.current_frame.is_some()
+    }
+
     pub fn set_title(&mut self, title: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.video_title = Some(title.into());
         cx.notify();
@@ -266,6 +341,10 @@ impl VideoPlayerState {
 
     pub fn title(&self) -> Option<&SharedString> {
         self.video_title.as_ref()
+    }
+
+    pub fn has_title(&self) -> bool {
+        self.video_title.is_some()
     }
 
     pub fn playback_state(&self) -> VideoPlaybackState {
@@ -308,7 +387,11 @@ impl VideoPlayerState {
     }
 
     pub fn set_current_time(&mut self, time: f64, cx: &mut Context<Self>) {
-        self.current_time = time.clamp(0.0, self.duration);
+        self.current_time = if time.is_finite() {
+            time.clamp(0.0, self.duration)
+        } else {
+            0.0
+        };
         cx.notify();
     }
 
@@ -317,7 +400,11 @@ impl VideoPlayerState {
     }
 
     pub fn set_duration(&mut self, duration: f64, cx: &mut Context<Self>) {
-        self.duration = duration.max(0.0);
+        if !duration.is_finite() || duration < 0.0 {
+            return;
+        }
+        self.duration = duration;
+        self.current_time = self.current_time.min(duration);
         cx.notify();
     }
 
@@ -328,15 +415,27 @@ impl VideoPlayerState {
         (self.current_time / self.duration).clamp(0.0, 1.0)
     }
 
+    pub fn progress_class(&self) -> &'static str {
+        media_fraction_class(self.progress() as f32)
+    }
+
     pub fn seek(&mut self, position: f64, cx: &mut Context<Self>) {
-        let clamped = position.clamp(0.0, 1.0);
+        let clamped = if position.is_finite() {
+            position.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         self.current_time = clamped * self.duration;
         self.touch_controls(cx);
         cx.notify();
     }
 
     pub fn seek_relative(&mut self, delta: f64, cx: &mut Context<Self>) {
-        let new_time = (self.current_time + delta).clamp(0.0, self.duration);
+        let new_time = if delta.is_finite() {
+            (self.current_time + delta).clamp(0.0, self.duration)
+        } else {
+            self.current_time
+        };
         self.current_time = new_time;
         self.touch_controls(cx);
         cx.notify();
@@ -354,8 +453,16 @@ impl VideoPlayerState {
         }
     }
 
+    pub fn volume_class(&self) -> &'static str {
+        media_fraction_class(self.effective_volume())
+    }
+
     pub fn set_volume(&mut self, volume: f32, cx: &mut Context<Self>) {
-        self.volume = volume.clamp(0.0, 1.0);
+        self.volume = if volume.is_finite() {
+            volume.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         if self.volume > 0.0 {
             self.is_muted = false;
         }
@@ -400,6 +507,10 @@ impl VideoPlayerState {
 
     pub fn is_fullscreen(&self) -> bool {
         self.is_fullscreen
+    }
+
+    pub fn speed_key(&self) -> &'static str {
+        self.playback_speed.to_text()
     }
 
     pub fn set_fullscreen(&mut self, fullscreen: bool, cx: &mut Context<Self>) {
@@ -524,6 +635,25 @@ impl VideoPlayerState {
             cx.notify();
         }
     }
+
+    pub fn to_text(&self) -> String {
+        format!(
+            "video player state: playback {}, progress {}, volume {}, muted {}, speed {}, fullscreen {}, controls {}, seeking {}, volume dragging {}, speed menu {}, text-track menu {}, frame {}, title {}",
+            self.playback_state.to_text(),
+            self.progress_class(),
+            self.volume_class(),
+            self.is_muted,
+            self.speed_key(),
+            self.is_fullscreen,
+            self.show_controls,
+            self.is_seeking,
+            self.is_volume_dragging,
+            self.show_speed_menu,
+            self.show_text_track_menu,
+            self.has_frame(),
+            self.has_title()
+        )
+    }
 }
 
 impl Focusable for VideoPlayerState {
@@ -588,6 +718,7 @@ fn object_fit_css_value(object_fit: &ObjectFit) -> &'static str {
 
 #[derive(IntoElement)]
 pub struct VideoPlayer {
+    id: ElementId,
     state: Entity<VideoPlayerState>,
     controller: Option<VideoController>,
     playback_route: VideoPlayerRoute,
@@ -631,9 +762,76 @@ pub struct VideoPlayer {
     style: StyleRefinement,
 }
 
+fn video_player_callsite_id(caller: &'static Location<'static>) -> ElementId {
+    ElementId::Name(
+        format!(
+            "video-player:{}:{}:{}",
+            caller.file(),
+            caller.line(),
+            caller.column()
+        )
+        .into(),
+    )
+}
+
+fn video_player_child_id(parent: &ElementId, child: impl Into<SharedString>) -> ElementId {
+    ElementId::NamedChild(Box::new(parent.clone()), child.into())
+}
+
+fn handle_video_seek_accessibility_action(
+    request: &AccessibilityActionRequest,
+    state: &Entity<VideoPlayerState>,
+    controller: &Option<VideoController>,
+    handler: &Option<Rc<dyn Fn(f64, &mut Window, &mut App)>>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let (current, duration) = {
+        let state = state.read(cx);
+        (state.current_time(), state.duration().max(0.0))
+    };
+    let Some(next) =
+        crate::util::accessibility_adjusted_value(request, current, 0.0, duration, 5.0)
+    else {
+        return;
+    };
+    state.update(cx, |state, cx| state.set_current_time(next, cx));
+    if let Some(controller) = controller {
+        let _ = controller.seek(Duration::from_secs_f64(next));
+    }
+    if let Some(handler) = handler {
+        handler(next, window, cx);
+    }
+}
+
+fn handle_video_volume_accessibility_action(
+    request: &AccessibilityActionRequest,
+    state: &Entity<VideoPlayerState>,
+    controller: &Option<VideoController>,
+    handler: &Option<Rc<dyn Fn(f32, &mut Window, &mut App)>>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let current = state.read(cx).volume() as f64;
+    let Some(next) = crate::util::accessibility_adjusted_value(request, current, 0.0, 1.0, 0.05)
+    else {
+        return;
+    };
+    let next = next as f32;
+    state.update(cx, |state, cx| state.set_volume(next, cx));
+    if let Some(controller) = controller {
+        controller.set_volume(next);
+    }
+    if let Some(handler) = handler {
+        handler(next, window, cx);
+    }
+}
+
 impl VideoPlayer {
+    #[track_caller]
     pub fn new(state: Entity<VideoPlayerState>) -> Self {
         Self {
+            id: video_player_callsite_id(Location::caller()),
             state,
             controller: None,
             playback_route: VideoPlayerRoute::Auto,
@@ -678,32 +876,42 @@ impl VideoPlayer {
         }
     }
 
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
+    }
+
+    #[track_caller]
     pub fn source(source: impl Into<MediaSource>, cx: &mut App) -> Self {
         let controller = VideoController::new(source);
-        let state = cx.new(|cx| VideoPlayerState::new(cx));
+        let state = cx.new(VideoPlayerState::new);
 
-        let mut player = Self::new(state);
+        let mut player = Self::new(state).id(video_player_callsite_id(Location::caller()));
         player.controller = Some(controller.clone());
 
         player
     }
 
     /// Create a source-backed player from a URL.
+    #[track_caller]
     pub fn url(url: impl Into<Arc<str>>, cx: &mut App) -> Self {
         Self::source(MediaSource::url(url), cx)
     }
 
     /// Create a source-backed player from a local file path.
+    #[track_caller]
     pub fn file(path: impl Into<PathBuf>, cx: &mut App) -> Self {
         Self::source(MediaSource::file(path), cx)
     }
 
     /// Create a source-backed player from in-memory media bytes.
+    #[track_caller]
     pub fn bytes(bytes: impl Into<Arc<[u8]>>, cx: &mut App) -> Self {
         Self::source(MediaSource::bytes(bytes), cx)
     }
 
     /// Create a source-backed player from a keyed reader factory.
+    #[track_caller]
     pub fn reader<R>(
         key: impl Into<Arc<str>>,
         open: impl Fn() -> std::io::Result<R> + Send + Sync + 'static,
@@ -717,6 +925,16 @@ impl VideoPlayer {
 
     pub fn controller(&self) -> Option<VideoController> {
         self.controller.clone()
+    }
+
+    pub fn has_controller(&self) -> bool {
+        self.controller.is_some()
+    }
+
+    pub fn source_kind(&self) -> Option<&'static str> {
+        self.controller
+            .as_ref()
+            .map(|controller| media_source_kind_ui(&controller.source()))
     }
 
     /// Set how source-backed video should be rendered.
@@ -760,6 +978,82 @@ impl VideoPlayer {
     pub fn size(mut self, size: VideoPlayerSize) -> Self {
         self.size = size;
         self
+    }
+
+    pub fn size_key(&self) -> &'static str {
+        self.size.to_text()
+    }
+
+    pub fn route_key(&self) -> &'static str {
+        self.playback_route.to_text()
+    }
+
+    pub fn has_content_type(&self) -> bool {
+        self.content_type.is_some()
+    }
+
+    pub fn has_poster(&self) -> bool {
+        self.poster.is_some()
+    }
+
+    pub fn handler_count(&self) -> usize {
+        [
+            self.on_event.is_some(),
+            self.on_source_changed.is_some(),
+            self.on_loaded_metadata.is_some(),
+            self.on_ready_state_change.is_some(),
+            self.on_can_play.is_some(),
+            self.on_can_play_through.is_some(),
+            self.on_waiting.is_some(),
+            self.on_progress.is_some(),
+            self.on_playing.is_some(),
+            self.on_paused.is_some(),
+            self.on_stopped.is_some(),
+            self.on_time_update.is_some(),
+            self.on_seeked.is_some(),
+            self.on_volume_changed.is_some(),
+            self.on_rate_change.is_some(),
+            self.on_loop_change.is_some(),
+            self.on_text_track_added.is_some(),
+            self.on_text_track_changed.is_some(),
+            self.on_cue_change.is_some(),
+            self.on_ended.is_some(),
+            self.on_error.is_some(),
+            self.on_play.is_some(),
+            self.on_pause.is_some(),
+            self.on_seek.is_some(),
+            self.on_volume_change.is_some(),
+            self.on_fullscreen.is_some(),
+            self.on_playback_speed_change.is_some(),
+        ]
+        .into_iter()
+        .filter(|present| *present)
+        .count()
+    }
+
+    pub fn text_track_count(&self) -> usize {
+        self.controller
+            .as_ref()
+            .map(|controller| controller.text_tracks().len())
+            .unwrap_or(0)
+    }
+
+    pub fn to_text(&self) -> String {
+        format!(
+            "video player: source {}, route {}, size {}, controls {}, captions {}, poster {}, show poster {}, overlay {}, content type {}, webview text tracks {}, controller text tracks {}, handlers {}",
+            self.source_kind().unwrap_or("none"),
+            self.route_key(),
+            self.size_key(),
+            self.show_controls_chrome,
+            self.show_captions,
+            self.has_poster(),
+            self.show_poster,
+            self.overlay_only,
+            self.has_content_type(),
+            self.webview_options.text_track_count(),
+            self.text_track_count(),
+            self.handler_count()
+        )
     }
 
     pub fn object_fit(mut self, object_fit: ObjectFit) -> Self {
@@ -1133,6 +1427,131 @@ impl VideoPlayer {
     }
 }
 
+fn media_source_kind_ui(source: &MediaSource) -> &'static str {
+    match source {
+        MediaSource::File(_) => "file",
+        MediaSource::Url(_) => "url",
+        MediaSource::Bytes(_) => "bytes",
+        MediaSource::Reader(_) => "reader",
+    }
+}
+
+fn media_fraction_class(value: f32) -> &'static str {
+    if value <= 0.0 {
+        "empty"
+    } else if value < 0.25 {
+        "low"
+    } else if value < 0.75 {
+        "medium"
+    } else if value < 1.0 {
+        "high"
+    } else {
+        "full"
+    }
+}
+
+fn media_dimension_class(value: f32) -> &'static str {
+    if value <= 0.0 {
+        "invalid"
+    } else if value < 16.0 {
+        "compact"
+    } else if value < 32.0 {
+        "standard"
+    } else {
+        "large"
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::*;
+    use kael::TestAppContext;
+
+    #[::core::prelude::v1::test]
+    fn video_player_state_summary_is_content_safe() {
+        let cx = TestAppContext::single();
+        let state = cx.update(|cx| cx.new(VideoPlayerState::new));
+
+        let summary = cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.set_title("Private Launch Cut", cx);
+                state.set_frame("/Users/person/secret-frame.png", cx);
+                state.set_duration(240.0, cx);
+                state.set_current_time(42.0, cx);
+                state.set_volume(0.37, cx);
+                state.play(cx);
+                state.to_text()
+            })
+        });
+
+        assert!(summary.contains("playback playing"));
+        assert!(summary.contains("progress low"));
+        assert!(summary.contains("volume medium"));
+        assert!(summary.contains("frame true"));
+        assert!(summary.contains("title true"));
+        assert!(!summary.contains("Private Launch Cut"));
+        assert!(!summary.contains("secret-frame"));
+        assert!(!summary.contains("42"));
+        assert!(!summary.contains("0.37"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn video_player_summary_is_content_safe() {
+        let cx = TestAppContext::single();
+        let summary = cx.update(|cx| {
+            VideoPlayer::url("https://cdn.example.com/private/launch.m3u8", cx)
+                .content_type("application/vnd.apple.mpegurl")
+                .webview_fallback()
+                .poster("https://cdn.example.com/private/poster.jpg")
+                .webvtt_text_track(
+                    "captions",
+                    "Private captions",
+                    Some("en"),
+                    "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nSecret line",
+                )
+                .on_play(|_, _| {})
+                .on_error(|_, _, _| {})
+                .to_text()
+        });
+
+        assert!(summary.contains("source url"));
+        assert!(summary.contains("route webview"));
+        assert!(summary.contains("poster true"));
+        assert!(summary.contains("content type true"));
+        assert!(summary.contains("handlers 2"));
+        assert!(!summary.contains("cdn.example.com"));
+        assert!(!summary.contains("launch.m3u8"));
+        assert!(!summary.contains("poster.jpg"));
+        assert!(!summary.contains("Private captions"));
+        assert!(!summary.contains("Secret line"));
+        assert!(!summary.contains("application/vnd.apple.mpegurl"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn video_player_state_rejects_non_finite_values() {
+        let cx = TestAppContext::single();
+        let state = cx.update(|cx| cx.new(VideoPlayerState::new));
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.set_duration(120.0, cx);
+                state.set_current_time(f64::NAN, cx);
+                assert_eq!(state.current_time(), 0.0);
+
+                state.set_duration(f64::INFINITY, cx);
+                assert_eq!(state.duration(), 120.0);
+
+                state.seek(f64::NAN, cx);
+                assert_eq!(state.current_time(), 0.0);
+
+                state.set_volume(f32::NAN, cx);
+                assert_eq!(state.volume(), 0.0);
+            });
+        });
+    }
+}
+
 impl Styled for VideoPlayer {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.style
@@ -1301,6 +1720,14 @@ impl RenderOnce for VideoPlayer {
         let theme = Theme::of(cx);
         let state = self.state.read(cx);
         let focus_handle = state.focus_handle(cx);
+        let progress_focus_handle = state.progress_focus_handle.clone();
+        let volume_focus_handle = state.volume_focus_handle.clone();
+        let accessibility_label = state
+            .title()
+            .cloned()
+            .unwrap_or_else(|| "Video player".into())
+            .to_string();
+        let player_id = self.id.clone();
 
         let playback_state = state.playback_state();
         let is_playing = state.is_playing();
@@ -1390,7 +1817,11 @@ impl RenderOnce for VideoPlayer {
         let on_webview_error = self.on_error.clone();
 
         div()
-            .id("video-player")
+            .id(player_id.clone())
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group)
+                    .label(accessibility_label),
+            )
             .key_context("VideoPlayer")
             .track_focus(&focus_handle)
             .relative()
@@ -1934,7 +2365,7 @@ impl RenderOnce for VideoPlayer {
 
                     this.child(
                         div()
-                            .id("captions-overlay")
+                            .id(video_player_child_id(&player_id, "captions-overlay"))
                             .absolute()
                             .left_0()
                             .right_0()
@@ -1968,7 +2399,7 @@ impl RenderOnce for VideoPlayer {
                 let on_pause_center = on_pause.clone();
 
                 div()
-                    .id("center-play-button")
+                    .id(video_player_child_id(&player_id, "center-play-button"))
                     .absolute()
                     .inset_0()
                     .flex()
@@ -1980,20 +2411,18 @@ impl RenderOnce for VideoPlayer {
                             && (controls_visible || !is_playing),
                         |this| {
                             this.child(
-                            div()
-                                .id("play-overlay")
+                            IconButton::new(play_icon)
+                                .id(video_player_child_id(&player_id, "play-overlay"))
+                                .label(if is_playing { "Pause video" } else { "Play video" })
+                                .variant(ButtonVariant::Ghost)
                                 .size(px(72.0))
+                                .icon_size(px(32.0))
                                 .rounded_full()
                                 .bg(kael::black().opacity(0.6))
                                 .border_2()
                                 .border_color(kael::white().opacity(0.3))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .cursor(CursorStyle::PointingHand)
-                                .transition(theme.tokens.transition_fast)
-                                .hover(|style| style.bg(kael::black().opacity(0.8)))
-                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                .text_color(kael::white())
+                                .on_click(move |_, window, cx| {
                                     let is_playing_now = state_play.read(cx).is_playing();
                                     cx.update_entity(&state_play, |state, cx| state.toggle_play(cx));
                                     if is_playing_now {
@@ -2012,12 +2441,6 @@ impl RenderOnce for VideoPlayer {
                                         }
                                     }
                                 })
-                                .child(
-                                    svg()
-                                        .path(format!("icons/{}.svg", play_icon))
-                                        .size(px(32.0))
-                                        .text_color(kael::white())
-                                )
                             )
                         },
                     )
@@ -2027,22 +2450,48 @@ impl RenderOnce for VideoPlayer {
                 let state_progress_drag = state_entity.clone();
                 let state_progress_move = state_entity.clone();
                 let state_progress_up = state_entity.clone();
+                let state_progress_key = state_entity.clone();
+                let state_progress_increment = state_entity.clone();
+                let state_progress_decrement = state_entity.clone();
+                let state_progress_set_value = state_entity.clone();
                 let controller_seek_progress = controller.clone();
                 let controller_seek_drag = controller.clone();
+                let controller_seek_key = controller.clone();
+                let controller_seek_increment = controller.clone();
+                let controller_seek_decrement = controller.clone();
+                let controller_seek_set_value = controller.clone();
                 let on_seek_progress = on_seek.clone();
                 let on_seek_drag = on_seek.clone();
+                let on_seek_key = on_seek.clone();
+                let on_seek_increment = on_seek.clone();
+                let on_seek_decrement = on_seek.clone();
+                let on_seek_set_value = on_seek.clone();
+                let progress_focus_on_mouse = progress_focus_handle.clone();
 
                 let state_volume = state_entity.clone();
                 let state_volume_icon = state_entity.clone();
                 let state_volume_drag = state_entity.clone();
                 let state_volume_move = state_entity.clone();
                 let state_volume_up = state_entity.clone();
+                let state_volume_key = state_entity.clone();
+                let state_volume_increment = state_entity.clone();
+                let state_volume_decrement = state_entity.clone();
+                let state_volume_set_value = state_entity.clone();
                 let controller_volume_icon = controller.clone();
                 let controller_volume_slider = controller.clone();
                 let controller_volume_drag = controller.clone();
+                let controller_volume_key = controller.clone();
+                let controller_volume_increment = controller.clone();
+                let controller_volume_decrement = controller.clone();
+                let controller_volume_set_value = controller.clone();
                 let on_volume_icon = on_volume_change.clone();
                 let on_volume_slider = on_volume_change.clone();
                 let on_volume_drag_change = on_volume_change.clone();
+                let on_volume_key = on_volume_change.clone();
+                let on_volume_increment = on_volume_change.clone();
+                let on_volume_decrement = on_volume_change.clone();
+                let on_volume_set_value = on_volume_change.clone();
+                let volume_focus_on_mouse = volume_focus_handle.clone();
 
                 let state_play_btn = state_entity.clone();
                 let controller_play_btn = controller.clone();
@@ -2073,7 +2522,7 @@ impl RenderOnce for VideoPlayer {
 
                 this.child(
                     div()
-                        .id("controls-overlay")
+                        .id(video_player_child_id(&player_id, "controls-overlay"))
                         .absolute()
                         .bottom_0()
                         .left_0()
@@ -2085,18 +2534,67 @@ impl RenderOnce for VideoPlayer {
                         .justify_end()
                         .child(
                             div()
-                                .id("progress-bar-container")
+                                .id(video_player_child_id(&player_id, "progress-bar-container"))
                                 .px(px(12.0))
                                 .pb(px(4.0))
                                 .child(
                                     div()
-                                        .id("progress-bar")
+                                        .id(video_player_child_id(&player_id, "progress-bar"))
+                                        .accessibility(AccessibilityAttributes::slider(
+                                            "Playback position",
+                                            current_time,
+                                            0.0,
+                                            duration.max(0.0),
+                                            Some(5.0),
+                                        ))
+                                        .track_focus(
+                                            &progress_focus_handle.tab_index(0).tab_stop(true),
+                                        )
                                         .relative()
                                         .h(px(6.0))
                                         .w_full()
                                         .bg(kael::white().opacity(0.3))
                                         .rounded_full()
                                         .cursor(CursorStyle::PointingHand)
+                                        .on_accessibility_action(
+                                            AccessibilityAction::Increment,
+                                            move |request, window, cx| {
+                                                handle_video_seek_accessibility_action(
+                                                    request,
+                                                    &state_progress_increment,
+                                                    &controller_seek_increment,
+                                                    &on_seek_increment,
+                                                    window,
+                                                    cx,
+                                                );
+                                            },
+                                        )
+                                        .on_accessibility_action(
+                                            AccessibilityAction::Decrement,
+                                            move |request, window, cx| {
+                                                handle_video_seek_accessibility_action(
+                                                    request,
+                                                    &state_progress_decrement,
+                                                    &controller_seek_decrement,
+                                                    &on_seek_decrement,
+                                                    window,
+                                                    cx,
+                                                );
+                                            },
+                                        )
+                                        .on_accessibility_action(
+                                            AccessibilityAction::SetValue,
+                                            move |request, window, cx| {
+                                                handle_video_seek_accessibility_action(
+                                                    request,
+                                                    &state_progress_set_value,
+                                                    &controller_seek_set_value,
+                                                    &on_seek_set_value,
+                                                    window,
+                                                    cx,
+                                                );
+                                            },
+                                        )
                                         .child(
                                             canvas_with_prepaint(
                                                 {
@@ -2141,6 +2639,7 @@ impl RenderOnce for VideoPlayer {
                                                 {
                                                     let on_seek = on_seek_progress.clone();
                                                     move |state, e: &MouseDownEvent, window, cx| {
+                                                        window.focus(&progress_focus_on_mouse);
                                                         state.is_seeking = true;
                                                         state.update_seek_from_position(e.position, cx);
                                                         if let Some(controller) = &controller_seek_progress {
@@ -2181,11 +2680,40 @@ impl RenderOnce for VideoPlayer {
                                                 },
                                             ),
                                         )
+                                        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                                            let delta = match event.keystroke.key.as_str() {
+                                                "left" | "down" => Some(-5.0),
+                                                "right" | "up" => Some(5.0),
+                                                "home" => Some(f64::NEG_INFINITY),
+                                                "end" => Some(f64::INFINITY),
+                                                _ => None,
+                                            };
+                                            if let Some(delta) = delta {
+                                                state_progress_key.update(cx, |state, cx| {
+                                                    let next = if delta == f64::NEG_INFINITY {
+                                                        0.0
+                                                    } else if delta == f64::INFINITY {
+                                                        state.duration
+                                                    } else {
+                                                        state.current_time + delta
+                                                    };
+                                                    state.set_current_time(next, cx);
+                                                });
+                                                let next = state_progress_key.read(cx).current_time();
+                                                if let Some(controller) = &controller_seek_key {
+                                                    let _ = controller.seek(Duration::from_secs_f64(next));
+                                                }
+                                                if let Some(handler) = &on_seek_key {
+                                                    handler(next, window, cx);
+                                                }
+                                                cx.stop_propagation();
+                                            }
+                                        })
                                 )
                         )
                         .child(
                             div()
-                                .id("controls-bar")
+                                .id(video_player_child_id(&player_id, "controls-bar"))
                                 .h(controls_height)
                                 .px(px(12.0))
                                 .flex()
@@ -2197,17 +2725,14 @@ impl RenderOnce for VideoPlayer {
                                         .items_center()
                                         .gap(px(8.0))
                                         .child(
-                                            div()
-                                                .id("skip-back-btn")
+                                            IconButton::new("rewind")
+                                                .id(video_player_child_id(&player_id, "skip-back-btn"))
+                                                .label("Skip back 10 seconds")
+                                                .variant(ButtonVariant::Ghost)
                                                 .size(px(32.0))
-                                                .rounded(theme.tokens.radius_md)
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .cursor(CursorStyle::PointingHand)
-                                                .transition(theme.tokens.transition_fast)
-                                                .hover(|style| style.bg(kael::white().opacity(0.2)))
-                                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                                .icon_size(icon_size)
+                                                .text_color(kael::white())
+                                                .on_click(move |_, window, cx| {
                                                     cx.update_entity(&state_skip_back, |state, cx| {
                                                         state.seek_relative(-10.0, cx);
                                                     });
@@ -2219,26 +2744,16 @@ impl RenderOnce for VideoPlayer {
                                                         handler(current_time, window, cx);
                                                     }
                                                 })
-                                                .child(
-                                                    svg()
-                                                        .path("icons/rewind.svg")
-                                                        .size(icon_size)
-                                                        .text_color(kael::white())
-                                                )
                                         )
                                         .child(
-                                            div()
-                                                .id("play-pause-btn")
+                                            IconButton::new(play_icon)
+                                                .id(video_player_child_id(&player_id, "play-pause-btn"))
+                                                .label(if is_playing { "Pause video" } else { "Play video" })
+                                                .variant(ButtonVariant::Default)
                                                 .size(px(40.0))
+                                                .icon_size(icon_size)
                                                 .rounded_full()
-                                                .bg(theme.tokens.primary)
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .cursor(CursorStyle::PointingHand)
-                                                .transition(theme.tokens.transition_fast)
-                                                .hover(|style| style.opacity(0.9))
-                                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                                .on_click(move |_, window, cx| {
                                                     let is_playing_now = state_play_btn.read(cx).is_playing();
                                                     cx.update_entity(&state_play_btn, |state, cx| state.toggle_play(cx));
                                                     if is_playing_now {
@@ -2257,25 +2772,16 @@ impl RenderOnce for VideoPlayer {
                                                         }
                                                     }
                                                 })
-                                                .child(
-                                                    svg()
-                                                        .path(format!("icons/{}.svg", play_icon))
-                                                        .size(icon_size)
-                                                        .text_color(theme.tokens.primary_foreground)
-                                                )
                                         )
                                         .child(
-                                            div()
-                                                .id("skip-forward-btn")
+                                            IconButton::new("fast-forward")
+                                                .id(video_player_child_id(&player_id, "skip-forward-btn"))
+                                                .label("Skip forward 10 seconds")
+                                                .variant(ButtonVariant::Ghost)
                                                 .size(px(32.0))
-                                                .rounded(theme.tokens.radius_md)
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .cursor(CursorStyle::PointingHand)
-                                                .transition(theme.tokens.transition_fast)
-                                                .hover(|style| style.bg(kael::white().opacity(0.2)))
-                                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                                .icon_size(icon_size)
+                                                .text_color(kael::white())
+                                                .on_click(move |_, window, cx| {
                                                     cx.update_entity(&state_skip_forward, |state, cx| {
                                                         state.seek_relative(10.0, cx);
                                                     });
@@ -2287,12 +2793,6 @@ impl RenderOnce for VideoPlayer {
                                                         handler(current_time, window, cx);
                                                     }
                                                 })
-                                                .child(
-                                                    svg()
-                                                        .path("icons/fast-forward.svg")
-                                                        .size(icon_size)
-                                                        .text_color(kael::white())
-                                                )
                                         )
                                         .child(
                                             div()
@@ -2314,17 +2814,14 @@ impl RenderOnce for VideoPlayer {
                                                 .items_center()
                                                 .gap(px(4.0))
                                                 .child(
-                                                    div()
-                                                        .id("volume-btn")
+                                                    IconButton::new(volume_icon)
+                                                        .id(video_player_child_id(&player_id, "volume-btn"))
+                                                        .label(if is_muted { "Unmute video" } else { "Mute video" })
+                                                        .variant(ButtonVariant::Ghost)
                                                         .size(px(32.0))
-                                                        .rounded(theme.tokens.radius_md)
-                                                        .flex()
-                                                        .items_center()
-                                                        .justify_center()
-                                                        .cursor(CursorStyle::PointingHand)
-                                                        .transition(theme.tokens.transition_fast)
-                                                        .hover(|style| style.bg(kael::white().opacity(0.2)))
-                                                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                                        .icon_size(icon_size)
+                                                        .text_color(kael::white())
+                                                        .on_click(move |_, window, cx| {
                                                             cx.update_entity(&state_volume_icon, |state, cx| state.toggle_mute(cx));
                                                             let (effective_volume, muted) = {
                                                                 let state = state_volume_icon.read(cx);
@@ -2337,22 +2834,65 @@ impl RenderOnce for VideoPlayer {
                                                                 handler(effective_volume, window, cx);
                                                             }
                                                         })
-                                                        .child(
-                                                            svg()
-                                                                .path(format!("icons/{}.svg", volume_icon))
-                                                                .size(icon_size)
-                                                                .text_color(kael::white())
-                                                        )
                                                 )
                                                 .child(
                                                     div()
-                                                        .id("volume-slider")
+                                                        .id(video_player_child_id(&player_id, "volume-slider"))
+                                                        .accessibility(AccessibilityAttributes::slider(
+                                                            "Volume",
+                                                            volume as f64,
+                                                            0.0,
+                                                            1.0,
+                                                            Some(0.05),
+                                                        ))
+                                                        .track_focus(
+                                                            &volume_focus_handle.tab_index(0).tab_stop(true),
+                                                        )
                                                         .relative()
                                                         .w(px(80.0))
                                                         .h(px(4.0))
                                                         .bg(kael::white().opacity(0.3))
                                                         .rounded_full()
                                                         .cursor(CursorStyle::PointingHand)
+                                                        .on_accessibility_action(
+                                                            AccessibilityAction::Increment,
+                                                            move |request, window, cx| {
+                                                                handle_video_volume_accessibility_action(
+                                                                    request,
+                                                                    &state_volume_increment,
+                                                                    &controller_volume_increment,
+                                                                    &on_volume_increment,
+                                                                    window,
+                                                                    cx,
+                                                                );
+                                                            },
+                                                        )
+                                                        .on_accessibility_action(
+                                                            AccessibilityAction::Decrement,
+                                                            move |request, window, cx| {
+                                                                handle_video_volume_accessibility_action(
+                                                                    request,
+                                                                    &state_volume_decrement,
+                                                                    &controller_volume_decrement,
+                                                                    &on_volume_decrement,
+                                                                    window,
+                                                                    cx,
+                                                                );
+                                                            },
+                                                        )
+                                                        .on_accessibility_action(
+                                                            AccessibilityAction::SetValue,
+                                                            move |request, window, cx| {
+                                                                handle_video_volume_accessibility_action(
+                                                                    request,
+                                                                    &state_volume_set_value,
+                                                                    &controller_volume_set_value,
+                                                                    &on_volume_set_value,
+                                                                    window,
+                                                                    cx,
+                                                                );
+                                                            },
+                                                        )
                                                         .child(
                                                             canvas_with_prepaint(
                                                                 {
@@ -2395,6 +2935,7 @@ impl RenderOnce for VideoPlayer {
                                                                 {
                                                                     let on_volume = on_volume_slider.clone();
                                                                     move |state, e: &MouseDownEvent, window, cx| {
+                                                                        window.focus(&volume_focus_on_mouse);
                                                                         state.is_volume_dragging = true;
                                                                         state.update_volume_from_position(e.position, cx);
                                                                         if let Some(controller) = &controller_volume_slider {
@@ -2435,48 +2976,57 @@ impl RenderOnce for VideoPlayer {
                                                                 },
                                                             ),
                                                         )
+                                                        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                                                            let next = match event.keystroke.key.as_str() {
+                                                                "left" | "down" => Some((volume - 0.05).max(0.0)),
+                                                                "right" | "up" => Some((volume + 0.05).min(1.0)),
+                                                                "home" => Some(0.0),
+                                                                "end" => Some(1.0),
+                                                                _ => None,
+                                                            };
+                                                            if let Some(next) = next {
+                                                                state_volume_key.update(cx, |state, cx| {
+                                                                    state.set_volume(next, cx);
+                                                                });
+                                                                if let Some(controller) = &controller_volume_key {
+                                                                    controller.set_volume(next);
+                                                                }
+                                                                if let Some(handler) = &on_volume_key {
+                                                                    handler(next, window, cx);
+                                                                }
+                                                                cx.stop_propagation();
+                                                            }
+                                                        })
                                                 )
                                         )
                                         .when(has_text_tracks, {
                                             let theme = theme.clone();
+                                            let captions_player_id = player_id.clone();
                                             move |this| {
                                                 this.child(
                                                     div()
-                                                        .id("captions-btn")
+                                                        .id(video_player_child_id(&captions_player_id, "captions-menu"))
                                                         .relative()
                                                         .child(
-                                                            div()
+                                                            IconButton::new(if selected_text_track_id.is_some() {
+                                                                "captions"
+                                                            } else {
+                                                                "captions-off"
+                                                            })
+                                                                .id(video_player_child_id(&captions_player_id, "captions-btn"))
+                                                                .label("Choose captions")
+                                                                .variant(ButtonVariant::Ghost)
                                                                 .size(px(32.0))
-                                                                .rounded(theme.tokens.radius_md)
-                                                                .flex()
-                                                                .items_center()
-                                                                .justify_center()
-                                                                .cursor(CursorStyle::PointingHand)
-                                                                .transition(theme.tokens.transition_fast)
-                                                                .hover(|style| {
-                                                                    style.bg(kael::white().opacity(0.2))
-                                                                })
-                                                                .on_mouse_down(
-                                                                    MouseButton::Left,
-                                                                    move |_, _, cx| {
-                                                                        cx.update_entity(
-                                                                            &state_text_track,
-                                                                            |state, cx| {
-                                                                                state.toggle_text_track_menu(cx);
-                                                                            },
-                                                                        );
-                                                                    },
-                                                                )
-                                                                .child(
-                                                                    svg()
-                                                                        .path(if selected_text_track_id.is_some() {
-                                                                            "icons/captions.svg"
-                                                                        } else {
-                                                                            "icons/captions-off.svg"
-                                                                        })
-                                                                        .size(icon_size)
-                                                                        .text_color(kael::white()),
-                                                                ),
+                                                                .icon_size(icon_size)
+                                                                .text_color(kael::white())
+                                                                .on_click(move |_, _, cx| {
+                                                                    cx.update_entity(
+                                                                        &state_text_track,
+                                                                        |state, cx| {
+                                                                            state.toggle_text_track_menu(cx);
+                                                                        },
+                                                                    );
+                                                                }),
                                                         )
                                                         .when(show_text_track_menu, {
                                                             let theme = theme.clone();
@@ -2486,6 +3036,8 @@ impl RenderOnce for VideoPlayer {
                                                             move |this| {
                                                                 let off_selected =
                                                                     selected_text_track_id.is_none();
+                                                                let captions_option_parent =
+                                                                    captions_player_id.clone();
 
                                                                 this.child(
                                                                     div()
@@ -2513,11 +3065,15 @@ impl RenderOnce for VideoPlayer {
                                                                                 controller_text_track_item
                                                                                     .clone();
 
-                                                                            div()
-                                                                                .id("captions-off-option")
-                                                                                .px(px(12.0))
-                                                                                .py(px(6.0))
-                                                                                .text_xs()
+                                                                            Button::new(
+                                                                                video_player_child_id(&captions_player_id, "captions-off-option"),
+                                                                                "Off",
+                                                                            )
+                                                                                .variant(ButtonVariant::Ghost)
+                                                                                .size(ButtonSize::Sm)
+                                                                                .selected(off_selected)
+                                                                                .w_full()
+                                                                                .justify_start()
                                                                                 .text_color(if off_selected {
                                                                                     theme.tokens.primary
                                                                                 } else {
@@ -2525,29 +3081,7 @@ impl RenderOnce for VideoPlayer {
                                                                                         .tokens
                                                                                         .popover_foreground
                                                                                 })
-                                                                                .font_family(
-                                                                                    theme
-                                                                                        .tokens
-                                                                                        .font_family
-                                                                                        .clone(),
-                                                                                )
-                                                                                .cursor(
-                                                                                    CursorStyle::PointingHand,
-                                                                                )
-                                                                                .transition(
-                                                                                    theme
-                                                                                        .tokens
-                                                                                        .transition_fast,
-                                                                                )
-                                                                                .hover(|style| {
-                                                                                    style.bg(
-                                                                                        theme
-                                                                                            .tokens
-                                                                                            .accent,
-                                                                                    )
-                                                                                })
-                                                                                .on_mouse_down(
-                                                                                    MouseButton::Left,
+                                                                                .on_click(
                                                                                     move |_, _, cx| {
                                                                                         if let Some(controller) =
                                                                                             &controller
@@ -2564,7 +3098,6 @@ impl RenderOnce for VideoPlayer {
                                                                                         );
                                                                                     },
                                                                                 )
-                                                                                .child("Off")
                                                                         })
                                                                         .children(text_tracks.into_iter().map(
                                                                             move |track| {
@@ -2594,17 +3127,18 @@ impl RenderOnce for VideoPlayer {
                                                                                     _ => track.label.to_string(),
                                                                                 };
 
-                                                                                div()
-                                                                                    .id(ElementId::Name(
-                                                                                        format!(
-                                                                                            "captions-{}",
-                                                                                            track.id
-                                                                                        )
-                                                                                        .into(),
-                                                                                    ))
-                                                                                    .px(px(12.0))
-                                                                                    .py(px(6.0))
-                                                                                    .text_xs()
+                                                                                Button::new(
+                                                                                    video_player_child_id(
+                                                                                        &captions_option_parent,
+                                                                                        format!("captions-{}", track.id),
+                                                                                    ),
+                                                                                    label,
+                                                                                )
+                                                                                    .variant(ButtonVariant::Ghost)
+                                                                                    .size(ButtonSize::Sm)
+                                                                                    .selected(is_selected)
+                                                                                    .w_full()
+                                                                                    .justify_start()
                                                                                     .text_color(if is_selected {
                                                                                         theme.tokens.primary
                                                                                     } else {
@@ -2612,29 +3146,7 @@ impl RenderOnce for VideoPlayer {
                                                                                             .tokens
                                                                                             .popover_foreground
                                                                                     })
-                                                                                    .font_family(
-                                                                                        theme
-                                                                                            .tokens
-                                                                                            .font_family
-                                                                                            .clone(),
-                                                                                    )
-                                                                                    .cursor(
-                                                                                        CursorStyle::PointingHand,
-                                                                                    )
-                                                                                    .transition(
-                                                                                        theme
-                                                                                            .tokens
-                                                                                            .transition_fast,
-                                                                                    )
-                                                                                    .hover(|style| {
-                                                                                        style.bg(
-                                                                                            theme
-                                                                                                .tokens
-                                                                                                .accent,
-                                                                                        )
-                                                                                    })
-                                                                                    .on_mouse_down(
-                                                                                        MouseButton::Left,
+                                                                                    .on_click(
                                                                                         move |_, _, cx| {
                                                                                             if let Some(controller) =
                                                                                                 &controller
@@ -2654,7 +3166,6 @@ impl RenderOnce for VideoPlayer {
                                                                                             );
                                                                                         },
                                                                                     )
-                                                                                    .child(label)
                                                                             },
                                                                         )),
                                                                 )
@@ -2665,25 +3176,24 @@ impl RenderOnce for VideoPlayer {
                                         })
                                         .child(
                                             div()
-                                                .id("speed-btn")
+                                                .id(video_player_child_id(&player_id, "speed-menu"))
                                                 .relative()
                                                 .child(
-                                                    div()
-                                                        .px(px(8.0))
-                                                        .py(px(4.0))
-                                                        .rounded(theme.tokens.radius_md)
-                                                        .text_xs()
+                                                    Button::new(
+                                                        video_player_child_id(&player_id, "speed-btn"),
+                                                        playback_speed.label(),
+                                                    )
+                                                        .variant(ButtonVariant::Ghost)
+                                                        .size(ButtonSize::Sm)
                                                         .text_color(kael::white())
-                                                        .font_family(theme.tokens.font_family.clone())
-                                                        .cursor(CursorStyle::PointingHand)
-                                                        .hover(|style| style.bg(kael::white().opacity(0.2)))
-                                                        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                                        .tooltip("Change playback speed")
+                                                        .on_click(move |_, _, cx| {
                                                             cx.update_entity(&state_speed, |state, cx| state.toggle_speed_menu(cx));
                                                         })
-                                                        .child(playback_speed.label())
                                                 )
                                                 .when(show_speed_menu, {
                                                     let theme = theme.clone();
+                                                    let speed_player_id = player_id.clone();
                                                     move |this| {
                                                         this.child(
                                                             div()
@@ -2705,21 +3215,24 @@ impl RenderOnce for VideoPlayer {
                                                                         let speed_val = *speed;
                                                                         let is_selected = speed_val == playback_speed;
 
-                                                                        div()
-                                                                            .id(ElementId::Name(format!("speed-{}", speed_val.label()).into()))
-                                                                            .px(px(12.0))
-                                                                            .py(px(6.0))
-                                                                            .text_xs()
+                                                                        Button::new(
+                                                                            video_player_child_id(
+                                                                                &speed_player_id,
+                                                                                format!("speed-{}", speed_val.label()),
+                                                                            ),
+                                                                            speed_val.label(),
+                                                                        )
+                                                                            .variant(ButtonVariant::Ghost)
+                                                                            .size(ButtonSize::Sm)
+                                                                            .selected(is_selected)
+                                                                            .w_full()
+                                                                            .justify_start()
                                                                             .text_color(if is_selected {
                                                                                 theme.tokens.primary
                                                                             } else {
                                                                                 theme.tokens.popover_foreground
                                                                             })
-                                                                            .font_family(theme.tokens.font_family.clone())
-                                                                            .cursor(CursorStyle::PointingHand)
-                                                                            .transition(theme.tokens.transition_fast)
-                                                                            .hover(|style| style.bg(theme.tokens.accent))
-                                                                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                                                            .on_click(move |_, window, cx| {
                                                                                 cx.update_entity(&state_item, |state, cx| {
                                                                                     state.set_playback_speed(speed_val, cx);
                                                                                 });
@@ -2730,7 +3243,6 @@ impl RenderOnce for VideoPlayer {
                                                                                     handler(speed_val, window, cx);
                                                                                 }
                                                                             })
-                                                                            .child(speed_val.label())
                                                                     })
                                                                 )
                                                         )
@@ -2738,17 +3250,14 @@ impl RenderOnce for VideoPlayer {
                                                 })
                                         )
                                         .child(
-                                            div()
-                                                .id("fullscreen-btn")
+                                            IconButton::new(if is_fullscreen { "minimize" } else { "maximize" })
+                                                .id(video_player_child_id(&player_id, "fullscreen-btn"))
+                                                .label(if is_fullscreen { "Exit full screen" } else { "Enter full screen" })
+                                                .variant(ButtonVariant::Ghost)
                                                 .size(px(32.0))
-                                                .rounded(theme.tokens.radius_md)
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .cursor(CursorStyle::PointingHand)
-                                                .transition(theme.tokens.transition_fast)
-                                                .hover(|style| style.bg(kael::white().opacity(0.2)))
-                                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                                .icon_size(icon_size)
+                                                .text_color(kael::white())
+                                                .on_click(move |_, window, cx| {
                                                     window.toggle_fullscreen();
                                                     let is_fs = window.is_fullscreen();
                                                     cx.update_entity(&state_fullscreen, |state, cx| {
@@ -2758,12 +3267,6 @@ impl RenderOnce for VideoPlayer {
                                                         handler(is_fs, window, cx);
                                                     }
                                                 })
-                                                .child(
-                                                    svg()
-                                                        .path(if is_fullscreen { "icons/minimize.svg" } else { "icons/maximize.svg" })
-                                                        .size(icon_size)
-                                                        .text_color(kael::white())
-                                                )
                                         )
                                 )
                         )

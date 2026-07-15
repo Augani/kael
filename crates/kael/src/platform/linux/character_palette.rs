@@ -28,8 +28,11 @@ fn try_ibus_emoji() -> bool {
             "/org/freedesktop/IBus",
             "org.freedesktop.IBus.Panel.Extension.Emoji",
         ])
-        .output();
-    matches!(status, Ok(output) if output.status.success())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    matches!(status, Ok(status) if status.success())
 }
 
 /// Try to invoke the Fcitx5 emoji picker via D-Bus.
@@ -44,8 +47,11 @@ fn try_fcitx5_emoji() -> bool {
             "org.fcitx.Fcitx.Controller1.Activate",
             "string:emoji",
         ])
-        .output();
-    matches!(status, Ok(output) if output.status.success())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    matches!(status, Ok(status) if status.success())
 }
 
 /// Fallback: launch `gnome-characters` as a standalone picker.

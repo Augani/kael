@@ -16,7 +16,7 @@ struct HotkeyInputDemo {
 
 impl HotkeyInputDemo {
     fn new(cx: &mut Context<Self>) -> Self {
-        let basic_hotkey = cx.new(|cx| HotkeyInputState::new(cx));
+        let basic_hotkey = cx.new(HotkeyInputState::new);
 
         let preset_hotkey = cx.new(|cx| {
             HotkeyInputState::with_hotkey(
@@ -31,8 +31,8 @@ impl HotkeyInputDemo {
             )
         });
 
-        let save_hotkey = cx.new(|cx| HotkeyInputState::new(cx));
-        let open_hotkey = cx.new(|cx| HotkeyInputState::new(cx));
+        let save_hotkey = cx.new(HotkeyInputState::new);
+        let open_hotkey = cx.new(HotkeyInputState::new);
 
         let disabled_hotkey = cx.new(|cx| {
             HotkeyInputState::with_hotkey(
@@ -256,7 +256,7 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_, cx| cx.new(|cx| HotkeyInputDemo::new(cx)),
+            |_, cx| cx.new(HotkeyInputDemo::new),
         )
         .unwrap();
 

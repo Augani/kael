@@ -19,6 +19,35 @@ pub struct Deferred {
 }
 
 impl Deferred {
+    /// Returns true when the deferred wrapper still owns a child element.
+    pub fn has_child(&self) -> bool {
+        self.child.is_some()
+    }
+
+    /// Returns the configured draw priority.
+    pub fn priority_value(&self) -> usize {
+        self.priority
+    }
+
+    /// Coarse priority class for content-safe diagnostics.
+    pub fn priority_class(&self) -> &'static str {
+        match self.priority {
+            0 => "default",
+            1..=99 => "raised",
+            _ => "overlay",
+        }
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "deferred(has_child={}, priority={}, priority_class={})",
+            self.has_child(),
+            self.priority_value(),
+            self.priority_class()
+        )
+    }
+
     /// Sets the `priority` value of the `deferred` element, which
     /// determines the drawing order relative to other deferred elements,
     /// with higher values being drawn on top.
@@ -92,5 +121,25 @@ impl Deferred {
     pub fn priority(mut self, priority: usize) -> Self {
         self.priority = priority;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::deferred;
+    use crate::{ParentElement, div};
+
+    #[test]
+    fn deferred_summary_is_content_safe() {
+        let overlay = deferred(div().child("private overlay contents")).with_priority(120);
+
+        assert!(overlay.has_child());
+        assert_eq!(overlay.priority_value(), 120);
+        assert_eq!(overlay.priority_class(), "overlay");
+
+        let summary = overlay.to_text();
+        assert!(summary.contains("priority=120"));
+        assert!(summary.contains("priority_class=overlay"));
+        assert!(!summary.contains("private overlay contents"));
     }
 }

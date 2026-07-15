@@ -136,6 +136,45 @@ impl Lottie {
         self.style.fallback = Some(Box::new(fallback));
         self
     }
+
+    /// Returns true when this element will start playback after load.
+    pub fn is_autoplay(&self) -> bool {
+        self.autoplay
+    }
+
+    /// Returns the configured loop policy.
+    pub fn loop_policy(&self) -> LoopMode {
+        self.loop_mode
+    }
+
+    /// Returns the number of frames this element prefetches ahead of playback.
+    pub fn prefetch_frame_count(&self) -> usize {
+        self.prefetch_frames
+    }
+
+    /// Returns true when loading replacement content is configured.
+    pub fn has_loading(&self) -> bool {
+        self.style.loading.is_some()
+    }
+
+    /// Returns true when fallback replacement content is configured.
+    pub fn has_fallback(&self) -> bool {
+        self.style.fallback.is_some()
+    }
+
+    /// Returns a content-safe summary of this Lottie element plan.
+    pub fn to_text(&self) -> String {
+        format!(
+            "lottie element: {}, autoplay {}, loop {}, object_fit {}, prefetch_frames {}, loading {}, fallback {}",
+            self.source.to_text(),
+            self.autoplay,
+            self.loop_mode.to_text(),
+            object_fit_key(&self.style.object_fit),
+            self.prefetch_frames,
+            self.has_loading(),
+            self.has_fallback()
+        )
+    }
 }
 
 impl Element for Lottie {
@@ -632,10 +671,20 @@ fn scaled_render_size(size: crate::Size<Pixels>, scale_factor: f32) -> crate::Si
     )
 }
 
+fn object_fit_key(object_fit: &ObjectFit) -> &'static str {
+    match object_fit {
+        ObjectFit::Fill => "fill",
+        ObjectFit::Contain => "contain",
+        ObjectFit::Cover => "cover",
+        ObjectFit::ScaleDown => "scale-down",
+        ObjectFit::None => "none",
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::LottieState;
-    use crate::{LoopMode, LottieAnimation};
+    use super::{LottieState, lottie};
+    use crate::{IntoElement, LoopMode, LottieAnimation, ObjectFit, ParentElement, div};
     use std::{sync::Arc, time::Instant};
 
     const SIMPLE_LOTTIE: &str = r#"{
@@ -670,5 +719,30 @@ mod tests {
                 .is_some_and(|player| !player.is_animating())
         );
         assert!(!state.autoplay_started);
+    }
+
+    #[test]
+    fn lottie_element_summary_is_content_safe() {
+        let element = lottie("https://cdn.example.com/private/spinner.json")
+            .autoplay()
+            .ping_pong()
+            .object_fit(ObjectFit::Cover)
+            .prefetch_frames(8)
+            .with_loading(|| div().child("Loading private spinner").into_any_element())
+            .with_fallback(|| div().child("Broken private spinner").into_any_element());
+
+        assert!(element.is_autoplay());
+        assert_eq!(element.loop_policy(), LoopMode::PingPong);
+        assert_eq!(element.prefetch_frame_count(), 8);
+        assert!(element.has_loading());
+        assert!(element.has_fallback());
+        assert_eq!(
+            element.to_text(),
+            "lottie element: lottie source: kind uri, bytes none, decoded false, autoplay true, loop ping-pong, object_fit cover, prefetch_frames 8, loading true, fallback true"
+        );
+        assert!(!element.to_text().contains("cdn.example.com"));
+        assert!(!element.to_text().contains("private"));
+        assert!(!element.to_text().contains("Loading"));
+        assert!(!element.to_text().contains("Broken"));
     }
 }

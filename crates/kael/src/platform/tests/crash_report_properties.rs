@@ -1,4 +1,4 @@
-// Feature: platform-parity-electron-features, Property 11: Crash report persistence round-trip
+// Feature: platform-parity-browser-runtime-features, Property 11: Crash report persistence round-trip
 
 use proptest::prelude::*;
 

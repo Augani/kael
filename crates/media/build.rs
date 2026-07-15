@@ -7,20 +7,32 @@ fn main() {
 
     use std::{env, path::PathBuf, process::Command};
 
-    let sdk_path = String::from_utf8(
-        Command::new("xcrun")
-            .args(["--sdk", "macosx", "--show-sdk-path"])
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .unwrap();
-    let sdk_path = sdk_path.trim_end();
-
     println!("cargo:rerun-if-changed=src/bindings.h");
+    println!("cargo:rerun-if-env-changed=DEVELOPER_DIR");
+
+    let output = Command::new("xcrun")
+        .args(["--sdk", "macosx", "--show-sdk-path"])
+        .output()
+        .expect("failed to run xcrun while locating the macOS SDK");
+    if !output.status.success() {
+        panic!(
+            "xcrun could not locate the macOS SDK (status {}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let sdk_path =
+        String::from_utf8(output.stdout).expect("xcrun returned a non-UTF-8 macOS SDK path");
+    let sdk_path = sdk_path.trim_end();
+    assert!(
+        !sdk_path.is_empty(),
+        "xcrun returned an empty macOS SDK path"
+    );
+
     let bindings = bindgen::Builder::default()
         .header("src/bindings.h")
-        .clang_arg(format!("-isysroot{}", sdk_path))
+        .clang_arg("-isysroot")
+        .clang_arg(sdk_path)
         .clang_arg("-xobjective-c")
         .allowlist_type("CMItemIndex")
         .allowlist_type("CMSampleTimingInfo")
@@ -38,7 +50,7 @@ fn main() {
         .generate()
         .expect("unable to generate bindings");
 
-    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let out_path = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo did not set OUT_DIR"));
     bindings
         .write_to_file(out_path.join("bindings.rs"))
         .expect("couldn't write dispatch bindings");

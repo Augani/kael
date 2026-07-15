@@ -99,22 +99,26 @@ impl SelectableCard {
     }
 
     pub fn padding(mut self, padding: Pixels) -> Self {
-        self.padding = Some(padding);
+        let value = f32::from(padding);
+        self.padding = (value.is_finite() && value >= 0.0).then_some(padding);
         self
     }
 
     pub fn width(mut self, width: Pixels) -> Self {
-        self.width = Some(width);
+        let value = f32::from(width);
+        self.width = (value.is_finite() && value > 0.0).then_some(width);
         self
     }
 
     pub fn height(mut self, height: Pixels) -> Self {
-        self.height = Some(height);
+        let value = f32::from(height);
+        self.height = (value.is_finite() && value > 0.0).then_some(height);
         self
     }
 
     pub fn max_width(mut self, max_width: Pixels) -> Self {
-        self.max_width = Some(max_width);
+        let value = f32::from(max_width);
+        self.max_width = (value.is_finite() && value > 0.0).then_some(max_width);
         self
     }
 
@@ -124,7 +128,8 @@ impl SelectableCard {
     }
 
     pub fn min_height(mut self, min_height: Pixels) -> Self {
-        self.min_height = Some(min_height);
+        let value = f32::from(min_height);
+        self.min_height = (value.is_finite() && value >= 0.0).then_some(min_height);
         self
     }
 
@@ -174,7 +179,11 @@ impl RenderOnce for SelectableCard {
         let selected = self.selected;
         let disabled = self.disabled;
         let on_click = self.on_click.clone();
-        let label = self.label.clone();
+        let accessible_label = self
+            .label
+            .clone()
+            .unwrap_or_else(|| SharedString::from("Select card"));
+        let is_interactive = on_click.is_some();
         let dark = theme.tokens.background.l < 0.5;
         let bg = self.variant.background(&theme);
         let selected_ring = match self.variant {
@@ -201,7 +210,33 @@ impl RenderOnce for SelectableCard {
             transparent_black()
         };
 
+        let mut accessibility_state = AccessibilityState::NONE;
+        if selected {
+            accessibility_state |= AccessibilityState::CHECKED;
+        }
+        if disabled {
+            accessibility_state |= AccessibilityState::DISABLED;
+        }
+        let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::CheckBox)
+            .label(accessible_label.to_string())
+            .states(accessibility_state);
+        if !disabled && on_click.is_some() {
+            accessibility =
+                accessibility.actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]);
+        }
+
         self.base
+            .accessibility(accessibility)
+            .when(!disabled && on_click.is_some(), |this| {
+                this.focusable()
+                    .tab_index(0)
+                    .tab_stop(true)
+                    .focus_visible(move |style| {
+                        style.shadow(smallvec::smallvec![
+                            astryx::focus_ring_outer(selected_ring,)
+                        ])
+                    })
+            })
             .relative()
             .p(self.padding.unwrap_or(px(16.0)))
             .when_some(self.width, |this, width| this.w(width))
@@ -215,23 +250,12 @@ impl RenderOnce for SelectableCard {
             .transition(theme.tokens.transition_fast)
             .when(selected, |this| this.inset_ring(selected_ring, px(2.0)))
             .when(disabled, |this| this.opacity(0.5))
-            .when(!disabled, |this| {
+            .when(!disabled && is_interactive, |this| {
                 this.cursor(CursorStyle::PointingHand)
                     .hover(move |style| style.bg(astryx::overlay_hover(dark)))
             })
             .when_some(self.content, |this, content| this.child(content))
             .children(self.children)
-            .when_some(label, |this, label| {
-                this.child(
-                    div()
-                        .absolute()
-                        .left(px(-10000.0))
-                        .top(px(0.0))
-                        .size(px(1.0))
-                        .overflow_hidden()
-                        .child(label),
-                )
-            })
             .when(selected && self.show_check, |this| {
                 this.child(
                     div()
@@ -251,11 +275,20 @@ impl RenderOnce for SelectableCard {
                         ),
                 )
             })
-            .when(!disabled, |this| {
+            .when(!disabled && is_interactive, |this| {
                 this.when_some(on_click, |this, handler| {
+                    let on_key = handler.clone();
                     this.on_click(move |_, window, cx| {
                         let next = !selected;
                         (handler)(&next, window, cx);
+                    })
+                    .on_key_down(move |event, window, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            let next = !selected;
+                            (on_key)(&next, window, cx);
+                            cx.stop_propagation();
+                            window.prevent_default();
+                        }
                     })
                 })
             })
@@ -264,5 +297,25 @@ impl RenderOnce for SelectableCard {
                 div.style().refine(&user_style);
                 div
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn invalid_geometry_is_ignored() {
+        let card = SelectableCard::new("test")
+            .padding(px(-1.0))
+            .width(px(f32::NAN))
+            .height(px(0.0))
+            .max_width(px(-2.0))
+            .min_height(px(f32::NAN));
+        assert!(card.padding.is_none());
+        assert!(card.width.is_none());
+        assert!(card.height.is_none());
+        assert!(card.max_width.is_none());
+        assert!(card.min_height.is_none());
     }
 }

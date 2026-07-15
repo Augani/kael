@@ -57,6 +57,54 @@ impl Animation {
         self.repeat(Repeat::Forever)
     }
 
+    /// Returns the active duration of one animation cycle.
+    pub fn duration(&self) -> Duration {
+        self.duration
+    }
+
+    /// Returns the delay before this animation starts.
+    pub fn delay_duration(&self) -> Duration {
+        self.delay
+    }
+
+    /// Returns true when this animation has a non-zero delay.
+    pub fn has_delay(&self) -> bool {
+        !self.delay.is_zero()
+    }
+
+    /// Returns the configured easing curve.
+    pub fn easing_curve(&self) -> &Easing {
+        &self.easing
+    }
+
+    /// Returns the configured repeat behavior.
+    pub fn repeat_mode(&self) -> Repeat {
+        self.repeat
+    }
+
+    /// Returns true when this animation can keep requesting frames indefinitely.
+    pub fn repeats_forever(&self) -> bool {
+        matches!(self.repeat, Repeat::Forever)
+    }
+
+    /// Returns the scheduled end including delay and finite repeats.
+    pub fn scheduled_duration(&self) -> Duration {
+        self.scheduled_end()
+    }
+
+    /// Returns a content-safe summary of the animation timeline.
+    pub fn to_text(&self) -> String {
+        format!(
+            "animation: duration_ms {}, delay_ms {}, easing {}, repeat {}, scheduled_ms {}, forever {}",
+            self.duration.as_millis(),
+            self.delay.as_millis(),
+            self.easing.to_text(),
+            self.repeat.to_text(),
+            self.scheduled_duration().as_millis(),
+            self.repeats_forever()
+        )
+    }
+
     pub(crate) fn sample(&self, elapsed: Duration) -> AnimationSample {
         if elapsed < self.delay {
             return AnimationSample {
@@ -351,6 +399,45 @@ impl Easing {
     pub fn ease(&self, delta: f32) -> f32 {
         self.sample(delta)
     }
+
+    /// Returns a stable label for this easing curve without logging curve parameters.
+    pub fn to_text(&self) -> &'static str {
+        match self {
+            Self::Linear => "linear",
+            Self::EaseIn => "ease-in",
+            Self::EaseOut => "ease-out",
+            Self::EaseInOut => "ease-in-out",
+            Self::EaseInCubic => "ease-in-cubic",
+            Self::EaseOutCubic => "ease-out-cubic",
+            Self::EaseInOutCubic => "ease-in-out-cubic",
+            Self::EaseInQuart => "ease-in-quart",
+            Self::EaseOutQuart => "ease-out-quart",
+            Self::EaseInOutQuart => "ease-in-out-quart",
+            Self::EaseInQuint => "ease-in-quint",
+            Self::EaseOutQuint => "ease-out-quint",
+            Self::EaseInOutQuint => "ease-in-out-quint",
+            Self::EaseInExpo => "ease-in-expo",
+            Self::EaseOutExpo => "ease-out-expo",
+            Self::EaseInOutExpo => "ease-in-out-expo",
+            Self::EaseInCirc => "ease-in-circ",
+            Self::EaseOutCirc => "ease-out-circ",
+            Self::EaseInOutCirc => "ease-in-out-circ",
+            Self::EaseInBack(_) => "ease-in-back",
+            Self::EaseOutBack(_) => "ease-out-back",
+            Self::EaseInOutBack(_) => "ease-in-out-back",
+            Self::EaseInElastic => "ease-in-elastic",
+            Self::EaseOutElastic => "ease-out-elastic",
+            Self::Elastic => "elastic",
+            Self::Steps(_) => "steps",
+            Self::CubicBezier(_, _, _, _) => "cubic-bezier",
+            Self::Custom(_) => "custom",
+        }
+    }
+
+    /// Returns true when this easing uses a caller-provided callback.
+    pub fn is_custom(&self) -> bool {
+        matches!(self, Self::Custom(_))
+    }
 }
 
 /// How to interpolate from one media keyframe toward the next.
@@ -360,6 +447,16 @@ pub enum KeyframeInterpolation {
     Hold,
     /// Interpolate with the given easing curve (includes `CubicBezier` handles).
     Eased(Easing),
+}
+
+impl KeyframeInterpolation {
+    /// Returns a stable label for this interpolation policy.
+    pub fn to_text(&self) -> &'static str {
+        match self {
+            Self::Hold => "hold",
+            Self::Eased(_) => "eased",
+        }
+    }
 }
 
 /// A single media keyframe: a value at a time, with the curve used to reach the
@@ -372,6 +469,18 @@ pub struct MediaKeyframe {
     pub value: f32,
     /// Interpolation toward the following keyframe.
     pub interpolation: KeyframeInterpolation,
+}
+
+impl MediaKeyframe {
+    /// Returns a content-safe summary of this media keyframe.
+    pub fn to_text(&self) -> String {
+        format!(
+            "media keyframe: interpolation {}, finite_time {}, finite_value {}",
+            self.interpolation.to_text(),
+            self.time.is_finite(),
+            self.value.is_finite()
+        )
+    }
 }
 
 /// A keyframed scalar track sampled by the render/playback clock.
@@ -418,6 +527,38 @@ impl KeyframeTrack {
         self.keys.is_empty()
     }
 
+    /// Returns the number of hold keyframes in this track.
+    pub fn hold_count(&self) -> usize {
+        self.keys
+            .iter()
+            .filter(|key| matches!(key.interpolation, KeyframeInterpolation::Hold))
+            .count()
+    }
+
+    /// Returns the number of eased keyframes in this track.
+    pub fn eased_count(&self) -> usize {
+        self.keys.len().saturating_sub(self.hold_count())
+    }
+
+    /// Returns true when all keyframe times and values are finite.
+    pub fn is_finite(&self) -> bool {
+        self.keys
+            .iter()
+            .all(|key| key.time.is_finite() && key.value.is_finite())
+    }
+
+    /// Returns a content-safe summary of this media keyframe track.
+    pub fn to_text(&self) -> String {
+        format!(
+            "keyframe track: keys {}, hold {}, eased {}, finite {}, empty {}",
+            self.len(),
+            self.hold_count(),
+            self.eased_count(),
+            self.is_finite(),
+            self.is_empty()
+        )
+    }
+
     /// Sample the track at `time` (seconds). Returns `default` for an empty
     /// track; clamps to the first/last value outside the keyframe range.
     pub fn sample(&self, time: f64, default: f32) -> f32 {
@@ -457,6 +598,30 @@ pub enum Repeat {
     Count(u32),
     /// Repeat the animation indefinitely.
     Forever,
+}
+
+impl Repeat {
+    /// Returns a stable label for this repeat behavior.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Once => "once",
+            Self::Count(_) => "count",
+            Self::Forever => "forever",
+        }
+    }
+
+    /// Returns the configured repeat count when this is [`Repeat::Count`].
+    pub fn count(self) -> Option<u32> {
+        match self {
+            Self::Count(count) => Some(count),
+            _ => None,
+        }
+    }
+
+    /// Returns true when this repeat mode is indefinite.
+    pub fn is_forever(self) -> bool {
+        matches!(self, Self::Forever)
+    }
 }
 
 /// A sequence of animations that can overlap with the previous step.
@@ -505,6 +670,43 @@ impl AnimationSequence {
     /// Returns the scheduled animations in this sequence.
     pub fn animations(&self) -> &[Animation] {
         &self.animations
+    }
+
+    /// Returns the number of animations in this sequence.
+    pub fn len(&self) -> usize {
+        self.animations.len()
+    }
+
+    /// Returns whether this sequence has no animations.
+    pub fn is_empty(&self) -> bool {
+        self.animations.is_empty()
+    }
+
+    /// Returns true when at least one animation in this sequence repeats forever.
+    pub fn has_infinite_animation(&self) -> bool {
+        self.animations
+            .iter()
+            .any(|animation| animation.repeats_forever())
+    }
+
+    /// Returns the scheduled end of the finite portion of this sequence.
+    pub fn scheduled_duration(&self) -> Duration {
+        self.animations
+            .iter()
+            .map(Animation::scheduled_end)
+            .max()
+            .unwrap_or(Duration::ZERO)
+    }
+
+    /// Returns a content-safe summary of this animation sequence.
+    pub fn to_text(&self) -> String {
+        format!(
+            "animation sequence: animations {}, scheduled_ms {}, infinite {}, empty {}",
+            self.len(),
+            self.scheduled_duration().as_millis(),
+            self.has_infinite_animation(),
+            self.is_empty()
+        )
     }
 }
 
@@ -566,6 +768,43 @@ impl Keyframes {
 
     pub(crate) fn apply<E: Styled>(&self, element: E, progress: f32) -> E {
         self.sample(progress).apply(element)
+    }
+
+    /// Returns the number of configured keyframes.
+    pub fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    /// Returns whether this keyframe set has no frames.
+    pub fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
+
+    /// Returns how many keyframes set opacity.
+    pub fn opacity_frame_count(&self) -> usize {
+        self.frames
+            .iter()
+            .filter(|frame| frame.style.has_opacity())
+            .count()
+    }
+
+    /// Returns how many keyframes set any transform property.
+    pub fn transform_frame_count(&self) -> usize {
+        self.frames
+            .iter()
+            .filter(|frame| frame.style.has_transform())
+            .count()
+    }
+
+    /// Returns a content-safe summary of this keyframe set.
+    pub fn to_text(&self) -> String {
+        format!(
+            "keyframes: frames {}, opacity_frames {}, transform_frames {}, empty {}",
+            self.len(),
+            self.opacity_frame_count(),
+            self.transform_frame_count(),
+            self.is_empty()
+        )
     }
 }
 
@@ -635,6 +874,64 @@ impl StyledKeyframe {
     pub fn translate_y(mut self, y: f32) -> Self {
         self.translate_y = Some(y);
         self
+    }
+
+    /// Returns true when this keyframe sets opacity.
+    pub fn has_opacity(&self) -> bool {
+        self.opacity.is_some()
+    }
+
+    /// Returns true when this keyframe sets horizontal or vertical scale.
+    pub fn has_scale(&self) -> bool {
+        self.scale_x.is_some() || self.scale_y.is_some()
+    }
+
+    /// Returns true when this keyframe sets rotation.
+    pub fn has_rotation(&self) -> bool {
+        self.rotate_degrees.is_some()
+    }
+
+    /// Returns true when this keyframe sets horizontal or vertical translation.
+    pub fn has_translation(&self) -> bool {
+        self.translate_x.is_some() || self.translate_y.is_some()
+    }
+
+    /// Returns true when this keyframe sets any transform property.
+    pub fn has_transform(&self) -> bool {
+        self.has_scale() || self.has_rotation() || self.has_translation()
+    }
+
+    /// Returns the number of style properties set by this keyframe.
+    pub fn property_count(&self) -> usize {
+        [
+            self.opacity.is_some(),
+            self.scale_x.is_some(),
+            self.scale_y.is_some(),
+            self.rotate_degrees.is_some(),
+            self.translate_x.is_some(),
+            self.translate_y.is_some(),
+        ]
+        .into_iter()
+        .filter(|present| *present)
+        .count()
+    }
+
+    /// Returns true when this keyframe sets no style properties.
+    pub fn is_empty(&self) -> bool {
+        self.property_count() == 0
+    }
+
+    /// Returns a content-safe summary of this styled keyframe.
+    pub fn to_text(&self) -> String {
+        format!(
+            "styled keyframe: properties {}, opacity {}, scale {}, rotation {}, translation {}, empty {}",
+            self.property_count(),
+            self.has_opacity(),
+            self.has_scale(),
+            self.has_rotation(),
+            self.has_translation(),
+            self.is_empty()
+        )
     }
 
     /// Applies this keyframe to a styled element.
@@ -1026,7 +1323,7 @@ mod easing_variant_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{Animation, AnimationSequence, Repeat, keyframes};
+    use super::{Animation, AnimationSequence, Easing, Repeat, keyframes};
     use crate::animation::StyledKeyframe;
     use std::time::Duration;
 
@@ -1093,6 +1390,81 @@ mod tests {
 
         assert!(!animation.sample(Duration::from_millis(150)).finished);
         assert!(animation.sample(Duration::from_millis(250)).finished);
+    }
+
+    #[test]
+    fn animation_summaries_expose_timeline_shape() {
+        let animation = Animation::new(Duration::from_millis(240))
+            .delay(Duration::from_millis(60))
+            .easing(Easing::CubicBezier(0.25, 0.1, 0.25, 1.0))
+            .repeat(Repeat::Count(3));
+
+        assert_eq!(animation.duration(), Duration::from_millis(240));
+        assert_eq!(animation.delay_duration(), Duration::from_millis(60));
+        assert!(animation.has_delay());
+        assert_eq!(animation.easing_curve().to_text(), "cubic-bezier");
+        assert_eq!(animation.repeat_mode(), Repeat::Count(3));
+        assert_eq!(animation.repeat_mode().count(), Some(3));
+        assert!(!animation.repeats_forever());
+        assert_eq!(animation.scheduled_duration(), Duration::from_millis(780));
+        assert_eq!(
+            animation.to_text(),
+            "animation: duration_ms 240, delay_ms 60, easing cubic-bezier, repeat count, scheduled_ms 780, forever false"
+        );
+        assert!(!animation.to_text().contains("0.25"));
+        assert!(!animation.to_text().contains("0.1"));
+
+        let custom = Animation::new(Duration::from_millis(1)).with_easing(|delta| delta);
+        assert!(custom.easing_curve().is_custom());
+        assert!(Repeat::Forever.is_forever());
+        assert_eq!(Repeat::Forever.to_text(), "forever");
+    }
+
+    #[test]
+    fn sequence_and_keyframe_summaries_expose_counts_not_values() {
+        let sequence = AnimationSequence::new()
+            .then(Animation::new(Duration::from_millis(100)))
+            .then(Animation::new(Duration::from_millis(200)).repeat_forever());
+
+        assert_eq!(sequence.len(), 2);
+        assert!(!sequence.is_empty());
+        assert!(sequence.has_infinite_animation());
+        assert_eq!(
+            sequence.to_text(),
+            "animation sequence: animations 2, scheduled_ms 300, infinite true, empty false"
+        );
+
+        let keyframe = StyledKeyframe::default()
+            .opacity(0.42)
+            .scale_xy(1.25, 0.75)
+            .rotate(37.0)
+            .translate(123.0, 456.0);
+
+        assert_eq!(keyframe.property_count(), 6);
+        assert!(keyframe.has_opacity());
+        assert!(keyframe.has_scale());
+        assert!(keyframe.has_rotation());
+        assert!(keyframe.has_translation());
+        assert!(!keyframe.is_empty());
+        assert_eq!(
+            keyframe.to_text(),
+            "styled keyframe: properties 6, opacity true, scale true, rotation true, translation true, empty false"
+        );
+        assert!(!keyframe.to_text().contains("123"));
+        assert!(!keyframe.to_text().contains("0.42"));
+
+        let frames = keyframes()
+            .at(0.0, |_| keyframe)
+            .at(1.0, |frame| frame.opacity(0.0));
+        assert_eq!(frames.len(), 2);
+        assert!(!frames.is_empty());
+        assert_eq!(frames.opacity_frame_count(), 2);
+        assert_eq!(frames.transform_frame_count(), 1);
+        assert_eq!(
+            frames.to_text(),
+            "keyframes: frames 2, opacity_frames 2, transform_frames 1, empty false"
+        );
+        assert!(!frames.to_text().contains("456"));
     }
 }
 
@@ -1171,5 +1543,39 @@ mod media_keyframe_tests {
         assert!((track.sample(0.5, 0.0) - 5.0).abs() < 1e-5);
         assert!((track.sample(1.5, 0.0) - 15.0).abs() < 1e-5);
         assert_eq!(track.len(), 3);
+    }
+
+    #[test]
+    fn media_keyframe_summaries_do_not_leak_values() {
+        let key = MediaKeyframe {
+            time: 12.5,
+            value: 99.0,
+            interpolation: KeyframeInterpolation::Eased(Easing::EaseOutBack(1.7)),
+        };
+
+        assert_eq!(key.interpolation.to_text(), "eased");
+        assert_eq!(
+            key.to_text(),
+            "media keyframe: interpolation eased, finite_time true, finite_value true"
+        );
+        assert!(!key.to_text().contains("12.5"));
+        assert!(!key.to_text().contains("99"));
+
+        let track = KeyframeTrack::new()
+            .with_key(0.0, 0.0, KeyframeInterpolation::Hold)
+            .with_key(1.0, 10.0, KeyframeInterpolation::Eased(Easing::Linear))
+            .with_key(2.0, 20.0, KeyframeInterpolation::Eased(Easing::Steps(4)));
+
+        assert_eq!(track.hold_count(), 1);
+        assert_eq!(track.eased_count(), 2);
+        assert!(track.is_finite());
+        assert_eq!(
+            track.to_text(),
+            "keyframe track: keys 3, hold 1, eased 2, finite true, empty false"
+        );
+        assert!(!track.to_text().contains("20"));
+        assert!(!track.to_text().contains("10"));
+        assert_eq!(Easing::Steps(4).to_text(), "steps");
+        assert_eq!(Easing::EaseOutBack(1.7).to_text(), "ease-out-back");
     }
 }

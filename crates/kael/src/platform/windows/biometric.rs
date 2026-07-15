@@ -26,12 +26,10 @@ pub fn authenticate_biometric(reason: &str, callback: Box<dyn FnOnce(bool) + Sen
     let result = UserConsentVerifier::RequestVerificationAsync(&message)
         .and_then(super::util::block_on_operation);
 
-    match result {
-        Ok(verification_result) => {
-            callback(verification_result == UserConsentVerificationResult::Verified);
-        }
-        Err(_) => {
-            callback(false);
-        }
-    }
+    let verified = result
+        .map(|result| result == UserConsentVerificationResult::Verified)
+        .unwrap_or(false);
+    crate::platform::catch_platform_callback("Windows", "biometric authentication", (), || {
+        callback(verified)
+    });
 }

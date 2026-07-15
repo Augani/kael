@@ -122,9 +122,20 @@ impl RenderOnce for EmptyState {
         let gap = self.size.gap();
         let id = self.id.clone();
         let compact = self.size == EmptyStateSize::Sm;
+        let accessible_title = self.title.clone();
+        let accessible_description = self.description.clone();
 
         div()
             .id(self.id)
+            .accessibility({
+                let attributes = AccessibilityAttributes::new(AccessibilityRole::Group)
+                    .label(accessible_title.to_string());
+                if let Some(description) = accessible_description {
+                    attributes.description(description.to_string())
+                } else {
+                    attributes
+                }
+            })
             .flex()
             .flex_col()
             .items_center()
@@ -157,7 +168,7 @@ impl RenderOnce for EmptyState {
                             .text_color(theme.tokens.foreground)
                             .font_family(theme.tokens.font_family.clone())
                             .text_align(TextAlign::Center)
-                            .child(self.title),
+                            .child(StyledText::new(self.title).accessibility_hidden(true)),
                     )
                     .when_some(self.description, |d, desc| {
                         d.child(
@@ -167,7 +178,7 @@ impl RenderOnce for EmptyState {
                                 .text_color(theme.tokens.muted_foreground)
                                 .font_family(theme.tokens.font_family.clone())
                                 .text_align(TextAlign::Center)
-                                .child(desc),
+                                .child(StyledText::new(desc).accessibility_hidden(true)),
                         )
                     }),
             )

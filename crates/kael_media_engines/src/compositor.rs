@@ -41,7 +41,9 @@ pub fn composite_frame(
     height: u32,
     provider: &dyn FrameProvider,
 ) -> Image {
-    let mut output = Image::new(width, height);
+    let Ok(mut output) = Image::try_new(width, height) else {
+        return Image::new(0, 0);
+    };
     for (index, track) in timeline.tracks.iter().enumerate() {
         if !track.enabled {
             continue;
@@ -68,14 +70,14 @@ pub fn composite_frame(
                 continue;
             }
             let clip_local = frame.saturating_sub(clip.track_offset);
-            let time_ms = if timeline.frame_rate > 0.0 {
-                (clip_local as f64 / timeline.frame_rate * 1000.0) as u64
-            } else {
-                0
-            };
+            let time_ms = clip_time_ms(clip_local, timeline.frame_rate);
             let effected = clip.effects.resolve(time_ms).apply(&image);
             let mut layer = clip.transform.apply(&effected);
-            let opacity = clip.opacity.clamp(0.0, 1.0);
+            let opacity = finite_opacity(
+                clip.opacity_curve
+                    .as_ref()
+                    .map_or(clip.opacity, |curve| curve.sample(time_ms)),
+            );
             if opacity < 1.0 {
                 for pixel in layer.pixels.iter_mut() {
                     pixel[3] *= opacity;
@@ -83,7 +85,9 @@ pub fn composite_frame(
             }
             (layer, clip.blend_mode.to_render_graph())
         };
-        let mut next = Image::new(width, height);
+        let Ok(mut next) = Image::try_new(width, height) else {
+            return Image::new(0, 0);
+        };
         blend(mode)(&[&layer, &output], &mut next);
         output = next;
     }
@@ -150,8 +154,8 @@ pub fn build_frame_graph(timeline: &Timeline, frame: u64) -> FrameGraph {
         let source = graph.add_pass(
             PassDesc::new(format!("source_{index}"))
                 .write(layer_texture)
-                .frame_pts(request.source_frame as i64)
-                .param_hash(fnv1a(request.clip_id.as_bytes())),
+                .frame_pts(i64::try_from(request.source_frame).unwrap_or(i64::MAX))
+                .param_hash(source_param(&request.clip_id, request.source_frame)),
         );
 
         // Chain the clip's effect stack between the source and the composite; each effect
@@ -230,6 +234,29 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     hash
 }
 
+fn source_param(clip_id: &str, source_frame: u64) -> u64 {
+    let mut bytes = Vec::with_capacity(clip_id.len().saturating_add(8));
+    bytes.extend_from_slice(clip_id.as_bytes());
+    bytes.extend_from_slice(&source_frame.to_le_bytes());
+    fnv1a(&bytes)
+}
+
+fn clip_time_ms(clip_local: u64, frame_rate: f64) -> u64 {
+    if frame_rate.is_finite() && frame_rate > 0.0 {
+        (clip_local as f64 / frame_rate * 1000.0) as u64
+    } else {
+        0
+    }
+}
+
+fn finite_opacity(opacity: f32) -> f32 {
+    if opacity.is_finite() {
+        opacity.clamp(0.0, 1.0)
+    } else {
+        1.0
+    }
+}
+
 fn blend_param(blend_mode: u8, opacity: f32) -> u64 {
     let mut bytes = [0u8; 5];
     bytes[0] = blend_mode;
@@ -275,7 +302,7 @@ pub fn frame_graph_ops(
             ops.insert(transform_pass, request.transform.to_pass_op());
         }
 
-        let opacity = request.opacity.clamp(0.0, 1.0);
+        let opacity = finite_opacity(request.opacity);
         ops.insert(
             layer.composite,
             composite_op(request.blend_mode.to_render_graph(), opacity),
@@ -344,7 +371,7 @@ pub fn render_frames(
         }
         let frame_graph = build_frame_graph(timeline, frame);
         let Ok(compiled) = frame_graph.graph.compile() else {
-            rendered.push(Image::new(width, height));
+            rendered.push(Image::try_new(width, height).unwrap_or_else(|_| Image::new(0, 0)));
             continue;
         };
         let ops = frame_graph_ops(&frame_graph, timeline, frame, width, height, provider);
@@ -357,11 +384,10 @@ pub fn render_frames(
             &ops,
             &mut cache,
         ) {
-            Ok((images, _)) => images
-                .get(&frame_graph.output)
-                .cloned()
-                .unwrap_or_else(|| Image::new(width, height)),
-            Err(_) => Image::new(width, height),
+            Ok((images, _)) => images.get(&frame_graph.output).cloned().unwrap_or_else(|| {
+                Image::try_new(width, height).unwrap_or_else(|_| Image::new(0, 0))
+            }),
+            Err(_) => Image::try_new(width, height).unwrap_or_else(|_| Image::new(0, 0)),
         };
         rendered.push(image);
     }
@@ -393,17 +419,24 @@ pub fn render_transition(
             return None;
         }
         let clip_local = frame.saturating_sub(clip.track_offset);
-        let time_ms = if timeline.frame_rate > 0.0 {
-            (clip_local as f64 / timeline.frame_rate * 1000.0) as u64
-        } else {
-            0
-        };
+        let time_ms = clip_time_ms(clip_local, timeline.frame_rate);
         let effected = clip.effects.resolve(time_ms).apply(&image);
-        Some(clip.transform.apply(&effected))
+        let mut transformed = clip.transform.apply(&effected);
+        let opacity = finite_opacity(
+            clip.opacity_curve
+                .as_ref()
+                .map_or(clip.opacity, |curve| curve.sample(time_ms)),
+        );
+        if opacity < 1.0 {
+            for pixel in &mut transformed.pixels {
+                pixel[3] *= opacity;
+            }
+        }
+        Some(transformed)
     };
     let outgoing = render_side(&transition.outgoing, transition.outgoing_source_frame)?;
     let incoming = render_side(&transition.incoming, transition.incoming_source_frame)?;
-    let mut output = Image::new(width, height);
+    let mut output = Image::try_new(width, height).ok()?;
     crossfade(transition.progress)(&[&outgoing, &incoming], &mut output);
     Some(output)
 }
@@ -1123,6 +1156,73 @@ mod tests {
         .pixel(0, 0);
         assert!((pixel[3] - 0.5).abs() < 1e-5, "alpha {}", pixel[3]);
         assert!((pixel[0] - 1.0).abs() < 1e-5, "red preserved {}", pixel[0]);
+    }
+
+    #[test]
+    fn opacity_curve_and_non_finite_opacity_match_graph_path() {
+        let mut animated = clip("a", "red", 0, 60, 0);
+        animated.opacity = f32::NAN;
+        animated.opacity_curve = Some(Automation::constant(0.25));
+        let mut timeline = Timeline {
+            tracks: vec![track("v1", vec![animated])],
+            frame_rate: f64::NAN,
+            duration_frames: 60,
+        };
+        let source = provider(&[("red", [1.0, 0.0, 0.0, 1.0])]);
+        let direct = composite_frame(&timeline, 10, 1, 1, &source);
+        let rendered = render_frames(&timeline, [10], 1, 1, &source);
+        assert_eq!(direct.pixels, rendered[0].pixels);
+        assert!((direct.pixel(0, 0)[3] - 0.25).abs() < 1e-6);
+
+        timeline.tracks[0].clips[0].opacity_curve = None;
+        let pixel = composite_frame(&timeline, 10, 1, 1, &source).pixel(0, 0);
+        assert!(pixel.iter().all(|channel| channel.is_finite()));
+        assert_eq!(pixel[3], 1.0);
+    }
+
+    #[test]
+    fn transition_applies_each_clips_opacity() {
+        let mut outgoing = clip("a", "red", 0, 30, 0);
+        outgoing.opacity = 0.5;
+        let incoming = clip("b", "blue", 0, 30, 20);
+        let timeline = Timeline {
+            tracks: vec![track("v1", vec![outgoing, incoming])],
+            frame_rate: 30.0,
+            duration_frames: 50,
+        };
+        let source = provider(&[
+            ("red", [1.0, 0.0, 0.0, 1.0]),
+            ("blue", [0.0, 0.0, 1.0, 1.0]),
+        ]);
+        let pixel = render_transition(&timeline, 0, 20, 1, 1, &source)
+            .unwrap()
+            .pixel(0, 0);
+        assert!((pixel[3] - 0.5).abs() < 1e-6, "{pixel:?}");
+    }
+
+    #[test]
+    fn impossible_dimensions_fail_soft_without_calling_provider() {
+        struct PanicProvider;
+        impl FrameProvider for PanicProvider {
+            fn frame(&self, _: &str, _: u64, _: u32, _: u32) -> Option<Image> {
+                panic!("provider must not be called")
+            }
+        }
+        let timeline = Timeline {
+            tracks: vec![track("v1", vec![clip("a", "red", 0, 30, 0)])],
+            frame_rate: 30.0,
+            duration_frames: 30,
+        };
+        let image = composite_frame(&timeline, 0, u32::MAX, u32::MAX, &PanicProvider);
+        assert_eq!((image.width, image.height), (0, 0));
+        assert!(image.pixels.is_empty());
+    }
+
+    #[test]
+    fn source_cache_key_distinguishes_full_u64_frame_domain() {
+        let low = source_param("clip", i64::MAX as u64);
+        let high = source_param("clip", i64::MAX as u64 + 1);
+        assert_ne!(low, high);
     }
 
     #[test]

@@ -2,11 +2,11 @@
 
 use crate::{
     astryx::{self, ControlSize, Hue},
-    components::{icon::Icon, icon_source::IconSource},
+    components::{icon::Icon, icon_button::IconButton, icon_source::IconSource},
     theme::Theme,
 };
 use kael::{prelude::FluentBuilder as _, *};
-use std::rc::Rc;
+use std::{cell::RefCell, panic::Location, rc::Rc};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum TokenColor {
@@ -30,6 +30,7 @@ pub type TokenProps = Token;
 
 #[derive(IntoElement)]
 pub struct Token {
+    id: ElementId,
     label: SharedString,
     size: ControlSize,
     color: TokenColor,
@@ -45,8 +46,19 @@ pub struct Token {
 }
 
 impl Token {
+    #[track_caller]
     pub fn new(label: impl Into<SharedString>) -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "token:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             label: label.into(),
             size: ControlSize::Md,
             color: TokenColor::Default,
@@ -64,6 +76,11 @@ impl Token {
 
     pub fn size(mut self, size: ControlSize) -> Self {
         self.size = size;
+        self
+    }
+
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
         self
     }
 
@@ -159,13 +176,14 @@ impl Styled for Token {
 
 impl RenderOnce for Token {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = Theme::of(cx);
+        let theme = Theme::of(cx).clone();
         let dark = theme.tokens.background.l < 0.5;
         let (bg_color, text_color) = token_colors(self.color, dark, &theme);
         let user_style = self.style;
-        let is_interactive = self.on_click.is_some();
-        let has_href = self.href.is_some();
+        let is_interactive = self.on_click.is_some() || self.href.is_some();
+        let has_remove = self.on_remove.is_some() && !self.disabled;
         let label = self.label.clone();
+        let accessible_label = label.clone();
         let height = self.size.height() - px(8.0);
         let icon_size = match self.size {
             ControlSize::Sm => px(12.0),
@@ -173,13 +191,98 @@ impl RenderOnce for Token {
             ControlSize::Lg => px(16.0),
         };
 
+        let icon = self.icon;
+        let description = self.description;
+        let label_hidden = self.label_hidden;
+        let end_content = Rc::new(RefCell::new(self.end_content));
+        let disabled = self.disabled;
+        let on_click = self.on_click;
+        let href = self.href;
+        let content = move |focused: bool| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .h_full()
+                .max_w_full()
+                .pl(px(8.0))
+                .pr(if has_remove { px(2.0) } else { px(8.0) })
+                .when(focused && !disabled, |this| {
+                    this.shadow(smallvec::smallvec![astryx::focus_ring_outer(
+                        theme.tokens.ring
+                    )])
+                })
+                .when((is_interactive || has_remove) && !disabled, |this| {
+                    this.cursor_pointer()
+                        .hover(|style| style.bg(bg_color.blend(astryx::overlay_hover(dark))))
+                })
+                .when_some(icon.clone(), |this, icon| {
+                    this.child(
+                        div()
+                            .size(icon_size)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(Icon::new(icon).size(icon_size).color(text_color)),
+                    )
+                })
+                .when(!label_hidden, |this| {
+                    this.child(
+                        div()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(label.clone()),
+                    )
+                })
+                .when_some(description.clone(), |this, description| {
+                    this.child(
+                        div()
+                            .size(px(1.0))
+                            .overflow_hidden()
+                            .opacity(0.0)
+                            .child(description),
+                    )
+                })
+                .children(end_content.borrow_mut().take())
+                .into_any_element()
+        };
+
+        let main = if is_interactive {
+            button((self.id.clone(), "action"))
+                .role(if href.is_some() {
+                    AccessibilityRole::Link
+                } else {
+                    AccessibilityRole::Button
+                })
+                .label(accessible_label.clone())
+                .when(disabled, |this| this.disabled())
+                .when(!disabled, |this| {
+                    this.on_click(move |_, window, cx| {
+                        if let Some(href) = href.as_ref() {
+                            let _ = cx.open_url(href.as_ref());
+                        }
+                        if let Some(handler) = on_click.as_ref() {
+                            handler(window, cx);
+                        }
+                    })
+                })
+                .render_with(move |state, _, _| content(state.focused))
+                .into_any_element()
+        } else {
+            content(false)
+        };
+
         div()
+            .id(self.id.clone())
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group)
+                    .label(accessible_label.to_string()),
+            )
             .flex()
             .items_center()
-            .gap(px(4.0))
             .h(height)
             .max_w_full()
-            .px(px(8.0))
             .rounded(theme.tokens.radius_sm)
             .bg(bg_color)
             .text_color(text_color)
@@ -188,85 +291,22 @@ impl RenderOnce for Token {
             .line_height(relative(1.35))
             .font_weight(FontWeight::MEDIUM)
             .overflow_hidden()
-            .when(self.disabled, |this| this.opacity(0.5))
-            .when((is_interactive || has_href) && !self.disabled, |this| {
-                this.cursor_pointer()
-                    .hover(|style| style.bg(bg_color.blend(astryx::overlay_hover(dark))))
-            })
-            .when_some(self.on_click.filter(|_| !self.disabled), |this, handler| {
-                this.on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                    handler(window, cx);
-                })
-            })
-            .when_some(self.href, |this, href| {
+            .when(disabled, |this| this.opacity(0.5))
+            .child(main)
+            .when_some(self.on_remove.filter(|_| !disabled), |this, handler| {
                 this.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .child(format!("href:{href}"))
-                        .opacity(0.0),
+                    IconButton::new("x")
+                        .id((self.id.clone(), "remove"))
+                        .label(format!("Remove {accessible_label}"))
+                        .size(px(20.0))
+                        .icon_size(px(12.0))
+                        .no_background(true)
+                        .on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            handler(window, cx);
+                        }),
                 )
             })
-            .when_some(self.icon, |this, icon| {
-                this.child(
-                    div()
-                        .size(icon_size)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(Icon::new(icon).size(icon_size).color(text_color)),
-                )
-            })
-            .when(!self.label_hidden, |this| {
-                this.child(
-                    div()
-                        .min_w(px(0.0))
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .child(label.clone()),
-                )
-            })
-            .when(self.label_hidden, |this| {
-                this.child(
-                    div()
-                        .size(px(1.0))
-                        .overflow_hidden()
-                        .opacity(0.0)
-                        .child(label),
-                )
-            })
-            .when_some(self.description, |this, description| {
-                this.child(
-                    div()
-                        .size(px(1.0))
-                        .overflow_hidden()
-                        .opacity(0.0)
-                        .child(description),
-                )
-            })
-            .children(self.end_content)
-            .when_some(
-                self.on_remove.filter(|_| !self.disabled),
-                |this, handler| {
-                    this.child(
-                        div()
-                            .ml(px(2.0))
-                            .mr(px(-4.0))
-                            .size(px(16.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_full()
-                            .cursor_pointer()
-                            .hover(|style| style.bg(text_color.opacity(0.12)))
-                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                cx.stop_propagation();
-                                handler(window, cx);
-                            })
-                            .child(Icon::new("x").size(px(12.0)).color(text_color)),
-                    )
-                },
-            )
             .map(|this| {
                 let mut div = this;
                 div.style().refine(&user_style);

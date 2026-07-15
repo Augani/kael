@@ -59,10 +59,9 @@ use objc2::{
     runtime::{AnyObject, Bool},
 };
 use objc2_foundation::{NSRect, NSSize, NSString, NSUInteger};
-use std::{
-    ffi::{CStr, c_char},
-    ops::Range,
-};
+use std::{ffi::c_char, ops::Range};
+
+const MAX_NATIVE_STRING_BYTES: usize = 1024 * 1024;
 
 #[cfg(test)]
 static MAC_APPKIT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -107,7 +106,13 @@ impl NSStringExt for *mut AnyObject {
             if cstr.is_null() {
                 ""
             } else {
-                CStr::from_ptr(cstr).to_str().unwrap()
+                let encoding: NSUInteger = 4;
+                let len: NSUInteger = msg_send![*self, lengthOfBytesUsingEncoding: encoding];
+                if len > MAX_NATIVE_STRING_BYTES {
+                    return "";
+                }
+                std::str::from_utf8(std::slice::from_raw_parts(cstr.cast(), len))
+                    .unwrap_or_default()
             }
         }
     }
@@ -136,7 +141,7 @@ impl NSRangeExt for NSRange {
     fn to_range(self) -> Option<Range<usize>> {
         if self.is_valid() {
             let start = self.location as usize;
-            let end = start + self.length as usize;
+            let end = start.checked_add(self.length as usize)?;
             Some(start..end)
         } else {
             None
@@ -153,8 +158,8 @@ unsafe fn ns_string(string: &str) -> *mut AnyObject {
 impl From<NSSize> for Size<Pixels> {
     fn from(value: NSSize) -> Self {
         Size {
-            width: px(value.width as f32),
-            height: px(value.height as f32),
+            width: px(finite_native_dimension(value.width)),
+            height: px(finite_native_dimension(value.height)),
         }
     }
 }
@@ -169,6 +174,55 @@ impl From<NSRect> for Size<Pixels> {
 impl From<NSRect> for Size<DevicePixels> {
     fn from(rect: NSRect) -> Self {
         let NSSize { width, height } = rect.size;
-        size(DevicePixels(width as i32), DevicePixels(height as i32))
+        size(
+            DevicePixels(device_dimension(width)),
+            DevicePixels(device_dimension(height)),
+        )
+    }
+}
+
+fn finite_native_dimension(value: f64) -> f32 {
+    if value.is_finite() && value >= 0.0 && value <= f32::MAX as f64 {
+        value as f32
+    } else {
+        0.0
+    }
+}
+
+fn finite_native_coordinate(value: f64) -> f32 {
+    if value.is_finite() && value.abs() <= f32::MAX as f64 {
+        value as f32
+    } else {
+        0.0
+    }
+}
+
+fn device_dimension(value: f64) -> i32 {
+    if value.is_finite() && value >= 0.0 && value <= i32::MAX as f64 {
+        value as i32
+    } else {
+        0
+    }
+}
+
+#[cfg(test)]
+mod native_value_tests {
+    use super::*;
+
+    #[test]
+    fn native_ranges_and_geometry_fail_closed() {
+        assert!(
+            NSRange {
+                location: usize::MAX - 1,
+                length: 4,
+            }
+            .to_range()
+            .is_none()
+        );
+        assert_eq!(finite_native_dimension(f64::NAN), 0.0);
+        assert_eq!(finite_native_dimension(f64::INFINITY), 0.0);
+        assert_eq!(finite_native_dimension(-1.0), 0.0);
+        assert_eq!(finite_native_coordinate(f64::NEG_INFINITY), 0.0);
+        assert_eq!(device_dimension(f64::MAX), 0);
     }
 }

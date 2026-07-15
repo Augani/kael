@@ -20,14 +20,24 @@ use crate::*;
 pub fn block_on_operation<T: windows_core::RuntimeType + 'static>(
     op: windows_future::IAsyncOperation<T>,
 ) -> windows_core::Result<T> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while op.Status()? == windows_future::AsyncStatus::Started {
+        if std::time::Instant::now() >= deadline {
+            op.Cancel()?;
+            return op.GetResults();
+        }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     op.GetResults()
 }
 
 pub fn block_on_action(op: windows_future::IAsyncAction) -> windows_core::Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while op.Status()? == windows_future::AsyncStatus::Started {
+        if std::time::Instant::now() >= deadline {
+            op.Cancel()?;
+            return op.GetResults();
+        }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     op.GetResults()
@@ -182,6 +192,9 @@ pub(crate) fn configure_dwm_dark_mode(hwnd: HWND, appearance: WindowAppearance) 
 
 #[inline]
 pub(crate) fn logical_point(x: f32, y: f32, scale_factor: f32) -> Point<Pixels> {
+    if !x.is_finite() || !y.is_finite() || !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return Point::default();
+    }
     Point {
         x: px(x / scale_factor),
         y: px(y / scale_factor),

@@ -54,7 +54,7 @@ fn main() {
                     })),
                     ..Default::default()
                 },
-                |_, cx| cx.new(|cx| SliderStyledDemo::new(cx)),
+                |_, cx| cx.new(SliderStyledDemo::new),
             )
             .unwrap();
         });

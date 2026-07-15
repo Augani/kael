@@ -677,8 +677,6 @@ mod tests {
 
     // For compatibility with the test macro
     #[cfg(target_os = "macos")]
-    use crate as kael;
-
     // These seem to vary wildly based on the text system.
     #[cfg(target_os = "macos")]
     #[crate::test]

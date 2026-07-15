@@ -54,7 +54,9 @@ impl WindowsDispatcher {
             let task_wrapper = Mutex::new(Some(runnable));
             WorkItemHandler::new(move |_| {
                 if let Some(task) = task_wrapper.lock().take() {
-                    task.run();
+                    super::catch_platform_callback("background task", (), || {
+                        task.run();
+                    });
                 }
                 Ok(())
             })
@@ -67,7 +69,9 @@ impl WindowsDispatcher {
             let task_wrapper = Mutex::new(Some(runnable));
             TimerElapsedHandler::new(move |_| {
                 if let Some(task) = task_wrapper.lock().take() {
-                    task.run();
+                    super::catch_platform_callback("timer task", (), || {
+                        task.run();
+                    });
                 }
                 Ok(())
             })

@@ -1,4 +1,7 @@
-use crate::theme::Theme;
+use crate::{
+    charts::{finite_or_zero, readable_text_color},
+    theme::Theme,
+};
 use kael::{prelude::FluentBuilder as _, *};
 
 fn lerp_color(low: Hsla, high: Hsla, t: f32) -> Hsla {
@@ -8,6 +11,22 @@ fn lerp_color(low: Hsla, high: Hsla, t: f32) -> Hsla {
         low.s + (high.s - low.s) * t,
         low.l + (high.l - low.l) * t,
         low.a + (high.a - low.a) * t,
+    )
+}
+
+fn value_domain(data: &[Vec<f64>]) -> Option<(f64, f64)> {
+    let mut values = data.iter().flatten().copied();
+    let first = values.next()?;
+    Some(values.fold((first, first), |(min, max), value| {
+        (min.min(value), max.max(value))
+    }))
+}
+
+fn heatmap_text_sizes(cell_size: Pixels) -> (Pixels, Pixels) {
+    let cell_size = f32::from(cell_size);
+    (
+        px((cell_size * 0.25).clamp(10.0, 14.0)),
+        px((cell_size * 0.22).clamp(11.0, 13.0)),
     )
 }
 
@@ -48,7 +67,10 @@ impl Heatmap {
     }
 
     pub fn data(mut self, data: Vec<Vec<f64>>) -> Self {
-        self.data = data;
+        self.data = data
+            .into_iter()
+            .map(|row| row.into_iter().map(finite_or_zero).collect())
+            .collect();
         self
     }
 
@@ -69,12 +91,22 @@ impl Heatmap {
     }
 
     pub fn cell_size(mut self, size: Pixels) -> Self {
-        self.cell_size = size;
+        let value = f32::from(size);
+        self.cell_size = if value.is_finite() && value > 0.0 {
+            size
+        } else {
+            px(40.0)
+        };
         self
     }
 
     pub fn gap(mut self, gap: Pixels) -> Self {
-        self.gap = gap;
+        let value = f32::from(gap);
+        self.gap = if value.is_finite() && value >= 0.0 {
+            gap
+        } else {
+            px(2.0)
+        };
         self
     }
 
@@ -105,24 +137,11 @@ impl RenderOnce for Heatmap {
             .high_color
             .unwrap_or_else(|| hsla(0.58, 0.9, 0.35, 1.0));
 
-        let mut global_min = f64::MAX;
-        let mut global_max = f64::MIN;
-        for row in &self.data {
-            for &val in row {
-                global_min = global_min.min(val);
-                global_max = global_max.max(val);
-            }
-        }
-        if global_min == f64::MAX {
-            global_min = 0.0;
-            global_max = 1.0;
-        }
-        if (global_max - global_min).abs() < f64::EPSILON {
-            global_max = global_min + 1.0;
-        }
-
-        let value_range = global_max - global_min;
+        let domain = value_domain(&self.data);
+        let (global_min, global_max) = domain.unwrap_or((0.0, 1.0));
+        let value_range = (global_max - global_min).abs().max(1.0);
         let cell_size = self.cell_size;
+        let (value_text_size, label_text_size) = heatmap_text_sizes(cell_size);
         let gap = self.gap;
         let show_values = self.show_values;
         let show_labels = self.show_labels;
@@ -131,8 +150,23 @@ impl RenderOnce for Heatmap {
 
         let has_y_labels = show_labels && !self.y_labels.is_empty();
         let has_x_labels = show_labels && !self.x_labels.is_empty();
+        let cell_count = self.data.iter().map(Vec::len).sum::<usize>();
+        let description = if cell_count == 0 {
+            "Heatmap. No data".to_string()
+        } else {
+            format!(
+                "Heatmap with {} rows and {cell_count} cells. Values range from {global_min:.2} to {global_max:.2}",
+                self.data.len()
+            )
+        };
 
         div()
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Image)
+                    .label("Heatmap")
+                    .description(description),
+            )
+            .max_w_full()
             .flex()
             .flex_col()
             .gap(px(4.0))
@@ -141,24 +175,38 @@ impl RenderOnce for Heatmap {
                 d.style().refine(&user_style);
                 d
             })
+            .when(cell_count == 0, |this| {
+                this.min_h(px(120.0))
+                    .items_center()
+                    .justify_center()
+                    .text_sm()
+                    .text_color(label_color)
+                    .child("No data")
+            })
             .child(
                 div()
                     .flex()
                     .gap(px(4.0))
                     .when(has_y_labels, |this| {
-                        this.child(div().flex().flex_col().gap(gap).children(
-                            self.y_labels.iter().map(|label| {
-                                div()
-                                    .h(cell_size)
-                                    .flex()
-                                    .items_center()
-                                    .justify_end()
-                                    .pr(px(4.0))
-                                    .text_size(px(11.0))
-                                    .text_color(label_color)
-                                    .child(label.clone())
-                            }),
-                        ))
+                        this.child(
+                            div()
+                                .w(px(56.0))
+                                .flex_shrink_0()
+                                .flex()
+                                .flex_col()
+                                .gap(gap)
+                                .children(self.y_labels.iter().map(|label| {
+                                    div()
+                                        .h(cell_size)
+                                        .flex()
+                                        .items_center()
+                                        .justify_end()
+                                        .pr(px(4.0))
+                                        .text_size(label_text_size)
+                                        .text_color(label_color)
+                                        .child(label.clone())
+                                })),
+                        )
                     })
                     .child(
                         div()
@@ -170,11 +218,7 @@ impl RenderOnce for Heatmap {
                                     let t = ((val - global_min) / value_range) as f32;
                                     let bg = lerp_color(low_color, high_color, t);
 
-                                    let contrast = if bg.l > 0.5 {
-                                        hsla(0.0, 0.0, 0.1, 1.0)
-                                    } else {
-                                        hsla(0.0, 0.0, 0.95, 1.0)
-                                    };
+                                    let contrast = readable_text_color(bg);
 
                                     div()
                                         .size(cell_size)
@@ -186,7 +230,7 @@ impl RenderOnce for Heatmap {
                                         .when(show_values, |this| {
                                             this.child(
                                                 div()
-                                                    .text_size(px(10.0))
+                                                    .text_size(value_text_size)
                                                     .text_color(contrast)
                                                     .child(format!("{:.0}", val)),
                                             )
@@ -204,12 +248,41 @@ impl RenderOnce for Heatmap {
                         .children(self.x_labels.iter().map(|label| {
                             div()
                                 .w(cell_size)
-                                .text_size(px(11.0))
+                                .text_size(label_text_size)
                                 .text_color(label_color)
                                 .text_center()
                                 .child(label.clone())
                         })),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn value_domain_preserves_constant_data() {
+        assert_eq!(value_domain(&[]), None);
+        assert_eq!(value_domain(&[vec![5.0, 5.0], vec![5.0]]), Some((5.0, 5.0)));
+        assert_eq!(
+            value_domain(&[vec![-2.0, 4.0], vec![1.0]]),
+            Some((-2.0, 4.0))
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn invalid_geometry_uses_safe_defaults() {
+        let heatmap = Heatmap::new().cell_size(px(f32::NAN)).gap(px(-1.0));
+        assert_eq!(f32::from(heatmap.cell_size), 40.0);
+        assert_eq!(f32::from(heatmap.gap), 2.0);
+    }
+
+    #[::core::prelude::v1::test]
+    fn text_scales_with_cells_inside_readable_bounds() {
+        assert_eq!(heatmap_text_sizes(px(20.0)), (px(10.0), px(11.0)));
+        assert_eq!(heatmap_text_sizes(px(64.0)), (px(14.0), px(13.0)));
+        assert_eq!(heatmap_text_sizes(px(200.0)), (px(14.0), px(13.0)));
     }
 }

@@ -1,6 +1,10 @@
-use kael::*;
+use kael::{prelude::FluentBuilder as _, *};
+use std::panic::Location;
 
-use crate::theme::Theme;
+use crate::{
+    components::copy_button::{CopyButton, CopyButtonState},
+    theme::Theme,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CodeBlockCopyState {
@@ -20,6 +24,7 @@ enum TokenKind {
 
 #[derive(IntoElement)]
 pub struct CodeBlock {
+    id: ElementId,
     base: Div,
     code: SharedString,
     language: Option<SharedString>,
@@ -30,8 +35,19 @@ pub struct CodeBlock {
 }
 
 impl CodeBlock {
+    #[track_caller]
     pub fn new(code: impl Into<SharedString>) -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "code-block:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             base: div(),
             code: code.into(),
             language: None,
@@ -40,6 +56,11 @@ impl CodeBlock {
             highlight_lines: Vec::new(),
             max_height: None,
         }
+    }
+
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
     }
 
     pub fn language(mut self, lang: impl Into<SharedString>) -> Self {
@@ -58,7 +79,9 @@ impl CodeBlock {
     }
 
     pub fn highlight_lines(mut self, lines: Vec<usize>) -> Self {
-        self.highlight_lines = lines;
+        self.highlight_lines = lines.into_iter().filter(|line| *line > 0).collect();
+        self.highlight_lines.sort_unstable();
+        self.highlight_lines.dedup();
         self
     }
 
@@ -68,7 +91,10 @@ impl CodeBlock {
     }
 
     pub fn max_height(mut self, height: Pixels) -> Self {
-        self.max_height = Some(height);
+        let value = f32::from(height);
+        if value.is_finite() && value > 0.0 {
+            self.max_height = Some(height);
+        }
         self
     }
 
@@ -89,7 +115,7 @@ impl CodeBlock {
 }
 
 impl RenderOnce for CodeBlock {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = Theme::of(cx);
         let lines: Vec<&str> = self.code.split('\n').collect();
         let is_rust = self
@@ -97,6 +123,22 @@ impl RenderOnce for CodeBlock {
             .as_ref()
             .map(|l| l.as_ref() == "rust" || l.as_ref() == "rs")
             .unwrap_or(false);
+        let language_label = self
+            .language
+            .as_ref()
+            .filter(|language| !language.trim().is_empty())
+            .map(|language| match language.as_ref() {
+                "rs" | "rust" => "Rust".to_string(),
+                other => other.to_string(),
+            });
+        let group_label = language_label
+            .map(|language| format!("{language} code block"))
+            .unwrap_or_else(|| "Code block".to_string());
+        let accessible_code = if self.code.trim().is_empty() {
+            "Empty code block".to_string()
+        } else {
+            self.code.to_string()
+        };
 
         let keyword_color = theme.tokens.primary;
         let string_color = hsla(0.4, 0.7, 0.5, 1.0);
@@ -110,9 +152,14 @@ impl RenderOnce for CodeBlock {
 
         let code_for_copy = self.code.clone();
         let show_copy = self.show_copy_button;
+        let id = self.id.clone();
 
         let mut outer = self
             .base
+            .id(id.clone())
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group).label(group_label),
+            )
             .relative()
             .bg(theme.tokens.muted.opacity(0.3))
             .rounded(theme.tokens.radius_md)
@@ -123,29 +170,30 @@ impl RenderOnce for CodeBlock {
         let max_h = self.max_height;
 
         if show_copy {
-            let copy_btn = div()
-                .id("code-block-copy")
-                .absolute()
-                .top(px(8.0))
-                .right(px(8.0))
-                .px(px(8.0))
-                .py(px(4.0))
-                .rounded(theme.tokens.radius_sm)
-                .bg(theme.tokens.muted.opacity(0.6))
-                .text_color(theme.tokens.muted_foreground)
-                .text_size(px(11.0))
-                .cursor_pointer()
-                .transition(theme.tokens.transition_fast)
-                .hover(|s| s.bg(theme.tokens.muted))
-                .active(|s| s.opacity(0.7))
-                .child("Copy")
-                .on_click(move |_, _window, cx| {
-                    cx.write_to_clipboard(ClipboardItem::new_string(code_for_copy.to_string()));
-                });
+            let copy_state_id = ElementId::NamedChild(Box::new(id.clone()), "copy-state".into());
+            let copy_state = window.use_keyed_state(copy_state_id, cx, |_, _| {
+                CopyButtonState::new(code_for_copy.clone())
+            });
+            copy_state.update(cx, |state, _| state.set_text(code_for_copy.clone()));
+            let copy_btn = CopyButton::new(
+                ElementId::NamedChild(Box::new(id.clone()), "copy".into()),
+                copy_state,
+            )
+            .absolute()
+            .top(px(8.0))
+            .right(px(8.0))
+            .h(px(28.0));
             outer = outer.child(copy_btn);
         }
 
-        let mut content = div().flex().flex_col().py(px(12.0));
+        let mut content = div()
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group)
+                    .states(AccessibilityState::HIDDEN),
+            )
+            .flex()
+            .flex_col()
+            .py(px(12.0));
 
         for (idx, line_text) in lines.iter().enumerate() {
             let line_num = idx + 1;
@@ -188,17 +236,17 @@ impl RenderOnce for CodeBlock {
             content = content.child(row);
         }
 
-        if let Some(h) = max_h {
-            outer.child(
-                div()
-                    .id("code-block-scroll")
-                    .max_h(h)
-                    .overflow_y_scroll()
-                    .child(content),
-            )
-        } else {
-            outer.child(content)
-        }
+        outer.child(
+            div()
+                .id(ElementId::NamedChild(Box::new(id), "scroll".into()))
+                .accessibility(
+                    AccessibilityAttributes::new(AccessibilityRole::StaticText)
+                        .label(accessible_code),
+                )
+                .overflow_x_scroll()
+                .when_some(max_h, |this, height| this.max_h(height).overflow_y_scroll())
+                .child(content),
+        )
     }
 }
 
@@ -364,5 +412,22 @@ impl StatefulInteractiveElement for CodeBlock {}
 impl ParentElement for CodeBlock {
     fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
         self.base.extend(elements)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn code_block_normalizes_highlights_and_invalid_height() {
+        let block = CodeBlock::new("one\ntwo")
+            .highlight_lines(vec![2, 0, 2, 1])
+            .max_height(px(f32::NAN));
+        assert_eq!(block.highlight_lines, vec![1, 2]);
+        assert_eq!(block.max_height, None);
+
+        let block = block.max_height(px(-12.0)).max_height(px(180.0));
+        assert_eq!(block.max_height, Some(px(180.0)));
     }
 }

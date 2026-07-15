@@ -20,7 +20,7 @@ impl DeviceEnumerator for WindowsScreenCaptureBackend {
                 id: "display-0".to_string(),
                 name: "Primary Display".to_string(),
                 kind: CaptureDeviceKind::Screen,
-                is_available: true,
+                is_available: false,
             }]),
             CaptureDeviceKind::Window => Ok(vec![]),
             _ => Ok(vec![]),
@@ -43,7 +43,6 @@ impl CaptureBackend for WindowsScreenCaptureBackend {
 }
 
 struct WindowsScreenCaptureSession {
-    config: CaptureConfig,
     state: CaptureSessionState,
     dropped: AtomicU64,
     latency_ms: AtomicU64,
@@ -51,9 +50,8 @@ struct WindowsScreenCaptureSession {
 }
 
 impl WindowsScreenCaptureSession {
-    fn new(config: CaptureConfig) -> Self {
+    fn new(_config: CaptureConfig) -> Self {
         Self {
-            config,
             state: CaptureSessionState::Idle,
             dropped: AtomicU64::new(0),
             latency_ms: AtomicU64::new(0),
@@ -64,20 +62,26 @@ impl WindowsScreenCaptureSession {
 
 impl CaptureSession for WindowsScreenCaptureSession {
     fn start(&mut self, config: CaptureConfig, callback: FrameCallback) -> Result<()> {
-        self.config = config;
-        self.state = CaptureSessionState::Starting;
-        self.callback = Some(callback);
+        let _ = (config, callback);
+        self.state = CaptureSessionState::Idle;
+        self.callback = None;
         Err(anyhow!(
             "Windows Graphics Capture API requires runtime initialization"
         ))
     }
 
     fn pause(&mut self) -> Result<()> {
+        if self.state != CaptureSessionState::Running {
+            return Err(anyhow!("screen capture session is not running"));
+        }
         self.state = CaptureSessionState::Paused;
         Ok(())
     }
 
     fn resume(&mut self) -> Result<()> {
+        if self.state != CaptureSessionState::Paused {
+            return Err(anyhow!("screen capture session is not paused"));
+        }
         self.state = CaptureSessionState::Running;
         Ok(())
     }

@@ -7,7 +7,10 @@ pub(crate) struct SafeCursor {
     raw: HCURSOR,
 }
 
+// SAFETY: `HCURSOR` is a copyable system handle. This wrapper does not own or destroy
+// it; the cached cursors are `LR_SHARED` resources and are only passed back to Win32.
 unsafe impl Send for SafeCursor {}
+// SAFETY: See the `Send` rationale; immutable handle copies carry no Rust aliasing state.
 unsafe impl Sync for SafeCursor {}
 
 impl From<HCURSOR> for SafeCursor {
@@ -35,7 +38,11 @@ impl SafeHwnd {
     }
 }
 
+// SAFETY: `HWND` is an opaque copyable identifier. Cross-thread users in this module
+// only retain it for Win32's thread-safe message-posting/enumeration APIs; window state
+// remains owned by its creating UI thread.
 unsafe impl Send for SafeHwnd {}
+// SAFETY: Sharing the identifier does not share Rust-managed window memory.
 unsafe impl Sync for SafeHwnd {}
 
 impl From<HWND> for SafeHwnd {

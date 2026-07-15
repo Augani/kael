@@ -38,7 +38,7 @@ impl NotarizeResult {
     pub fn warnings(&self) -> Vec<&str> {
         self.log_entries
             .iter()
-            .filter(|line| line.to_lowercase().contains("warning"))
+            .filter(|line| contains_ascii_case_insensitive(line, b"warning"))
             .map(|s| s.as_str())
             .collect()
     }
@@ -47,7 +47,7 @@ impl NotarizeResult {
     pub fn errors(&self) -> Vec<&str> {
         self.log_entries
             .iter()
-            .filter(|line| line.to_lowercase().contains("error"))
+            .filter(|line| contains_ascii_case_insensitive(line, b"error"))
             .map(|s| s.as_str())
             .collect()
     }
@@ -56,6 +56,13 @@ impl NotarizeResult {
     pub fn parse_log(&self) -> (Vec<&str>, Vec<&str>) {
         (self.warnings(), self.errors())
     }
+}
+
+fn contains_ascii_case_insensitive(value: &str, needle: &[u8]) -> bool {
+    value
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
 }
 
 #[cfg(test)]

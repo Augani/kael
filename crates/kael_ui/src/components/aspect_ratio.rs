@@ -20,7 +20,11 @@ pub struct AspectRatio {
 impl AspectRatio {
     pub fn new(ratio: f32, child: impl IntoElement) -> Self {
         Self {
-            ratio,
+            ratio: if ratio.is_finite() && ratio > 0.0 {
+                ratio
+            } else {
+                1.0
+            },
             shape: AspectRatioShape::Rectangle,
             child: child.into_any_element(),
             style: StyleRefinement::default(),
@@ -30,6 +34,21 @@ impl AspectRatio {
     pub fn shape(mut self, shape: AspectRatioShape) -> Self {
         self.shape = shape;
         self
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::AspectRatio;
+    use kael::div;
+
+    #[test]
+    fn invalid_ratios_fall_back_to_square() {
+        assert_eq!(AspectRatio::new(0.0, div()).ratio, 1.0);
+        assert_eq!(AspectRatio::new(-2.0, div()).ratio, 1.0);
+        assert_eq!(AspectRatio::new(f32::NAN, div()).ratio, 1.0);
+        assert_eq!(AspectRatio::new(16.0 / 9.0, div()).ratio, 16.0 / 9.0);
     }
 }
 

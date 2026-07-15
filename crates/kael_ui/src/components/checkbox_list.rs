@@ -10,6 +10,7 @@ use crate::{
     theme::Theme,
 };
 use kael::{prelude::FluentBuilder as _, *};
+use std::panic::Location;
 use std::rc::Rc;
 
 #[derive(Clone)]
@@ -72,6 +73,7 @@ impl CheckboxListItem {
 
 #[derive(IntoElement)]
 pub struct CheckboxList {
+    id: ElementId,
     label: Option<SharedString>,
     items: Vec<CheckboxListItem>,
     size: CheckboxSize,
@@ -88,8 +90,19 @@ pub struct CheckboxList {
 }
 
 impl CheckboxList {
+    #[track_caller]
     pub fn new() -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "checkbox-list:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             label: None,
             items: Vec::new(),
             size: CheckboxSize::Md,
@@ -104,6 +117,11 @@ impl CheckboxList {
             on_change: None,
             style: StyleRefinement::default(),
         }
+    }
+
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
     }
 
     pub fn label(mut self, label: impl Into<SharedString>) -> Self {
@@ -204,6 +222,7 @@ impl CheckboxList {
 }
 
 impl Default for CheckboxList {
+    #[track_caller]
     fn default() -> Self {
         Self::new()
     }
@@ -233,18 +252,34 @@ impl RenderOnce for CheckboxList {
         };
         let has_dividers = self.has_dividers;
         let item_count = self.items.len();
+        let list_id = self.id.clone();
+        let list_label = self.label.clone().unwrap_or_else(|| "Checkbox list".into());
 
         let list = div()
+            .id(list_id.clone())
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::List).label(list_label.to_string()),
+            )
             .flex()
             .flex_col()
             .gap(if has_dividers { px(0.0) } else { px(2.0) })
             .children(self.items.into_iter().enumerate().map(move |(idx, item)| {
                 let item_id = item.id.clone();
                 let on_change = on_change.clone();
+                let on_change_for_row = on_change.clone();
                 let item_disabled = disabled || item.disabled;
                 let interactive = !item_disabled && !read_only;
+                let row_item_id = item.id.clone();
+                let checkbox_label = item.label.clone();
+                let row_element_id =
+                    ElementId::NamedChild(Box::new(list_id.clone()), item.id.clone());
 
                 div()
+                    .id(row_element_id)
+                    .accessibility(
+                        AccessibilityAttributes::new(AccessibilityRole::ListItem)
+                            .label(item.label.to_string()),
+                    )
                     .flex()
                     .items_start()
                     .gap(px(8.0))
@@ -266,8 +301,9 @@ impl RenderOnce for CheckboxList {
                     })
                     .child(
                         Checkbox::new(ElementId::Name(item.id.clone()))
+                            .label(checkbox_label)
                             .checked(item.checked)
-                            .disabled(item_disabled)
+                            .disabled(item_disabled || read_only)
                             .size(size)
                             .on_click(move |checked, window, cx| {
                                 if interactive {
@@ -314,6 +350,14 @@ impl RenderOnce for CheckboxList {
                                 .child(content),
                         )
                     })
+                    .when_some(
+                        on_change_for_row.filter(|_| interactive),
+                        |this, handler| {
+                            this.on_click(move |_, window, cx| {
+                                handler(row_item_id.clone(), !item.checked, window, cx);
+                            })
+                        },
+                    )
                     .when(!interactive, |this| this.cursor(CursorStyle::Arrow))
             }));
 

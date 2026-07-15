@@ -13,7 +13,9 @@ type id = *mut AnyObject;
 #[allow(non_snake_case)]
 pub trait NSAttributedString: Sized {
     unsafe fn alloc(_: Self) -> id {
-        let class = AnyClass::get(c"NSAttributedString").expect("NSAttributedString class");
+        let Some(class) = AnyClass::get(c"NSAttributedString") else {
+            return std::ptr::null_mut();
+        };
         let obj: *mut AnyObject = unsafe { msg_send![class, alloc] };
         obj as id
     }
@@ -66,8 +68,9 @@ impl NSAttributedString for id {
 
 pub trait NSMutableAttributedString: NSAttributedString {
     unsafe fn alloc(_: Self) -> id {
-        let class =
-            AnyClass::get(c"NSMutableAttributedString").expect("NSMutableAttributedString class");
+        let Some(class) = AnyClass::get(c"NSMutableAttributedString") else {
+            return std::ptr::null_mut();
+        };
         let obj: *mut AnyObject = unsafe { msg_send![class, alloc] };
         obj as id
     }

@@ -45,6 +45,9 @@ pub(crate) fn network_status() -> NetworkStatus {
 }
 
 pub(crate) fn path_status_to_network_status(path: *const c_void) -> NetworkStatus {
+    if path.is_null() {
+        return NetworkStatus::Offline;
+    }
     let status = unsafe { nw_path_get_status(path) };
     if status == NW_PATH_STATUS_SATISFIED {
         NetworkStatus::Online
@@ -62,6 +65,9 @@ pub(crate) unsafe fn start_path_monitor(
     handler_block: *const c_void,
     queue: *const c_void,
 ) {
+    if monitor.is_null() || handler_block.is_null() || queue.is_null() {
+        return;
+    }
     unsafe {
         nw_path_monitor_set_update_handler(monitor, handler_block);
         nw_path_monitor_set_queue(monitor, queue);
@@ -74,5 +80,18 @@ pub(crate) unsafe fn cancel_path_monitor(monitor: *const c_void) {
         unsafe {
             nw_path_monitor_cancel(monitor);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn null_network_path_fails_closed() {
+        assert_eq!(
+            path_status_to_network_status(std::ptr::null()),
+            NetworkStatus::Offline
+        );
     }
 }

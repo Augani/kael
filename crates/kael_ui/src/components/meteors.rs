@@ -6,6 +6,7 @@ use std::time::Duration;
 
 pub struct MeteorState {
     version: usize,
+    paused: bool,
 }
 
 impl MeteorState {
@@ -15,8 +16,10 @@ impl MeteorState {
                 .timer(Duration::from_millis(100))
                 .await;
             let result = this.update(cx, |state, cx| {
-                state.version = state.version.wrapping_add(1);
-                cx.notify();
+                if !state.paused && !cx.reduce_motion() {
+                    state.version = state.version.wrapping_add(1);
+                    cx.notify();
+                }
             });
             if result.is_err() {
                 break;
@@ -24,7 +27,34 @@ impl MeteorState {
         })
         .detach();
 
-        Self { version: 0 }
+        Self {
+            version: 0,
+            paused: false,
+        }
+    }
+
+    pub fn new_paused(cx: &mut Context<Self>) -> Self {
+        let mut state = Self::new(cx);
+        state.paused = true;
+        state
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    pub fn pause(&mut self, cx: &mut Context<Self>) {
+        if !self.paused {
+            self.paused = true;
+            cx.notify();
+        }
+    }
+
+    pub fn resume(&mut self, cx: &mut Context<Self>) {
+        if self.paused && !cx.reduce_motion() {
+            self.paused = false;
+            cx.notify();
+        }
     }
 }
 
@@ -72,12 +102,16 @@ impl Meteors {
     }
 
     pub fn speed(mut self, speed: f32) -> Self {
-        self.speed = speed.max(0.1);
+        if speed.is_finite() {
+            self.speed = speed.max(0.1);
+        }
         self
     }
 
     pub fn angle(mut self, angle: f32) -> Self {
-        self.angle = angle;
+        if angle.is_finite() {
+            self.angle = angle.rem_euclid(360.0);
+        }
         self
     }
 
@@ -87,7 +121,9 @@ impl Meteors {
     }
 
     pub fn trail_length(mut self, length: Pixels) -> Self {
-        self.trail_length = length;
+        if (length / px(1.0)).is_finite() && length > px(0.0) {
+            self.trail_length = length;
+        }
         self
     }
 }
@@ -194,5 +230,34 @@ impl RenderOnce for Meteors {
                 el.style().refine(&user_style);
                 el
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn paused_state_can_resume_when_motion_is_allowed() {
+        let mut cx = TestAppContext::single();
+        let state = cx.new(MeteorState::new_paused);
+
+        cx.update(|cx| {
+            assert!(state.read(cx).is_paused());
+            state.update(cx, |state, cx| state.resume(cx));
+            assert!(!state.read(cx).is_paused());
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn reduced_motion_keeps_meteors_paused() {
+        let mut cx = TestAppContext::single();
+        cx.set_reduce_motion(true);
+        let state = cx.new(MeteorState::new_paused);
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| state.resume(cx));
+            assert!(state.read(cx).is_paused());
+        });
     }
 }

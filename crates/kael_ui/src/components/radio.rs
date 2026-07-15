@@ -128,6 +128,12 @@ impl RenderOnce for Radio {
             .read(cx)
             .clone();
         let is_focused = focus_handle.is_focused(window);
+        let focus_on_mouse = focus_handle.clone();
+        let accessibility_label = self
+            .label
+            .clone()
+            .unwrap_or_else(|| "Radio option".into())
+            .to_string();
 
         let tokens = &Theme::of(cx).tokens;
         let primary = tokens.primary;
@@ -158,6 +164,11 @@ impl RenderOnce for Radio {
         };
 
         self.base
+            .accessibility(
+                AccessibilityAttributes::radio_button(accessibility_label, self.checked)
+                    .disabled(self.disabled)
+                    .focused(is_focused),
+            )
             .when(!self.disabled, |this| {
                 this.track_focus(&focus_handle.tab_index(0).tab_stop(true))
             })
@@ -211,15 +222,26 @@ impl RenderOnce for Radio {
             })
             .when(!self.disabled, |this| {
                 this.cursor(CursorStyle::PointingHand)
-                    .on_mouse_down(MouseButton::Left, |_, window, _| {
+                    .on_mouse_down(MouseButton::Left, move |_, window, _| {
                         window.prevent_default();
+                        window.focus(&focus_on_mouse);
                     })
                     .when_some(self.on_click, |this, handler| {
+                        let handler_for_key = handler.clone();
                         this.on_click(move |_, window, cx| {
                             window.prevent_default();
                             cx.stop_propagation();
                             handler(window, cx);
                         })
+                        .on_key_down(
+                            move |event: &KeyDownEvent, window, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    handler_for_key(window, cx);
+                                    cx.stop_propagation();
+                                    window.prevent_default();
+                                }
+                            },
+                        )
                     })
             })
             .map(|this| {

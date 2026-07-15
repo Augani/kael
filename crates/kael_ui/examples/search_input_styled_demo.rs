@@ -47,7 +47,7 @@ impl SearchInputStyledDemo {
     fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
             // Default SearchInput
-            search1: cx.new(|cx| SearchInput::new(cx)),
+            search1: cx.new(SearchInput::new),
 
             // SearchInput with custom padding via Styled trait
             search2: cx.new(|cx| {

@@ -44,6 +44,9 @@ version = "0.5"
 [dependencies.proc-macro2]
 version = "1.0.93"
 
+[dependencies.proc-macro-crate]
+version = "3.5.0"
+
 [dependencies.quote]
 version = "1.0.9"
 
@@ -57,7 +60,7 @@ features = [
 
 
 [dev-dependencies]
-kael = { package = "kael", path = "../kael" }
+kael_renamed = { package = "kael", path = "../kael", features = ["runtime_shaders", "test-support"] }
 trybuild = "1"
 
 [lints]

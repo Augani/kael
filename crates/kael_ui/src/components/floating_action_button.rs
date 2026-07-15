@@ -5,7 +5,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::animations::{durations, easings};
-use crate::theme::Theme;
+use crate::components::button::ButtonVariant;
+use crate::components::icon_button::IconButton;
 
 struct FABAction {
     id: SharedString,
@@ -113,7 +114,7 @@ impl FloatingActionButton {
         Self {
             id: id.into(),
             state,
-            icon: "+".into(),
+            icon: "plus".into(),
             actions: Vec::new(),
             fab_size: FABSize::default(),
             stagger: Duration::from_millis(50),
@@ -162,7 +163,6 @@ impl Styled for FloatingActionButton {
 
 impl RenderOnce for FloatingActionButton {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = Theme::of(cx);
         let user_style = self.style;
         let state = self.state.read(cx);
         let is_expanded = state.is_expanded;
@@ -173,26 +173,30 @@ impl RenderOnce for FloatingActionButton {
         let action_icon_size = self.fab_size.action_icon_size();
         let stagger = self.stagger;
         let state_for_toggle = self.state.clone();
+        let fab_id = self.id.clone();
+        let main_id = ElementId::NamedChild(Box::new(fab_id.clone()), "trigger".into());
 
         div()
-            .id(self.id)
+            .id(fab_id.clone())
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group).label("Floating actions"),
+            )
             .flex()
             .flex_col_reverse()
             .items_center()
             .gap(px(12.0))
             .child(
-                div()
-                    .id("fab-main")
-                    .flex()
-                    .items_center()
-                    .justify_center()
+                IconButton::new(self.icon.clone())
+                    .id(main_id)
+                    .label(if is_expanded {
+                        "Close floating actions"
+                    } else {
+                        "Open floating actions"
+                    })
+                    .variant(ButtonVariant::Default)
                     .size(main_size)
+                    .icon_size(icon_size)
                     .rounded_full()
-                    .bg(theme.tokens.primary)
-                    .text_color(theme.tokens.primary_foreground)
-                    .text_size(icon_size)
-                    .font_weight(FontWeight::BOLD)
-                    .cursor_pointer()
                     .shadow(smallvec::smallvec![BoxShadow {
                         color: hsla(0.0, 0.0, 0.0, 0.2),
                         offset: point(px(0.0), px(4.0)),
@@ -200,14 +204,14 @@ impl RenderOnce for FloatingActionButton {
                         spread_radius: px(0.0),
                         inset: false,
                     }])
-                    .hover(|s| s.opacity(0.9))
-                    .active(|s| s.opacity(0.8))
-                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                        state_for_toggle.update(cx, |s, cx| s.toggle(cx));
+                    .on_click(move |_, _, cx| {
+                        state_for_toggle.update(cx, |state, cx| state.toggle(cx));
                     })
-                    .child(self.icon.clone())
                     .with_animation(
-                        ElementId::Name(format!("fab-rotate-{}", animation_version).into()),
+                        ElementId::NamedChild(
+                            Box::new(fab_id.clone()),
+                            format!("trigger-animation-{}", animation_version).into(),
+                        ),
                         Animation::new(durations::FAST).with_easing(easings::ease_out_cubic),
                         move |el, delta| {
                             if is_expanded {
@@ -226,21 +230,25 @@ impl RenderOnce for FloatingActionButton {
                         .enumerate()
                         .map(move |(idx, action)| {
                             let handler = action.handler.clone();
+                            let action_id = ElementId::NamedChild(
+                                Box::new(fab_id.clone()),
+                                format!("action-{}", action.id).into(),
+                            );
+                            let animation_id = ElementId::NamedChild(
+                                Box::new(fab_id.clone()),
+                                format!("action-animation-{}-{}", idx, animation_version).into(),
+                            );
                             let delay = Duration::from_millis(
                                 stagger.as_millis() as u64 * (action_count - 1 - idx) as u64,
                             );
 
-                            div()
-                                .id(ElementId::Name(format!("fab-action-{}", action.id).into()))
-                                .flex()
-                                .items_center()
-                                .justify_center()
+                            IconButton::new(action.icon.clone())
+                                .id(action_id)
+                                .label(action.id.to_string().replace(['-', '_'], " "))
+                                .variant(ButtonVariant::Secondary)
                                 .size(action_size)
+                                .icon_size(action_icon_size)
                                 .rounded_full()
-                                .bg(theme.tokens.secondary)
-                                .text_color(theme.tokens.secondary_foreground)
-                                .text_size(action_icon_size)
-                                .cursor_pointer()
                                 .shadow(smallvec::smallvec![BoxShadow {
                                     color: hsla(0.0, 0.0, 0.0, 0.15),
                                     offset: point(px(0.0), px(2.0)),
@@ -248,17 +256,11 @@ impl RenderOnce for FloatingActionButton {
                                     spread_radius: px(0.0),
                                     inset: false,
                                 }])
-                                .hover(|s| s.opacity(0.9))
-                                .active(|s| s.opacity(0.8))
-                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                .on_click(move |_, window, cx| {
                                     (handler)(window, cx);
                                 })
-                                .child(action.icon.clone())
                                 .with_animation(
-                                    ElementId::Name(
-                                        format!("fab-action-anim-{}-{}", idx, animation_version)
-                                            .into(),
-                                    ),
+                                    animation_id,
                                     Animation::new(durations::FAST + delay)
                                         .with_easing(easings::ease_out_cubic),
                                     move |el, delta| {

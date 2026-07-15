@@ -3,6 +3,19 @@ use std::default::Default;
 use x11rb::protocol::{Event, xproto};
 use xim::{AHashMap, AttributeName, Client, ClientError, ClientHandler, InputStyle};
 
+const MAX_XIM_TEXT_BYTES: usize = 64 * 1024;
+
+fn bounded_xim_text(text: &str) -> String {
+    if text.len() <= MAX_XIM_TEXT_BYTES {
+        return text.to_string();
+    }
+    let mut end = MAX_XIM_TEXT_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
+}
+
 pub enum XimCallbackEvent {
     XimXEvent(x11rb::protocol::Event),
     XimPreeditEvent(xproto::Window, String),
@@ -75,7 +88,7 @@ impl<C: Client<XEvent = xproto::KeyPressEvent>> ClientHandler<C> for XimHandler 
     ) -> Result<(), ClientError> {
         self.last_callback_event = Some(XimCallbackEvent::XimCommitEvent(
             self.window,
-            String::from(text),
+            bounded_xim_text(text),
         ));
         Ok(())
     }
@@ -126,7 +139,7 @@ impl<C: Client<XEvent = xproto::KeyPressEvent>> ClientHandler<C> for XimHandler 
         // Currently there's no way to support these.
         self.last_callback_event = Some(XimCallbackEvent::XimPreeditEvent(
             self.window,
-            String::from(preedit_string),
+            bounded_xim_text(preedit_string),
         ));
         Ok(())
     }

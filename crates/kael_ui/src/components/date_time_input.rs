@@ -174,7 +174,7 @@ impl RenderOnce for DateTimeInput {
                     ),
                 )
                 .child(
-                    div().w(px(140.0)).child(
+                    div().w(px(168.0)).flex_shrink_0().child(
                         TimePicker::new(self.time_state)
                             .placeholder("Select time")
                             .size(self.size)

@@ -9,7 +9,17 @@ use crate::animations::easings;
 use crate::overlays::layer::{LayerAlignment, LayerPlacement};
 use crate::theme::use_theme;
 use kael::{prelude::*, *};
+use std::panic::Location;
 use std::time::Duration;
+
+fn tooltip_content_metrics(content: &str, max_width: Option<Pixels>) -> (Pixels, bool) {
+    let estimated = (content.chars().count() as f32 * 7.2 + 16.0).max(48.0);
+    let limit = max_width
+        .map(f32::from)
+        .filter(|width| width.is_finite() && *width > 0.0)
+        .unwrap_or(estimated);
+    (px(estimated.min(limit)), estimated > limit)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TooltipPlacement {
@@ -119,7 +129,9 @@ impl TooltipState {
     }
 }
 
+#[derive(IntoElement)]
 pub struct Tooltip {
+    id: ElementId,
     content: SharedString,
     placement: TooltipPlacement,
     alignment: TooltipAlignment,
@@ -137,9 +149,25 @@ pub struct Tooltip {
 }
 
 impl Tooltip {
+    #[track_caller]
     pub fn new(content: impl Into<SharedString>) -> Self {
+        let caller = Location::caller();
+        let content = content.into();
         Self {
-            content: content.into(),
+            id: ElementId::Name(
+                format!(
+                    "tooltip:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
+            content: if content.trim().is_empty() {
+                "Tooltip".into()
+            } else {
+                content
+            },
             placement: TooltipPlacement::default(),
             alignment: TooltipAlignment::default(),
             show_delay: Duration::from_millis(500),
@@ -157,7 +185,12 @@ impl Tooltip {
     }
 
     pub fn content(mut self, content: impl Into<SharedString>) -> Self {
-        self.content = content.into();
+        let content = content.into();
+        self.content = if content.trim().is_empty() {
+            "Tooltip".into()
+        } else {
+            content
+        };
         self
     }
 
@@ -285,7 +318,12 @@ impl Tooltip {
     }
 
     pub fn max_width(mut self, width: Pixels) -> Self {
-        self.max_width = Some(width);
+        let width = f32::from(width);
+        self.max_width = Some(px(if width.is_finite() && width > 0.0 {
+            width
+        } else {
+            300.0
+        }));
         self
     }
 
@@ -323,14 +361,13 @@ impl Styled for Tooltip {
     }
 }
 
-impl IntoElement for Tooltip {
-    type Element = Stateful<Div>;
-
-    fn into_element(self) -> Self::Element {
+impl RenderOnce for Tooltip {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = use_theme();
         let content = self.content;
         let user_style = self.style;
         let max_width = self.max_width;
+        let (content_width, content_wraps) = tooltip_content_metrics(content.as_ref(), max_width);
         let fade = Animation::new(theme.tokens.duration_fast).with_easing(easings::ease_out_cubic);
         let forced_open = self.is_open.unwrap_or(self.is_default_open);
         let placement = match self.placement {
@@ -342,14 +379,31 @@ impl IntoElement for Tooltip {
         };
         let alignment = self.alignment;
         let show_hover_indication = matches!(self.hover_indication, TooltipHoverIndication::Always);
-
-        let _ = (self.show_delay, self.hide_delay, self.focus_trigger);
-
-        let trigger_id = ElementId::Name(format!("kael-tooltip-{content}").into());
+        let show_delay = self.show_delay;
+        let hide_delay = self.hide_delay;
+        let on_open_change = self.on_open_change;
+        let focus_behavior = match self.focus_trigger {
+            TooltipFocusTrigger::Auto => TooltipFocusBehavior::Auto,
+            TooltipFocusTrigger::Always => TooltipFocusBehavior::Always,
+            TooltipFocusTrigger::Never => TooltipFocusBehavior::Never,
+        };
+        let focus_handle = window
+            .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone();
+        let accessibility = if self.focus_trigger == TooltipFocusTrigger::Never {
+            AccessibilityAttributes::new(AccessibilityRole::Group)
+        } else {
+            AccessibilityAttributes::new(AccessibilityRole::Group).description(content.to_string())
+        };
 
         div()
-            .id(trigger_id)
+            .accessibility(accessibility)
             .relative()
+            .when(focus_behavior != TooltipFocusBehavior::Never, |this| {
+                this.track_focus(&focus_handle).tab_stop(false)
+            })
+            .id(self.id)
             .when_some(self.child, |this, child| {
                 this.child(
                     div()
@@ -386,8 +440,14 @@ impl IntoElement for Tooltip {
                                 && alignment == TooltipAlignment::End,
                             |this| this.right_0(),
                         )
+                        .when(
+                            matches!(placement, TooltipPlacement::Top | TooltipPlacement::Bottom)
+                                && alignment == TooltipAlignment::Center,
+                            |this| this.left(relative(0.5)).ml(-(content_width * 0.5)),
+                        )
                         .child(
                             div()
+                                .w(content_width)
                                 .px(px(8.0))
                                 .py(px(4.0))
                                 .bg(theme.tokens.foreground)
@@ -396,18 +456,23 @@ impl IntoElement for Tooltip {
                                 .text_size(px(14.0))
                                 .line_height(px(20.0))
                                 .font_family(theme.tokens.font_family.clone())
-                                .whitespace_nowrap()
+                                .when(!content_wraps, |this| this.whitespace_nowrap())
                                 .when_some(max_width, |this, width| this.max_w(width))
-                                .child(content),
+                                .map(|mut this| {
+                                    this.style().refine(&user_style);
+                                    this
+                                })
+                                .child(StyledText::new(content).accessibility_hidden(true)),
                         ),
                 )
             })
-            .when(!self.disabled, move |this| {
+            .when(!self.disabled && !forced_open, move |this| {
                 let content = content.clone();
                 let user_style = user_style.clone();
                 let fade = fade.clone();
-                this.tooltip_element(move || {
+                let build_tooltip = move || {
                     div()
+                        .w(content_width)
                         .px(px(8.0))
                         .py(px(4.0))
                         .bg(theme.tokens.foreground)
@@ -416,21 +481,53 @@ impl IntoElement for Tooltip {
                         .text_size(px(14.0))
                         .line_height(px(20.0))
                         .font_family(theme.tokens.font_family.clone())
-                        .whitespace_nowrap()
+                        .when(!content_wraps, |this| this.whitespace_nowrap())
                         .when_some(max_width, |this, width| this.max_w(width))
                         .map(|mut this| {
                             this.style().refine(&user_style);
                             this
                         })
-                        .child(content.clone())
+                        .child(StyledText::new(content.clone()).accessibility_hidden(true))
                         .with_animation("tooltip-fade-in", fade.clone(), |el, delta| {
                             el.opacity(delta)
                         })
-                })
+                };
+                if let Some(handler) = on_open_change {
+                    this.tooltip_element_with_options(
+                        show_delay,
+                        hide_delay,
+                        move |open, window, cx| handler(open, window, cx),
+                        build_tooltip,
+                    )
+                    .tooltip_focus_behavior(focus_behavior)
+                } else {
+                    this.tooltip_element_with_delays(show_delay, hide_delay, build_tooltip)
+                        .tooltip_focus_behavior(focus_behavior)
+                }
             })
     }
 }
 
 pub fn tooltip<E: IntoElement>(child: E, content: impl Into<SharedString>) -> Tooltip {
     Tooltip::new(content).child(child)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn content_width_is_readable_bounded_and_invalid_values_are_normalized() {
+        let (short, wraps) = tooltip_content_metrics("Tooltip on top", Some(px(300.0)));
+        assert!(short > px(100.0));
+        assert!(!wraps);
+
+        let (long, wraps) = tooltip_content_metrics(&"x".repeat(100), Some(px(180.0)));
+        assert_eq!(long, px(180.0));
+        assert!(wraps);
+
+        let tooltip = Tooltip::new(" ").max_width(px(f32::NAN));
+        assert_eq!(tooltip.content.as_ref(), "Tooltip");
+        assert_eq!(tooltip.max_width, Some(px(300.0)));
+    }
 }

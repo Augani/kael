@@ -18,6 +18,29 @@ pub struct ButtonRenderState {
     pub disabled: bool,
 }
 
+impl ButtonRenderState {
+    /// Returns true when the button has a visible label.
+    pub fn has_label(&self) -> bool {
+        self.label.is_some()
+    }
+
+    /// Length of the configured label in bytes, without exposing label text.
+    pub fn label_len_bytes(&self) -> usize {
+        self.label.as_ref().map_or(0, |label| label.len())
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "button_render_state(has_label={}, label_len_bytes={}, focused={}, disabled={})",
+            self.has_label(),
+            self.label_len_bytes(),
+            self.focused,
+            self.disabled
+        )
+    }
+}
+
 type ButtonCustomRenderer = Rc<dyn Fn(ButtonRenderState, &Window, &App) -> AnyElement>;
 
 /// Construct a button primitive with caller-owned visuals.
@@ -29,8 +52,13 @@ pub fn button(id: impl Into<ElementId>) -> Button {
 /// A focusable button primitive backed by `div` click semantics.
 pub struct Button {
     element_id: ElementId,
+    role: AccessibilityRole,
     label: Option<SharedString>,
+    description: Option<SharedString>,
     disabled: bool,
+    checked: Option<bool>,
+    selected: Option<bool>,
+    pressed: Option<bool>,
     on_click: Option<ClickListener>,
     custom_renderer: Option<ButtonCustomRenderer>,
 }
@@ -39,11 +67,22 @@ impl Button {
     fn new(element_id: ElementId) -> Self {
         Self {
             element_id,
+            role: AccessibilityRole::Button,
             label: None,
+            description: None,
             disabled: false,
+            checked: None,
+            selected: None,
+            pressed: None,
             on_click: None,
             custom_renderer: None,
         }
+    }
+
+    /// Override the semantic role for button-like controls such as links or tabs.
+    pub fn role(mut self, role: AccessibilityRole) -> Self {
+        self.role = role;
+        self
     }
 
     /// Set the visible label for the button.
@@ -52,9 +91,33 @@ impl Button {
         self
     }
 
+    /// Set a longer accessible description for the control.
+    pub fn description(mut self, description: impl Into<SharedString>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
     /// Disable the button.
     pub fn disabled(mut self) -> Self {
         self.disabled = true;
+        self
+    }
+
+    /// Mark a checkbox-, switch-, or radio-like button checked or unchecked.
+    pub fn checked(mut self, checked: bool) -> Self {
+        self.checked = Some(checked);
+        self
+    }
+
+    /// Mark a tab- or option-like button selected or unselected.
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = Some(selected);
+        self
+    }
+
+    /// Mark a toggle button pressed or released.
+    pub fn pressed(mut self, pressed: bool) -> Self {
+        self.pressed = Some(pressed);
         self
     }
 
@@ -81,8 +144,13 @@ impl RenderOnce for Button {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let Button {
             element_id,
+            role,
             label,
+            description,
             disabled,
+            checked,
+            selected,
+            pressed,
             on_click,
             custom_renderer,
         } = self;
@@ -97,16 +165,27 @@ impl RenderOnce for Button {
             .read(cx)
             .clone();
 
-        let mut accessibility =
-            AccessibilityAttributes::new(AccessibilityRole::Button).states(if disabled {
-                AccessibilityState::DISABLED
-            } else if focus_handle.is_focused(window) {
-                AccessibilityState::FOCUSED
-            } else {
-                AccessibilityState::NONE
-            });
+        let mut accessibility = AccessibilityAttributes::new(role).states(if disabled {
+            AccessibilityState::DISABLED
+        } else if focus_handle.is_focused(window) {
+            AccessibilityState::FOCUSED
+        } else {
+            AccessibilityState::NONE
+        });
         if let Some(label) = label.as_ref() {
             accessibility = accessibility.label(label.to_string());
+        }
+        if let Some(description) = description.as_ref() {
+            accessibility = accessibility.description(description.to_string());
+        }
+        if let Some(checked) = checked {
+            accessibility = accessibility.toggle_state(checked);
+        }
+        if let Some(selected) = selected {
+            accessibility = accessibility.selected(selected);
+        }
+        if let Some(pressed) = pressed {
+            accessibility = accessibility.pressed(pressed);
         }
         if !disabled {
             accessibility =
@@ -294,5 +373,25 @@ mod tests {
             snapshot.take(),
             Some((false, true, SharedString::from("Save")))
         );
+    }
+
+    #[test]
+    fn button_render_state_summary_is_content_safe() {
+        let state = ButtonRenderState {
+            label: Some(SharedString::from("Launch Secret Workflow")),
+            focused: true,
+            disabled: false,
+        };
+
+        assert!(state.has_label());
+        assert_eq!(state.label_len_bytes(), "Launch Secret Workflow".len());
+
+        let summary = state.to_text();
+        assert!(summary.contains("has_label=true"));
+        assert!(summary.contains("label_len_bytes=22"));
+        assert!(summary.contains("focused=true"));
+        assert!(summary.contains("disabled=false"));
+        assert!(!summary.contains("Launch"));
+        assert!(!summary.contains("Secret"));
     }
 }

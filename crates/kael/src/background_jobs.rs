@@ -8,6 +8,29 @@ use serde::{Deserialize, Serialize};
 
 use crate::worker_api::WorkerPool;
 
+const MAX_TRACKED_JOBS: usize = 4_096;
+const MAX_JOB_DEPENDENCIES: usize = 256;
+const MAX_RETRIES: u32 = 100;
+const MAX_RETRY_DELAY_MS: u64 = 60 * 60 * 1000;
+const MAX_JOB_PAYLOAD_BYTES: usize = 1024 * 1024;
+const MAX_JOB_RESULT_BYTES: usize = 1024 * 1024;
+
+type ResultDecoder = Arc<dyn Fn(serde_json::Value) -> Result<serde_json::Value> + Send + Sync>;
+
+#[derive(Clone)]
+struct PendingJob {
+    payload: serde_json::Value,
+    decode_result: ResultDecoder,
+}
+
+struct RunningSlot(Arc<AtomicUsize>);
+
+impl Drop for RunningSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// Priority level for scheduling background jobs.
 ///
 /// Jobs with higher priority are sorted first when querying all jobs.
@@ -33,6 +56,16 @@ impl JobPriority {
             Self::Critical => 3,
         }
     }
+
+    /// Stable lowercase key for logs and generated scheduling policies.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Normal => "normal",
+            Self::High => "high",
+            Self::Critical => "critical",
+        }
+    }
 }
 
 impl PartialOrd for JobPriority {
@@ -56,6 +89,22 @@ pub struct JobProgress {
     pub percent: f64,
     /// Optional human-readable description of the current step.
     pub message: Option<String>,
+}
+
+impl JobProgress {
+    /// Whether a human-readable progress message is present.
+    pub fn has_message(&self) -> bool {
+        self.message.is_some()
+    }
+
+    /// Content-safe summary that avoids logging job ids, exact percent, or messages.
+    pub fn to_text(&self) -> String {
+        format!(
+            "job progress: message {}, complete {}",
+            self.has_message(),
+            self.percent >= 100.0
+        )
+    }
 }
 
 /// A cooperative cancellation token backed by an atomic boolean.
@@ -118,6 +167,10 @@ impl RetryPolicy {
     /// Validate retry settings before scheduling generated jobs.
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
+            self.max_retries <= MAX_RETRIES,
+            "retry attempts cannot exceed {MAX_RETRIES}"
+        );
+        anyhow::ensure!(
             self.delay_ms > 0 || self.max_retries == 0,
             "retry delay must be greater than zero when retries are enabled"
         );
@@ -125,7 +178,46 @@ impl RetryPolicy {
             self.backoff_multiplier.is_finite() && self.backoff_multiplier >= 1.0,
             "retry backoff multiplier must be finite and at least 1.0"
         );
+        anyhow::ensure!(
+            self.backoff_multiplier <= 100.0,
+            "retry backoff multiplier cannot exceed 100"
+        );
+        anyhow::ensure!(
+            self.delay_ms <= MAX_RETRY_DELAY_MS,
+            "retry delay cannot exceed {MAX_RETRY_DELAY_MS}ms"
+        );
         Ok(())
+    }
+
+    /// Return the capped delay for a one-based retry attempt.
+    pub fn delay_for_attempt(&self, attempt: u32) -> Option<std::time::Duration> {
+        if self.validate().is_err() || attempt == 0 || attempt > self.max_retries {
+            return None;
+        }
+        let exponent = i32::try_from(attempt.saturating_sub(1)).unwrap_or(i32::MAX);
+        let multiplier = self.backoff_multiplier.powi(exponent);
+        let delay = (self.delay_ms as f64 * multiplier).min(MAX_RETRY_DELAY_MS as f64);
+        Some(std::time::Duration::from_millis(delay as u64))
+    }
+
+    /// Whether this policy schedules any retry attempts.
+    pub fn has_retries(&self) -> bool {
+        self.max_retries > 0
+    }
+
+    /// Whether this policy applies exponential or multiplicative backoff.
+    pub fn has_backoff(&self) -> bool {
+        self.backoff_multiplier > 1.0
+    }
+
+    /// Content-safe summary that avoids logging exact delays and counts.
+    pub fn to_text(&self) -> String {
+        format!(
+            "retry policy: retries {}, delay {}, backoff {}",
+            self.has_retries(),
+            self.delay_ms > 0,
+            self.has_backoff()
+        )
     }
 }
 
@@ -149,6 +241,41 @@ pub enum JobStatus {
         /// The current retry attempt number (1-based).
         attempt: u32,
     },
+}
+
+impl JobStatus {
+    /// Stable lowercase key for logs and routing.
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::Paused => "paused",
+            Self::Retrying { .. } => "retrying",
+        }
+    }
+
+    /// Whether this status is terminal.
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+
+    /// Whether this status means work is actively executing or will resume soon.
+    pub fn is_active(&self) -> bool {
+        matches!(self, Self::Running | Self::Retrying { .. })
+    }
+
+    /// Content-safe summary that avoids logging retry attempt counts.
+    pub fn to_text(&self) -> String {
+        format!(
+            "job status: {}, active {}, terminal {}",
+            self.key(),
+            self.is_active(),
+            self.is_terminal()
+        )
+    }
 }
 
 /// A task that can be offloaded to a worker process.
@@ -213,12 +340,42 @@ impl JobDescriptor {
         self
     }
 
+    /// Whether retry behavior is configured.
+    pub fn has_retry_policy(&self) -> bool {
+        self.retry_policy.is_some()
+    }
+
+    /// Number of configured dependencies.
+    pub fn dependency_count(&self) -> usize {
+        self.dependencies.len()
+    }
+
+    /// Whether cancellation has already been requested.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancellation_token.is_cancelled()
+    }
+
+    /// Content-safe summary that avoids logging job ids and dependency ids.
+    pub fn to_text(&self) -> String {
+        format!(
+            "job descriptor: priority {}, retry {}, dependencies {}, cancelled {}",
+            self.priority.key(),
+            self.has_retry_policy(),
+            self.dependency_count(),
+            self.is_cancelled()
+        )
+    }
+
     /// Validate descriptor metadata before scheduling.
     pub fn validate(&self) -> Result<()> {
         validate_job_id(&self.id, "job id")?;
         if let Some(policy) = &self.retry_policy {
             policy.validate()?;
         }
+        anyhow::ensure!(
+            self.dependencies.len() <= MAX_JOB_DEPENDENCIES,
+            "job cannot contain more than {MAX_JOB_DEPENDENCIES} dependencies"
+        );
 
         let mut seen = HashSet::new();
         for dependency in &self.dependencies {
@@ -259,6 +416,36 @@ pub struct JobInfo {
     pub completed_at: Option<Instant>,
 }
 
+impl JobInfo {
+    /// Whether the job has emitted progress.
+    pub fn has_progress(&self) -> bool {
+        self.progress.is_some()
+    }
+
+    /// Whether the job has ever started.
+    pub fn has_started(&self) -> bool {
+        self.started_at.is_some()
+    }
+
+    /// Whether the job has completed, failed, or cancelled.
+    pub fn has_completed(&self) -> bool {
+        self.completed_at.is_some() || self.status.is_terminal()
+    }
+
+    /// Content-safe summary that avoids logging job ids, progress messages, and timings.
+    pub fn to_text(&self) -> String {
+        format!(
+            "job info: status {}, priority {}, progress {}, retries {}, started {}, completed {}",
+            self.status.key(),
+            self.priority.key(),
+            self.has_progress(),
+            self.retry_count > 0,
+            self.has_started(),
+            self.has_completed()
+        )
+    }
+}
+
 /// Internal bookkeeping entry for a tracked job.
 #[derive(Debug, Clone)]
 struct JobEntry {
@@ -297,6 +484,7 @@ pub struct JobScheduler {
     worker_pool: Option<WorkerPool>,
     entries: Arc<Mutex<HashMap<String, JobEntry>>>,
     results: Arc<Mutex<HashMap<String, serde_json::Value>>>,
+    pending: Arc<Mutex<HashMap<String, PendingJob>>>,
     running_count: Arc<AtomicUsize>,
     max_concurrent: usize,
 }
@@ -308,6 +496,7 @@ impl JobScheduler {
             worker_pool: None,
             entries: Arc::new(Mutex::new(HashMap::new())),
             results: Arc::new(Mutex::new(HashMap::new())),
+            pending: Arc::new(Mutex::new(HashMap::new())),
             running_count: Arc::new(AtomicUsize::new(0)),
             max_concurrent: usize::MAX,
         }
@@ -353,11 +542,50 @@ impl JobScheduler {
         Job: BackgroundJob,
     {
         let id = job.id().to_string();
+        descriptor.validate()?;
+        anyhow::ensure!(
+            id == descriptor.id,
+            "job descriptor id must match job id: descriptor={}, job={id}",
+            descriptor.id
+        );
+        let payload_bytes =
+            serde_json::to_vec(&job).context("failed to serialize background job")?;
+        anyhow::ensure!(
+            payload_bytes.len() <= MAX_JOB_PAYLOAD_BYTES,
+            "background job payload cannot exceed {MAX_JOB_PAYLOAD_BYTES} bytes"
+        );
+        let payload = serde_json::from_slice(&payload_bytes)
+            .context("failed to decode serialized background job")?;
+        let decode_result: ResultDecoder = Arc::new(|value| {
+            let output: Job::Output = serde_json::from_value(value)
+                .context("failed to deserialize background job result")?;
+            let bytes =
+                serde_json::to_vec(&output).context("failed to serialize background job result")?;
+            anyhow::ensure!(
+                bytes.len() <= MAX_JOB_RESULT_BYTES,
+                "background job result cannot exceed {MAX_JOB_RESULT_BYTES} bytes"
+            );
+            serde_json::from_slice(&bytes)
+                .context("failed to decode serialized background job result")
+        });
 
         {
-            let mut entries = self.entries.lock().unwrap();
+            let mut entries = self
+                .entries
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if entries.contains_key(&id) {
                 return Err(anyhow!("job already exists: {}", id));
+            }
+            anyhow::ensure!(
+                entries.len() < MAX_TRACKED_JOBS,
+                "background job scheduler cannot track more than {MAX_TRACKED_JOBS} jobs"
+            );
+            for dependency in &descriptor.dependencies {
+                anyhow::ensure!(
+                    !dependency_reaches(&entries, dependency, &id),
+                    "job dependency cycle detected for {id}"
+                );
             }
 
             let entry = JobEntry {
@@ -375,20 +603,34 @@ impl JobScheduler {
             entries.insert(id.clone(), entry);
         }
 
-        if !self.dependencies_met(&id) {
-            return Ok(id);
-        }
+        self.pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(
+                id.clone(),
+                PendingJob {
+                    payload,
+                    decode_result,
+                },
+            );
 
         if descriptor.cancellation_token.is_cancelled() {
-            let mut entries = self.entries.lock().unwrap();
+            let mut entries = self
+                .entries
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(entry) = entries.get_mut(&id) {
                 entry.status = JobStatus::Cancelled;
                 entry.completed_at = Some(Instant::now());
             }
+            self.pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(&id);
             return Ok(id);
         }
 
-        self.try_execute(&id, job)?;
+        self.drain_ready()?;
         Ok(id)
     }
 
@@ -401,103 +643,205 @@ impl JobScheduler {
     where
         Job: BackgroundJob,
     {
-        descriptor.validate()?;
-        anyhow::ensure!(
-            job.id() == descriptor.id,
-            "job descriptor id must match job id: descriptor={}, job={}",
-            descriptor.id,
-            job.id()
-        );
         self.schedule_with_descriptor(job, descriptor)
     }
 
-    /// Attempts to execute a job, respecting concurrency limits.
-    fn try_execute<Job>(&self, id: &str, job: Job) -> Result<()>
-    where
-        Job: BackgroundJob,
-    {
-        let current = self.running_count.load(Ordering::Acquire);
-        if current >= self.max_concurrent {
-            return Ok(());
+    fn try_acquire_slot(&self) -> bool {
+        let mut current = self.running_count.load(Ordering::Acquire);
+        loop {
+            if current >= self.max_concurrent {
+                return false;
+            }
+            match self.running_count.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return true,
+                Err(observed) => current = observed,
+            }
         }
+    }
 
-        self.running_count.fetch_add(1, Ordering::AcqRel);
+    fn try_execute(&self, id: &str) -> Result<bool> {
+        let pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(id)
+            .cloned();
+        let Some(pending) = pending else {
+            let mut entries = self
+                .entries
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(entry) = entries.get_mut(id) {
+                entry.status = JobStatus::Failed;
+                entry.completed_at = Some(Instant::now());
+            }
+            return Ok(true);
+        };
+
+        if !self.try_acquire_slot() {
+            return Ok(false);
+        }
+        let _slot = RunningSlot(self.running_count.clone());
 
         {
-            let mut entries = self.entries.lock().unwrap();
+            let mut entries = self
+                .entries
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(entry) = entries.get_mut(id) {
                 entry.status = JobStatus::Running;
                 entry.started_at = Some(Instant::now());
             }
         }
 
-        let result: Result<Job::Output> = if let Some(ref pool) = self.worker_pool {
-            pool.request(job).context("worker request failed")
+        let result: Result<serde_json::Value> = if let Some(ref pool) = self.worker_pool {
+            let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                pool.request::<_, serde_json::Value>(pending.payload.clone())
+            }))
+            .map_err(|_| anyhow!("worker request panicked"))?
+            .context("worker request failed");
+            response.and_then(|value| (pending.decode_result)(value))
         } else {
             Err(anyhow!("no worker pool configured"))
         };
 
-        self.running_count.fetch_sub(1, Ordering::AcqRel);
-
-        let mut entries = self.entries.lock().unwrap();
-        let mut results = self.results.lock().unwrap();
-
-        match result {
-            Ok(output) => {
-                let value = serde_json::to_value(output).context("failed to serialize result")?;
-                results.insert(id.to_string(), value);
-                if let Some(entry) = entries.get_mut(id) {
-                    entry.status = JobStatus::Completed;
-                    entry.completed_at = Some(Instant::now());
-                }
-            }
-            Err(_) => {
-                if let Some(entry) = entries.get_mut(id) {
-                    let should_retry = entry
-                        .retry_policy
-                        .as_ref()
-                        .map(|p| entry.retry_count < p.max_retries)
-                        .unwrap_or(false);
-
-                    if should_retry {
-                        entry.retry_count += 1;
-                        entry.status = JobStatus::Retrying {
-                            attempt: entry.retry_count,
-                        };
-                    } else {
-                        entry.status = JobStatus::Failed;
+        let mut completed_value = None;
+        let mut clear_pending = false;
+        {
+            let mut entries = self
+                .entries
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let Some(entry) = entries.get_mut(id) else {
+                return Ok(true);
+            };
+            if entry.cancellation_token.is_cancelled() || entry.status == JobStatus::Cancelled {
+                entry.status = JobStatus::Cancelled;
+                entry.completed_at.get_or_insert_with(Instant::now);
+                clear_pending = true;
+            } else {
+                match result {
+                    Ok(value) => {
+                        completed_value = Some(value);
+                        entry.status = JobStatus::Completed;
                         entry.completed_at = Some(Instant::now());
+                        clear_pending = true;
+                    }
+                    Err(_) => {
+                        let should_retry = entry
+                            .retry_policy
+                            .as_ref()
+                            .is_some_and(|policy| entry.retry_count < policy.max_retries);
+                        if should_retry {
+                            entry.retry_count += 1;
+                            entry.status = JobStatus::Retrying {
+                                attempt: entry.retry_count,
+                            };
+                        } else {
+                            entry.status = JobStatus::Failed;
+                            entry.completed_at = Some(Instant::now());
+                            clear_pending = true;
+                        }
                     }
                 }
             }
         }
 
+        if let Some(value) = completed_value {
+            self.results
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(id.to_string(), value);
+        }
+        if clear_pending {
+            self.pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(id);
+        }
+
+        Ok(true)
+    }
+
+    fn drain_ready(&self) -> Result<()> {
+        loop {
+            let pending_ids: HashSet<String> = self
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .keys()
+                .cloned()
+                .collect();
+            let next = {
+                let entries = self
+                    .entries
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                entries
+                    .iter()
+                    .filter(|(id, entry)| {
+                        entry.status == JobStatus::Queued
+                            && entry.dependencies.iter().all(|dependency| {
+                                entries.get(dependency).is_some_and(|dependency| {
+                                    dependency.status == JobStatus::Completed
+                                })
+                            })
+                            && pending_ids.contains(*id)
+                    })
+                    .max_by_key(|(_, entry)| (entry.priority, std::cmp::Reverse(entry.created_at)))
+                    .map(|(id, _)| id.clone())
+            };
+            let Some(id) = next else { break };
+            if !self.try_execute(&id)? {
+                break;
+            }
+        }
         Ok(())
     }
 
     /// Cancels a queued, running, or paused job.
     pub fn cancel(&self, job_id: &str) -> Result<()> {
-        let mut entries = self.entries.lock().unwrap();
-        match entries.get_mut(job_id) {
-            Some(entry) => match &entry.status {
-                JobStatus::Queued
-                | JobStatus::Running
-                | JobStatus::Paused
-                | JobStatus::Retrying { .. } => {
-                    entry.cancellation_token.cancel();
-                    entry.status = JobStatus::Cancelled;
-                    entry.completed_at = Some(Instant::now());
-                    Ok(())
-                }
-                status => Err(anyhow!("job cannot be cancelled: {:?}", status)),
-            },
-            None => Err(anyhow!("job not found: {}", job_id)),
+        let result = {
+            let mut entries = self
+                .entries
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match entries.get_mut(job_id) {
+                Some(entry) => match &entry.status {
+                    JobStatus::Queued
+                    | JobStatus::Running
+                    | JobStatus::Paused
+                    | JobStatus::Retrying { .. } => {
+                        entry.cancellation_token.cancel();
+                        entry.status = JobStatus::Cancelled;
+                        entry.completed_at = Some(Instant::now());
+                        Ok(())
+                    }
+                    status => Err(anyhow!("job cannot be cancelled: {:?}", status)),
+                },
+                None => Err(anyhow!("job not found: {}", job_id)),
+            }
+        };
+        if result.is_ok() {
+            self.pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(job_id);
         }
+        result
     }
 
     /// Pauses a queued or running job.
     pub fn pause(&self, job_id: &str) -> Result<()> {
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         match entries.get_mut(job_id) {
             Some(entry) => match entry.status {
                 JobStatus::Queued | JobStatus::Running => {
@@ -512,31 +856,86 @@ impl JobScheduler {
 
     /// Resumes a previously paused job back to `Queued` status.
     pub fn resume(&self, job_id: &str) -> Result<()> {
-        let mut entries = self.entries.lock().unwrap();
-        match entries.get_mut(job_id) {
-            Some(entry) if entry.status == JobStatus::Paused => {
-                entry.status = JobStatus::Queued;
-                Ok(())
+        {
+            let mut entries = self
+                .entries
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match entries.get_mut(job_id) {
+                Some(entry) if entry.status == JobStatus::Paused => {
+                    entry.status = JobStatus::Queued;
+                }
+                Some(entry) => {
+                    return Err(anyhow!(
+                        "job cannot be resumed from state: {:?}",
+                        entry.status
+                    ));
+                }
+                None => return Err(anyhow!("job not found: {}", job_id)),
             }
-            Some(entry) => Err(anyhow!(
-                "job cannot be resumed from state: {:?}",
-                entry.status
-            )),
-            None => Err(anyhow!("job not found: {}", job_id)),
         }
+        self.drain_ready()
+    }
+
+    /// Requeues a job after the caller has observed its retry delay.
+    pub fn retry(&self, job_id: &str) -> Result<()> {
+        anyhow::ensure!(
+            self.pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .contains_key(job_id),
+            "retry payload is unavailable: {job_id}"
+        );
+        {
+            let mut entries = self
+                .entries
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match entries.get_mut(job_id) {
+                Some(entry) if matches!(entry.status, JobStatus::Retrying { .. }) => {
+                    entry.status = JobStatus::Queued;
+                }
+                Some(entry) => {
+                    return Err(anyhow!(
+                        "job cannot be retried from state: {:?}",
+                        entry.status
+                    ));
+                }
+                None => return Err(anyhow!("job not found: {job_id}")),
+            }
+        }
+        self.drain_ready()
+    }
+
+    /// Returns the configured delay for the job's current retry attempt.
+    pub fn retry_delay(&self, job_id: &str) -> Option<std::time::Duration> {
+        let entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let entry = entries.get(job_id)?;
+        let JobStatus::Retrying { attempt } = entry.status else {
+            return None;
+        };
+        entry.retry_policy.as_ref()?.delay_for_attempt(attempt)
     }
 
     /// Reports progress for a running job.
     pub fn report_progress(&self, progress: JobProgress) -> Result<()> {
-        let mut entries = self.entries.lock().unwrap();
+        validate_job_id(&progress.job_id, "progress job id")?;
+        anyhow::ensure!(
+            progress.percent.is_finite() && (0.0..=100.0).contains(&progress.percent),
+            "progress percent must be finite and in 0..=100"
+        );
+        if let Some(message) = &progress.message {
+            validate_background_reason(message, "progress message")?;
+        }
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         match entries.get_mut(&progress.job_id) {
             Some(entry) if entry.status == JobStatus::Running => {
-                if !(0.0..=100.0).contains(&progress.percent) {
-                    return Err(anyhow!(
-                        "progress percent must be in 0..=100, got {}",
-                        progress.percent
-                    ));
-                }
                 entry.progress = Some(progress);
                 Ok(())
             }
@@ -549,21 +948,25 @@ impl JobScheduler {
     pub fn status(&self, job_id: &str) -> Option<JobStatus> {
         self.entries
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(job_id)
             .map(|e| e.status.clone())
     }
 
     /// Returns the serialized result of a completed job.
     pub fn result(&self, job_id: &str) -> Option<serde_json::Value> {
-        self.results.lock().unwrap().get(job_id).cloned()
+        self.results
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(job_id)
+            .cloned()
     }
 
     /// Returns a copy of all tracked job statuses.
     pub fn all_statuses(&self) -> HashMap<String, JobStatus> {
         self.entries
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .iter()
             .map(|(k, v)| (k.clone(), v.status.clone()))
             .collect()
@@ -572,7 +975,10 @@ impl JobScheduler {
     /// Returns observable information for all tracked jobs, sorted by priority
     /// (highest first).
     pub fn jobs(&self) -> Vec<JobInfo> {
-        let entries = self.entries.lock().unwrap();
+        let entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut infos: Vec<JobInfo> = entries
             .iter()
             .map(|(id, entry)| entry.to_info(id))
@@ -585,7 +991,7 @@ impl JobScheduler {
     pub fn job_info(&self, job_id: &str) -> Option<JobInfo> {
         self.entries
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(job_id)
             .map(|e| e.to_info(job_id))
     }
@@ -600,20 +1006,483 @@ impl JobScheduler {
         self.max_concurrent
     }
 
-    /// Checks whether all dependencies of a job have completed.
-    fn dependencies_met(&self, job_id: &str) -> bool {
-        let entries = self.entries.lock().unwrap();
-        let deps = match entries.get(job_id) {
-            Some(entry) => entry.dependencies.clone(),
-            None => return false,
-        };
+    /// Removes a terminal job and any stored result from the scheduler.
+    pub fn remove_terminal(&self, job_id: &str) -> Result<()> {
+        {
+            let mut entries = self
+                .entries
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let entry = entries
+                .get(job_id)
+                .ok_or_else(|| anyhow!("job not found: {job_id}"))?;
+            anyhow::ensure!(entry.status.is_terminal(), "job is not terminal: {job_id}");
+            entries.remove(job_id);
+        }
+        self.results
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(job_id);
+        self.pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(job_id);
+        Ok(())
+    }
+}
 
-        deps.iter().all(|dep_id| {
-            entries
-                .get(dep_id)
-                .map(|e| e.status == JobStatus::Completed)
-                .unwrap_or(false)
+fn dependency_reaches(entries: &HashMap<String, JobEntry>, start: &str, target: &str) -> bool {
+    let mut stack = vec![start];
+    let mut visited = HashSet::new();
+    while let Some(job_id) = stack.pop() {
+        if job_id == target {
+            return true;
+        }
+        if !visited.insert(job_id) {
+            continue;
+        }
+        if let Some(entry) = entries.get(job_id) {
+            stack.extend(entry.dependencies.iter().map(String::as_str));
+        }
+    }
+    false
+}
+
+/// Next action for a checked background-work handoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundWorkNextAction {
+    /// Schedule the job immediately.
+    ScheduleJob,
+    /// Queue the job and wait for dependencies to complete.
+    WaitForDependencies,
+    /// Report progress for a running job.
+    ReportProgress,
+    /// Cancel a queued, running, paused, or retrying job.
+    CancelJob,
+    /// Pause a queued or running job.
+    PauseJob,
+    /// Resume a paused job.
+    ResumeJob,
+    /// Use a worker pool for off-UI-thread execution.
+    UseWorkerPool,
+    /// Escalate to a helper or utility process.
+    UseHelperProcess,
+}
+
+impl BackgroundWorkNextAction {
+    /// Stable key for logs and generated routing.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::ScheduleJob => "schedule-job",
+            Self::WaitForDependencies => "wait-for-dependencies",
+            Self::ReportProgress => "report-progress",
+            Self::CancelJob => "cancel-job",
+            Self::PauseJob => "pause-job",
+            Self::ResumeJob => "resume-job",
+            Self::UseWorkerPool => "use-worker-pool",
+            Self::UseHelperProcess => "use-helper-process",
+        }
+    }
+}
+
+/// Checked background-work request for generated jobs, workers, and queues.
+#[derive(Debug, Clone)]
+pub enum BackgroundWorkRequest {
+    /// Job descriptor ready for scheduling.
+    Job(JobDescriptor),
+    /// Progress update for a running job.
+    Progress(JobProgress),
+    /// Cancel a job.
+    Cancel {
+        /// Job identifier to cancel.
+        job_id: String,
+    },
+    /// Pause a job.
+    Pause {
+        /// Job identifier to pause.
+        job_id: String,
+    },
+    /// Resume a job.
+    Resume {
+        /// Job identifier to resume.
+        job_id: String,
+    },
+    /// Require a worker pool before executing generated work.
+    WorkerPool {
+        /// Diagnostic reason for requiring a worker pool.
+        reason: String,
+    },
+    /// Escalate work to a helper process.
+    HelperProcess {
+        /// Diagnostic reason for requiring helper-process isolation.
+        reason: String,
+    },
+}
+
+impl BackgroundWorkRequest {
+    /// Whether this request schedules a job descriptor.
+    pub fn is_job(&self) -> bool {
+        matches!(self, Self::Job(_))
+    }
+
+    /// Whether this request reports progress.
+    pub fn is_progress(&self) -> bool {
+        matches!(self, Self::Progress(_))
+    }
+
+    /// Whether this request cancels a job.
+    pub fn is_cancel(&self) -> bool {
+        matches!(self, Self::Cancel { .. })
+    }
+
+    /// Whether this request pauses a job.
+    pub fn is_pause(&self) -> bool {
+        matches!(self, Self::Pause { .. })
+    }
+
+    /// Whether this request resumes a job.
+    pub fn is_resume(&self) -> bool {
+        matches!(self, Self::Resume { .. })
+    }
+
+    /// Whether this request requires a worker pool.
+    pub fn is_worker_pool(&self) -> bool {
+        matches!(self, Self::WorkerPool { .. })
+    }
+
+    /// Whether this request escalates to a helper process.
+    pub fn is_helper_process(&self) -> bool {
+        matches!(self, Self::HelperProcess { .. })
+    }
+
+    /// Next action implied by this request.
+    pub fn next_action(&self) -> BackgroundWorkNextAction {
+        match self {
+            Self::Job(descriptor) if descriptor.dependency_count() > 0 => {
+                BackgroundWorkNextAction::WaitForDependencies
+            }
+            Self::Job(_) => BackgroundWorkNextAction::ScheduleJob,
+            Self::Progress(_) => BackgroundWorkNextAction::ReportProgress,
+            Self::Cancel { .. } => BackgroundWorkNextAction::CancelJob,
+            Self::Pause { .. } => BackgroundWorkNextAction::PauseJob,
+            Self::Resume { .. } => BackgroundWorkNextAction::ResumeJob,
+            Self::WorkerPool { .. } => BackgroundWorkNextAction::UseWorkerPool,
+            Self::HelperProcess { .. } => BackgroundWorkNextAction::UseHelperProcess,
+        }
+    }
+
+    /// Job descriptor when this request schedules a job.
+    pub fn descriptor(&self) -> Option<&JobDescriptor> {
+        match self {
+            Self::Job(descriptor) => Some(descriptor),
+            _ => None,
+        }
+    }
+
+    /// Progress update when this request reports progress.
+    pub fn progress(&self) -> Option<&JobProgress> {
+        match self {
+            Self::Progress(progress) => Some(progress),
+            _ => None,
+        }
+    }
+
+    /// Job id for job, progress, cancel, pause, or resume requests.
+    pub fn job_id(&self) -> Option<&str> {
+        match self {
+            Self::Job(descriptor) => Some(&descriptor.id),
+            Self::Progress(progress) => Some(&progress.job_id),
+            Self::Cancel { job_id } | Self::Pause { job_id } | Self::Resume { job_id } => {
+                Some(job_id)
+            }
+            Self::WorkerPool { .. } | Self::HelperProcess { .. } => None,
+        }
+    }
+
+    /// Whether this request has a helper/worker reason.
+    pub fn has_reason(&self) -> bool {
+        matches!(
+            self,
+            Self::WorkerPool { reason } | Self::HelperProcess { reason } if !reason.is_empty()
+        )
+    }
+
+    /// Content-safe request summary.
+    pub fn to_text(&self) -> String {
+        let detail = match self {
+            Self::Job(descriptor) => descriptor.to_text(),
+            Self::Progress(progress) => progress.to_text(),
+            Self::Cancel { .. } => "job control: cancel".to_string(),
+            Self::Pause { .. } => "job control: pause".to_string(),
+            Self::Resume { .. } => "job control: resume".to_string(),
+            Self::WorkerPool { .. } => {
+                format!("worker pool request: reason {}", self.has_reason())
+            }
+            Self::HelperProcess { .. } => {
+                format!("helper process request: reason {}", self.has_reason())
+            }
+        };
+        format!(
+            "background work request: action {}, {}",
+            self.next_action().key(),
+            detail
+        )
+    }
+
+    /// Validate the request before routing generated background work.
+    pub fn validate(&self) -> Result<()> {
+        match self {
+            Self::Job(descriptor) => descriptor.validate(),
+            Self::Progress(progress) => {
+                validate_job_id(&progress.job_id, "progress job id")?;
+                anyhow::ensure!(
+                    progress.percent.is_finite() && (0.0..=100.0).contains(&progress.percent),
+                    "progress percent must be finite and in 0..=100"
+                );
+                if let Some(message) = &progress.message {
+                    validate_background_reason(message, "progress message")?;
+                }
+                Ok(())
+            }
+            Self::Cancel { job_id } => validate_job_id(job_id, "cancel job id"),
+            Self::Pause { job_id } => validate_job_id(job_id, "pause job id"),
+            Self::Resume { job_id } => validate_job_id(job_id, "resume job id"),
+            Self::WorkerPool { reason } => validate_background_reason(reason, "worker pool reason"),
+            Self::HelperProcess { reason } => {
+                validate_background_reason(reason, "helper process reason")
+            }
+        }
+    }
+}
+
+/// Builder for a checked background-work handoff.
+#[derive(Debug, Clone)]
+pub struct BackgroundWorkHandoffBuilder {
+    request: BackgroundWorkRequest,
+}
+
+impl BackgroundWorkHandoffBuilder {
+    /// Handoff for a job descriptor.
+    pub fn descriptor(descriptor: JobDescriptor) -> Self {
+        Self {
+            request: BackgroundWorkRequest::Job(descriptor),
+        }
+    }
+
+    /// Handoff for a job id with default descriptor settings.
+    pub fn job(job_id: impl Into<String>) -> Self {
+        Self::descriptor(JobDescriptor::new(job_id))
+    }
+
+    /// Handoff for a progress update.
+    pub fn progress(job_id: impl Into<String>, percent: f64) -> Self {
+        Self {
+            request: BackgroundWorkRequest::Progress(JobProgress {
+                job_id: job_id.into(),
+                percent,
+                message: None,
+            }),
+        }
+    }
+
+    /// Attach a progress message to a progress handoff.
+    pub fn progress_message(mut self, message: impl Into<String>) -> Self {
+        if let BackgroundWorkRequest::Progress(progress) = &mut self.request {
+            progress.message = Some(message.into());
+        }
+        self
+    }
+
+    /// Handoff for cancelling a job.
+    pub fn cancel(job_id: impl Into<String>) -> Self {
+        Self {
+            request: BackgroundWorkRequest::Cancel {
+                job_id: job_id.into(),
+            },
+        }
+    }
+
+    /// Handoff for pausing a job.
+    pub fn pause(job_id: impl Into<String>) -> Self {
+        Self {
+            request: BackgroundWorkRequest::Pause {
+                job_id: job_id.into(),
+            },
+        }
+    }
+
+    /// Handoff for resuming a job.
+    pub fn resume(job_id: impl Into<String>) -> Self {
+        Self {
+            request: BackgroundWorkRequest::Resume {
+                job_id: job_id.into(),
+            },
+        }
+    }
+
+    /// Handoff for requiring a worker pool.
+    pub fn worker_pool(reason: impl Into<String>) -> Self {
+        Self {
+            request: BackgroundWorkRequest::WorkerPool {
+                reason: reason.into(),
+            },
+        }
+    }
+
+    /// Handoff for escalating work to a helper process.
+    pub fn helper_process(reason: impl Into<String>) -> Self {
+        Self {
+            request: BackgroundWorkRequest::HelperProcess {
+                reason: reason.into(),
+            },
+        }
+    }
+
+    /// Request carried by this builder.
+    pub fn request(&self) -> &BackgroundWorkRequest {
+        &self.request
+    }
+
+    /// Next action implied by this builder.
+    pub fn next_action(&self) -> BackgroundWorkNextAction {
+        self.request.next_action()
+    }
+
+    /// Content-safe builder summary.
+    pub fn to_text(&self) -> String {
+        format!(
+            "background work handoff builder: {}",
+            self.request.to_text()
+        )
+    }
+
+    /// Validate the handoff before routing it.
+    pub fn validate(&self) -> Result<()> {
+        self.request.validate()
+    }
+
+    /// Build the checked handoff.
+    pub fn build_checked(self) -> Result<BackgroundWorkHandoff> {
+        self.validate()?;
+        let next_action = self.request.next_action();
+        Ok(BackgroundWorkHandoff {
+            request: self.request,
+            next_action,
         })
+    }
+}
+
+/// Checked handoff for generated background work and worker routing.
+#[derive(Debug, Clone)]
+pub struct BackgroundWorkHandoff {
+    request: BackgroundWorkRequest,
+    next_action: BackgroundWorkNextAction,
+}
+
+impl BackgroundWorkHandoff {
+    /// Build a checked job descriptor handoff.
+    pub fn descriptor(descriptor: JobDescriptor) -> Result<Self> {
+        BackgroundWorkHandoffBuilder::descriptor(descriptor).build_checked()
+    }
+
+    /// Build a checked default job handoff.
+    pub fn job(job_id: impl Into<String>) -> Result<Self> {
+        BackgroundWorkHandoffBuilder::job(job_id).build_checked()
+    }
+
+    /// Build a checked progress handoff.
+    pub fn progress(job_id: impl Into<String>, percent: f64) -> Result<Self> {
+        BackgroundWorkHandoffBuilder::progress(job_id, percent).build_checked()
+    }
+
+    /// Build a checked cancel handoff.
+    pub fn cancel(job_id: impl Into<String>) -> Result<Self> {
+        BackgroundWorkHandoffBuilder::cancel(job_id).build_checked()
+    }
+
+    /// Build a checked pause handoff.
+    pub fn pause(job_id: impl Into<String>) -> Result<Self> {
+        BackgroundWorkHandoffBuilder::pause(job_id).build_checked()
+    }
+
+    /// Build a checked resume handoff.
+    pub fn resume(job_id: impl Into<String>) -> Result<Self> {
+        BackgroundWorkHandoffBuilder::resume(job_id).build_checked()
+    }
+
+    /// Build a checked worker-pool handoff.
+    pub fn worker_pool(reason: impl Into<String>) -> Result<Self> {
+        BackgroundWorkHandoffBuilder::worker_pool(reason).build_checked()
+    }
+
+    /// Build a checked helper-process handoff.
+    pub fn helper_process(reason: impl Into<String>) -> Result<Self> {
+        BackgroundWorkHandoffBuilder::helper_process(reason).build_checked()
+    }
+
+    /// Request carried by this handoff.
+    pub fn request(&self) -> &BackgroundWorkRequest {
+        &self.request
+    }
+
+    /// Next action to take.
+    pub fn next_action(&self) -> BackgroundWorkNextAction {
+        self.next_action
+    }
+
+    /// Whether this handoff schedules a job.
+    pub fn is_job(&self) -> bool {
+        self.request.is_job()
+    }
+
+    /// Whether this handoff reports progress.
+    pub fn is_progress(&self) -> bool {
+        self.request.is_progress()
+    }
+
+    /// Whether this handoff cancels a job.
+    pub fn is_cancel(&self) -> bool {
+        self.request.is_cancel()
+    }
+
+    /// Whether this handoff pauses a job.
+    pub fn is_pause(&self) -> bool {
+        self.request.is_pause()
+    }
+
+    /// Whether this handoff resumes a job.
+    pub fn is_resume(&self) -> bool {
+        self.request.is_resume()
+    }
+
+    /// Whether this handoff requires a worker pool.
+    pub fn is_worker_pool(&self) -> bool {
+        self.request.is_worker_pool()
+    }
+
+    /// Whether this handoff escalates to a helper process.
+    pub fn is_helper_process(&self) -> bool {
+        self.request.is_helper_process()
+    }
+
+    /// Job descriptor when present.
+    pub fn descriptor_ref(&self) -> Option<&JobDescriptor> {
+        self.request.descriptor()
+    }
+
+    /// Progress update when present.
+    pub fn progress_ref(&self) -> Option<&JobProgress> {
+        self.request.progress()
+    }
+
+    /// Job id when present.
+    pub fn job_id(&self) -> Option<&str> {
+        self.request.job_id()
+    }
+
+    /// Content-safe handoff summary.
+    pub fn to_text(&self) -> String {
+        format!("background work handoff: {}", self.request.to_text())
     }
 }
 
@@ -628,6 +1497,23 @@ fn validate_job_id(id: &str, label: &str) -> Result<()> {
         id.chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | ':' | '-' | '_' | '/')),
         "{label} must contain only ASCII letters, numbers, '.', ':', '-', '_' or '/'"
+    );
+    Ok(())
+}
+
+fn validate_background_reason(value: &str, label: &str) -> Result<()> {
+    anyhow::ensure!(!value.trim().is_empty(), "{label} cannot be empty");
+    anyhow::ensure!(
+        value == value.trim(),
+        "{label} cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        value.len() <= 256,
+        "{label} cannot be longer than 256 bytes"
+    );
+    anyhow::ensure!(
+        !value.chars().any(char::is_control),
+        "{label} cannot contain control characters"
     );
     Ok(())
 }
@@ -648,6 +1534,19 @@ mod tests {
     }
 
     impl BackgroundJob for TestJob {
+        type Output = String;
+        fn id(&self) -> &str {
+            &self.id
+        }
+    }
+
+    #[derive(Serialize)]
+    struct LargeJob {
+        id: String,
+        payload: String,
+    }
+
+    impl BackgroundJob for LargeJob {
         type Output = String;
         fn id(&self) -> &str {
             &self.id
@@ -727,6 +1626,7 @@ mod tests {
         assert!(JobPriority::High > JobPriority::Normal);
         assert!(JobPriority::Normal > JobPriority::Low);
         assert!(JobPriority::Low < JobPriority::Critical);
+        assert_eq!(JobPriority::Critical.key(), "critical");
     }
 
     #[test]
@@ -756,6 +1656,56 @@ mod tests {
         assert_eq!(policy.max_retries, 3);
         assert_eq!(policy.delay_ms, 1000);
         assert!((policy.backoff_multiplier - 2.0).abs() < f64::EPSILON);
+        assert!(policy.has_retries());
+        assert!(policy.has_backoff());
+        assert_eq!(
+            policy.to_text(),
+            "retry policy: retries true, delay true, backoff true"
+        );
+    }
+
+    #[test]
+    fn test_retry_policy_bounds_and_caps_backoff_delay() {
+        let policy = RetryPolicy {
+            max_retries: 100,
+            delay_ms: 1_000,
+            backoff_multiplier: 100.0,
+        };
+        assert_eq!(
+            policy.delay_for_attempt(1),
+            Some(std::time::Duration::from_secs(1))
+        );
+        assert_eq!(
+            policy.delay_for_attempt(100),
+            Some(std::time::Duration::from_secs(60 * 60))
+        );
+        assert_eq!(policy.delay_for_attempt(0), None);
+        assert_eq!(policy.delay_for_attempt(101), None);
+
+        assert!(
+            RetryPolicy {
+                max_retries: 101,
+                ..RetryPolicy::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            RetryPolicy {
+                delay_ms: MAX_RETRY_DELAY_MS + 1,
+                ..RetryPolicy::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            RetryPolicy {
+                backoff_multiplier: 100.1,
+                ..RetryPolicy::default()
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[test]
@@ -776,6 +1726,74 @@ mod tests {
         assert!(descriptor.retry_policy.is_some());
         assert_eq!(descriptor.retry_policy.unwrap().max_retries, 5);
         assert_eq!(descriptor.dependencies.len(), 2);
+    }
+
+    #[test]
+    fn test_job_descriptor_and_state_summaries_are_content_safe() {
+        let descriptor = JobDescriptor::new("export/private-video")
+            .with_priority(JobPriority::Critical)
+            .with_retry_policy(RetryPolicy {
+                max_retries: 2,
+                delay_ms: 250,
+                backoff_multiplier: 1.5,
+            })
+            .with_dependencies(vec![
+                "index/private-project".to_string(),
+                "download/source".to_string(),
+            ]);
+
+        assert!(descriptor.has_retry_policy());
+        assert_eq!(descriptor.dependency_count(), 2);
+        assert!(!descriptor.is_cancelled());
+        assert_eq!(
+            descriptor.to_text(),
+            "job descriptor: priority critical, retry true, dependencies 2, cancelled false"
+        );
+        assert!(!descriptor.to_text().contains("private-video"));
+        assert!(!descriptor.to_text().contains("private-project"));
+
+        let status = JobStatus::Retrying { attempt: 3 };
+        assert_eq!(status.key(), "retrying");
+        assert!(status.is_active());
+        assert!(!status.is_terminal());
+        assert_eq!(
+            status.to_text(),
+            "job status: retrying, active true, terminal false"
+        );
+        assert!(!status.to_text().contains("3"));
+
+        let progress = JobProgress {
+            job_id: "export/private-video".to_string(),
+            percent: 42.5,
+            message: Some("Rendering scene 9".to_string()),
+        };
+        assert!(progress.has_message());
+        assert_eq!(
+            progress.to_text(),
+            "job progress: message true, complete false"
+        );
+        assert!(!progress.to_text().contains("42.5"));
+        assert!(!progress.to_text().contains("Rendering"));
+
+        let info = JobInfo {
+            id: "export/private-video".to_string(),
+            status,
+            priority: JobPriority::Critical,
+            progress: Some(progress),
+            retry_count: 3,
+            created_at: Instant::now(),
+            started_at: Some(Instant::now()),
+            completed_at: None,
+        };
+        assert!(info.has_progress());
+        assert!(info.has_started());
+        assert!(!info.has_completed());
+        assert_eq!(
+            info.to_text(),
+            "job info: status retrying, priority critical, progress true, retries true, started true, completed false"
+        );
+        assert!(!info.to_text().contains("private-video"));
+        assert!(!info.to_text().contains("Rendering"));
     }
 
     #[test]
@@ -836,6 +1854,132 @@ mod tests {
                 .validate()
                 .is_ok()
         );
+        assert!(
+            JobDescriptor::new("job")
+                .with_dependencies(
+                    (0..=MAX_JOB_DEPENDENCIES)
+                        .map(|index| format!("dependency-{index}"))
+                        .collect()
+                )
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_background_work_handoff_guides_generated_worker_routing() {
+        let schedule = BackgroundWorkHandoffBuilder::job("export/video")
+            .build_checked()
+            .unwrap();
+        assert!(schedule.is_job());
+        assert_eq!(
+            schedule.next_action(),
+            BackgroundWorkNextAction::ScheduleJob
+        );
+        assert_eq!(schedule.job_id(), Some("export/video"));
+        assert_eq!(
+            schedule.to_text(),
+            "background work handoff: background work request: action schedule-job, job descriptor: priority normal, retry false, dependencies 0, cancelled false"
+        );
+        assert!(!schedule.to_text().contains("export/video"));
+
+        let dependency_handoff = BackgroundWorkHandoff::descriptor(
+            JobDescriptor::new("export/video")
+                .with_priority(JobPriority::High)
+                .with_dependencies(vec!["scan/workspace".to_string()])
+                .with_retry_policy(RetryPolicy {
+                    max_retries: 2,
+                    delay_ms: 100,
+                    backoff_multiplier: 1.5,
+                }),
+        )
+        .unwrap();
+        assert!(dependency_handoff.is_job());
+        assert_eq!(
+            dependency_handoff.next_action(),
+            BackgroundWorkNextAction::WaitForDependencies
+        );
+        assert_eq!(
+            dependency_handoff
+                .descriptor_ref()
+                .unwrap()
+                .dependency_count(),
+            1
+        );
+        assert!(!dependency_handoff.to_text().contains("scan/workspace"));
+
+        let progress = BackgroundWorkHandoffBuilder::progress("export/video", 42.0)
+            .progress_message("Rendering private timeline")
+            .build_checked()
+            .unwrap();
+        assert!(progress.is_progress());
+        assert_eq!(
+            progress.next_action(),
+            BackgroundWorkNextAction::ReportProgress
+        );
+        assert!(progress.progress_ref().unwrap().has_message());
+        assert!(!progress.to_text().contains("42"));
+        assert!(!progress.to_text().contains("private timeline"));
+
+        let cancel = BackgroundWorkHandoff::cancel("export/video").unwrap();
+        assert!(cancel.is_cancel());
+        assert_eq!(cancel.next_action(), BackgroundWorkNextAction::CancelJob);
+        assert_eq!(cancel.job_id(), Some("export/video"));
+        assert!(!cancel.to_text().contains("export/video"));
+
+        let pause = BackgroundWorkHandoff::pause("export/video").unwrap();
+        assert!(pause.is_pause());
+        assert_eq!(pause.next_action(), BackgroundWorkNextAction::PauseJob);
+
+        let resume = BackgroundWorkHandoff::resume("export/video").unwrap();
+        assert!(resume.is_resume());
+        assert_eq!(resume.next_action(), BackgroundWorkNextAction::ResumeJob);
+
+        let worker_pool =
+            BackgroundWorkHandoff::worker_pool("CPU-heavy indexer should not block UI").unwrap();
+        assert!(worker_pool.is_worker_pool());
+        assert_eq!(
+            worker_pool.next_action(),
+            BackgroundWorkNextAction::UseWorkerPool
+        );
+        assert!(!worker_pool.to_text().contains("CPU-heavy"));
+
+        let helper =
+            BackgroundWorkHandoff::helper_process("Native module isolation required").unwrap();
+        assert!(helper.is_helper_process());
+        assert_eq!(
+            helper.next_action(),
+            BackgroundWorkNextAction::UseHelperProcess
+        );
+        assert_eq!(
+            BackgroundWorkNextAction::UseHelperProcess.key(),
+            "use-helper-process"
+        );
+        assert!(!helper.to_text().contains("Native module"));
+    }
+
+    #[test]
+    fn test_background_work_handoff_rejects_invalid_generated_requests() {
+        assert!(BackgroundWorkHandoff::job("bad job").is_err());
+        assert!(
+            BackgroundWorkHandoff::descriptor(
+                JobDescriptor::new("job").with_dependencies(vec!["bad dep".to_string()])
+            )
+            .is_err()
+        );
+        assert!(BackgroundWorkHandoff::progress("job", f64::NAN).is_err());
+        assert!(BackgroundWorkHandoff::progress("job", 101.0).is_err());
+        assert!(
+            BackgroundWorkHandoffBuilder::progress("job", 50.0)
+                .progress_message(" private step")
+                .build_checked()
+                .is_err()
+        );
+        assert!(BackgroundWorkHandoff::cancel("bad job").is_err());
+        assert!(BackgroundWorkHandoff::pause("bad job").is_err());
+        assert!(BackgroundWorkHandoff::resume("bad job").is_err());
+        assert!(BackgroundWorkHandoff::worker_pool("").is_err());
+        assert!(BackgroundWorkHandoff::helper_process("bad\nreason").is_err());
     }
 
     #[test]
@@ -868,6 +2012,31 @@ mod tests {
             .unwrap();
         assert_eq!(id, "valid-job");
         assert_eq!(scheduler.status(&id), Some(JobStatus::Failed));
+    }
+
+    #[test]
+    fn test_scheduler_rejects_oversized_requests_and_results() {
+        let scheduler = JobScheduler::new().with_max_concurrent(0);
+        assert!(
+            scheduler
+                .schedule(LargeJob {
+                    id: "large-job".to_string(),
+                    payload: "x".repeat(MAX_JOB_PAYLOAD_BYTES),
+                })
+                .is_err()
+        );
+        assert!(scheduler.status("large-job").is_none());
+
+        let id = scheduler
+            .schedule(TestJob {
+                id: "large-result".to_string(),
+            })
+            .unwrap();
+        let pending = scheduler.pending.lock().unwrap().get(&id).cloned().unwrap();
+        assert!(
+            (pending.decode_result)(serde_json::Value::String("x".repeat(MAX_JOB_RESULT_BYTES)))
+                .is_err()
+        );
     }
 
     #[test]
@@ -1042,6 +2211,20 @@ mod tests {
             message: None,
         };
         assert!(scheduler.report_progress(progress).is_err());
+
+        let progress = JobProgress {
+            job_id: id.clone(),
+            percent: f64::NAN,
+            message: None,
+        };
+        assert!(scheduler.report_progress(progress).is_err());
+
+        let progress = JobProgress {
+            job_id: id,
+            percent: 50.0,
+            message: Some(" invalid message".to_string()),
+        };
+        assert!(scheduler.report_progress(progress).is_err());
     }
 
     #[test]
@@ -1183,6 +2366,30 @@ mod tests {
         };
         let id = scheduler.schedule(job).unwrap();
         assert_eq!(scheduler.status(&id), Some(JobStatus::Queued));
+        assert!(scheduler.pending.lock().unwrap().contains_key(&id));
+    }
+
+    #[test]
+    fn test_concurrency_slot_acquisition_is_atomic() {
+        let scheduler = Arc::new(JobScheduler::new().with_max_concurrent(2));
+        let barrier = Arc::new(std::sync::Barrier::new(17));
+        let mut threads = Vec::new();
+        for _ in 0..16 {
+            let scheduler = scheduler.clone();
+            let barrier = barrier.clone();
+            threads.push(std::thread::spawn(move || {
+                barrier.wait();
+                scheduler.try_acquire_slot()
+            }));
+        }
+        barrier.wait();
+        let acquired = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .filter(|acquired| *acquired)
+            .count();
+        assert_eq!(acquired, 2);
+        assert_eq!(scheduler.running_count(), 2);
     }
 
     #[test]
@@ -1221,6 +2428,32 @@ mod tests {
 
         let id = scheduler.schedule_with_descriptor(job, descriptor).unwrap();
         assert_eq!(scheduler.status(&id), Some(JobStatus::Queued));
+    }
+
+    #[test]
+    fn test_dependency_cycle_is_rejected_without_partial_insertion() {
+        let scheduler = JobScheduler::new();
+        scheduler
+            .schedule_with_descriptor(
+                TestJob {
+                    id: "job-a".to_string(),
+                },
+                JobDescriptor::new("job-a").with_dependencies(vec!["job-b".to_string()]),
+            )
+            .unwrap();
+
+        assert!(
+            scheduler
+                .schedule_with_descriptor(
+                    TestJob {
+                        id: "job-b".to_string(),
+                    },
+                    JobDescriptor::new("job-b").with_dependencies(vec!["job-a".to_string()]),
+                )
+                .is_err()
+        );
+        assert!(scheduler.status("job-b").is_none());
+        assert!(!scheduler.pending.lock().unwrap().contains_key("job-b"));
     }
 
     #[test]
@@ -1371,6 +2604,50 @@ mod tests {
         );
         let info = scheduler.job_info(&id).unwrap();
         assert_eq!(info.retry_count, 1);
+        assert_eq!(
+            scheduler.retry_delay(&id),
+            Some(std::time::Duration::from_millis(100))
+        );
+        assert!(scheduler.pending.lock().unwrap().contains_key(&id));
+
+        scheduler.retry(&id).unwrap();
+        assert_eq!(
+            scheduler.status(&id),
+            Some(JobStatus::Retrying { attempt: 2 })
+        );
+        scheduler.retry(&id).unwrap();
+        assert_eq!(
+            scheduler.status(&id),
+            Some(JobStatus::Retrying { attempt: 3 })
+        );
+        scheduler.retry(&id).unwrap();
+        assert_eq!(scheduler.status(&id), Some(JobStatus::Failed));
+        assert!(scheduler.retry_delay(&id).is_none());
+        assert!(!scheduler.pending.lock().unwrap().contains_key(&id));
+        assert!(scheduler.retry(&id).is_err());
+    }
+
+    #[test]
+    fn test_cancelled_and_terminal_jobs_release_retained_state() {
+        let scheduler = JobScheduler::new().with_max_concurrent(0);
+        let id = scheduler
+            .schedule(TestJob {
+                id: "cleanup-job".to_string(),
+            })
+            .unwrap();
+        assert!(scheduler.pending.lock().unwrap().contains_key(&id));
+
+        scheduler.cancel(&id).unwrap();
+        assert!(!scheduler.pending.lock().unwrap().contains_key(&id));
+        scheduler
+            .results
+            .lock()
+            .unwrap()
+            .insert(id.clone(), serde_json::json!("stale"));
+        scheduler.remove_terminal(&id).unwrap();
+        assert!(scheduler.status(&id).is_none());
+        assert!(scheduler.result(&id).is_none());
+        assert!(scheduler.remove_terminal(&id).is_err());
     }
 
     #[test]

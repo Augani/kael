@@ -52,7 +52,7 @@ fn main() {
                     })),
                     ..Default::default()
                 },
-                |_, cx| cx.new(|cx| MentionInputDemo::new(cx)),
+                |_, cx| cx.new(MentionInputDemo::new),
             )
             .unwrap();
         });
@@ -70,9 +70,9 @@ struct MentionInputDemo {
 
 impl MentionInputDemo {
     fn new(cx: &mut Context<Self>) -> Self {
-        let basic_state = cx.new(|cx| MentionInputState::new(cx));
-        let custom_trigger_state = cx.new(|cx| MentionInputState::new(cx));
-        let with_avatars_state = cx.new(|cx| MentionInputState::new(cx));
+        let basic_state = cx.new(MentionInputState::new);
+        let custom_trigger_state = cx.new(MentionInputState::new);
+        let with_avatars_state = cx.new(MentionInputState::new);
         let disabled_state = cx.new(|cx| {
             let mut state = MentionInputState::new(cx);
             state.disabled = true;

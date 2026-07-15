@@ -24,6 +24,8 @@ use crate::PermissionStatus;
 
 const TOOLKIT_NAME: &str = "Kael";
 const TOOLKIT_VERSION: &str = env!("CARGO_PKG_VERSION");
+const MAX_PENDING_ACCESSIBILITY_ACTIONS: usize = 1_024;
+const MAX_ACCESSIBILITY_APP_NAME_BYTES: usize = 1_024;
 
 type SharedUpdate = Arc<Mutex<Option<TreeUpdate>>>;
 type PendingActions = Arc<Mutex<Vec<ActionRequest>>>;
@@ -45,7 +47,9 @@ struct CollectingActionHandler {
 impl ActionHandler for CollectingActionHandler {
     fn do_action(&mut self, request: ActionRequest) {
         if let Ok(mut pending) = self.pending.lock() {
-            pending.push(request);
+            if pending.len() < MAX_PENDING_ACCESSIBILITY_ACTIONS {
+                pending.push(request);
+            }
         }
     }
 }
@@ -81,7 +85,11 @@ impl AtSpiAccessibleRoot {
             NoopDeactivationHandler,
         );
         Self {
-            app_name: app_name.to_string(),
+            app_name: if app_name.len() <= MAX_ACCESSIBILITY_APP_NAME_BYTES {
+                app_name.to_string()
+            } else {
+                String::new()
+            },
             adapter: RefCell::new(adapter),
             latest,
             pending_actions,

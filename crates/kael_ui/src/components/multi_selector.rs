@@ -11,6 +11,7 @@ use crate::{
     theme::Theme,
 };
 use kael::{prelude::FluentBuilder as _, *};
+use std::panic::Location;
 use std::rc::Rc;
 
 pub type MultiSelectorDivider = crate::components::select::SelectorDivider;
@@ -52,6 +53,7 @@ impl MultiSelectorOption {
 
 #[derive(IntoElement)]
 pub struct MultiSelector {
+    id: ElementId,
     label: SharedString,
     hidden_label: bool,
     description: Option<SharedString>,
@@ -61,6 +63,7 @@ pub struct MultiSelector {
     optional: bool,
     required: bool,
     loading: bool,
+    open: bool,
     size: MultiSelectorSize,
     status: Option<MultiSelectorStatus>,
     status_message: Option<SharedString>,
@@ -73,8 +76,19 @@ pub struct MultiSelector {
 }
 
 impl MultiSelector {
+    #[track_caller]
     pub fn new(label: impl Into<SharedString>) -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "multi-selector:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             label: label.into(),
             hidden_label: false,
             description: None,
@@ -84,6 +98,7 @@ impl MultiSelector {
             optional: false,
             required: false,
             loading: false,
+            open: false,
             size: MultiSelectorSize::default(),
             status: None,
             status_message: None,
@@ -98,6 +113,11 @@ impl MultiSelector {
 
     pub fn option(mut self, option: MultiSelectorOption) -> Self {
         self.options.push(option);
+        self
+    }
+
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
         self
     }
 
@@ -158,6 +178,11 @@ impl MultiSelector {
 
     pub fn is_loading(mut self, loading: bool) -> Self {
         self.loading = loading;
+        self
+    }
+
+    pub fn open(mut self, open: bool) -> Self {
+        self.open = open;
         self
     }
 
@@ -242,6 +267,12 @@ impl RenderOnce for MultiSelector {
         let on_open = self.on_open;
         let on_clear = self.on_clear;
         let is_busy = self.loading;
+        let is_open = self.open;
+        let selector_id = self.id;
+        let trigger_id = ElementId::NamedChild(Box::new(selector_id.clone()), "trigger".into());
+        let clear_id = ElementId::NamedChild(Box::new(selector_id.clone()), "clear".into());
+        let field_label = self.label.clone();
+        let can_open = !self.disabled && !is_busy && on_open.is_some();
         let hover_ring = astryx::input_hover_ring(theme.tokens.input);
         let (height, padding_x, text_size, icon_size) = match self.size {
             InputSize::Sm => (px(28.0), px(8.0), px(14.0), px(16.0)),
@@ -253,10 +284,67 @@ impl RenderOnce for MultiSelector {
             FieldStatusType::Error => theme.tokens.destructive,
             FieldStatusType::Success => theme.tokens.success,
         });
+        let mut accessibility_state = if is_open {
+            AccessibilityState::EXPANDED
+        } else {
+            AccessibilityState::COLLAPSED
+        };
+        if self.disabled || !can_open {
+            accessibility_state |= AccessibilityState::DISABLED;
+        }
+        if self.required {
+            accessibility_state |= AccessibilityState::REQUIRED;
+        }
+        if is_busy {
+            accessibility_state |= AccessibilityState::BUSY;
+        }
+        if self.status == Some(FieldStatusType::Error) {
+            accessibility_state |= AccessibilityState::INVALID;
+        }
+        let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::ComboBox)
+            .label(field_label.to_string())
+            .placeholder(self.placeholder.to_string())
+            .states(accessibility_state);
+        if let Some(description) = self.description.as_ref() {
+            accessibility = accessibility.description(description.to_string());
+        }
+        if has_selected {
+            accessibility = accessibility.value(AccessibilityValue::Text(
+                selected
+                    .iter()
+                    .map(|option| option.label.as_ref())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ));
+        }
+        if can_open {
+            accessibility = accessibility.actions(vec![
+                AccessibilityAction::Focus,
+                AccessibilityAction::Click,
+                if is_open {
+                    AccessibilityAction::Collapse
+                } else {
+                    AccessibilityAction::Expand
+                },
+            ]);
+        }
+        let mut clear_accessibility = AccessibilityAttributes::new(AccessibilityRole::Button)
+            .label(format!("Clear {}", field_label))
+            .states(if on_clear.is_some() {
+                AccessibilityState::NONE
+            } else {
+                AccessibilityState::DISABLED
+            });
+        if on_clear.is_some() {
+            clear_accessibility = clear_accessibility
+                .actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]);
+        }
 
         let field = Field::new(
             self.label,
             div()
+                .id(trigger_id)
+                .accessibility(accessibility)
                 .flex()
                 .items_center()
                 .gap(px(8.0))
@@ -276,8 +364,11 @@ impl RenderOnce for MultiSelector {
                     this.shadow(smallvec::smallvec![astryx::input_hover_ring(color)])
                 })
                 .when(self.disabled || is_busy, |this| this.opacity(0.5))
-                .when(!self.disabled && !is_busy, |this| {
-                    this.cursor_pointer()
+                .when(can_open, |this| {
+                    this.focusable()
+                        .tab_index(0)
+                        .tab_stop(true)
+                        .cursor_pointer()
                         .hover(move |style| {
                             style
                                 .border_color(status_color.unwrap_or(theme.tokens.input))
@@ -286,8 +377,16 @@ impl RenderOnce for MultiSelector {
                                 ])
                         })
                         .when_some(on_open, |this, handler| {
-                            this.on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                            let on_key = handler.clone();
+                            this.on_click(move |_, window, cx| {
                                 handler(window, cx);
+                            })
+                            .on_key_down(move |event, window, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    on_key(window, cx);
+                                    cx.stop_propagation();
+                                    window.prevent_default();
+                                }
                             })
                         })
                 })
@@ -324,8 +423,8 @@ impl RenderOnce for MultiSelector {
                         .children(
                             selected
                                 .iter()
-                                .cloned()
                                 .take(self.max_visible)
+                                .cloned()
                                 .map(|opt| Token::new(opt.label).into_any_element()),
                         )
                         .when(overflow > 0, |this| {
@@ -343,20 +442,47 @@ impl RenderOnce for MultiSelector {
                     |this| {
                         this.child(
                             div()
+                                .id(clear_id)
+                                .accessibility(clear_accessibility)
                                 .size(px(24.0))
                                 .flex()
                                 .items_center()
                                 .justify_center()
                                 .rounded(theme.tokens.radius_sm)
-                                .cursor_pointer()
-                                .hover(|style| {
-                                    style.bg(astryx::overlay_hover(theme.tokens.background.l < 0.5))
+                                .when(on_clear.is_some(), |this| {
+                                    this.focusable()
+                                        .tab_index(0)
+                                        .tab_stop(true)
+                                        .cursor_pointer()
+                                        .hover(|style| {
+                                            style.bg(astryx::overlay_hover(
+                                                theme.tokens.background.l < 0.5,
+                                            ))
+                                        })
+                                        .focus_visible(|style| {
+                                            style.bg(astryx::overlay_hover(
+                                                theme.tokens.background.l < 0.5,
+                                            ))
+                                        })
                                 })
                                 .when_some(on_clear, |this, handler| {
-                                    this.on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                    let on_key = handler.clone();
+                                    this.on_click(move |_, window, cx| {
                                         cx.stop_propagation();
                                         handler(window, cx);
                                     })
+                                    .on_key_down(
+                                        move |event, window, cx| {
+                                            if matches!(
+                                                event.keystroke.key.as_str(),
+                                                "enter" | "space"
+                                            ) {
+                                                on_key(window, cx);
+                                                cx.stop_propagation();
+                                                window.prevent_default();
+                                            }
+                                        },
+                                    )
                                 })
                                 .child(
                                     Icon::new("x")

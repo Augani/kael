@@ -661,7 +661,7 @@ fn main() {
                     }),
                     ..Default::default()
                 },
-                |_window, cx| cx.new(|cx| ValidationDemoApp::new(cx)),
+                |_window, cx| cx.new(ValidationDemoApp::new),
             )
             .unwrap();
         });

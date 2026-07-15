@@ -1,5 +1,5 @@
 use crate::components::avatar::{Avatar, AvatarSize};
-use crate::components::tooltip::tooltip;
+use crate::components::tooltip::{tooltip, TooltipFocusTrigger};
 use crate::theme::use_theme;
 use kael::{prelude::FluentBuilder as _, *};
 
@@ -99,8 +99,9 @@ impl RenderOnce for AvatarGroupOverflow {
 }
 
 fn get_overlap(size: AvatarSize, spacing: Option<f32>) -> f32 {
-    if let Some(spacing) = spacing {
-        return spacing;
+    if let Some(spacing) = spacing.filter(|spacing| spacing.is_finite()) {
+        let size = get_size_px(size);
+        return spacing.clamp(-size + 1.0, size * 4.0);
     }
 
     match size {
@@ -185,7 +186,12 @@ impl AvatarGroup {
     }
 
     pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
-        self.aria_label = label.into();
+        let label = label.into();
+        self.aria_label = if label.trim().is_empty() {
+            "Avatars".into()
+        } else {
+            label
+        };
         self
     }
 
@@ -205,8 +211,32 @@ impl AvatarGroup {
     }
 
     pub fn spacing(mut self, spacing: Pixels) -> Self {
-        self.spacing = Some(f32::from(spacing));
+        let spacing = f32::from(spacing);
+        if spacing.is_finite() {
+            self.spacing = Some(spacing);
+        }
         self
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn overlap_is_finite_and_bounded_for_the_final_avatar_size() {
+        assert_eq!(get_overlap(AvatarSize::Md, None), -9.0);
+        assert_eq!(get_overlap(AvatarSize::Xs, Some(-500.0)), -19.0);
+        assert_eq!(get_overlap(AvatarSize::Xs, Some(500.0)), 80.0);
+        assert_eq!(get_overlap(AvatarSize::Md, Some(f32::NAN)), -9.0);
+    }
+
+    #[::core::prelude::v1::test]
+    fn empty_group_labels_and_invalid_spacing_use_safe_values() {
+        let group = AvatarGroup::default().aria_label(" ").spacing(px(f32::NAN));
+        assert_eq!(group.aria_label.as_ref(), "Avatars");
+        assert_eq!(group.spacing, None);
     }
 }
 
@@ -243,18 +273,13 @@ impl RenderOnce for AvatarGroup {
             let step = size_px + overlap;
             let total_w = (composed_children.len() as f32 - 1.0).max(0.0) * step + size_px;
             return div()
+                .accessibility(
+                    AccessibilityAttributes::new(AccessibilityRole::Group)
+                        .label(aria_label.to_string()),
+                )
                 .relative()
                 .h(px(size_px))
                 .w(px(total_w))
-                .child(
-                    div()
-                        .absolute()
-                        .left(px(-10000.0))
-                        .top(px(0.0))
-                        .size(px(1.0))
-                        .overflow_hidden()
-                        .child(aria_label),
-                )
                 .children(composed_children.into_iter().enumerate().rev().map(
                     move |(index, child)| {
                         div()
@@ -302,6 +327,10 @@ impl RenderOnce for AvatarGroup {
         if overflow_count > 0 {
             let left = visible_count as f32 * step;
             let visual = div()
+                .accessibility(
+                    AccessibilityAttributes::new(AccessibilityRole::StaticText)
+                        .label(format!("{overflow_count} more avatars")),
+                )
                 .size(px(size_px))
                 .flex()
                 .items_center()
@@ -314,12 +343,16 @@ impl RenderOnce for AvatarGroup {
                 .font_family(theme.tokens.font_family.clone())
                 .border_2()
                 .border_color(card)
-                .child(format!("+{}", overflow_count));
+                .child(StyledText::new(format!("+{}", overflow_count)).accessibility_hidden(true));
             children.push(if show_tooltips && !overflow_names.is_empty() {
-                tooltip(visual, overflow_names.join(", "))
+                div()
                     .absolute()
                     .left(px(left))
                     .top_0()
+                    .child(
+                        tooltip(visual, overflow_names.join(", "))
+                            .focus_trigger(TooltipFocusTrigger::Never),
+                    )
                     .into_any_element()
             } else {
                 visual.absolute().left(px(left)).top_0().into_any_element()
@@ -334,10 +367,11 @@ impl RenderOnce for AvatarGroup {
                 .border_color(card)
                 .child(create_avatar(item, size));
             let el = match (show_tooltips, item.name.clone()) {
-                (true, Some(name)) => tooltip(visual, name)
+                (true, Some(name)) => div()
                     .absolute()
                     .left(px(left))
                     .top_0()
+                    .child(tooltip(visual, name).focus_trigger(TooltipFocusTrigger::Never))
                     .into_any_element(),
                 _ => visual.absolute().left(px(left)).top_0().into_any_element(),
             };
@@ -345,18 +379,13 @@ impl RenderOnce for AvatarGroup {
         }
 
         div()
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group)
+                    .label(aria_label.to_string()),
+            )
             .relative()
             .h(px(size_px))
             .w(px(total_w))
-            .child(
-                div()
-                    .absolute()
-                    .left(px(-10000.0))
-                    .top(px(0.0))
-                    .size(px(1.0))
-                    .overflow_hidden()
-                    .child(aria_label),
-            )
             .map(|this| {
                 let mut div = this;
                 div.style().refine(&user_style);

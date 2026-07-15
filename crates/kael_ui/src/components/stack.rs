@@ -59,6 +59,8 @@ impl Styled for StackItem {
 impl RenderOnce for StackItem {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         div()
+            .min_w(px(0.0))
+            .min_h(px(0.0))
             .when(self.size == StackItemSize::Fill, |this| this.flex_1())
             .when(self.size == StackItemSize::Static, |this| {
                 this.flex_shrink_0()
@@ -124,8 +126,8 @@ impl Stack {
         self
     }
 
-    pub fn gap(mut self, gap: Pixels) -> Self {
-        self.gap = Some(gap);
+    pub fn gap(mut self, gap: impl Into<Pixels>) -> Self {
+        self.gap = Some(gap.into());
         self
     }
 
@@ -134,18 +136,24 @@ impl Stack {
         self
     }
 
-    pub fn width(mut self, width: Pixels) -> Self {
-        self.width = Some(width);
+    pub fn width(mut self, width: impl Into<Pixels>) -> Self {
+        self.width = Some(width.into());
         self
     }
 
-    pub fn height(mut self, height: Pixels) -> Self {
-        self.height = Some(height);
+    pub fn height(mut self, height: impl Into<Pixels>) -> Self {
+        self.height = Some(height.into());
         self
     }
 
     pub fn child(mut self, child: impl IntoElement) -> Self {
         self.children.push(child.into_any_element());
+        self
+    }
+
+    pub fn children(mut self, children: impl IntoIterator<Item = impl IntoElement>) -> Self {
+        self.children
+            .extend(children.into_iter().map(IntoElement::into_any_element));
         self
     }
 }
@@ -165,7 +173,10 @@ impl Styled for Stack {
 impl RenderOnce for Stack {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         div()
+            .accessibility(AccessibilityAttributes::new(AccessibilityRole::Group))
             .flex()
+            .min_w(px(0.0))
+            .min_h(px(0.0))
             .when(self.direction == StackDirection::Horizontal, |this| {
                 this.flex_row()
             })
@@ -192,16 +203,18 @@ fn apply_align(div: Div, align: Option<Align>) -> Div {
         Some(Align::Start) => div.items_start(),
         Some(Align::Center) => div.items_center(),
         Some(Align::End) => div.items_end(),
-        Some(Align::Stretch) | None => div,
+        Some(Align::Stretch) => div.items_stretch(),
+        None => div,
     }
 }
 
 fn apply_align_self(div: Div, align: Option<Align>) -> Div {
     match align {
-        Some(Align::Start) => div.justify_self_start(),
-        Some(Align::End) => div.justify_self_end(),
-        Some(Align::Stretch) | None => div,
-        Some(Align::Center) => div,
+        Some(Align::Start) => div.self_start(),
+        Some(Align::Center) => div.self_center(),
+        Some(Align::End) => div.self_end(),
+        Some(Align::Stretch) => div.self_stretch(),
+        None => div,
     }
 }
 
@@ -211,7 +224,8 @@ fn apply_justify(div: Div, justify: Option<Justify>) -> Div {
         Some(Justify::Center) => div.justify_center(),
         Some(Justify::End) => div.justify_end(),
         Some(Justify::Between) => div.justify_between(),
-        Some(Justify::Around) | Some(Justify::Evenly) => div.justify_around(),
+        Some(Justify::Around) => div.justify_around(),
+        Some(Justify::Evenly) => div.justify_evenly(),
         None => div,
     }
 }

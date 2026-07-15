@@ -30,6 +30,39 @@ impl Svg {
         self
     }
 
+    /// Returns true when an SVG path is configured.
+    pub fn has_path(&self) -> bool {
+        self.path.is_some()
+    }
+
+    /// Byte length of the configured SVG path, without exposing the path.
+    pub fn path_len_bytes(&self) -> usize {
+        self.path.as_ref().map_or(0, |path| path.len())
+    }
+
+    /// Returns true when a transform is configured.
+    pub fn has_transformation(&self) -> bool {
+        self.transformation.is_some()
+    }
+
+    /// Stable transformation kind key.
+    pub fn transformation_key(&self) -> &'static str {
+        self.transformation
+            .as_ref()
+            .map_or("none", Transformation::kind_key)
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "svg(has_path={}, path_len_bytes={}, has_transformation={}, transformation={})",
+            self.has_path(),
+            self.path_len_bytes(),
+            self.has_transformation(),
+            self.transformation_key()
+        )
+    }
+
     /// Transform the SVG element with the given transformation.
     /// Note that this won't effect the hitbox or layout of the element, only the rendering.
     pub fn with_transformation(mut self, transformation: Transformation) -> Self {
@@ -164,6 +197,50 @@ impl Default for Transformation {
 }
 
 impl Transformation {
+    /// Returns true when the transformation changes scale.
+    pub fn has_scale(&self) -> bool {
+        self.scale != size(1.0, 1.0)
+    }
+
+    /// Returns true when the transformation changes translation.
+    pub fn has_translation(&self) -> bool {
+        self.translate != point(px(0.0), px(0.0))
+    }
+
+    /// Returns true when the transformation changes rotation.
+    pub fn has_rotation(&self) -> bool {
+        self.rotate != radians(0.0)
+    }
+
+    /// Stable transformation kind key.
+    pub fn kind_key(&self) -> &'static str {
+        match (
+            self.has_scale(),
+            self.has_translation(),
+            self.has_rotation(),
+        ) {
+            (false, false, false) => "identity",
+            (true, false, false) => "scale",
+            (false, true, false) => "translate",
+            (false, false, true) => "rotate",
+            (true, true, false) => "scale_translate",
+            (true, false, true) => "scale_rotate",
+            (false, true, true) => "translate_rotate",
+            (true, true, true) => "compound",
+        }
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "svg_transformation(kind={}, has_scale={}, has_translation={}, has_rotation={})",
+            self.kind_key(),
+            self.has_scale(),
+            self.has_translation(),
+            self.has_rotation()
+        )
+    }
+
     /// Create a new Transformation with the specified scale along each axis.
     pub fn scale(scale: Size<f32>) -> Self {
         Self {
@@ -217,5 +294,40 @@ impl Transformation {
             .rotate(self.rotate)
             .scale(self.scale)
             .translate(center.scale(scale_factor).negate())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Transformation, svg};
+    use crate::{point, px, radians, size};
+
+    #[test]
+    fn svg_summary_is_content_safe() {
+        let transformation = Transformation::scale(size(2.0, 1.0))
+            .with_translation(point(px(12.0), px(4.0)))
+            .with_rotation(radians(0.25));
+        assert_eq!(transformation.kind_key(), "compound");
+        let transformation_summary = transformation.to_text();
+        assert!(transformation_summary.contains("kind=compound"));
+        assert!(!transformation_summary.contains("12"));
+        assert!(!transformation_summary.contains("0.25"));
+
+        let icon = svg()
+            .path("/private/assets/secret-icon.svg")
+            .with_transformation(transformation);
+        assert!(icon.has_path());
+        assert_eq!(
+            icon.path_len_bytes(),
+            "/private/assets/secret-icon.svg".len()
+        );
+        assert!(icon.has_transformation());
+        assert_eq!(icon.transformation_key(), "compound");
+
+        let summary = icon.to_text();
+        assert!(summary.contains("svg(has_path=true"));
+        assert!(summary.contains("transformation=compound"));
+        assert!(!summary.contains("secret-icon"));
+        assert!(!summary.contains("/private"));
     }
 }

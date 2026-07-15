@@ -14,6 +14,10 @@ use crate::{
     Background, Bounds, ContentMask, ScaledPixels, Scene, TransformationMatrix, hsla, point, size,
 };
 
+const MAX_HEADLESS_FRAME_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_HEADLESS_COMPLEXITY: usize = 1_000_000;
+const MAX_COMPUTE_BUFFER_BYTES: usize = 64 * 1024 * 1024;
+
 /// Which rendering backend a [`HeadlessRenderer`] is using.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HeadlessBackend {
@@ -71,9 +75,7 @@ impl HeadlessRenderer {
     /// Selects the GPU backend when a compatible device is present, otherwise
     /// falls back to the CPU-only backend.
     pub fn new(width: u32, height: u32) -> Result<Self> {
-        if width == 0 || height == 0 {
-            anyhow::bail!("headless renderer requires non-zero dimensions");
-        }
+        validate_headless_dimensions(width, height)?;
 
         #[cfg(all(target_os = "macos", not(feature = "macos-blade")))]
         {
@@ -82,13 +84,19 @@ impl HeadlessRenderer {
             use std::sync::Arc;
 
             if metal_is_available() {
-                let renderer = MetalRenderer::new(Arc::new(Mutex::new(Default::default())));
-                return Ok(Self {
-                    width,
-                    height,
-                    backend: HeadlessBackend::Gpu,
-                    metal: Some(renderer),
-                });
+                match MetalRenderer::try_new(Arc::new(Mutex::new(Default::default()))) {
+                    Ok(renderer) => {
+                        return Ok(Self {
+                            width,
+                            height,
+                            backend: HeadlessBackend::Gpu,
+                            metal: Some(renderer),
+                        });
+                    }
+                    Err(error) => {
+                        log::warn!("Metal headless renderer initialization failed: {error:#}");
+                    }
+                }
             }
         }
 
@@ -117,6 +125,7 @@ impl HeadlessRenderer {
     /// derived from the read-back pixels; on a CPU-only backend the real scene
     /// is built and batched and the checksum is derived from its structure.
     pub fn render_frame(&mut self, complexity: usize) -> Result<RenderedFrame> {
+        validate_headless_complexity(complexity)?;
         let scene = build_benchmark_scene(self.width, self.height, complexity);
 
         #[cfg(all(target_os = "macos", not(feature = "macos-blade")))]
@@ -146,6 +155,7 @@ impl HeadlessRenderer {
     /// linear ≥16-bit working format), returning peak/checksum stats. Available
     /// only on the GPU backend.
     pub fn render_frame_rgba16f(&mut self, complexity: usize) -> Result<HdrFrame> {
+        validate_headless_complexity(complexity)?;
         #[cfg(all(target_os = "macos", not(feature = "macos-blade")))]
         if let Some(renderer) = self.metal.as_mut() {
             let scene = build_benchmark_scene(self.width, self.height, complexity);
@@ -235,6 +245,14 @@ impl HeadlessRenderer {
     /// Run a built-in GPU compute kernel that doubles each input value, proving
     /// the compute-pipeline path end-to-end. Available only on the GPU backend.
     pub fn run_compute_doubler(&self, data: &[f32]) -> Result<Vec<f32>> {
+        let byte_len = data
+            .len()
+            .checked_mul(std::mem::size_of::<f32>())
+            .ok_or_else(|| anyhow::anyhow!("headless compute buffer size overflowed"))?;
+        anyhow::ensure!(
+            byte_len <= MAX_COMPUTE_BUFFER_BYTES,
+            "headless compute buffer cannot exceed {MAX_COMPUTE_BUFFER_BYTES} bytes"
+        );
         #[cfg(all(target_os = "macos", not(feature = "macos-blade")))]
         if let Some(renderer) = self.metal.as_ref() {
             const KERNEL: &str = concat!(
@@ -252,6 +270,30 @@ impl HeadlessRenderer {
         let _ = data;
         anyhow::bail!("compute is only available on the GPU backend")
     }
+}
+
+fn validate_headless_dimensions(width: u32, height: u32) -> Result<()> {
+    anyhow::ensure!(
+        width > 0 && height > 0,
+        "headless renderer requires non-zero dimensions"
+    );
+    let byte_len = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| anyhow::anyhow!("headless frame dimensions overflowed"))?;
+    anyhow::ensure!(
+        byte_len <= MAX_HEADLESS_FRAME_BYTES,
+        "headless frame cannot exceed {MAX_HEADLESS_FRAME_BYTES} bytes"
+    );
+    Ok(())
+}
+
+fn validate_headless_complexity(complexity: usize) -> Result<()> {
+    anyhow::ensure!(
+        complexity <= MAX_HEADLESS_COMPLEXITY,
+        "headless scene complexity cannot exceed {MAX_HEADLESS_COMPLEXITY} primitives"
+    );
+    Ok(())
 }
 
 fn build_benchmark_scene(width: u32, height: u32, complexity: usize) -> Scene {
@@ -367,6 +409,20 @@ fn channel_range(bytes: &[u8], channel: usize) -> (u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn headless_renderer_bounds_dimensions_and_scene_complexity() {
+        assert!(HeadlessRenderer::new(0, 1).is_err());
+        assert!(HeadlessRenderer::new(u32::MAX, 1).is_err());
+
+        let mut renderer = HeadlessRenderer::new(1, 1).unwrap();
+        assert!(renderer.render_frame(MAX_HEADLESS_COMPLEXITY + 1).is_err());
+        assert!(
+            renderer
+                .render_frame_rgba16f(MAX_HEADLESS_COMPLEXITY + 1)
+                .is_err()
+        );
+    }
 
     #[test]
     fn render_frame_is_deterministic_and_does_real_work() {

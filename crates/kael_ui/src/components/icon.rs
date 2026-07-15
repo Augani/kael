@@ -1,12 +1,13 @@
 //! Icon component - SVG icon rendering with named icon support.
 
 use crate::components::icon_source::IconSource;
+use crate::components::{button::ButtonVariant, icon_button::IconButton};
 use crate::icon_config::resolve_icon_path;
 use crate::theme::use_theme;
 use kael::{prelude::*, *};
 use once_cell::sync::Lazy;
 use std::collections::BTreeMap;
-use std::sync::RwLock;
+use std::{panic::Location, path::Path, sync::RwLock};
 
 pub type IconName = String;
 pub type IconType = IconSource;
@@ -21,9 +22,9 @@ fn default_icons() -> IconRegistry {
         ("chevronLeft", "chevron-left"),
         ("chevronRight", "chevron-right"),
         ("check", "check"),
-        ("success", "check-circle"),
-        ("error", "x-circle"),
-        ("warning", "alert-circle"),
+        ("success", "circle-check"),
+        ("error", "circle-x"),
+        ("warning", "triangle-alert"),
         ("info", "info"),
         ("calendar", "calendar"),
         ("clock", "clock"),
@@ -93,8 +94,8 @@ pub fn resetIcons() {
     reset_icons();
 }
 
-/// Icon variant - currently for API compatibility, not yet affecting rendering
-/// TODO: Implement different icon styles or remove if not needed
+/// Icon rendering style. Solid variants resolve `<name>-solid` assets or
+/// registered aliases when available, with a regular-icon fallback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum IconVariant {
     #[default]
@@ -188,6 +189,7 @@ fn icon_path_from_name(name: &str) -> String {
 }
 
 pub struct Icon {
+    id: ElementId,
     source: IconSource,
     variant: IconVariant,
     size: IconSize,
@@ -195,15 +197,26 @@ pub struct Icon {
     semantic_color: IconColor,
     clickable: bool,
     disabled: bool,
+    label: Option<SharedString>,
     on_click: Option<Box<dyn Fn(&mut Window, &mut App) + Send + Sync + 'static>>,
-    focus_handle: Option<FocusHandle>,
     style: StyleRefinement,
     rotation: Option<Radians>,
 }
 
 impl Icon {
+    #[track_caller]
     pub fn new(source: impl Into<IconSource>) -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "icon:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             source: source.into(),
             variant: IconVariant::default(),
             size: IconSize::default(),
@@ -211,11 +224,22 @@ impl Icon {
             semantic_color: IconColor::Inherit,
             clickable: false,
             disabled: false,
+            label: None,
             on_click: None,
-            focus_handle: None,
             style: StyleRefinement::default(),
             rotation: None,
         }
+    }
+
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
+    }
+
+    /// Set the accessible name used when the icon is interactive.
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
     }
 
     pub fn variant(mut self, variant: IconVariant) -> Self {
@@ -270,7 +294,26 @@ impl Icon {
     fn get_svg_path(&self) -> Option<SharedString> {
         match &self.source {
             IconSource::FilePath(path) => Some(path.clone()),
-            IconSource::Named(name) => Some(SharedString::from(icon_path_from_name(name))),
+            IconSource::Named(name) => {
+                if self.variant == IconVariant::Solid {
+                    for candidate in [format!("{}Solid", name), format!("{}-solid", name)] {
+                        if let Some(source) = get_icon(&candidate) {
+                            return match source {
+                                IconSource::FilePath(path) => Some(path),
+                                IconSource::Named(name) => {
+                                    Some(SharedString::from(resolve_icon_path(&name)))
+                                }
+                            };
+                        }
+                    }
+
+                    let solid_path = resolve_icon_path(&format!("{}-solid", name));
+                    if Path::new(&solid_path).exists() {
+                        return Some(solid_path.into());
+                    }
+                }
+                Some(SharedString::from(icon_path_from_name(name)))
+            }
         }
     }
 }
@@ -334,50 +377,31 @@ impl IntoElement for Icon {
         // For clickable icons, wrap in interactive Div
         let on_click = self.on_click;
         let disabled = self.disabled;
-
-        div()
-            .flex()
-            .flex_shrink_0()
-            .items_center()
-            .justify_center()
-            .cursor(if disabled {
-                CursorStyle::Arrow
+        let label = self.label.unwrap_or_else(|| match &self.source {
+            IconSource::Named(name) => name.replace(['-', '_'], " ").into(),
+            IconSource::FilePath(_) => "Icon action".into(),
+        });
+        let icon_size = self.size.to_pixels();
+        let rotation = self.rotation;
+        let mut button = IconButton::new(svg_content.unwrap_or_else(|| "".into()))
+            .id(self.id)
+            .label(label)
+            .variant(ButtonVariant::Ghost)
+            .no_background(true)
+            .size(icon_size.max(px(32.0)))
+            .icon_size(icon_size)
+            .disabled(disabled)
+            .text_color(if disabled {
+                theme.tokens.muted_foreground
             } else {
-                CursorStyle::PointingHand
+                color
             })
-            .when_some(self.focus_handle, |div, handle| div.track_focus(&handle))
-            .when(!disabled && on_click.is_some(), |div| {
-                div.on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                    if let Some(ref cb) = on_click {
-                        cb(window, cx);
-                    }
-                })
-            })
-            .when(!disabled, |div| {
-                div.hover(|mut style| {
-                    style.opacity = Some(0.7);
-                    style
-                })
-            })
-            .when_some(svg_content, |div, svg_string| {
-                let mut icon_svg = svg();
-                *icon_svg.style() = self.style.clone();
-
-                div.child(
-                    icon_svg
-                        .path(svg_string)
-                        .size(self.size.to_pixels())
-                        .text_color(if disabled {
-                            theme.tokens.muted_foreground
-                        } else {
-                            color
-                        })
-                        .when_some(self.rotation, |this, rotation| {
-                            this.with_transformation(Transformation::rotate(rotation))
-                        }),
-                )
-            })
-            .into_any_element()
+            .when_some(rotation, |this, rotation| this.rotate(rotation));
+        button.style().refine(&self.style);
+        if let Some(callback) = on_click {
+            button = button.on_click(move |_, window, cx| callback(window, cx));
+        }
+        button.into_any_element()
     }
 }
 
@@ -407,4 +431,24 @@ pub fn renderIconSlot(
     color: IconColor,
 ) -> Icon {
     render_icon_slot(source, size, color)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{default_icons, IconSource};
+
+    #[test]
+    fn semantic_aliases_resolve_to_bundled_icon_names() {
+        let icons = default_icons();
+
+        assert_eq!(
+            icons.get("success"),
+            Some(&IconSource::from("circle-check"))
+        );
+        assert_eq!(
+            icons.get("warning"),
+            Some(&IconSource::from("triangle-alert"))
+        );
+        assert_eq!(icons.get("error"), Some(&IconSource::from("circle-x")));
+    }
 }

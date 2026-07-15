@@ -29,10 +29,6 @@ pub struct StatusDot {
 }
 
 impl StatusDot {
-    pub fn default() -> Self {
-        Self::new(StatusTone::Neutral)
-    }
-
     pub fn new(tone: StatusTone) -> Self {
         Self {
             tone,
@@ -69,7 +65,12 @@ impl StatusDot {
     }
 
     pub fn size(mut self, size: Pixels) -> Self {
-        self.size = size;
+        let size = f32::from(size);
+        self.size = px(if size.is_finite() && size > 0.0 {
+            size
+        } else {
+            8.0
+        });
         self
     }
 
@@ -104,6 +105,12 @@ impl StatusDot {
     }
 }
 
+impl Default for StatusDot {
+    fn default() -> Self {
+        Self::new(StatusTone::Neutral)
+    }
+}
+
 impl Styled for StatusDot {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.style
@@ -121,6 +128,7 @@ impl IntoElement for StatusDot {
             .tooltip
             .clone()
             .or_else(|| self.label.clone())
+            .filter(|label| !label.trim().is_empty())
             .unwrap_or_else(|| "Status".into());
 
         let color = match self.tone {
@@ -128,7 +136,7 @@ impl IntoElement for StatusDot {
             StatusTone::Success => theme.tokens.success,
             StatusTone::Warning => theme.tokens.warning,
             StatusTone::Error => theme.tokens.destructive,
-            StatusTone::Info => theme.tokens.accent,
+            StatusTone::Info => theme.tokens.primary,
             StatusTone::Hue(hue) => hue.colors(dark).border,
             StatusTone::Custom(c) => c,
         };
@@ -152,22 +160,30 @@ impl IntoElement for StatusDot {
             .child(div().size(size).rounded_full().bg(color));
 
         div()
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Image)
+                    .label(accessible_label.to_string()),
+            )
             .relative()
             .flex()
             .flex_shrink_0()
             .size(size)
             .child(dot)
-            .child(
-                div()
-                    .size(px(1.0))
-                    .overflow_hidden()
-                    .opacity(0.0)
-                    .child(accessible_label),
-            )
             .map(|this| {
                 let mut div = this;
                 div.style().refine(&user_style);
                 div
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn invalid_size_uses_the_safe_default() {
+        assert_eq!(StatusDot::success().size(px(f32::NAN)).size, px(8.0));
+        assert_eq!(StatusDot::success().size(px(-1.0)).size, px(8.0));
     }
 }

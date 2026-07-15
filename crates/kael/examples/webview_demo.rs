@@ -199,7 +199,6 @@ impl Render for WebViewDemo {
                                 }
                             }))
                             .child(button("Eval JS", {
-                                let webview_controller = webview_controller.clone();
                                 move |window, _| {
                                     let _ = webview_controller.evaluate_javascript(
                                         window,

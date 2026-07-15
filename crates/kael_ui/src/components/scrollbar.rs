@@ -24,6 +24,39 @@ const THUMB_ACTIVE_INSET: Pixels = px(2.);
 
 const FADE_OUT_DURATION: f32 = 3.0;
 
+fn thumb_geometry(
+    scroll_area_size: Pixels,
+    container_size: Pixels,
+    margin_end: Pixels,
+    scroll_position: Pixels,
+) -> Option<(Pixels, Pixels)> {
+    let values = [
+        f32::from(scroll_area_size),
+        f32::from(container_size),
+        f32::from(margin_end),
+        f32::from(scroll_position),
+    ];
+    if !values.into_iter().all(f32::is_finite)
+        || scroll_area_size <= container_size
+        || container_size <= px(0.0)
+    {
+        return None;
+    }
+
+    let track_size = (container_size - margin_end).max(px(0.0));
+    if track_size <= px(0.0) {
+        return None;
+    }
+
+    let minimum = px(MIN_THUMB_SIZE).min(track_size);
+    let thumb_size = (container_size / scroll_area_size * track_size).clamp(minimum, track_size);
+    let scroll_range = scroll_area_size - container_size;
+    let progress = (-scroll_position / scroll_range).clamp(0.0, 1.0);
+    let thumb_start = (track_size - thumb_size) * progress;
+
+    Some((thumb_start, thumb_size))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScrollbarAxis {
     Vertical,
@@ -205,20 +238,26 @@ impl Scrollbar {
     }
 
     pub fn scroll_size(mut self, scroll_size: Size<Pixels>) -> Self {
-        self.scroll_size = Some(scroll_size);
+        if f32::from(scroll_size.width).is_finite()
+            && f32::from(scroll_size.height).is_finite()
+            && scroll_size.width >= px(0.0)
+            && scroll_size.height >= px(0.0)
+        {
+            self.scroll_size = Some(scroll_size);
+        }
         self
     }
 
     fn get_thumb_color(&self, theme: &crate::theme::Theme) -> Hsla {
-        theme.tokens.muted_foreground.opacity(0.6)
+        theme.tokens.muted_foreground.opacity(0.72)
     }
 
     fn get_track_color(&self, theme: &crate::theme::Theme) -> Hsla {
-        theme.tokens.muted.opacity(0.3)
+        theme.tokens.muted_foreground.opacity(0.12)
     }
 
     fn get_hover_thumb_color(&self, theme: &crate::theme::Theme) -> Hsla {
-        theme.tokens.muted_foreground.opacity(0.8)
+        theme.tokens.muted_foreground.opacity(0.92)
     }
 }
 
@@ -299,11 +338,14 @@ impl Element for Scrollbar {
         });
 
         let mut states = vec![];
-        let mut has_both = self.axis.is_both();
-
         let scroll_size = self
             .scroll_size
             .unwrap_or_else(|| self.scroll_handle.max_offset() + self.scroll_handle.bounds().size);
+        let has_horizontal_overflow =
+            self.axis.has_horizontal() && scroll_size.width > hitbox.size.width;
+        let has_vertical_overflow =
+            self.axis.has_vertical() && scroll_size.height > hitbox.size.height;
+        let has_both = has_horizontal_overflow && has_vertical_overflow;
 
         for axis in self.axis.all().into_iter() {
             let is_vertical = axis == Axis::Vertical;
@@ -321,22 +363,16 @@ impl Element for Scrollbar {
                 )
             };
 
-            let margin_end = if has_both && !is_vertical {
-                WIDTH
-            } else {
-                px(0.)
-            };
+            let margin_end = if has_both { WIDTH } else { px(0.) };
 
-            if scroll_area_size <= container_size {
-                has_both = false;
+            let Some((thumb_start, thumb_extent)) = thumb_geometry(
+                scroll_area_size,
+                container_size,
+                margin_end,
+                scroll_position,
+            ) else {
                 continue;
-            }
-
-            let thumb_length =
-                (container_size / scroll_area_size * container_size).max(px(MIN_THUMB_SIZE));
-            let thumb_start = -(scroll_position / (scroll_area_size - container_size)
-                * (container_size - margin_end - thumb_length));
-            let thumb_end = (thumb_start + thumb_length).min(container_size - margin_end);
+            };
 
             let bounds = Bounds {
                 origin: if is_vertical {
@@ -388,7 +424,7 @@ impl Element for Scrollbar {
                     )
                 };
 
-            let thumb_length = thumb_end - thumb_start - inset * 2;
+            let thumb_length = (thumb_extent - inset * 2).max(px(1.0));
             let thumb_bounds = if is_vertical {
                 Bounds::from_corner_and_size(
                     Corner::TopRight,
@@ -444,7 +480,7 @@ impl Element for Scrollbar {
                 thumb_bg,
                 scroll_size: scroll_area_size,
                 container_size,
-                thumb_size: thumb_length,
+                thumb_size: thumb_extent,
                 margin_end,
             })
         }
@@ -540,24 +576,30 @@ impl Element for Scrollbar {
                                     cx.notify(view_id);
                                 } else {
                                     let offset = scroll_handle.offset();
-                                    let percentage = if is_vertical {
-                                        (event.position.y - thumb_size / 2. - bounds.origin.y)
-                                            / (bounds.size.height - thumb_size)
+                                    let track_travel = if is_vertical {
+                                        bounds.size.height - margin_end - thumb_size
                                     } else {
-                                        (event.position.x - thumb_size / 2. - bounds.origin.x)
-                                            / (bounds.size.width - thumb_size)
+                                        bounds.size.width - margin_end - thumb_size
                                     }
-                                    .min(1.);
+                                    .max(px(1.0));
+                                    let pointer = if is_vertical {
+                                        event.position.y - bounds.origin.y
+                                    } else {
+                                        event.position.x - bounds.origin.x
+                                    };
+                                    let percentage = ((pointer - thumb_size / 2.0) / track_travel)
+                                        .clamp(0.0, 1.0);
+                                    let scroll_range = scroll_area_size - container_size;
 
                                     if is_vertical {
                                         scroll_handle.set_offset(point(
                                             offset.x,
-                                            (-scroll_area_size * percentage)
+                                            (-scroll_range * percentage)
                                                 .clamp(safe_range.start, safe_range.end),
                                         ));
                                     } else {
                                         scroll_handle.set_offset(point(
-                                            (-scroll_area_size * percentage)
+                                            (-scroll_range * percentage)
                                                 .clamp(safe_range.start, safe_range.end),
                                             offset.y,
                                         ));
@@ -589,12 +631,17 @@ impl Element for Scrollbar {
                             if state.0.get().dragged_axis == Some(axis) && event.dragging() {
                                 let drag_pos = state.0.get().drag_pos;
 
-                                let percentage = (if is_vertical {
-                                    (event.position.y - drag_pos.y - bounds.origin.y)
-                                        / (bounds.size.height - thumb_size)
+                                let track_travel = if is_vertical {
+                                    bounds.size.height - margin_end - thumb_size
                                 } else {
-                                    (event.position.x - drag_pos.x - bounds.origin.x)
-                                        / (bounds.size.width - thumb_size - margin_end)
+                                    bounds.size.width - margin_end - thumb_size
+                                }
+                                .max(px(1.0));
+
+                                let percentage = (if is_vertical {
+                                    (event.position.y - drag_pos.y - bounds.origin.y) / track_travel
+                                } else {
+                                    (event.position.x - drag_pos.x - bounds.origin.x) / track_travel
                                 })
                                 .clamp(0., 1.);
 
@@ -640,5 +687,32 @@ impl Element for Scrollbar {
                 }
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn thumb_geometry_is_bounded_for_small_containers() {
+        let (start, extent) = thumb_geometry(px(1_000.0), px(32.0), px(0.0), px(-968.0))
+            .expect("scrollable geometry");
+        assert_eq!(extent, px(32.0));
+        assert_eq!(start, px(0.0));
+    }
+
+    #[::core::prelude::v1::test]
+    fn thumb_geometry_maps_scroll_range_to_track_range() {
+        let (start, extent) = thumb_geometry(px(1_000.0), px(200.0), px(0.0), px(-400.0))
+            .expect("scrollable geometry");
+        assert_eq!(extent, px(48.0));
+        assert_eq!(start, px(76.0));
+    }
+
+    #[::core::prelude::v1::test]
+    fn invalid_geometry_is_rejected() {
+        assert!(thumb_geometry(px(f32::NAN), px(200.0), px(0.0), px(0.0)).is_none());
+        assert!(thumb_geometry(px(100.0), px(200.0), px(0.0), px(0.0)).is_none());
     }
 }

@@ -2,9 +2,17 @@ use anyhow::{Context as _, Result, anyhow};
 use std::{
     collections::BTreeMap,
     fs,
+    io::Read as _,
     path::{Path, PathBuf},
     sync::Arc,
 };
+
+const MAX_THEME_BYTES: usize = 1024 * 1024;
+const MAX_THEME_PATH_BYTES: usize = 4_096;
+const MAX_CUSTOM_THEME_COLORS: usize = 256;
+const MAX_THEME_TOKEN_BYTES: usize = 256;
+const MAX_THEME_WATCHERS: usize = 256;
+const MAX_THEME_LENGTH: f32 = 10_000.0;
 
 use crate::{
     App, BorrowAppContext, BoxShadow, FileWatchEvent, FileWatcher, FontWeight, Global, Hsla,
@@ -24,7 +32,7 @@ pub type ThemeFileSubscriber = Box<dyn FnMut(&Theme, &mut App) + 'static>;
 
 /// A full application theme that can be stored in GPUI global state.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Theme {
     /// The semantic color tokens used by the application.
     pub colors: ThemeColors,
@@ -85,19 +93,25 @@ impl Theme {
 
     /// Parses a theme from a JSON string.
     pub fn from_json_str(input: &str) -> Result<Self> {
-        serde_json::from_str(input).context("failed to parse theme JSON")
+        validate_theme_input(input)?;
+        let theme: Self = serde_json::from_str(input).context("failed to parse theme JSON")?;
+        theme.validate()?;
+        Ok(theme)
     }
 
     /// Parses a theme from a TOML string.
     pub fn from_toml_str(input: &str) -> Result<Self> {
-        toml::from_str(input).context("failed to parse theme TOML")
+        validate_theme_input(input)?;
+        let theme: Self = toml::from_str(input).context("failed to parse theme TOML")?;
+        theme.validate()?;
+        Ok(theme)
     }
 
     /// Loads a theme from a JSON or TOML file.
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let input = fs::read_to_string(path)
-            .with_context(|| format!("failed to read theme file {}", path.display()))?;
+        validate_theme_path(path)?;
+        let input = read_theme_file(path)?;
 
         match ThemeFileFormat::from_path(path) {
             Some(ThemeFileFormat::Json) => Self::from_json_str(&input),
@@ -125,8 +139,7 @@ impl Theme {
                     Err(primary_error) => match secondary {
                         Ok(theme) => Ok(theme),
                         Err(secondary_error) => Err(anyhow!(
-                            "failed to parse theme file {} as {} or {}: {primary_error:#}; {secondary_error:#}",
-                            path.display(),
+                            "failed to parse theme file as {} or {}: {primary_error:#}; {secondary_error:#}",
                             primary_label,
                             secondary_label,
                         )),
@@ -145,11 +158,23 @@ impl Theme {
             shadows: ThemeShadows::default(),
         }
     }
+
+    /// Validate every color, typography, spacing, radius, shadow, and custom token.
+    pub fn validate(&self) -> Result<()> {
+        validate_theme_colors(&self.colors)?;
+        validate_theme_typography(&self.typography)?;
+        validate_theme_spacing(&self.spacing)?;
+        validate_theme_radii(&self.radii)?;
+        for shadow in [&self.shadows.sm, &self.shadows.md, &self.shadows.lg] {
+            validate_theme_shadow(shadow)?;
+        }
+        Ok(())
+    }
 }
 
 /// Semantic theme colors that can be mapped onto GPUI defaults and custom tokens.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ThemeColors {
     /// The primary application background color.
     pub background: Hsla,
@@ -187,7 +212,7 @@ impl Default for ThemeColors {
 
 /// Typography tokens shared across the application.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ThemeTypography {
     /// The font family used for general UI text.
     pub ui_font_family: SharedString,
@@ -218,7 +243,7 @@ impl Default for ThemeTypography {
 
 /// Spacing tokens used for layout gaps and insets.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ThemeSpacing {
     /// The smallest spacing token.
     pub xs: Pixels,
@@ -249,7 +274,7 @@ impl Default for ThemeSpacing {
 
 /// Radius tokens used for corners and pills.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ThemeRadii {
     /// The smallest radius.
     pub sm: Pixels,
@@ -277,7 +302,7 @@ impl Default for ThemeRadii {
 
 /// Box-shadow tokens used for elevation.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ThemeShadows {
     /// The smallest elevation shadow.
     pub sm: BoxShadow,
@@ -350,7 +375,202 @@ impl From<&Theme> for Colors {
     }
 }
 
+fn validate_theme_input(input: &str) -> Result<()> {
+    anyhow::ensure!(!input.trim().is_empty(), "theme input cannot be empty");
+    anyhow::ensure!(
+        input.len() <= MAX_THEME_BYTES,
+        "theme input cannot exceed {MAX_THEME_BYTES} bytes"
+    );
+    Ok(())
+}
+
+fn validate_theme_color(color: Hsla) -> Result<()> {
+    anyhow::ensure!(
+        [color.h, color.s, color.l, color.a]
+            .into_iter()
+            .all(|value| value.is_finite() && (0.0..=1.0).contains(&value)),
+        "theme colors must contain finite normalized channels"
+    );
+    Ok(())
+}
+
+fn validate_theme_colors(colors: &ThemeColors) -> Result<()> {
+    for color in [
+        colors.background,
+        colors.surface,
+        colors.primary,
+        colors.accent,
+        colors.muted,
+        colors.foreground,
+        colors.border,
+        colors.separator,
+        colors.selected_text,
+        colors.error,
+        colors.warning,
+        colors.success,
+    ] {
+        validate_theme_color(color)?;
+    }
+    anyhow::ensure!(
+        colors.custom.len() <= MAX_CUSTOM_THEME_COLORS,
+        "theme cannot exceed {MAX_CUSTOM_THEME_COLORS} custom colors"
+    );
+    for (name, color) in &colors.custom {
+        let name = name.as_ref();
+        anyhow::ensure!(
+            !name.trim().is_empty() && name == name.trim(),
+            "custom color name is invalid"
+        );
+        anyhow::ensure!(
+            name.len() <= MAX_THEME_TOKEN_BYTES,
+            "custom color name cannot exceed {MAX_THEME_TOKEN_BYTES} bytes"
+        );
+        anyhow::ensure!(
+            !name.chars().any(char::is_control),
+            "custom color name cannot contain control characters"
+        );
+        validate_theme_color(*color)?;
+    }
+    Ok(())
+}
+
+fn validate_font_family(family: &SharedString) -> Result<()> {
+    let family = family.as_ref();
+    anyhow::ensure!(
+        !family.trim().is_empty(),
+        "theme font family cannot be empty"
+    );
+    anyhow::ensure!(
+        family.len() <= MAX_THEME_TOKEN_BYTES,
+        "theme font family cannot exceed {MAX_THEME_TOKEN_BYTES} bytes"
+    );
+    anyhow::ensure!(
+        !family.chars().any(char::is_control),
+        "theme font family cannot contain control characters"
+    );
+    Ok(())
+}
+
+fn validate_positive_length(value: Pixels, field: &str) -> Result<()> {
+    anyhow::ensure!(
+        value.0.is_finite() && value.0 > 0.0 && value.0 <= MAX_THEME_LENGTH,
+        "{field} must be finite, positive, and bounded"
+    );
+    Ok(())
+}
+
+fn validate_nonnegative_length(value: Pixels, field: &str) -> Result<()> {
+    anyhow::ensure!(
+        value.0.is_finite() && value.0 >= 0.0 && value.0 <= MAX_THEME_LENGTH,
+        "{field} must be finite, non-negative, and bounded"
+    );
+    Ok(())
+}
+
+fn validate_theme_typography(typography: &ThemeTypography) -> Result<()> {
+    validate_font_family(&typography.ui_font_family)?;
+    validate_font_family(&typography.code_font_family)?;
+    anyhow::ensure!(
+        typography.ui_font_weight.0.is_finite()
+            && (100.0..=900.0).contains(&typography.ui_font_weight.0),
+        "theme font weight must be between 100 and 900"
+    );
+    validate_positive_length(typography.ui_font_size, "UI font size")?;
+    validate_positive_length(typography.ui_line_height, "UI line height")?;
+    validate_positive_length(typography.code_font_size, "code font size")?;
+    anyhow::ensure!(
+        typography.ui_line_height >= typography.ui_font_size,
+        "UI line height cannot be smaller than font size"
+    );
+    Ok(())
+}
+
+fn validate_theme_spacing(spacing: &ThemeSpacing) -> Result<()> {
+    let values = [
+        spacing.xs,
+        spacing.sm,
+        spacing.md,
+        spacing.lg,
+        spacing.xl,
+        spacing.xxl,
+    ];
+    for value in values {
+        validate_nonnegative_length(value, "theme spacing")?;
+    }
+    Ok(())
+}
+
+fn validate_theme_radii(radii: &ThemeRadii) -> Result<()> {
+    let scale = [radii.sm, radii.md, radii.lg, radii.xl];
+    for value in scale {
+        validate_nonnegative_length(value, "theme radius")?;
+    }
+    validate_nonnegative_length(radii.pill, "pill radius")?;
+    Ok(())
+}
+
+fn validate_theme_shadow(shadow: &BoxShadow) -> Result<()> {
+    validate_theme_color(shadow.color)?;
+    for offset in [shadow.offset.x, shadow.offset.y] {
+        anyhow::ensure!(
+            offset.0.is_finite() && offset.0.abs() <= MAX_THEME_LENGTH,
+            "theme shadow offset must be finite and bounded"
+        );
+    }
+    validate_nonnegative_length(shadow.blur_radius, "shadow blur radius")?;
+    anyhow::ensure!(
+        shadow.spread_radius.0.is_finite() && shadow.spread_radius.0.abs() <= MAX_THEME_LENGTH,
+        "theme shadow spread must be finite and bounded"
+    );
+    Ok(())
+}
+
+fn validate_theme_path(path: &Path) -> Result<()> {
+    anyhow::ensure!(!path.as_os_str().is_empty(), "theme path cannot be empty");
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        anyhow::ensure!(
+            path.as_os_str().as_bytes().len() <= MAX_THEME_PATH_BYTES,
+            "theme path is too long"
+        );
+    }
+    #[cfg(not(unix))]
+    anyhow::ensure!(
+        path.as_os_str().to_string_lossy().len() <= MAX_THEME_PATH_BYTES,
+        "theme path is too long"
+    );
+    Ok(())
+}
+
+fn read_theme_file(path: &Path) -> Result<String> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options.open(path).context("failed to open theme file")?;
+    let metadata = file.metadata().context("failed to inspect theme file")?;
+    anyhow::ensure!(metadata.is_file(), "theme source must be a regular file");
+    anyhow::ensure!(
+        metadata.len() <= MAX_THEME_BYTES as u64,
+        "theme file cannot exceed {MAX_THEME_BYTES} bytes"
+    );
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take((MAX_THEME_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .context("failed to read theme file")?;
+    anyhow::ensure!(
+        bytes.len() <= MAX_THEME_BYTES,
+        "theme file cannot exceed {MAX_THEME_BYTES} bytes"
+    );
+    String::from_utf8(bytes).context("theme file must contain UTF-8")
+}
+
 pub(crate) fn normalize_theme_path(path: &Path) -> Result<PathBuf> {
+    validate_theme_path(path)?;
     let path = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -358,9 +578,9 @@ pub(crate) fn normalize_theme_path(path: &Path) -> Result<PathBuf> {
             .context("failed to resolve current directory while loading theme")?
             .join(path)
     };
+    validate_theme_path(&path)?;
 
-    path.canonicalize()
-        .with_context(|| format!("failed to resolve theme file {}", path.display()))
+    path.canonicalize().context("failed to resolve theme file")
 }
 
 pub(crate) fn theme_file_event_matches_target(event: &FileWatchEvent, watched_path: &Path) -> bool {
@@ -375,10 +595,15 @@ pub(crate) fn theme_file_event_matches_target(event: &FileWatchEvent, watched_pa
     }
 }
 
-pub(crate) fn retain_file_watcher(cx: &mut App, watcher: FileWatcher) {
+pub(crate) fn retain_file_watcher(cx: &mut App, watcher: FileWatcher) -> Result<()> {
     cx.update_default_global::<ThemeRuntime, _>(|runtime, _| {
+        anyhow::ensure!(
+            runtime.file_watchers.len() < MAX_THEME_WATCHERS,
+            "theme runtime cannot exceed {MAX_THEME_WATCHERS} watched files"
+        );
         runtime.file_watchers.push(watcher);
-    });
+        Ok(())
+    })
 }
 
 pub(crate) fn register_theme_file_subscriber(
@@ -399,7 +624,10 @@ pub(crate) fn notify_theme_file_subscribers(cx: &mut App, theme: &Theme) {
 
     let subscribers = cx.global::<ThemeRuntime>().file_subscribers.clone();
     subscribers.retain(&(), |subscriber| {
-        subscriber(theme, cx);
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| subscriber(theme, cx))).is_err()
+        {
+            log::error!("theme file subscriber panicked");
+        }
         true
     });
 }
@@ -654,6 +882,85 @@ foreground = "#f9fafb"
             &watched_path,
         ));
 
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn theme_parsing_rejects_unknown_and_invalid_tokens() {
+        assert!(Theme::light().validate().is_ok());
+        assert!(Theme::dark().validate().is_ok());
+        assert!(Theme::from_json_str(r#"{"unknown_token":true}"#).is_err());
+        assert!(Theme::from_toml_str("[spacing]\nxs = -1.0").is_err());
+        assert!(Theme::from_toml_str("[typography]\nui_font_weight = 50.0").is_err());
+        assert!(Theme::from_json_str(&" ".repeat(MAX_THEME_BYTES + 1)).is_err());
+
+        let mut theme = Theme::light();
+        for index in 0..=MAX_CUSTOM_THEME_COLORS {
+            theme
+                .colors
+                .custom
+                .insert(format!("custom-{index}").into(), theme.colors.primary);
+        }
+        assert!(theme.validate().is_err());
+
+        let mut theme = Theme::light();
+        theme.shadows.sm.blur_radius = px(f32::NAN);
+        assert!(theme.validate().is_err());
+    }
+
+    #[test]
+    fn theme_file_loading_is_bounded_regular_and_content_safe() {
+        let directory = create_temp_theme_dir();
+        let oversized = directory.join("private-oversized-theme.toml");
+        fs::write(&oversized, vec![b' '; MAX_THEME_BYTES + 1]).unwrap();
+        let error = Theme::from_path(&oversized).unwrap_err().to_string();
+        assert!(!error.contains("private-oversized-theme"));
+
+        assert!(Theme::from_path(&directory).is_err());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let target = directory.join("target.toml");
+            let link = directory.join("theme-link.toml");
+            fs::write(&target, "[spacing]\nmd=12.0").unwrap();
+            symlink(&target, &link).unwrap();
+            assert!(Theme::from_path(&link).is_err());
+        }
+
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[kael::test]
+    fn theme_callbacks_are_panic_contained(cx: &mut crate::TestAppContext) {
+        use std::{cell::Cell, rc::Rc};
+
+        let later_ran = Rc::new(Cell::new(false));
+        cx.update(|cx| {
+            Theme::init(cx);
+            cx.observe_theme_files(|_, _| panic!("private subscriber panic"))
+                .detach();
+            let later_ran = later_ran.clone();
+            cx.observe_theme_files(move |_, _| later_ran.set(true))
+                .detach();
+            notify_theme_file_subscribers(cx, &Theme::light());
+        });
+        assert!(later_ran.get());
+
+        let directory = create_temp_theme_dir();
+        let path = directory.join("theme.toml");
+        fs::write(&path, "[spacing]\nmd=12.0").unwrap();
+        let watched = normalize_theme_path(&path).unwrap();
+        cx.update(|cx| {
+            let error = crate::app::handle_theme_file_event(
+                cx,
+                &FileWatchEvent::Modified(watched.clone()),
+                &watched,
+                &mut |_, _| panic!("private on-change panic"),
+            )
+            .unwrap_err();
+            assert_eq!(error.to_string(), "theme file change callback panicked");
+        });
         let _ = fs::remove_dir_all(directory);
     }
 

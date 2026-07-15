@@ -1,14 +1,18 @@
 //! AnimatedCollapsible - Collapsible section with smooth height and opacity animation.
 
 use kael::{prelude::FluentBuilder as _, *};
+use std::panic::Location;
 use std::rc::Rc;
 use std::time::Duration;
 
 use crate::animations::easings;
+use crate::components::icon::Icon;
 use crate::theme::Theme;
 
 #[derive(IntoElement)]
 pub struct AnimatedCollapsible {
+    id: ElementId,
+    label: SharedString,
     trigger: Option<AnyElement>,
     content: Option<AnyElement>,
     is_open: bool,
@@ -20,8 +24,20 @@ pub struct AnimatedCollapsible {
 }
 
 impl AnimatedCollapsible {
+    #[track_caller]
     pub fn new() -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "animated-collapsible:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
+            label: "Toggle section".into(),
             trigger: None,
             content: None,
             is_open: false,
@@ -35,6 +51,16 @@ impl AnimatedCollapsible {
 
     pub fn trigger(mut self, trigger: impl IntoElement) -> Self {
         self.trigger = Some(trigger.into_any_element());
+        self
+    }
+
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
+    }
+
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = label.into();
         self
     }
 
@@ -73,6 +99,7 @@ impl AnimatedCollapsible {
 }
 
 impl Default for AnimatedCollapsible {
+    #[track_caller]
     fn default() -> Self {
         Self::new()
     }
@@ -94,63 +121,144 @@ impl RenderOnce for AnimatedCollapsible {
         let on_toggle = self.on_toggle;
         let duration = self.duration;
 
-        let anim_id: SharedString = if is_open {
-            "animated-collapsible-open".into()
+        let root_id = self.id;
+        let trigger_id = ElementId::NamedChild(Box::new(root_id.clone()), "trigger".into());
+        let content_id = ElementId::NamedChild(Box::new(root_id.clone()), "content".into());
+        let anim_id = ElementId::NamedChild(
+            Box::new(root_id.clone()),
+            if is_open {
+                "open".into()
+            } else {
+                "close".into()
+            },
+        );
+        let can_toggle = !disabled && on_toggle.is_some();
+        let mut state = if is_open {
+            AccessibilityState::EXPANDED
         } else {
-            "animated-collapsible-close".into()
+            AccessibilityState::COLLAPSED
         };
+        if disabled || !can_toggle {
+            state |= AccessibilityState::DISABLED;
+        }
+        let mut trigger_accessibility = AccessibilityAttributes::new(AccessibilityRole::Button)
+            .label(self.label.to_string())
+            .states(state);
+        if can_toggle {
+            trigger_accessibility = trigger_accessibility.actions(vec![
+                AccessibilityAction::Focus,
+                AccessibilityAction::Click,
+                if is_open {
+                    AccessibilityAction::Collapse
+                } else {
+                    AccessibilityAction::Expand
+                },
+            ]);
+        }
 
-        let mut root = div().flex().flex_col().w_full();
+        let mut root = div()
+            .id(root_id)
+            .accessibility(AccessibilityAttributes::new(AccessibilityRole::Group))
+            .flex()
+            .flex_col()
+            .w_full();
 
         if let Some(trigger) = self.trigger {
             let trigger_row = div()
+                .id(trigger_id)
+                .accessibility(trigger_accessibility)
                 .flex()
                 .items_center()
                 .gap(px(8.0))
-                .cursor(if disabled {
-                    CursorStyle::Arrow
-                } else {
+                .cursor(if can_toggle {
                     CursorStyle::PointingHand
+                } else {
+                    CursorStyle::Arrow
                 })
-                .when(!disabled, |this: Div| {
-                    this.hover(|style| style.bg(theme.tokens.muted.opacity(0.5)))
+                .when(can_toggle, |this| {
+                    this.focusable()
+                        .tab_index(0)
+                        .tab_stop(true)
+                        .hover(|style| style.bg(theme.tokens.muted.opacity(0.5)))
+                        .focus_visible(|style| style.bg(theme.tokens.muted.opacity(0.5)))
                 })
-                .when(disabled, |this: Div| this.opacity(0.5))
-                .when(!disabled && on_toggle.is_some(), |this: Div| {
+                .when(disabled || !can_toggle, |this| this.opacity(0.5))
+                .when(can_toggle, |this| {
                     let handler = on_toggle.clone().unwrap();
-                    this.on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    let on_key = handler.clone();
+                    this.on_click(move |_, window, cx| {
                         handler(!is_open, window, cx);
                     })
+                    .on_key_down(move |event, window, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            on_key(!is_open, window, cx);
+                            cx.stop_propagation();
+                            window.prevent_default();
+                        }
+                    })
                 })
-                .when(show_icon, |this: Div| {
+                .when(show_icon, |this| {
                     this.child(
                         div()
+                            .size(px(20.0))
                             .flex()
                             .items_center()
                             .justify_center()
-                            .text_size(px(16.0))
-                            .text_color(theme.tokens.muted_foreground)
-                            .when(is_open, |this: Div| this.child("▼"))
-                            .when(!is_open, |this: Div| this.child("▶")),
+                            .child(
+                                Icon::new("chevron-right")
+                                    .size(px(16.0))
+                                    .color(theme.tokens.muted_foreground)
+                                    .when(is_open, |icon| {
+                                        icon.rotate(Radians(std::f32::consts::FRAC_PI_2))
+                                    }),
+                            ),
                     )
                 })
-                .child(div().flex_1().child(trigger));
+                .child(
+                    div()
+                        .flex_1()
+                        .accessibility(
+                            AccessibilityAttributes::new(AccessibilityRole::Group)
+                                .states(AccessibilityState::HIDDEN),
+                        )
+                        .child(trigger),
+                );
 
             root = root.child(trigger_row);
         }
 
         if let Some(content) = self.content {
-            let content_wrapper = div().overflow_hidden().child(content).with_animation(
-                ElementId::Name(anim_id),
-                Animation::new(duration).with_easing(easings::ease_out_cubic),
-                move |el, delta| {
-                    if is_open {
-                        el.max_h(px(1500.0 * delta)).opacity(delta)
-                    } else {
-                        el.max_h(px(1500.0 * (1.0 - delta))).opacity(1.0 - delta)
-                    }
-                },
-            );
+            let mut content_state = AccessibilityState::NONE;
+            if !is_open {
+                content_state |= AccessibilityState::HIDDEN;
+            }
+            let content_wrapper = div()
+                .id(content_id)
+                .accessibility(
+                    AccessibilityAttributes::new(AccessibilityRole::Group)
+                        .label(format!("{} content", self.label))
+                        .states(content_state),
+                )
+                .overflow_hidden()
+                .child(content);
+
+            let content_wrapper = if cx.reduce_motion() || duration.is_zero() {
+                content_wrapper.into_any_element()
+            } else {
+                content_wrapper
+                    .with_animation(
+                        anim_id,
+                        Animation::new(duration).with_easing(easings::ease_out_cubic),
+                        move |el, delta| {
+                            if is_open {
+                                el.max_h(px(1500.0 * delta)).opacity(delta)
+                            } else {
+                                el.max_h(px(1500.0 * (1.0 - delta))).opacity(1.0 - delta)
+                            }
+                        },
+                    )
+                    .into_any_element()
+            };
 
             root = root.child(content_wrapper);
         }

@@ -124,33 +124,58 @@ pub fn background_executor() -> BackgroundExecutor {
     current_platform(true).background_executor()
 }
 
+/// Attempts to create a background executor without panicking if platform initialization fails.
+pub fn try_background_executor() -> anyhow::Result<BackgroundExecutor> {
+    Ok(try_current_platform(true)?.background_executor())
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn current_platform(headless: bool) -> Rc<dyn Platform> {
-    Rc::new(MacPlatform::new(headless))
+    try_current_platform(headless).expect("failed to initialize the macOS platform")
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn try_current_platform(headless: bool) -> anyhow::Result<Rc<dyn Platform>> {
+    Ok(Rc::new(MacPlatform::new(headless)))
 }
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub(crate) fn current_platform(headless: bool) -> Rc<dyn Platform> {
-    #[cfg(feature = "x11")]
-    use anyhow::Context as _;
+    match try_current_platform(headless) {
+        Ok(platform) => platform,
+        Err(platform_error) if !headless => {
+            log::error!(
+                "failed to initialize the graphical platform; using headless backend: {platform_error:#}"
+            );
+            Rc::new(HeadlessClient::new().unwrap_or_else(|headless_error| {
+                panic!(
+                    "graphical platform initialization failed ({platform_error:#}); headless fallback also failed ({headless_error:#})"
+                )
+            }))
+        }
+        Err(error) => panic!("failed to initialize the headless platform: {error:#}"),
+    }
+}
 
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub(crate) fn try_current_platform(headless: bool) -> anyhow::Result<Rc<dyn Platform>> {
     if headless {
-        return Rc::new(HeadlessClient::new());
+        return Ok(Rc::new(HeadlessClient::new()?));
     }
 
     match guess_compositor() {
         #[cfg(feature = "wayland")]
-        "Wayland" => Rc::new(WaylandClient::new()),
+        "Wayland" => Ok(Rc::new(WaylandClient::new().map_err(|error| {
+            anyhow::anyhow!("failed to initialize Wayland: {error:#}")
+        })?)),
 
         #[cfg(feature = "x11")]
-        "X11" => Rc::new(
-            X11Client::new()
-                .context("Failed to initialize X11 client.")
-                .unwrap(),
-        ),
+        "X11" => Ok(Rc::new(X11Client::new().map_err(|error| {
+            anyhow::anyhow!("failed to initialize X11: {error:#}")
+        })?)),
 
-        "Headless" => Rc::new(HeadlessClient::new()),
-        _ => unreachable!(),
+        "Headless" => Ok(Rc::new(HeadlessClient::new()?)),
+        compositor => anyhow::bail!("unsupported compositor selection {compositor:?}"),
     }
 }
 
@@ -187,11 +212,14 @@ pub fn guess_compositor() -> &'static str {
 
 #[cfg(target_os = "windows")]
 pub(crate) fn current_platform(_headless: bool) -> Rc<dyn Platform> {
-    Rc::new(
-        WindowsPlatform::new()
-            .inspect_err(|err| show_error("Failed to launch", err.to_string()))
-            .unwrap(),
-    )
+    try_current_platform(false)
+        .inspect_err(|err| show_error("Failed to launch", err.to_string()))
+        .expect("failed to initialize the Windows platform")
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn try_current_platform(_headless: bool) -> anyhow::Result<Rc<dyn Platform>> {
+    Ok(Rc::new(WindowsPlatform::new()?))
 }
 
 pub(crate) trait Platform: 'static {
@@ -264,6 +292,12 @@ pub(crate) trait Platform: 'static {
     fn can_select_mixed_files_and_dirs(&self) -> bool;
     fn reveal_path(&self, path: &Path);
     fn open_with_system(&self, path: &Path);
+    fn move_path_to_trash(&self, path: &Path) -> Result<()> {
+        Err(anyhow::anyhow!(
+            "platform trash/recycle is not supported for {}",
+            path.display()
+        ))
+    }
 
     fn on_quit(&self, callback: Box<dyn FnMut()>);
     fn on_reopen(&self, callback: Box<dyn FnMut()>);
@@ -274,8 +308,12 @@ pub(crate) trait Platform: 'static {
     }
 
     fn set_dock_menu(&self, menu: Vec<MenuItem>, keymap: &Keymap);
+    fn dock_menu_action_count(&self) -> Option<usize> {
+        None
+    }
     fn perform_dock_menu_action(&self, _action: usize) {}
     fn add_recent_document(&self, _path: &Path) {}
+    fn clear_recent_documents(&self) {}
     fn update_jump_list(
         &self,
         _menus: Vec<MenuItem>,
@@ -299,6 +337,7 @@ pub(crate) trait Platform: 'static {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn write_to_primary(&self, item: ClipboardItem);
     fn write_to_clipboard(&self, item: ClipboardItem);
+    fn clear_clipboard(&self) {}
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn read_from_primary(&self) -> Option<ClipboardItem>;
     fn read_from_clipboard(&self) -> Option<ClipboardItem>;
@@ -389,6 +428,12 @@ pub(crate) trait Platform: 'static {
     fn power_mode(&self) -> PowerMode {
         PowerMode::Performance
     }
+    fn system_power_source(&self) -> SystemPowerSource {
+        SystemPowerSource::Unknown
+    }
+    fn battery_percentage(&self) -> Option<u8> {
+        None
+    }
     /// Whether the OS "reduce motion" accessibility preference is enabled.
     fn should_reduce_motion(&self) -> bool {
         false
@@ -460,6 +505,13 @@ pub trait PlatformDisplay: Send + Sync + Debug {
     /// advertise a fixed rate). Callers should fall back to a sensible default.
     fn refresh_rate(&self) -> Option<f32> {
         None
+    }
+
+    /// Logical-to-device pixel scale factor for this display.
+    ///
+    /// Returns `1.0` when the platform cannot report a display-specific scale.
+    fn scale_factor(&self) -> f32 {
+        1.0
     }
 }
 
@@ -538,6 +590,22 @@ pub enum ResizeEdge {
     TopLeft,
 }
 
+impl ResizeEdge {
+    /// Stable label for diagnostics, generated resize handles, and custom chrome.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Top => "top",
+            Self::TopRight => "top-right",
+            Self::Right => "right",
+            Self::BottomRight => "bottom-right",
+            Self::Bottom => "bottom",
+            Self::BottomLeft => "bottom-left",
+            Self::Left => "left",
+            Self::TopLeft => "top-left",
+        }
+    }
+}
+
 /// A type to describe the appearance of a window
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Default)]
 pub enum WindowDecorations {
@@ -546,6 +614,16 @@ pub enum WindowDecorations {
     Server,
     /// Client side decorations
     Client,
+}
+
+impl WindowDecorations {
+    /// Stable label for diagnostics and generated UI.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Server => "server",
+            Self::Client => "client",
+        }
+    }
 }
 
 /// A type to describe how this window is currently configured
@@ -583,6 +661,49 @@ impl Default for WindowControls {
             minimize: true,
             window_menu: true,
         }
+    }
+}
+
+impl WindowControls {
+    /// Number of supported native window-control affordances.
+    pub fn supported_count(&self) -> usize {
+        [
+            self.fullscreen,
+            self.maximize,
+            self.minimize,
+            self.window_menu,
+        ]
+        .into_iter()
+        .filter(|supported| *supported)
+        .count()
+    }
+
+    /// Whether all standard native window controls are supported.
+    pub fn supports_all(&self) -> bool {
+        self.supported_count() == 4
+    }
+
+    /// Whether no standard native window controls are supported.
+    pub fn supports_none(&self) -> bool {
+        self.supported_count() == 0
+    }
+
+    /// Whether this platform exposes a native maximize or fullscreen affordance.
+    pub fn has_zoom_control(&self) -> bool {
+        self.maximize || self.fullscreen
+    }
+
+    /// Content-safe summary for generated custom titlebars.
+    pub fn to_text(&self) -> String {
+        format!(
+            "window controls: supported {}, fullscreen {}, maximize {}, minimize {}, window-menu {}, zoom {}",
+            self.supported_count(),
+            bool_text(self.fullscreen),
+            bool_text(self.maximize),
+            bool_text(self.minimize),
+            bool_text(self.window_menu),
+            bool_text(self.has_zoom_control())
+        )
     }
 }
 
@@ -649,7 +770,16 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn is_hovered(&self) -> bool;
     fn set_title(&mut self, title: &str);
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance);
+    fn set_opacity(&self, _opacity: f32) {
+        warn_unsupported_once!("set_opacity");
+    }
+    fn set_always_on_top(&self, _always_on_top: bool) {
+        warn_unsupported_once!("set_always_on_top");
+    }
     fn set_frame_polling(&self, _active: bool) {}
+    fn close(&self) {
+        warn_unsupported_once!("close");
+    }
     fn minimize(&self);
     fn zoom(&self);
     fn toggle_fullscreen(&self);
@@ -1019,6 +1149,65 @@ pub(crate) const SMALL_IMAGE_ATLAS_PAGE_SIZE: Size<DevicePixels> = Size {
     height: DevicePixels(512),
 };
 
+pub(crate) const MAX_ATLAS_TEXTURE_DIMENSION: i32 = 16_384;
+
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn safe_gpu_dimension(value: f32) -> u32 {
+    if !value.is_finite() {
+        return 1;
+    }
+    value.clamp(1.0, MAX_ATLAS_TEXTURE_DIMENSION as f32) as u32
+}
+
+pub(crate) fn catch_platform_callback<T>(
+    platform: &'static str,
+    name: &'static str,
+    fallback: T,
+    callback: impl FnOnce() -> T,
+) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback)) {
+        Ok(value) => value,
+        Err(_) => {
+            log::error!(
+                "{name} callback panicked; containing panic at the {platform} platform boundary"
+            );
+            fallback
+        }
+    }
+}
+
+pub(crate) fn validate_atlas_payload(
+    size: Size<DevicePixels>,
+    kind: AtlasTextureKind,
+    byte_len: usize,
+) -> Result<usize> {
+    let width = usize::try_from(size.width.0)
+        .ok()
+        .filter(|width| *width > 0 && *width <= MAX_ATLAS_TEXTURE_DIMENSION as usize)
+        .ok_or_else(|| {
+            anyhow::anyhow!("atlas width must be within 1..={MAX_ATLAS_TEXTURE_DIMENSION}")
+        })?;
+    let height = usize::try_from(size.height.0)
+        .ok()
+        .filter(|height| *height > 0 && *height <= MAX_ATLAS_TEXTURE_DIMENSION as usize)
+        .ok_or_else(|| {
+            anyhow::anyhow!("atlas height must be within 1..={MAX_ATLAS_TEXTURE_DIMENSION}")
+        })?;
+    let bytes_per_pixel = match kind {
+        AtlasTextureKind::Monochrome => 1,
+        AtlasTextureKind::Polychrome => 4,
+    };
+    let expected = width
+        .checked_mul(height)
+        .and_then(|pixels| pixels.checked_mul(bytes_per_pixel))
+        .ok_or_else(|| anyhow::anyhow!("atlas payload size overflow"))?;
+    anyhow::ensure!(
+        byte_len == expected,
+        "atlas payload length mismatch: expected {expected} bytes, received {byte_len}"
+    );
+    Ok(expected)
+}
+
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub(crate) struct CachedSurfaceParams {
     pub(crate) cache_id: u64,
@@ -1218,9 +1407,9 @@ impl From<TileId> for etagere::AllocId {
 /// can (the atlas may remain over budget until those tiles age out — by design, never at the
 /// cost of correctness).
 ///
-/// This is the verified policy the per-backend atlas wiring (metal/blade/directx) will call
-/// to bound glyph-atlas growth; compiled in all builds, exercised by tests until that
-/// wiring lands.
+/// This pure policy remains useful for callers budgeting individually accounted resources.
+/// Texture-atlas backends use page-aware eviction because freeing a tile does not necessarily
+/// release its shared GPU texture page.
 #[allow(dead_code)]
 pub(crate) fn select_atlas_evictions(
     tiles: &[(u64, u64)],
@@ -1661,6 +1850,133 @@ impl Default for WindowOptions {
     }
 }
 
+impl WindowOptions {
+    /// Whether explicit bounds were configured.
+    pub fn has_bounds(&self) -> bool {
+        self.window_bounds.is_some()
+    }
+
+    /// Content-safe bounds mode without exposing screen coordinates.
+    pub fn bounds_mode(&self) -> &'static str {
+        match self.window_bounds {
+            Some(WindowBounds::Windowed(_)) => "windowed",
+            Some(WindowBounds::Maximized(_)) => "maximized",
+            Some(WindowBounds::Fullscreen(_)) => "fullscreen",
+            None => "inherited",
+        }
+    }
+
+    /// Whether a titlebar configuration is present.
+    pub fn has_titlebar(&self) -> bool {
+        self.titlebar.is_some()
+    }
+
+    /// Whether a title is configured without exposing its value.
+    pub fn has_title(&self) -> bool {
+        self.titlebar
+            .as_ref()
+            .and_then(|titlebar| titlebar.title.as_ref())
+            .is_some()
+    }
+
+    /// Whether the titlebar is configured as transparent/custom chrome.
+    pub fn has_transparent_titlebar(&self) -> bool {
+        self.titlebar
+            .as_ref()
+            .is_some_and(|titlebar| titlebar.appears_transparent)
+    }
+
+    /// Whether macOS traffic-light positioning is configured.
+    pub fn has_traffic_light_position(&self) -> bool {
+        self.titlebar
+            .as_ref()
+            .is_some_and(|titlebar| titlebar.traffic_light_position.is_some())
+    }
+
+    /// Whether the window is hidden on creation.
+    pub fn starts_hidden(&self) -> bool {
+        !self.show
+    }
+
+    /// Whether the window is unfocused on creation.
+    pub fn starts_unfocused(&self) -> bool {
+        !self.focus
+    }
+
+    /// Whether the window has a fixed size from the user's perspective.
+    pub fn fixed_size(&self) -> bool {
+        !self.is_resizable
+    }
+
+    /// Whether a display target is configured.
+    pub fn has_display_id(&self) -> bool {
+        self.display_id.is_some()
+    }
+
+    /// Whether an application grouping id is configured.
+    pub fn has_app_id(&self) -> bool {
+        self.app_id.is_some()
+    }
+
+    /// Whether a native tabbing identifier is configured.
+    pub fn has_tabbing_identifier(&self) -> bool {
+        self.tabbing_identifier.is_some()
+    }
+
+    /// Whether a parent window is configured.
+    pub fn has_parent(&self) -> bool {
+        self.parent.is_some()
+    }
+
+    /// Whether a minimum size is configured.
+    pub fn has_min_size(&self) -> bool {
+        self.window_min_size.is_some()
+    }
+
+    /// Whether client-side decorations are requested.
+    pub fn uses_client_decorations(&self) -> bool {
+        self.window_decorations == Some(WindowDecorations::Client)
+    }
+
+    /// Content-safe summary for window-management options.
+    pub fn to_text(&self) -> String {
+        let titlebar = if let Some(titlebar) = &self.titlebar {
+            if titlebar.appears_transparent {
+                "transparent"
+            } else {
+                "system"
+            }
+        } else {
+            "none"
+        };
+        let decorations = self
+            .window_decorations
+            .map(WindowDecorations::to_text)
+            .unwrap_or("default");
+
+        format!(
+            "window options: kind {}, bounds {}, background {}, titlebar {}, decorations {}, title {}, min-size {}, display {}, app-id {}, tabbing {}, parent {}, shown {}, focused {}, movable {}, resizable {}, minimizable {}, mouse-passthrough {}",
+            self.kind.to_text(),
+            self.bounds_mode(),
+            self.window_background.to_text(),
+            titlebar,
+            decorations,
+            bool_text(self.has_title()),
+            bool_text(self.has_min_size()),
+            bool_text(self.has_display_id()),
+            bool_text(self.has_app_id()),
+            bool_text(self.has_tabbing_identifier()),
+            bool_text(self.has_parent()),
+            bool_text(self.show),
+            bool_text(self.focus),
+            bool_text(self.is_movable),
+            bool_text(self.is_resizable),
+            bool_text(self.is_minimizable),
+            bool_text(self.mouse_passthrough),
+        )
+    }
+}
+
 /// Builder for [`WindowOptions`].
 #[derive(Debug)]
 pub struct WindowOptionsBuilder {
@@ -1875,6 +2191,86 @@ impl WindowOptionsBuilder {
         self
     }
 
+    /// Whether explicit bounds are configured.
+    pub fn has_bounds(&self) -> bool {
+        self.options.has_bounds()
+    }
+
+    /// Content-safe bounds mode without exposing screen coordinates.
+    pub fn bounds_mode(&self) -> &'static str {
+        self.options.bounds_mode()
+    }
+
+    /// Whether a titlebar configuration is present.
+    pub fn has_titlebar(&self) -> bool {
+        self.options.has_titlebar()
+    }
+
+    /// Whether a title is configured without exposing its value.
+    pub fn has_title(&self) -> bool {
+        self.options.has_title()
+    }
+
+    /// Whether the titlebar is configured as transparent/custom chrome.
+    pub fn has_transparent_titlebar(&self) -> bool {
+        self.options.has_transparent_titlebar()
+    }
+
+    /// Whether macOS traffic-light positioning is configured.
+    pub fn has_traffic_light_position(&self) -> bool {
+        self.options.has_traffic_light_position()
+    }
+
+    /// Whether the window is hidden on creation.
+    pub fn starts_hidden(&self) -> bool {
+        self.options.starts_hidden()
+    }
+
+    /// Whether the window is unfocused on creation.
+    pub fn starts_unfocused(&self) -> bool {
+        self.options.starts_unfocused()
+    }
+
+    /// Whether the window has a fixed size from the user's perspective.
+    pub fn fixed_size(&self) -> bool {
+        self.options.fixed_size()
+    }
+
+    /// Whether a display target is configured.
+    pub fn has_display_id(&self) -> bool {
+        self.options.has_display_id()
+    }
+
+    /// Whether an application grouping id is configured.
+    pub fn has_app_id(&self) -> bool {
+        self.options.has_app_id()
+    }
+
+    /// Whether a native tabbing identifier is configured.
+    pub fn has_tabbing_identifier(&self) -> bool {
+        self.options.has_tabbing_identifier()
+    }
+
+    /// Whether a parent window is configured.
+    pub fn has_parent(&self) -> bool {
+        self.options.has_parent()
+    }
+
+    /// Whether a minimum size is configured.
+    pub fn has_min_size(&self) -> bool {
+        self.options.has_min_size()
+    }
+
+    /// Whether client-side decorations are requested.
+    pub fn uses_client_decorations(&self) -> bool {
+        self.options.uses_client_decorations()
+    }
+
+    /// Content-safe summary for window-management options before creation.
+    pub fn to_text(&self) -> String {
+        self.options.to_text()
+    }
+
     /// Consume the builder into raw window options.
     pub fn build(self) -> WindowOptions {
         self.options
@@ -1914,7 +2310,21 @@ pub enum WindowIntentKind {
     Overlay,
 }
 
-/// Checked builder for BrowserWindow-style window intent presets.
+impl WindowIntentKind {
+    /// Stable label for diagnostics and generated UI.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Palette => "palette",
+            Self::Utility => "utility",
+            Self::Modal => "modal",
+            Self::Popup => "popup",
+            Self::Overlay => "overlay",
+        }
+    }
+}
+
+/// Checked builder for window-management window intent presets.
 #[derive(Debug)]
 pub struct WindowIntentBuilder {
     kind: WindowIntentKind,
@@ -1963,6 +2373,45 @@ impl WindowIntentBuilder {
     /// Return this intent kind.
     pub fn kind(&self) -> WindowIntentKind {
         self.kind
+    }
+
+    /// Content-safe window option summary for this intent.
+    pub fn options_summary(&self) -> String {
+        self.options.to_text()
+    }
+
+    /// Whether the intent configures custom/transparent titlebar chrome.
+    pub fn has_transparent_titlebar(&self) -> bool {
+        self.options.has_transparent_titlebar()
+    }
+
+    /// Whether the intent opens hidden.
+    pub fn starts_hidden(&self) -> bool {
+        self.options.starts_hidden()
+    }
+
+    /// Whether the intent opens unfocused.
+    pub fn starts_unfocused(&self) -> bool {
+        self.options.starts_unfocused()
+    }
+
+    /// Whether the intent configures a parent window.
+    pub fn has_parent(&self) -> bool {
+        self.options.has_parent()
+    }
+
+    /// Whether the intent configures explicit bounds.
+    pub fn has_bounds(&self) -> bool {
+        self.options.has_bounds()
+    }
+
+    /// Content-safe summary for traces, generated UI, and agent audits.
+    pub fn to_text(&self) -> String {
+        format!(
+            "window intent {}: {}",
+            self.kind.to_text(),
+            self.options_summary()
+        )
     }
 
     /// Refine the underlying window options builder.
@@ -2201,6 +2650,33 @@ pub struct TitlebarOptions {
     pub traffic_light_position: Option<Point<Pixels>>,
 }
 
+impl TitlebarOptions {
+    /// Whether a title is configured without exposing it.
+    pub fn has_title(&self) -> bool {
+        self.title.is_some()
+    }
+
+    /// Whether the default titlebar should appear transparent for custom chrome.
+    pub fn is_transparent(&self) -> bool {
+        self.appears_transparent
+    }
+
+    /// Whether a macOS traffic-light position is configured.
+    pub fn has_traffic_light_position(&self) -> bool {
+        self.traffic_light_position.is_some()
+    }
+
+    /// Content-safe summary for generated native titlebar/custom-chrome setup.
+    pub fn to_text(&self) -> String {
+        format!(
+            "titlebar options: title {}, transparent {}, traffic-light-position {}",
+            bool_text(self.has_title()),
+            bool_text(self.is_transparent()),
+            bool_text(self.has_traffic_light_position())
+        )
+    }
+}
+
 /// The kind of window to create
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum WindowKind {
@@ -2216,6 +2692,18 @@ pub enum WindowKind {
 
     /// An overlay window that appears above all other windows, including fullscreen apps
     Overlay,
+}
+
+impl WindowKind {
+    /// Stable label for diagnostics and generated UI.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::PopUp => "popup",
+            Self::Floating => "floating",
+            Self::Overlay => "overlay",
+        }
+    }
 }
 
 /// The appearance of the window, as defined by the operating system.
@@ -2247,6 +2735,16 @@ pub enum WindowAppearance {
 }
 
 impl WindowAppearance {
+    /// Stable summary text for logs and agent traces.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::VibrantLight => "vibrant light",
+            Self::Dark => "dark",
+            Self::VibrantDark => "vibrant dark",
+        }
+    }
+
     /// Return true when the appearance is dark.
     pub fn is_dark(self) -> bool {
         matches!(self, Self::Dark | Self::VibrantDark)
@@ -2282,6 +2780,21 @@ pub enum WindowBackgroundAppearance {
     ///
     /// Not always supported.
     Blurred,
+}
+
+impl WindowBackgroundAppearance {
+    /// Stable label for diagnostics and generated UI.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Opaque => "opaque",
+            Self::Transparent => "transparent",
+            Self::Blurred => "blurred",
+        }
+    }
+}
+
+fn bool_text(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
 }
 
 /// Events that can occur on a system tray icon.
@@ -2364,6 +2877,41 @@ impl TrayMenuItem {
     pub fn validate_items(items: &[TrayMenuItem]) -> Result<()> {
         validate_tray_menu_items(items)
     }
+
+    /// Count all items in a native tray/context menu tree.
+    pub fn item_count(items: &[TrayMenuItem]) -> usize {
+        tray_menu_counts(items).items
+    }
+
+    /// Count action items in a native tray/context menu tree.
+    pub fn action_count(items: &[TrayMenuItem]) -> usize {
+        tray_menu_counts(items).actions
+    }
+
+    /// Count toggle items in a native tray/context menu tree.
+    pub fn toggle_count(items: &[TrayMenuItem]) -> usize {
+        tray_menu_counts(items).toggles
+    }
+
+    /// Count submenu items in a native tray/context menu tree.
+    pub fn submenu_count(items: &[TrayMenuItem]) -> usize {
+        tray_menu_counts(items).submenus
+    }
+
+    /// Count separators in a native tray/context menu tree.
+    pub fn separator_count(items: &[TrayMenuItem]) -> usize {
+        tray_menu_counts(items).separators
+    }
+
+    /// Count checked toggle items in a native tray/context menu tree.
+    pub fn checked_toggle_count(items: &[TrayMenuItem]) -> usize {
+        tray_menu_counts(items).checked_toggles
+    }
+
+    /// Content-safe summary for a native tray/context menu tree.
+    pub fn items_to_text(items: &[TrayMenuItem]) -> String {
+        tray_menu_counts(items).to_text("menu items")
+    }
 }
 
 /// Builder for a system tray menu.
@@ -2414,6 +2962,41 @@ impl TrayMenuBuilder {
     /// Return the configured tray menu items.
     pub fn items(&self) -> &[TrayMenuItem] {
         &self.items
+    }
+
+    /// Count all configured items, including submenu children.
+    pub fn item_count(&self) -> usize {
+        TrayMenuItem::item_count(&self.items)
+    }
+
+    /// Count action items.
+    pub fn action_count(&self) -> usize {
+        TrayMenuItem::action_count(&self.items)
+    }
+
+    /// Count toggle items.
+    pub fn toggle_count(&self) -> usize {
+        TrayMenuItem::toggle_count(&self.items)
+    }
+
+    /// Count submenu items.
+    pub fn submenu_count(&self) -> usize {
+        TrayMenuItem::submenu_count(&self.items)
+    }
+
+    /// Count separators.
+    pub fn separator_count(&self) -> usize {
+        TrayMenuItem::separator_count(&self.items)
+    }
+
+    /// Count checked toggle items.
+    pub fn checked_toggle_count(&self) -> usize {
+        TrayMenuItem::checked_toggle_count(&self.items)
+    }
+
+    /// Content-safe summary that avoids labels and action IDs.
+    pub fn to_text(&self) -> String {
+        tray_menu_counts(&self.items).to_text("tray menu")
     }
 
     /// Validate labels and action IDs before installing the menu.
@@ -2489,6 +3072,41 @@ impl NativeContextMenuBuilder {
         &self.items
     }
 
+    /// Count all configured items, including submenu children.
+    pub fn item_count(&self) -> usize {
+        TrayMenuItem::item_count(&self.items)
+    }
+
+    /// Count action items.
+    pub fn action_count(&self) -> usize {
+        TrayMenuItem::action_count(&self.items)
+    }
+
+    /// Count toggle items.
+    pub fn toggle_count(&self) -> usize {
+        TrayMenuItem::toggle_count(&self.items)
+    }
+
+    /// Count submenu items.
+    pub fn submenu_count(&self) -> usize {
+        TrayMenuItem::submenu_count(&self.items)
+    }
+
+    /// Count separators.
+    pub fn separator_count(&self) -> usize {
+        TrayMenuItem::separator_count(&self.items)
+    }
+
+    /// Count checked toggle items.
+    pub fn checked_toggle_count(&self) -> usize {
+        TrayMenuItem::checked_toggle_count(&self.items)
+    }
+
+    /// Content-safe summary that avoids labels and action IDs.
+    pub fn to_text(&self) -> String {
+        tray_menu_counts(&self.items).to_text("context menu")
+    }
+
     /// Validate labels and action IDs before showing the menu.
     pub fn validate(&self) -> Result<()> {
         validate_tray_menu_items(&self.items)
@@ -2512,35 +3130,92 @@ impl From<NativeContextMenuBuilder> for Vec<TrayMenuItem> {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct TrayMenuCounts {
+    items: usize,
+    actions: usize,
+    toggles: usize,
+    checked_toggles: usize,
+    submenus: usize,
+    separators: usize,
+    max_depth: usize,
+}
+
+impl TrayMenuCounts {
+    fn to_text(self, label: &str) -> String {
+        format!(
+            "{label}: items {}, actions {}, toggles {}, checked toggles {}, submenus {}, separators {}, max depth {}",
+            self.items,
+            self.actions,
+            self.toggles,
+            self.checked_toggles,
+            self.submenus,
+            self.separators,
+            self.max_depth
+        )
+    }
+}
+
+fn tray_menu_counts(items: &[TrayMenuItem]) -> TrayMenuCounts {
+    let mut counts = TrayMenuCounts::default();
+    let mut pending = vec![(items, 1usize)];
+    while let Some((items, depth)) = pending.pop() {
+        counts.max_depth = counts.max_depth.max(depth.min(MAX_NATIVE_MENU_DEPTH));
+        let remaining = MAX_NATIVE_MENU_ITEMS.saturating_sub(counts.items);
+        for item in items.iter().take(remaining) {
+            counts.items += 1;
+            match item {
+                TrayMenuItem::Action { .. } => counts.actions += 1,
+                TrayMenuItem::Separator => counts.separators += 1,
+                TrayMenuItem::Submenu { items, .. } => {
+                    counts.submenus += 1;
+                    if depth < MAX_NATIVE_MENU_DEPTH {
+                        pending.push((items, depth + 1));
+                    }
+                }
+                TrayMenuItem::Toggle { checked, .. } => {
+                    counts.toggles += 1;
+                    if *checked {
+                        counts.checked_toggles += 1;
+                    }
+                }
+            }
+        }
+        if counts.items >= MAX_NATIVE_MENU_ITEMS {
+            break;
+        }
+    }
+    counts
+}
+
+const MAX_NATIVE_MENU_ITEMS: usize = 1_024;
+const MAX_NATIVE_MENU_DEPTH: usize = 32;
+const MAX_NATIVE_MENU_TEXT_BYTES: usize = 4_096;
+
 fn validate_tray_menu_items(items: &[TrayMenuItem]) -> Result<()> {
     anyhow::ensure!(!items.is_empty(), "menu must contain at least one item");
     let mut action_ids = std::collections::HashSet::new();
-    validate_tray_menu_items_inner(items, &mut action_ids)
-}
-
-fn validate_tray_menu_items_inner<'a>(
-    items: &'a [TrayMenuItem],
-    action_ids: &mut std::collections::HashSet<&'a str>,
-) -> Result<()> {
-    for item in items {
-        match item {
-            TrayMenuItem::Action { label, id } => {
-                validate_menu_label(label)?;
-                validate_menu_action_id(id, action_ids)?;
-            }
-            TrayMenuItem::Separator => {}
-            TrayMenuItem::Submenu { label, items } => {
-                validate_menu_label(label)?;
-                anyhow::ensure!(
-                    !items.is_empty(),
-                    "submenu '{}' must contain at least one item",
-                    label
-                );
-                validate_tray_menu_items_inner(items, action_ids)?;
-            }
-            TrayMenuItem::Toggle { label, id, .. } => {
-                validate_menu_label(label)?;
-                validate_menu_action_id(id, action_ids)?;
+    let mut count = 0usize;
+    let mut pending = vec![(items, 1usize)];
+    while let Some((items, depth)) = pending.pop() {
+        anyhow::ensure!(depth <= MAX_NATIVE_MENU_DEPTH, "menu nesting is too deep");
+        anyhow::ensure!(
+            items.len() <= MAX_NATIVE_MENU_ITEMS.saturating_sub(count),
+            "menu contains too many items"
+        );
+        count += items.len();
+        for item in items {
+            match item {
+                TrayMenuItem::Action { label, id } | TrayMenuItem::Toggle { label, id, .. } => {
+                    validate_menu_label(label)?;
+                    validate_menu_action_id(id, &mut action_ids)?;
+                }
+                TrayMenuItem::Separator => {}
+                TrayMenuItem::Submenu { label, items } => {
+                    validate_menu_label(label)?;
+                    anyhow::ensure!(!items.is_empty(), "submenu cannot be empty");
+                    pending.push((items, depth + 1));
+                }
             }
         }
     }
@@ -2552,6 +3227,11 @@ fn validate_menu_label(label: &SharedString) -> Result<()> {
         !label.as_ref().trim().is_empty(),
         "menu label cannot be empty"
     );
+    anyhow::ensure!(
+        label.len() <= MAX_NATIVE_MENU_TEXT_BYTES
+            && !label.chars().any(|character| character.is_control()),
+        "menu label is invalid"
+    );
     Ok(())
 }
 
@@ -2562,11 +3242,92 @@ fn validate_menu_action_id<'a>(
     let id = id.as_ref();
     anyhow::ensure!(!id.trim().is_empty(), "menu action id cannot be empty");
     anyhow::ensure!(
-        action_ids.insert(id),
-        "menu action id must be unique: {}",
-        id
+        id.len() <= MAX_NATIVE_MENU_TEXT_BYTES
+            && !id.chars().any(|character| character.is_control()),
+        "menu action id is invalid"
     );
+    anyhow::ensure!(action_ids.insert(id), "menu action id must be unique");
     Ok(())
+}
+
+#[cfg(test)]
+mod tray_menu_tests {
+    use super::*;
+
+    #[test]
+    fn tray_and_context_menu_summaries_are_content_safe() {
+        let submenu = TrayMenuBuilder::new()
+            .toggle("Secret Available", true, "presence.available")
+            .action("Private Away", "presence.away")
+            .build()
+            .unwrap();
+        let tray = TrayMenuBuilder::new()
+            .action("Open Secret Project", "open.secret")
+            .separator()
+            .toggle("Pause Private Sync", false, "sync.pause")
+            .submenu("Private Status", submenu)
+            .action("Quit", "quit");
+
+        assert_eq!(tray.item_count(), 7);
+        assert_eq!(tray.action_count(), 3);
+        assert_eq!(tray.toggle_count(), 2);
+        assert_eq!(tray.checked_toggle_count(), 1);
+        assert_eq!(tray.submenu_count(), 1);
+        assert_eq!(tray.separator_count(), 1);
+        assert!(tray.validate().is_ok());
+
+        let summary = tray.to_text();
+        assert_eq!(
+            summary,
+            "tray menu: items 7, actions 3, toggles 2, checked toggles 1, submenus 1, separators 1, max depth 2"
+        );
+        assert!(!summary.contains("Secret"));
+        assert!(!summary.contains("open.secret"));
+        assert!(!summary.contains("presence"));
+        assert!(!summary.contains("Private"));
+
+        let built = tray.build().unwrap();
+        let item_summary = TrayMenuItem::items_to_text(&built);
+        assert!(item_summary.contains("menu items: items 7"));
+        assert_eq!(TrayMenuItem::item_count(&built), 7);
+        assert_eq!(TrayMenuItem::checked_toggle_count(&built), 1);
+        assert!(!item_summary.contains("Secret"));
+        assert!(!item_summary.contains("open.secret"));
+
+        let context = NativeContextMenuBuilder::new()
+            .action("Copy Private Path", "copy.path")
+            .separator()
+            .toggle("Show Hidden Files", true, "show.hidden");
+        assert_eq!(
+            context.to_text(),
+            "context menu: items 3, actions 1, toggles 1, checked toggles 1, submenus 0, separators 1, max depth 1"
+        );
+        assert!(!context.to_text().contains("Private"));
+        assert!(!context.to_text().contains("copy.path"));
+    }
+
+    #[test]
+    fn native_menu_validation_is_bounded_iterative_and_content_safe() {
+        let duplicate = vec![
+            TrayMenuItem::action("Private first", "secret.identifier"),
+            TrayMenuItem::action("Private second", "secret.identifier"),
+        ];
+        let error = TrayMenuItem::validate_items(&duplicate)
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("secret.identifier"));
+        assert!(!error.contains("Private"));
+
+        let oversized = vec![TrayMenuItem::separator(); MAX_NATIVE_MENU_ITEMS + 1];
+        assert!(TrayMenuItem::validate_items(&oversized).is_err());
+        assert_eq!(TrayMenuItem::item_count(&oversized), MAX_NATIVE_MENU_ITEMS);
+
+        let mut nested = TrayMenuItem::action("Leaf", "leaf");
+        for depth in 0..MAX_NATIVE_MENU_DEPTH {
+            nested = TrayMenuItem::submenu(format!("Level {depth}"), vec![nested]);
+        }
+        assert!(TrayMenuItem::validate_items(&[nested]).is_err());
+    }
 }
 
 /// A platform shell target that can be opened or revealed by the OS.
@@ -2604,6 +3365,90 @@ impl ShellTarget {
                 validate_shell_path(path, false)
             }
         }
+    }
+}
+
+/// Checked, inspectable plan for ordered shell open/reveal workflows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellTargetsPlan {
+    targets: Vec<ShellTarget>,
+    require_existing_paths: bool,
+    canonicalized_paths: bool,
+}
+
+impl ShellTargetsPlan {
+    /// Shell targets in dispatch order.
+    pub fn targets(&self) -> &[ShellTarget] {
+        &self.targets
+    }
+
+    /// Consume the plan and return the ordered shell targets.
+    pub fn into_targets(self) -> Vec<ShellTarget> {
+        self.targets
+    }
+
+    /// Number of shell targets in the plan.
+    pub fn len(&self) -> usize {
+        self.targets.len()
+    }
+
+    /// Whether this plan contains no shell targets.
+    pub fn is_empty(&self) -> bool {
+        self.targets.is_empty()
+    }
+
+    /// Whether path and reveal targets were required to exist.
+    pub fn requires_existing_paths(&self) -> bool {
+        self.require_existing_paths
+    }
+
+    /// Whether path and reveal targets were canonicalized while building.
+    pub fn canonicalized_paths(&self) -> bool {
+        self.canonicalized_paths
+    }
+
+    /// Whether this plan includes URL targets.
+    pub fn contains_url_targets(&self) -> bool {
+        self.targets
+            .iter()
+            .any(|target| matches!(target, ShellTarget::Url(_)))
+    }
+
+    /// Whether this plan includes file or directory open targets.
+    pub fn contains_path_targets(&self) -> bool {
+        self.targets
+            .iter()
+            .any(|target| matches!(target, ShellTarget::Path(_)))
+    }
+
+    /// Whether this plan includes reveal-in-folder targets.
+    pub fn contains_reveal_targets(&self) -> bool {
+        self.targets
+            .iter()
+            .any(|target| matches!(target, ShellTarget::RevealPath(_)))
+    }
+
+    /// Whether dispatching this plan requires URL-open capability.
+    pub fn requires_open_external_url(&self) -> bool {
+        self.contains_url_targets()
+    }
+
+    /// Whether dispatching this plan requires shell-execute capability.
+    pub fn requires_shell_execute(&self) -> bool {
+        self.contains_path_targets() || self.contains_reveal_targets()
+    }
+
+    /// Content-safe summary for shell open/reveal traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "shell targets: {} targets, url {}, path {}, reveal {}, existing {}, canonicalized {}",
+            self.len(),
+            self.contains_url_targets(),
+            self.contains_path_targets(),
+            self.contains_reveal_targets(),
+            self.requires_existing_paths(),
+            self.canonicalized_paths()
+        )
     }
 }
 
@@ -2666,6 +3511,60 @@ impl ShellTargetsBuilder {
         &self.targets
     }
 
+    /// Number of configured shell targets.
+    pub fn len(&self) -> usize {
+        self.targets.len()
+    }
+
+    /// Whether no shell targets are configured yet.
+    pub fn is_empty(&self) -> bool {
+        self.targets.is_empty()
+    }
+
+    /// Whether this builder includes URL targets.
+    pub fn contains_url_targets(&self) -> bool {
+        self.targets
+            .iter()
+            .any(|target| matches!(target, ShellTarget::Url(_)))
+    }
+
+    /// Whether this builder includes file or directory open targets.
+    pub fn contains_path_targets(&self) -> bool {
+        self.targets
+            .iter()
+            .any(|target| matches!(target, ShellTarget::Path(_)))
+    }
+
+    /// Whether this builder includes reveal-in-folder targets.
+    pub fn contains_reveal_targets(&self) -> bool {
+        self.targets
+            .iter()
+            .any(|target| matches!(target, ShellTarget::RevealPath(_)))
+    }
+
+    /// Whether path and reveal targets will be required to exist.
+    pub fn requires_existing_paths(&self) -> bool {
+        self.require_existing_paths
+    }
+
+    /// Whether path and reveal targets will be canonicalized while building.
+    pub fn canonicalizes_paths(&self) -> bool {
+        self.canonicalize_paths
+    }
+
+    /// Content-safe summary for generated shell-target traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "shell targets builder: {} targets, url {}, path {}, reveal {}, existing {}, canonicalize {}",
+            self.len(),
+            self.contains_url_targets(),
+            self.contains_path_targets(),
+            self.contains_reveal_targets(),
+            self.requires_existing_paths(),
+            self.canonicalizes_paths()
+        )
+    }
+
     /// Validate that at least one shell target was configured.
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
@@ -2679,8 +3578,14 @@ impl ShellTargetsBuilder {
     }
 
     /// Build the validated shell-target list.
-    pub fn build(mut self) -> Result<Vec<ShellTarget>> {
+    pub fn build(self) -> Result<Vec<ShellTarget>> {
+        Ok(self.build_checked()?.into_targets())
+    }
+
+    /// Build a checked, inspectable shell-target plan.
+    pub fn build_checked(mut self) -> Result<ShellTargetsPlan> {
         self.validate()?;
+        let canonicalized_paths = self.canonicalize_paths;
         if self.canonicalize_paths {
             for target in &mut self.targets {
                 match target {
@@ -2696,7 +3601,11 @@ impl ShellTargetsBuilder {
                 }
             }
         }
-        Ok(self.targets)
+        Ok(ShellTargetsPlan {
+            targets: self.targets,
+            require_existing_paths: self.require_existing_paths,
+            canonicalized_paths,
+        })
     }
 }
 
@@ -2740,6 +3649,33 @@ impl TrashRequest {
     pub fn allows_relative_path(&self) -> bool {
         self.allow_relative_path
     }
+
+    /// Best-effort display name for prompts, logs, and generated confirmations.
+    pub fn display_name(&self) -> Option<&str> {
+        self.path.file_name().and_then(|name| name.to_str())
+    }
+
+    /// Parent directory of the target, when available.
+    pub fn parent_path(&self) -> Option<&Path> {
+        self.path.parent()
+    }
+
+    /// Whether dispatching this request requires shell-execute/trash capability.
+    pub fn requires_shell_execute(&self) -> bool {
+        true
+    }
+
+    /// Stable diagnostic text for generated trash/recycle flows.
+    pub fn to_text(&self) -> String {
+        format!(
+            "trash request: display-name {}, parent {}, require existing path {}, canonicalized {}, allow relative path {}",
+            self.display_name().is_some(),
+            self.parent_path().is_some(),
+            self.require_existing_path,
+            self.canonicalized,
+            self.allow_relative_path
+        )
+    }
 }
 
 /// Builder for checked platform trash/recycle requests.
@@ -2779,6 +3715,37 @@ impl TrashRequestBuilder {
     pub fn allow_relative_path(mut self) -> Self {
         self.allow_relative_path = true;
         self
+    }
+
+    /// Whether the builder requires the path to exist.
+    pub fn requires_existing_path(&self) -> bool {
+        self.require_existing_path
+    }
+
+    /// Whether the builder will canonicalize the path.
+    pub fn canonicalizes_path(&self) -> bool {
+        self.canonicalize_path
+    }
+
+    /// Whether the builder allows a relative path.
+    pub fn allows_relative_path(&self) -> bool {
+        self.allow_relative_path
+    }
+
+    /// Whether the configured path appears relative.
+    pub fn has_relative_path(&self) -> bool {
+        self.path.is_relative()
+    }
+
+    /// Content-safe summary for generated trash/recycle request traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "trash request builder: relative {}, require existing path {}, canonicalize {}, allow relative path {}",
+            self.has_relative_path(),
+            self.requires_existing_path(),
+            self.canonicalizes_path(),
+            self.allows_relative_path()
+        )
     }
 
     /// Validate this trash request without mutating the filesystem.
@@ -2924,6 +3891,20 @@ impl GlobalHotkey {
     pub fn name(&self) -> Option<&SharedString> {
         self.name.as_ref()
     }
+
+    /// Whether this hotkey has a human-readable name.
+    pub fn has_name(&self) -> bool {
+        self.name.is_some()
+    }
+
+    /// Return a compact summary without exposing shortcut text or names.
+    pub fn to_text(&self) -> String {
+        format!(
+            "global hotkey: id {}, name {}, shortcut true",
+            self.id(),
+            self.has_name()
+        )
+    }
 }
 
 /// A collection of global hotkeys ready to register.
@@ -2949,6 +3930,67 @@ impl GlobalHotkeySet {
         &self.hotkeys
     }
 
+    /// Number of configured global hotkeys.
+    pub fn len(&self) -> usize {
+        self.hotkeys.len()
+    }
+
+    /// Whether this set contains no global hotkeys.
+    pub fn is_empty(&self) -> bool {
+        self.hotkeys.is_empty()
+    }
+
+    /// Application-owned hotkey ids in registration order.
+    pub fn ids(&self) -> Vec<u32> {
+        self.hotkeys.iter().map(GlobalHotkey::id).collect()
+    }
+
+    /// Parsed keystrokes in registration order.
+    pub fn keystrokes(&self) -> Vec<&Keystroke> {
+        self.hotkeys.iter().map(GlobalHotkey::keystroke).collect()
+    }
+
+    /// Human-readable names in registration order.
+    pub fn names(&self) -> Vec<Option<&str>> {
+        self.hotkeys
+            .iter()
+            .map(|hotkey| hotkey.name().map(|name| name.as_ref()))
+            .collect()
+    }
+
+    /// Number of hotkeys with human-readable names.
+    pub fn named_count(&self) -> usize {
+        self.hotkeys
+            .iter()
+            .filter(|hotkey| hotkey.name().is_some())
+            .count()
+    }
+
+    /// Number of hotkeys without human-readable names.
+    pub fn unnamed_count(&self) -> usize {
+        self.len().saturating_sub(self.named_count())
+    }
+
+    /// Whether this set includes a specific application-owned id.
+    pub fn contains_id(&self, id: u32) -> bool {
+        self.hotkeys.iter().any(|hotkey| hotkey.id() == id)
+    }
+
+    /// Returns a compact summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "global hotkey set: {} hotkeys, {} named, {} unnamed, ids [{}]",
+            self.len(),
+            self.named_count(),
+            self.unnamed_count(),
+            self.ids()
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+
     /// Validate the set before registering it with the platform.
     pub fn validate(&self) -> Result<()> {
         validate_global_hotkeys(&self.hotkeys)
@@ -2969,6 +4011,73 @@ impl From<GlobalHotkey> for GlobalHotkeySet {
 impl From<GlobalHotkeyBuilder> for GlobalHotkeySet {
     fn from(value: GlobalHotkeyBuilder) -> Self {
         value.build()
+    }
+}
+
+/// Checked global hotkey unregistration request.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GlobalHotkeyUnregistration {
+    ids: Vec<u32>,
+}
+
+impl GlobalHotkeyUnregistration {
+    /// Create an empty unregistration request.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a global hotkey id to unregister.
+    pub fn id(mut self, id: u32) -> Self {
+        self.ids.push(id);
+        self
+    }
+
+    /// Add all ids from a registered hotkey set.
+    pub fn hotkey_set(mut self, hotkeys: &GlobalHotkeySet) -> Self {
+        self.ids
+            .extend(hotkeys.hotkeys().iter().map(GlobalHotkey::id));
+        self
+    }
+
+    /// Return the configured ids.
+    pub fn ids(&self) -> &[u32] {
+        &self.ids
+    }
+
+    /// Number of ids configured for unregistration.
+    pub fn id_count(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// Returns a compact summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "global hotkey unregistration: {} ids [{}]",
+            self.id_count(),
+            self.ids
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+
+    /// Validate the request before unregistering platform hotkeys.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.ids.is_empty(),
+            "at least one global hotkey id must be configured for unregistration"
+        );
+
+        let mut ids = std::collections::HashSet::new();
+        for id in &self.ids {
+            anyhow::ensure!(
+                ids.insert(*id),
+                "global hotkey unregister id must be unique: {id}"
+            );
+        }
+
+        Ok(())
     }
 }
 
@@ -3029,6 +4138,54 @@ impl GlobalHotkeyBuilder {
         &self.hotkeys
     }
 
+    /// Number of configured global hotkeys.
+    pub fn len(&self) -> usize {
+        self.hotkeys.len()
+    }
+
+    /// Whether no global hotkeys are configured yet.
+    pub fn is_empty(&self) -> bool {
+        self.hotkeys.is_empty()
+    }
+
+    /// Application-owned hotkey ids in configured order.
+    pub fn ids(&self) -> Vec<u32> {
+        self.hotkeys.iter().map(GlobalHotkey::id).collect()
+    }
+
+    /// Number of hotkeys with human-readable names.
+    pub fn named_count(&self) -> usize {
+        self.hotkeys
+            .iter()
+            .filter(|hotkey| hotkey.name().is_some())
+            .count()
+    }
+
+    /// Number of hotkeys without human-readable names.
+    pub fn unnamed_count(&self) -> usize {
+        self.len().saturating_sub(self.named_count())
+    }
+
+    /// Whether this builder includes a specific application-owned id.
+    pub fn contains_id(&self, id: u32) -> bool {
+        self.hotkeys.iter().any(|hotkey| hotkey.id() == id)
+    }
+
+    /// Return a compact summary before registering platform hotkeys.
+    pub fn to_text(&self) -> String {
+        format!(
+            "global hotkey builder: {} hotkeys, {} named, {} unnamed, ids [{}]",
+            self.len(),
+            self.named_count(),
+            self.unnamed_count(),
+            self.ids()
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+
     /// Validate the configured hotkeys.
     pub fn validate(&self) -> Result<()> {
         validate_global_hotkeys(&self.hotkeys)
@@ -3057,6 +4214,9 @@ fn validate_global_hotkeys(hotkeys: &[GlobalHotkey]) -> Result<()> {
     let mut ids = std::collections::HashSet::new();
     let mut keystrokes = std::collections::HashSet::new();
     for hotkey in hotkeys {
+        if let Some(name) = hotkey.name() {
+            validate_global_hotkey_name(name.as_ref())?;
+        }
         anyhow::ensure!(
             ids.insert(hotkey.id()),
             "global hotkey id must be unique: {}",
@@ -3069,6 +4229,26 @@ fn validate_global_hotkeys(hotkeys: &[GlobalHotkey]) -> Result<()> {
         );
     }
 
+    Ok(())
+}
+
+fn validate_global_hotkey_name(name: &str) -> Result<()> {
+    anyhow::ensure!(
+        !name.trim().is_empty(),
+        "global hotkey name cannot be empty"
+    );
+    anyhow::ensure!(
+        name.trim() == name,
+        "global hotkey name cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        name.len() <= 128,
+        "global hotkey name cannot exceed 128 bytes"
+    );
+    anyhow::ensure!(
+        !name.chars().any(char::is_control),
+        "global hotkey name cannot contain control characters"
+    );
     Ok(())
 }
 
@@ -3094,6 +4274,32 @@ impl FocusedWindowInfo {
     /// Returns true when this focused window belongs to another process.
     pub fn is_external_process(&self) -> bool {
         self.pid.is_some_and(|pid| pid != std::process::id())
+    }
+
+    /// Whether the platform supplied a non-empty window title.
+    pub fn has_title(&self) -> bool {
+        !self.window_title.trim().is_empty()
+    }
+
+    /// Whether the platform supplied a bundle identifier.
+    pub fn has_bundle_id(&self) -> bool {
+        self.bundle_id.is_some()
+    }
+
+    /// Whether the platform supplied a process id.
+    pub fn has_pid(&self) -> bool {
+        self.pid.is_some()
+    }
+
+    /// Content-safe summary for active-window diagnostics and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "focused window: title {}, bundle {}, pid {}, external {}",
+            self.has_title(),
+            self.has_bundle_id(),
+            self.has_pid(),
+            self.is_external_process()
+        )
     }
 
     /// Validate metadata shape supplied by a platform backend or test fixture.
@@ -3210,6 +4416,30 @@ impl FocusedWindowQuery {
         self.pid
     }
 
+    /// Whether the query carries any app, bundle, or pid filter.
+    pub fn has_filter(&self) -> bool {
+        self.app_name.is_some()
+            || self.app_name_contains.is_some()
+            || self.bundle_id.is_some()
+            || self.pid.is_some()
+    }
+
+    /// Whether the query constrains the process relationship.
+    pub fn has_process_scope(&self) -> bool {
+        self.external_only || self.current_process_only
+    }
+
+    /// Content-safe summary for checked focused-window queries.
+    pub fn to_text(&self) -> String {
+        format!(
+            "focused window query: title {}, pid {}, scope {}, filters {}",
+            self.require_title,
+            self.require_pid,
+            self.has_process_scope(),
+            self.has_filter()
+        )
+    }
+
     /// Validate the query before reading platform state.
     pub fn validate(&self) -> Result<()> {
         if let Some(app_name) = &self.app_name {
@@ -3306,6 +4536,11 @@ impl FocusedWindowQueryBuilder {
         self.query.validate()
     }
 
+    /// Content-safe summary for generated focused-window query traces.
+    pub fn to_text(&self) -> String {
+        self.query.to_text()
+    }
+
     /// Build the checked query.
     pub fn build_checked(self) -> Result<FocusedWindowQuery> {
         self.query.validate()?;
@@ -3364,6 +4599,20 @@ pub enum SystemPowerEvent {
     Shutdown,
 }
 
+impl SystemPowerEvent {
+    /// Stable summary text for logs and agent traces.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Suspend => "suspend",
+            Self::Resume => "resume",
+            Self::PowerModeChanged => "power mode changed",
+            Self::LockScreen => "lock screen",
+            Self::UnlockScreen => "unlock screen",
+            Self::Shutdown => "shutdown",
+        }
+    }
+}
+
 /// The kind of power save blocker to create.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PowerSaveBlockerKind {
@@ -3371,6 +4620,16 @@ pub enum PowerSaveBlockerKind {
     PreventAppSuspension,
     /// Prevent the display from sleeping.
     PreventDisplaySleep,
+}
+
+impl PowerSaveBlockerKind {
+    /// Stable summary text for logs and agent traces.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::PreventAppSuspension => "prevent app suspension",
+            Self::PreventDisplaySleep => "prevent display sleep",
+        }
+    }
 }
 
 /// The system's current power policy.
@@ -3383,6 +4642,61 @@ pub enum PowerMode {
     Balanced,
     /// The system's low-power or battery-saver mode is active.
     LowPower,
+}
+
+impl PowerMode {
+    /// Stable summary text for logs and agent traces.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Performance => "performance",
+            Self::Balanced => "balanced",
+            Self::LowPower => "low power",
+        }
+    }
+}
+
+/// The system's current external-power or battery source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SystemPowerSource {
+    /// The platform does not expose the current power source.
+    #[default]
+    Unknown,
+    /// The system is connected to external/AC power and is not reporting charging state.
+    ExternalPower,
+    /// The system is running on battery and is not reporting charging state.
+    Battery,
+    /// The battery is currently charging from external power.
+    Charging,
+    /// The battery is currently discharging.
+    Discharging,
+}
+
+impl SystemPowerSource {
+    /// Whether the source means the app should assume battery-powered operation.
+    pub fn is_on_battery(self) -> bool {
+        matches!(self, Self::Battery | Self::Discharging)
+    }
+
+    /// Whether the source means the app should assume external power is available.
+    pub fn is_external_power(self) -> bool {
+        matches!(self, Self::ExternalPower | Self::Charging)
+    }
+
+    /// Whether the platform reported a concrete power source.
+    pub fn is_known(self) -> bool {
+        !matches!(self, Self::Unknown)
+    }
+
+    /// Stable summary text for logs and agent traces.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::ExternalPower => "external power",
+            Self::Battery => "battery",
+            Self::Charging => "charging",
+            Self::Discharging => "discharging",
+        }
+    }
 }
 
 /// The current network connectivity status.
@@ -3463,6 +4777,36 @@ impl ProgressBarState {
             }
         }
     }
+
+    /// Stable state name for diagnostics and generated UI.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Indeterminate => "indeterminate",
+            Self::Normal(_) => "normal",
+            Self::Error(_) => "error",
+            Self::Paused(_) => "paused",
+        }
+    }
+
+    /// Whether this progress state carries a validated fraction.
+    pub fn is_determinate(&self) -> bool {
+        matches!(self, Self::Normal(_) | Self::Error(_) | Self::Paused(_))
+    }
+
+    /// Whether this progress state clears the platform indicator.
+    pub fn is_clear(&self) -> bool {
+        matches!(self, Self::None)
+    }
+
+    /// Content-safe summary for taskbar/dock progress traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "window progress: kind {}, determinate {}",
+            self.kind(),
+            self.is_determinate()
+        )
+    }
 }
 
 fn validate_progress_fraction(fraction: f64) -> Result<()> {
@@ -3484,6 +4828,17 @@ pub enum DialogKind {
     Error,
 }
 
+impl DialogKind {
+    /// Stable summary text for logs and agent traces.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Warning => "warning",
+            Self::Error => "error",
+        }
+    }
+}
+
 /// Options for displaying a native dialog.
 #[derive(Debug, Clone)]
 pub struct DialogOptions {
@@ -3503,10 +4858,148 @@ pub struct DialogOptions {
     pub cancel_button: Option<usize>,
 }
 
+impl DialogOptions {
+    /// Number of dialog buttons.
+    pub fn button_count(&self) -> usize {
+        self.buttons.len()
+    }
+
+    /// Whether the dialog has optional detail text.
+    pub fn has_detail(&self) -> bool {
+        self.detail.is_some()
+    }
+
+    /// Whether the dialog has an explicit default action.
+    pub fn has_default_button(&self) -> bool {
+        self.default_button
+            .is_some_and(|index| index < self.button_count())
+    }
+
+    /// Whether the dialog has an explicit cancel/escape action.
+    pub fn has_cancel_button(&self) -> bool {
+        self.cancel_button
+            .is_some_and(|index| index < self.button_count())
+    }
+
+    /// Returns a content-safe summary for raw dialog options.
+    pub fn to_text(&self) -> String {
+        format!(
+            "dialog options {}: {} buttons, detail {}, default {}, cancel {}",
+            self.kind.to_text(),
+            self.button_count(),
+            self.has_detail(),
+            self.has_default_button(),
+            self.has_cancel_button()
+        )
+    }
+}
+
 /// Builder for native message/confirmation dialogs.
 #[derive(Debug, Clone)]
 pub struct MessageDialogBuilder {
     options: DialogOptions,
+}
+
+/// Checked, inspectable plan for a native message/confirmation dialog.
+#[derive(Debug, Clone)]
+pub struct MessageDialogPlan {
+    options: DialogOptions,
+}
+
+impl MessageDialogPlan {
+    /// Dialog kind requested from the platform.
+    pub fn kind(&self) -> DialogKind {
+        self.options.kind
+    }
+
+    /// Dialog title.
+    pub fn title(&self) -> &SharedString {
+        &self.options.title
+    }
+
+    /// Primary dialog message.
+    pub fn message(&self) -> &SharedString {
+        &self.options.message
+    }
+
+    /// Optional detail text.
+    pub fn detail(&self) -> Option<&SharedString> {
+        self.options.detail.as_ref()
+    }
+
+    /// Button labels in returned-index order.
+    pub fn buttons(&self) -> &[SharedString] {
+        &self.options.buttons
+    }
+
+    /// Number of dialog buttons.
+    pub fn button_count(&self) -> usize {
+        self.options.buttons.len()
+    }
+
+    /// Return the index for a button label, if present.
+    pub fn button_index(&self, label: &str) -> Option<usize> {
+        self.options
+            .buttons
+            .iter()
+            .position(|button| button.as_ref() == label)
+    }
+
+    /// Default button index, when configured.
+    pub fn default_button_index(&self) -> Option<usize> {
+        self.options.default_button
+    }
+
+    /// Default button label, when configured.
+    pub fn default_button_label(&self) -> Option<&SharedString> {
+        self.options
+            .default_button
+            .and_then(|index| self.options.buttons.get(index))
+    }
+
+    /// Cancel button index, when configured.
+    pub fn cancel_button_index(&self) -> Option<usize> {
+        self.options.cancel_button
+    }
+
+    /// Cancel button label, when configured.
+    pub fn cancel_button_label(&self) -> Option<&SharedString> {
+        self.options
+            .cancel_button
+            .and_then(|index| self.options.buttons.get(index))
+    }
+
+    /// Whether the dialog has an explicit cancel/escape action.
+    pub fn has_cancel_button(&self) -> bool {
+        self.cancel_button_label().is_some()
+    }
+
+    /// Whether the dialog has optional detail text.
+    pub fn has_detail(&self) -> bool {
+        self.options.detail.is_some()
+    }
+
+    /// Returns a content-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "message dialog {}: {} buttons, detail {}, default {:?}, cancel {:?}",
+            self.kind().to_text(),
+            self.button_count(),
+            self.has_detail(),
+            self.default_button_index(),
+            self.cancel_button_index()
+        )
+    }
+
+    /// Return a clone of the raw options for lower-level platform APIs.
+    pub fn options(&self) -> DialogOptions {
+        self.options.clone()
+    }
+
+    /// Consume the plan into raw dialog options.
+    pub fn into_options(self) -> DialogOptions {
+        self.options
+    }
 }
 
 impl MessageDialogBuilder {
@@ -3648,6 +5141,11 @@ impl MessageDialogBuilder {
         self.options.cancel_button
     }
 
+    /// Returns a content-safe summary before building or showing the dialog.
+    pub fn to_text(&self) -> String {
+        self.options.to_text()
+    }
+
     /// Validate required fields before showing the dialog.
     pub fn validate(&self) -> anyhow::Result<()> {
         validate_message_dialog_text(&self.options.title, "message dialog title", 256, false)?;
@@ -3690,6 +5188,14 @@ impl MessageDialogBuilder {
     /// Return a clone of the raw options for inspection or lower-level APIs.
     pub fn options(&self) -> DialogOptions {
         self.options.clone()
+    }
+
+    /// Build a checked, inspectable dialog plan.
+    pub fn build_checked(self) -> Result<MessageDialogPlan> {
+        self.validate()?;
+        Ok(MessageDialogPlan {
+            options: self.options,
+        })
     }
 
     /// Consume the builder into raw dialog options.
@@ -3745,6 +5251,22 @@ mod message_dialog_tests {
         );
         assert_eq!(dialog.cancel_button_index(), Some(0));
         assert_eq!(dialog.default_button_index(), Some(2));
+
+        let plan = dialog.build_checked().unwrap();
+        assert_eq!(plan.kind(), DialogKind::Warning);
+        assert_eq!(plan.button_count(), 3);
+        assert_eq!(plan.button_index("Don't Save"), Some(1));
+        assert_eq!(plan.default_button_index(), Some(2));
+        assert_eq!(
+            plan.default_button_label().map(|label| label.as_ref()),
+            Some("Save")
+        );
+        assert_eq!(plan.cancel_button_index(), Some(0));
+        assert_eq!(
+            plan.cancel_button_label().map(|label| label.as_ref()),
+            Some("Cancel")
+        );
+        assert!(plan.has_cancel_button());
     }
 
     #[test]
@@ -3872,6 +5394,29 @@ pub struct NotificationAction {
     pub label: String,
 }
 
+/// Delivery urgency for OS-level notifications.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NotificationUrgency {
+    /// Low-priority notification that should not interrupt the user.
+    Low,
+    /// Normal-priority notification.
+    #[default]
+    Normal,
+    /// Critical or time-sensitive notification.
+    Critical,
+}
+
+impl NotificationUrgency {
+    /// Stable lowercase key for logs and platform mappers.
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Normal => "normal",
+            Self::Critical => "critical",
+        }
+    }
+}
+
 impl NotificationAction {
     /// Create a notification action button.
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
@@ -3912,6 +5457,263 @@ impl NotificationAction {
     pub fn settings(label: impl Into<String>) -> Self {
         Self::new(Self::SETTINGS_ID, label)
     }
+
+    /// Whether this action uses the conventional open id.
+    pub fn is_open(&self) -> bool {
+        self.id == Self::OPEN_ID
+    }
+
+    /// Whether this action uses the conventional dismiss/defer id.
+    pub fn is_dismiss(&self) -> bool {
+        self.id == Self::DISMISS_ID
+    }
+
+    /// Whether this action uses the conventional retry id.
+    pub fn is_retry(&self) -> bool {
+        self.id == Self::RETRY_ID
+    }
+
+    /// Whether this action uses the conventional settings/preferences id.
+    pub fn is_settings(&self) -> bool {
+        self.id == Self::SETTINGS_ID
+    }
+
+    /// Whether this action uses one of Kael's conventional ids.
+    pub fn is_conventional(&self) -> bool {
+        self.is_open() || self.is_dismiss() || self.is_retry() || self.is_settings()
+    }
+}
+
+/// Notification feature used when checking how a builder maps to a platform backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum NotificationFeature {
+    /// Basic notification delivery.
+    Basic,
+    /// Action buttons and action callbacks.
+    Actions,
+    /// Delivery urgency / priority.
+    Urgency,
+    /// Silent delivery.
+    Silent,
+    /// Replacement tags.
+    Tag,
+    /// Grouping keys.
+    Group,
+    /// Timeout / expiration hints.
+    Timeout,
+}
+
+impl NotificationFeature {
+    /// Stable feature key for logs and agent traces.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Basic => "basic",
+            Self::Actions => "actions",
+            Self::Urgency => "urgency",
+            Self::Silent => "silent",
+            Self::Tag => "tag",
+            Self::Group => "group",
+            Self::Timeout => "timeout",
+        }
+    }
+}
+
+/// Platform/backend notification feature support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct NotificationFeatureSupport {
+    basic: bool,
+    actions: bool,
+    urgency: bool,
+    silent: bool,
+    tag: bool,
+    group: bool,
+    timeout: bool,
+}
+
+impl NotificationFeatureSupport {
+    /// No OS-level notification support.
+    pub fn unsupported() -> Self {
+        Self::default()
+    }
+
+    /// Basic title/body delivery only.
+    pub fn basic() -> Self {
+        Self {
+            basic: true,
+            ..Self::default()
+        }
+    }
+
+    /// Basic notifications plus action buttons.
+    pub fn actions() -> Self {
+        Self::basic().with_actions()
+    }
+
+    /// Broad rich-notification support profile.
+    pub fn rich() -> Self {
+        Self {
+            basic: true,
+            actions: true,
+            urgency: true,
+            silent: true,
+            tag: true,
+            group: true,
+            timeout: true,
+        }
+    }
+
+    /// Mark action buttons as supported.
+    pub fn with_actions(mut self) -> Self {
+        self.basic = true;
+        self.actions = true;
+        self
+    }
+
+    /// Mark urgency metadata as supported.
+    pub fn with_urgency(mut self) -> Self {
+        self.basic = true;
+        self.urgency = true;
+        self
+    }
+
+    /// Mark silent-delivery metadata as supported.
+    pub fn with_silent(mut self) -> Self {
+        self.basic = true;
+        self.silent = true;
+        self
+    }
+
+    /// Mark replacement tags as supported.
+    pub fn with_tags(mut self) -> Self {
+        self.basic = true;
+        self.tag = true;
+        self
+    }
+
+    /// Mark grouping keys as supported.
+    pub fn with_groups(mut self) -> Self {
+        self.basic = true;
+        self.group = true;
+        self
+    }
+
+    /// Mark timeout hints as supported.
+    pub fn with_timeouts(mut self) -> Self {
+        self.basic = true;
+        self.timeout = true;
+        self
+    }
+
+    /// Whether a feature is supported.
+    pub fn supports(&self, feature: NotificationFeature) -> bool {
+        match feature {
+            NotificationFeature::Basic => self.basic,
+            NotificationFeature::Actions => self.actions,
+            NotificationFeature::Urgency => self.urgency,
+            NotificationFeature::Silent => self.silent,
+            NotificationFeature::Tag => self.tag,
+            NotificationFeature::Group => self.group,
+            NotificationFeature::Timeout => self.timeout,
+        }
+    }
+
+    /// Whether basic OS-level notification delivery is supported.
+    pub fn supports_basic(&self) -> bool {
+        self.supports(NotificationFeature::Basic)
+    }
+
+    /// Whether action buttons are supported.
+    pub fn supports_actions(&self) -> bool {
+        self.supports(NotificationFeature::Actions)
+    }
+
+    /// Whether delivery metadata is fully supported.
+    pub fn supports_delivery_metadata(&self) -> bool {
+        self.urgency && self.silent && self.tag && self.group && self.timeout
+    }
+
+    /// Stable summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "notification support: basic {}, actions {}, urgency {}, silent {}, tag {}, group {}, timeout {}",
+            self.basic, self.actions, self.urgency, self.silent, self.tag, self.group, self.timeout
+        )
+    }
+}
+
+/// Checked notification delivery plan against a known backend support profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotificationDeliveryPlan {
+    notification: NotificationBuilder,
+    support: NotificationFeatureSupport,
+    missing_features: Vec<NotificationFeature>,
+}
+
+impl NotificationDeliveryPlan {
+    /// Create a checked delivery plan for a notification and support profile.
+    pub fn new(
+        notification: NotificationBuilder,
+        support: NotificationFeatureSupport,
+    ) -> Result<Self> {
+        notification.validate()?;
+        let missing_features = notification.missing_features(support);
+        Ok(Self {
+            notification,
+            support,
+            missing_features,
+        })
+    }
+
+    /// Planned notification.
+    pub fn notification(&self) -> &NotificationBuilder {
+        &self.notification
+    }
+
+    /// Backend support profile used for the plan.
+    pub fn support(&self) -> NotificationFeatureSupport {
+        self.support
+    }
+
+    /// Features requested by the notification but not supported by the profile.
+    pub fn missing_features(&self) -> &[NotificationFeature] {
+        &self.missing_features
+    }
+
+    /// Number of unsupported requested features.
+    pub fn missing_feature_count(&self) -> usize {
+        self.missing_features.len()
+    }
+
+    /// Whether no requested features need fallback handling.
+    pub fn is_fully_supported(&self) -> bool {
+        self.missing_features.is_empty()
+    }
+
+    /// Whether app code should use a fallback route or degrade metadata.
+    pub fn requires_fallback(&self) -> bool {
+        !self.is_fully_supported()
+    }
+
+    /// Content-safe summary for notification delivery planning.
+    pub fn to_text(&self) -> String {
+        let missing = if self.missing_features.is_empty() {
+            "none".to_string()
+        } else {
+            self.missing_features
+                .iter()
+                .map(|feature| feature.key())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
+        format!(
+            "notification delivery plan: fully supported {}, fallback {}, missing [{}], {}",
+            self.is_fully_supported(),
+            self.requires_fallback(),
+            missing,
+            self.notification.to_text()
+        )
+    }
 }
 
 /// Builder for an OS-level notification.
@@ -3920,6 +5722,16 @@ pub struct NotificationBuilder {
     title: String,
     body: String,
     actions: Vec<NotificationAction>,
+    #[serde(default)]
+    urgency: NotificationUrgency,
+    #[serde(default)]
+    silent: bool,
+    #[serde(default)]
+    tag: Option<String>,
+    #[serde(default)]
+    group: Option<String>,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
 }
 
 impl NotificationBuilder {
@@ -3929,6 +5741,11 @@ impl NotificationBuilder {
             title: title.into(),
             body: body.into(),
             actions: Vec::new(),
+            urgency: NotificationUrgency::Normal,
+            silent: false,
+            tag: None,
+            group: None,
+            timeout_ms: None,
         }
     }
 
@@ -3976,6 +5793,56 @@ impl NotificationBuilder {
         self
     }
 
+    /// Set the delivery urgency.
+    pub fn urgency(mut self, urgency: NotificationUrgency) -> Self {
+        self.urgency = urgency;
+        self
+    }
+
+    /// Mark the notification as low-priority.
+    pub fn low_priority(self) -> Self {
+        self.urgency(NotificationUrgency::Low)
+    }
+
+    /// Mark the notification as critical or time-sensitive.
+    pub fn critical(self) -> Self {
+        self.urgency(NotificationUrgency::Critical)
+    }
+
+    /// Request silent delivery when the platform supports it.
+    pub fn silent(mut self, silent: bool) -> Self {
+        self.silent = silent;
+        self
+    }
+
+    /// Convenience alias for enabling silent delivery.
+    pub fn deliver_silently(self) -> Self {
+        self.silent(true)
+    }
+
+    /// Set a stable replacement tag for coalescing related notifications.
+    pub fn tag(mut self, tag: impl Into<String>) -> Self {
+        self.tag = Some(tag.into());
+        self
+    }
+
+    /// Set a stable grouping key for related notifications.
+    pub fn group(mut self, group: impl Into<String>) -> Self {
+        self.group = Some(group.into());
+        self
+    }
+
+    /// Set a timeout hint in milliseconds.
+    pub fn timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.timeout_ms = Some(timeout_ms);
+        self
+    }
+
+    /// Set a timeout hint in whole seconds.
+    pub fn timeout_secs(self, timeout_secs: u64) -> Self {
+        self.timeout_ms(timeout_secs.saturating_mul(1_000))
+    }
+
     /// The notification title.
     pub fn title(&self) -> &str {
         &self.title
@@ -3991,9 +5858,54 @@ impl NotificationBuilder {
         &self.actions
     }
 
+    /// Requested notification urgency.
+    pub fn urgency_level(&self) -> NotificationUrgency {
+        self.urgency
+    }
+
+    /// Whether silent delivery was requested.
+    pub fn is_silent(&self) -> bool {
+        self.silent
+    }
+
+    /// Whether a replacement tag was configured.
+    pub fn has_tag(&self) -> bool {
+        self.tag.is_some()
+    }
+
+    /// Whether a grouping key was configured.
+    pub fn has_group(&self) -> bool {
+        self.group.is_some()
+    }
+
+    /// Whether a timeout hint was configured.
+    pub fn has_timeout(&self) -> bool {
+        self.timeout_ms.is_some()
+    }
+
+    /// Replacement tag, when configured.
+    pub fn tag_value(&self) -> Option<&str> {
+        self.tag.as_deref()
+    }
+
+    /// Grouping key, when configured.
+    pub fn group_value(&self) -> Option<&str> {
+        self.group.as_deref()
+    }
+
+    /// Timeout hint in milliseconds, when configured.
+    pub fn timeout_millis(&self) -> Option<u64> {
+        self.timeout_ms
+    }
+
     /// The configured notification action IDs in display order.
     pub fn action_ids(&self) -> impl Iterator<Item = &str> {
         self.actions.iter().map(|action| action.id.as_str())
+    }
+
+    /// Number of configured notification action buttons.
+    pub fn action_count(&self) -> usize {
+        self.actions.len()
     }
 
     /// Whether this notification has action buttons.
@@ -4001,10 +5913,116 @@ impl NotificationBuilder {
         !self.actions.is_empty()
     }
 
+    /// Whether this notification includes a conventional open action.
+    pub fn has_open_action(&self) -> bool {
+        self.actions.iter().any(NotificationAction::is_open)
+    }
+
+    /// Whether this notification includes a conventional dismiss/defer action.
+    pub fn has_dismiss_action(&self) -> bool {
+        self.actions.iter().any(NotificationAction::is_dismiss)
+    }
+
+    /// Whether this notification includes a conventional retry action.
+    pub fn has_retry_action(&self) -> bool {
+        self.actions.iter().any(NotificationAction::is_retry)
+    }
+
+    /// Whether this notification includes a conventional settings/preferences action.
+    pub fn has_settings_action(&self) -> bool {
+        self.actions.iter().any(NotificationAction::is_settings)
+    }
+
+    /// Number of custom action ids.
+    pub fn custom_action_count(&self) -> usize {
+        self.actions
+            .iter()
+            .filter(|action| !action.is_conventional())
+            .count()
+    }
+
+    /// Features this notification requests from a platform backend.
+    pub fn requested_features(&self) -> Vec<NotificationFeature> {
+        let mut features = vec![NotificationFeature::Basic];
+        if self.has_actions() {
+            features.push(NotificationFeature::Actions);
+        }
+        if self.urgency != NotificationUrgency::Normal {
+            features.push(NotificationFeature::Urgency);
+        }
+        if self.is_silent() {
+            features.push(NotificationFeature::Silent);
+        }
+        if self.has_tag() {
+            features.push(NotificationFeature::Tag);
+        }
+        if self.has_group() {
+            features.push(NotificationFeature::Group);
+        }
+        if self.has_timeout() {
+            features.push(NotificationFeature::Timeout);
+        }
+        features
+    }
+
+    /// Requested features not supported by the given backend profile.
+    pub fn missing_features(
+        &self,
+        support: NotificationFeatureSupport,
+    ) -> Vec<NotificationFeature> {
+        self.requested_features()
+            .into_iter()
+            .filter(|feature| !support.supports(*feature))
+            .collect()
+    }
+
+    /// Create a checked delivery plan against a known backend support profile.
+    pub fn delivery_plan(
+        self,
+        support: NotificationFeatureSupport,
+    ) -> Result<NotificationDeliveryPlan> {
+        NotificationDeliveryPlan::new(self, support)
+    }
+
+    /// Returns a content-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "notification: urgency {}, silent {}, tag {}, group {}, timeout {}, actions {}, has actions {}, open {}, dismiss {}, retry {}, settings {}, custom {}",
+            self.urgency.key(),
+            self.silent,
+            self.has_tag(),
+            self.has_group(),
+            self.has_timeout(),
+            self.action_count(),
+            self.has_actions(),
+            self.has_open_action(),
+            self.has_dismiss_action(),
+            self.has_retry_action(),
+            self.has_settings_action(),
+            self.custom_action_count()
+        )
+    }
+
     /// Validate the notification before dispatching it to the platform backend.
     pub fn validate(&self) -> Result<()> {
         validate_notification_title(&self.title)?;
         validate_notification_body(&self.body)?;
+        if let Some(tag) = &self.tag {
+            validate_notification_metadata(tag, "notification tag", 128)?;
+        }
+        if let Some(group) = &self.group {
+            validate_notification_metadata(group, "notification group", 128)?;
+        }
+        if let Some(timeout_ms) = self.timeout_ms {
+            anyhow::ensure!(
+                timeout_ms > 0,
+                "notification timeout must be greater than zero"
+            );
+            anyhow::ensure!(
+                timeout_ms <= 604_800_000,
+                "notification timeout cannot be longer than 7 days"
+            );
+        }
 
         anyhow::ensure!(
             self.actions.len() <= 4,
@@ -4045,6 +6063,10 @@ fn validate_notification_body(body: &str) -> Result<()> {
 
 fn validate_notification_action_label(label: &str) -> Result<()> {
     validate_notification_text(label, "notification action label", 128, false)
+}
+
+fn validate_notification_metadata(value: &str, label: &str, max_len: usize) -> Result<()> {
+    validate_notification_text(value, label, max_len, false)
 }
 
 fn validate_notification_text(
@@ -4122,6 +6144,133 @@ mod notification_tests {
     }
 
     #[test]
+    fn notification_builder_delivery_metadata_validates() {
+        let notification = NotificationBuilder::new("Sync complete", "3 files uploaded")
+            .low_priority()
+            .deliver_silently()
+            .tag("workspace-a")
+            .group("sync")
+            .timeout_ms(5_000);
+
+        assert!(notification.validate().is_ok());
+        assert_eq!(notification.urgency_level(), NotificationUrgency::Low);
+        assert!(notification.is_silent());
+        assert!(notification.has_tag());
+        assert!(notification.has_group());
+        assert!(notification.has_timeout());
+        assert_eq!(notification.tag_value(), Some("workspace-a"));
+        assert_eq!(notification.group_value(), Some("sync"));
+        assert_eq!(notification.timeout_millis(), Some(5_000));
+        assert_eq!(
+            notification.to_text(),
+            "notification: urgency low, silent true, tag true, group true, timeout true, actions 0, has actions false, open false, dismiss false, retry false, settings false, custom 0"
+        );
+        assert!(!notification.to_text().contains("workspace-a"));
+        assert!(!notification.to_text().contains("5000"));
+    }
+
+    #[test]
+    fn notification_delivery_plan_reports_platform_variance() {
+        let notification = NotificationBuilder::new("Update available", "Version 2.0")
+            .critical()
+            .deliver_silently()
+            .tag("update")
+            .group("updates")
+            .timeout_secs(30)
+            .open_and_dismiss_actions("Install", "Later");
+
+        assert_eq!(
+            notification.requested_features(),
+            vec![
+                NotificationFeature::Basic,
+                NotificationFeature::Actions,
+                NotificationFeature::Urgency,
+                NotificationFeature::Silent,
+                NotificationFeature::Tag,
+                NotificationFeature::Group,
+                NotificationFeature::Timeout,
+            ]
+        );
+        assert_eq!(NotificationFeature::Actions.key(), "actions");
+
+        let rich = NotificationFeatureSupport::rich();
+        assert!(rich.supports_basic());
+        assert!(rich.supports_actions());
+        assert!(rich.supports_delivery_metadata());
+        assert_eq!(
+            rich.to_text(),
+            "notification support: basic true, actions true, urgency true, silent true, tag true, group true, timeout true"
+        );
+
+        let plan = notification.clone().delivery_plan(rich).unwrap();
+        assert!(plan.is_fully_supported());
+        assert!(!plan.requires_fallback());
+        assert_eq!(plan.missing_feature_count(), 0);
+        assert_eq!(plan.support(), rich);
+        assert_eq!(plan.notification().action_count(), 2);
+
+        let basic = NotificationFeatureSupport::basic();
+        assert!(basic.supports_basic());
+        assert!(!basic.supports_actions());
+        assert!(!basic.supports_delivery_metadata());
+        let plan = notification.delivery_plan(basic).unwrap();
+        assert!(!plan.is_fully_supported());
+        assert!(plan.requires_fallback());
+        assert_eq!(
+            plan.missing_features(),
+            &[
+                NotificationFeature::Actions,
+                NotificationFeature::Urgency,
+                NotificationFeature::Silent,
+                NotificationFeature::Tag,
+                NotificationFeature::Group,
+                NotificationFeature::Timeout,
+            ]
+        );
+        assert!(plan.to_text().contains("fallback true"));
+        assert!(
+            plan.to_text()
+                .contains("missing [actions, urgency, silent, tag, group, timeout]")
+        );
+    }
+
+    #[test]
+    fn notification_delivery_plan_summary_is_content_safe() {
+        let notification = NotificationBuilder::new("Secret project", "Token expired")
+            .retry_action("Retry secret sync")
+            .tag("project-alpha")
+            .group("private-sync")
+            .timeout_ms(42_000);
+        let plan = notification
+            .delivery_plan(NotificationFeatureSupport::unsupported())
+            .unwrap();
+
+        assert_eq!(plan.missing_feature_count(), 5);
+        assert_eq!(
+            plan.missing_features(),
+            &[
+                NotificationFeature::Basic,
+                NotificationFeature::Actions,
+                NotificationFeature::Tag,
+                NotificationFeature::Group,
+                NotificationFeature::Timeout,
+            ]
+        );
+        let summary = plan.to_text();
+        assert!(summary.contains("notification delivery plan"));
+        assert!(summary.contains("fallback true"));
+        assert!(summary.contains("basic"));
+        assert!(summary.contains("actions"));
+        assert!(summary.contains("timeout"));
+        assert!(!summary.contains("Secret project"));
+        assert!(!summary.contains("Token expired"));
+        assert!(!summary.contains("Retry secret sync"));
+        assert!(!summary.contains("project-alpha"));
+        assert!(!summary.contains("private-sync"));
+        assert!(!summary.contains("42000"));
+    }
+
+    #[test]
     fn notification_builder_rejects_ambiguous_generated_copy() {
         assert!(
             NotificationBuilder::new(" Build", "Done")
@@ -4161,6 +6310,24 @@ mod notification_tests {
                     NotificationAction::new("d", "D"),
                     NotificationAction::new("e", "E"),
                 ])
+                .validate()
+                .is_err()
+        );
+        assert!(
+            NotificationBuilder::new("Build", "Done")
+                .tag("")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            NotificationBuilder::new("Build", "Done")
+                .group(" group")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            NotificationBuilder::new("Build", "Done")
+                .timeout_ms(604_800_001)
                 .validate()
                 .is_err()
         );
@@ -4235,6 +6402,30 @@ impl FileDialogFilter {
         )
     }
 
+    /// Return the filter name.
+    pub fn name(&self) -> &str {
+        self.name.as_ref()
+    }
+
+    /// Return normalized extensions without leading dots.
+    pub fn extensions(&self) -> &[SharedString] {
+        &self.extensions
+    }
+
+    /// Number of normalized extensions accepted by this filter.
+    pub fn extension_count(&self) -> usize {
+        self.extensions.len()
+    }
+
+    /// Return a content-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "file dialog filter: name {}, extensions {}",
+            !self.name.as_ref().is_empty(),
+            self.extension_count()
+        )
+    }
+
     /// Validate the filter name and extensions.
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
@@ -4279,10 +6470,147 @@ pub struct PathPromptOptions {
     pub filters: Vec<FileDialogFilter>,
 }
 
+impl PathPromptOptions {
+    /// Number of configured extension filters.
+    pub fn filter_count(&self) -> usize {
+        self.filters.len()
+    }
+
+    /// Total number of extensions across all configured filters.
+    pub fn filter_extension_count(&self) -> usize {
+        self.filters
+            .iter()
+            .map(FileDialogFilter::extension_count)
+            .sum()
+    }
+
+    /// Whether files can be selected.
+    pub fn allows_files(&self) -> bool {
+        self.files
+    }
+
+    /// Whether directories can be selected.
+    pub fn allows_directories(&self) -> bool {
+        self.directories
+    }
+
+    /// Whether multiple paths can be selected.
+    pub fn allows_multiple(&self) -> bool {
+        self.multiple
+    }
+
+    /// Whether a prompt label is configured.
+    pub fn has_prompt(&self) -> bool {
+        self.prompt.is_some()
+    }
+
+    /// Returns a path-safe summary for raw path prompt options.
+    pub fn to_text(&self) -> String {
+        let mode = match (self.allows_files(), self.allows_directories()) {
+            (true, true) => "files-and-directories",
+            (true, false) => "files",
+            (false, true) => "directories",
+            (false, false) => "none",
+        };
+
+        format!(
+            "path prompt options: mode {mode}, multiple {}, prompt {}, {} filters, {} extensions",
+            self.allows_multiple(),
+            self.has_prompt(),
+            self.filter_count(),
+            self.filter_extension_count()
+        )
+    }
+}
+
 /// Builder for native open-file/open-directory dialogs.
 #[derive(Clone, Debug)]
 pub struct OpenDialogBuilder {
     options: PathPromptOptions,
+}
+
+/// Checked, inspectable plan for a native open-file/open-directory dialog.
+#[derive(Clone, Debug)]
+pub struct OpenDialogPlan {
+    options: PathPromptOptions,
+}
+
+impl OpenDialogPlan {
+    /// Return the path prompt options that will be passed to the platform.
+    pub fn options(&self) -> &PathPromptOptions {
+        &self.options
+    }
+
+    /// Whether files can be selected.
+    pub fn allows_files(&self) -> bool {
+        self.options.files
+    }
+
+    /// Whether directories can be selected.
+    pub fn allows_directories(&self) -> bool {
+        self.options.directories
+    }
+
+    /// Whether multiple paths can be selected.
+    pub fn allows_multiple(&self) -> bool {
+        self.options.multiple
+    }
+
+    /// Prompt label shown by the native picker, if configured.
+    pub fn prompt(&self) -> Option<&SharedString> {
+        self.options.prompt.as_ref()
+    }
+
+    /// Named extension filters shown by file-capable dialogs.
+    pub fn filters(&self) -> &[FileDialogFilter] {
+        &self.options.filters
+    }
+
+    /// Number of configured extension filters.
+    pub fn filter_count(&self) -> usize {
+        self.options.filters.len()
+    }
+
+    /// Total number of extensions across all configured filters.
+    pub fn filter_extension_count(&self) -> usize {
+        self.options
+            .filters
+            .iter()
+            .map(FileDialogFilter::extension_count)
+            .sum()
+    }
+
+    /// Filter names in configured order.
+    pub fn filter_names(&self) -> Vec<&str> {
+        self.options
+            .filters
+            .iter()
+            .map(|filter| filter.name.as_ref())
+            .collect()
+    }
+
+    /// Returns a path-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        let mode = match (self.allows_files(), self.allows_directories()) {
+            (true, true) => "files-and-directories",
+            (true, false) => "files",
+            (false, true) => "directories",
+            (false, false) => "none",
+        };
+
+        format!(
+            "open dialog: mode {mode}, multiple {}, prompt {}, {} filters, {} extensions",
+            self.allows_multiple(),
+            self.prompt().is_some(),
+            self.filter_count(),
+            self.filter_extension_count()
+        )
+    }
+
+    /// Consume the plan into platform path prompt options.
+    pub fn into_options(self) -> PathPromptOptions {
+        self.options
+    }
 }
 
 impl OpenDialogBuilder {
@@ -4411,6 +6739,19 @@ impl OpenDialogBuilder {
         &self.options
     }
 
+    /// Returns a path-safe summary before building or showing the dialog.
+    pub fn to_text(&self) -> String {
+        self.options.to_text()
+    }
+
+    /// Build a checked, inspectable open-dialog plan.
+    pub fn build_checked(self) -> Result<OpenDialogPlan> {
+        self.validate()?;
+        Ok(OpenDialogPlan {
+            options: self.options,
+        })
+    }
+
     /// Consume the builder into path prompt options.
     pub fn into_options(self) -> PathPromptOptions {
         self.options
@@ -4435,6 +6776,65 @@ pub struct SaveDialogBuilder {
     directory: PathBuf,
     suggested_name: Option<String>,
     default_extension: Option<SharedString>,
+}
+
+/// Checked, inspectable plan for a native save dialog.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SaveDialogPlan {
+    directory: PathBuf,
+    suggested_name: Option<String>,
+    default_extension: Option<SharedString>,
+    appended_default_extension: bool,
+}
+
+impl SaveDialogPlan {
+    /// Initial directory for the save dialog.
+    pub fn directory(&self) -> &Path {
+        &self.directory
+    }
+
+    /// Suggested filename after applying the default extension, if configured.
+    pub fn suggested_name(&self) -> Option<&str> {
+        self.suggested_name.as_deref()
+    }
+
+    /// Default extension used to complete extension-less suggested names.
+    pub fn default_extension(&self) -> Option<&str> {
+        self.default_extension
+            .as_ref()
+            .map(|extension| extension.as_ref())
+    }
+
+    /// Whether the suggested filename was completed by the default extension.
+    pub fn appended_default_extension(&self) -> bool {
+        self.appended_default_extension
+    }
+
+    /// Whether a suggested filename is configured.
+    pub fn has_suggested_name(&self) -> bool {
+        self.suggested_name.is_some()
+    }
+
+    /// Whether a default extension is configured.
+    pub fn has_default_extension(&self) -> bool {
+        self.default_extension.is_some()
+    }
+
+    /// Returns a path-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "save dialog: directory set {}, suggested name {}, default extension {}, appended default extension {}",
+            !self.directory.as_os_str().is_empty(),
+            self.has_suggested_name(),
+            self.has_default_extension(),
+            self.appended_default_extension()
+        )
+    }
+
+    /// Consume the plan into raw save-dialog parts.
+    pub fn into_parts(self) -> (PathBuf, Option<String>) {
+        (self.directory, self.suggested_name)
+    }
 }
 
 impl SaveDialogBuilder {
@@ -4508,6 +6908,28 @@ impl SaveDialogBuilder {
             validate_file_dialog_extension(extension)?;
         }
         Ok(())
+    }
+
+    /// Build a checked, inspectable save-dialog plan.
+    pub fn build_checked(self) -> Result<SaveDialogPlan> {
+        self.validate()?;
+        let extension = self
+            .default_extension
+            .as_ref()
+            .map(|extension| extension.as_ref().to_string());
+        let appended_default_extension = self
+            .suggested_name
+            .as_deref()
+            .is_some_and(|name| extension.is_some() && Path::new(name).extension().is_none());
+        let suggested_name = self
+            .suggested_name
+            .map(|name| append_default_extension(name, extension.as_deref()));
+        Ok(SaveDialogPlan {
+            directory: self.directory,
+            suggested_name,
+            default_extension: self.default_extension,
+            appended_default_extension,
+        })
     }
 
     /// Consume the builder into the raw save dialog parts.
@@ -4847,6 +7269,11 @@ impl ClipboardItem {
         &self.entries
     }
 
+    /// Number of entries in this clipboard item.
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
     /// Iterate over string entries.
     pub fn strings(&self) -> impl Iterator<Item = &ClipboardString> {
         self.entries.iter().filter_map(|entry| match entry {
@@ -4861,6 +7288,28 @@ impl ClipboardItem {
             ClipboardEntry::String(_) => None,
             ClipboardEntry::Image(image) => Some(image),
         })
+    }
+
+    /// Number of text entries in this clipboard item.
+    pub fn text_count(&self) -> usize {
+        self.strings().count()
+    }
+
+    /// Number of image entries in this clipboard item.
+    pub fn image_count(&self) -> usize {
+        self.images().count()
+    }
+
+    /// Number of string entries that carry metadata.
+    pub fn metadata_count(&self) -> usize {
+        self.strings()
+            .filter(|string| string.metadata().is_some())
+            .count()
+    }
+
+    /// Total UTF-8 byte length of all text entries.
+    pub fn text_len_bytes(&self) -> usize {
+        self.strings().map(|string| string.text().len()).sum()
     }
 
     /// Return the first image entry, if any.
@@ -4886,6 +7335,19 @@ impl ClipboardItem {
     /// Return true when any string entry carries HTML metadata.
     pub fn has_html(&self) -> bool {
         self.html().is_some()
+    }
+
+    /// Returns a content-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "clipboard item: {} entries, {} text, {} images, html {}, metadata {}, text {} bytes",
+            self.entry_count(),
+            self.text_count(),
+            self.image_count(),
+            self.has_html(),
+            self.metadata_count(),
+            self.text_len_bytes()
+        )
     }
 
     /// Decode the metadata of a single string entry as JSON.
@@ -4990,6 +7452,80 @@ impl ClipboardItemBuilder {
         &self.entries
     }
 
+    /// Number of configured entries.
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Number of configured text entries.
+    pub fn text_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| matches!(entry, ClipboardEntry::String(_)))
+            .count()
+    }
+
+    /// Number of configured image entries.
+    pub fn image_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| matches!(entry, ClipboardEntry::Image(_)))
+            .count()
+    }
+
+    /// Number of configured string entries that carry metadata.
+    pub fn metadata_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| match entry {
+                ClipboardEntry::String(string) => string.metadata().is_some(),
+                ClipboardEntry::Image(_) => false,
+            })
+            .count()
+    }
+
+    /// Total UTF-8 byte length of configured text entries.
+    pub fn text_len_bytes(&self) -> usize {
+        self.entries
+            .iter()
+            .filter_map(|entry| match entry {
+                ClipboardEntry::String(string) => Some(string.text().len()),
+                ClipboardEntry::Image(_) => None,
+            })
+            .sum()
+    }
+
+    /// Return whether a configured text entry carries HTML metadata.
+    pub fn has_html(&self) -> bool {
+        self.entries.iter().any(|entry| match entry {
+            ClipboardEntry::String(string) => string.has_html(),
+            ClipboardEntry::Image(_) => false,
+        })
+    }
+
+    /// Return whether any configured text entry exists.
+    pub fn has_text(&self) -> bool {
+        self.text_count() > 0
+    }
+
+    /// Return whether any configured image entry exists.
+    pub fn has_image(&self) -> bool {
+        self.image_count() > 0
+    }
+
+    /// Returns a content-safe summary for logs and agent traces before writing.
+    pub fn to_text(&self) -> String {
+        format!(
+            "clipboard item builder: {} entries, {} text, {} images, html {}, metadata {}, text {} bytes",
+            self.entry_count(),
+            self.text_count(),
+            self.image_count(),
+            self.has_html(),
+            self.metadata_count(),
+            self.text_len_bytes()
+        )
+    }
+
     /// Validate the builder configuration.
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
@@ -5011,6 +7547,11 @@ impl ClipboardItemBuilder {
         Ok(ClipboardItem {
             entries: self.entries,
         })
+    }
+
+    /// Build the clipboard item using the checked-builder naming convention.
+    pub fn build_checked(self) -> Result<ClipboardItem> {
+        self.build()
     }
 }
 
@@ -5075,6 +7616,19 @@ pub enum ImageFormat {
 }
 
 impl ImageFormat {
+    /// Stable lowercase key for summaries and generated routing.
+    pub const fn key(self) -> &'static str {
+        match self {
+            ImageFormat::Png => "png",
+            ImageFormat::Jpeg => "jpeg",
+            ImageFormat::Webp => "webp",
+            ImageFormat::Gif => "gif",
+            ImageFormat::Svg => "svg",
+            ImageFormat::Bmp => "bmp",
+            ImageFormat::Tiff => "tiff",
+        }
+    }
+
     /// Returns the mime type for the ImageFormat
     pub const fn mime_type(self) -> &'static str {
         match self {
@@ -5138,6 +7692,36 @@ impl Image {
     /// Get this image's ID
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    /// Image format for these bytes.
+    pub fn format(&self) -> ImageFormat {
+        self.format
+    }
+
+    /// Raw encoded image bytes.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Encoded byte length.
+    pub fn byte_len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    /// Whether this image contains encoded bytes.
+    pub fn has_bytes(&self) -> bool {
+        !self.bytes.is_empty()
+    }
+
+    /// Content-safe summary for clipboard/native-image traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "image: format {}, bytes {}, empty {}",
+            self.format.key(),
+            self.byte_len(),
+            !self.has_bytes()
+        )
     }
 
     /// Validate this image for clipboard use.
@@ -5225,16 +7809,6 @@ impl Image {
         };
 
         Ok(Arc::new(RenderImage::new(frames)))
-    }
-
-    /// Get the format of the clipboard image
-    pub fn format(&self) -> ImageFormat {
-        self.format
-    }
-
-    /// Get the raw bytes of the clipboard image
-    pub fn bytes(&self) -> &[u8] {
-        self.bytes.as_slice()
     }
 }
 

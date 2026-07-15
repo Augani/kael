@@ -31,6 +31,10 @@ const RENDER_TARGET_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
 // This configuration is used for MSAA rendering on paths only, and it's guaranteed to be supported by DirectX 11.
 const PATH_MULTISAMPLE_COUNT: u32 = 4;
 
+fn require_com_output<T>(output: Option<T>, operation: &'static str) -> Result<T> {
+    output.ok_or_else(|| anyhow::anyhow!("{operation} succeeded without returning an object"))
+}
+
 pub(crate) struct FontInfo {
     pub gamma_ratios: [f32; 4],
     pub grayscale_enhanced_contrast: f32,
@@ -46,6 +50,7 @@ pub(crate) struct DirectXRenderer {
     direct_composition: Option<DirectComposition>,
     font_info: &'static FontInfo,
     last_pipeline: Option<*const ()>,
+    atlas_byte_budget: Option<u64>,
 }
 
 /// Direct3D objects
@@ -61,7 +66,7 @@ pub(crate) struct DirectXRendererDevices {
 struct DirectXResources {
     // Direct3D rendering objects
     swap_chain: IDXGISwapChain1,
-    render_target: ManuallyDrop<ID3D11Texture2D>,
+    render_target: Option<ID3D11Texture2D>,
     render_target_view: [Option<ID3D11RenderTargetView>; 1],
 
     // Path intermediate textures (with MSAA)
@@ -157,8 +162,12 @@ impl DirectXRenderer {
         let direct_composition = if disable_direct_composition {
             None
         } else {
-            let composition = DirectComposition::new(devices.dxgi_device.as_ref().unwrap(), hwnd)
-                .context("Creating DirectComposition")?;
+            let dxgi_device = devices
+                .dxgi_device
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("DirectComposition requires a DXGI device"))?;
+            let composition =
+                DirectComposition::new(dxgi_device, hwnd).context("Creating DirectComposition")?;
             composition
                 .set_swap_chain(&resources.swap_chain)
                 .context("Setting swap chain for DirectComposition")?;
@@ -175,6 +184,7 @@ impl DirectXRenderer {
             direct_composition,
             font_info: Self::get_font_info(),
             last_pipeline: None,
+            atlas_byte_budget: None,
         })
     }
 
@@ -184,9 +194,15 @@ impl DirectXRenderer {
 
     fn pre_draw(&mut self) -> Result<()> {
         self.last_pipeline = None;
+        let global_params_buffer = self.globals.global_params_buffer[0]
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("DirectX global parameter buffer is unavailable"))?;
+        let render_target_view = self.resources.render_target_view[0]
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("DirectX render-target view is unavailable"))?;
         update_buffer(
             &self.devices.device_context,
-            self.globals.global_params_buffer[0].as_ref().unwrap(),
+            global_params_buffer,
             &[GlobalParams {
                 gamma_ratios: self.font_info.gamma_ratios,
                 viewport_size: [
@@ -198,10 +214,9 @@ impl DirectXRenderer {
             }],
         )?;
         unsafe {
-            self.devices.device_context.ClearRenderTargetView(
-                self.resources.render_target_view[0].as_ref().unwrap(),
-                &[0.0; 4],
-            );
+            self.devices
+                .device_context
+                .ClearRenderTargetView(render_target_view, &[0.0; 4]);
             self.devices
                 .device_context
                 .OMSetRenderTargets(Some(&self.resources.render_target_view), None);
@@ -237,33 +252,15 @@ impl DirectXRenderer {
 
     fn handle_device_lost_impl(&mut self, directx_devices: &DirectXDevices) -> Result<()> {
         let disable_direct_composition = self.direct_composition.is_none();
-
-        unsafe {
-            #[cfg(debug_assertions)]
-            report_live_objects(&self.devices.device)
-                .context("Failed to report live objects after device lost")
-                .log_err();
-
-            ManuallyDrop::drop(&mut self.resources);
-            self.devices.device_context.OMSetRenderTargets(None, None);
-            self.devices.device_context.ClearState();
-            self.devices.device_context.Flush();
-
-            #[cfg(debug_assertions)]
-            report_live_objects(&self.devices.device)
-                .context("Failed to report live objects after device lost")
-                .log_err();
-
-            drop(self.direct_composition.take());
-            ManuallyDrop::drop(&mut self.devices);
-        }
+        let width = self.resources.width;
+        let height = self.resources.height;
 
         let devices = DirectXRendererDevices::new(directx_devices, disable_direct_composition)
             .context("Recreating DirectX devices")?;
         let resources = DirectXResources::new(
             &devices,
-            self.resources.width,
-            self.resources.height,
+            width,
+            height,
             self.hwnd,
             disable_direct_composition,
         )?;
@@ -273,11 +270,35 @@ impl DirectXRenderer {
         let direct_composition = if disable_direct_composition {
             None
         } else {
-            let composition =
-                DirectComposition::new(devices.dxgi_device.as_ref().unwrap(), self.hwnd)?;
+            let dxgi_device = devices.dxgi_device.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("DirectComposition recovery requires a DXGI device")
+            })?;
+            let composition = DirectComposition::new(dxgi_device, self.hwnd)?;
             composition.set_swap_chain(&resources.swap_chain)?;
             Some(composition)
         };
+
+        // Build the replacement state first. If any step above fails, the current
+        // renderer remains structurally valid for the recovery loop to retry.
+        unsafe {
+            #[cfg(debug_assertions)]
+            report_live_objects(&self.devices.device)
+                .context("Failed to report live objects after device lost")
+                .log_err();
+
+            self.devices.device_context.OMSetRenderTargets(None, None);
+            self.devices.device_context.ClearState();
+            self.devices.device_context.Flush();
+            drop(self.direct_composition.take());
+            ManuallyDrop::drop(&mut self.resources);
+
+            #[cfg(debug_assertions)]
+            report_live_objects(&self.devices.device)
+                .context("Failed to report live objects after device lost")
+                .log_err();
+
+            ManuallyDrop::drop(&mut self.devices);
+        }
 
         self.atlas
             .handle_device_lost(&devices.device, &devices.device_context);
@@ -328,7 +349,17 @@ impl DirectXRenderer {
         }
 
         self.draw_cached_surface_snapshots(scene)?;
-        self.present()
+        self.present()?;
+        if let Some(budget) = self.atlas_byte_budget {
+            const IN_FLIGHT_FRAMES: u64 = 3;
+            self.atlas.evict_to_budget_keeping(budget, IN_FLIGHT_FRAMES);
+        }
+        self.atlas.advance_frame();
+        Ok(())
+    }
+
+    pub(crate) fn set_atlas_byte_budget(&mut self, budget: Option<u64>) {
+        self.atlas_byte_budget = budget;
     }
 
     fn draw_cached_surface_snapshots(&mut self, scene: &Scene) -> Result<()> {
@@ -362,7 +393,7 @@ impl DirectXRenderer {
                 .context("cached surface snapshot scene too large")?;
             }
 
-            let destination_texture = self.atlas.get_texture(snapshot.target.texture_id);
+            let destination_texture = self.atlas.get_texture(snapshot.target.texture_id)?;
             let source_box = D3D11_BOX {
                 left: snapshot.source_bounds.origin.x.0 as u32,
                 top: snapshot.source_bounds.origin.y.0 as u32,
@@ -402,6 +433,9 @@ impl DirectXRenderer {
         render_target_view: &[Option<ID3D11RenderTargetView>; 1],
         clear: bool,
     ) -> Result<()> {
+        let target_view = render_target_view[0]
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("DirectX render-target view is unavailable"))?;
         unsafe {
             self.devices
                 .device_context
@@ -412,7 +446,7 @@ impl DirectXRenderer {
             if clear {
                 self.devices
                     .device_context
-                    .ClearRenderTargetView(render_target_view[0].as_ref().unwrap(), &[0.0; 4]);
+                    .ClearRenderTargetView(target_view, &[0.0; 4]);
             }
         }
 
@@ -421,38 +455,55 @@ impl DirectXRenderer {
     }
 
     pub(crate) fn resize(&mut self, new_size: Size<DevicePixels>) -> Result<()> {
-        let width = new_size.width.0.max(1) as u32;
-        let height = new_size.height.0.max(1) as u32;
+        let width = new_size
+            .width
+            .0
+            .clamp(1, crate::MAX_ATLAS_TEXTURE_DIMENSION) as u32;
+        let height = new_size
+            .height
+            .0
+            .clamp(1, crate::MAX_ATLAS_TEXTURE_DIMENSION) as u32;
+        if width != new_size.width.0.max(0) as u32 || height != new_size.height.0.max(0) as u32 {
+            log::warn!(
+                "clamping unsafe DirectX drawable size {:?} to {width}x{height}",
+                new_size
+            );
+        }
         if self.resources.width == width && self.resources.height == height {
             return Ok(());
         }
-        self.resources.width = width;
-        self.resources.height = height;
-
         // Clear the render target before resizing
         unsafe { self.devices.device_context.OMSetRenderTargets(None, None) };
-        unsafe { ManuallyDrop::drop(&mut self.resources.render_target) };
-        drop(self.resources.render_target_view[0].take().unwrap());
+        self.resources.render_target.take();
+        self.resources.render_target_view[0].take();
 
         // Resizing the swap chain requires a call to the underlying DXGI adapter, which can return the device removed error.
         // The app might have moved to a monitor that's attached to a different graphics device.
         // When a graphics device is removed or reset, the desktop resolution often changes, resulting in a window size change.
         // But here we just return the error, because we are handling device lost scenarios elsewhere.
-        unsafe {
-            self.resources
-                .swap_chain
-                .ResizeBuffers(
-                    BUFFER_COUNT as u32,
-                    width,
-                    height,
-                    RENDER_TARGET_FORMAT,
-                    DXGI_SWAP_CHAIN_FLAG(0),
-                )
-                .context("Failed to resize swap chain")?;
+        let resize_result = unsafe {
+            self.resources.swap_chain.ResizeBuffers(
+                BUFFER_COUNT as u32,
+                width,
+                height,
+                RENDER_TARGET_FORMAT,
+                DXGI_SWAP_CHAIN_FLAG(0),
+            )
+        };
+        if let Err(error) = resize_result {
+            if let Ok((render_target, render_target_view)) =
+                create_render_target_and_its_view(&self.resources.swap_chain, &self.devices.device)
+            {
+                self.resources.render_target = Some(render_target);
+                self.resources.render_target_view = render_target_view;
+            }
+            return Err(error).context("Failed to resize swap chain");
         }
 
         self.resources
             .recreate_resources(&self.devices, width, height)?;
+        self.resources.width = width;
+        self.resources.height = height;
         unsafe {
             self.devices
                 .device_context
@@ -517,13 +568,13 @@ impl DirectXRenderer {
         self.last_pipeline = None;
 
         // Clear intermediate MSAA texture
+        let intermediate_view = self.resources.path_intermediate_msaa_view[0]
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("DirectX path render-target view is unavailable"))?;
         unsafe {
-            self.devices.device_context.ClearRenderTargetView(
-                self.resources.path_intermediate_msaa_view[0]
-                    .as_ref()
-                    .unwrap(),
-                &[0.0; 4],
-            );
+            self.devices
+                .device_context
+                .ClearRenderTargetView(intermediate_view, &[0.0; 4]);
             // Set intermediate MSAA texture as render target
             self.devices
                 .device_context
@@ -589,7 +640,10 @@ impl DirectXRenderer {
         // disjoint, so we can copy each path's bounds individually. If this
         // batch combines different draw orders, we perform a single copy
         // for a minimal spanning rect.
-        let sprites = if paths.last().unwrap().order == first_path.order {
+        let sprites = if paths
+            .last()
+            .is_some_and(|path| path.order == first_path.order)
+        {
             paths
                 .iter()
                 .map(|path| PathSprite {
@@ -658,7 +712,7 @@ impl DirectXRenderer {
             sprites,
             &mut self.last_pipeline,
         )?;
-        let texture_view = self.atlas.get_texture_view(texture_id);
+        let texture_view = self.atlas.get_texture_view(texture_id)?;
         self.pipelines.mono_sprites.draw_with_texture(
             &self.devices.device_context,
             &texture_view,
@@ -684,7 +738,7 @@ impl DirectXRenderer {
             sprites,
             &mut self.last_pipeline,
         )?;
-        let texture_view = self.atlas.get_texture_view(texture_id);
+        let texture_view = self.atlas.get_texture_view(texture_id)?;
         self.pipelines.poly_sprites.draw_with_texture(
             &self.devices.device_context,
             &texture_view,
@@ -697,11 +751,16 @@ impl DirectXRenderer {
     }
 
     fn draw_blur_rects(&mut self, blur_rects: &[BlurRect]) -> Result<()> {
-        let target_texture = (&*self.resources.render_target).clone();
+        let target_texture = self
+            .resources
+            .render_target
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("swap-chain render target is unavailable"))?
+            .clone();
         let target_view = [Some(
             self.resources.render_target_view[0]
                 .as_ref()
-                .unwrap()
+                .ok_or_else(|| anyhow::anyhow!("DirectX render-target view is unavailable"))?
                 .clone(),
         )];
         self.draw_blur_rects_with_target(blur_rects, &target_texture, &target_view)
@@ -712,7 +771,7 @@ impl DirectXRenderer {
         let target_view = [Some(
             self.resources.cached_surface_view[0]
                 .as_ref()
-                .unwrap()
+                .ok_or_else(|| anyhow::anyhow!("DirectX cached-surface view is unavailable"))?
                 .clone(),
         )];
         self.draw_blur_rects_with_target(blur_rects, &target_texture, &target_view)
@@ -839,14 +898,32 @@ impl DirectXRenderer {
 
     pub(crate) fn get_font_info() -> &'static FontInfo {
         static CACHED_FONT_INFO: OnceLock<FontInfo> = OnceLock::new();
-        CACHED_FONT_INFO.get_or_init(|| unsafe {
-            let factory: IDWriteFactory5 = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).unwrap();
-            let render_params: IDWriteRenderingParams1 =
-                factory.CreateRenderingParams().unwrap().cast().unwrap();
-            FontInfo {
-                gamma_ratios: Self::get_gamma_ratios(render_params.GetGamma()),
-                grayscale_enhanced_contrast: render_params.GetGrayscaleEnhancedContrast(),
-            }
+        CACHED_FONT_INFO.get_or_init(|| {
+            let detected = (|| -> Result<FontInfo> {
+                let factory: IDWriteFactory5 =
+                    unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) }
+                        .context("creating DirectWrite factory for font rendering")?;
+                let render_params: IDWriteRenderingParams1 = unsafe {
+                    factory
+                        .CreateRenderingParams()
+                        .context("reading DirectWrite rendering parameters")?
+                        .cast()
+                        .context("querying DirectWrite rendering parameters v1")?
+                };
+                Ok(FontInfo {
+                    gamma_ratios: Self::get_gamma_ratios(unsafe { render_params.GetGamma() }),
+                    grayscale_enhanced_contrast: unsafe {
+                        render_params.GetGrayscaleEnhancedContrast()
+                    },
+                })
+            })();
+            detected.unwrap_or_else(|error| {
+                log::warn!("using conservative font-rendering defaults: {error:#}");
+                FontInfo {
+                    gamma_ratios: Self::get_gamma_ratios(2.2),
+                    grayscale_enhanced_contrast: 1.0,
+                }
+            })
         })
     }
 
@@ -935,7 +1012,7 @@ impl DirectXResources {
 
         Ok(ManuallyDrop::new(Self {
             swap_chain,
-            render_target,
+            render_target: Some(render_target),
             render_target_view,
             path_intermediate_texture,
             path_intermediate_msaa_texture,
@@ -977,7 +1054,7 @@ impl DirectXResources {
             blur_horizontal_view,
             viewport,
         ) = create_resources(devices, &self.swap_chain, width, height)?;
-        self.render_target = render_target;
+        self.render_target = Some(render_target);
         self.render_target_view = render_target_view;
         self.path_intermediate_texture = path_intermediate_texture;
         self.path_intermediate_msaa_texture = path_intermediate_msaa_texture;
@@ -1345,14 +1422,6 @@ impl Drop for DirectXRenderer {
     }
 }
 
-impl Drop for DirectXResources {
-    fn drop(&mut self) {
-        unsafe {
-            ManuallyDrop::drop(&mut self.render_target);
-        }
-    }
-}
-
 #[inline]
 fn get_comp_device(dxgi_device: &IDXGIDevice) -> Result<IDCompositionDevice> {
     Ok(unsafe { DCompositionCreateDevice(dxgi_device)? })
@@ -1422,7 +1491,7 @@ fn create_resources(
     width: u32,
     height: u32,
 ) -> Result<(
-    ManuallyDrop<ID3D11Texture2D>,
+    ID3D11Texture2D,
     [Option<ID3D11RenderTargetView>; 1],
     ID3D11Texture2D,
     [Option<ID3D11ShaderResourceView>; 1],
@@ -1496,7 +1565,7 @@ fn create_blur_intermediate_texture_and_views(
             MiscFlags: 0,
         };
         device.CreateTexture2D(&desc, None, Some(&mut output))?;
-        output.unwrap()
+        require_com_output(output, "CreateTexture2D for blur intermediate")?
     };
 
     let mut shader_resource_view = None;
@@ -1508,8 +1577,14 @@ fn create_blur_intermediate_texture_and_views(
 
     Ok((
         texture,
-        [Some(shader_resource_view.unwrap())],
-        [Some(render_target_view.unwrap())],
+        [Some(require_com_output(
+            shader_resource_view,
+            "CreateShaderResourceView for blur intermediate",
+        )?)],
+        [Some(require_com_output(
+            render_target_view,
+            "CreateRenderTargetView for blur intermediate",
+        )?)],
     ))
 }
 
@@ -1537,28 +1612,34 @@ fn create_cached_surface_texture_and_view(
             MiscFlags: 0,
         };
         device.CreateTexture2D(&desc, None, Some(&mut output))?;
-        output.unwrap()
+        require_com_output(output, "CreateTexture2D for cached surface")?
     };
 
     let mut render_target_view = None;
     unsafe { device.CreateRenderTargetView(&texture, None, Some(&mut render_target_view))? };
-    Ok((texture, [Some(render_target_view.unwrap())]))
+    Ok((
+        texture,
+        [Some(require_com_output(
+            render_target_view,
+            "CreateRenderTargetView for cached surface",
+        )?)],
+    ))
 }
 
 #[inline]
 fn create_render_target_and_its_view(
     swap_chain: &IDXGISwapChain1,
     device: &ID3D11Device,
-) -> Result<(
-    ManuallyDrop<ID3D11Texture2D>,
-    [Option<ID3D11RenderTargetView>; 1],
-)> {
+) -> Result<(ID3D11Texture2D, [Option<ID3D11RenderTargetView>; 1])> {
     let render_target: ID3D11Texture2D = unsafe { swap_chain.GetBuffer(0) }?;
     let mut render_target_view = None;
     unsafe { device.CreateRenderTargetView(&render_target, None, Some(&mut render_target_view))? };
     Ok((
-        ManuallyDrop::new(render_target),
-        [Some(render_target_view.unwrap())],
+        render_target,
+        [Some(require_com_output(
+            render_target_view,
+            "CreateRenderTargetView for swap chain",
+        )?)],
     ))
 }
 
@@ -1586,13 +1667,19 @@ fn create_path_intermediate_texture(
             MiscFlags: 0,
         };
         device.CreateTexture2D(&desc, None, Some(&mut output))?;
-        output.unwrap()
+        require_com_output(output, "CreateTexture2D for path intermediate")?
     };
 
     let mut shader_resource_view = None;
     unsafe { device.CreateShaderResourceView(&texture, None, Some(&mut shader_resource_view))? };
 
-    Ok((texture, [Some(shader_resource_view.unwrap())]))
+    Ok((
+        texture,
+        [Some(require_com_output(
+            shader_resource_view,
+            "CreateShaderResourceView for path intermediate",
+        )?)],
+    ))
 }
 
 #[inline]
@@ -1619,11 +1706,17 @@ fn create_path_intermediate_msaa_texture_and_view(
             MiscFlags: 0,
         };
         device.CreateTexture2D(&desc, None, Some(&mut output))?;
-        output.unwrap()
+        require_com_output(output, "CreateTexture2D for path MSAA intermediate")?
     };
     let mut msaa_view = None;
     unsafe { device.CreateRenderTargetView(&msaa_texture, None, Some(&mut msaa_view))? };
-    Ok((msaa_texture, [Some(msaa_view.unwrap())]))
+    Ok((
+        msaa_texture,
+        [Some(require_com_output(
+            msaa_view,
+            "CreateRenderTargetView for path MSAA intermediate",
+        )?)],
+    ))
 }
 
 #[inline]
@@ -1661,7 +1754,7 @@ fn set_rasterizer_state(device: &ID3D11Device, device_context: &ID3D11DeviceCont
     let rasterizer_state = unsafe {
         let mut state = None;
         device.CreateRasterizerState(&desc, Some(&mut state))?;
-        state.unwrap()
+        require_com_output(state, "CreateRasterizerState")?
     };
     unsafe { device_context.RSSetState(&rasterizer_state) };
     Ok(())
@@ -1684,7 +1777,7 @@ fn create_blend_state(device: &ID3D11Device) -> Result<ID3D11BlendState> {
     unsafe {
         let mut state = None;
         device.CreateBlendState(&desc, Some(&mut state))?;
-        Ok(state.unwrap())
+        require_com_output(state, "CreateBlendState")
     }
 }
 
@@ -1704,7 +1797,7 @@ fn create_blend_state_for_path_rasterization(device: &ID3D11Device) -> Result<ID
     unsafe {
         let mut state = None;
         device.CreateBlendState(&desc, Some(&mut state))?;
-        Ok(state.unwrap())
+        require_com_output(state, "CreateBlendState for path rasterization")
     }
 }
 
@@ -1724,7 +1817,7 @@ fn create_blend_state_for_path_sprite(device: &ID3D11Device) -> Result<ID3D11Ble
     unsafe {
         let mut state = None;
         device.CreateBlendState(&desc, Some(&mut state))?;
-        Ok(state.unwrap())
+        require_com_output(state, "CreateBlendState for path sprite")
     }
 }
 
@@ -1733,7 +1826,7 @@ fn create_vertex_shader(device: &ID3D11Device, bytes: &[u8]) -> Result<ID3D11Ver
     unsafe {
         let mut shader = None;
         device.CreateVertexShader(bytes, None, Some(&mut shader))?;
-        Ok(shader.unwrap())
+        require_com_output(shader, "CreateVertexShader")
     }
 }
 
@@ -1742,7 +1835,7 @@ fn create_fragment_shader(device: &ID3D11Device, bytes: &[u8]) -> Result<ID3D11P
     unsafe {
         let mut shader = None;
         device.CreatePixelShader(bytes, None, Some(&mut shader))?;
-        Ok(shader.unwrap())
+        require_com_output(shader, "CreatePixelShader")
     }
 }
 
@@ -1752,17 +1845,26 @@ fn create_buffer(
     element_size: usize,
     buffer_size: usize,
 ) -> Result<ID3D11Buffer> {
+    let byte_width = element_size
+        .checked_mul(buffer_size)
+        .and_then(|bytes| u32::try_from(bytes).ok())
+        .filter(|bytes| *bytes > 0)
+        .ok_or_else(|| anyhow::anyhow!("DirectX buffer size is zero or exceeds u32"))?;
+    let element_size = u32::try_from(element_size)
+        .ok()
+        .filter(|size| *size > 0)
+        .ok_or_else(|| anyhow::anyhow!("DirectX buffer element size is zero or exceeds u32"))?;
     let desc = D3D11_BUFFER_DESC {
-        ByteWidth: (element_size * buffer_size) as u32,
+        ByteWidth: byte_width,
         Usage: D3D11_USAGE_DYNAMIC,
         BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
         CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
         MiscFlags: D3D11_RESOURCE_MISC_BUFFER_STRUCTURED.0 as u32,
-        StructureByteStride: element_size as u32,
+        StructureByteStride: element_size,
     };
     let mut buffer = None;
     unsafe { device.CreateBuffer(&desc, None, Some(&mut buffer)) }?;
-    Ok(buffer.unwrap())
+    require_com_output(buffer, "CreateBuffer")
 }
 
 #[inline]
@@ -1772,7 +1874,10 @@ fn create_buffer_view(
 ) -> Result<[Option<ID3D11ShaderResourceView>; 1]> {
     let mut view = None;
     unsafe { device.CreateShaderResourceView(buffer, None, Some(&mut view)) }?;
-    Ok([view])
+    Ok([Some(require_com_output(
+        view,
+        "CreateShaderResourceView for structured buffer",
+    )?)])
 }
 
 #[inline]
@@ -1873,12 +1978,15 @@ pub(crate) mod shader_resources {
             #[cfg(debug_assertions)]
             {
                 let blob = build_shader_blob(module, target)?;
-                let inner = unsafe {
-                    std::slice::from_raw_parts(
-                        blob.GetBufferPointer() as *const u8,
-                        blob.GetBufferSize(),
-                    )
-                };
+                let buffer_len = unsafe { blob.GetBufferSize() };
+                let buffer_ptr = unsafe { blob.GetBufferPointer() };
+                anyhow::ensure!(
+                    buffer_len > 0 && buffer_len <= 64 * 1024 * 1024,
+                    "compiled shader blob has an invalid size"
+                );
+                anyhow::ensure!(!buffer_ptr.is_null(), "compiled shader blob has no data");
+                let inner =
+                    unsafe { std::slice::from_raw_parts(buffer_ptr.cast::<u8>(), buffer_len) };
                 Ok(Self { inner, _blob: blob })
             }
         }
@@ -1976,7 +2084,7 @@ pub(crate) mod shader_resources {
             );
 
             let ret = D3DCompileFromFile(
-                &HSTRING::from(shader_path.to_str().unwrap()),
+                &HSTRING::from(shader_path.as_os_str()),
                 None,
                 include_handler,
                 entry_point,
@@ -1990,14 +2098,23 @@ pub(crate) mod shader_resources {
                 let Some(error_blob) = error_blob else {
                     return Err(anyhow::anyhow!("{ret:?}"));
                 };
-
-                let error_string =
-                    std::ffi::CStr::from_ptr(error_blob.GetBufferPointer() as *const i8)
-                        .to_string_lossy();
+                let error_len = error_blob.GetBufferSize().min(1024 * 1024);
+                let error_ptr = error_blob.GetBufferPointer().cast::<u8>();
+                if error_ptr.is_null() || error_len == 0 {
+                    return Err(anyhow::anyhow!(
+                        "shader compilation failed without diagnostics"
+                    ));
+                }
+                let error_bytes = std::slice::from_raw_parts(error_ptr, error_len);
+                let error_end = error_bytes
+                    .iter()
+                    .position(|byte| *byte == 0)
+                    .unwrap_or(error_bytes.len());
+                let error_string = String::from_utf8_lossy(&error_bytes[..error_end]);
                 log::error!("Shader compile error: {}", error_string);
                 return Err(anyhow::anyhow!("Compile error: {}", error_string));
             }
-            Ok(compile_blob.unwrap())
+            require_com_output(compile_blob, "D3DCompileFromFile")
         }
     }
 
@@ -2024,10 +2141,7 @@ pub(crate) mod shader_resources {
 }
 
 mod nvidia {
-    use std::{
-        ffi::CStr,
-        os::raw::{c_char, c_int, c_uint},
-    };
+    use std::os::raw::{c_char, c_int, c_uint};
 
     use anyhow::Result;
     use windows::{Win32::System::LibraryLoader::GetProcAddress, core::s};
@@ -2082,13 +2196,14 @@ mod nvidia {
             }
             let major = driver_version / 100;
             let minor = driver_version % 100;
-            let branch_string = CStr::from_ptr(build_branch_string.as_ptr());
-            Ok(format!(
-                "{}.{} {}",
-                major,
-                minor,
-                branch_string.to_string_lossy()
-            ))
+            let branch_end = build_branch_string
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(build_branch_string.len());
+            let branch_bytes =
+                std::slice::from_raw_parts(build_branch_string.as_ptr().cast::<u8>(), branch_end);
+            let branch_string = String::from_utf8_lossy(branch_bytes);
+            Ok(format!("{}.{} {}", major, minor, branch_string))
         })
     }
 }
@@ -2132,6 +2247,32 @@ mod amd {
     #[allow(non_camel_case_types)]
     type agsDeInitialize_t = unsafe extern "C" fn(context: *mut AGSContext) -> c_int;
 
+    struct AgsContextGuard {
+        context: *mut AGSContext,
+        deinitialize: agsDeInitialize_t,
+    }
+
+    impl Drop for AgsContextGuard {
+        fn drop(&mut self) {
+            unsafe {
+                (self.deinitialize)(self.context);
+            }
+        }
+    }
+
+    unsafe fn bounded_driver_string(value: *const c_char) -> Option<String> {
+        if value.is_null() {
+            return None;
+        }
+        const MAX_DRIVER_STRING_BYTES: usize = 4_096;
+        let len = unsafe { libc::strnlen(value, MAX_DRIVER_STRING_BYTES + 1) };
+        if len > MAX_DRIVER_STRING_BYTES {
+            return None;
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(value.cast::<u8>(), len) };
+        Some(String::from_utf8_lossy(bytes).into_owned())
+    }
+
     pub(super) fn get_driver_version() -> Result<String> {
         #[cfg(target_pointer_width = "64")]
         let amd_dll_name = s!("amd_ags_x64.dll");
@@ -2164,25 +2305,21 @@ mod amd {
             if result != 0 {
                 anyhow::bail!("Failed to initialize AMD AGS, error code: {}", result);
             }
+            if context.is_null() {
+                anyhow::bail!("AMD AGS initialized without returning a context");
+            }
+            let _context = AgsContextGuard {
+                context,
+                deinitialize: ags_deinitialize,
+            };
 
             // Vulkan actually returns this as the driver version
-            let software_version = if !gpu_info.radeon_software_version.is_null() {
-                std::ffi::CStr::from_ptr(gpu_info.radeon_software_version)
-                    .to_string_lossy()
-                    .into_owned()
-            } else {
-                "Unknown Radeon Software Version".to_string()
-            };
+            let software_version = bounded_driver_string(gpu_info.radeon_software_version)
+                .unwrap_or_else(|| "Unknown Radeon Software Version".to_string());
 
-            let driver_version = if !gpu_info.driver_version.is_null() {
-                std::ffi::CStr::from_ptr(gpu_info.driver_version)
-                    .to_string_lossy()
-                    .into_owned()
-            } else {
-                "Unknown Radeon Driver Version".to_string()
-            };
+            let driver_version = bounded_driver_string(gpu_info.driver_version)
+                .unwrap_or_else(|| "Unknown Radeon Driver Version".to_string());
 
-            ags_deinitialize(context);
             Ok(format!("{} ({})", software_version, driver_version))
         })
     }

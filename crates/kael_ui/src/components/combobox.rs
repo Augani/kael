@@ -70,13 +70,42 @@ impl<T: Clone + 'static> ComboboxState<T> {
         self.focused_index = None;
     }
 
-    pub fn select_item(&mut self, item: T, multi_select: bool) {
+    pub fn select_item(&mut self, item: T, multi_select: bool)
+    where
+        T: PartialEq,
+    {
+        self.select_item_by(item, multi_select, PartialEq::eq);
+    }
+
+    /// Select or toggle an item using a caller-provided equality predicate.
+    ///
+    /// This is useful for model types that intentionally do not implement
+    /// [`PartialEq`]. Most callers should use [`Self::select_item_eq`].
+    pub fn select_item_by(&mut self, item: T, multi_select: bool, equals: impl Fn(&T, &T) -> bool) {
         if multi_select {
-            self.selected.push(item);
+            if let Some(index) = self
+                .selected
+                .iter()
+                .position(|selected| equals(selected, &item))
+            {
+                self.selected.remove(index);
+            } else {
+                self.selected.push(item);
+            }
         } else {
             self.selected = vec![item];
             self.is_open = false;
+            self.search_text.clear();
+            self.focused_index = None;
         }
+    }
+
+    /// Select or toggle an item using [`PartialEq`].
+    pub fn select_item_eq(&mut self, item: T, multi_select: bool)
+    where
+        T: PartialEq,
+    {
+        self.select_item_by(item, multi_select, PartialEq::eq);
     }
 
     pub fn clear(&mut self) {
@@ -122,7 +151,7 @@ pub struct Combobox<T: Clone + 'static> {
     style: StyleRefinement,
 }
 
-impl<T: Clone + 'static> Combobox<T> {
+impl<T: Clone + PartialEq + 'static> Combobox<T> {
     /// Create a new combobox with items and state entity
     pub fn new(items: Vec<T>, state: &Entity<ComboboxState<T>>, cx: &mut Context<Self>) -> Self {
         Self {
@@ -253,11 +282,12 @@ impl<T: Clone + 'static> Combobox<T> {
     /// Toggle dropdown open/close
     fn toggle_dropdown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.disabled {
+            let has_items = !self.filtered_items(cx).is_empty();
             self.state.update(cx, |state, cx| {
                 state.toggle_open();
                 if state.is_open {
                     window.focus(&self.focus_handle);
-                    state.focused_index = Some(0);
+                    state.focused_index = has_items.then_some(0);
                 }
                 cx.notify(); // Trigger re-render
             });
@@ -390,6 +420,8 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
         let search_text = state.search_text.clone();
         let focused_idx = state.focused_index;
         let has_selection = !state.selected.is_empty();
+        let entity_id = cx.entity().entity_id().as_u64();
+        let is_focused = self.focus_handle.is_focused(_window);
 
         let display_text: SharedString = if !search_text.is_empty() {
             search_text.clone().into()
@@ -420,9 +452,41 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
             InputSize::Lg => px(8.0),
         };
 
+        let mut accessibility_state = if is_open {
+            AccessibilityState::EXPANDED
+        } else {
+            AccessibilityState::COLLAPSED
+        };
+        if self.disabled {
+            accessibility_state |= AccessibilityState::DISABLED;
+        }
+        if is_focused {
+            accessibility_state |= AccessibilityState::FOCUSED;
+        }
+        let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::ComboBox)
+            .label("Combobox")
+            .placeholder(self.placeholder.to_string())
+            .states(accessibility_state);
+        if has_selection || is_searching {
+            accessibility = accessibility.value(AccessibilityValue::Text(display_text.to_string()));
+        }
+        if !self.disabled {
+            accessibility = accessibility.actions(vec![
+                AccessibilityAction::Focus,
+                AccessibilityAction::Click,
+                if is_open {
+                    AccessibilityAction::Collapse
+                } else {
+                    AccessibilityAction::Expand
+                },
+            ]);
+        }
+
         let trigger = div()
-            .id("combobox-trigger")
+            .id(("combobox-trigger", entity_id))
             .relative()
+            .track_focus(&self.focus_handle.clone().tab_index(0).tab_stop(true))
+            .accessibility(accessibility)
             .flex()
             .items_center()
             .justify_between()
@@ -503,7 +567,13 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                                         MouseButton::Left,
                                         cx.listener(|this, _event, window, cx| {
                                             this.clear_selection(window, cx);
+                                            cx.stop_propagation();
                                         }),
+                                    )
+                                    .accessibility(
+                                        AccessibilityAttributes::new(AccessibilityRole::Button)
+                                            .label("Clear selection")
+                                            .actions(vec![AccessibilityAction::Click]),
                                     )
                                     .child(
                                         Icon::new("x")
@@ -561,17 +631,22 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                     if event.keystroke.key == "backspace" {
                         this.state.update(cx, |state, cx| {
                             state.search_text.pop();
-                            cx.notify();  // Trigger re-render
+                            state.focused_index = None;
+                            cx.notify(); // Trigger re-render
                         });
                         cx.emit(ComboboxEvent::Search);
+                        if let Some(ref callback) = this.on_search {
+                            let search = this.state.read(cx).search_text.clone();
+                            callback(&search, cx);
+                        }
                     } else if event.keystroke.key.len() == 1
                         && !event.keystroke.modifiers.control
                         && !event.keystroke.modifiers.platform
                         && !event.keystroke.modifiers.alt {
                         this.state.update(cx, |state, cx| {
                             state.search_text.push_str(&event.keystroke.key);
-                            state.focused_index = Some(0);
-                            cx.notify();  // Trigger re-render
+                            state.focused_index = None;
+                            cx.notify(); // Trigger re-render
                         });
                         cx.emit(ComboboxEvent::Search);
 
@@ -611,7 +686,13 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                                                 let filtered = self.filtered_items(cx);
 
                                                 div()
-                                                    .id("combobox-dropdown-list")
+                                                    .id(("combobox-dropdown-list", entity_id))
+                                                    .accessibility(
+                                                        AccessibilityAttributes::new(
+                                                            AccessibilityRole::List,
+                                                        )
+                                                        .label("Options"),
+                                                    )
                                                     .max_h(self.max_height)
                                                     .overflow_y_scroll()
                                                     .py(px(4.0))
@@ -635,8 +716,25 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                                                                 let is_focused = focused_idx == Some(display_idx);
                                                                 let is_selected = state.is_selected(item);
                                                                 let item_text = (self.render_item)(item);
+                                                                let mut item_state = AccessibilityState::NONE;
+                                                                if is_selected {
+                                                                    item_state |= AccessibilityState::SELECTED;
+                                                                }
+                                                                if is_focused {
+                                                                    item_state |= AccessibilityState::FOCUSED;
+                                                                }
 
                                                                 div()
+                                                                    .id(ElementId::NamedInteger(
+                                                                        format!("combobox-option-{entity_id}").into(),
+                                                                        display_idx as u64,
+                                                                    ))
+                                                                    .accessibility(
+                                                                        AccessibilityAttributes::new(AccessibilityRole::ListItem)
+                                                                            .label(item_text.to_string())
+                                                                            .states(item_state)
+                                                                            .actions(vec![AccessibilityAction::Click]),
+                                                                    )
                                                                     .px(px(12.0))
                                                                     .py(item_padding_y)
                                                                     .flex()
@@ -721,3 +819,35 @@ impl<T: Clone + 'static> Focusable for Combobox<T> {
 }
 
 impl<T: Clone + 'static> EventEmitter<ComboboxEvent> for Combobox<T> {}
+
+#[cfg(test)]
+mod tests {
+    use super::ComboboxState;
+
+    #[test]
+    fn multi_select_toggles_equal_items_without_duplicates() {
+        let mut state = ComboboxState::new();
+        state.select_item_eq("alpha", true);
+        state.select_item_eq("alpha", true);
+        assert!(state.selected.is_empty());
+
+        state.select_item_eq("alpha", true);
+        state.select_item_eq("beta", true);
+        assert_eq!(state.selected, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn single_select_commits_and_resets_transient_search_state() {
+        let mut state = ComboboxState::new();
+        state.is_open = true;
+        state.search_text = "alp".to_owned();
+        state.focused_index = Some(2);
+
+        state.select_item_eq("alpha", false);
+
+        assert_eq!(state.selected, vec!["alpha"]);
+        assert!(!state.is_open);
+        assert!(state.search_text.is_empty());
+        assert_eq!(state.focused_index, None);
+    }
+}

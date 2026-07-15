@@ -19,6 +19,7 @@ use windows::{
 use crate::{Bounds, Pixels, SharedString, TrayMenuItem, WM_GPUI_TRAY_ICON, point, px, size};
 
 const TRAY_ICON_ID: u32 = 1;
+const MAX_TRAY_ICON_BYTES: usize = 16 * 1024 * 1024;
 
 pub(crate) struct WindowsTray {
     icon_added: bool,
@@ -55,10 +56,7 @@ impl WindowsTray {
             uCallbackMessage: WM_GPUI_TRAY_ICON,
             ..Default::default()
         };
-        unsafe {
-            let _ = Shell_NotifyIconW(NIM_ADD, &nid);
-        }
-        self.icon_added = true;
+        self.icon_added = unsafe { Shell_NotifyIconW(NIM_ADD, &nid).as_bool() };
     }
 
     pub fn set_icon(&mut self, icon_data: Option<&[u8]>, hwnd: HWND) {
@@ -95,7 +93,7 @@ impl WindowsTray {
             uFlags: NIF_TIP,
             ..Default::default()
         };
-        let wide: Vec<u16> = tooltip.encode_utf16().collect();
+        let wide: Vec<u16> = tooltip.encode_utf16().take(nid.szTip.len() - 1).collect();
         let len = wide.len().min(nid.szTip.len() - 1);
         nid.szTip[..len].copy_from_slice(&wide[..len]);
         unsafe {
@@ -112,11 +110,14 @@ impl WindowsTray {
             ..Default::default()
         };
 
-        let title_wide: Vec<u16> = title.encode_utf16().collect();
+        let title_wide: Vec<u16> = title
+            .encode_utf16()
+            .take(nid.szInfoTitle.len() - 1)
+            .collect();
         let title_len = title_wide.len().min(nid.szInfoTitle.len() - 1);
         nid.szInfoTitle[..title_len].copy_from_slice(&title_wide[..title_len]);
 
-        let body_wide: Vec<u16> = body.encode_utf16().collect();
+        let body_wide: Vec<u16> = body.encode_utf16().take(nid.szInfo.len() - 1).collect();
         let body_len = body_wide.len().min(nid.szInfo.len() - 1);
         nid.szInfo[..body_len].copy_from_slice(&body_wide[..body_len]);
 
@@ -147,19 +148,26 @@ impl WindowsTray {
         };
         let rect = unsafe { Shell_NotifyIconGetRect(&identifier) };
         match rect {
-            Ok(rect) => Some(Bounds::new(
-                point(px(rect.left as f32), px(rect.top as f32)),
-                size(
-                    px((rect.right - rect.left) as f32),
-                    px((rect.bottom - rect.top) as f32),
-                ),
-            )),
+            Ok(rect) => {
+                let width = rect.right.checked_sub(rect.left)?;
+                let height = rect.bottom.checked_sub(rect.top)?;
+                if width < 0 || height < 0 {
+                    return None;
+                }
+                Some(Bounds::new(
+                    point(px(rect.left as f32), px(rect.top as f32)),
+                    size(px(width as f32), px(height as f32)),
+                ))
+            }
             Err(_) => None,
         }
     }
 
     pub fn show_context_menu(&mut self, hwnd: HWND) {
         if self.menu_items.is_empty() {
+            return;
+        }
+        if TrayMenuItem::validate_items(&self.menu_items).is_err() {
             return;
         }
         self.command_id_map.clear();
@@ -200,7 +208,10 @@ impl WindowsTray {
             match item {
                 TrayMenuItem::Action { label, id } => {
                     let cmd_id = *counter;
-                    *counter += 1;
+                    let Some(next) = counter.checked_add(1) else {
+                        return;
+                    };
+                    *counter = next;
                     id_map.insert(cmd_id, id.clone());
                     let wide: Vec<u16> = label.encode_utf16().chain(Some(0)).collect();
                     unsafe {
@@ -232,7 +243,10 @@ impl WindowsTray {
                     label, checked, id, ..
                 } => {
                     let cmd_id = *counter;
-                    *counter += 1;
+                    let Some(next) = counter.checked_add(1) else {
+                        return;
+                    };
+                    *counter = next;
                     id_map.insert(cmd_id, id.clone());
                     let flags = if *checked {
                         MF_STRING | MF_CHECKED
@@ -271,16 +285,34 @@ impl Drop for WindowsTray {
 }
 
 fn create_hicon_from_bytes(data: &[u8]) -> Option<HICON> {
+    let icon_data = first_ico_image(data)?;
     unsafe {
-        let offset = LookupIconIdFromDirectoryEx(data.as_ptr(), true, 0, 0, LR_DEFAULTCOLOR);
-        if offset <= 0 {
-            return None;
-        }
-        if (offset as usize) >= data.len() {
-            return None;
-        }
-        let icon_data = &data[offset as usize..];
         let hicon = CreateIconFromResourceEx(icon_data, true, 0x00030000, 0, 0, LR_DEFAULTCOLOR);
         hicon.ok()
     }
+}
+
+fn first_ico_image(data: &[u8]) -> Option<&[u8]> {
+    if data.len() > MAX_TRAY_ICON_BYTES || data.len() < 22 {
+        return None;
+    }
+    let reserved = u16::from_le_bytes(data[0..2].try_into().ok()?);
+    let kind = u16::from_le_bytes(data[2..4].try_into().ok()?);
+    let count = usize::from(u16::from_le_bytes(data[4..6].try_into().ok()?));
+    if reserved != 0 || kind != 1 || count == 0 || count > 256 {
+        return None;
+    }
+    let directory_end = 6usize.checked_add(count.checked_mul(16)?)?;
+    if directory_end > data.len() {
+        return None;
+    }
+    for entry in data[6..directory_end].chunks_exact(16) {
+        let size = usize::try_from(u32::from_le_bytes(entry[8..12].try_into().ok()?)).ok()?;
+        let offset = usize::try_from(u32::from_le_bytes(entry[12..16].try_into().ok()?)).ok()?;
+        let end = offset.checked_add(size)?;
+        if size > 0 && offset >= directory_end && end <= data.len() {
+            return Some(&data[offset..end]);
+        }
+    }
+    None
 }

@@ -2,6 +2,11 @@
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
+use url::Url;
+
+const MAX_UPDATE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const MAX_TEXT_BYTES: usize = 1024 * 1024;
+const MAX_CHANNEL_BYTES: usize = 128;
 
 /// Distribution channel for updates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,14 +66,31 @@ impl UpdateManifest {
 
     /// Validates the manifest fields.
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.version.is_empty() {
-            anyhow::bail!("update version must not be empty");
+        if parse_semver(&self.version).is_none() {
+            anyhow::bail!("update version must be a strict MAJOR.MINOR.PATCH triplet");
         }
-        if self.url.is_empty() {
-            anyhow::bail!("update URL must not be empty");
+        if let Some(min_version) = &self.min_version
+            && parse_semver(min_version).is_none()
+        {
+            anyhow::bail!("minimum version must be a strict MAJOR.MINOR.PATCH triplet");
         }
-        if !self.url.starts_with("https://") {
-            anyhow::bail!("update URL must use https");
+        if let UpdateChannel::Custom(channel) = &self.channel
+            && (channel.is_empty()
+                || channel.len() > MAX_CHANNEL_BYTES
+                || !channel
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
+        {
+            anyhow::bail!("custom update channel is invalid");
+        }
+        let url = Url::parse(&self.url).map_err(|_| anyhow::anyhow!("update URL is invalid"))?;
+        if url.scheme() != "https"
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.fragment().is_some()
+        {
+            anyhow::bail!("update URL must be an absolute credential-free https URL");
         }
         if self.sha256.len() != 64 {
             anyhow::bail!("sha256 must be exactly 64 hex characters");
@@ -76,8 +98,15 @@ impl UpdateManifest {
         if !self.sha256.chars().all(|c| c.is_ascii_hexdigit()) {
             anyhow::bail!("sha256 must contain only hex characters");
         }
-        if self.size_bytes == 0 {
-            anyhow::bail!("size_bytes must be greater than zero");
+        if self.size_bytes == 0 || self.size_bytes > MAX_UPDATE_BYTES {
+            anyhow::bail!("size_bytes must be between 1 and {MAX_UPDATE_BYTES}");
+        }
+        if self
+            .release_notes
+            .as_ref()
+            .is_some_and(|notes| notes.len() > MAX_TEXT_BYTES)
+        {
+            anyhow::bail!("release notes exceed {MAX_TEXT_BYTES} bytes");
         }
         Ok(())
     }
@@ -132,15 +161,35 @@ pub struct RollbackInfo {
 }
 
 fn manifest_signing_payload(manifest: &UpdateManifest) -> Vec<u8> {
-    format!(
-        "kael-update-v1\n{}\n{}\n{}\n{}\n{}",
-        manifest.version,
-        manifest.channel.as_str(),
-        manifest.url,
-        manifest.sha256,
-        manifest.size_bytes,
-    )
-    .into_bytes()
+    let mut payload = b"kael-update-v2".to_vec();
+    put_field(&mut payload, manifest.version.as_bytes());
+    match &manifest.channel {
+        UpdateChannel::Stable => put_field(&mut payload, b"stable"),
+        UpdateChannel::Beta => put_field(&mut payload, b"beta"),
+        UpdateChannel::Nightly => put_field(&mut payload, b"nightly"),
+        UpdateChannel::Custom(channel) => {
+            put_field(&mut payload, b"custom");
+            put_field(&mut payload, channel.as_bytes());
+        }
+    }
+    put_field(&mut payload, manifest.url.as_bytes());
+    put_field(&mut payload, manifest.sha256.as_bytes());
+    put_field(&mut payload, &manifest.size_bytes.to_be_bytes());
+    put_optional_field(&mut payload, manifest.release_notes.as_deref());
+    put_optional_field(&mut payload, manifest.min_version.as_deref());
+    payload
+}
+
+fn put_field(payload: &mut Vec<u8>, value: &[u8]) {
+    payload.extend_from_slice(&(value.len() as u64).to_be_bytes());
+    payload.extend_from_slice(value);
+}
+
+fn put_optional_field(payload: &mut Vec<u8>, value: Option<&str>) {
+    payload.push(u8::from(value.is_some()));
+    if let Some(value) = value {
+        put_field(payload, value.as_bytes());
+    }
 }
 
 /// Signs an [`UpdateManifest`] with the given [`SigningKey`].
@@ -155,6 +204,9 @@ pub fn verify_manifest(
     signature: &Signature,
     key: &VerifyingKey,
 ) -> bool {
+    if manifest.validate().is_err() {
+        return false;
+    }
     let payload = manifest_signing_payload(manifest);
     key.verify(&payload, signature).is_ok()
 }
@@ -207,15 +259,26 @@ pub fn generate_keypair() -> (String, String) {
 }
 
 fn parse_semver(version: &str) -> Option<(u64, u64, u64)> {
-    let parts: Vec<&str> = version.split('.').collect();
-    if parts.len() != 3 {
+    fn component(part: &str) -> Option<u64> {
+        if part.is_empty()
+            || !part.bytes().all(|byte| byte.is_ascii_digit())
+            || (part.len() > 1 && part.starts_with('0'))
+        {
+            return None;
+        }
+        part.parse().ok()
+    }
+
+    let mut parts = version.split('.');
+    let parsed = (
+        component(parts.next()?)?,
+        component(parts.next()?)?,
+        component(parts.next()?)?,
+    );
+    if parts.next().is_some() {
         return None;
     }
-    Some((
-        parts[0].parse().ok()?,
-        parts[1].parse().ok()?,
-        parts[2].parse().ok()?,
-    ))
+    Some(parsed)
 }
 
 #[cfg(test)]
@@ -294,6 +357,27 @@ mod tests {
     }
 
     #[test]
+    fn manifest_rejects_malformed_versions_urls_and_oversized_artifacts() {
+        for version in ["01.0.0", "1.0.0-beta", "1.0.0.1", "١.0.0"] {
+            let mut manifest = valid_manifest();
+            manifest.version = version.to_string();
+            assert!(manifest.validate().is_err());
+        }
+        for url in [
+            "https://",
+            "https://user:secret@example.com/update.zip",
+            "https://example.com/update.zip#fragment",
+        ] {
+            let mut manifest = valid_manifest();
+            manifest.url = url.to_string();
+            assert!(manifest.validate().is_err());
+        }
+        let mut manifest = valid_manifest();
+        manifest.size_bytes = MAX_UPDATE_BYTES + 1;
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
     fn validate_bad_sha256_length() {
         let mut m = valid_manifest();
         m.sha256 = "abc".to_string();
@@ -361,7 +445,7 @@ mod tests {
             version: "1.2.0".into(),
             channel: UpdateChannel::Stable,
             url: "https://example.com/update.tar.gz".into(),
-            sha256: "abc123".into(),
+            sha256: valid_sha256(),
             size_bytes: 1024,
             release_notes: None,
             min_version: None,
@@ -380,7 +464,7 @@ mod tests {
             version: "1.2.0".into(),
             channel: UpdateChannel::Stable,
             url: "https://example.com/update.tar.gz".into(),
-            sha256: "abc123".into(),
+            sha256: valid_sha256(),
             size_bytes: 1024,
             release_notes: None,
             min_version: None,
@@ -389,6 +473,24 @@ mod tests {
         let signature = sign_manifest(&manifest, &signing_key);
         manifest.url = "https://evil.com/malware.tar.gz".into();
         assert!(!verify_manifest(&manifest, &signature, &verifying_key));
+    }
+
+    #[test]
+    fn signature_covers_optional_fields_and_channel_variant() {
+        let signing_key = SigningKey::generate(&mut rand::thread_rng());
+        let verifying_key = signing_key.verifying_key();
+        let manifest = valid_manifest();
+        let signature = sign_manifest(&manifest, &signing_key);
+
+        let mut tampered = manifest.clone();
+        tampered.release_notes = Some("Different notes".to_string());
+        assert!(!verify_manifest(&tampered, &signature, &verifying_key));
+        tampered = manifest.clone();
+        tampered.min_version = Some("1.1.0".to_string());
+        assert!(!verify_manifest(&tampered, &signature, &verifying_key));
+        tampered = manifest.clone();
+        tampered.channel = UpdateChannel::Custom("stable".to_string());
+        assert!(!verify_manifest(&tampered, &signature, &verifying_key));
     }
 
     #[test]

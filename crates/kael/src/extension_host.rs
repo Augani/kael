@@ -3,6 +3,7 @@
 
 use std::{
     collections::{HashMap, VecDeque},
+    io::Read as _,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -14,7 +15,7 @@ use crate::{
         EXTENSION_RPC_VERSION, ExtensionHandshake, ExtensionMessage, ExtensionNotification,
         ExtensionRequest, ExtensionResponse, ExtensionTransport,
     },
-    ipc_transport::{Transport, decode_frame, encode_frame, ipc_socket_path},
+    ipc_transport::{Transport, decode_exact_frame, encode_frame, try_ipc_socket_path},
     plugin::{
         ExecutionModel, ExtensionHost, ExtensionInfo, HOST_API_VERSION, PluginManifest,
         is_api_compatible,
@@ -24,6 +25,44 @@ use crate::{
     supervisor::ProcessSupervisor,
 };
 
+#[cfg(unix)]
+const EXTENSION_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[cfg(unix)]
+struct ExtensionSocketGuard(PathBuf);
+
+#[cfg(unix)]
+impl Drop for ExtensionSocketGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn validate_extension_app_id(app_id: &str) -> Result<()> {
+    anyhow::ensure!(!app_id.is_empty(), "extension host app id cannot be empty");
+    anyhow::ensure!(
+        app_id.len() <= 255,
+        "extension host app id cannot exceed 255 bytes"
+    );
+    anyhow::ensure!(
+        app_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_')),
+        "extension host app id contains unsupported characters"
+    );
+    Ok(())
+}
+
+const MAX_EXTENSION_PACKAGE_ENTRIES: usize = 10_000;
+const MAX_EXTENSION_PACKAGE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_EXTENSION_PACKAGE_DEPTH: usize = 64;
+
+#[derive(Default)]
+struct ExtensionCopyBudget {
+    entries: usize,
+    bytes: u64,
+}
+
 /// Manages the full lifecycle of extensions including loading,
 /// activation, process spawning, and RPC communication.
 pub struct ExtensionHostRuntime {
@@ -32,6 +71,7 @@ pub struct ExtensionHostRuntime {
     extensions_dir: PathBuf,
     transports: HashMap<String, ExtensionTransport>,
     app_id: String,
+    next_request_id: u64,
 }
 
 struct WasmExtensionTransport {
@@ -49,14 +89,14 @@ impl WasmExtensionTransport {
 
     fn queue_message(&mut self, message: ExtensionMessage) -> Result<()> {
         let payload = serde_json::to_vec(&message).context("failed to serialize WASM message")?;
-        self.pending_frames.push_back(encode_frame(&payload));
+        self.pending_frames.push_back(encode_frame(&payload)?);
         Ok(())
     }
 }
 
 impl Transport for WasmExtensionTransport {
     fn send_frame(&mut self, data: &[u8]) -> Result<()> {
-        let (payload, _) = decode_frame(data)?.ok_or_else(|| anyhow!("incomplete WASM frame"))?;
+        let payload = decode_exact_frame(data)?;
         let message: ExtensionMessage =
             serde_json::from_slice(&payload).context("failed to decode WASM message")?;
 
@@ -86,8 +126,8 @@ impl Transport for WasmExtensionTransport {
             }
             ExtensionMessage::Notification(_) => Ok(()),
             other => Err(anyhow!(
-                "unexpected host message for WASM extension: {:?}",
-                other
+                "unexpected host message for WASM extension: {}",
+                other.to_text()
             )),
         }
     }
@@ -107,26 +147,32 @@ impl Transport for WasmExtensionTransport {
 impl ExtensionHostRuntime {
     /// Creates a new extension host runtime.
     pub fn new(extensions_dir: impl AsRef<Path>, app_id: impl Into<String>) -> Self {
-        let _ = std::fs::create_dir_all(extensions_dir.as_ref());
         Self {
             host: ExtensionHost::new(),
             supervisor: ProcessSupervisor::new(),
             extensions_dir: extensions_dir.as_ref().to_path_buf(),
             transports: HashMap::new(),
             app_id: app_id.into(),
+            next_request_id: 1,
         }
+    }
+
+    /// Creates a checked extension host runtime and prepares its install directory.
+    pub fn try_new(extensions_dir: impl AsRef<Path>, app_id: impl Into<String>) -> Result<Self> {
+        let app_id = app_id.into();
+        validate_extension_app_id(&app_id)?;
+        std::fs::create_dir_all(extensions_dir.as_ref()).with_context(|| {
+            format!(
+                "failed to create extensions directory {}",
+                extensions_dir.as_ref().display()
+            )
+        })?;
+        Ok(Self::new(extensions_dir, app_id))
     }
 
     /// Loads a manifest into the host.
     pub fn load(&mut self, manifest: PluginManifest) -> Result<()> {
-        if !is_api_compatible(&manifest.api_version) {
-            anyhow::bail!(
-                "extension {} API version {} is incompatible with host {}",
-                manifest.id,
-                manifest.api_version,
-                HOST_API_VERSION
-            );
-        }
+        Self::validate_api_compatibility(&manifest)?;
         self.host.load_manifest(manifest)
     }
 
@@ -134,6 +180,7 @@ impl ExtensionHostRuntime {
     pub fn load_from_directory(&mut self, path: impl AsRef<Path>) -> Result<String> {
         let path = path.as_ref();
         let manifest = Self::read_manifest_from_dir(path)?;
+        Self::validate_api_compatibility(&manifest)?;
         let id = manifest.id.clone();
         self.host
             .load_manifest_with_options(manifest, Some(path.to_path_buf()), true)?;
@@ -143,19 +190,51 @@ impl ExtensionHostRuntime {
     /// Installs an extension by copying it into the extensions directory.
     pub fn install_from_path(&mut self, path: impl AsRef<Path>) -> Result<String> {
         let path = path.as_ref();
-        if !path.is_dir() {
-            anyhow::bail!("install path must be a directory");
-        }
+        let source_metadata = std::fs::symlink_metadata(path)?;
+        anyhow::ensure!(
+            source_metadata.file_type().is_dir(),
+            "install path must be a regular directory"
+        );
         let manifest = Self::read_manifest_from_dir(path)?;
+        Self::validate_api_compatibility(&manifest)?;
         let id = manifest.id.clone();
+        anyhow::ensure!(
+            self.host.get(&id).is_none(),
+            "extension already loaded: {id}"
+        );
+        std::fs::create_dir_all(&self.extensions_dir).with_context(|| {
+            format!(
+                "failed to create extensions directory {}",
+                self.extensions_dir.display()
+            )
+        })?;
         let target_dir = self.extensions_dir.join(&id);
         if target_dir.exists() {
             anyhow::bail!("extension already installed: {}", id);
         }
-        copy_dir_all(path, &target_dir)
-            .with_context(|| format!("failed to copy extension to {}", target_dir.display()))?;
-        self.host
-            .load_manifest_with_options(manifest, Some(target_dir), false)?;
+        let stage_dir = self
+            .extensions_dir
+            .join(format!(".install-{}", uuid::Uuid::new_v4()));
+        let install_result = (|| -> Result<()> {
+            copy_dir_all(path, &stage_dir).with_context(|| {
+                format!("failed to stage extension for {}", target_dir.display())
+            })?;
+            std::fs::rename(&stage_dir, &target_dir).with_context(|| {
+                format!("failed to install extension to {}", target_dir.display())
+            })?;
+            if let Err(error) =
+                self.host
+                    .load_manifest_with_options(manifest, Some(target_dir.clone()), false)
+            {
+                let _ = std::fs::remove_dir_all(&target_dir);
+                return Err(error);
+            }
+            Ok(())
+        })();
+        if install_result.is_err() {
+            let _ = std::fs::remove_dir_all(&stage_dir);
+        }
+        install_result?;
         Ok(id)
     }
 
@@ -180,6 +259,7 @@ impl ExtensionHostRuntime {
                 result.push((manifest.id, dir));
             }
         }
+        result.sort_by(|left, right| left.0.cmp(&right.0));
         Ok(result)
     }
 
@@ -241,21 +321,36 @@ impl ExtensionHostRuntime {
 
     /// Deactivates an extension.
     pub fn deactivate(&mut self, id: &str) -> Result<()> {
-        let info = self
+        let (is_active, process_id) = self
             .host
             .get(id)
+            .map(|info| (info.is_active, info.process_id))
             .ok_or_else(|| anyhow!("extension not found: {}", id))?;
-        if !info.is_active {
+        if !is_active {
             return Ok(());
         }
+        let mut shutdown_error = None;
         if let Some(transport) = self.transports.get_mut(id) {
-            let _ = transport.send_request(0, ExtensionRequest::Shutdown);
+            if let Err(error) = transport.send_request(0, ExtensionRequest::Shutdown) {
+                shutdown_error = Some(error);
+            }
         }
-        if let Some(process_id) = info.process_id {
-            let _ = self.supervisor.stop(process_id);
+        if let Some(process_id) = process_id
+            && let Err(stop_error) = self.supervisor.stop(process_id)
+        {
+            if let Some(shutdown_error) = shutdown_error {
+                return Err(stop_error).context(format!(
+                    "failed to stop extension after shutdown request failed: {shutdown_error}"
+                ));
+            }
+            return Err(stop_error).context("failed to stop extension process");
         }
         self.transports.remove(id);
-        self.host.deactivate(id)
+        self.host.deactivate(id)?;
+        if let Some(error) = shutdown_error {
+            return Err(error).context("extension was stopped after its shutdown request failed");
+        }
+        Ok(())
     }
 
     /// Unloads an extension.
@@ -277,36 +372,38 @@ impl ExtensionHostRuntime {
         command_id: impl Into<String>,
         args: Option<serde_json::Value>,
     ) -> Result<()> {
+        let request_id = self.allocate_request_id()?;
         let transport = self
             .transports
             .get_mut(id)
             .ok_or_else(|| anyhow!("extension not active: {}", id))?;
         transport.send_request(
-            1,
+            request_id,
             ExtensionRequest::ExecuteCommand {
                 command_id: command_id.into(),
                 args,
             },
         )?;
-        let (_id, result) = Self::recv_rpc_response(transport)?;
+        let result = Self::recv_rpc_response(transport, request_id)?;
         match result {
             Ok(ExtensionResponse::Ack) => Ok(()),
-            Ok(other) => Err(anyhow!("unexpected response: {:?}", other)),
+            Ok(other) => Err(anyhow!("unexpected response: {}", other.to_text())),
             Err(error) => Err(anyhow!("extension error: {}", error)),
         }
     }
 
     /// Query an active extension process for its current contributions.
     pub fn request_contributions(&mut self, id: &str) -> Result<crate::plugin::Contributions> {
+        let request_id = self.allocate_request_id()?;
         let transport = self
             .transports
             .get_mut(id)
             .ok_or_else(|| anyhow!("extension not active: {}", id))?;
-        transport.send_request(2, ExtensionRequest::GetContributions)?;
-        let (_id, result) = Self::recv_rpc_response(transport)?;
+        transport.send_request(request_id, ExtensionRequest::GetContributions)?;
+        let result = Self::recv_rpc_response(transport, request_id)?;
         match result {
             Ok(ExtensionResponse::Contributions(contributions)) => Ok(contributions),
-            Ok(other) => Err(anyhow!("unexpected response: {:?}", other)),
+            Ok(other) => Err(anyhow!("unexpected response: {}", other.to_text())),
             Err(error) => Err(anyhow!("extension error: {}", error)),
         }
     }
@@ -358,6 +455,25 @@ impl ExtensionHostRuntime {
         &mut self.supervisor
     }
 
+    fn allocate_request_id(&mut self) -> Result<u64> {
+        let id = self.next_request_id;
+        self.next_request_id = id
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("extension request identifier space exhausted"))?;
+        Ok(id)
+    }
+
+    fn validate_api_compatibility(manifest: &PluginManifest) -> Result<()> {
+        anyhow::ensure!(
+            is_api_compatible(&manifest.api_version),
+            "extension {} API version {} is incompatible with host {}",
+            manifest.id,
+            manifest.api_version,
+            HOST_API_VERSION
+        );
+        Ok(())
+    }
+
     #[cfg(not(any(unix, windows)))]
     fn spawn_external_process(&mut self, id: &str) -> Result<()> {
         let _ = id;
@@ -368,27 +484,59 @@ impl ExtensionHostRuntime {
 
     #[cfg(any(unix, windows))]
     fn spawn_external_process(&mut self, id: &str) -> Result<()> {
+        validate_extension_app_id(&self.app_id)?;
         let info = self
             .host
             .get(id)
             .ok_or_else(|| anyhow!("extension not found: {}", id))?;
-        let socket_path = ipc_socket_path(&self.app_id, id);
+        let load_path = info.load_path.clone();
+        let executable = PathBuf::from(&info.manifest.entry_point);
+        let executable = match (&load_path, executable.is_relative()) {
+            (Some(load_path), true) => load_path.join(executable),
+            _ => executable,
+        };
 
-        let process_info = ProcessInfo::extension(ProcessId(0), &info.manifest.name)
-            .executable(&info.manifest.entry_point)
-            .args(&info.manifest.args)
-            .env(
+        #[cfg(unix)]
+        let socket_path =
+            try_ipc_socket_path("kael-extension", &uuid::Uuid::new_v4().simple().to_string())?;
+        #[cfg(windows)]
+        let pipe_name = crate::platform::pipe_name(&self.app_id, id);
+
+        let mut process_info = ProcessInfo::extension(ProcessId(0), &info.manifest.name)
+            .executable(executable)
+            .args(&info.manifest.args);
+        if let Some(load_path) = &load_path {
+            process_info = process_info.working_dir(load_path);
+        }
+        #[cfg(unix)]
+        {
+            process_info = process_info.env(
                 "GPUI_EXTENSION_SOCKET",
                 socket_path.to_string_lossy().to_string(),
-            )
+            );
+        }
+        #[cfg(windows)]
+        {
+            process_info =
+                process_info.env("GPUI_EXTENSION_SOCKET", format!("\\\\.\\pipe\\{pipe_name}"));
+        }
+        let process_info = process_info
             .env("GPUI_EXTENSION_ID", id)
             .env("GPUI_API_VERSION", HOST_API_VERSION);
 
         #[cfg(unix)]
-        let listener = {
-            let _ = std::fs::remove_file(&socket_path);
-            std::os::unix::net::UnixListener::bind(&socket_path)
-                .with_context(|| format!("failed to bind extension socket for {}", id))?
+        let (listener, _socket_guard) = {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let listener = std::os::unix::net::UnixListener::bind(&socket_path)
+                .with_context(|| format!("failed to bind extension socket for {}", id))?;
+            let socket_guard = ExtensionSocketGuard(socket_path.clone());
+            std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
+                .with_context(|| format!("failed to protect extension socket for {id}"))?;
+            listener
+                .set_nonblocking(true)
+                .with_context(|| format!("failed to configure extension listener for {id}"))?;
+            (listener, socket_guard)
         };
 
         let process_id = self.supervisor.spawn(
@@ -399,36 +547,86 @@ impl ExtensionHostRuntime {
             },
         )?;
 
-        #[cfg(unix)]
-        let mut transport = {
-            use crate::ipc_transport::UnixDomainSocketTransport;
-            let (stream, _) = listener
-                .accept()
-                .with_context(|| format!("failed to accept connection for {}", id))?;
-            let transport = UnixDomainSocketTransport::from_stream(stream)
-                .with_context(|| format!("failed to open extension transport for {}", id))?;
-            ExtensionTransport::new(Box::new(transport))
-        };
+        let setup = (|| -> Result<ExtensionTransport> {
+            #[cfg(unix)]
+            let (mut transport, timeout_control) = {
+                use crate::ipc_transport::UnixDomainSocketTransport;
 
-        #[cfg(windows)]
-        let mut transport = {
-            use crate::ipc_transport::NamedPipeTransport;
-            let pipe_name = format!("{}-{}", self.app_id, id);
-            let transport = NamedPipeTransport::server(&pipe_name)
-                .with_context(|| format!("failed to accept connection for {}", id))?;
-            ExtensionTransport::new(Box::new(transport))
-        };
+                let deadline = std::time::Instant::now() + EXTENSION_BOOTSTRAP_TIMEOUT;
+                let stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if std::time::Instant::now() >= deadline {
+                                return Err(anyhow!(
+                                    "timed out waiting for extension {id} to connect"
+                                ));
+                            }
+                            if matches!(
+                                self.supervisor.health(process_id),
+                                Some(crate::process_model::ProcessHealth::Dead)
+                                    | Some(crate::process_model::ProcessHealth::Stopped)
+                            ) {
+                                return Err(anyhow!("extension {id} exited before connecting"));
+                            }
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => {
+                            return Err(error)
+                                .with_context(|| format!("failed to accept connection for {id}"));
+                        }
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(EXTENSION_BOOTSTRAP_TIMEOUT))
+                    .with_context(|| format!("failed to set handshake timeout for {id}"))?;
+                let timeout_control = stream
+                    .try_clone()
+                    .with_context(|| format!("failed to clone extension socket for {id}"))?;
+                let transport = UnixDomainSocketTransport::from_stream(stream)
+                    .with_context(|| format!("failed to open extension transport for {id}"))?;
+                (
+                    ExtensionTransport::new(Box::new(transport)),
+                    timeout_control,
+                )
+            };
 
-        if let Err(error) =
-            Self::initialize_transport(id, &mut transport, &info.manifest.capabilities)
-        {
-            let _ = self.supervisor.stop(process_id);
-            return Err(error);
+            #[cfg(windows)]
+            let mut transport = {
+                use crate::ipc_transport::NamedPipeTransport;
+                let transport = NamedPipeTransport::server(&pipe_name)
+                    .with_context(|| format!("failed to accept connection for {id}"))?;
+                ExtensionTransport::new(Box::new(transport))
+            };
+
+            Self::initialize_transport(id, &mut transport, &info.manifest.capabilities)?;
+
+            #[cfg(unix)]
+            timeout_control
+                .set_read_timeout(None)
+                .with_context(|| format!("failed to clear handshake timeout for {id}"))?;
+
+            Ok(transport)
+        })();
+
+        match setup {
+            Ok(transport) => {
+                if let Err(error) = self.host.attach_process(id, process_id) {
+                    let _ = self.supervisor.stop(process_id);
+                    return Err(error);
+                }
+                self.transports.insert(id.to_string(), transport);
+                Ok(())
+            }
+            Err(error) => {
+                if let Err(stop_error) = self.supervisor.stop(process_id) {
+                    return Err(error).context(format!(
+                        "extension bootstrap failed and cleanup also failed: {stop_error}"
+                    ));
+                }
+                Err(error)
+            }
         }
-
-        self.transports.insert(id.to_string(), transport);
-        self.host.attach_process(id, process_id)?;
-        Ok(())
     }
 
     fn spawn_wasm_extension(&mut self, id: &str) -> Result<()> {
@@ -452,8 +650,9 @@ impl ExtensionHostRuntime {
     ) -> Result<()> {
         let capabilities: Vec<serde_json::Value> = capabilities
             .iter()
-            .map(|capability| serde_json::to_value(capability).unwrap_or(serde_json::Value::Null))
-            .collect();
+            .map(serde_json::to_value)
+            .collect::<std::result::Result<_, _>>()
+            .context("failed to serialize extension capabilities")?;
 
         transport
             .send_handshake(ExtensionHandshake::Host {
@@ -487,12 +686,20 @@ impl ExtensionHostRuntime {
 
     fn recv_rpc_response(
         transport: &mut ExtensionTransport,
-    ) -> Result<(u64, Result<ExtensionResponse, String>)> {
+        expected_id: u64,
+    ) -> Result<Result<ExtensionResponse, String>> {
         match transport.recv_message()? {
-            ExtensionMessage::Rpc(crate::process_model::IpcMessage::Response { id, result }) => {
-                Ok((id, result))
+            ExtensionMessage::Rpc(crate::process_model::IpcMessage::Response { id, result })
+                if id == expected_id =>
+            {
+                Ok(result)
             }
-            other => Err(anyhow!("unexpected RPC message: {:?}", other)),
+            ExtensionMessage::Rpc(crate::process_model::IpcMessage::Response { id, .. }) => {
+                Err(anyhow!(
+                    "extension response correlation mismatch: expected {expected_id}, got {id}"
+                ))
+            }
+            other => Err(anyhow!("unexpected RPC message: {}", other.to_text())),
         }
     }
 
@@ -513,24 +720,71 @@ impl ExtensionHostRuntime {
 }
 
 fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> Result<()> {
-    let src = src.as_ref();
-    let dst = dst.as_ref();
+    copy_dir_all_bounded(
+        src.as_ref(),
+        dst.as_ref(),
+        0,
+        &mut ExtensionCopyBudget::default(),
+    )
+}
+
+fn copy_dir_all_bounded(
+    src: &Path,
+    dst: &Path,
+    depth: usize,
+    budget: &mut ExtensionCopyBudget,
+) -> Result<()> {
+    anyhow::ensure!(
+        depth <= MAX_EXTENSION_PACKAGE_DEPTH,
+        "extension package nesting exceeds {MAX_EXTENSION_PACKAGE_DEPTH} levels"
+    );
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
+        budget.entries = budget
+            .entries
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("extension package entry count overflow"))?;
+        anyhow::ensure!(
+            budget.entries <= MAX_EXTENSION_PACKAGE_ENTRIES,
+            "extension package exceeds {MAX_EXTENSION_PACKAGE_ENTRIES} entries"
+        );
         let file_type = entry.file_type()?;
+        anyhow::ensure!(
+            !file_type.is_symlink(),
+            "extension packages cannot contain symbolic links"
+        );
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
         if file_type.is_dir() {
-            copy_dir_all(&src_path, &dst_path)?;
-        } else {
-            std::fs::copy(&src_path, &dst_path).with_context(|| {
+            copy_dir_all_bounded(&src_path, &dst_path, depth + 1, budget)?;
+        } else if file_type.is_file() {
+            let remaining = MAX_EXTENSION_PACKAGE_BYTES.saturating_sub(budget.bytes);
+            let mut source = std::fs::File::open(&src_path)
+                .with_context(|| format!("failed to open {}", src_path.display()))?
+                .take(remaining.saturating_add(1));
+            let mut destination = std::fs::File::create(&dst_path)
+                .with_context(|| format!("failed to create {}", dst_path.display()))?;
+            let copied = std::io::copy(&mut source, &mut destination).with_context(|| {
                 format!(
                     "failed to copy {} to {}",
                     src_path.display(),
                     dst_path.display()
                 )
             })?;
+            anyhow::ensure!(
+                copied <= remaining,
+                "extension package exceeds {MAX_EXTENSION_PACKAGE_BYTES} byte limit"
+            );
+            budget.bytes = budget
+                .bytes
+                .checked_add(copied)
+                .ok_or_else(|| anyhow!("extension package byte count overflow"))?;
+            std::fs::set_permissions(&dst_path, entry.metadata()?.permissions()).with_context(
+                || format!("failed to preserve permissions for {}", dst_path.display()),
+            )?;
+        } else {
+            anyhow::bail!("extension packages can contain only files and directories");
         }
     }
     Ok(())
@@ -571,6 +825,29 @@ mod tests {
                 result: Ok(ExtensionResponse::Ack)
             })
         ));
+    }
+
+    #[test]
+    fn extension_rpc_rejects_mismatched_response_ids() {
+        use crate::ipc_transport::InMemoryTransport;
+
+        let (host_side, extension_side) = InMemoryTransport::pair();
+        let mut host = ExtensionTransport::new(Box::new(host_side));
+        let mut extension = ExtensionTransport::new(Box::new(extension_side));
+        extension
+            .send_response(99, Ok(ExtensionResponse::Ack))
+            .unwrap();
+
+        let error = ExtensionHostRuntime::recv_rpc_response(&mut host, 7).unwrap_err();
+        assert!(error.to_string().contains("correlation mismatch"));
+    }
+
+    #[test]
+    fn checked_extension_runtime_rejects_path_like_app_ids() {
+        let tmp =
+            std::env::temp_dir().join(format!("kael-extension-runtime-{}", uuid::Uuid::new_v4()));
+        assert!(ExtensionHostRuntime::try_new(&tmp, "../../unsafe").is_err());
+        assert!(!tmp.exists());
     }
 
     #[test]
@@ -761,6 +1038,117 @@ mod tests {
         runtime.uninstall(&id).unwrap();
         assert!(runtime.get(&id).is_none());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extension_install_rejects_symlinks_and_cleans_staging() {
+        use std::os::unix::fs::symlink;
+
+        let tmp =
+            std::env::temp_dir().join(format!("kael-test-install-link-{}", uuid::Uuid::new_v4()));
+        let source = tmp.join("source");
+        let installs = tmp.join("extensions");
+        std::fs::create_dir_all(&source).unwrap();
+        let manifest = PluginManifestBuilder::new(
+            "com.test.link",
+            "Link",
+            "1.0.0",
+            "1.0.0",
+            "ext.wasm",
+            ExecutionModel::Wasm,
+        )
+        .build()
+        .unwrap();
+        std::fs::write(
+            source.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(tmp.join("outside"), b"private").unwrap();
+        symlink(tmp.join("outside"), source.join("linked-secret")).unwrap();
+
+        let mut runtime = ExtensionHostRuntime::try_new(&installs, "test-app").unwrap();
+        assert!(runtime.install_from_path(&source).is_err());
+        assert!(!installs.join("com.test.link").exists());
+        assert_eq!(std::fs::read_dir(&installs).unwrap().count(), 0);
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn extension_install_rejects_incompatible_api_before_copying() {
+        let tmp =
+            std::env::temp_dir().join(format!("kael-test-install-api-{}", uuid::Uuid::new_v4()));
+        let source = tmp.join("source");
+        let installs = tmp.join("extensions");
+        std::fs::create_dir_all(&source).unwrap();
+        let manifest = PluginManifestBuilder::new(
+            "com.test.future",
+            "Future",
+            "1.0.0",
+            "2.0.0",
+            "ext.wasm",
+            ExecutionModel::Wasm,
+        )
+        .build()
+        .unwrap();
+        std::fs::write(
+            source.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let mut runtime = ExtensionHostRuntime::try_new(&installs, "test-app").unwrap();
+        assert!(runtime.install_from_path(&source).is_err());
+        assert_eq!(std::fs::read_dir(&installs).unwrap().count(), 0);
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn extension_package_copy_rejects_excessive_nesting() {
+        let tmp =
+            std::env::temp_dir().join(format!("kael-test-install-depth-{}", uuid::Uuid::new_v4()));
+        let source = tmp.join("source");
+        let mut nested = source.clone();
+        for index in 0..=MAX_EXTENSION_PACKAGE_DEPTH {
+            nested = nested.join(format!("level-{index}"));
+        }
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("payload"), b"data").unwrap();
+
+        assert!(copy_dir_all(&source, tmp.join("copy")).is_err());
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exited_external_extension_fails_activation_and_is_stopped() {
+        let tmp =
+            std::env::temp_dir().join(format!("kael-test-external-exit-{}", uuid::Uuid::new_v4()));
+        let mut runtime = ExtensionHostRuntime::try_new(&tmp, "test-app").unwrap();
+        let manifest = PluginManifestBuilder::new(
+            "com.test.exits",
+            "Exits",
+            "1.0.0",
+            "1.0.0",
+            "/usr/bin/true",
+            ExecutionModel::ExternalProcess,
+        )
+        .build()
+        .unwrap();
+        runtime.load(manifest).unwrap();
+
+        let started = std::time::Instant::now();
+        assert!(runtime.activate("com.test.exits").is_err());
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(!runtime.get("com.test.exits").unwrap().is_active);
+        let processes = runtime.supervisor().processes();
+        assert_eq!(processes.len(), 1);
+        assert_eq!(
+            runtime.supervisor().health(processes[0]),
+            Some(crate::process_model::ProcessHealth::Stopped)
+        );
+        std::fs::remove_dir_all(&tmp).unwrap();
     }
 
     #[test]

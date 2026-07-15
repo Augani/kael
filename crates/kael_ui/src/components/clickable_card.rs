@@ -2,10 +2,13 @@
 
 use crate::{astryx, display::card::CardVariant, styled_ext::StyledExt, theme::Theme};
 use kael::{prelude::FluentBuilder as _, *};
+use std::cell::RefCell;
+use std::panic::Location;
 use std::rc::Rc;
 
 #[derive(IntoElement)]
 pub struct ClickableCard {
+    id: ElementId,
     children: Vec<AnyElement>,
     label: Option<SharedString>,
     variant: CardVariant,
@@ -23,8 +26,19 @@ pub struct ClickableCard {
 }
 
 impl ClickableCard {
+    #[track_caller]
     pub fn new() -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "clickable-card:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             children: Vec::new(),
             label: None,
             variant: CardVariant::Default,
@@ -142,7 +156,7 @@ impl Styled for ClickableCard {
 
 impl RenderOnce for ClickableCard {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = Theme::of(cx);
+        let theme = Theme::of(cx).clone();
         let selected = self.selected;
         let disabled = self.disabled;
         let user_style = self.style;
@@ -156,40 +170,75 @@ impl RenderOnce for ClickableCard {
             transparent_black()
         };
         let padding = self.padding.unwrap_or(px(16.0));
+        let label = self.label.unwrap_or_else(|| "Open card".into());
+        let handler = self.on_click;
+        let href = self.href;
+        let announces_external_target = self
+            .target
+            .as_ref()
+            .is_some_and(|target| target.as_ref() == "_blank");
+        let accessible_label: SharedString = if announces_external_target {
+            format!("{label}, opens externally").into()
+        } else {
+            label
+        };
+        let has_action = handler.is_some() || href.is_some();
+        let children = Rc::new(RefCell::new(Some(self.children)));
 
-        div()
-            .relative()
-            .flex()
-            .flex_col()
-            .gap(px(8.0))
-            .p(padding)
-            .when_some(self.width, |this, width| this.w(width))
-            .when_some(self.height, |this, height| this.h(height).overflow_hidden())
-            .when_some(self.max_width, |this, max_width| this.max_w(max_width))
-            .when_some(self.min_height, |this, min_height| this.min_h(min_height))
-            .bg(bg)
-            .border_1()
-            .border_color(border)
-            .rounded(theme.tokens.radius_lg)
-            .transition(theme.tokens.transition_fast)
-            .when(selected, |this| {
-                this.inset_ring(theme.tokens.primary, px(2.0))
+        button(self.id)
+            .role(if href.is_some() {
+                AccessibilityRole::Link
+            } else {
+                AccessibilityRole::Button
             })
-            .when(disabled, |this| this.opacity(0.55))
-            .when(!disabled, |this| {
-                this.cursor_pointer()
-                    .hover(move |style| style.bg(astryx::overlay_hover(dark)))
-            })
-            .when_some(self.on_click.filter(|_| !disabled), |this, handler| {
-                this.on_mouse_down(MouseButton::Left, move |_event, window, cx| {
-                    handler(window, cx);
+            .label(accessible_label)
+            .when(disabled || !has_action, |this| this.disabled())
+            .when(has_action && !disabled, |this| {
+                this.on_click(move |_, window, cx| {
+                    if let Some(href) = href.as_ref() {
+                        let _ = cx.open_url(href.as_ref());
+                    }
+                    if let Some(handler) = handler.as_ref() {
+                        handler(window, cx);
+                    }
                 })
             })
-            .children(self.children)
-            .map(|this| {
-                let mut div = this;
-                div.style().refine(&user_style);
-                div
+            .render_with(move |state, _, _| {
+                let children = children.borrow_mut().take().unwrap_or_default();
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .p(padding)
+                    .when_some(self.width, |this, width| this.w(width))
+                    .when_some(self.height, |this, height| this.h(height).overflow_hidden())
+                    .when_some(self.max_width, |this, max_width| this.max_w(max_width))
+                    .when_some(self.min_height, |this, min_height| this.min_h(min_height))
+                    .bg(bg)
+                    .border_1()
+                    .border_color(border)
+                    .rounded(theme.tokens.radius_lg)
+                    .transition(theme.tokens.transition_fast)
+                    .when(selected, |this| {
+                        this.inset_ring(theme.tokens.primary, px(2.0))
+                    })
+                    .when(state.focused && !state.disabled, |this| {
+                        this.shadow(smallvec::smallvec![astryx::focus_ring_outer(
+                            theme.tokens.ring
+                        )])
+                    })
+                    .when(state.disabled, |this| this.opacity(0.55))
+                    .when(!state.disabled, |this| {
+                        this.cursor_pointer()
+                            .hover(move |style| style.bg(astryx::overlay_hover(dark)))
+                    })
+                    .children(children)
+                    .map(|this| {
+                        let mut div = this;
+                        div.style().refine(&user_style);
+                        div.into_any_element()
+                    })
             })
     }
 }

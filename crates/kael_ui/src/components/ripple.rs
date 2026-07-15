@@ -14,6 +14,11 @@ pub struct Ripple {
 
 impl Ripple {
     pub fn new(id: impl Into<ElementId>, origin: Point<Pixels>, color: Hsla) -> Self {
+        let origin = if f32::from(origin.x).is_finite() && f32::from(origin.y).is_finite() {
+            origin
+        } else {
+            Point::default()
+        };
         Self {
             id: id.into(),
             origin,
@@ -29,7 +34,9 @@ impl Ripple {
     }
 
     pub fn max_size(mut self, size: Pixels) -> Self {
-        self.max_size = size;
+        if f32::from(size).is_finite() && size > px(0.0) {
+            self.max_size = size;
+        }
         self
     }
 }
@@ -39,6 +46,8 @@ impl RenderOnce for Ripple {
         let origin = self.origin;
         let max_size = self.max_size;
         let color = self.color;
+        let ripple_id = self.id;
+        let animation_id = ElementId::NamedChild(Box::new(ripple_id.clone()), "expand".into());
 
         div()
             .absolute()
@@ -48,12 +57,12 @@ impl RenderOnce for Ripple {
             .left_0()
             .child(
                 div()
-                    .id(self.id)
+                    .id(ripple_id)
                     .absolute()
                     .rounded_full()
                     .bg(color.opacity(0.2))
                     .with_animation(
-                        "ripple-expand",
+                        animation_id,
                         Animation::new(self.duration).with_easing(easings::ease_out_cubic),
                         move |el, delta| {
                             let size = max_size * delta;
@@ -64,5 +73,20 @@ impl RenderOnce for Ripple {
                         },
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn invalid_geometry_keeps_the_ripple_bounded() {
+        let ripple = Ripple::new("ripple", point(px(f32::NAN), px(f32::INFINITY)), white())
+            .max_size(px(f32::INFINITY))
+            .max_size(px(-20.0));
+
+        assert_eq!(ripple.origin, Point::default());
+        assert_eq!(ripple.max_size, px(150.0));
     }
 }

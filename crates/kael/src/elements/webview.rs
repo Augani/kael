@@ -45,7 +45,7 @@ pub fn webview_with_options(
 
 /// Creates a WebView element from a local HTML/document file.
 ///
-/// This is the WebView-island equivalent of Electron's `loadFile`. Relative
+/// This is the WebView-island equivalent of browser-runtime `loadFile`. Relative
 /// paths are resolved against the current working directory before being
 /// converted to a `file://` URL.
 pub fn webview_file(id: impl Into<ElementId>, path: impl AsRef<Path>) -> Result<WebView> {
@@ -76,7 +76,7 @@ pub fn webview_file_url(path: impl AsRef<Path>) -> Result<SharedString> {
 
 /// Creates a WebView element from an inline HTML document.
 ///
-/// This is the WebView-island equivalent of Electron's `loadHTML`: useful for
+/// This is the WebView-island equivalent of browser-runtime `loadHTML`: useful for
 /// controlled widgets, rich previews, demos, and small browser-only surfaces
 /// that do not need a separate local server or asset file.
 pub fn webview_html(id: impl Into<ElementId>, html: impl AsRef<str>) -> WebView {
@@ -119,7 +119,7 @@ pub struct WebViewController {
 ///
 /// This is a lightweight, cross-backend wrapper over the browser
 /// `window.find(...)` behavior. It is intended for app-owned find bars and
-/// Electron-style "find in page" commands that need basic next/previous
+/// native desktop "find in page" commands that need basic next/previous
 /// navigation without opening backend-native find UI.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct WebViewFindOptions {
@@ -135,7 +135,7 @@ pub struct WebViewFindOptions {
     pub search_in_frames: bool,
 }
 
-/// Result for an Electron-style WebView find operation.
+/// Result for an native desktop WebView find operation.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WebViewFindResult {
     /// Whether the browser selected a match for the query.
@@ -941,10 +941,10 @@ pub struct WebViewMediaElementState {
     /// Duration in seconds, or `None` when the browser reports `NaN`/infinity.
     #[serde(default)]
     pub duration: Option<f64>,
-    /// HTMLMediaElement readyState.
+    /// media playback surface readyState.
     #[serde(default, rename = "readyState")]
     pub ready_state: u16,
-    /// HTMLMediaElement networkState.
+    /// media playback surface networkState.
     #[serde(default, rename = "networkState")]
     pub network_state: u16,
     /// Whether the element is currently seeking.
@@ -1968,7 +1968,7 @@ impl WebViewController {
 
     /// Insert or replace a named runtime CSS block in the target WebView.
     ///
-    /// This mirrors Electron `webContents.insertCSS(...)` workflows for hosted
+    /// This mirrors browser-runtime `hosted CSS injection(...)` workflows for hosted
     /// widgets and browser-media islands, while using an app-chosen key so CSS
     /// can be updated or removed deterministically later.
     pub fn insert_css(&self, window: &mut Window, key: &str, css: &str) -> Result<()> {
@@ -2023,9 +2023,9 @@ impl WebViewController {
         self.stop_finding_with_action(window, WebViewStopFindAction::ClearSelection)
     }
 
-    /// Stop finding with an Electron-style selection action.
+    /// Stop finding with an native desktop selection action.
     ///
-    /// This mirrors `webContents.stopFindInPage(action)`: `ClearSelection`
+    /// This mirrors `hosted find stop(action)`: `ClearSelection`
     /// removes the current browser selection, `KeepSelection` leaves it alone,
     /// and `ActivateSelection` focuses/scrolls the selected match where browser
     /// APIs allow it.
@@ -2039,7 +2039,7 @@ impl WebViewController {
 
     /// Execute a browser edit command in the target WebView.
     ///
-    /// This covers common Electron `webContents` edit commands such as copy,
+    /// This covers common browser-runtime `hosted page controller` edit commands such as copy,
     /// cut, paste, select all, undo, and redo. The callback receives the
     /// browser's boolean `document.execCommand(...)` result.
     pub fn edit_command(
@@ -2056,7 +2056,7 @@ impl WebViewController {
 
     /// Insert text into the focused browser editor or form control.
     ///
-    /// This mirrors Electron `webContents.insertText(...)` for command palettes,
+    /// This mirrors browser-runtime `hosted page controller.insertText(...)` for command palettes,
     /// AI agents, test automation, and native editor chrome that need to type
     /// into hosted inputs or contenteditable documents without bespoke page
     /// JavaScript. The callback receives whether the browser accepted or
@@ -2366,7 +2366,7 @@ impl WebViewController {
 
     /// Read the current browser selection as text.
     ///
-    /// This mirrors Electron `webContents.getSelectedText()` for context menus,
+    /// This mirrors browser-runtime `hosted selected-text query` for context menus,
     /// inspectors, find bars, and hosted editor chrome. It handles both normal
     /// document selections and focused `<input>` / `<textarea>` selection ranges.
     pub fn selected_text(
@@ -2405,7 +2405,7 @@ impl WebViewController {
 
     /// Read the current document element as serialized HTML.
     ///
-    /// This mirrors the common Electron pattern of calling
+    /// This mirrors the common browser-runtime stack pattern of calling
     /// `executeJavaScript("document.documentElement.outerHTML")` for page
     /// inspectors, export flows, bug reports, and AI-agent page understanding.
     /// Cross-origin frames remain owned by the browser engine and are not
@@ -2529,7 +2529,7 @@ impl WebViewController {
 
     /// Read favicon candidates from the current document.
     ///
-    /// This mirrors Electron-style tab chrome that reacts to hosted page icons.
+    /// This mirrors native desktop tab chrome that reacts to hosted page icons.
     /// It returns resolved URLs from `<link rel="icon">`, shortcut icons,
     /// Apple touch icons, and mask icons in document order. It does not fetch
     /// or decode image bytes.
@@ -2545,7 +2545,7 @@ impl WebViewController {
 
     /// Read the current `document.title` from the target WebView.
     ///
-    /// This mirrors Electron `webContents.getTitle()` for tab labels,
+    /// This mirrors browser-runtime `hosted title query` for tab labels,
     /// breadcrumbs, inspectors, and restore flows that need the title on
     /// demand rather than only through title-change events.
     pub fn title(
@@ -2560,7 +2560,7 @@ impl WebViewController {
 
     /// Read the effective browser user agent from the target WebView.
     ///
-    /// This mirrors Electron `webContents.getUserAgent()` for diagnostics,
+    /// This mirrors browser-runtime `hosted user-agent query` for diagnostics,
     /// hosted service compatibility checks, and verifying custom
     /// [`WebViewOptions::user_agent`] configuration.
     pub fn user_agent(
@@ -2575,7 +2575,7 @@ impl WebViewController {
 
     /// Read whether the target WebView document is still loading.
     ///
-    /// This mirrors the common Electron `webContents.isLoading()` workflow for
+    /// This mirrors the common browser-runtime `hosted loading query` workflow for
     /// app-owned loading indicators and route guards. It is based on
     /// `document.readyState !== "complete"` rather than backend-native network
     /// activity counters.
@@ -2591,7 +2591,7 @@ impl WebViewController {
 
     /// Read whether the target WebView likely has a previous history entry.
     ///
-    /// This mirrors the common Electron `webContents.canGoBack()` workflow for
+    /// This mirrors the common browser-runtime `hosted back-state query` workflow for
     /// native Back buttons. It uses the browser History API
     /// (`history.length > 1`), which is portable but less precise than
     /// backend-native navigation-stack state.
@@ -2607,7 +2607,7 @@ impl WebViewController {
 
     /// Read whether the target WebView likely has a forward history entry.
     ///
-    /// This mirrors the common Electron `webContents.canGoForward()` workflow
+    /// This mirrors the common browser-runtime `hosted forward-state query` workflow
     /// for native Forward buttons. Browser JavaScript cannot inspect the
     /// backend forward stack directly, so this reads an app/page-provided
     /// `window.__kaelNavigationState.canGoForward` marker when present and
@@ -2749,7 +2749,7 @@ impl WebViewController {
 
     /// Stop loading resources in the target WebView.
     ///
-    /// This mirrors Electron `webContents.stop()` through the browser's
+    /// This mirrors browser-runtime `hosted load stop` through the browser's
     /// standard `window.stop()` primitive so it works across supported
     /// WebView backends.
     pub fn stop_loading(&self, window: &mut Window) -> Result<()> {
@@ -2846,7 +2846,7 @@ impl WebViewController {
     /// Apply common browser media properties to the first matching element.
     ///
     /// The selector may point at an `<audio>`, `<video>`, or descendant element.
-    /// Kael sets normal HTMLMediaElement properties/attributes such as controls,
+    /// Kael sets normal media playback surface properties/attributes such as controls,
     /// loop, autoplay, muted, playsinline, poster, preload, controlslist, and
     /// disablePictureInPicture where the browser supports them.
     pub fn set_media_options(
@@ -3166,7 +3166,7 @@ impl WebViewController {
     }
 }
 
-/// A small, Electron-style envelope for messages crossing a WebView island.
+/// A small, native desktop envelope for messages crossing a WebView island.
 ///
 /// JavaScript can send the same shape with `window.kael.post(kind, payload, id)`;
 /// Rust can send it with [`WebViewController::post_bridge_message`].
@@ -6792,7 +6792,7 @@ impl WebViewOptions {
         self.inject_javascript(webview_navigation_state_bridge_script())
     }
 
-    /// Inject the standard bridge plus Electron-style find-result forwarding.
+    /// Inject the standard bridge plus native desktop find-result forwarding.
     ///
     /// The injected script wraps `window.find(...)` and posts
     /// [`WebViewBridgeMessage`] values with the given kind after browser find
@@ -7120,7 +7120,7 @@ impl WebViewOptions {
 
     /// Inject permission preflighting and handle typed permission requests.
     ///
-    /// This is the WebView-island equivalent of an Electron permission request
+    /// This is the WebView-island equivalent of an browser-runtime stack permission request
     /// handler for browser APIs exposed inside hosted content. The embedded
     /// browser remains the final authority for native permission prompts.
     pub fn on_permission_request(
@@ -7240,7 +7240,7 @@ impl WebViewOptions {
 
     /// Inject browser keyboard/input forwarding and handle typed events.
     ///
-    /// This is the closest portable WebView island equivalent to Electron
+    /// This is the closest portable WebView island equivalent to browser-runtime stack
     /// `before-input-event` today. It observes events after browser dispatch
     /// starts; use native shortcut systems for commands that must cancel input
     /// before the page sees it.
@@ -7761,7 +7761,7 @@ impl WebView {
         self
     }
 
-    /// Injects the standard bridge plus Electron-style find-result forwarding.
+    /// Injects the standard bridge plus native desktop find-result forwarding.
     pub fn find_result_bridge(mut self, kind: impl AsRef<str>) -> Self {
         self.options = self.options.find_result_bridge(kind);
         self
@@ -8983,7 +8983,7 @@ mod tests {
     }
 
     #[test]
-    fn webview_stop_finding_script_handles_electron_actions() {
+    fn webview_stop_finding_script_handles_browser_runtime_actions() {
         let clear = webview_stop_finding_script(WebViewStopFindAction::ClearSelection);
         let keep = webview_stop_finding_script(WebViewStopFindAction::KeepSelection);
         let activate = webview_stop_finding_script(WebViewStopFindAction::ActivateSelection);

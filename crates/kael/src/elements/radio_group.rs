@@ -108,6 +108,38 @@ pub struct RadioItemRenderState<T> {
     pub disabled: bool,
 }
 
+impl<T> RadioItemRenderState<T> {
+    /// Length of the option label in bytes, without exposing label text.
+    pub fn label_len_bytes(&self) -> usize {
+        self.label.len()
+    }
+
+    /// Returns true when this is the first option in the group.
+    pub fn is_first(&self) -> bool {
+        self.index == 0
+    }
+
+    /// Returns true when this is the last option in the group.
+    pub fn is_last(&self) -> bool {
+        self.index + 1 == self.option_count
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "radio_item_render_state(index={}, option_count={}, first={}, last={}, selected={}, focused={}, disabled={}, label_len_bytes={})",
+            self.index,
+            self.option_count,
+            self.is_first(),
+            self.is_last(),
+            self.selected,
+            self.focused,
+            self.disabled,
+            self.label_len_bytes()
+        )
+    }
+}
+
 type RadioItemCustomRenderer<T> = Rc<dyn Fn(RadioItemRenderState<T>, &Window, &App) -> AnyElement>;
 
 /// Construct a controlled radio group from a current value and labeled options.
@@ -606,5 +638,35 @@ mod tests {
                 .debug_bounds("radio-custom-1-selected-focused")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn radio_item_render_state_summary_is_content_safe() {
+        let state = RadioItemRenderState {
+            value: "secret-value",
+            label: SharedString::from("Secret Enterprise Plan"),
+            index: 2,
+            option_count: 3,
+            selected: true,
+            focused: false,
+            disabled: true,
+        };
+
+        assert_eq!(state.label_len_bytes(), "Secret Enterprise Plan".len());
+        assert!(!state.is_first());
+        assert!(state.is_last());
+
+        let summary = state.to_text();
+        assert!(summary.contains("index=2"));
+        assert!(summary.contains("option_count=3"));
+        assert!(summary.contains("first=false"));
+        assert!(summary.contains("last=true"));
+        assert!(summary.contains("selected=true"));
+        assert!(summary.contains("focused=false"));
+        assert!(summary.contains("disabled=true"));
+        assert!(summary.contains("label_len_bytes=22"));
+        assert!(!summary.contains("secret-value"));
+        assert!(!summary.contains("Secret"));
+        assert!(!summary.contains("Enterprise"));
     }
 }

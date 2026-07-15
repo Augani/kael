@@ -68,6 +68,910 @@ pub use prompts::*;
 
 pub(crate) const DEFAULT_WINDOW_SIZE: Size<Pixels> = size(px(1536.), px(864.));
 
+const MAX_CHECKED_WINDOW_CONTENT_SIZE: f32 = 32768.0;
+const MAX_CHECKED_WINDOW_CLIENT_INSET: f32 = 512.0;
+const MIN_CHECKED_WINDOW_REM_SIZE: f32 = 4.0;
+const MAX_CHECKED_WINDOW_REM_SIZE: f32 = 128.0;
+const MAX_CHECKED_AUTOSCROLL_BOUND_SIZE: f32 = 32768.0;
+
+/// Checked runtime content size for a native window.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowContentSize {
+    size: Size<Pixels>,
+}
+
+impl WindowContentSize {
+    /// Return the validated content size.
+    pub fn size(&self) -> Size<Pixels> {
+        self.size
+    }
+
+    /// Whether the content size is wider than it is tall.
+    pub fn is_landscape(&self) -> bool {
+        self.size.width > self.size.height
+    }
+
+    /// Whether the content size is taller than it is wide.
+    pub fn is_portrait(&self) -> bool {
+        self.size.height > self.size.width
+    }
+
+    /// Whether the content size is square.
+    pub fn is_square(&self) -> bool {
+        self.size.width == self.size.height
+    }
+
+    /// Content-safe summary for resize traces and generated UI.
+    pub fn to_text(&self) -> String {
+        format!(
+            "window content size: orientation {}",
+            window_size_orientation(self.size)
+        )
+    }
+}
+
+/// Builder for checked runtime native window resizing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowContentSizeBuilder {
+    size: Size<Pixels>,
+}
+
+impl WindowContentSizeBuilder {
+    /// Create a checked content-size request.
+    pub fn new(size: Size<Pixels>) -> Self {
+        Self { size }
+    }
+
+    /// Create a checked content-size request from width and height.
+    pub fn dimensions(width: Pixels, height: Pixels) -> Self {
+        Self::new(size(width, height))
+    }
+
+    /// Return the configured content size.
+    pub fn size(&self) -> Size<Pixels> {
+        self.size
+    }
+
+    /// Whether the content size is wider than it is tall.
+    pub fn is_landscape(&self) -> bool {
+        self.size.width > self.size.height
+    }
+
+    /// Whether the content size is taller than it is wide.
+    pub fn is_portrait(&self) -> bool {
+        self.size.height > self.size.width
+    }
+
+    /// Whether the content size is square.
+    pub fn is_square(&self) -> bool {
+        self.size.width == self.size.height
+    }
+
+    /// Content-safe summary for resize traces and generated UI.
+    pub fn to_text(&self) -> String {
+        format!(
+            "window content size builder: orientation {}",
+            window_size_orientation(self.size)
+        )
+    }
+
+    /// Validate the content size before passing it to platform resize APIs.
+    pub fn validate(&self) -> Result<()> {
+        validate_window_content_dimension(self.size.width, "window content width")?;
+        validate_window_content_dimension(self.size.height, "window content height")?;
+        Ok(())
+    }
+
+    /// Build the checked content-size request.
+    pub fn build_checked(self) -> Result<WindowContentSize> {
+        self.validate()?;
+        Ok(WindowContentSize { size: self.size })
+    }
+}
+
+fn validate_window_content_dimension(value: Pixels, label: &str) -> Result<()> {
+    anyhow::ensure!(value.0.is_finite(), "{label} must be finite");
+    anyhow::ensure!(value.0 > 0.0, "{label} must be greater than zero");
+    anyhow::ensure!(
+        value.0 <= MAX_CHECKED_WINDOW_CONTENT_SIZE,
+        "{label} cannot be larger than {MAX_CHECKED_WINDOW_CONTENT_SIZE} pixels"
+    );
+    Ok(())
+}
+
+fn window_size_orientation(size: Size<Pixels>) -> &'static str {
+    if size.width > size.height {
+        "landscape"
+    } else if size.height > size.width {
+        "portrait"
+    } else {
+        "square"
+    }
+}
+
+/// Builder for checked taskbar/dock progress state.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowProgressBuilder {
+    state: ProgressBarState,
+}
+
+impl WindowProgressBuilder {
+    /// Clear the taskbar/dock progress indicator.
+    pub fn none() -> Self {
+        Self {
+            state: ProgressBarState::None,
+        }
+    }
+
+    /// Show an indeterminate progress indicator.
+    pub fn indeterminate() -> Self {
+        Self {
+            state: ProgressBarState::Indeterminate,
+        }
+    }
+
+    /// Show normal determinate progress using an inclusive `0.0..=1.0` fraction.
+    pub fn normal(fraction: f64) -> Self {
+        Self {
+            state: ProgressBarState::Normal(fraction),
+        }
+    }
+
+    /// Show normal determinate progress from an inclusive `0..=100` percentage.
+    pub fn normal_percent(percent: u8) -> Self {
+        Self::normal(f64::from(percent) / 100.0)
+    }
+
+    /// Show a paused determinate progress indicator.
+    pub fn paused(fraction: f64) -> Self {
+        Self {
+            state: ProgressBarState::Paused(fraction),
+        }
+    }
+
+    /// Show a paused determinate progress indicator from an inclusive `0..=100` percentage.
+    pub fn paused_percent(percent: u8) -> Self {
+        Self::paused(f64::from(percent) / 100.0)
+    }
+
+    /// Show an error determinate progress indicator.
+    pub fn error(fraction: f64) -> Self {
+        Self {
+            state: ProgressBarState::Error(fraction),
+        }
+    }
+
+    /// Show an error determinate progress indicator from an inclusive `0..=100` percentage.
+    pub fn error_percent(percent: u8) -> Self {
+        Self::error(f64::from(percent) / 100.0)
+    }
+
+    /// Return the configured platform progress state.
+    pub fn state(&self) -> ProgressBarState {
+        self.state
+    }
+
+    /// Stable state name for diagnostics and generated UI.
+    pub fn kind(&self) -> &'static str {
+        self.state.kind()
+    }
+
+    /// Whether this progress request carries a fraction.
+    pub fn is_determinate(&self) -> bool {
+        self.state.is_determinate()
+    }
+
+    /// Whether this progress request clears the platform indicator.
+    pub fn is_clear(&self) -> bool {
+        self.state.is_clear()
+    }
+
+    /// Content-safe summary for taskbar/dock progress traces.
+    pub fn to_text(&self) -> String {
+        self.state.to_text()
+    }
+
+    /// Validate the progress state before passing it to platform taskbar/dock APIs.
+    pub fn validate(&self) -> Result<()> {
+        self.state.validate()
+    }
+
+    /// Build the checked platform progress state.
+    pub fn build_checked(self) -> Result<ProgressBarState> {
+        self.validate()?;
+        Ok(self.state)
+    }
+}
+
+impl Default for WindowProgressBuilder {
+    fn default() -> Self {
+        Self::none()
+    }
+}
+
+impl From<ProgressBarState> for WindowProgressBuilder {
+    fn from(state: ProgressBarState) -> Self {
+        Self { state }
+    }
+}
+
+/// Runtime snapshot of native window state for diagnostics, chrome, and agents.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowRuntimeSnapshot {
+    bounds: Bounds<Pixels>,
+    window_bounds: WindowBounds,
+    viewport_size: Size<Pixels>,
+    display_id: Option<DisplayId>,
+    scale_factor: f32,
+    appearance: WindowAppearance,
+    active: bool,
+    hovered: bool,
+    visible: bool,
+    fullscreen: bool,
+    maximized: bool,
+    power_mode: PowerMode,
+    reduce_motion: bool,
+}
+
+impl WindowRuntimeSnapshot {
+    /// Native window bounds in global coordinates.
+    pub fn bounds(&self) -> Bounds<Pixels> {
+        self.bounds
+    }
+
+    /// Persistable platform window bounds/state.
+    pub fn window_bounds(&self) -> WindowBounds {
+        self.window_bounds
+    }
+
+    /// Drawable viewport size inside the window.
+    pub fn viewport_size(&self) -> Size<Pixels> {
+        self.viewport_size
+    }
+
+    /// Display currently associated with the platform window, when known.
+    pub fn display_id(&self) -> Option<DisplayId> {
+        self.display_id
+    }
+
+    /// Platform scale factor for this window.
+    pub fn scale_factor(&self) -> f32 {
+        self.scale_factor
+    }
+
+    /// Current native appearance for this window.
+    pub fn appearance(&self) -> WindowAppearance {
+        self.appearance
+    }
+
+    /// Whether the OS reports this window as active/focused.
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
+    /// Whether the OS reports this window as owning the cursor.
+    pub fn is_hovered(&self) -> bool {
+        self.hovered
+    }
+
+    /// Whether the platform window is visible.
+    pub fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    /// Whether the platform window is fullscreen.
+    pub fn is_fullscreen(&self) -> bool {
+        self.fullscreen
+    }
+
+    /// Whether the platform window is maximized/zoomed.
+    pub fn is_maximized(&self) -> bool {
+        self.maximized
+    }
+
+    /// System power mode observed for this window frame.
+    pub fn power_mode(&self) -> PowerMode {
+        self.power_mode
+    }
+
+    /// Whether reduce-motion was active for this window frame.
+    pub fn reduce_motion(&self) -> bool {
+        self.reduce_motion
+    }
+
+    /// Whether animation-heavy chrome should run at full fidelity.
+    pub fn animations_enabled(&self) -> bool {
+        self.power_mode != PowerMode::LowPower && !self.reduce_motion
+    }
+}
+
+/// Builder for checked runtime window snapshot queries.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WindowRuntimeSnapshotQueryBuilder {
+    require_visible: bool,
+    require_active: bool,
+    require_display: bool,
+}
+
+impl WindowRuntimeSnapshotQueryBuilder {
+    /// Create a permissive runtime snapshot query.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Require the window to be visible.
+    pub fn require_visible(mut self) -> Self {
+        self.require_visible = true;
+        self
+    }
+
+    /// Require the window to be active/focused.
+    pub fn require_active(mut self) -> Self {
+        self.require_active = true;
+        self
+    }
+
+    /// Require the window to be associated with a display.
+    pub fn require_display(mut self) -> Self {
+        self.require_display = true;
+        self
+    }
+
+    /// Whether visibility is required.
+    pub fn requires_visible(&self) -> bool {
+        self.require_visible
+    }
+
+    /// Whether active/focused state is required.
+    pub fn requires_active(&self) -> bool {
+        self.require_active
+    }
+
+    /// Whether a known display is required.
+    pub fn requires_display(&self) -> bool {
+        self.require_display
+    }
+
+    /// Validate a runtime window snapshot against this query.
+    pub fn validate_snapshot(&self, snapshot: &WindowRuntimeSnapshot) -> Result<()> {
+        anyhow::ensure!(
+            !self.require_visible || snapshot.is_visible(),
+            "window is not visible"
+        );
+        anyhow::ensure!(
+            !self.require_active || snapshot.is_active(),
+            "window is not active"
+        );
+        anyhow::ensure!(
+            !self.require_display || snapshot.display_id().is_some(),
+            "window display is unknown"
+        );
+        Ok(())
+    }
+}
+
+/// Checked autoscroll bounds for native drag, selection, and editor surfaces.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowAutoscrollRequest {
+    bounds: Bounds<Pixels>,
+}
+
+impl WindowAutoscrollRequest {
+    /// Return the validated autoscroll bounds.
+    pub fn bounds(&self) -> Bounds<Pixels> {
+        self.bounds
+    }
+
+    /// Whether the autoscroll region is empty.
+    pub fn is_empty(&self) -> bool {
+        self.bounds.size.width == Pixels::ZERO || self.bounds.size.height == Pixels::ZERO
+    }
+
+    /// Content-safe summary for autoscroll traces and generated UI.
+    pub fn to_text(&self) -> String {
+        format!("window autoscroll: empty {}", self.is_empty())
+    }
+}
+
+/// Builder for checked native autoscroll requests.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowAutoscrollRequestBuilder {
+    bounds: Bounds<Pixels>,
+}
+
+impl WindowAutoscrollRequestBuilder {
+    /// Create a checked autoscroll request.
+    pub fn new(bounds: Bounds<Pixels>) -> Self {
+        Self { bounds }
+    }
+
+    /// Return the configured bounds.
+    pub fn bounds(&self) -> Bounds<Pixels> {
+        self.bounds
+    }
+
+    /// Whether the configured autoscroll region is empty.
+    pub fn is_empty(&self) -> bool {
+        self.bounds.size.width == Pixels::ZERO || self.bounds.size.height == Pixels::ZERO
+    }
+
+    /// Content-safe summary for autoscroll traces and generated UI.
+    pub fn to_text(&self) -> String {
+        format!("window autoscroll builder: empty {}", self.is_empty())
+    }
+
+    /// Validate the autoscroll bounds before they can affect containing scroll elements.
+    pub fn validate(&self) -> Result<()> {
+        validate_window_autoscroll_bounds(self.bounds)
+    }
+
+    /// Build the checked autoscroll request.
+    pub fn build_checked(self) -> Result<WindowAutoscrollRequest> {
+        self.validate()?;
+        Ok(WindowAutoscrollRequest {
+            bounds: self.bounds,
+        })
+    }
+}
+
+fn validate_window_autoscroll_bounds(bounds: Bounds<Pixels>) -> Result<()> {
+    anyhow::ensure!(
+        bounds.origin.x.0.is_finite()
+            && bounds.origin.y.0.is_finite()
+            && bounds.size.width.0.is_finite()
+            && bounds.size.height.0.is_finite(),
+        "window autoscroll bounds must use finite values"
+    );
+    anyhow::ensure!(
+        bounds.size.width >= Pixels::ZERO && bounds.size.height >= Pixels::ZERO,
+        "window autoscroll bounds cannot have negative size"
+    );
+    anyhow::ensure!(
+        bounds.size.width.0 <= MAX_CHECKED_AUTOSCROLL_BOUND_SIZE
+            && bounds.size.height.0 <= MAX_CHECKED_AUTOSCROLL_BOUND_SIZE,
+        "window autoscroll bounds cannot be larger than {MAX_CHECKED_AUTOSCROLL_BOUND_SIZE} pixels"
+    );
+    Ok(())
+}
+
+/// Checked base `rem` size for native window UI scaling.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowRemSize {
+    rem_size: Pixels,
+}
+
+impl WindowRemSize {
+    /// Return the validated rem size.
+    pub fn rem_size(&self) -> Pixels {
+        self.rem_size
+    }
+
+    /// Size class for generated density/zoom summaries.
+    pub fn size_class(&self) -> &'static str {
+        window_rem_size_class(self.rem_size)
+    }
+
+    /// Content-safe summary for layout scale traces and generated UI.
+    pub fn to_text(&self) -> String {
+        format!("window rem size: class {}", self.size_class())
+    }
+}
+
+/// Builder for checked native window rem-size changes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowRemSizeBuilder {
+    rem_size: Pixels,
+}
+
+impl WindowRemSizeBuilder {
+    /// Create a checked rem-size request.
+    pub fn new(rem_size: impl Into<Pixels>) -> Self {
+        Self {
+            rem_size: rem_size.into(),
+        }
+    }
+
+    /// Return the configured rem size.
+    pub fn rem_size(&self) -> Pixels {
+        self.rem_size
+    }
+
+    /// Size class for generated density/zoom summaries.
+    pub fn size_class(&self) -> &'static str {
+        window_rem_size_class(self.rem_size)
+    }
+
+    /// Content-safe summary for layout scale traces and generated UI.
+    pub fn to_text(&self) -> String {
+        format!("window rem size builder: class {}", self.size_class())
+    }
+
+    /// Validate the rem size before it can rescale native layout.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.rem_size.0.is_finite(),
+            "window rem size must be finite"
+        );
+        anyhow::ensure!(
+            self.rem_size.0 >= MIN_CHECKED_WINDOW_REM_SIZE,
+            "window rem size cannot be smaller than {MIN_CHECKED_WINDOW_REM_SIZE} pixels"
+        );
+        anyhow::ensure!(
+            self.rem_size.0 <= MAX_CHECKED_WINDOW_REM_SIZE,
+            "window rem size cannot be larger than {MAX_CHECKED_WINDOW_REM_SIZE} pixels"
+        );
+        Ok(())
+    }
+
+    /// Build the checked rem-size request.
+    pub fn build_checked(self) -> Result<WindowRemSize> {
+        self.validate()?;
+        Ok(WindowRemSize {
+            rem_size: self.rem_size,
+        })
+    }
+}
+
+fn window_rem_size_class(rem_size: Pixels) -> &'static str {
+    if rem_size.0 < 12.0 {
+        "compact"
+    } else if rem_size.0 <= 24.0 {
+        "standard"
+    } else {
+        "large"
+    }
+}
+
+/// Checked custom-chrome client inset for native window decorations.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowClientInset {
+    inset: Pixels,
+}
+
+impl WindowClientInset {
+    /// Return the validated inset.
+    pub fn inset(&self) -> Pixels {
+        self.inset
+    }
+
+    /// Whether this inset removes the custom chrome client margin.
+    pub fn is_zero(&self) -> bool {
+        self.inset == Pixels::ZERO
+    }
+
+    /// Content-safe summary for custom chrome traces and generated UI.
+    pub fn to_text(&self) -> String {
+        format!("window client inset: zero {}", self.is_zero())
+    }
+}
+
+/// Builder for checked client-side decoration insets.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowClientInsetBuilder {
+    inset: Pixels,
+}
+
+impl WindowClientInsetBuilder {
+    /// Create a checked client inset request.
+    pub fn new(inset: Pixels) -> Self {
+        Self { inset }
+    }
+
+    /// Return the configured inset.
+    pub fn inset(&self) -> Pixels {
+        self.inset
+    }
+
+    /// Whether this inset removes the custom chrome client margin.
+    pub fn is_zero(&self) -> bool {
+        self.inset == Pixels::ZERO
+    }
+
+    /// Content-safe summary for custom chrome traces and generated UI.
+    pub fn to_text(&self) -> String {
+        format!("window client inset builder: zero {}", self.is_zero())
+    }
+
+    /// Validate the inset before passing it to platform custom-chrome APIs.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.inset.0.is_finite(),
+            "window client inset must be finite"
+        );
+        anyhow::ensure!(
+            self.inset.0 >= 0.0,
+            "window client inset cannot be negative"
+        );
+        anyhow::ensure!(
+            self.inset.0 <= MAX_CHECKED_WINDOW_CLIENT_INSET,
+            "window client inset cannot be larger than {MAX_CHECKED_WINDOW_CLIENT_INSET} pixels"
+        );
+        Ok(())
+    }
+
+    /// Build the checked client inset request.
+    pub fn build_checked(self) -> Result<WindowClientInset> {
+        self.validate()?;
+        Ok(WindowClientInset { inset: self.inset })
+    }
+}
+
+/// Checked render policy for native window performance behavior.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowRenderPolicy {
+    frame_skip_enabled: bool,
+    reason: Option<String>,
+}
+
+impl WindowRenderPolicy {
+    /// Return whether whole-frame damage skipping should be enabled.
+    pub fn frame_skip_enabled(&self) -> bool {
+        self.frame_skip_enabled
+    }
+
+    /// Optional diagnostic reason for enabling frame skipping.
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+}
+
+/// Builder for checked native window render/performance policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowRenderPolicyBuilder {
+    frame_skip_enabled: bool,
+    reason: Option<String>,
+}
+
+impl WindowRenderPolicyBuilder {
+    /// Enable whole-frame damage skipping for mostly-static native UI.
+    pub fn frame_skip(reason: impl Into<String>) -> Self {
+        Self {
+            frame_skip_enabled: true,
+            reason: Some(reason.into()),
+        }
+    }
+
+    /// Disable whole-frame damage skipping.
+    pub fn no_frame_skip() -> Self {
+        Self {
+            frame_skip_enabled: false,
+            reason: None,
+        }
+    }
+
+    /// Return whether this policy enables whole-frame damage skipping.
+    pub fn frame_skip_requested(&self) -> bool {
+        self.frame_skip_enabled
+    }
+
+    /// Optional diagnostic reason for enabling frame skipping.
+    pub fn reason_text(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    /// Validate the render policy before applying it.
+    pub fn validate(&self) -> Result<()> {
+        if self.frame_skip_enabled {
+            let Some(reason) = &self.reason else {
+                anyhow::bail!("enabling frame skipping requires a reason");
+            };
+            validate_window_policy_reason(reason, "window render policy reason")?;
+        } else {
+            anyhow::ensure!(
+                self.reason.is_none(),
+                "disabled frame skipping policy cannot include a reason"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Build the checked render policy.
+    pub fn build_checked(self) -> Result<WindowRenderPolicy> {
+        self.validate()?;
+        Ok(WindowRenderPolicy {
+            frame_skip_enabled: self.frame_skip_enabled,
+            reason: self.reason,
+        })
+    }
+}
+
+fn validate_window_policy_reason(reason: &str, label: &str) -> Result<()> {
+    anyhow::ensure!(!reason.trim().is_empty(), "{label} cannot be empty");
+    anyhow::ensure!(
+        reason == reason.trim(),
+        "{label} cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        !reason.chars().any(char::is_control),
+        "{label} cannot contain control characters"
+    );
+    anyhow::ensure!(
+        reason.chars().count() <= 256,
+        "{label} cannot be longer than 256 characters"
+    );
+    Ok(())
+}
+
+/// Builder for checked assistive-technology announcements.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccessibilityAnnouncementBuilder {
+    message: String,
+}
+
+impl AccessibilityAnnouncementBuilder {
+    /// Create an announcement from user-facing status text.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    /// Return the configured announcement message.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Validate the announcement before passing it to assistive technology.
+    pub fn validate(&self) -> Result<()> {
+        validate_window_policy_reason(&self.message, "accessibility announcement")
+    }
+
+    /// Build the validated announcement message.
+    pub fn build_checked(self) -> Result<String> {
+        self.validate()?;
+        Ok(self.message)
+    }
+}
+
+/// Builder for checked accessibility focus changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccessibilityFocusBuilder {
+    node_id: crate::AccessibilityId,
+}
+
+impl AccessibilityFocusBuilder {
+    /// Focus an existing accessibility node.
+    pub fn new(node_id: crate::AccessibilityId) -> Self {
+        Self { node_id }
+    }
+
+    /// Return the target node id.
+    pub fn node_id(&self) -> crate::AccessibilityId {
+        self.node_id
+    }
+
+    /// Validate the target against an accessibility tree.
+    pub fn validate_tree(&self, tree: &crate::AccessibilityTree) -> Result<()> {
+        let Some(node) = tree.get(self.node_id) else {
+            anyhow::bail!(
+                "accessibility focus target {} is not present in the current tree",
+                self.node_id.0
+            );
+        };
+        anyhow::ensure!(
+            !node.states.contains(crate::AccessibilityState::HIDDEN),
+            "accessibility focus target {} is hidden",
+            self.node_id.0
+        );
+        Ok(())
+    }
+
+    /// Validate the target against the window's current accessibility tree.
+    pub fn validate(&self, window: &Window) -> Result<()> {
+        self.validate_tree(&window.accessibility_tree)
+    }
+
+    /// Build the validated focus target.
+    pub fn build_checked(self, window: &Window) -> Result<crate::AccessibilityId> {
+        self.validate(window)?;
+        Ok(self.node_id)
+    }
+}
+
+/// Checked native window opacity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowOpacity {
+    fraction: f32,
+}
+
+impl WindowOpacity {
+    /// Return the validated opacity fraction in the inclusive `0.0..=1.0` range.
+    pub fn fraction(&self) -> f32 {
+        self.fraction
+    }
+
+    /// Whether this opacity is fully opaque.
+    pub fn is_opaque(&self) -> bool {
+        self.fraction >= 1.0
+    }
+
+    /// Whether this opacity makes the native window translucent.
+    pub fn is_translucent(&self) -> bool {
+        self.fraction < 1.0
+    }
+
+    /// Content-safe summary for traces and generated UI.
+    pub fn to_text(&self) -> String {
+        format!(
+            "window opacity: {}, translucent {}",
+            if self.is_opaque() {
+                "opaque"
+            } else {
+                "fractional"
+            },
+            self.is_translucent()
+        )
+    }
+}
+
+/// Builder for checked native window opacity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowOpacityBuilder {
+    fraction: f32,
+}
+
+impl WindowOpacityBuilder {
+    /// Create a native window opacity from a fraction in the inclusive `0.0..=1.0` range.
+    pub fn fraction(fraction: f32) -> Self {
+        Self { fraction }
+    }
+
+    /// Create a fully opaque native window.
+    pub fn opaque() -> Self {
+        Self::fraction(1.0)
+    }
+
+    /// Return the configured opacity fraction.
+    pub fn value(&self) -> f32 {
+        self.fraction
+    }
+
+    /// Whether this opacity request is fully opaque.
+    pub fn is_opaque(&self) -> bool {
+        self.fraction >= 1.0
+    }
+
+    /// Whether this opacity request makes the native window translucent.
+    pub fn is_translucent(&self) -> bool {
+        self.fraction < 1.0
+    }
+
+    /// Content-safe summary for traces and generated UI.
+    pub fn to_text(&self) -> String {
+        format!(
+            "window opacity: {}, translucent {}",
+            if self.is_opaque() {
+                "opaque"
+            } else {
+                "fractional"
+            },
+            self.is_translucent()
+        )
+    }
+
+    /// Validate the opacity before passing it to platform window APIs.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.fraction.is_finite(),
+            "window opacity must be a finite fraction"
+        );
+        anyhow::ensure!(
+            (0.0..=1.0).contains(&self.fraction),
+            "window opacity must be between 0.0 and 1.0"
+        );
+        Ok(())
+    }
+
+    /// Build the checked opacity.
+    pub fn build_checked(self) -> Result<WindowOpacity> {
+        self.validate()?;
+        Ok(WindowOpacity {
+            fraction: self.fraction,
+        })
+    }
+}
+
 /// Builder for validated platform window titles.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowTitleBuilder {
@@ -85,6 +989,25 @@ impl WindowTitleBuilder {
     /// Return the configured title.
     pub fn title(&self) -> &str {
         &self.title
+    }
+
+    /// Number of Unicode scalar values in the configured title.
+    pub fn title_len_chars(&self) -> usize {
+        self.title.chars().count()
+    }
+
+    /// Whether the configured title is empty or whitespace-only before validation.
+    pub fn is_blank(&self) -> bool {
+        self.title.trim().is_empty()
+    }
+
+    /// Content-safe summary for traces and generated UI.
+    pub fn to_text(&self) -> String {
+        format!(
+            "window title: {} chars, blank {}",
+            self.title_len_chars(),
+            self.is_blank()
+        )
     }
 
     /// Validate the title before passing it to platform chrome.
@@ -137,6 +1060,26 @@ impl WindowDocumentState {
     /// Return whether the window should be marked as having unsaved changes.
     pub fn edited(&self) -> bool {
         self.edited
+    }
+
+    /// Whether a title is available without exposing the title text.
+    pub fn has_title(&self) -> bool {
+        self.title.is_some()
+    }
+
+    /// Whether a document path is associated without exposing the path.
+    pub fn has_document_path(&self) -> bool {
+        self.document_path.is_some()
+    }
+
+    /// Content-safe summary for traces and generated UI.
+    pub fn to_text(&self) -> String {
+        format!(
+            "document window state: title {}, path {}, edited {}",
+            self.has_title(),
+            self.has_document_path(),
+            self.edited
+        )
     }
 }
 
@@ -221,6 +1164,38 @@ impl WindowDocumentStateBuilder {
     /// Return whether the document should be marked edited.
     pub fn is_edited(&self) -> bool {
         self.edited
+    }
+
+    /// Whether a title is configured without exposing the title text.
+    pub fn has_title(&self) -> bool {
+        self.title.is_some()
+    }
+
+    /// Whether a document path is configured without exposing the path.
+    pub fn has_document_path(&self) -> bool {
+        self.document_path.is_some()
+    }
+
+    /// Whether the builder requires the path to exist.
+    pub fn requires_existing_path(&self) -> bool {
+        self.require_existing_path
+    }
+
+    /// Whether the builder canonicalizes the document path.
+    pub fn canonicalizes_path(&self) -> bool {
+        self.canonicalize_path
+    }
+
+    /// Content-safe summary for traces and generated UI.
+    pub fn to_text(&self) -> String {
+        format!(
+            "document window state builder: title {}, path {}, edited {}, require existing {}, canonicalize {}",
+            self.has_title(),
+            self.has_document_path(),
+            self.edited,
+            self.require_existing_path,
+            self.canonicalize_path
+        )
     }
 
     /// Validate the configured state.
@@ -336,6 +1311,25 @@ impl WindowAppIdBuilder {
         &self.app_id
     }
 
+    /// Number of bytes in the configured app id.
+    pub fn len_bytes(&self) -> usize {
+        self.app_id.len()
+    }
+
+    /// Whether the configured app id is empty or whitespace-only before validation.
+    pub fn is_blank(&self) -> bool {
+        self.app_id.trim().is_empty()
+    }
+
+    /// Content-safe summary for traces and generated UI.
+    pub fn to_text(&self) -> String {
+        format!(
+            "window app id: {} bytes, blank {}",
+            self.len_bytes(),
+            self.is_blank()
+        )
+    }
+
     /// Validate the app identifier before passing it to platform grouping APIs.
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
@@ -390,6 +1384,26 @@ impl WindowTabbingIdentifierBuilder {
     /// Return whether this builder clears the tabbing identifier.
     pub fn is_clear(&self) -> bool {
         self.identifier.is_none()
+    }
+
+    /// Whether this builder sets a non-clear tabbing identifier.
+    pub fn has_identifier(&self) -> bool {
+        self.identifier.is_some()
+    }
+
+    /// Number of bytes in the configured identifier, or zero when clearing it.
+    pub fn len_bytes(&self) -> usize {
+        self.identifier.as_ref().map_or(0, String::len)
+    }
+
+    /// Content-safe summary for traces and generated UI.
+    pub fn to_text(&self) -> String {
+        format!(
+            "window tabbing identifier: clear {}, identifier {}, {} bytes",
+            self.is_clear(),
+            self.has_identifier(),
+            self.len_bytes()
+        )
     }
 
     /// Validate the tabbing identifier before passing it to platform APIs.
@@ -767,17 +1781,27 @@ fn validate_window_presentation_reason(reason: &str) -> Result<()> {
     Ok(())
 }
 
-/// Window-level interaction command for Electron-style window show/hide/focus flows.
+/// Window-level interaction command for native desktop window show/hide/focus flows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowInteractionCommandKind {
     /// Focus and raise the current window.
     Activate,
     /// Minimize the current window.
     Minimize,
+    /// Toggle native zoom/maximize behavior for the current window.
+    ZoomWindow,
     /// Show the current window.
     Show,
     /// Hide the current window.
     Hide,
+    /// Request that the current window close through the platform lifecycle.
+    Close,
+    /// Enter platform fullscreen if the window is not already fullscreen.
+    EnterFullscreen,
+    /// Exit platform fullscreen if the window is currently fullscreen.
+    ExitFullscreen,
+    /// Toggle platform fullscreen.
+    ToggleFullscreen,
     /// Enable or disable mouse-event pass-through for overlay windows.
     MousePassthrough {
         /// Whether mouse events should pass through the window.
@@ -809,6 +1833,14 @@ impl WindowInteractionCommand {
         }
     }
 
+    /// Toggle native zoom/maximize behavior for the current window.
+    pub fn zoom_window() -> Self {
+        Self {
+            kind: WindowInteractionCommandKind::ZoomWindow,
+            reason: None,
+        }
+    }
+
     /// Show the current window.
     pub fn show() -> Self {
         Self {
@@ -821,6 +1853,38 @@ impl WindowInteractionCommand {
     pub fn hide() -> Self {
         Self {
             kind: WindowInteractionCommandKind::Hide,
+            reason: None,
+        }
+    }
+
+    /// Request that the current window close through the platform lifecycle.
+    pub fn close(reason: impl Into<String>) -> Self {
+        Self {
+            kind: WindowInteractionCommandKind::Close,
+            reason: Some(reason.into()),
+        }
+    }
+
+    /// Enter platform fullscreen if the window is not already fullscreen.
+    pub fn enter_fullscreen() -> Self {
+        Self {
+            kind: WindowInteractionCommandKind::EnterFullscreen,
+            reason: None,
+        }
+    }
+
+    /// Exit platform fullscreen if the window is currently fullscreen.
+    pub fn exit_fullscreen() -> Self {
+        Self {
+            kind: WindowInteractionCommandKind::ExitFullscreen,
+            reason: None,
+        }
+    }
+
+    /// Toggle platform fullscreen.
+    pub fn toggle_fullscreen() -> Self {
+        Self {
+            kind: WindowInteractionCommandKind::ToggleFullscreen,
             reason: None,
         }
     }
@@ -868,6 +1932,9 @@ impl WindowInteractionCommand {
                 "enabling mouse pass-through requires a reason"
             );
         }
+        if matches!(self.kind, WindowInteractionCommandKind::Close) {
+            anyhow::ensure!(self.reason.is_some(), "closing a window requires a reason");
+        }
 
         if let Some(reason) = &self.reason {
             validate_window_interaction_reason(reason)?;
@@ -897,7 +1964,271 @@ fn validate_window_interaction_reason(reason: &str) -> Result<()> {
     Ok(())
 }
 
-/// Window-manager/custom-chrome command for Electron-style frameless windows.
+/// Checked whole-window cursor style request for generated native UI surfaces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowCursorStyleCommand {
+    style: CursorStyle,
+    reason: String,
+}
+
+impl WindowCursorStyleCommand {
+    /// Set a cursor style for the entire window for the upcoming frame.
+    pub fn new(style: CursorStyle, reason: impl Into<String>) -> Self {
+        Self {
+            style,
+            reason: reason.into(),
+        }
+    }
+
+    /// Return the requested cursor style.
+    pub fn style(&self) -> CursorStyle {
+        self.style
+    }
+
+    /// Diagnostic reason for applying a whole-window cursor style.
+    pub fn reason_text(&self) -> &str {
+        &self.reason
+    }
+
+    /// Whether a diagnostic reason is present.
+    pub fn has_reason(&self) -> bool {
+        !self.reason.is_empty()
+    }
+
+    /// Content-safe summary for cursor override traces and generated UI.
+    pub fn to_text(&self) -> String {
+        format!(
+            "window cursor: style {:?}, reason {}",
+            self.style,
+            self.has_reason()
+        )
+    }
+
+    /// Validate the cursor command before it overrides element cursor styles.
+    pub fn validate(&self) -> Result<()> {
+        validate_window_interaction_reason(&self.reason)
+    }
+}
+
+/// Checked native z-order policy for native desktop always-on-top windows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowZOrderPolicy {
+    always_on_top: bool,
+    reason: Option<String>,
+}
+
+impl WindowZOrderPolicy {
+    /// Return whether the platform window should stay above normal app windows.
+    pub fn always_on_top(&self) -> bool {
+        self.always_on_top
+    }
+
+    /// Optional diagnostic reason for enabling always-on-top behavior.
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+}
+
+/// Builder for checked native z-order policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowZOrderPolicyBuilder {
+    always_on_top: bool,
+    reason: Option<String>,
+}
+
+impl WindowZOrderPolicyBuilder {
+    /// Keep this window above normal app windows.
+    pub fn always_on_top(reason: impl Into<String>) -> Self {
+        Self {
+            always_on_top: true,
+            reason: Some(reason.into()),
+        }
+    }
+
+    /// Return this window to normal platform z-order behavior.
+    pub fn normal() -> Self {
+        Self {
+            always_on_top: false,
+            reason: None,
+        }
+    }
+
+    /// Return whether the policy enables always-on-top behavior.
+    pub fn is_always_on_top(&self) -> bool {
+        self.always_on_top
+    }
+
+    /// Optional diagnostic reason for enabling always-on-top behavior.
+    pub fn reason_text(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    /// Validate the policy before changing platform z-order state.
+    pub fn validate(&self) -> Result<()> {
+        if self.always_on_top {
+            let Some(reason) = &self.reason else {
+                anyhow::bail!("always-on-top windows require a reason");
+            };
+            validate_window_interaction_reason(reason)?;
+        } else {
+            anyhow::ensure!(
+                self.reason.is_none(),
+                "normal z-order policy cannot include a reason"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Build the checked policy.
+    pub fn build_checked(self) -> Result<WindowZOrderPolicy> {
+        self.validate()?;
+        Ok(WindowZOrderPolicy {
+            always_on_top: self.always_on_top,
+            reason: self.reason,
+        })
+    }
+}
+
+/// Native system-UI command for platform window affordances.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowSystemUiCommandKind {
+    /// Open the platform character palette for emoji, symbols, and special characters.
+    ShowCharacterPalette,
+    /// Perform the platform titlebar double-click action.
+    TitlebarDoubleClick,
+    /// Toggle platform window zoom/maximize behavior.
+    ZoomWindow,
+}
+
+/// Checked native system-UI command for editor, custom-titlebar, and desktop flows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowSystemUiCommand {
+    kind: WindowSystemUiCommandKind,
+    reason: Option<String>,
+}
+
+impl WindowSystemUiCommand {
+    /// Open the platform character palette for emoji, symbols, and special characters.
+    pub fn show_character_palette() -> Self {
+        Self {
+            kind: WindowSystemUiCommandKind::ShowCharacterPalette,
+            reason: None,
+        }
+    }
+
+    /// Perform the platform titlebar double-click action.
+    pub fn titlebar_double_click() -> Self {
+        Self {
+            kind: WindowSystemUiCommandKind::TitlebarDoubleClick,
+            reason: None,
+        }
+    }
+
+    /// Toggle platform window zoom/maximize behavior.
+    pub fn zoom_window() -> Self {
+        Self {
+            kind: WindowSystemUiCommandKind::ZoomWindow,
+            reason: None,
+        }
+    }
+
+    /// Attach a diagnostic reason to the command.
+    pub fn reason(mut self, reason: impl Into<String>) -> Self {
+        self.reason = Some(reason.into());
+        self
+    }
+
+    /// The command kind.
+    pub fn kind(&self) -> WindowSystemUiCommandKind {
+        self.kind
+    }
+
+    /// Optional diagnostic reason for the command.
+    pub fn reason_text(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    /// Validate the command before dispatching it to the platform window.
+    pub fn validate(&self) -> Result<()> {
+        if let Some(reason) = &self.reason {
+            validate_window_interaction_reason(reason)?;
+        }
+
+        Ok(())
+    }
+}
+
+/// Native window-tab command for document and workspace window management.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowTabCommandKind {
+    /// Merge compatible app windows into a single tabbed window.
+    MergeAllWindows,
+    /// Move the current tab into a new containing window.
+    MoveTabToNewWindow,
+    /// Show or hide the native tab overview.
+    ToggleTabOverview,
+}
+
+/// Checked native window-tab command for document and workspace flows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowTabCommand {
+    kind: WindowTabCommandKind,
+    reason: Option<String>,
+}
+
+impl WindowTabCommand {
+    /// Merge compatible app windows into a single tabbed window.
+    pub fn merge_all_windows() -> Self {
+        Self {
+            kind: WindowTabCommandKind::MergeAllWindows,
+            reason: None,
+        }
+    }
+
+    /// Move the current tab into a new containing window.
+    pub fn move_tab_to_new_window() -> Self {
+        Self {
+            kind: WindowTabCommandKind::MoveTabToNewWindow,
+            reason: None,
+        }
+    }
+
+    /// Show or hide the native tab overview.
+    pub fn toggle_tab_overview() -> Self {
+        Self {
+            kind: WindowTabCommandKind::ToggleTabOverview,
+            reason: None,
+        }
+    }
+
+    /// Attach a diagnostic reason to the command.
+    pub fn reason(mut self, reason: impl Into<String>) -> Self {
+        self.reason = Some(reason.into());
+        self
+    }
+
+    /// The command kind.
+    pub fn kind(&self) -> WindowTabCommandKind {
+        self.kind
+    }
+
+    /// Optional diagnostic reason for the command.
+    pub fn reason_text(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    /// Validate the command before dispatching it to the platform window.
+    pub fn validate(&self) -> Result<()> {
+        if let Some(reason) = &self.reason {
+            validate_window_interaction_reason(reason)?;
+        }
+
+        Ok(())
+    }
+}
+
+/// Window-manager/custom-chrome command for native desktop frameless windows.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WindowChromeCommandKind {
     /// Request server-side or client-side platform decorations.
@@ -908,6 +2239,38 @@ pub enum WindowChromeCommandKind {
     StartMove,
     /// Ask the compositor to begin resizing the window from an edge/corner.
     StartResize(ResizeEdge),
+}
+
+impl WindowChromeCommandKind {
+    /// Stable command key for diagnostics and generated UI.
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::RequestDecorations(_) => "request-decorations",
+            Self::ShowWindowMenu(_) => "show-window-menu",
+            Self::StartMove => "start-move",
+            Self::StartResize(_) => "start-resize",
+        }
+    }
+
+    /// Whether this command includes a window-space menu position.
+    pub fn has_position(&self) -> bool {
+        matches!(self, Self::ShowWindowMenu(_))
+    }
+
+    /// Whether this command includes a resize edge.
+    pub fn has_resize_edge(&self) -> bool {
+        matches!(self, Self::StartResize(_))
+    }
+
+    /// Whether this command requests client-side decorations.
+    pub fn requests_client_decorations(&self) -> bool {
+        matches!(self, Self::RequestDecorations(WindowDecorations::Client))
+    }
+
+    /// Whether this command requests server-side decorations.
+    pub fn requests_server_decorations(&self) -> bool {
+        matches!(self, Self::RequestDecorations(WindowDecorations::Server))
+    }
 }
 
 /// Checked custom-window-chrome command for titlebars, menus, move, and resize.
@@ -964,6 +2327,29 @@ impl WindowChromeCommand {
     /// Optional diagnostic reason for the command.
     pub fn reason_text(&self) -> Option<&str> {
         self.reason.as_deref()
+    }
+
+    /// Whether a diagnostic reason is present.
+    pub fn has_reason(&self) -> bool {
+        self.reason.is_some()
+    }
+
+    /// Stable command key for diagnostics and generated UI.
+    pub fn key(&self) -> &'static str {
+        self.kind.key()
+    }
+
+    /// Content-safe summary for custom chrome traces and generated UI.
+    pub fn to_text(&self) -> String {
+        format!(
+            "window chrome command: kind {}, reason {}, position {}, resize-edge {}, client-decorations {}, server-decorations {}",
+            self.key(),
+            self.has_reason(),
+            self.kind.has_position(),
+            self.kind.has_resize_edge(),
+            self.kind.requests_client_decorations(),
+            self.kind.requests_server_decorations()
+        )
     }
 
     /// Validate the command before dispatching it to the platform window.
@@ -1518,6 +2904,28 @@ pub enum WindowControlArea {
     Min,
 }
 
+impl WindowControlArea {
+    /// Stable label for diagnostics and generated custom titlebar hit regions.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Drag => "drag",
+            Self::Close => "close",
+            Self::Max => "max",
+            Self::Min => "min",
+        }
+    }
+
+    /// Whether this area moves the window instead of activating a button.
+    pub fn is_drag_region(self) -> bool {
+        matches!(self, Self::Drag)
+    }
+
+    /// Whether this area represents a native window-control button.
+    pub fn is_button(self) -> bool {
+        !self.is_drag_region()
+    }
+}
+
 /// An identifier for a [Hitbox] which also includes [HitboxBehavior].
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct HitboxId(u64);
@@ -1922,6 +3330,8 @@ pub struct Window {
     pub(crate) client_inset: Option<Pixels>,
     pub(crate) accessibility_tree: crate::AccessibilityTree,
     accessibility_parent_stack: SmallVec<[crate::AccessibilityId; 16]>,
+    accessibility_path_ids: FxHashMap<(crate::AccessibilityId, u32), crate::AccessibilityId>,
+    accessibility_child_ordinals: FxHashMap<crate::AccessibilityId, u32>,
     pub(crate) accessibility_announcements: Vec<String>,
     accessibility_action_router: crate::AccessibilityActionRouter,
     pending_accessibility_actions: Vec<crate::AccessibilityActionRequest>,
@@ -2366,6 +3776,8 @@ impl Window {
                 crate::AccessibilityRole::Window,
             )),
             accessibility_parent_stack: SmallVec::new(),
+            accessibility_path_ids: FxHashMap::default(),
+            accessibility_child_ordinals: FxHashMap::default(),
             accessibility_announcements: Vec::new(),
             accessibility_action_router: crate::AccessibilityActionRouter::new(),
             pending_accessibility_actions: Vec::new(),
@@ -2566,6 +3978,16 @@ impl Window {
         self.frame_skip.set_enabled(enabled);
     }
 
+    /// Validate and apply window render/performance policy.
+    pub fn set_render_policy_checked(
+        &mut self,
+        policy: WindowRenderPolicyBuilder,
+    ) -> Result<WindowRenderPolicy> {
+        let policy = policy.build_checked()?;
+        self.set_frame_skip_enabled(policy.frame_skip_enabled());
+        Ok(policy)
+    }
+
     /// Whether whole-frame damage skipping is currently enabled.
     pub fn frame_skip_enabled(&self) -> bool {
         self.frame_skip.is_enabled()
@@ -2707,6 +4129,22 @@ impl Window {
         description.map(SharedString::from)
     }
 
+    /// Return a stable identity for an accessible element without an explicit id.
+    pub(crate) fn next_anonymous_accessibility_id(&mut self) -> crate::AccessibilityId {
+        let parent = self
+            .accessibility_parent_stack
+            .last()
+            .copied()
+            .unwrap_or(self.accessibility_tree.root);
+        let ordinal = self.accessibility_child_ordinals.entry(parent).or_default();
+        let key = (parent, *ordinal);
+        *ordinal = ordinal.saturating_add(1);
+        *self
+            .accessibility_path_ids
+            .entry(key)
+            .or_insert_with(crate::AccessibilityId::new)
+    }
+
     /// Register an accessibility node for the current frame.
     pub fn register_accessibility_node(&mut self, mut node: crate::AccessibilityNode) {
         if node.parent.is_none() {
@@ -2730,8 +4168,13 @@ impl Window {
 
     /// Rebuild the accessibility tree from nodes collected during the frame.
     pub fn update_accessibility_tree(&mut self) {
-        let root = crate::AccessibilityNode::new(crate::AccessibilityRole::Window);
-        let root_id = root.id;
+        // AccessKit adapters retain the consumer tree after activation. The root
+        // identifier is therefore a window-lifetime identity, not a frame-lifetime
+        // identity. Replacing it on every draw leaves the consumer applying child
+        // changes to a root that no longer exists and can abort the host process.
+        let root_id = self.accessibility_tree.root;
+        let mut root = crate::AccessibilityNode::new(crate::AccessibilityRole::Window);
+        root.id = root_id;
         let mut tree = crate::AccessibilityTree::new(root);
         let nodes = self
             .rendered_frame
@@ -2747,6 +4190,14 @@ impl Window {
         self.accessibility_tree = tree;
     }
 
+    /// Return the latest accessibility tree produced for this window.
+    ///
+    /// This is useful for diagnostics, automated accessibility verification,
+    /// and platform integrations that need a read-only semantic snapshot.
+    pub fn accessibility_tree(&self) -> &crate::AccessibilityTree {
+        &self.accessibility_tree
+    }
+
     /// Focus the given accessibility node in the tree.
     pub fn focus_accessibility_node(&mut self, id: crate::AccessibilityId) {
         if let Some(node) = self.accessibility_tree.get_mut(id) {
@@ -2759,9 +4210,29 @@ impl Window {
         }
     }
 
+    /// Validate and focus an accessibility node in the current tree.
+    pub fn focus_accessibility_node_checked(
+        &mut self,
+        focus: AccessibilityFocusBuilder,
+    ) -> Result<crate::AccessibilityId> {
+        let id = focus.build_checked(self)?;
+        self.focus_accessibility_node(id);
+        Ok(id)
+    }
+
     /// Announce a message to assistive technology.
     pub fn announce_accessibility(&mut self, message: &str) {
         self.accessibility_announcements.push(message.to_string());
+    }
+
+    /// Validate and announce a message to assistive technology.
+    pub fn announce_accessibility_checked(
+        &mut self,
+        announcement: AccessibilityAnnouncementBuilder,
+    ) -> Result<String> {
+        let message = announcement.build_checked()?;
+        self.announce_accessibility(&message);
+        Ok(message)
     }
 
     /// Register a handler for an assistive-technology action on one node.
@@ -2804,6 +4275,15 @@ impl Window {
                 );
             }
         }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn dispatch_accessibility_action_for_test(
+        &mut self,
+        request: crate::AccessibilityActionRequest,
+    ) {
+        self.dispatch_accessibility_actions(vec![request]);
     }
 
     /// Remove focus from all elements within this context's window.
@@ -3199,9 +4679,45 @@ impl Window {
         self.platform_window.resize(size);
     }
 
+    /// Validate and set the content size of the window.
+    pub fn resize_checked(&mut self, size: WindowContentSizeBuilder) -> Result<WindowContentSize> {
+        let size = size.build_checked()?;
+        self.resize(size.size());
+        Ok(size)
+    }
+
     /// Returns whether or not the window is currently fullscreen
     pub fn is_fullscreen(&self) -> bool {
         self.platform_window.is_fullscreen()
+    }
+
+    /// Capture a runtime snapshot of native window state for diagnostics and generated chrome.
+    pub fn runtime_snapshot(&self) -> WindowRuntimeSnapshot {
+        WindowRuntimeSnapshot {
+            bounds: self.bounds(),
+            window_bounds: self.window_bounds(),
+            viewport_size: self.viewport_size(),
+            display_id: self.display_id,
+            scale_factor: self.scale_factor(),
+            appearance: self.appearance(),
+            active: self.is_window_active(),
+            hovered: self.is_window_hovered(),
+            visible: self.is_window_visible(),
+            fullscreen: self.is_fullscreen(),
+            maximized: self.is_maximized(),
+            power_mode: self.power_mode(),
+            reduce_motion: self.reduce_motion(),
+        }
+    }
+
+    /// Capture and validate a runtime window snapshot.
+    pub fn runtime_snapshot_checked(
+        &self,
+        query: WindowRuntimeSnapshotQueryBuilder,
+    ) -> Result<WindowRuntimeSnapshot> {
+        let snapshot = self.runtime_snapshot();
+        query.validate_snapshot(&snapshot)?;
+        Ok(snapshot)
     }
 
     pub(crate) fn appearance_changed(&mut self, cx: &mut App) {
@@ -3265,6 +4781,16 @@ impl Window {
         self.platform_window.set_client_inset(inset);
     }
 
+    /// Validate and set the custom-chrome client inset.
+    pub fn set_client_inset_checked(
+        &mut self,
+        inset: WindowClientInsetBuilder,
+    ) -> Result<WindowClientInset> {
+        let inset = inset.build_checked()?;
+        self.set_client_inset(inset.inset());
+        Ok(inset)
+    }
+
     /// Returns the client_inset value by [`Self::set_client_inset`].
     pub fn client_inset(&self) -> Option<Pixels> {
         self.client_inset
@@ -3308,6 +4834,33 @@ impl Window {
     pub fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {
         self.platform_window
             .set_background_appearance(background_appearance);
+    }
+
+    /// Set native window opacity as an unchecked fraction in the inclusive `0.0..=1.0` range.
+    pub fn set_opacity(&self, opacity: f32) {
+        self.platform_window.set_opacity(opacity);
+    }
+
+    /// Validate and set native window opacity.
+    pub fn set_opacity_checked(&self, opacity: WindowOpacityBuilder) -> Result<WindowOpacity> {
+        let opacity = opacity.build_checked()?;
+        self.set_opacity(opacity.fraction());
+        Ok(opacity)
+    }
+
+    /// Set whether the platform window should stay above normal app windows.
+    pub fn set_always_on_top(&self, always_on_top: bool) {
+        self.platform_window.set_always_on_top(always_on_top);
+    }
+
+    /// Validate and set native z-order policy.
+    pub fn set_z_order_policy_checked(
+        &self,
+        policy: WindowZOrderPolicyBuilder,
+    ) -> Result<WindowZOrderPolicy> {
+        let policy = policy.build_checked()?;
+        self.set_always_on_top(policy.always_on_top());
+        Ok(policy)
     }
 
     /// Mark the window as dirty at the platform level.
@@ -3368,6 +4921,20 @@ impl Window {
         self.platform_window.show_character_palette();
     }
 
+    /// Validate and perform a native system-UI command.
+    pub fn perform_window_system_ui_command_checked(
+        &self,
+        command: WindowSystemUiCommand,
+    ) -> Result<WindowSystemUiCommand> {
+        command.validate()?;
+        match command.kind() {
+            WindowSystemUiCommandKind::ShowCharacterPalette => self.show_character_palette(),
+            WindowSystemUiCommandKind::TitlebarDoubleClick => self.titlebar_double_click(),
+            WindowSystemUiCommandKind::ZoomWindow => self.zoom_window(),
+        }
+        Ok(command)
+    }
+
     /// The scale factor of the display associated with the window. For example, it could
     /// return 2.0 for a "retina" display, indicating that each logical pixel should actually
     /// be rendered as two pixels on screen.
@@ -3394,6 +4961,16 @@ impl Window {
     /// UI to scale, just like zooming a web page.
     pub fn set_rem_size(&mut self, rem_size: impl Into<Pixels>) {
         self.rem_size = rem_size.into();
+    }
+
+    /// Validate and set the base font em size for native window UI scaling.
+    pub fn set_rem_size_checked(
+        &mut self,
+        rem_size: WindowRemSizeBuilder,
+    ) -> Result<WindowRemSize> {
+        let rem_size = rem_size.build_checked()?;
+        self.set_rem_size(rem_size.rem_size());
+        Ok(rem_size)
     }
 
     /// Acquire a globally unique identifier for the given ElementId.
@@ -3494,6 +5071,7 @@ impl Window {
         self.invalidator.set_dirty(false);
         self.requested_autoscroll = None;
         self.accessibility_parent_stack.clear();
+        self.accessibility_child_ordinals.clear();
 
         // Restore the previously-used input handler.
         if let Some(input_handler) = self.platform_window.take_input_handler() {
@@ -3518,6 +5096,8 @@ impl Window {
         mem::swap(&mut self.rendered_frame, &mut self.next_frame);
         self.next_frame.clear();
         self.update_accessibility_tree();
+        self.accessibility_action_router
+            .retain_nodes(self.accessibility_tree.nodes.keys().copied());
         let accessibility_actions = self
             .platform_window
             .update_accessibility_tree(&self.accessibility_tree);
@@ -4158,6 +5738,16 @@ impl Window {
         })
     }
 
+    /// Validate and set a cursor style for the entire window for the upcoming frame.
+    pub fn set_window_cursor_style_checked(
+        &mut self,
+        command: WindowCursorStyleCommand,
+    ) -> Result<WindowCursorStyleCommand> {
+        command.validate()?;
+        self.set_window_cursor_style(command.style());
+        Ok(command)
+    }
+
     /// Sets a tooltip to be rendered for the upcoming frame. This method should only be called
     /// during the paint phase of element drawing.
     pub fn set_tooltip(&mut self, tooltip: AnyTooltip) -> TooltipId {
@@ -4386,6 +5976,16 @@ impl Window {
     pub fn request_autoscroll(&mut self, bounds: Bounds<Pixels>) {
         self.invalidator.debug_assert_prepaint();
         self.requested_autoscroll = Some(bounds);
+    }
+
+    /// Validate and request autoscroll for drag, selection, and editor surfaces.
+    pub fn request_autoscroll_checked(
+        &mut self,
+        request: WindowAutoscrollRequestBuilder,
+    ) -> Result<WindowAutoscrollRequest> {
+        let request = request.build_checked()?;
+        self.request_autoscroll(request.bounds());
+        Ok(request)
     }
 
     /// This method can be called from a containing element such as [`crate::List`] to support the autoscroll behavior
@@ -6660,6 +8260,11 @@ impl Window {
         self.platform_window.hide();
     }
 
+    /// Request that the current window close through the platform lifecycle.
+    pub fn close_window(&self) {
+        self.platform_window.close();
+    }
+
     /// Returns whether the current window is visible at the platform level.
     pub fn is_window_visible(&self) -> bool {
         self.platform_window.is_visible()
@@ -6679,8 +8284,21 @@ impl Window {
         match command.kind() {
             WindowInteractionCommandKind::Activate => self.activate_window(),
             WindowInteractionCommandKind::Minimize => self.minimize_window(),
+            WindowInteractionCommandKind::ZoomWindow => self.zoom_window(),
             WindowInteractionCommandKind::Show => self.show_window(),
             WindowInteractionCommandKind::Hide => self.hide_window(),
+            WindowInteractionCommandKind::Close => self.close_window(),
+            WindowInteractionCommandKind::EnterFullscreen => {
+                if !self.is_fullscreen() {
+                    self.toggle_fullscreen();
+                }
+            }
+            WindowInteractionCommandKind::ExitFullscreen => {
+                if self.is_fullscreen() {
+                    self.toggle_fullscreen();
+                }
+            }
+            WindowInteractionCommandKind::ToggleFullscreen => self.toggle_fullscreen(),
             WindowInteractionCommandKind::MousePassthrough { enabled } => {
                 self.set_mouse_passthrough(enabled);
             }
@@ -6749,8 +8367,11 @@ impl Window {
     }
 
     /// Validate and set the progress bar state for this window's taskbar/dock representation.
-    pub fn set_progress_bar_checked(&self, state: ProgressBarState) -> Result<()> {
-        state.validate()?;
+    pub fn set_progress_bar_checked(
+        &self,
+        progress: impl Into<WindowProgressBuilder>,
+    ) -> Result<()> {
+        let state = progress.into().build_checked()?;
         self.set_progress_bar(state);
         Ok(())
     }
@@ -7074,6 +8695,21 @@ impl Window {
     /// This is macOS specific.
     pub fn toggle_window_tab_overview(&self) {
         self.platform_window.toggle_window_tab_overview()
+    }
+
+    /// Validate and perform a native window-tab command.
+    /// This is macOS specific.
+    pub fn perform_window_tab_command_checked(
+        &self,
+        command: WindowTabCommand,
+    ) -> Result<WindowTabCommand> {
+        command.validate()?;
+        match command.kind() {
+            WindowTabCommandKind::MergeAllWindows => self.merge_all_windows(),
+            WindowTabCommandKind::MoveTabToNewWindow => self.move_tab_to_new_window(),
+            WindowTabCommandKind::ToggleTabOverview => self.toggle_window_tab_overview(),
+        }
+        Ok(command)
     }
 
     /// Sets the tabbing identifier for the window.
@@ -7809,22 +9445,39 @@ pub fn outline(
 #[cfg(test)]
 mod tests {
     use super::{
-        WindowAppIdBuilder, WindowAtlasBudgetBuilder, WindowChromeCommand, WindowChromeCommandKind,
-        WindowContentProtectionBuilder, WindowContentProtectionMode, WindowDocumentStateBuilder,
-        WindowInteractionCommand, WindowInteractionCommandKind, WindowPresentationMode,
-        WindowPresentationPolicyBuilder, WindowTabbingIdentifierBuilder, WindowTitleBuilder,
+        AccessibilityAnnouncementBuilder, AccessibilityFocusBuilder, WindowAppIdBuilder,
+        WindowAtlasBudgetBuilder, WindowAutoscrollRequestBuilder, WindowChromeCommand,
+        WindowChromeCommandKind, WindowClientInsetBuilder, WindowContentProtectionBuilder,
+        WindowContentProtectionMode, WindowContentSizeBuilder, WindowCursorStyleCommand,
+        WindowDocumentStateBuilder, WindowInteractionCommand, WindowInteractionCommandKind,
+        WindowOpacityBuilder, WindowPresentationMode, WindowPresentationPolicyBuilder,
+        WindowProgressBuilder, WindowRemSizeBuilder, WindowRenderPolicyBuilder,
+        WindowRuntimeSnapshot, WindowRuntimeSnapshotQueryBuilder, WindowSystemUiCommand,
+        WindowSystemUiCommandKind, WindowTabCommand, WindowTabCommandKind,
+        WindowTabbingIdentifierBuilder, WindowTitleBuilder, WindowZOrderPolicyBuilder,
     };
-    use crate::{ResizeEdge, WindowDecorations, point, px};
+    use crate::{
+        AccessibilityId, AccessibilityNode, AccessibilityRole, AccessibilityState,
+        AccessibilityTree, Bounds, CursorStyle, DisplayId, PowerMode, ProgressBarState, ResizeEdge,
+        WindowAppearance, WindowBounds, WindowDecorations, point, px, size,
+    };
 
     #[test]
     fn window_title_builder_validates_platform_chrome_text() {
         let title = WindowTitleBuilder::new("Project - Report.md");
         assert!(title.validate().is_ok());
         assert_eq!(title.title(), "Project - Report.md");
+        assert_eq!(title.title_len_chars(), 19);
+        assert!(!title.is_blank());
+        assert_eq!(title.to_text(), "window title: 19 chars, blank false");
+        assert!(!title.to_text().contains("Project"));
         assert_eq!(
             title.build_checked().unwrap(),
             "Project - Report.md".to_string()
         );
+        let blank = WindowTitleBuilder::new(" ");
+        assert!(blank.is_blank());
+        assert_eq!(blank.to_text(), "window title: 1 chars, blank true");
 
         assert!(WindowTitleBuilder::new("").validate().is_err());
         assert!(WindowTitleBuilder::new(" ").validate().is_err());
@@ -7843,8 +9496,15 @@ mod tests {
         let app_id = WindowAppIdBuilder::new("com.example.app");
         assert!(app_id.validate().is_ok());
         assert_eq!(app_id.app_id(), "com.example.app");
+        assert_eq!(app_id.len_bytes(), 15);
+        assert!(!app_id.is_blank());
+        assert_eq!(app_id.to_text(), "window app id: 15 bytes, blank false");
+        assert!(!app_id.to_text().contains("com.example.app"));
         assert_eq!(app_id.build_checked().unwrap(), "com.example.app");
 
+        let blank = WindowAppIdBuilder::new(" ");
+        assert!(blank.is_blank());
+        assert_eq!(blank.to_text(), "window app id: 1 bytes, blank true");
         assert!(WindowAppIdBuilder::new("").validate().is_err());
         assert!(WindowAppIdBuilder::new(" ").validate().is_err());
         assert!(
@@ -7870,10 +9530,375 @@ mod tests {
     }
 
     #[test]
+    fn accessibility_announcement_builder_validates_live_region_text() {
+        let announcement = AccessibilityAnnouncementBuilder::new("Upload complete");
+        assert!(announcement.validate().is_ok());
+        assert_eq!(announcement.message(), "Upload complete");
+        assert_eq!(
+            announcement.build_checked().unwrap(),
+            "Upload complete".to_string()
+        );
+
+        assert!(
+            AccessibilityAnnouncementBuilder::new("")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            AccessibilityAnnouncementBuilder::new(" Upload complete")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            AccessibilityAnnouncementBuilder::new("Upload\ncomplete")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            AccessibilityAnnouncementBuilder::new("x".repeat(257))
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn accessibility_focus_builder_validates_current_tree_target() {
+        let root = AccessibilityNode::new(AccessibilityRole::Window);
+        let mut tree = AccessibilityTree::new(root);
+        let button = AccessibilityNode::new(AccessibilityRole::Button).with_label("Save");
+        let button_id = button.id;
+        tree.insert(button);
+        let hidden = AccessibilityNode::new(AccessibilityRole::Button)
+            .with_label("Hidden")
+            .with_states(AccessibilityState::HIDDEN);
+        let hidden_id = hidden.id;
+        tree.insert(hidden);
+
+        let focus = AccessibilityFocusBuilder::new(button_id);
+        assert_eq!(focus.node_id(), button_id);
+        assert!(focus.validate_tree(&tree).is_ok());
+
+        assert!(
+            AccessibilityFocusBuilder::new(AccessibilityId::new())
+                .validate_tree(&tree)
+                .is_err()
+        );
+        assert!(
+            AccessibilityFocusBuilder::new(hidden_id)
+                .validate_tree(&tree)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn window_content_size_builder_validates_runtime_resize() {
+        let builder = WindowContentSizeBuilder::new(size(px(640.0), px(480.0)));
+        assert!(builder.is_landscape());
+        assert!(!builder.is_portrait());
+        assert!(!builder.is_square());
+        assert_eq!(
+            builder.to_text(),
+            "window content size builder: orientation landscape"
+        );
+        assert!(!builder.to_text().contains("640"));
+        let request = builder.build_checked().unwrap();
+        assert_eq!(request.size(), size(px(640.0), px(480.0)));
+        assert!(request.is_landscape());
+        assert_eq!(
+            request.to_text(),
+            "window content size: orientation landscape"
+        );
+        assert!(!request.to_text().contains("480"));
+
+        assert!(
+            WindowContentSizeBuilder::dimensions(px(0.0), px(480.0))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowContentSizeBuilder::dimensions(px(640.0), px(-1.0))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowContentSizeBuilder::dimensions(px(f32::NAN), px(480.0))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowContentSizeBuilder::dimensions(px(640.0), px(f32::INFINITY))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowContentSizeBuilder::dimensions(px(32769.0), px(480.0))
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn window_progress_builder_validates_taskbar_progress() {
+        let normal = WindowProgressBuilder::normal_percent(37);
+        assert_eq!(normal.kind(), "normal");
+        assert!(normal.is_determinate());
+        assert!(!normal.is_clear());
+        assert_eq!(
+            normal.to_text(),
+            "window progress: kind normal, determinate true"
+        );
+        assert!(!normal.to_text().contains("0.37"));
+        assert_eq!(
+            normal.build_checked().unwrap(),
+            ProgressBarState::Normal(0.37)
+        );
+        assert_eq!(
+            WindowProgressBuilder::paused_percent(100)
+                .build_checked()
+                .unwrap(),
+            ProgressBarState::Paused(1.0)
+        );
+        assert_eq!(
+            WindowProgressBuilder::error_percent(0)
+                .build_checked()
+                .unwrap(),
+            ProgressBarState::Error(0.0)
+        );
+        let indeterminate = WindowProgressBuilder::indeterminate();
+        assert_eq!(indeterminate.kind(), "indeterminate");
+        assert!(!indeterminate.is_determinate());
+        assert!(!indeterminate.is_clear());
+        assert_eq!(
+            indeterminate.to_text(),
+            "window progress: kind indeterminate, determinate false"
+        );
+        assert_eq!(
+            indeterminate.build_checked().unwrap(),
+            ProgressBarState::Indeterminate
+        );
+        let clear = WindowProgressBuilder::none();
+        assert_eq!(clear.kind(), "none");
+        assert!(!clear.is_determinate());
+        assert!(clear.is_clear());
+        assert_eq!(
+            clear.to_text(),
+            "window progress: kind none, determinate false"
+        );
+        assert_eq!(clear.build_checked().unwrap(), ProgressBarState::None);
+        assert_eq!(
+            WindowProgressBuilder::from(ProgressBarState::Normal(0.5)).state(),
+            ProgressBarState::Normal(0.5)
+        );
+        let error_state = ProgressBarState::Error(0.5);
+        assert_eq!(error_state.kind(), "error");
+        assert!(error_state.is_determinate());
+        assert!(!error_state.is_clear());
+        assert_eq!(
+            error_state.to_text(),
+            "window progress: kind error, determinate true"
+        );
+        assert!(!error_state.to_text().contains("0.5"));
+
+        for value in [-0.1, 1.1, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(WindowProgressBuilder::normal(value).validate().is_err());
+            assert!(WindowProgressBuilder::paused(value).validate().is_err());
+            assert!(WindowProgressBuilder::error(value).validate().is_err());
+        }
+    }
+
+    #[test]
+    fn window_runtime_snapshot_query_validates_required_state() {
+        let bounds = Bounds::new(point(px(10.0), px(20.0)), size(px(640.0), px(480.0)));
+        let snapshot = WindowRuntimeSnapshot {
+            bounds,
+            window_bounds: WindowBounds::Windowed(bounds),
+            viewport_size: size(px(640.0), px(480.0)),
+            display_id: Some(DisplayId(7)),
+            scale_factor: 2.0,
+            appearance: WindowAppearance::Dark,
+            active: true,
+            hovered: true,
+            visible: true,
+            fullscreen: false,
+            maximized: false,
+            power_mode: PowerMode::Performance,
+            reduce_motion: false,
+        };
+
+        let query = WindowRuntimeSnapshotQueryBuilder::new()
+            .require_visible()
+            .require_active()
+            .require_display();
+        assert!(query.requires_visible());
+        assert!(query.requires_active());
+        assert!(query.requires_display());
+        assert!(query.validate_snapshot(&snapshot).is_ok());
+        assert_eq!(snapshot.bounds(), bounds);
+        assert_eq!(snapshot.window_bounds(), WindowBounds::Windowed(bounds));
+        assert_eq!(snapshot.viewport_size(), size(px(640.0), px(480.0)));
+        assert_eq!(snapshot.display_id(), Some(DisplayId(7)));
+        assert_eq!(snapshot.scale_factor(), 2.0);
+        assert_eq!(snapshot.appearance(), WindowAppearance::Dark);
+        assert!(snapshot.is_active());
+        assert!(snapshot.is_hovered());
+        assert!(snapshot.is_visible());
+        assert!(!snapshot.is_fullscreen());
+        assert!(!snapshot.is_maximized());
+        assert_eq!(snapshot.power_mode(), PowerMode::Performance);
+        assert!(!snapshot.reduce_motion());
+        assert!(snapshot.animations_enabled());
+
+        let hidden = WindowRuntimeSnapshot {
+            visible: false,
+            ..snapshot.clone()
+        };
+        assert!(query.validate_snapshot(&hidden).is_err());
+
+        let inactive = WindowRuntimeSnapshot {
+            active: false,
+            ..snapshot.clone()
+        };
+        assert!(query.validate_snapshot(&inactive).is_err());
+
+        let displayless = WindowRuntimeSnapshot {
+            display_id: None,
+            ..snapshot
+        };
+        assert!(query.validate_snapshot(&displayless).is_err());
+    }
+
+    #[test]
+    fn window_opacity_builder_validates_native_opacity_fraction() {
+        let opacity_builder = WindowOpacityBuilder::fraction(0.72);
+        assert_eq!(opacity_builder.value(), 0.72);
+        assert!(!opacity_builder.is_opaque());
+        assert!(opacity_builder.is_translucent());
+        assert_eq!(
+            opacity_builder.to_text(),
+            "window opacity: fractional, translucent true"
+        );
+        assert!(!opacity_builder.to_text().contains("0.72"));
+        let opacity = opacity_builder.build_checked().unwrap();
+        assert_eq!(opacity.fraction(), 0.72);
+        assert!(!opacity.is_opaque());
+        assert!(opacity.is_translucent());
+        assert_eq!(
+            opacity.to_text(),
+            "window opacity: fractional, translucent true"
+        );
+
+        let opaque_builder = WindowOpacityBuilder::opaque();
+        assert!(opaque_builder.is_opaque());
+        assert!(!opaque_builder.is_translucent());
+        assert_eq!(
+            opaque_builder.to_text(),
+            "window opacity: opaque, translucent false"
+        );
+        let opaque = opaque_builder.build_checked().unwrap();
+        assert_eq!(opaque.fraction(), 1.0);
+        assert!(opaque.is_opaque());
+        assert_eq!(
+            opaque.to_text(),
+            "window opacity: opaque, translucent false"
+        );
+
+        assert!(WindowOpacityBuilder::fraction(-0.01).validate().is_err());
+        assert!(WindowOpacityBuilder::fraction(1.01).validate().is_err());
+        assert!(WindowOpacityBuilder::fraction(f32::NAN).validate().is_err());
+        assert!(
+            WindowOpacityBuilder::fraction(f32::INFINITY)
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn window_z_order_policy_builder_validates_always_on_top_intent() {
+        let always_on_top =
+            WindowZOrderPolicyBuilder::always_on_top("Keep video call controls visible")
+                .build_checked()
+                .unwrap();
+        assert!(always_on_top.always_on_top());
+        assert_eq!(
+            always_on_top.reason(),
+            Some("Keep video call controls visible")
+        );
+
+        let normal = WindowZOrderPolicyBuilder::normal().build_checked().unwrap();
+        assert!(!normal.always_on_top());
+        assert_eq!(normal.reason(), None);
+
+        assert!(
+            WindowZOrderPolicyBuilder::always_on_top("")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowZOrderPolicyBuilder::always_on_top(" Keep visible")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowZOrderPolicyBuilder::always_on_top("Keep\nvisible")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowZOrderPolicyBuilder::always_on_top("x".repeat(257))
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn window_render_policy_builder_validates_frame_skip_intent() {
+        let policy = WindowRenderPolicyBuilder::frame_skip("Static settings panel")
+            .build_checked()
+            .unwrap();
+        assert!(policy.frame_skip_enabled());
+        assert_eq!(policy.reason(), Some("Static settings panel"));
+
+        let disabled = WindowRenderPolicyBuilder::no_frame_skip()
+            .build_checked()
+            .unwrap();
+        assert!(!disabled.frame_skip_enabled());
+        assert_eq!(disabled.reason(), None);
+
+        assert!(
+            WindowRenderPolicyBuilder::frame_skip("")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowRenderPolicyBuilder::frame_skip(" Static panel")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowRenderPolicyBuilder::frame_skip("Static\npanel")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowRenderPolicyBuilder::frame_skip("x".repeat(257))
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
     fn window_tabbing_identifier_builder_validates_tab_group_id() {
         let identifier = WindowTabbingIdentifierBuilder::new("workspace.main");
         assert!(identifier.validate().is_ok());
         assert_eq!(identifier.identifier(), Some("workspace.main"));
+        assert!(!identifier.is_clear());
+        assert!(identifier.has_identifier());
+        assert_eq!(identifier.len_bytes(), 14);
+        assert_eq!(
+            identifier.to_text(),
+            "window tabbing identifier: clear false, identifier true, 14 bytes"
+        );
+        assert!(!identifier.to_text().contains("workspace"));
         assert_eq!(
             identifier.build_checked().unwrap(),
             Some("workspace.main".to_string())
@@ -7882,6 +9907,12 @@ mod tests {
         let clear = WindowTabbingIdentifierBuilder::clear();
         assert!(clear.validate().is_ok());
         assert!(clear.is_clear());
+        assert!(!clear.has_identifier());
+        assert_eq!(clear.len_bytes(), 0);
+        assert_eq!(
+            clear.to_text(),
+            "window tabbing identifier: clear true, identifier false, 0 bytes"
+        );
         assert_eq!(clear.build_checked().unwrap(), None);
 
         assert!(WindowTabbingIdentifierBuilder::new("").validate().is_err());
@@ -7910,10 +9941,19 @@ mod tests {
 
     #[test]
     fn window_document_state_builder_derives_document_titles() {
-        let state = WindowDocumentStateBuilder::document("/Users/example/Report.md")
-            .unsaved_changes()
-            .build_checked()
-            .unwrap();
+        let builder =
+            WindowDocumentStateBuilder::document("/Users/example/Report.md").unsaved_changes();
+        assert!(!builder.has_title());
+        assert!(builder.has_document_path());
+        assert!(builder.is_edited());
+        assert!(!builder.requires_existing_path());
+        assert!(!builder.canonicalizes_path());
+        assert_eq!(
+            builder.to_text(),
+            "document window state builder: title false, path true, edited true, require existing false, canonicalize false"
+        );
+        assert!(!builder.to_text().contains("Report.md"));
+        let state = builder.build_checked().unwrap();
 
         assert_eq!(state.title(), Some("Report.md"));
         assert_eq!(
@@ -7921,6 +9961,13 @@ mod tests {
             std::path::Path::new("/Users/example/Report.md")
         );
         assert!(state.edited());
+        assert!(state.has_title());
+        assert!(state.has_document_path());
+        assert_eq!(
+            state.to_text(),
+            "document window state: title true, path true, edited true"
+        );
+        assert!(!state.to_text().contains("Report.md"));
 
         let titled = WindowDocumentStateBuilder::new()
             .title("Project Notes")
@@ -7930,6 +9977,13 @@ mod tests {
         assert_eq!(titled.title(), Some("Project Notes"));
         assert_eq!(titled.document_path(), None);
         assert!(!titled.edited());
+        assert!(titled.has_title());
+        assert!(!titled.has_document_path());
+        assert_eq!(
+            titled.to_text(),
+            "document window state: title true, path false, edited false"
+        );
+        assert!(!titled.to_text().contains("Project Notes"));
     }
 
     #[test]
@@ -8122,7 +10176,51 @@ mod tests {
 
         assert!(WindowInteractionCommand::activate().validate().is_ok());
         assert!(WindowInteractionCommand::minimize().validate().is_ok());
+        assert!(
+            WindowInteractionCommand::zoom_window()
+                .reason("Toolbar zoom button")
+                .validate()
+                .is_ok()
+        );
+        assert_eq!(
+            WindowInteractionCommand::zoom_window().kind(),
+            WindowInteractionCommandKind::ZoomWindow
+        );
         assert!(WindowInteractionCommand::hide().validate().is_ok());
+        assert!(
+            WindowInteractionCommand::enter_fullscreen()
+                .reason("Start presentation")
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            WindowInteractionCommand::exit_fullscreen()
+                .reason("Presentation ended")
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            WindowInteractionCommand::toggle_fullscreen()
+                .reason("Toolbar fullscreen button")
+                .validate()
+                .is_ok()
+        );
+        assert_eq!(
+            WindowInteractionCommand::enter_fullscreen().kind(),
+            WindowInteractionCommandKind::EnterFullscreen
+        );
+        assert_eq!(
+            WindowInteractionCommand::exit_fullscreen().kind(),
+            WindowInteractionCommandKind::ExitFullscreen
+        );
+        assert_eq!(
+            WindowInteractionCommand::toggle_fullscreen().kind(),
+            WindowInteractionCommandKind::ToggleFullscreen
+        );
+        let close = WindowInteractionCommand::close("User confirmed close");
+        assert!(close.validate().is_ok());
+        assert_eq!(close.kind(), WindowInteractionCommandKind::Close);
+        assert_eq!(close.reason_text(), Some("User confirmed close"));
     }
 
     #[test]
@@ -8149,6 +10247,264 @@ mod tests {
                 .validate()
                 .is_err()
         );
+        assert!(WindowInteractionCommand::close("").validate().is_err());
+        assert!(
+            WindowInteractionCommand::close("Unsaved changes\nclose")
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn window_cursor_style_command_validates_generated_window_cursor_overrides() {
+        let command =
+            WindowCursorStyleCommand::new(CursorStyle::Crosshair, "Canvas drawing tool active");
+        assert!(command.validate().is_ok());
+        assert_eq!(command.style(), CursorStyle::Crosshair);
+        assert_eq!(command.reason_text(), "Canvas drawing tool active");
+        assert!(command.has_reason());
+        assert_eq!(
+            command.to_text(),
+            "window cursor: style Crosshair, reason true"
+        );
+        assert!(!command.to_text().contains("Canvas"));
+
+        assert!(
+            WindowCursorStyleCommand::new(CursorStyle::PointingHand, "")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowCursorStyleCommand::new(CursorStyle::PointingHand, " Cursor")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowCursorStyleCommand::new(CursorStyle::PointingHand, "Line one\nLine two")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowCursorStyleCommand::new(CursorStyle::PointingHand, "x".repeat(257))
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn window_client_inset_builder_validates_custom_chrome_insets() {
+        let builder = WindowClientInsetBuilder::new(px(12.0));
+        assert!(!builder.is_zero());
+        assert_eq!(builder.to_text(), "window client inset builder: zero false");
+        assert!(!builder.to_text().contains("12"));
+        let inset = builder.build_checked().unwrap();
+        assert_eq!(inset.inset(), px(12.0));
+        assert!(!inset.is_zero());
+        assert_eq!(inset.to_text(), "window client inset: zero false");
+        let zero = WindowClientInsetBuilder::new(px(0.0))
+            .build_checked()
+            .unwrap();
+        assert!(zero.is_zero());
+        assert_eq!(zero.to_text(), "window client inset: zero true");
+        assert!(
+            WindowClientInsetBuilder::new(px(f32::NAN))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowClientInsetBuilder::new(px(f32::INFINITY))
+                .validate()
+                .is_err()
+        );
+        assert!(WindowClientInsetBuilder::new(px(-1.0)).validate().is_err());
+        assert!(
+            WindowClientInsetBuilder::new(px(1024.0))
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn window_rem_size_builder_validates_generated_ui_scale() {
+        let builder = WindowRemSizeBuilder::new(px(18.0));
+        assert_eq!(builder.size_class(), "standard");
+        assert_eq!(builder.to_text(), "window rem size builder: class standard");
+        assert!(!builder.to_text().contains("18"));
+        let rem_size = builder.build_checked().unwrap();
+        assert_eq!(rem_size.rem_size(), px(18.0));
+        assert_eq!(rem_size.size_class(), "standard");
+        assert_eq!(rem_size.to_text(), "window rem size: class standard");
+        assert_eq!(WindowRemSizeBuilder::new(px(8.0)).size_class(), "compact");
+        assert_eq!(WindowRemSizeBuilder::new(px(32.0)).size_class(), "large");
+        assert!(WindowRemSizeBuilder::new(px(4.0)).validate().is_ok());
+        assert!(WindowRemSizeBuilder::new(px(128.0)).validate().is_ok());
+        assert!(WindowRemSizeBuilder::new(px(f32::NAN)).validate().is_err());
+        assert!(
+            WindowRemSizeBuilder::new(px(f32::INFINITY))
+                .validate()
+                .is_err()
+        );
+        assert!(WindowRemSizeBuilder::new(px(0.0)).validate().is_err());
+        assert!(WindowRemSizeBuilder::new(px(3.0)).validate().is_err());
+        assert!(WindowRemSizeBuilder::new(px(129.0)).validate().is_err());
+    }
+
+    #[test]
+    fn window_autoscroll_request_builder_validates_generated_bounds() {
+        let bounds = Bounds::new(point(px(10.0), px(20.0)), size(px(30.0), px(40.0)));
+        let builder = WindowAutoscrollRequestBuilder::new(bounds);
+        assert!(!builder.is_empty());
+        assert_eq!(builder.to_text(), "window autoscroll builder: empty false");
+        assert!(!builder.to_text().contains("10"));
+        let request = builder.build_checked().unwrap();
+        assert_eq!(request.bounds(), bounds);
+        assert!(!request.is_empty());
+        assert_eq!(request.to_text(), "window autoscroll: empty false");
+        assert!(!request.to_text().contains("40"));
+        assert!(
+            WindowAutoscrollRequestBuilder::new(Bounds::new(
+                point(px(0.0), px(0.0)),
+                size(px(0.0), px(0.0)),
+            ))
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            WindowAutoscrollRequestBuilder::new(Bounds::new(
+                point(px(0.0), px(0.0)),
+                size(px(0.0), px(0.0)),
+            ))
+            .build_checked()
+            .unwrap()
+            .is_empty()
+        );
+        assert!(
+            WindowAutoscrollRequestBuilder::new(Bounds::new(
+                point(px(f32::NAN), px(0.0)),
+                size(px(1.0), px(1.0)),
+            ))
+            .validate()
+            .is_err()
+        );
+        assert!(
+            WindowAutoscrollRequestBuilder::new(Bounds::new(
+                point(px(0.0), px(f32::INFINITY)),
+                size(px(1.0), px(1.0)),
+            ))
+            .validate()
+            .is_err()
+        );
+        assert!(
+            WindowAutoscrollRequestBuilder::new(Bounds::new(
+                point(px(0.0), px(0.0)),
+                size(px(-1.0), px(1.0)),
+            ))
+            .validate()
+            .is_err()
+        );
+        assert!(
+            WindowAutoscrollRequestBuilder::new(Bounds::new(
+                point(px(0.0), px(0.0)),
+                size(px(40000.0), px(1.0)),
+            ))
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn window_system_ui_command_validates_native_commands() {
+        let palette =
+            WindowSystemUiCommand::show_character_palette().reason("Editor symbol picker");
+        assert!(palette.validate().is_ok());
+        assert_eq!(
+            palette.kind(),
+            WindowSystemUiCommandKind::ShowCharacterPalette
+        );
+        assert_eq!(palette.reason_text(), Some("Editor symbol picker"));
+
+        let double_click = WindowSystemUiCommand::titlebar_double_click();
+        assert!(double_click.validate().is_ok());
+        assert_eq!(
+            double_click.kind(),
+            WindowSystemUiCommandKind::TitlebarDoubleClick
+        );
+
+        let zoom = WindowSystemUiCommand::zoom_window();
+        assert!(zoom.validate().is_ok());
+        assert_eq!(zoom.kind(), WindowSystemUiCommandKind::ZoomWindow);
+    }
+
+    #[test]
+    fn window_system_ui_command_rejects_generated_footguns() {
+        assert!(
+            WindowSystemUiCommand::show_character_palette()
+                .reason("")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowSystemUiCommand::titlebar_double_click()
+                .reason(" Titlebar")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowSystemUiCommand::zoom_window()
+                .reason("Zoom\nwindow")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowSystemUiCommand::zoom_window()
+                .reason("x".repeat(257))
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn window_tab_command_validates_native_tab_commands() {
+        let merge = WindowTabCommand::merge_all_windows().reason("Collect project windows");
+        assert!(merge.validate().is_ok());
+        assert_eq!(merge.kind(), WindowTabCommandKind::MergeAllWindows);
+        assert_eq!(merge.reason_text(), Some("Collect project windows"));
+
+        let detach = WindowTabCommand::move_tab_to_new_window();
+        assert!(detach.validate().is_ok());
+        assert_eq!(detach.kind(), WindowTabCommandKind::MoveTabToNewWindow);
+
+        let overview = WindowTabCommand::toggle_tab_overview();
+        assert!(overview.validate().is_ok());
+        assert_eq!(overview.kind(), WindowTabCommandKind::ToggleTabOverview);
+    }
+
+    #[test]
+    fn window_tab_command_rejects_generated_footguns() {
+        assert!(
+            WindowTabCommand::merge_all_windows()
+                .reason("")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowTabCommand::move_tab_to_new_window()
+                .reason(" Detach tab")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowTabCommand::toggle_tab_overview()
+                .reason("Toggle\noverview")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WindowTabCommand::toggle_tab_overview()
+                .reason("x".repeat(257))
+                .validate()
+                .is_err()
+        );
     }
 
     #[test]
@@ -8160,6 +10516,15 @@ mod tests {
             decorations.kind(),
             &WindowChromeCommandKind::RequestDecorations(WindowDecorations::Client)
         );
+        assert_eq!(decorations.key(), "request-decorations");
+        assert!(decorations.has_reason());
+        assert_eq!(
+            decorations.to_text(),
+            "window chrome command: kind request-decorations, reason true, position false, resize-edge false, client-decorations true, server-decorations false"
+        );
+        assert!(!decorations.to_text().contains("Custom titlebar"));
+        assert!(decorations.kind().requests_client_decorations());
+        assert!(!decorations.kind().requests_server_decorations());
         assert_eq!(
             decorations.reason_text(),
             Some("Custom titlebar owns drag regions")
@@ -8171,6 +10536,13 @@ mod tests {
             menu.kind(),
             &WindowChromeCommandKind::ShowWindowMenu(point(px(10.0), px(20.0)))
         );
+        assert_eq!(menu.key(), "show-window-menu");
+        assert!(menu.kind().has_position());
+        assert_eq!(
+            menu.to_text(),
+            "window chrome command: kind show-window-menu, reason false, position true, resize-edge false, client-decorations false, server-decorations false"
+        );
+        assert!(!menu.to_text().contains("10"));
 
         let resize = WindowChromeCommand::start_resize(ResizeEdge::BottomRight);
         assert!(resize.validate().is_ok());
@@ -8178,7 +10550,16 @@ mod tests {
             resize.kind(),
             &WindowChromeCommandKind::StartResize(ResizeEdge::BottomRight)
         );
-        assert!(WindowChromeCommand::start_move().validate().is_ok());
+        assert_eq!(resize.key(), "start-resize");
+        assert!(resize.kind().has_resize_edge());
+        assert_eq!(
+            resize.to_text(),
+            "window chrome command: kind start-resize, reason false, position false, resize-edge true, client-decorations false, server-decorations false"
+        );
+
+        let move_command = WindowChromeCommand::start_move();
+        assert!(move_command.validate().is_ok());
+        assert_eq!(move_command.key(), "start-move");
     }
 
     #[test]

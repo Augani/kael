@@ -428,7 +428,7 @@ fn clickable_card(
 ) -> impl IntoElement {
     let theme = use_theme();
     let label: SharedString = label.into();
-    let is_clicked = clicked_item.as_ref().map(|s| s.as_str()) == Some(id);
+    let is_clicked = clicked_item.as_deref() == Some(id);
     let id_string = id.to_string();
 
     VStack::new()

@@ -1,4 +1,4 @@
-// Feature: platform-parity-electron-features, Property 12: Trace event Chrome format export
+// Feature: platform-parity-browser-runtime-features, Property 12: Trace event Chrome format export
 
 use proptest::prelude::*;
 

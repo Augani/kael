@@ -21,6 +21,9 @@ doctest = false
 [dependencies.anyhow]
 workspace = true
 
+[dependencies.smol]
+workspace = true
+
 [dependencies.url]
 version = "2.5.4"
 
@@ -30,14 +33,11 @@ workspace = true
 [dev-dependencies.tempfile]
 version = "3"
 
-[target.'cfg(target_os = "macos")'.dependencies.block]
-version = "0.1"
+[target.'cfg(target_os = "macos")'.dependencies.objc2]
+version = "0.6"
 
-[target.'cfg(target_os = "macos")'.dependencies.cocoa]
-version = "0.26"
-
-[target.'cfg(target_os = "macos")'.dependencies.objc]
-version = "0.2"
+[target.'cfg(target_os = "macos")'.dependencies.objc2-foundation]
+version = "0.3"
 
 [target.'cfg(target_os = "windows")'.dependencies.windows]
 workspace = true

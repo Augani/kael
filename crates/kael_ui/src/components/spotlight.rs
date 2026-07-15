@@ -2,6 +2,7 @@ use kael::{prelude::FluentBuilder as _, *};
 
 pub struct SpotlightState {
     mouse_pos: Option<Point<Pixels>>,
+    bounds: Option<Bounds<Pixels>>,
 }
 
 impl Default for SpotlightState {
@@ -12,7 +13,10 @@ impl Default for SpotlightState {
 
 impl SpotlightState {
     pub fn new() -> Self {
-        Self { mouse_pos: None }
+        Self {
+            mouse_pos: None,
+            bounds: None,
+        }
     }
 }
 
@@ -46,12 +50,16 @@ impl Spotlight {
     }
 
     pub fn size(mut self, size: Pixels) -> Self {
-        self.spot_size = size;
+        if f32::from(size).is_finite() && size > px(0.0) {
+            self.spot_size = size;
+        }
         self
     }
 
     pub fn intensity(mut self, intensity: f32) -> Self {
-        self.intensity = intensity.clamp(0.0, 1.0);
+        if intensity.is_finite() {
+            self.intensity = intensity.clamp(0.0, 1.0);
+        }
         self
     }
 }
@@ -78,21 +86,51 @@ impl RenderOnce for Spotlight {
         let user_style = self.style;
 
         let state_for_move = self.state.clone();
+        let state_for_bounds = self.state.clone();
+        let state_for_hover = self.state.clone();
+        let motion_enabled = !cx.reduce_motion();
 
         let mut container = div()
             .id(self.id)
             .relative()
             .overflow_hidden()
             .on_mouse_move(move |event: &MouseMoveEvent, _, cx| {
+                if !motion_enabled {
+                    return;
+                }
                 state_for_move.update(cx, |s, cx| {
-                    s.mouse_pos = Some(event.position);
-                    cx.notify();
+                    if let Some(bounds) = s.bounds {
+                        s.mouse_pos = Some(point(
+                            event.position.x - bounds.origin.x,
+                            event.position.y - bounds.origin.y,
+                        ));
+                        cx.notify();
+                    }
                 });
+            })
+            .on_hover(move |hovered: &bool, _, cx| {
+                if !*hovered {
+                    state_for_hover.update(cx, |state, cx| {
+                        state.mouse_pos = None;
+                        cx.notify();
+                    });
+                }
             })
             .map(|mut el| {
                 el.style().refine(&user_style);
                 el
-            });
+            })
+            .child(
+                canvas_with_prepaint(
+                    move |bounds, _, cx| {
+                        state_for_bounds.update(cx, |state, _| state.bounds = Some(bounds));
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0()
+                .size_full(),
+            );
 
         for child in self.children {
             container = container.child(child);
@@ -117,5 +155,22 @@ impl RenderOnce for Spotlight {
         }
 
         container
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn invalid_spot_geometry_keeps_safe_defaults() {
+        let mut cx = TestAppContext::single();
+        let state = cx.new(|_| SpotlightState::new());
+        let spotlight = Spotlight::new("spot", state)
+            .size(px(f32::NAN))
+            .intensity(f32::NAN);
+
+        assert_eq!(spotlight.spot_size, px(300.0));
+        assert_eq!(spotlight.intensity, 0.15);
     }
 }

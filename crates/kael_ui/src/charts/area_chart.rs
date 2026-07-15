@@ -1,4 +1,7 @@
-use crate::theme::Theme;
+use crate::{
+    charts::{finite_or_zero, format_axis_value},
+    theme::Theme,
+};
 use kael::{prelude::FluentBuilder as _, *};
 
 const CHART_COLORS: [u32; 8] = crate::astryx::CHART_PALETTE;
@@ -18,7 +21,10 @@ impl AreaChartSeries {
     pub fn new(label: impl Into<SharedString>, points: Vec<(f64, f64)>) -> Self {
         Self {
             label: label.into(),
-            points,
+            points: points
+                .into_iter()
+                .map(|(x, y)| (finite_or_zero(x), finite_or_zero(y).max(0.0)))
+                .collect(),
             color: None,
         }
     }
@@ -44,8 +50,39 @@ impl AreaChartSize {
             AreaChartSize::Sm => (px(300.0), px(180.0)),
             AreaChartSize::Md => (px(500.0), px(280.0)),
             AreaChartSize::Lg => (px(700.0), px(400.0)),
-            AreaChartSize::Custom(w, h) => (px(w as f32), px(h as f32)),
+            AreaChartSize::Custom(w, h) => (px(w.max(180) as f32), px(h.max(120) as f32)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn ranges_are_safe_for_empty_and_constant_series() {
+        let empty = AreaChartRange::from_series(&[], AreaChartMode::Overlaid);
+        assert_eq!(
+            (empty.x_min, empty.x_max, empty.y_min, empty.y_max),
+            (0.0, 1.0, 0.0, 1.0)
+        );
+
+        let series = vec![AreaChartSeries::new(
+            "constant",
+            vec![(2.0, 0.0), (2.0, 0.0)],
+        )];
+        let range = AreaChartRange::from_series(&series, AreaChartMode::Overlaid);
+        assert!(range.x_max > range.x_min);
+        assert!(range.y_max > range.y_min);
+        assert!(range.normalize_x(2.0).is_finite());
+        assert!(range.normalize_y(0.0).is_finite());
+    }
+
+    #[::core::prelude::v1::test]
+    fn custom_size_has_visible_minimums() {
+        let (width, height) = AreaChartSize::Custom(0, 0).dimensions();
+        assert_eq!(f32::from(width), 180.0);
+        assert_eq!(f32::from(height), 120.0);
     }
 }
 
@@ -134,13 +171,9 @@ impl AreaChartRange {
 struct PaintData {
     series: Vec<AreaChartSeries>,
     show_grid: bool,
-    _show_x_axis: bool,
-    _show_y_axis: bool,
     mode: AreaChartMode,
-    _x_labels: Vec<SharedString>,
     y_label_count: usize,
     grid_color: Hsla,
-    _text_color: Hsla,
     fill_opacity: f32,
 }
 
@@ -238,7 +271,11 @@ impl AreaChart {
     }
 
     pub fn fill_opacity(mut self, opacity: f32) -> Self {
-        self.fill_opacity = opacity.clamp(0.0, 1.0);
+        self.fill_opacity = if opacity.is_finite() {
+            opacity.clamp(0.0, 1.0)
+        } else {
+            0.25
+        };
         self
     }
 }
@@ -246,16 +283,6 @@ impl AreaChart {
 impl Styled for AreaChart {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.style
-    }
-}
-
-fn format_value(value: f64) -> String {
-    if value.abs() >= 1000.0 {
-        format!("{:.0}k", value / 1000.0)
-    } else if value.abs() >= 1.0 {
-        format!("{:.0}", value)
-    } else {
-        format!("{:.2}", value)
     }
 }
 
@@ -272,6 +299,15 @@ impl RenderOnce for AreaChart {
 
         let series_for_legend = self.series.clone();
         let show_legend = self.show_legend && self.series.len() > 1;
+        let point_count = self
+            .series
+            .iter()
+            .map(|series| series.points.len())
+            .sum::<usize>();
+        let description = format!(
+            "Area chart with {} series and {point_count} points",
+            self.series.len()
+        );
 
         let range = AreaChartRange::from_series(&self.series, self.mode);
         let y_labels: Vec<String> = if self.show_y_axis {
@@ -279,7 +315,7 @@ impl RenderOnce for AreaChart {
                 .map(|i| {
                     let normalized = i as f64 / self.y_label_count as f64;
                     let value = range.y_min + (range.y_max - range.y_min) * (1.0 - normalized);
-                    format_value(value)
+                    format_axis_value(value)
                 })
                 .collect()
         } else {
@@ -291,17 +327,18 @@ impl RenderOnce for AreaChart {
         let paint_data = PaintData {
             series: self.series,
             show_grid: self.show_grid,
-            _show_x_axis: self.show_x_axis,
-            _show_y_axis: self.show_y_axis,
             mode: self.mode,
-            _x_labels: self.x_labels.clone(),
             y_label_count: self.y_label_count,
             grid_color: theme.tokens.border,
-            _text_color: text_color,
             fill_opacity: self.fill_opacity,
         };
 
         div()
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Image)
+                    .label("Area chart")
+                    .description(description),
+            )
             .flex()
             .flex_col()
             .w(chart_w)
@@ -499,43 +536,59 @@ impl RenderOnce for AreaChart {
                                 }
                             },
                         )
-                        .size_full(),
+                        .absolute()
+                        .inset_0(),
                     )
+                    .when(point_count == 0, |this| {
+                        this.child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_sm()
+                                .text_color(text_color)
+                                .child("No data"),
+                        )
+                    })
                     .when(self.show_y_axis, |this| {
-                        this.children(y_labels.iter().enumerate().map(|(i, label)| {
-                            let tick_count = y_labels.len().saturating_sub(1).max(1);
-                            let top_percent = i as f32 / tick_count as f32;
+                        this.child(
                             div()
                                 .absolute()
                                 .left(px(4.0))
-                                .top(relative(top_percent))
-                                .mt(px(padding_top - 6.0))
-                                .text_size(px(11.0))
-                                .text_color(text_color)
-                                .child(label.clone())
-                        }))
+                                .top(px(padding_top - 6.0))
+                                .bottom(px(padding_bottom - 6.0))
+                                .flex()
+                                .flex_col()
+                                .justify_between()
+                                .children(y_labels.iter().map(|label| {
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(text_color)
+                                        .child(label.clone())
+                                })),
+                        )
                     })
                     .when(self.show_x_axis && !self.x_labels.is_empty(), |this| {
                         let num_labels = self.x_labels.len();
-                        this.children(self.x_labels.iter().enumerate().map(|(i, label)| {
-                            let left_percent = if num_labels == 1 {
-                                0.5
-                            } else {
-                                i as f32 / (num_labels - 1) as f32
-                            };
-                            let chart_w_f32 = chart_w / px(1.0);
-                            let chart_frac = 1.0 - (padding_left + padding_right) / chart_w_f32;
-                            let adjusted_left =
-                                padding_left / chart_w_f32 + left_percent * chart_frac;
+                        this.child(
                             div()
                                 .absolute()
+                                .left(px(padding_left))
+                                .right(px(padding_right))
                                 .bottom(px(8.0))
-                                .left(relative(adjusted_left))
-                                .ml(px(-15.0))
-                                .text_size(px(11.0))
-                                .text_color(text_color)
-                                .child(label.clone())
-                        }))
+                                .flex()
+                                .items_center()
+                                .when(num_labels == 1, |this| this.justify_center())
+                                .when(num_labels > 1, |this| this.justify_between())
+                                .children(self.x_labels.iter().map(|label| {
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(text_color)
+                                        .child(label.clone())
+                                })),
+                        )
                     }),
             )
             .when(show_legend, |this| {

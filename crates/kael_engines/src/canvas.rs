@@ -73,7 +73,11 @@ impl VectorPath {
     /// Compute the axis-aligned bounding box of all points in the path.
     /// Returns `None` if the path contains no points.
     pub fn bounds(&self) -> Option<CanvasRect> {
-        let mut points = self.segments.iter().flat_map(|s| s.points.iter());
+        let mut points = self
+            .segments
+            .iter()
+            .flat_map(|s| s.points.iter())
+            .filter(|point| point.x.is_finite() && point.y.is_finite());
         let first = points.next()?;
         let (mut min_x, mut min_y) = (first.x, first.y);
         let (mut max_x, mut max_y) = (first.x, first.y);
@@ -101,15 +105,25 @@ impl VectorPath {
 
     /// Total number of points across all segments.
     pub fn point_count(&self) -> usize {
-        self.segments.iter().map(|s| s.points.len()).sum()
+        self.segments.iter().fold(0usize, |total, segment| {
+            total.saturating_add(segment.points.len())
+        })
     }
 
     /// Translate all points by the given offset.
     pub fn translate(&mut self, dx: f64, dy: f64) {
+        let dx = if dx.is_finite() { dx } else { 0.0 };
+        let dy = if dy.is_finite() { dy } else { 0.0 };
         for seg in &mut self.segments {
             for p in &mut seg.points {
-                p.x += dx;
-                p.y += dy;
+                let x = p.x + dx;
+                let y = p.y + dy;
+                if x.is_finite() {
+                    p.x = x;
+                }
+                if y.is_finite() {
+                    p.y = y;
+                }
             }
         }
     }
@@ -152,7 +166,7 @@ impl CanvasExport {
         if self.height == 0 {
             anyhow::bail!("height must be greater than zero");
         }
-        if self.dpi <= 0.0 {
+        if !self.dpi.is_finite() || self.dpi <= 0.0 {
             anyhow::bail!("dpi must be positive");
         }
         Ok(())
@@ -202,18 +216,35 @@ impl TileCache {
     }
 
     fn next_order(&mut self) -> u64 {
-        self.clock += 1;
+        if self.clock == u64::MAX {
+            let mut by_age: Vec<_> = self
+                .tiles
+                .iter()
+                .map(|(coord, tile)| (*coord, tile.order))
+                .collect();
+            by_age.sort_unstable_by_key(|(_, order)| *order);
+            for (index, (coord, _)) in by_age.into_iter().enumerate() {
+                if let Some(tile) = self.tiles.get_mut(&coord) {
+                    tile.order = u64::try_from(index).unwrap_or(u64::MAX - 1) + 1;
+                }
+            }
+            self.clock = u64::try_from(self.tiles.len()).unwrap_or(u64::MAX - 1);
+        }
+        self.clock = self.clock.saturating_add(1);
         self.clock
     }
 
     /// Insert tile data at the given coordinate, evicting LRU tiles if over budget.
     pub fn insert(&mut self, coord: TileCoord, data: Vec<u8>) {
-        let order = self.next_order();
         let bytes = data.len();
-        if let Some(previous) = self.tiles.insert(coord, CachedTile { data, order }) {
-            self.current_bytes -= previous.data.len();
+        if self.max_bytes.is_some_and(|budget| bytes > budget) {
+            return;
         }
-        self.current_bytes += bytes;
+        let order = self.next_order();
+        if let Some(previous) = self.tiles.insert(coord, CachedTile { data, order }) {
+            self.current_bytes = self.current_bytes.saturating_sub(previous.data.len());
+        }
+        self.current_bytes = self.current_bytes.saturating_add(bytes);
         self.evict_to_budget();
     }
 
@@ -238,7 +269,7 @@ impl TileCache {
     pub fn invalidate(&mut self, coord: &TileCoord) -> bool {
         match self.tiles.remove(coord) {
             Some(tile) => {
-                self.current_bytes -= tile.data.len();
+                self.current_bytes = self.current_bytes.saturating_sub(tile.data.len());
                 true
             }
             None => false,
@@ -280,20 +311,55 @@ impl TileCache {
                 break;
             };
             if let Some(tile) = self.tiles.remove(&coord) {
-                self.current_bytes -= tile.data.len();
+                self.current_bytes = self.current_bytes.saturating_sub(tile.data.len());
             }
         }
     }
 
     /// Return the coordinates of tiles visible within a viewport at the given zoom level.
     pub fn visible_tiles(&self, viewport: &CanvasRect, zoom: u8) -> Vec<TileCoord> {
+        const MAX_VISIBLE_TILES: u64 = 1_048_576;
         let tile_size = 256.0;
+        if !viewport.x.is_finite()
+            || !viewport.y.is_finite()
+            || !viewport.width.is_finite()
+            || !viewport.height.is_finite()
+            || viewport.width <= 0.0
+            || viewport.height <= 0.0
+        {
+            return Vec::new();
+        }
+        let right = viewport.x + viewport.width;
+        let bottom = viewport.y + viewport.height;
+        if !right.is_finite() || !bottom.is_finite() {
+            return Vec::new();
+        }
         let start_x = (viewport.x / tile_size).floor() as i32;
         let start_y = (viewport.y / tile_size).floor() as i32;
-        let end_x = ((viewport.x + viewport.width) / tile_size).ceil() as i32;
-        let end_y = ((viewport.y + viewport.height) / tile_size).ceil() as i32;
+        let end_x = (right / tile_size).ceil() as i32;
+        let end_y = (bottom / tile_size).ceil() as i32;
+        let width = i64::from(end_x).saturating_sub(i64::from(start_x));
+        let height = i64::from(end_y).saturating_sub(i64::from(start_y));
+        let Ok(width) = u64::try_from(width) else {
+            return Vec::new();
+        };
+        let Ok(height) = u64::try_from(height) else {
+            return Vec::new();
+        };
+        let Some(tile_count) = width.checked_mul(height) else {
+            return Vec::new();
+        };
+        if tile_count > MAX_VISIBLE_TILES {
+            return Vec::new();
+        }
 
         let mut coords = Vec::new();
+        if coords
+            .try_reserve_exact(usize::try_from(tile_count).unwrap_or(usize::MAX))
+            .is_err()
+        {
+            return Vec::new();
+        }
         for tx in start_x..end_x {
             for ty in start_y..end_y {
                 coords.push(TileCoord { x: tx, y: ty, zoom });
@@ -397,6 +463,9 @@ mod tests {
             background: None,
         };
         assert!(exp.validate().is_err());
+        let mut non_finite = exp;
+        non_finite.dpi = f64::NAN;
+        assert!(non_finite.validate().is_err());
     }
 
     #[test]
@@ -526,6 +595,95 @@ mod tests {
             y: 0,
             zoom: 1
         }));
+    }
+
+    #[test]
+    fn tile_cache_rejects_oversized_replacements_without_flushing() {
+        let mut cache = TileCache::with_max_bytes(10);
+        let first = TileCoord {
+            x: 0,
+            y: 0,
+            zoom: 0,
+        };
+        let second = TileCoord {
+            x: 1,
+            y: 0,
+            zoom: 0,
+        };
+        cache.insert(first, vec![1; 5]);
+        cache.insert(second, vec![2; 5]);
+        cache.insert(first, vec![3; 11]);
+        assert_eq!(cache.get(&first), Some(&vec![1; 5]));
+        assert!(cache.get(&second).is_some());
+        assert_eq!(cache.byte_len(), 10);
+    }
+
+    #[test]
+    fn tile_cache_clock_rollover_preserves_lru_order() {
+        let mut cache = TileCache::with_max_bytes(2);
+        let old = TileCoord {
+            x: 0,
+            y: 0,
+            zoom: 0,
+        };
+        let recent = TileCoord {
+            x: 1,
+            y: 0,
+            zoom: 0,
+        };
+        cache.insert(old, vec![0]);
+        cache.insert(recent, vec![1]);
+        cache.clock = u64::MAX;
+        cache.touch(&recent);
+        cache.insert(
+            TileCoord {
+                x: 2,
+                y: 0,
+                zoom: 0,
+            },
+            vec![2],
+        );
+        assert!(cache.get(&old).is_none());
+        assert!(cache.get(&recent).is_some());
+    }
+
+    #[test]
+    fn invalid_or_unbounded_viewports_return_no_tiles() {
+        let cache = TileCache::new();
+        for viewport in [
+            CanvasRect {
+                x: f64::NAN,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            CanvasRect {
+                x: 0.0,
+                y: 0.0,
+                width: -1.0,
+                height: 10.0,
+            },
+            CanvasRect {
+                x: 0.0,
+                y: 0.0,
+                width: f64::MAX,
+                height: f64::MAX,
+            },
+        ] {
+            assert!(cache.visible_tiles(&viewport, 0).is_empty());
+        }
+    }
+
+    #[test]
+    fn vector_geometry_ignores_non_finite_coordinates() {
+        let mut path = VectorPath::new();
+        path.add_segment(PathSegment {
+            segment_type: PathSegmentType::MoveTo,
+            points: vec![pt(f64::NAN, 1.0), pt(2.0, 3.0)],
+        });
+        assert_eq!(path.bounds().unwrap().x, 2.0);
+        path.translate(f64::INFINITY, 1.0);
+        assert_eq!(path.segments[0].points[1], pt(2.0, 4.0));
     }
 
     #[test]

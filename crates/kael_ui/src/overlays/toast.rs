@@ -2,11 +2,20 @@
 
 use kael::{prelude::FluentBuilder as _, *};
 use smol::Timer;
-use std::time::Duration;
+use std::{panic::Location, rc::Rc, time::Duration};
 
 use crate::animations::easings;
 use crate::components::button::{Button, ButtonColors, ButtonSize};
 use crate::theme::Theme;
+
+fn sanitize_inset(inset: Pixels) -> Pixels {
+    let inset = f32::from(inset);
+    px(if inset.is_finite() {
+        inset.max(0.0)
+    } else {
+        0.0
+    })
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ToastType {
@@ -126,6 +135,7 @@ impl From<ToastType> for ToastVariant {
 
 #[derive(IntoElement)]
 pub struct Toast {
+    id: ElementId,
     toast_type: ToastType,
     body: AnyElement,
     end_content: Option<AnyElement>,
@@ -137,8 +147,19 @@ pub struct Toast {
 }
 
 impl Toast {
+    #[track_caller]
     pub fn new(body: impl IntoElement) -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "toast:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             toast_type: ToastType::Info,
             body: body.into_any_element(),
             end_content: None,
@@ -148,6 +169,12 @@ impl Toast {
             on_dismiss: None,
             style: StyleRefinement::default(),
         }
+    }
+
+    /// Set a stable identity when multiple toasts originate at one callsite.
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
     }
 
     pub fn toast_type(mut self, toast_type: ToastType) -> Self {
@@ -198,8 +225,10 @@ impl Styled for Toast {
 }
 
 impl RenderOnce for Toast {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = Theme::of(cx);
+        let toast_id = self.id;
+        let dismiss_id = ElementId::NamedChild(Box::new(toast_id.clone()), "dismiss".into());
         let user_style = self.style;
         let is_error = self.toast_type == ToastType::Error;
         let bg = if is_error {
@@ -221,9 +250,30 @@ impl RenderOnce for Toast {
             has_shadow: false,
             has_border: false,
         };
-        let _auto_hide = (self.is_auto_hide, self.auto_hide_duration);
+        let on_dismiss: Option<Rc<dyn Fn(ToastDismissReason, &mut Window, &mut App)>> =
+            self.on_dismiss.map(Rc::from);
+        if self.is_auto_hide {
+            if let Some(handler) = on_dismiss.clone() {
+                let duration = self.auto_hide_duration;
+                window
+                    .spawn(cx, async move |cx| {
+                        Timer::after(duration).await;
+                        cx.update(|window, cx| handler(ToastDismissReason::Auto, window, cx))
+                            .ok();
+                    })
+                    .detach();
+            }
+        }
 
         div()
+            .id(toast_id)
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Alert).label(if is_error {
+                    "Error notification"
+                } else {
+                    "Notification"
+                }),
+            )
             .flex()
             .items_start()
             .gap(px(12.0))
@@ -246,13 +296,13 @@ impl RenderOnce for Toast {
                     .gap(px(8.0))
                     .when_some(self.end_content, |this, content| this.child(content))
                     .child(
-                        Button::new("toast-dismiss", "")
+                        Button::new(dismiss_id, "")
                             .colors(close_colors)
                             .size(ButtonSize::Icon)
                             .icon("x")
                             .tooltip("Dismiss notification")
                             .on_click(move |_, window, cx| {
-                                if let Some(handler) = self.on_dismiss.as_ref() {
+                                if let Some(handler) = on_dismiss.as_ref() {
                                     handler(ToastDismissReason::Manual, window, cx);
                                 }
                             }),
@@ -301,12 +351,12 @@ impl ToastViewport {
     }
 
     pub fn max_visible(mut self, max_visible: usize) -> Self {
-        self.max_visible = max_visible;
+        self.max_visible = max_visible.max(1);
         self
     }
 
     pub fn inset(mut self, inset: impl Into<Pixels>) -> Self {
-        self.inset = Edges::all(inset.into());
+        self.inset = Edges::all(sanitize_inset(inset.into()));
         self
     }
 
@@ -338,20 +388,28 @@ impl RenderOnce for ToastViewport {
         let user_style = self.style;
         let position = self.position;
         let max_visible = self.max_visible;
-        let _ = (self.inset, self.top_layer);
+        let inset = self.inset;
+        let top_layer = self.top_layer;
         let manager = self.manager.clone();
 
         if let Some(manager) = manager.as_ref() {
             manager.update(cx, |manager, _| {
                 manager.position = position;
                 manager.max_toasts = max_visible;
+                manager.inset = inset;
             });
         }
 
         div()
             .relative()
             .children(self.children)
-            .when_some(manager, |this, manager| this.child(manager))
+            .when_some(manager, |this, manager| {
+                this.child(if top_layer {
+                    deferred(manager).with_priority(100).into_any_element()
+                } else {
+                    manager.into_any_element()
+                })
+            })
             .map(|this| {
                 let mut div = this;
                 div.style().refine(&user_style);
@@ -413,6 +471,7 @@ pub struct ToastManager {
     toasts: Vec<ToastItem>,
     position: ToastPosition,
     max_toasts: usize,
+    inset: Edges<Pixels>,
     dismissing: std::collections::HashSet<u64>,
 }
 
@@ -422,6 +481,7 @@ impl ToastManager {
             toasts: vec![],
             position: ToastPosition::BottomRight,
             max_toasts: 5,
+            inset: Edges::all(px(0.0)),
             dismissing: std::collections::HashSet::new(),
         }
     }
@@ -432,7 +492,7 @@ impl ToastManager {
     }
 
     pub fn max_toasts(mut self, max: usize) -> Self {
-        self.max_toasts = max;
+        self.max_toasts = max.max(1);
         self
     }
 
@@ -442,7 +502,7 @@ impl ToastManager {
     }
 
     pub fn set_max_toasts(&mut self, max: usize, cx: &mut Context<Self>) {
-        self.max_toasts = max;
+        self.max_toasts = max.max(1);
         cx.notify();
     }
 
@@ -516,8 +576,10 @@ impl ToastManager {
 }
 
 impl Render for ToastManager {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
+        let inset = self.inset;
+        let animations_enabled = window.animations_enabled();
 
         if self.toasts.is_empty() {
             return div().into_any_element();
@@ -544,15 +606,15 @@ impl Render for ToastManager {
             .max_w(px(420.0));
 
         container = match v_pos {
-            "top" => container.top_0(),
-            "bottom" => container.bottom_0(),
+            "top" => container.top(inset.top),
+            "bottom" => container.bottom(inset.bottom),
             _ => container,
         };
 
         container = match h_pos {
-            "left" => container.left_0(),
-            "right" => container.right_0(),
-            "center" => container.left_0().right_0().mx_auto(),
+            "left" => container.left(inset.left),
+            "right" => container.right(inset.right),
+            "center" => container.left(inset.left).right(inset.right).mx_auto(),
             _ => container,
         };
 
@@ -596,9 +658,19 @@ impl Render for ToastManager {
                         let user_style = toast.style.clone();
                         let toast_id = toast.id;
                         let is_dismissing = self.dismissing.contains(&toast_id);
+                        let accessibility_title = toast.title.clone();
+                        let accessibility_description = toast.description.clone();
+                        let accessibility = AccessibilityAttributes::new(AccessibilityRole::Alert)
+                            .label(accessibility_title.to_string());
+                        let accessibility = if let Some(description) = accessibility_description {
+                            accessibility.description(description.to_string())
+                        } else {
+                            accessibility
+                        };
 
                         div()
                             .id(("toast", toast_id))
+                            .accessibility(accessibility)
                             .flex()
                             .items_start()
                             .gap(px(12.0))
@@ -630,7 +702,10 @@ impl Render for ToastManager {
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(fg_color)
                                             .line_height(px(20.0))
-                                            .child(toast.title),
+                                            .child(
+                                                StyledText::new(toast.title)
+                                                    .accessibility_hidden(true),
+                                            ),
                                     )
                                     .when_some(toast.description, |this, desc| {
                                         this.child(
@@ -639,7 +714,10 @@ impl Render for ToastManager {
                                                 .font_family(theme.tokens.font_family.clone())
                                                 .text_color(fg_color)
                                                 .line_height(px(20.0))
-                                                .child(desc),
+                                                .child(
+                                                    StyledText::new(desc)
+                                                        .accessibility_hidden(true),
+                                                ),
                                         )
                                     }),
                             )
@@ -653,34 +731,40 @@ impl Render for ToastManager {
                                         this.dismiss_toast_animated(toast.id, window, cx);
                                     })),
                             )
-                            .with_animation(
-                                ElementId::NamedInteger(
-                                    if is_dismissing {
-                                        "toast-exit"
-                                    } else {
-                                        "toast-enter"
-                                    }
-                                    .into(),
-                                    toast_id,
-                                ),
-                                Animation::new(Duration::from_millis(if is_dismissing {
-                                    250
+                            .map(|toast_element| {
+                                if animations_enabled {
+                                    toast_element
+                                        .with_animation(
+                                            ElementId::NamedInteger(
+                                                if is_dismissing {
+                                                    "toast-exit"
+                                                } else {
+                                                    "toast-enter"
+                                                }
+                                                .into(),
+                                                toast_id,
+                                            ),
+                                            Animation::new(Duration::from_millis(
+                                                if is_dismissing { 250 } else { 300 },
+                                            ))
+                                            .with_easing(if is_dismissing {
+                                                easings::ease_in_cubic as fn(f32) -> f32
+                                            } else {
+                                                easings::ease_out_cubic as fn(f32) -> f32
+                                            }),
+                                            move |el, delta| {
+                                                if is_dismissing {
+                                                    el.opacity(1.0 - delta).mt(px(8.0 * delta))
+                                                } else {
+                                                    el.opacity(delta).mt(px(8.0 * (1.0 - delta)))
+                                                }
+                                            },
+                                        )
+                                        .into_any_element()
                                 } else {
-                                    300
-                                }))
-                                .with_easing(if is_dismissing {
-                                    easings::ease_in_cubic as fn(f32) -> f32
-                                } else {
-                                    easings::ease_out_cubic as fn(f32) -> f32
-                                }),
-                                move |el, delta| {
-                                    if is_dismissing {
-                                        el.opacity(1.0 - delta).mt(px(8.0 * delta))
-                                    } else {
-                                        el.opacity(delta).mt(px(8.0 * (1.0 - delta)))
-                                    }
-                                },
-                            )
+                                    toast_element.into_any_element()
+                                }
+                            })
                     })
                     .collect::<Vec<_>>(),
             )
@@ -689,3 +773,19 @@ impl Render for ToastManager {
 }
 
 impl EventEmitter<()> for ToastManager {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn viewport_and_manager_limits_never_allow_an_empty_capacity() {
+        let viewport = ToastViewport::new().max_visible(0).inset(px(f32::NAN));
+        assert_eq!(viewport.max_visible, 1);
+        assert_eq!(viewport.inset, Edges::all(px(0.0)));
+
+        let cx = TestAppContext::single();
+        let manager = cx.update(|cx| cx.new(|cx| ToastManager::new(cx).max_toasts(0)));
+        cx.update(|cx| assert_eq!(manager.read(cx).max_toasts, 1));
+    }
+}

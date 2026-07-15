@@ -116,6 +116,11 @@ impl RenderOnce for Checkbox {
         let border_radius = theme.tokens.radius_sm;
         let checked = self.checked;
         let indeterminate = self.indeterminate;
+        let accessibility_label = self
+            .label
+            .clone()
+            .unwrap_or_else(|| "Checkbox".into())
+            .to_string();
 
         let (bg, border, fg) = if self.disabled {
             (
@@ -142,12 +147,19 @@ impl RenderOnce for Checkbox {
             .read(cx)
             .clone();
         let is_focused = focus_handle.is_focused(window);
+        let focus_on_mouse = focus_handle.clone();
         let focus_ring = crate::astryx::focus_ring(theme.tokens.primary);
         let hover_ring = crate::astryx::input_hover_ring(theme.tokens.input);
 
         let user_style = self.style;
 
         self.base
+            .accessibility(
+                AccessibilityAttributes::checkbox(accessibility_label, checked)
+                    .indeterminate(indeterminate)
+                    .disabled(self.disabled)
+                    .focused(is_focused),
+            )
             .when(!self.disabled, |this| {
                 this.track_focus(&focus_handle.tab_index(0).tab_stop(true))
             })
@@ -225,8 +237,11 @@ impl RenderOnce for Checkbox {
                         .child(label),
                 )
             })
-            .on_mouse_down(MouseButton::Left, |_, window, _| {
+            .on_mouse_down(MouseButton::Left, move |_, window, _| {
                 window.prevent_default();
+                if !self.disabled {
+                    window.focus(&focus_on_mouse);
+                }
             })
             .when(!self.disabled, |this| {
                 this.when_some(self.on_click, |this, on_click| {

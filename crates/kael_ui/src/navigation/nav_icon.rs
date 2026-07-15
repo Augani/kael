@@ -42,9 +42,16 @@ impl RenderOnce for NavIcon {
             .items_center()
             .justify_center()
             .rounded_full()
-            .bg(theme.tokens.primary)
-            .text_color(theme.tokens.primary_foreground)
-            .child(Icon::new(self.icon).size(px(16.0)))
+            .bg(if self.selected {
+                theme.tokens.primary
+            } else {
+                transparent_black()
+            })
+            .child(Icon::new(self.icon).size(px(16.0)).color(if self.selected {
+                theme.tokens.primary_foreground
+            } else {
+                theme.tokens.muted_foreground
+            }))
             .map(|this| {
                 let mut div = this;
                 div.style().refine(&user_style);

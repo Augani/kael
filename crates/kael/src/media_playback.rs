@@ -176,6 +176,14 @@ impl VideoPlaybackRoute {
     pub fn should_use_webview(&self) -> bool {
         matches!(self, Self::WebViewRecommended { .. })
     }
+
+    /// Return a compact route label for logs, docs, and agent traces.
+    pub fn to_text(&self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::WebViewRecommended { .. } => "webview recommended",
+        }
+    }
 }
 
 /// Browser-style media support confidence for Kael's native video path.
@@ -192,10 +200,19 @@ pub enum VideoCanPlay {
 }
 
 impl VideoCanPlay {
-    /// Return the browser-style string used by HTMLMediaElement.canPlayType.
+    /// Return the browser media capability string used by media can-play checks.
     pub fn as_can_play_type(&self) -> &'static str {
         match self {
             Self::No => "",
+            Self::Maybe => "maybe",
+            Self::Probably => "probably",
+        }
+    }
+
+    /// Return a stable label for summaries.
+    pub fn to_text(&self) -> &'static str {
+        match self {
+            Self::No => "no",
             Self::Maybe => "maybe",
             Self::Probably => "probably",
         }
@@ -211,6 +228,17 @@ pub enum VideoCapabilityStatus {
     Partial,
     /// The capability is intentionally not implemented in the native path yet.
     Roadmap,
+}
+
+impl VideoCapabilityStatus {
+    /// Return a stable label for capability reports.
+    pub fn to_text(&self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Partial => "partial",
+            Self::Roadmap => "roadmap",
+        }
+    }
 }
 
 /// Current native/WebView media capability report.
@@ -270,6 +298,55 @@ impl VideoCapabilityReport {
             self.native_track_selection,
         ]
     }
+
+    /// Count fields with the requested capability status.
+    pub fn count_status(&self, status: VideoCapabilityStatus) -> usize {
+        self.statuses()
+            .into_iter()
+            .filter(|candidate| *candidate == status)
+            .count()
+    }
+
+    /// Count fully implemented capability fields.
+    pub fn full_count(&self) -> usize {
+        self.count_status(VideoCapabilityStatus::Full)
+    }
+
+    /// Count partially implemented capability fields.
+    pub fn partial_count(&self) -> usize {
+        self.count_status(VideoCapabilityStatus::Partial)
+    }
+
+    /// Count roadmap capability fields.
+    pub fn roadmap_count(&self) -> usize {
+        self.count_status(VideoCapabilityStatus::Roadmap)
+    }
+
+    /// Count fields that are not fully implemented in the native media path.
+    pub fn native_gap_count(&self) -> usize {
+        self.partial_count() + self.roadmap_count()
+    }
+
+    /// Return whether any native media capability is partial or roadmap.
+    pub fn has_native_gaps(&self) -> bool {
+        self.native_gap_count() > 0
+    }
+
+    /// Return whether Kael has a browser-video fallback path available.
+    pub fn has_webview_fallback(&self) -> bool {
+        self.webview_fallback != VideoCapabilityStatus::Roadmap
+    }
+
+    /// Return a content-safe summary for dashboards and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "video capabilities: full {full}, partial {partial}, roadmap {roadmap}, all full {}",
+            self.is_full(),
+            full = self.full_count(),
+            partial = self.partial_count(),
+            roadmap = self.roadmap_count(),
+        )
+    }
 }
 
 /// Return Kael's current video capability report.
@@ -288,6 +365,411 @@ pub fn video_capability_report() -> VideoCapabilityReport {
         native_adaptive_streaming: VideoCapabilityStatus::Roadmap,
         hardware_decode: VideoCapabilityStatus::Roadmap,
         native_track_selection: VideoCapabilityStatus::Roadmap,
+    }
+}
+
+/// Playback affordance that an app or generated player may require.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VideoPlaybackRequirement {
+    /// Load and play one checked URL/file/bytes/reader source.
+    BasicPlayback,
+    /// Replace the source at runtime, like assigning `video.src`.
+    SourceReplacement,
+    /// Probe source or MIME support before rendering.
+    CanPlayProbe,
+    /// Add, render, and switch SRT/WebVTT text tracks.
+    TextTracks,
+    /// Seek quickly from custom controls or keyboard shortcuts.
+    FastSeek,
+    /// Change playback speed.
+    PlaybackRate,
+    /// Present the player fullscreen.
+    Fullscreen,
+    /// Use browser picture-in-picture controls.
+    PictureInPicture,
+    /// Play HLS/DASH/adaptive manifests through the planned route.
+    AdaptiveStreaming,
+    /// Use native platform hardware decode.
+    HardwareDecode,
+    /// Select native audio/video streams.
+    NativeTrackSelection,
+}
+
+impl VideoPlaybackRequirement {
+    /// Every known video playback affordance in stable priority order.
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::BasicPlayback,
+            Self::SourceReplacement,
+            Self::CanPlayProbe,
+            Self::TextTracks,
+            Self::FastSeek,
+            Self::PlaybackRate,
+            Self::Fullscreen,
+            Self::PictureInPicture,
+            Self::AdaptiveStreaming,
+            Self::HardwareDecode,
+            Self::NativeTrackSelection,
+        ]
+    }
+
+    /// Requirements expected from the easy "URL in, player out" path.
+    ///
+    /// This intentionally excludes browser-only or backend-heavy affordances so
+    /// generated media players can distinguish the default player promise from
+    /// advanced platform work.
+    pub fn url_player_baseline() -> &'static [Self] {
+        &[
+            Self::BasicPlayback,
+            Self::SourceReplacement,
+            Self::CanPlayProbe,
+            Self::TextTracks,
+            Self::FastSeek,
+            Self::PlaybackRate,
+            Self::Fullscreen,
+        ]
+    }
+
+    /// Stable requirement label for logs, tests, and generated checklists.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::BasicPlayback => "basic playback",
+            Self::SourceReplacement => "source replacement",
+            Self::CanPlayProbe => "can-play probe",
+            Self::TextTracks => "text tracks",
+            Self::FastSeek => "fast seek",
+            Self::PlaybackRate => "playback rate",
+            Self::Fullscreen => "fullscreen",
+            Self::PictureInPicture => "picture-in-picture",
+            Self::AdaptiveStreaming => "adaptive streaming",
+            Self::HardwareDecode => "hardware decode",
+            Self::NativeTrackSelection => "native track selection",
+        }
+    }
+}
+
+/// Planned support state for one requested video affordance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VideoPlaybackRequirementStatus {
+    /// The selected route covers this requirement.
+    Satisfied,
+    /// The selected route exposes this requirement with documented limits.
+    Limited,
+    /// The selected route does not currently cover this requirement.
+    Missing,
+}
+
+impl VideoPlaybackRequirementStatus {
+    /// Stable status label for summaries and generated checklists.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Satisfied => "satisfied",
+            Self::Limited => "limited",
+            Self::Missing => "missing",
+        }
+    }
+}
+
+/// Next builder action for a requested video playback affordance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VideoPlaybackRequirementNextAction {
+    /// Render with the checked plan as-is.
+    RenderPlannedRoute,
+    /// Render with documented limits or expose the limitation in UI.
+    AcceptLimitedSupport,
+    /// Rebuild or render the source through the checked WebView video fallback.
+    UseWebViewFallback,
+    /// Product/backend work is required before this affordance can be promised.
+    BuildNativeBackend,
+}
+
+impl VideoPlaybackRequirementNextAction {
+    /// Stable action label for logs, setup screens, and generated agents.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::RenderPlannedRoute => "render planned route",
+            Self::AcceptLimitedSupport => "accept limited support",
+            Self::UseWebViewFallback => "use webview fallback",
+            Self::BuildNativeBackend => "build native backend",
+        }
+    }
+}
+
+/// One requirement evaluated against a checked playback plan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VideoPlaybackRequirementFinding {
+    requirement: VideoPlaybackRequirement,
+    status: VideoPlaybackRequirementStatus,
+}
+
+impl VideoPlaybackRequirementFinding {
+    /// Requested playback affordance.
+    pub fn requirement(&self) -> VideoPlaybackRequirement {
+        self.requirement
+    }
+
+    /// Planned support state for the affordance.
+    pub fn status(&self) -> VideoPlaybackRequirementStatus {
+        self.status
+    }
+
+    /// Whether this requirement is fully satisfied by the planned route.
+    pub fn is_satisfied(&self) -> bool {
+        self.status == VideoPlaybackRequirementStatus::Satisfied
+    }
+
+    /// Whether this requirement is usable with documented limits.
+    pub fn is_limited(&self) -> bool {
+        self.status == VideoPlaybackRequirementStatus::Limited
+    }
+
+    /// Whether this requirement is currently missing.
+    pub fn is_missing(&self) -> bool {
+        self.status == VideoPlaybackRequirementStatus::Missing
+    }
+
+    /// Compact non-source summary for generated requirement checklists.
+    pub fn to_text(&self) -> String {
+        format!(
+            "video playback requirement: {} {}",
+            self.requirement.to_text(),
+            self.status.to_text()
+        )
+    }
+}
+
+/// Requirement coverage report for a checked video playback plan.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VideoPlaybackRequirementPlan {
+    target: VideoPlaybackPlanTarget,
+    findings: Vec<VideoPlaybackRequirementFinding>,
+}
+
+impl VideoPlaybackRequirementPlan {
+    fn new(
+        plan: &VideoPlaybackPlan,
+        requirements: impl IntoIterator<Item = VideoPlaybackRequirement>,
+    ) -> Self {
+        let mut findings = Vec::new();
+        for requirement in requirements {
+            if findings
+                .iter()
+                .any(|finding: &VideoPlaybackRequirementFinding| finding.requirement == requirement)
+            {
+                continue;
+            }
+            findings.push(VideoPlaybackRequirementFinding {
+                requirement,
+                status: support_for_video_requirement(plan, requirement),
+            });
+        }
+
+        Self {
+            target: plan.target.clone(),
+            findings,
+        }
+    }
+
+    /// Planned rendering target used to evaluate the requirements.
+    pub fn target(&self) -> &VideoPlaybackPlanTarget {
+        &self.target
+    }
+
+    /// All requested requirement findings in request order after de-duplication.
+    pub fn findings(&self) -> &[VideoPlaybackRequirementFinding] {
+        &self.findings
+    }
+
+    /// Number of requested requirements.
+    pub fn requirement_count(&self) -> usize {
+        self.findings.len()
+    }
+
+    /// Number of fully satisfied requirements.
+    pub fn satisfied_count(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|finding| finding.is_satisfied())
+            .count()
+    }
+
+    /// Number of limited requirements.
+    pub fn limited_count(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|finding| finding.is_limited())
+            .count()
+    }
+
+    /// Number of missing requirements.
+    pub fn missing_count(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|finding| finding.is_missing())
+            .count()
+    }
+
+    /// Requirements fully satisfied by the planned route.
+    pub fn satisfied_requirements(&self) -> Vec<VideoPlaybackRequirement> {
+        self.findings
+            .iter()
+            .filter_map(|finding| finding.is_satisfied().then_some(finding.requirement()))
+            .collect()
+    }
+
+    /// Requirements usable with documented limits.
+    pub fn limited_requirements(&self) -> Vec<VideoPlaybackRequirement> {
+        self.findings
+            .iter()
+            .filter_map(|finding| finding.is_limited().then_some(finding.requirement()))
+            .collect()
+    }
+
+    /// Requirements currently missing from the planned route.
+    pub fn missing_requirements(&self) -> Vec<VideoPlaybackRequirement> {
+        self.findings
+            .iter()
+            .filter_map(|finding| finding.is_missing().then_some(finding.requirement()))
+            .collect()
+    }
+
+    /// Requirements that can be satisfied by routing this source through the
+    /// browser-video fallback instead of the selected native route.
+    pub fn webview_fallback_requirements(&self) -> Vec<VideoPlaybackRequirement> {
+        self.findings
+            .iter()
+            .filter_map(|finding| {
+                (requirement_next_action(&self.target, finding)
+                    == VideoPlaybackRequirementNextAction::UseWebViewFallback)
+                    .then_some(finding.requirement())
+            })
+            .collect()
+    }
+
+    /// Requirements that need backend/product work before they can be promised.
+    pub fn native_backend_work_requirements(&self) -> Vec<VideoPlaybackRequirement> {
+        self.findings
+            .iter()
+            .filter_map(|finding| {
+                (requirement_next_action(&self.target, finding)
+                    == VideoPlaybackRequirementNextAction::BuildNativeBackend)
+                    .then_some(finding.requirement())
+            })
+            .collect()
+    }
+
+    /// Whether the plan should be rerouted through WebView fallback to satisfy
+    /// one or more requested affordances.
+    pub fn requires_webview_fallback(&self) -> bool {
+        !self.webview_fallback_requirements().is_empty()
+    }
+
+    /// Whether one or more requested affordances need native/backend work.
+    pub fn requires_native_backend_work(&self) -> bool {
+        !self.native_backend_work_requirements().is_empty()
+    }
+
+    /// Next action for one requested requirement, if it was part of the plan.
+    pub fn next_action_for(
+        &self,
+        requirement: VideoPlaybackRequirement,
+    ) -> Option<VideoPlaybackRequirementNextAction> {
+        self.findings
+            .iter()
+            .find(|finding| finding.requirement() == requirement)
+            .map(|finding| requirement_next_action(&self.target, finding))
+    }
+
+    /// Highest-priority next action for the whole requirement plan.
+    pub fn next_action(&self) -> VideoPlaybackRequirementNextAction {
+        if self.requires_native_backend_work() {
+            VideoPlaybackRequirementNextAction::BuildNativeBackend
+        } else if self.requires_webview_fallback() {
+            VideoPlaybackRequirementNextAction::UseWebViewFallback
+        } else if self.limited_count() > 0 {
+            VideoPlaybackRequirementNextAction::AcceptLimitedSupport
+        } else {
+            VideoPlaybackRequirementNextAction::RenderPlannedRoute
+        }
+    }
+
+    /// Whether every requested requirement is fully satisfied.
+    pub fn is_ready(&self) -> bool {
+        self.limited_count() == 0 && self.missing_count() == 0
+    }
+
+    /// Whether any requested requirement is limited or missing.
+    pub fn has_gaps(&self) -> bool {
+        !self.is_ready()
+    }
+
+    /// Content-safe summary for generated player audits.
+    pub fn to_text(&self) -> String {
+        format!(
+            "video playback requirements: target {}, requested {}, satisfied {}, limited {}, missing {}, next action {}, ready {}",
+            self.target.to_text(),
+            self.requirement_count(),
+            self.satisfied_count(),
+            self.limited_count(),
+            self.missing_count(),
+            self.next_action().to_text(),
+            self.is_ready()
+        )
+    }
+}
+
+fn requirement_next_action(
+    target: &VideoPlaybackPlanTarget,
+    finding: &VideoPlaybackRequirementFinding,
+) -> VideoPlaybackRequirementNextAction {
+    if finding.is_satisfied() {
+        return VideoPlaybackRequirementNextAction::RenderPlannedRoute;
+    }
+
+    if finding.is_limited() {
+        return VideoPlaybackRequirementNextAction::AcceptLimitedSupport;
+    }
+
+    match finding.requirement() {
+        VideoPlaybackRequirement::PictureInPicture
+        | VideoPlaybackRequirement::AdaptiveStreaming
+            if target.is_native() =>
+        {
+            VideoPlaybackRequirementNextAction::UseWebViewFallback
+        }
+        _ => VideoPlaybackRequirementNextAction::BuildNativeBackend,
+    }
+}
+
+fn support_for_video_requirement(
+    plan: &VideoPlaybackPlan,
+    requirement: VideoPlaybackRequirement,
+) -> VideoPlaybackRequirementStatus {
+    match requirement {
+        VideoPlaybackRequirement::BasicPlayback
+        | VideoPlaybackRequirement::SourceReplacement
+        | VideoPlaybackRequirement::CanPlayProbe
+        | VideoPlaybackRequirement::TextTracks
+        | VideoPlaybackRequirement::Fullscreen => VideoPlaybackRequirementStatus::Satisfied,
+        VideoPlaybackRequirement::FastSeek | VideoPlaybackRequirement::PlaybackRate => {
+            VideoPlaybackRequirementStatus::Limited
+        }
+        VideoPlaybackRequirement::PictureInPicture => {
+            if plan.target().is_webview_fallback() {
+                VideoPlaybackRequirementStatus::Satisfied
+            } else {
+                VideoPlaybackRequirementStatus::Missing
+            }
+        }
+        VideoPlaybackRequirement::AdaptiveStreaming => {
+            if plan.target().is_webview_fallback() {
+                VideoPlaybackRequirementStatus::Satisfied
+            } else {
+                VideoPlaybackRequirementStatus::Missing
+            }
+        }
+        VideoPlaybackRequirement::HardwareDecode
+        | VideoPlaybackRequirement::NativeTrackSelection => VideoPlaybackRequirementStatus::Missing,
     }
 }
 
@@ -427,6 +909,440 @@ pub enum WebViewVideoCommand {
     ExitPictureInPicture,
     /// Post a snapshot event through the WebView bridge.
     RequestSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum WebViewVideoCommandDraft {
+    Command(WebViewVideoCommand),
+    SeekSeconds { seconds: f64, fast: bool },
+}
+
+/// Checked browser-video command for a WebView-hosted video fallback.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WebViewVideoCommandBuilder {
+    draft: WebViewVideoCommandDraft,
+}
+
+impl WebViewVideoCommandBuilder {
+    /// Build a checked `play()` command.
+    pub fn play() -> Self {
+        Self::command(WebViewVideoCommand::Play)
+    }
+
+    /// Build a checked `pause()` command.
+    pub fn pause() -> Self {
+        Self::command(WebViewVideoCommand::Pause)
+    }
+
+    /// Build a checked play/pause toggle command.
+    pub fn toggle_play() -> Self {
+        Self::command(WebViewVideoCommand::TogglePlay)
+    }
+
+    /// Build a checked stop command.
+    pub fn stop() -> Self {
+        Self::command(WebViewVideoCommand::Stop)
+    }
+
+    /// Build a checked seek command.
+    pub fn seek(position: Duration) -> Self {
+        Self::command(WebViewVideoCommand::Seek(position))
+    }
+
+    /// Build a checked seek command from seconds.
+    pub fn seek_secs(seconds: f64) -> Self {
+        Self {
+            draft: WebViewVideoCommandDraft::SeekSeconds {
+                seconds,
+                fast: false,
+            },
+        }
+    }
+
+    /// Build a checked fast seek command.
+    pub fn fast_seek(position: Duration) -> Self {
+        Self::command(WebViewVideoCommand::FastSeek(position))
+    }
+
+    /// Build a checked fast seek command from seconds.
+    pub fn fast_seek_secs(seconds: f64) -> Self {
+        Self {
+            draft: WebViewVideoCommandDraft::SeekSeconds {
+                seconds,
+                fast: true,
+            },
+        }
+    }
+
+    /// Build a checked volume command.
+    pub fn volume(volume: f32) -> Self {
+        Self::command(WebViewVideoCommand::SetVolume(volume))
+    }
+
+    /// Build a checked muted command.
+    pub fn muted(muted: bool) -> Self {
+        Self::command(WebViewVideoCommand::SetMuted(muted))
+    }
+
+    /// Build a checked playback-rate command.
+    pub fn playback_rate(playback_rate: f32) -> Self {
+        Self::command(WebViewVideoCommand::SetPlaybackRate(playback_rate))
+    }
+
+    /// Build a checked looping command.
+    pub fn looping(looping: bool) -> Self {
+        Self::command(WebViewVideoCommand::SetLooping(looping))
+    }
+
+    /// Build a checked browser text-track selection command.
+    pub fn select_text_track(selector: impl Into<SharedString>) -> Self {
+        Self::command(WebViewVideoCommand::SelectTextTrack(selector.into()))
+    }
+
+    /// Build a checked browser text-track disablement command.
+    pub fn disable_text_tracks() -> Self {
+        Self::command(WebViewVideoCommand::DisableTextTracks)
+    }
+
+    /// Build a checked browser fullscreen request command.
+    pub fn request_fullscreen() -> Self {
+        Self::command(WebViewVideoCommand::RequestFullscreen)
+    }
+
+    /// Build a checked browser fullscreen exit command.
+    pub fn exit_fullscreen() -> Self {
+        Self::command(WebViewVideoCommand::ExitFullscreen)
+    }
+
+    /// Build a checked picture-in-picture request command.
+    pub fn request_picture_in_picture() -> Self {
+        Self::command(WebViewVideoCommand::RequestPictureInPicture)
+    }
+
+    /// Build a checked picture-in-picture exit command.
+    pub fn exit_picture_in_picture() -> Self {
+        Self::command(WebViewVideoCommand::ExitPictureInPicture)
+    }
+
+    /// Build a checked snapshot request command.
+    pub fn request_snapshot() -> Self {
+        Self::command(WebViewVideoCommand::RequestSnapshot)
+    }
+
+    /// Wrap an existing raw command and validate it before use.
+    pub fn command(command: WebViewVideoCommand) -> Self {
+        Self {
+            draft: WebViewVideoCommandDraft::Command(command),
+        }
+    }
+
+    /// Validate this command without consuming it.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        match &self.draft {
+            WebViewVideoCommandDraft::Command(command) => validate_webview_video_command(command),
+            WebViewVideoCommandDraft::SeekSeconds { seconds, .. } => {
+                validate_video_seek_seconds(*seconds)
+            }
+        }
+    }
+
+    /// Return the command category without exposing generated values.
+    pub fn command_kind(&self) -> &'static str {
+        match &self.draft {
+            WebViewVideoCommandDraft::Command(command) => webview_video_command_kind(command),
+            WebViewVideoCommandDraft::SeekSeconds { fast: true, .. } => "fast seek",
+            WebViewVideoCommandDraft::SeekSeconds { fast: false, .. } => "seek",
+        }
+    }
+
+    /// Return whether this command changes playback position.
+    pub fn is_seek_command(&self) -> bool {
+        matches!(
+            &self.draft,
+            WebViewVideoCommandDraft::Command(
+                WebViewVideoCommand::Seek(_) | WebViewVideoCommand::FastSeek(_)
+            ) | WebViewVideoCommandDraft::SeekSeconds { .. }
+        )
+    }
+
+    /// Return whether this command changes output volume or mute state.
+    pub fn is_audio_command(&self) -> bool {
+        matches!(
+            &self.draft,
+            WebViewVideoCommandDraft::Command(
+                WebViewVideoCommand::SetVolume(_) | WebViewVideoCommand::SetMuted(_)
+            )
+        )
+    }
+
+    /// Return whether this command changes browser presentation state.
+    pub fn is_presentation_command(&self) -> bool {
+        matches!(
+            &self.draft,
+            WebViewVideoCommandDraft::Command(
+                WebViewVideoCommand::RequestFullscreen
+                    | WebViewVideoCommand::ExitFullscreen
+                    | WebViewVideoCommand::RequestPictureInPicture
+                    | WebViewVideoCommand::ExitPictureInPicture
+            )
+        )
+    }
+
+    /// Return a content-safe summary for generated WebView video commands.
+    pub fn to_text(&self) -> String {
+        format!(
+            "webview video command: kind {}, seek {}, audio {}, presentation {}",
+            self.command_kind(),
+            self.is_seek_command(),
+            self.is_audio_command(),
+            self.is_presentation_command()
+        )
+    }
+
+    /// Return the checked command.
+    pub fn build_checked(self) -> anyhow::Result<WebViewVideoCommand> {
+        self.validate()?;
+        Ok(match self.draft {
+            WebViewVideoCommandDraft::Command(command) => command,
+            WebViewVideoCommandDraft::SeekSeconds { seconds, fast } => {
+                let position = Duration::from_secs_f64(seconds);
+                if fast {
+                    WebViewVideoCommand::FastSeek(position)
+                } else {
+                    WebViewVideoCommand::Seek(position)
+                }
+            }
+        })
+    }
+}
+
+/// Checked media-control update for an native desktop video player.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VideoPlaybackControls {
+    volume: Option<f32>,
+    muted: Option<bool>,
+    playback_rate: Option<f32>,
+    looping: Option<bool>,
+    seek_position: Option<Duration>,
+    fast_seek: bool,
+}
+
+impl VideoPlaybackControls {
+    /// Requested output volume, if configured.
+    pub fn volume(&self) -> Option<f32> {
+        self.volume
+    }
+
+    /// Requested muted state, if configured.
+    pub fn muted(&self) -> Option<bool> {
+        self.muted
+    }
+
+    /// Requested playback rate, if configured.
+    pub fn playback_rate(&self) -> Option<f32> {
+        self.playback_rate
+    }
+
+    /// Requested looping state, if configured.
+    pub fn looping(&self) -> Option<bool> {
+        self.looping
+    }
+
+    /// Requested seek position, if configured.
+    pub fn seek_position(&self) -> Option<Duration> {
+        self.seek_position
+    }
+
+    /// Whether the requested seek should prefer a fast/keyframe-oriented path.
+    pub fn uses_fast_seek(&self) -> bool {
+        self.fast_seek
+    }
+
+    /// Number of configured control updates.
+    pub fn update_count(&self) -> usize {
+        [
+            self.volume.is_some(),
+            self.muted.is_some(),
+            self.playback_rate.is_some(),
+            self.looping.is_some(),
+            self.seek_position.is_some(),
+        ]
+        .into_iter()
+        .filter(|configured| *configured)
+        .count()
+    }
+
+    /// Return a content-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "video playback controls: updates {}, volume {}, muted {}, playback rate {}, looping {}, seek {}, fast seek {}",
+            self.update_count(),
+            self.volume.is_some(),
+            self.muted.is_some(),
+            self.playback_rate.is_some(),
+            self.looping.is_some(),
+            self.seek_position.is_some(),
+            self.fast_seek
+        )
+    }
+}
+
+/// Builder for validated media-control updates.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct VideoPlaybackControlsBuilder {
+    volume: Option<f32>,
+    muted: Option<bool>,
+    playback_rate: Option<f32>,
+    looping: Option<bool>,
+    seek_position: Option<Duration>,
+    seek_seconds: Option<f64>,
+    fast_seek: bool,
+}
+
+impl VideoPlaybackControlsBuilder {
+    /// Create an empty controls builder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set output volume in the browser-compatible `0.0..=1.0` range.
+    pub fn volume(mut self, volume: f32) -> Self {
+        self.volume = Some(volume);
+        self
+    }
+
+    /// Set muted state.
+    pub fn muted(mut self, muted: bool) -> Self {
+        self.muted = Some(muted);
+        self
+    }
+
+    /// Set playback rate in the checked `0.0625..=16.0` range.
+    pub fn playback_rate(mut self, playback_rate: f32) -> Self {
+        self.playback_rate = Some(playback_rate);
+        self
+    }
+
+    /// Set looping state.
+    pub fn looping(mut self, looping: bool) -> Self {
+        self.looping = Some(looping);
+        self
+    }
+
+    /// Seek to a playback position.
+    pub fn seek(mut self, position: Duration) -> Self {
+        self.seek_position = Some(position);
+        self.seek_seconds = None;
+        self.fast_seek = false;
+        self
+    }
+
+    /// Seek to a playback position using the fast-seek path when supported.
+    pub fn fast_seek(mut self, position: Duration) -> Self {
+        self.seek_position = Some(position);
+        self.seek_seconds = None;
+        self.fast_seek = true;
+        self
+    }
+
+    /// Seek to a playback position expressed in seconds.
+    pub fn seek_secs(mut self, seconds: f64) -> Self {
+        self.seek_seconds = Some(seconds);
+        self.seek_position = None;
+        self.fast_seek = false;
+        self
+    }
+
+    /// Fast-seek to a playback position expressed in seconds.
+    pub fn fast_seek_secs(mut self, seconds: f64) -> Self {
+        self.seek_seconds = Some(seconds);
+        self.seek_position = None;
+        self.fast_seek = true;
+        self
+    }
+
+    /// Return the configured volume.
+    pub fn configured_volume(&self) -> Option<f32> {
+        self.volume
+    }
+
+    /// Return the configured playback rate.
+    pub fn configured_playback_rate(&self) -> Option<f32> {
+        self.playback_rate
+    }
+
+    /// Number of configured control updates.
+    pub fn configured_update_count(&self) -> usize {
+        [
+            self.volume.is_some(),
+            self.muted.is_some(),
+            self.playback_rate.is_some(),
+            self.looping.is_some(),
+            self.seek_position.is_some() || self.seek_seconds.is_some(),
+        ]
+        .into_iter()
+        .filter(|configured| *configured)
+        .count()
+    }
+
+    /// Return a content-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "video playback controls: updates {}, volume {}, muted {}, playback rate {}, looping {}, seek {}, fast seek {}",
+            self.configured_update_count(),
+            self.volume.is_some(),
+            self.muted.is_some(),
+            self.playback_rate.is_some(),
+            self.looping.is_some(),
+            self.seek_position.is_some() || self.seek_seconds.is_some(),
+            self.fast_seek
+        )
+    }
+
+    /// Validate the requested control update.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.volume.is_some()
+                || self.muted.is_some()
+                || self.playback_rate.is_some()
+                || self.looping.is_some()
+                || self.seek_position.is_some()
+                || self.seek_seconds.is_some(),
+            "video playback controls must configure at least one update"
+        );
+        if let Some(volume) = self.volume {
+            validate_video_volume(volume)?;
+        }
+        if let Some(playback_rate) = self.playback_rate {
+            validate_video_playback_rate(playback_rate)?;
+        }
+        if let Some(position) = self.seek_position {
+            validate_video_seek_position(position)?;
+        }
+        if let Some(seconds) = self.seek_seconds {
+            validate_video_seek_seconds(seconds)?;
+        }
+        Ok(())
+    }
+
+    /// Build the validated controls.
+    pub fn build_checked(self) -> anyhow::Result<VideoPlaybackControls> {
+        self.validate()?;
+        let seek_position = match (self.seek_position, self.seek_seconds) {
+            (Some(position), None) => Some(position),
+            (None, Some(seconds)) => Some(Duration::from_secs_f64(seconds)),
+            (None, None) => None,
+            (Some(_), Some(_)) => unreachable!("builder stores one seek representation"),
+        };
+        Ok(VideoPlaybackControls {
+            volume: self.volume,
+            muted: self.muted,
+            playback_rate: self.playback_rate,
+            looping: self.looping,
+            seek_position,
+            fast_seek: self.fast_seek,
+        })
+    }
 }
 
 /// Options for building a WebView-hosted browser video fallback.
@@ -579,6 +1495,56 @@ impl WebViewVideoOptions {
         self
     }
 
+    /// Number of configured browser controls-list tokens.
+    pub fn controls_list_count(&self) -> usize {
+        self.controls_list.len()
+    }
+
+    /// Number of configured browser text tracks.
+    pub fn text_track_count(&self) -> usize {
+        self.text_tracks.len()
+    }
+
+    /// Return whether a poster URL is configured.
+    pub fn has_poster(&self) -> bool {
+        self.poster.is_some()
+    }
+
+    /// Return whether a preload hint is configured.
+    pub fn has_preload(&self) -> bool {
+        self.preload.is_some()
+    }
+
+    /// Return whether a CORS mode is configured.
+    pub fn has_cross_origin(&self) -> bool {
+        self.cross_origin.is_some()
+    }
+
+    /// Return whether a start position is configured.
+    pub fn has_start_position(&self) -> bool {
+        self.start_position.is_some()
+    }
+
+    /// Return a content-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "webview video options: controls {}, autoplay {}, muted {}, looping {}, plays inline {}, poster {}, preload {}, cross origin {}, controls-list {}, disable picture-in-picture {}, start position {}, text tracks {}, object fit {}",
+            self.controls,
+            self.autoplay,
+            self.muted,
+            self.looping,
+            self.plays_inline,
+            self.has_poster(),
+            self.has_preload(),
+            self.has_cross_origin(),
+            self.controls_list_count(),
+            self.disable_picture_in_picture,
+            self.has_start_position(),
+            self.text_track_count(),
+            self.object_fit.as_ref()
+        )
+    }
+
     /// Validate browser-video fallback options before embedding them.
     pub fn validate(&self) -> anyhow::Result<()> {
         validate_optional_media_url(
@@ -674,6 +1640,31 @@ impl MediaSourceBuilder {
         self
     }
 
+    /// Return the configured source kind without exposing URLs, paths, or keys.
+    pub fn source_kind(&self) -> &'static str {
+        media_source_kind(&self.source)
+    }
+
+    /// Return whether file-backed sources must already exist.
+    pub fn requires_existing_file(&self) -> bool {
+        self.require_existing_file
+    }
+
+    /// Return whether file-backed sources will be canonicalized.
+    pub fn canonicalizes_file(&self) -> bool {
+        self.canonicalize_file
+    }
+
+    /// Return a content-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "media source: kind {}, require existing file {}, canonicalize file {}",
+            self.source_kind(),
+            self.requires_existing_file(),
+            self.canonicalizes_file()
+        )
+    }
+
     /// Validate the configured source without consuming the builder.
     pub fn validate(&self) -> anyhow::Result<()> {
         validate_media_source(
@@ -737,9 +1728,61 @@ impl VideoPlaybackPlanTarget {
     pub fn is_webview_fallback(&self) -> bool {
         matches!(self, Self::WebViewFallback { .. })
     }
+
+    /// Return a compact target label for logs and agent traces.
+    pub fn to_text(&self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::WebViewFallback { .. } => "webview fallback",
+        }
+    }
 }
 
-/// Checked plan for building an Electron-style video player from one source.
+/// Render instruction produced by a checked video playback plan.
+#[derive(Clone, Debug)]
+pub enum VideoPlaybackRenderInstruction {
+    /// Render with Kael's native video element and control with this controller.
+    Native {
+        /// Controller initialized with the plan's validated source.
+        controller: VideoController,
+    },
+    /// Render through a WebView-hosted browser `<video>` fallback.
+    WebViewFallback {
+        /// Data URL containing the fallback browser video page.
+        page_url: SharedString,
+        /// Stable WebView element id for this source.
+        element_id: SharedString,
+        /// Human-readable route recommendation reason.
+        reason: SharedString,
+    },
+}
+
+impl VideoPlaybackRenderInstruction {
+    /// Return whether this instruction renders through Kael's native video path.
+    pub fn is_native(&self) -> bool {
+        matches!(self, Self::Native { .. })
+    }
+
+    /// Return whether this instruction renders through a browser-video WebView fallback.
+    pub fn is_webview_fallback(&self) -> bool {
+        matches!(self, Self::WebViewFallback { .. })
+    }
+
+    /// Return a content-safe summary for render dispatch logs.
+    pub fn to_text(&self) -> String {
+        format!(
+            "video render instruction: target {}, controller {}",
+            if self.is_native() {
+                "native"
+            } else {
+                "webview fallback"
+            },
+            self.is_native()
+        )
+    }
+}
+
+/// Checked plan for building an native desktop video player from one source.
 #[derive(Clone)]
 pub struct VideoPlaybackPlan {
     source: MediaSource,
@@ -788,6 +1831,32 @@ impl VideoPlaybackPlan {
         VideoController::new(self.source.clone())
     }
 
+    /// Produce the concrete render instruction for this checked playback plan.
+    pub fn render_instruction(&self) -> VideoPlaybackRenderInstruction {
+        match &self.target {
+            VideoPlaybackPlanTarget::Native => VideoPlaybackRenderInstruction::Native {
+                controller: self.controller(),
+            },
+            VideoPlaybackPlanTarget::WebViewFallback {
+                page_url,
+                element_id,
+                reason,
+            } => VideoPlaybackRenderInstruction::WebViewFallback {
+                page_url: page_url.clone(),
+                element_id: element_id.clone(),
+                reason: reason.clone(),
+            },
+        }
+    }
+
+    /// Evaluate requested playback affordances against this checked plan.
+    pub fn requirement_plan(
+        &self,
+        requirements: impl IntoIterator<Item = VideoPlaybackRequirement>,
+    ) -> VideoPlaybackRequirementPlan {
+        VideoPlaybackRequirementPlan::new(self, requirements)
+    }
+
     /// Return the WebView fallback page URL when this plan targets WebView.
     pub fn webview_page_url(&self) -> Option<&str> {
         match &self.target {
@@ -804,6 +1873,1013 @@ impl VideoPlaybackPlan {
             }
             VideoPlaybackPlanTarget::Native => None,
         }
+    }
+
+    /// Return a content-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "video playback plan: source {}, target {}, route {}, can play {}, content type {}, webview text tracks {}",
+            media_source_kind(&self.source),
+            self.target.to_text(),
+            self.route.to_text(),
+            self.can_play.to_text(),
+            self.content_type.is_some(),
+            self.webview_options.text_track_count()
+        )
+    }
+}
+
+/// One-object handoff for native desktop URL video playback.
+///
+/// This is the ergonomic path for generated code that would otherwise reach
+/// for `<video src="...">`: validate the URL, choose native playback unless a
+/// browser-video fallback is required, and expose the controller/render
+/// instruction without logging the media URL.
+#[derive(Clone)]
+pub struct VideoUrlPlaybackHandoff {
+    plan: VideoPlaybackPlan,
+}
+
+impl VideoUrlPlaybackHandoff {
+    /// Build a checked URL-backed handoff with default fallback options.
+    pub fn url(url: impl Into<Arc<str>>) -> anyhow::Result<Self> {
+        Self::from_builder(VideoPlaybackPlanBuilder::url(url))
+    }
+
+    /// Build a checked URL-backed handoff with browser fallback options.
+    pub fn url_with_options(
+        url: impl Into<Arc<str>>,
+        options: WebViewVideoOptions,
+    ) -> anyhow::Result<Self> {
+        Self::from_builder(VideoPlaybackPlanBuilder::url(url).webview_options(options))
+    }
+
+    /// Build a checked URL-backed handoff when a server-supplied content type
+    /// should drive native-vs-browser routing for extensionless URLs.
+    pub fn url_with_content_type(
+        url: impl Into<Arc<str>>,
+        content_type: impl Into<SharedString>,
+    ) -> anyhow::Result<Self> {
+        Self::from_builder(VideoPlaybackPlanBuilder::url(url).content_type(content_type))
+    }
+
+    /// Build from a configured playback-plan builder.
+    pub fn from_builder(builder: VideoPlaybackPlanBuilder) -> anyhow::Result<Self> {
+        Ok(Self {
+            plan: builder.build_checked()?,
+        })
+    }
+
+    /// Return the checked playback plan.
+    pub fn plan(&self) -> &VideoPlaybackPlan {
+        &self.plan
+    }
+
+    /// Return a fresh controller for the validated URL source.
+    pub fn controller(&self) -> VideoController {
+        self.plan.controller()
+    }
+
+    /// Produce the render instruction selected by the checked plan.
+    pub fn render_instruction(&self) -> VideoPlaybackRenderInstruction {
+        self.plan.render_instruction()
+    }
+
+    /// Browser-style native playback confidence for this URL.
+    pub fn can_play(&self) -> VideoCanPlay {
+        self.plan.can_play()
+    }
+
+    /// Recommended native-vs-WebView route.
+    pub fn route(&self) -> &VideoPlaybackRoute {
+        self.plan.route()
+    }
+
+    /// Planned rendering target.
+    pub fn target(&self) -> &VideoPlaybackPlanTarget {
+        self.plan.target()
+    }
+
+    /// Evaluate requested playback affordances against this checked handoff.
+    pub fn requirement_plan(
+        &self,
+        requirements: impl IntoIterator<Item = VideoPlaybackRequirement>,
+    ) -> VideoPlaybackRequirementPlan {
+        self.plan.requirement_plan(requirements)
+    }
+
+    /// Evaluate the default URL-player affordances expected by generated apps.
+    pub fn baseline_requirement_plan(&self) -> VideoPlaybackRequirementPlan {
+        self.requirement_plan(
+            VideoPlaybackRequirement::url_player_baseline()
+                .iter()
+                .copied(),
+        )
+    }
+
+    /// Evaluate every known video playback affordance for audit/roadmap output.
+    pub fn full_requirement_plan(&self) -> VideoPlaybackRequirementPlan {
+        self.requirement_plan(VideoPlaybackRequirement::all().iter().copied())
+    }
+
+    /// Highest-priority next action for the default URL-player promise.
+    pub fn baseline_next_action(&self) -> VideoPlaybackRequirementNextAction {
+        self.baseline_requirement_plan().next_action()
+    }
+
+    /// Return whether the default URL-player promise is ready for this source.
+    pub fn baseline_ready(&self) -> bool {
+        self.baseline_requirement_plan().is_ready()
+    }
+
+    /// Return whether this URL is ready for Kael's native video path.
+    pub fn is_native(&self) -> bool {
+        self.plan.target().is_native()
+    }
+
+    /// Return whether this URL is routed through the browser-video fallback.
+    pub fn uses_webview_fallback(&self) -> bool {
+        self.plan.target().is_webview_fallback()
+    }
+
+    /// Return the WebView fallback page URL when the checked route needs one.
+    pub fn webview_page_url(&self) -> Option<&str> {
+        self.plan.webview_page_url()
+    }
+
+    /// Return the stable browser-video element id when the checked route needs one.
+    pub fn webview_element_id(&self) -> Option<&str> {
+        self.plan.webview_element_id()
+    }
+
+    /// Return a content-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "video URL playback handoff: target {}, route {}, can play {}, controller {}, webview page {}, webview element {}",
+            self.plan.target().to_text(),
+            self.plan.route().to_text(),
+            self.plan.can_play().to_text(),
+            true,
+            self.webview_page_url().is_some(),
+            self.webview_element_id().is_some()
+        )
+    }
+}
+
+/// Next app-builder action for a checked desktop video element handoff.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VideoElementHandoffNextAction {
+    /// Render a native Kael video element/controller.
+    RenderNativePlayer,
+    /// Render the checked browser-video fallback for this source.
+    RenderWebViewFallback,
+    /// Render with documented native limitations surfaced to the app.
+    AcceptLimitedSupport,
+    /// Product/backend work is required before the requested promise is true.
+    BuildNativeBackend,
+}
+
+impl VideoElementHandoffNextAction {
+    /// Stable action label for logs, setup screens, and generated agents.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::RenderNativePlayer => "render native player",
+            Self::RenderWebViewFallback => "render webview fallback",
+            Self::AcceptLimitedSupport => "accept limited support",
+            Self::BuildNativeBackend => "build native backend",
+        }
+    }
+}
+
+/// Customization affordance expected from an Electron-style video element.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VideoElementCustomizationFeature {
+    /// Browser-like readable state/properties such as source, duration, ready state, and support.
+    Properties,
+    /// Playback event callbacks for generated player chrome and agents.
+    Events,
+    /// App-owned play/pause/seek/volume/rate/loop controls.
+    CustomControls,
+    /// Timeline scrubbing and fast seek behavior.
+    TimelineScrubbing,
+    /// Caption/subtitle track UI.
+    CaptionsUi,
+    /// Native fullscreen presentation.
+    Fullscreen,
+    /// Browser picture-in-picture presentation.
+    PictureInPicture,
+    /// Native hardware decode / low-copy media surface expectation.
+    HardwareDecode,
+    /// Runtime source switching like assigning `video.src`.
+    SourceSwitching,
+    /// Playlist plus hardware/OS media-key next/previous routing.
+    PlaylistMediaKeys,
+}
+
+impl VideoElementCustomizationFeature {
+    /// Stable feature label for logs and generated checklists.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Properties => "properties",
+            Self::Events => "events",
+            Self::CustomControls => "custom controls",
+            Self::TimelineScrubbing => "timeline scrubbing",
+            Self::CaptionsUi => "captions ui",
+            Self::Fullscreen => "fullscreen",
+            Self::PictureInPicture => "picture-in-picture",
+            Self::HardwareDecode => "hardware decode",
+            Self::SourceSwitching => "source switching",
+            Self::PlaylistMediaKeys => "playlist media keys",
+        }
+    }
+}
+
+/// Support state for one requested video-element customization affordance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VideoElementCustomizationStatus {
+    /// The selected handoff covers this customization.
+    Satisfied,
+    /// The selected handoff covers this customization with documented limits.
+    Limited,
+    /// The selected handoff does not cover this customization yet.
+    Missing,
+}
+
+impl VideoElementCustomizationStatus {
+    /// Stable status label for logs and generated checklists.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Satisfied => "satisfied",
+            Self::Limited => "limited",
+            Self::Missing => "missing",
+        }
+    }
+}
+
+/// Next app-builder action for a video-element customization plan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VideoElementCustomizationNextAction {
+    /// Render the configured native or checked fallback player.
+    RenderConfiguredPlayer,
+    /// Render with documented limits surfaced in the app.
+    AcceptLimitedSupport,
+    /// Use the checked browser-video fallback for browser-only media behavior.
+    UseWebViewFallback,
+    /// Add playlist/media-key wiring before claiming this customization.
+    ConfigurePlaylistOrHandlers,
+    /// Product/backend work is required before this customization can be promised.
+    BuildNativeBackend,
+}
+
+impl VideoElementCustomizationNextAction {
+    /// Stable action label for logs and generated agents.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::RenderConfiguredPlayer => "render configured player",
+            Self::AcceptLimitedSupport => "accept limited support",
+            Self::UseWebViewFallback => "use webview fallback",
+            Self::ConfigurePlaylistOrHandlers => "configure playlist or handlers",
+            Self::BuildNativeBackend => "build native backend",
+        }
+    }
+}
+
+/// One customization finding for an Electron-style video-element replacement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VideoElementCustomizationFinding {
+    feature: VideoElementCustomizationFeature,
+    status: VideoElementCustomizationStatus,
+    next_action: VideoElementCustomizationNextAction,
+}
+
+impl VideoElementCustomizationFinding {
+    /// Requested customization affordance.
+    pub fn feature(&self) -> VideoElementCustomizationFeature {
+        self.feature
+    }
+
+    /// Support state for the affordance.
+    pub fn status(&self) -> VideoElementCustomizationStatus {
+        self.status
+    }
+
+    /// Next app-builder action for the affordance.
+    pub fn next_action(&self) -> VideoElementCustomizationNextAction {
+        self.next_action
+    }
+
+    /// Whether this customization is fully covered.
+    pub fn is_satisfied(&self) -> bool {
+        self.status == VideoElementCustomizationStatus::Satisfied
+    }
+
+    /// Whether this customization is usable with documented limits.
+    pub fn is_limited(&self) -> bool {
+        self.status == VideoElementCustomizationStatus::Limited
+    }
+
+    /// Whether this customization is missing.
+    pub fn is_missing(&self) -> bool {
+        self.status == VideoElementCustomizationStatus::Missing
+    }
+
+    /// Content-safe summary for generated customization checklists.
+    pub fn to_text(&self) -> String {
+        format!(
+            "video element customization: {} {}, next action {}",
+            self.feature.to_text(),
+            self.status.to_text(),
+            self.next_action.to_text()
+        )
+    }
+}
+
+/// Checked customization plan for a generated, highly tweakable video player.
+#[derive(Clone)]
+pub struct VideoElementCustomizationPlan {
+    handoff: VideoElementHandoff,
+    features: Vec<VideoElementCustomizationFeature>,
+    findings: Vec<VideoElementCustomizationFinding>,
+    event_handler_count: usize,
+    custom_control_count: usize,
+}
+
+impl VideoElementCustomizationPlan {
+    /// Underlying source/route/requirement handoff.
+    pub fn handoff(&self) -> &VideoElementHandoff {
+        &self.handoff
+    }
+
+    /// Requested customization features in stable insertion order.
+    pub fn features(&self) -> &[VideoElementCustomizationFeature] {
+        &self.features
+    }
+
+    /// Customization findings in feature order.
+    pub fn findings(&self) -> &[VideoElementCustomizationFinding] {
+        &self.findings
+    }
+
+    /// Number of requested customization features.
+    pub fn feature_count(&self) -> usize {
+        self.features.len()
+    }
+
+    /// Number of expected event handlers.
+    pub fn event_handler_count(&self) -> usize {
+        self.event_handler_count
+    }
+
+    /// Number of expected custom controls.
+    pub fn custom_control_count(&self) -> usize {
+        self.custom_control_count
+    }
+
+    /// Number of fully satisfied customization features.
+    pub fn satisfied_count(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|finding| finding.is_satisfied())
+            .count()
+    }
+
+    /// Number of limited customization features.
+    pub fn limited_count(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|finding| finding.is_limited())
+            .count()
+    }
+
+    /// Number of missing customization features.
+    pub fn missing_count(&self) -> usize {
+        self.findings
+            .iter()
+            .filter(|finding| finding.is_missing())
+            .count()
+    }
+
+    /// Whether this plan asks for a feature.
+    pub fn has_feature(&self, feature: VideoElementCustomizationFeature) -> bool {
+        self.features.contains(&feature)
+    }
+
+    /// Whether one or more requested features need the browser-video fallback.
+    pub fn requires_webview_fallback(&self) -> bool {
+        self.findings.iter().any(|finding| {
+            finding.next_action() == VideoElementCustomizationNextAction::UseWebViewFallback
+        })
+    }
+
+    /// Whether one or more requested features need native/backend work.
+    pub fn requires_native_backend_work(&self) -> bool {
+        self.findings.iter().any(|finding| {
+            finding.next_action() == VideoElementCustomizationNextAction::BuildNativeBackend
+        })
+    }
+
+    /// Whether playlist/media-key wiring is still required.
+    pub fn requires_playlist_or_handlers(&self) -> bool {
+        self.findings.iter().any(|finding| {
+            finding.next_action()
+                == VideoElementCustomizationNextAction::ConfigurePlaylistOrHandlers
+        })
+    }
+
+    /// Highest-priority next action for the whole customization plan.
+    pub fn next_action(&self) -> VideoElementCustomizationNextAction {
+        if self.requires_native_backend_work() {
+            VideoElementCustomizationNextAction::BuildNativeBackend
+        } else if self.requires_webview_fallback() {
+            VideoElementCustomizationNextAction::UseWebViewFallback
+        } else if self.requires_playlist_or_handlers() {
+            VideoElementCustomizationNextAction::ConfigurePlaylistOrHandlers
+        } else if self.limited_count() > 0 {
+            VideoElementCustomizationNextAction::AcceptLimitedSupport
+        } else {
+            VideoElementCustomizationNextAction::RenderConfiguredPlayer
+        }
+    }
+
+    /// Whether every requested customization is fully satisfied.
+    pub fn is_ready(&self) -> bool {
+        self.limited_count() == 0 && self.missing_count() == 0
+    }
+
+    /// Content-safe summary for generated player setup.
+    pub fn to_text(&self) -> String {
+        format!(
+            "video element customization plan: features {}, satisfied {}, limited {}, missing {}, event handlers {}, custom controls {}, native {}, webview fallback {}, next action {}",
+            self.feature_count(),
+            self.satisfied_count(),
+            self.limited_count(),
+            self.missing_count(),
+            self.event_handler_count,
+            self.custom_control_count,
+            self.handoff.is_native(),
+            self.handoff.uses_webview_fallback(),
+            self.next_action().to_text()
+        )
+    }
+}
+
+/// Builder for checked video-element customization plans.
+#[derive(Clone)]
+pub struct VideoElementCustomizationPlanBuilder {
+    handoff: VideoElementHandoff,
+    features: Vec<VideoElementCustomizationFeature>,
+    event_handler_count: usize,
+    custom_control_count: usize,
+}
+
+impl VideoElementCustomizationPlanBuilder {
+    /// Start from a checked video element handoff.
+    pub fn new(handoff: VideoElementHandoff) -> Self {
+        Self {
+            handoff,
+            features: Vec::new(),
+            event_handler_count: 0,
+            custom_control_count: 0,
+        }
+    }
+
+    /// Request the common `<video>`-like customization surface for generated players.
+    pub fn html_video_baseline(mut self) -> Self {
+        self = self
+            .feature(VideoElementCustomizationFeature::Properties)
+            .feature(VideoElementCustomizationFeature::Events)
+            .feature(VideoElementCustomizationFeature::CustomControls)
+            .feature(VideoElementCustomizationFeature::SourceSwitching);
+        if self.event_handler_count == 0 {
+            self.event_handler_count = 8;
+        }
+        if self.custom_control_count == 0 {
+            self.custom_control_count = 5;
+        }
+        self
+    }
+
+    /// Request one customization feature.
+    pub fn feature(mut self, feature: VideoElementCustomizationFeature) -> Self {
+        if !self.features.contains(&feature) {
+            self.features.push(feature);
+        }
+        self
+    }
+
+    /// Request custom controls and record the expected control count.
+    pub fn custom_controls(mut self, count: usize) -> Self {
+        self = self.feature(VideoElementCustomizationFeature::CustomControls);
+        self.custom_control_count = count;
+        self
+    }
+
+    /// Request event wiring and record the expected handler count.
+    pub fn event_handlers(mut self, count: usize) -> Self {
+        self = self.feature(VideoElementCustomizationFeature::Events);
+        self.event_handler_count = count;
+        self
+    }
+
+    /// Request timeline scrubbing support.
+    pub fn timeline_scrubbing(self) -> Self {
+        self.feature(VideoElementCustomizationFeature::TimelineScrubbing)
+    }
+
+    /// Request caption/subtitle UI.
+    pub fn captions_ui(self) -> Self {
+        self.feature(VideoElementCustomizationFeature::CaptionsUi)
+    }
+
+    /// Request fullscreen presentation.
+    pub fn fullscreen(self) -> Self {
+        self.feature(VideoElementCustomizationFeature::Fullscreen)
+    }
+
+    /// Request browser picture-in-picture presentation.
+    pub fn picture_in_picture(self) -> Self {
+        self.feature(VideoElementCustomizationFeature::PictureInPicture)
+    }
+
+    /// Request native hardware decode / low-copy media surface support.
+    pub fn hardware_decode(self) -> Self {
+        self.feature(VideoElementCustomizationFeature::HardwareDecode)
+    }
+
+    /// Request source switching support.
+    pub fn source_switching(self) -> Self {
+        self.feature(VideoElementCustomizationFeature::SourceSwitching)
+    }
+
+    /// Request playlist/media-key routing.
+    pub fn playlist_media_keys(self) -> Self {
+        self.feature(VideoElementCustomizationFeature::PlaylistMediaKeys)
+    }
+
+    /// Number of requested customization features.
+    pub fn feature_count(&self) -> usize {
+        self.features.len()
+    }
+
+    /// Return whether this builder requests a feature.
+    pub fn has_feature(&self, feature: VideoElementCustomizationFeature) -> bool {
+        self.features.contains(&feature)
+    }
+
+    /// Validate the customization request without consuming the builder.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.features.is_empty(),
+            "video element customization plan must request at least one feature"
+        );
+        anyhow::ensure!(
+            self.event_handler_count <= 64,
+            "video element customization plan supports at most 64 event handlers"
+        );
+        anyhow::ensure!(
+            self.custom_control_count <= 32,
+            "video element customization plan supports at most 32 custom controls"
+        );
+        Ok(())
+    }
+
+    /// Build the checked customization plan.
+    pub fn build_checked(self) -> anyhow::Result<VideoElementCustomizationPlan> {
+        self.validate()?;
+        let findings = self
+            .features
+            .iter()
+            .copied()
+            .map(|feature| video_customization_finding(&self.handoff, feature))
+            .collect();
+        Ok(VideoElementCustomizationPlan {
+            handoff: self.handoff,
+            features: self.features,
+            findings,
+            event_handler_count: self.event_handler_count,
+            custom_control_count: self.custom_control_count,
+        })
+    }
+}
+
+fn video_customization_finding(
+    handoff: &VideoElementHandoff,
+    feature: VideoElementCustomizationFeature,
+) -> VideoElementCustomizationFinding {
+    let (status, next_action) = match feature {
+        VideoElementCustomizationFeature::Properties
+        | VideoElementCustomizationFeature::Events
+        | VideoElementCustomizationFeature::SourceSwitching => (
+            VideoElementCustomizationStatus::Satisfied,
+            VideoElementCustomizationNextAction::RenderConfiguredPlayer,
+        ),
+        VideoElementCustomizationFeature::CustomControls => status_and_action_from_requirements(
+            handoff,
+            [
+                VideoPlaybackRequirement::BasicPlayback,
+                VideoPlaybackRequirement::FastSeek,
+                VideoPlaybackRequirement::PlaybackRate,
+            ],
+        ),
+        VideoElementCustomizationFeature::TimelineScrubbing => {
+            status_and_action_from_requirements(handoff, [VideoPlaybackRequirement::FastSeek])
+        }
+        VideoElementCustomizationFeature::CaptionsUi => {
+            status_and_action_from_requirements(handoff, [VideoPlaybackRequirement::TextTracks])
+        }
+        VideoElementCustomizationFeature::Fullscreen => {
+            status_and_action_from_requirements(handoff, [VideoPlaybackRequirement::Fullscreen])
+        }
+        VideoElementCustomizationFeature::PictureInPicture => status_and_action_from_requirements(
+            handoff,
+            [VideoPlaybackRequirement::PictureInPicture],
+        ),
+        VideoElementCustomizationFeature::HardwareDecode => {
+            status_and_action_from_requirements(handoff, [VideoPlaybackRequirement::HardwareDecode])
+        }
+        VideoElementCustomizationFeature::PlaylistMediaKeys => {
+            if handoff.has_playlist() {
+                (
+                    VideoElementCustomizationStatus::Satisfied,
+                    VideoElementCustomizationNextAction::RenderConfiguredPlayer,
+                )
+            } else {
+                (
+                    VideoElementCustomizationStatus::Missing,
+                    VideoElementCustomizationNextAction::ConfigurePlaylistOrHandlers,
+                )
+            }
+        }
+    };
+
+    VideoElementCustomizationFinding {
+        feature,
+        status,
+        next_action,
+    }
+}
+
+fn status_and_action_from_requirements(
+    handoff: &VideoElementHandoff,
+    requirements: impl IntoIterator<Item = VideoPlaybackRequirement>,
+) -> (
+    VideoElementCustomizationStatus,
+    VideoElementCustomizationNextAction,
+) {
+    let mut saw_limited = false;
+    let mut saw_missing = false;
+    let mut saw_webview = false;
+    let mut saw_backend = false;
+
+    for requirement in requirements {
+        match handoff.requirement_plan().next_action_for(requirement) {
+            Some(VideoPlaybackRequirementNextAction::RenderPlannedRoute) => {}
+            Some(VideoPlaybackRequirementNextAction::AcceptLimitedSupport) => {
+                saw_limited = true;
+            }
+            Some(VideoPlaybackRequirementNextAction::UseWebViewFallback) => {
+                saw_missing = true;
+                saw_webview = true;
+            }
+            Some(VideoPlaybackRequirementNextAction::BuildNativeBackend) | None => {
+                saw_missing = true;
+                saw_backend = true;
+            }
+        }
+    }
+
+    if saw_backend {
+        (
+            VideoElementCustomizationStatus::Missing,
+            VideoElementCustomizationNextAction::BuildNativeBackend,
+        )
+    } else if saw_webview {
+        (
+            VideoElementCustomizationStatus::Missing,
+            VideoElementCustomizationNextAction::UseWebViewFallback,
+        )
+    } else if saw_missing {
+        (
+            VideoElementCustomizationStatus::Missing,
+            VideoElementCustomizationNextAction::BuildNativeBackend,
+        )
+    } else if saw_limited {
+        (
+            VideoElementCustomizationStatus::Limited,
+            VideoElementCustomizationNextAction::AcceptLimitedSupport,
+        )
+    } else {
+        (
+            VideoElementCustomizationStatus::Satisfied,
+            VideoElementCustomizationNextAction::RenderConfiguredPlayer,
+        )
+    }
+}
+
+/// One-object replacement contract for an Electron-style `<video>` element.
+///
+/// The handoff wraps a checked playback plan, optional initial media controls,
+/// optional playlist/media-key intent, and the requirement audit that tells a
+/// builder whether the app can render native, should use the checked browser
+/// fallback, can accept documented limits, or needs backend work.
+#[derive(Clone)]
+pub struct VideoElementHandoff {
+    plan: VideoPlaybackPlan,
+    initial_controls: Option<VideoPlaybackControls>,
+    playlist: Option<VideoPlaylist>,
+    requirements: VideoPlaybackRequirementPlan,
+}
+
+impl VideoElementHandoff {
+    fn new(
+        plan: VideoPlaybackPlan,
+        initial_controls: Option<VideoPlaybackControls>,
+        playlist: Option<VideoPlaylist>,
+        requirements: impl IntoIterator<Item = VideoPlaybackRequirement>,
+    ) -> Self {
+        let requirements = plan.requirement_plan(requirements);
+        Self {
+            plan,
+            initial_controls,
+            playlist,
+            requirements,
+        }
+    }
+
+    /// Checked playback plan for this video element.
+    pub fn plan(&self) -> &VideoPlaybackPlan {
+        &self.plan
+    }
+
+    /// Optional initial controls to apply before first render/playback.
+    pub fn initial_controls(&self) -> Option<&VideoPlaybackControls> {
+        self.initial_controls.as_ref()
+    }
+
+    /// Optional playlist intent for next/previous media keys.
+    pub fn playlist(&self) -> Option<&VideoPlaylist> {
+        self.playlist.as_ref()
+    }
+
+    /// Requirement coverage for the promised player affordances.
+    pub fn requirement_plan(&self) -> &VideoPlaybackRequirementPlan {
+        &self.requirements
+    }
+
+    /// Produce the concrete render instruction selected by the checked plan.
+    pub fn render_instruction(&self) -> VideoPlaybackRenderInstruction {
+        self.plan.render_instruction()
+    }
+
+    /// Return a fresh controller with initial controls applied.
+    pub fn controller_checked(&self) -> anyhow::Result<VideoController> {
+        let controller = self.plan.controller();
+        if let Some(controls) = &self.initial_controls {
+            if let Some(volume) = controls.volume() {
+                controller.set_volume(volume);
+            }
+            if let Some(muted) = controls.muted() {
+                controller.set_muted(muted);
+            }
+            if let Some(playback_rate) = controls.playback_rate() {
+                controller.set_playback_rate(playback_rate);
+            }
+            if let Some(looping) = controls.looping() {
+                controller.set_looping(looping);
+            }
+            if let Some(position) = controls.seek_position() {
+                if controls.uses_fast_seek() {
+                    controller.fast_seek(position)?;
+                } else {
+                    controller.seek(position)?;
+                }
+            }
+        }
+        Ok(controller)
+    }
+
+    /// Build a media-key binding for this handoff when playlist intent exists.
+    pub fn media_key_binding_builder_checked(
+        &self,
+    ) -> anyhow::Result<Option<MediaKeyBindingBuilder>> {
+        let Some(playlist) = &self.playlist else {
+            return Ok(None);
+        };
+        Ok(Some(
+            MediaKeyBindingBuilder::new()
+                .video(self.controller_checked()?)
+                .playlist(playlist.clone()),
+        ))
+    }
+
+    /// Highest-priority next app-builder action.
+    pub fn next_action(&self) -> VideoElementHandoffNextAction {
+        match self.requirements.next_action() {
+            VideoPlaybackRequirementNextAction::BuildNativeBackend => {
+                VideoElementHandoffNextAction::BuildNativeBackend
+            }
+            VideoPlaybackRequirementNextAction::UseWebViewFallback => {
+                VideoElementHandoffNextAction::RenderWebViewFallback
+            }
+            VideoPlaybackRequirementNextAction::AcceptLimitedSupport => {
+                VideoElementHandoffNextAction::AcceptLimitedSupport
+            }
+            VideoPlaybackRequirementNextAction::RenderPlannedRoute => {
+                if self.plan.target().is_webview_fallback() {
+                    VideoElementHandoffNextAction::RenderWebViewFallback
+                } else {
+                    VideoElementHandoffNextAction::RenderNativePlayer
+                }
+            }
+        }
+    }
+
+    /// Whether the handoff can render through Kael's native video path.
+    pub fn is_native(&self) -> bool {
+        self.plan.target().is_native()
+    }
+
+    /// Whether the checked route uses the browser-video fallback.
+    pub fn uses_webview_fallback(&self) -> bool {
+        self.plan.target().is_webview_fallback()
+    }
+
+    /// Whether the promised requirements are fully satisfied.
+    pub fn is_ready(&self) -> bool {
+        self.requirements.is_ready()
+    }
+
+    /// Whether initial controls are configured.
+    pub fn has_initial_controls(&self) -> bool {
+        self.initial_controls.is_some()
+    }
+
+    /// Whether playlist/media-key intent is configured.
+    pub fn has_playlist(&self) -> bool {
+        self.playlist.is_some()
+    }
+
+    /// Number of playlist sources, if configured.
+    pub fn playlist_source_count(&self) -> usize {
+        self.playlist.as_ref().map(VideoPlaylist::len).unwrap_or(0)
+    }
+
+    /// Content-safe summary for generated player setup.
+    pub fn to_text(&self) -> String {
+        format!(
+            "video element handoff: target {}, route {}, can play {}, controls {}, playlist {}, playlist sources {}, requirements {}, satisfied {}, limited {}, missing {}, next action {}",
+            self.plan.target().to_text(),
+            self.plan.route().to_text(),
+            self.plan.can_play().to_text(),
+            self.has_initial_controls(),
+            self.has_playlist(),
+            self.playlist_source_count(),
+            self.requirements.requirement_count(),
+            self.requirements.satisfied_count(),
+            self.requirements.limited_count(),
+            self.requirements.missing_count(),
+            self.next_action().to_text()
+        )
+    }
+}
+
+/// Builder for checked desktop video element handoffs.
+#[derive(Clone)]
+pub struct VideoElementHandoffBuilder {
+    plan: VideoPlaybackPlanBuilder,
+    initial_controls: Option<VideoPlaybackControlsBuilder>,
+    playlist: Option<VideoPlaylist>,
+    requirements: Vec<VideoPlaybackRequirement>,
+}
+
+impl VideoElementHandoffBuilder {
+    /// Create a handoff builder from a playback-plan builder.
+    pub fn new(plan: VideoPlaybackPlanBuilder) -> Self {
+        Self {
+            plan,
+            initial_controls: None,
+            playlist: None,
+            requirements: VideoPlaybackRequirement::url_player_baseline().to_vec(),
+        }
+    }
+
+    /// Create a checked URL-backed handoff builder.
+    pub fn url(url: impl Into<Arc<str>>) -> Self {
+        Self::new(VideoPlaybackPlanBuilder::url(url))
+    }
+
+    /// Create a checked file-backed handoff builder.
+    pub fn file(path: impl Into<PathBuf>) -> Self {
+        Self::new(VideoPlaybackPlanBuilder::file(path))
+    }
+
+    /// Provide a MIME/content type for route selection.
+    pub fn content_type(mut self, content_type: impl Into<SharedString>) -> Self {
+        self.plan = self.plan.content_type(content_type);
+        self
+    }
+
+    /// Prefer the browser-video WebView fallback when possible.
+    pub fn prefer_webview(mut self) -> Self {
+        self.plan = self.plan.prefer_webview();
+        self
+    }
+
+    /// Configure browser-video fallback options.
+    pub fn webview_options(mut self, options: WebViewVideoOptions) -> Self {
+        self.plan = self.plan.webview_options(options);
+        self
+    }
+
+    /// Configure initial media controls for the generated player.
+    pub fn initial_controls(mut self, controls: VideoPlaybackControlsBuilder) -> Self {
+        self.initial_controls = Some(controls);
+        self
+    }
+
+    /// Configure playlist intent for next/previous media keys.
+    pub fn playlist(mut self, playlist: VideoPlaylist) -> Self {
+        self.playlist = Some(playlist);
+        self
+    }
+
+    /// Replace the default URL-player promise with explicit requirements.
+    pub fn requirements(
+        mut self,
+        requirements: impl IntoIterator<Item = VideoPlaybackRequirement>,
+    ) -> Self {
+        self.requirements = requirements.into_iter().collect();
+        self
+    }
+
+    /// Request every known playback affordance for audit/roadmap output.
+    pub fn all_requirements(mut self) -> Self {
+        self.requirements = VideoPlaybackRequirement::all().to_vec();
+        self
+    }
+
+    /// Number of requested requirements.
+    pub fn requirement_count(&self) -> usize {
+        self.requirements.len()
+    }
+
+    /// Return whether initial controls are configured.
+    pub fn has_initial_controls(&self) -> bool {
+        self.initial_controls.is_some()
+    }
+
+    /// Return whether playlist intent is configured.
+    pub fn has_playlist(&self) -> bool {
+        self.playlist.is_some()
+    }
+
+    /// Return a content-safe setup summary.
+    pub fn to_text(&self) -> String {
+        format!(
+            "video element handoff builder: source {}, content type {}, prefer webview {}, controls {}, playlist {}, requirements {}",
+            self.plan.source_kind(),
+            self.plan.has_content_type(),
+            self.plan.prefers_webview(),
+            self.has_initial_controls(),
+            self.has_playlist(),
+            self.requirement_count()
+        )
+    }
+
+    /// Validate the handoff without consuming the builder.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.requirements.is_empty(),
+            "video element handoff must request at least one requirement"
+        );
+        self.plan.validate()?;
+        if let Some(controls) = &self.initial_controls {
+            controls.validate()?;
+        }
+        if let Some(playlist) = &self.playlist {
+            playlist.validate()?;
+        }
+        Ok(())
+    }
+
+    /// Build the checked video element handoff.
+    pub fn build_checked(self) -> anyhow::Result<VideoElementHandoff> {
+        self.validate()?;
+        let controls = self
+            .initial_controls
+            .map(VideoPlaybackControlsBuilder::build_checked)
+            .transpose()?;
+        let playlist = self
+            .playlist
+            .map(|playlist| playlist.checked())
+            .transpose()?;
+        let plan = self.plan.build_checked()?;
+        Ok(VideoElementHandoff::new(
+            plan,
+            controls,
+            playlist,
+            self.requirements,
+        ))
     }
 }
 
@@ -883,6 +2959,33 @@ impl VideoPlaybackPlanBuilder {
         self
     }
 
+    /// Return the configured source kind without exposing URLs, paths, or keys.
+    pub fn source_kind(&self) -> &'static str {
+        self.source.source_kind()
+    }
+
+    /// Return whether MIME/content type was supplied.
+    pub fn has_content_type(&self) -> bool {
+        self.content_type.is_some()
+    }
+
+    /// Return whether browser-video fallback is preferred.
+    pub fn prefers_webview(&self) -> bool {
+        self.prefer_webview
+    }
+
+    /// Return a content-safe summary before building the playback plan.
+    pub fn to_text(&self) -> String {
+        format!(
+            "video playback plan builder: source {}, content type {}, prefer webview {}, webview text tracks {}, webview start position {}",
+            self.source_kind(),
+            self.has_content_type(),
+            self.prefers_webview(),
+            self.webview_options.text_track_count(),
+            self.webview_options.has_start_position()
+        )
+    }
+
     /// Validate the plan without consuming the builder.
     pub fn validate(&self) -> anyhow::Result<()> {
         self.source.validate()?;
@@ -939,6 +3042,14 @@ impl VideoPlaybackPlanBuilder {
             webview_options,
             target,
         })
+    }
+
+    /// Build a checked playback plan and evaluate requested affordances.
+    pub fn build_requirement_plan_checked(
+        self,
+        requirements: impl IntoIterator<Item = VideoPlaybackRequirement>,
+    ) -> anyhow::Result<VideoPlaybackRequirementPlan> {
+        Ok(self.build_checked()?.requirement_plan(requirements))
     }
 }
 
@@ -1093,6 +3204,68 @@ impl TextTrack {
             .filter(|cue| cue.is_active_at(position))
             .cloned()
             .collect()
+    }
+}
+
+/// Builder for validated native video text tracks.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TextTrackBuilder {
+    track: TextTrack,
+}
+
+impl TextTrackBuilder {
+    /// Create a builder from already parsed text-track cues.
+    pub fn new(
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        language: Option<impl Into<SharedString>>,
+        kind: TextTrackKind,
+        cues: Vec<TextTrackCue>,
+    ) -> Self {
+        Self {
+            track: TextTrack::new(id, label, language, kind, cues),
+        }
+    }
+
+    /// Parse a SubRip document into a checked subtitle text track builder.
+    pub fn srt(
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        language: Option<impl Into<SharedString>>,
+        input: &str,
+    ) -> Self {
+        Self {
+            track: TextTrack::from_srt(id, label, language, input),
+        }
+    }
+
+    /// Parse a WebVTT document into a checked subtitle text track builder.
+    pub fn webvtt(
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        language: Option<impl Into<SharedString>>,
+        input: &str,
+    ) -> Self {
+        Self {
+            track: TextTrack::from_webvtt(id, label, language, input),
+        }
+    }
+
+    /// Validate the text track without consuming the builder.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        validate_text_track(&self.track)
+    }
+
+    /// Build the validated text track.
+    pub fn build_checked(self) -> anyhow::Result<TextTrack> {
+        self.validate()?;
+        Ok(self.track)
+    }
+}
+
+impl From<TextTrack> for TextTrackBuilder {
+    fn from(track: TextTrack) -> Self {
+        Self { track }
     }
 }
 
@@ -1394,6 +3567,14 @@ impl VideoController {
         webview_video_player_command_script(command)
     }
 
+    /// Validate and return JavaScript for controlling this controller's browser fallback.
+    pub fn webview_command_script_checked(
+        &self,
+        command: WebViewVideoCommandBuilder,
+    ) -> anyhow::Result<SharedString> {
+        Ok(self.webview_command_script(command.build_checked()?))
+    }
+
     /// Dispatch a command to this controller's WebView-hosted browser fallback.
     ///
     /// This is only meaningful when the same source is rendered through
@@ -1407,6 +3588,15 @@ impl VideoController {
             self.webview_player_id(),
             self.webview_command_script(command),
         )
+    }
+
+    /// Validate and dispatch a command to this controller's WebView-hosted browser fallback.
+    pub fn dispatch_webview_command_checked(
+        &self,
+        window: &mut Window,
+        command: WebViewVideoCommandBuilder,
+    ) -> anyhow::Result<()> {
+        self.dispatch_webview_command(window, command.build_checked()?)
     }
 
     /// Replace the media source and reset metadata, readiness, and playback
@@ -1443,9 +3633,29 @@ impl VideoController {
         });
     }
 
+    /// Validate and replace the media source.
+    ///
+    /// This is the preferred path for generated player code and runtime `src`
+    /// changes. Use [`MediaSourceBuilder`] when file existence checks,
+    /// canonicalization, or an already-composed source should be validated
+    /// before the controller resets playback state.
+    pub fn set_source_checked(
+        &self,
+        source: impl Into<MediaSourceBuilder>,
+    ) -> anyhow::Result<MediaSource> {
+        let source = source.into().build_checked()?;
+        self.set_source(source.clone());
+        Ok(source)
+    }
+
     /// Replace the source with a URL.
     pub fn set_url(&self, url: impl Into<Arc<str>>) {
         self.set_source(MediaSource::url(url));
+    }
+
+    /// Validate and replace the source with a URL.
+    pub fn set_url_checked(&self, url: impl Into<Arc<str>>) -> anyhow::Result<MediaSource> {
+        self.set_source_checked(MediaSourceBuilder::url(url))
     }
 
     /// Replace the source with a local file path.
@@ -1453,9 +3663,19 @@ impl VideoController {
         self.set_source(MediaSource::file(path));
     }
 
+    /// Validate and replace the source with a local file path.
+    pub fn set_file_checked(&self, path: impl Into<PathBuf>) -> anyhow::Result<MediaSource> {
+        self.set_source_checked(MediaSourceBuilder::file(path))
+    }
+
     /// Replace the source with in-memory media bytes.
     pub fn set_bytes(&self, bytes: impl Into<Arc<[u8]>>) {
         self.set_source(MediaSource::bytes(bytes));
+    }
+
+    /// Validate and replace the source with in-memory media bytes.
+    pub fn set_bytes_checked(&self, bytes: impl Into<Arc<[u8]>>) -> anyhow::Result<MediaSource> {
+        self.set_source_checked(MediaSourceBuilder::bytes(bytes))
     }
 
     /// Replace the source with a keyed reader factory.
@@ -1467,6 +3687,18 @@ impl VideoController {
         R: Read + Seek + Send + Sync + 'static,
     {
         self.set_source(MediaSource::reader(key, open));
+    }
+
+    /// Validate and replace the source with a keyed reader factory.
+    pub fn set_reader_checked<R>(
+        &self,
+        key: impl Into<Arc<str>>,
+        open: impl Fn() -> std::io::Result<R> + Send + Sync + 'static,
+    ) -> anyhow::Result<MediaSource>
+    where
+        R: Read + Seek + Send + Sync + 'static,
+    {
+        self.set_source_checked(MediaSourceBuilder::reader(key, open))
     }
 
     /// Return a clonable audio handle for lower-level integrations.
@@ -1664,6 +3896,30 @@ impl VideoController {
         state.events.push_back(VideoEvent::TextTrackAdded { id });
     }
 
+    /// Validate and add a parsed text track.
+    ///
+    /// Generated caption/subtitle setup should prefer this path so empty
+    /// metadata, empty parsed cue sets, invalid cue ranges, and duplicate track
+    /// ids fail before the controller changes state.
+    pub fn add_text_track_checked(
+        &self,
+        track: impl Into<TextTrackBuilder>,
+    ) -> anyhow::Result<TextTrack> {
+        let track = track.into().build_checked()?;
+        {
+            let state = self.state.borrow();
+            anyhow::ensure!(
+                !state
+                    .text_tracks
+                    .iter()
+                    .any(|existing| existing.id == track.id),
+                "video text track id is already configured"
+            );
+        }
+        self.add_text_track(track.clone());
+        Ok(track)
+    }
+
     /// Parse and add a SubRip subtitle track.
     pub fn add_srt_text_track(
         &self,
@@ -1675,6 +3931,17 @@ impl VideoController {
         self.add_text_track(TextTrack::from_srt(id, label, language, input));
     }
 
+    /// Parse, validate, and add a SubRip subtitle track.
+    pub fn add_srt_text_track_checked(
+        &self,
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        language: Option<impl Into<SharedString>>,
+        input: &str,
+    ) -> anyhow::Result<TextTrack> {
+        self.add_text_track_checked(TextTrackBuilder::srt(id, label, language, input))
+    }
+
     /// Parse and add a WebVTT subtitle track.
     pub fn add_webvtt_text_track(
         &self,
@@ -1684,6 +3951,17 @@ impl VideoController {
         input: &str,
     ) {
         self.add_text_track(TextTrack::from_webvtt(id, label, language, input));
+    }
+
+    /// Parse, validate, and add a WebVTT subtitle track.
+    pub fn add_webvtt_text_track_checked(
+        &self,
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        language: Option<impl Into<SharedString>>,
+        input: &str,
+    ) -> anyhow::Result<TextTrack> {
+        self.add_text_track_checked(TextTrackBuilder::webvtt(id, label, language, input))
     }
 
     /// Return the configured text tracks.
@@ -1719,10 +3997,7 @@ impl VideoController {
     pub fn select_text_track(&self, id: impl AsRef<str>) {
         let id = id.as_ref();
         let mut state = self.state.borrow_mut();
-        state.selected_text_track = state
-            .text_tracks
-            .iter()
-            .position(|track| track.id.as_ref() == id);
+        state.selected_text_track = resolve_text_track_index(&state.text_tracks, id);
         let selected_id = state
             .selected_text_track
             .and_then(|index| state.text_tracks.get(index))
@@ -1733,6 +4008,25 @@ impl VideoController {
             .push_back(VideoEvent::TextTrackChanged { id: selected_id });
     }
 
+    /// Validate and select a text track by id.
+    ///
+    /// Unlike [`Self::select_text_track`], this fails for empty, malformed, or
+    /// unknown ids and leaves the current selection unchanged.
+    pub fn select_text_track_checked(&self, id: impl AsRef<str>) -> anyhow::Result<TextTrack> {
+        let id = id.as_ref();
+        validate_text_track_selector(id)?;
+        let mut state = self.state.borrow_mut();
+        let index = resolve_text_track_index(&state.text_tracks, id)
+            .ok_or_else(|| anyhow!("video text track selector did not match a configured track"))?;
+        let track = state.text_tracks[index].clone();
+        state.selected_text_track = Some(index);
+        state.last_active_text_cues.clear();
+        state.events.push_back(VideoEvent::TextTrackChanged {
+            id: Some(track.id.clone()),
+        });
+        Ok(track)
+    }
+
     /// Disable the selected text track.
     pub fn disable_text_track(&self) {
         let mut state = self.state.borrow_mut();
@@ -1741,6 +4035,25 @@ impl VideoController {
         state
             .events
             .push_back(VideoEvent::TextTrackChanged { id: None });
+    }
+
+    /// Disable the selected text track only when captions/subtitles are active.
+    pub fn disable_text_track_checked(&self) -> anyhow::Result<TextTrack> {
+        let mut state = self.state.borrow_mut();
+        let previous = state
+            .selected_text_track
+            .and_then(|index| state.text_tracks.get(index))
+            .cloned();
+        anyhow::ensure!(
+            previous.is_some(),
+            "video text tracks are already disabled or unavailable"
+        );
+        state.selected_text_track = None;
+        state.last_active_text_cues.clear();
+        state
+            .events
+            .push_back(VideoEvent::TextTrackChanged { id: None });
+        Ok(previous.expect("checked above"))
     }
 
     /// Return the current playback state.
@@ -1791,6 +4104,34 @@ impl VideoController {
     /// Set the current playback position.
     pub fn set_position(&self, position: Duration) -> Result<(), VideoPlaybackError> {
         self.set_current_time(position)
+    }
+
+    /// Validate and apply a batch of common video controls.
+    pub fn apply_controls_checked(
+        &self,
+        controls: VideoPlaybackControlsBuilder,
+    ) -> anyhow::Result<VideoPlaybackControls> {
+        let controls = controls.build_checked()?;
+        if let Some(volume) = controls.volume {
+            self.set_volume(volume);
+        }
+        if let Some(muted) = controls.muted {
+            self.set_muted(muted);
+        }
+        if let Some(playback_rate) = controls.playback_rate {
+            self.set_playback_rate(playback_rate);
+        }
+        if let Some(looping) = controls.looping {
+            self.set_looping(looping);
+        }
+        if let Some(position) = controls.seek_position {
+            if controls.fast_seek {
+                self.fast_seek(position)?;
+            } else {
+                self.seek(position)?;
+            }
+        }
+        Ok(controls)
     }
 
     /// Return the known duration, if available.
@@ -2008,7 +4349,7 @@ pub fn recommended_video_playback_route_for_type(mime_type: &str) -> VideoPlayba
 }
 
 /// Return native playback confidence for a MIME type, similar to
-/// `HTMLMediaElement.canPlayType`.
+/// `media can-play checks`.
 pub fn can_play_video_type(mime_type: &str) -> VideoCanPlay {
     let essence = media_mime_essence(mime_type);
 
@@ -2281,6 +4622,15 @@ fn media_manifest_extension(source: &MediaSource) -> Option<String> {
     }
 }
 
+fn media_source_kind(source: &MediaSource) -> &'static str {
+    match source {
+        MediaSource::File(_) => "file",
+        MediaSource::Url(_) => "url",
+        MediaSource::Bytes(_) => "bytes",
+        MediaSource::Reader(_) => "reader",
+    }
+}
+
 fn media_mime_essence(mime_type: &str) -> String {
     mime_type
         .split(';')
@@ -2306,6 +4656,140 @@ fn sanitize_video_playback_rate(playback_rate: f32) -> f32 {
     } else {
         1.0
     }
+}
+
+fn validate_video_volume(volume: f32) -> anyhow::Result<()> {
+    anyhow::ensure!(volume.is_finite(), "video volume must be finite");
+    anyhow::ensure!(
+        (0.0..=1.0).contains(&volume),
+        "video volume must be between 0.0 and 1.0"
+    );
+    Ok(())
+}
+
+fn validate_video_playback_rate(playback_rate: f32) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        playback_rate.is_finite(),
+        "video playback rate must be finite"
+    );
+    anyhow::ensure!(
+        (0.0625..=16.0).contains(&playback_rate),
+        "video playback rate must be between 0.0625 and 16.0"
+    );
+    Ok(())
+}
+
+fn validate_video_seek_position(position: Duration) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        position.as_secs() <= 7 * 24 * 60 * 60,
+        "video seek position cannot exceed 7 days"
+    );
+    Ok(())
+}
+
+fn validate_video_seek_seconds(seconds: f64) -> anyhow::Result<()> {
+    anyhow::ensure!(seconds.is_finite(), "video seek seconds must be finite");
+    anyhow::ensure!(seconds >= 0.0, "video seek seconds cannot be negative");
+    anyhow::ensure!(
+        seconds <= 7.0 * 24.0 * 60.0 * 60.0,
+        "video seek seconds cannot exceed 7 days"
+    );
+    Ok(())
+}
+
+fn webview_video_command_kind(command: &WebViewVideoCommand) -> &'static str {
+    match command {
+        WebViewVideoCommand::Play => "play",
+        WebViewVideoCommand::Pause => "pause",
+        WebViewVideoCommand::TogglePlay => "toggle play",
+        WebViewVideoCommand::Stop => "stop",
+        WebViewVideoCommand::Seek(_) => "seek",
+        WebViewVideoCommand::FastSeek(_) => "fast seek",
+        WebViewVideoCommand::SetVolume(_) => "volume",
+        WebViewVideoCommand::SetMuted(_) => "muted",
+        WebViewVideoCommand::SetPlaybackRate(_) => "playback rate",
+        WebViewVideoCommand::SetLooping(_) => "looping",
+        WebViewVideoCommand::SelectTextTrack(_) => "select text track",
+        WebViewVideoCommand::DisableTextTracks => "disable text tracks",
+        WebViewVideoCommand::RequestFullscreen => "request fullscreen",
+        WebViewVideoCommand::ExitFullscreen => "exit fullscreen",
+        WebViewVideoCommand::RequestPictureInPicture => "request picture-in-picture",
+        WebViewVideoCommand::ExitPictureInPicture => "exit picture-in-picture",
+        WebViewVideoCommand::RequestSnapshot => "request snapshot",
+    }
+}
+
+fn validate_webview_video_command(command: &WebViewVideoCommand) -> anyhow::Result<()> {
+    match command {
+        WebViewVideoCommand::Seek(position) | WebViewVideoCommand::FastSeek(position) => {
+            validate_video_seek_position(*position)
+        }
+        WebViewVideoCommand::SetVolume(volume) => validate_video_volume(*volume),
+        WebViewVideoCommand::SetPlaybackRate(playback_rate) => {
+            validate_video_playback_rate(*playback_rate)
+        }
+        WebViewVideoCommand::SelectTextTrack(selector) => {
+            validate_webview_text_track_selector(selector.as_ref())
+        }
+        WebViewVideoCommand::Play
+        | WebViewVideoCommand::Pause
+        | WebViewVideoCommand::TogglePlay
+        | WebViewVideoCommand::Stop
+        | WebViewVideoCommand::SetMuted(_)
+        | WebViewVideoCommand::SetLooping(_)
+        | WebViewVideoCommand::DisableTextTracks
+        | WebViewVideoCommand::RequestFullscreen
+        | WebViewVideoCommand::ExitFullscreen
+        | WebViewVideoCommand::RequestPictureInPicture
+        | WebViewVideoCommand::ExitPictureInPicture
+        | WebViewVideoCommand::RequestSnapshot => Ok(()),
+    }
+}
+
+fn validate_webview_text_track_selector(selector: &str) -> anyhow::Result<()> {
+    validate_text_track_selector(selector)
+}
+
+fn validate_text_track_selector(selector: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !selector.trim().is_empty(),
+        "video text track selector cannot be empty"
+    );
+    anyhow::ensure!(
+        selector.len() <= 256,
+        "video text track selector cannot exceed 256 bytes"
+    );
+    anyhow::ensure!(
+        !selector.chars().any(char::is_control),
+        "video text track selector cannot contain control characters"
+    );
+    Ok(())
+}
+
+fn validate_text_track(track: &TextTrack) -> anyhow::Result<()> {
+    validate_text_track_selector(track.id.as_ref())?;
+    validate_non_empty_trimmed(&track.label, "video text track label")?;
+    if let Some(language) = &track.language {
+        validate_non_empty_trimmed(language, "video text track language")?;
+    }
+    anyhow::ensure!(
+        !track.cues.is_empty(),
+        "video text track must include at least one cue"
+    );
+    for cue in &track.cues {
+        anyhow::ensure!(
+            cue.start < cue.end,
+            "video text track cue start must be before cue end"
+        );
+        validate_non_empty_trimmed(&cue.text, "video text track cue text")?;
+    }
+    Ok(())
+}
+
+fn resolve_text_track_index(text_tracks: &[TextTrack], selector: &str) -> Option<usize> {
+    text_tracks
+        .iter()
+        .position(|track| track.id.as_ref() == selector)
 }
 
 fn validate_media_source(
@@ -2662,6 +5146,21 @@ impl VideoPlaylist {
         self.repeat
     }
 
+    /// Return whether the playlist has a current source.
+    pub fn has_current_source(&self) -> bool {
+        self.current_index().is_some()
+    }
+
+    /// Return a content-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "video playlist: sources {}, current {}, repeat {}",
+            self.len(),
+            self.has_current_source(),
+            self.repeat_enabled()
+        )
+    }
+
     /// Return the current index.
     pub fn current_index(&self) -> Option<usize> {
         if self.sources.is_empty() {
@@ -2788,6 +5287,58 @@ impl MediaKeyBindingBuilder {
     pub fn on_unhandled(mut self, callback: impl FnMut(MediaKeyEvent, &mut App) + 'static) -> Self {
         self.on_unhandled = Some(Box::new(callback));
         self
+    }
+
+    /// Return whether play/pause/stop keys are routed to audio.
+    pub fn has_audio(&self) -> bool {
+        self.audio.is_some()
+    }
+
+    /// Return whether play/pause/stop keys are routed to video.
+    pub fn has_video(&self) -> bool {
+        self.video.is_some()
+    }
+
+    /// Return whether next/previous keys are routed through a playlist.
+    pub fn has_playlist(&self) -> bool {
+        self.playlist.is_some()
+    }
+
+    /// Return whether a next-track callback is configured.
+    pub fn has_next_track_callback(&self) -> bool {
+        self.on_next_track.is_some()
+    }
+
+    /// Return whether a previous-track callback is configured.
+    pub fn has_previous_track_callback(&self) -> bool {
+        self.on_previous_track.is_some()
+    }
+
+    /// Return whether an unhandled-key callback is configured.
+    pub fn has_unhandled_callback(&self) -> bool {
+        self.on_unhandled.is_some()
+    }
+
+    /// Return the configured playlist source count, if present.
+    pub fn playlist_source_count(&self) -> usize {
+        self.playlist
+            .as_ref()
+            .map(VideoPlaylist::len)
+            .unwrap_or_default()
+    }
+
+    /// Return a content-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "media-key binding: audio {}, video {}, playlist {}, playlist sources {}, next callback {}, previous callback {}, unhandled callback {}",
+            self.has_audio(),
+            self.has_video(),
+            self.has_playlist(),
+            self.playlist_source_count(),
+            self.has_next_track_callback(),
+            self.has_previous_track_callback(),
+            self.has_unhandled_callback()
+        )
     }
 
     /// Validate the binding before installing it.
@@ -3515,14 +6066,20 @@ mod tests {
     use super::{
         DEFAULT_VIDEO_FRAME_DELAY, MAX_VIDEO_FRAME_CACHE_LIMIT, MIN_VIDEO_FRAME_CACHE_LIMIT,
         MIN_VIDEO_FRAME_PREFETCH, MediaKeyBindingBuilder, MediaSourceBuilder, TextTrack,
-        TextTrackCue, TimeRange, VideoCanPlay, VideoCapabilityStatus, VideoController, VideoEvent,
-        VideoPlaybackPlanBuilder, VideoPlaybackPlanTarget, VideoPlaylist, VideoReadyState,
-        WebViewVideoCommand, WebViewVideoCrossOrigin, WebViewVideoOptions, WebViewVideoPreload,
-        WebViewVideoTextTrack, buffer_strategy_for_motion, buffered_ranges_for_source,
-        can_play_video_source, can_play_video_type, parse_text_track_timestamp,
-        push_ready_state_events, recommended_video_playback_route,
-        recommended_video_playback_route_for_type, video_capability_report, video_frame_delay,
-        webview_video_player_command_script, webview_video_player_id, webview_video_player_url,
+        TextTrackBuilder, TextTrackCue, TextTrackKind, TimeRange, VideoCanPlay,
+        VideoCapabilityStatus, VideoController, VideoElementCustomizationFeature,
+        VideoElementCustomizationNextAction, VideoElementCustomizationPlanBuilder,
+        VideoElementCustomizationStatus, VideoElementHandoffBuilder, VideoElementHandoffNextAction,
+        VideoEvent, VideoPlaybackControlsBuilder, VideoPlaybackPlanBuilder,
+        VideoPlaybackPlanTarget, VideoPlaybackRenderInstruction, VideoPlaybackRequirement,
+        VideoPlaybackRequirementNextAction, VideoPlaybackRequirementStatus, VideoPlaylist,
+        VideoReadyState, VideoUrlPlaybackHandoff, WebViewVideoCommand, WebViewVideoCommandBuilder,
+        WebViewVideoCrossOrigin, WebViewVideoOptions, WebViewVideoPreload, WebViewVideoTextTrack,
+        buffer_strategy_for_motion, buffered_ranges_for_source, can_play_video_source,
+        can_play_video_type, parse_text_track_timestamp, push_ready_state_events,
+        recommended_video_playback_route, recommended_video_playback_route_for_type,
+        video_capability_report, video_frame_delay, webview_video_player_command_script,
+        webview_video_player_id, webview_video_player_url,
     };
     use kael_media::{MediaSource, PlaybackState, VideoFrame};
     use std::{io::Cursor, sync::Arc, time::Duration};
@@ -3690,6 +6247,9 @@ mod tests {
             VideoCanPlay::Maybe
         );
         assert_eq!(VideoCanPlay::Maybe.as_can_play_type(), "maybe");
+        assert_eq!(VideoCanPlay::No.to_text(), "no");
+        assert_eq!(VideoCanPlay::Maybe.to_text(), "maybe");
+        assert_eq!(VideoCanPlay::Probably.to_text(), "probably");
         assert_eq!(
             VideoController::file("movie.mp4").can_play_source(),
             VideoCanPlay::Probably
@@ -3698,10 +6258,19 @@ mod tests {
 
     #[test]
     fn video_playback_plan_builds_native_url_player() {
-        let plan = VideoPlaybackPlanBuilder::url("https://cdn.example.com/movie.mp4")
-            .webview_options(WebViewVideoOptions::default().controls(false))
-            .build_checked()
-            .unwrap();
+        let builder = VideoPlaybackPlanBuilder::url("https://cdn.example.com/movie.mp4")
+            .webview_options(WebViewVideoOptions::default().controls(false));
+
+        assert_eq!(builder.source_kind(), "url");
+        assert!(!builder.has_content_type());
+        assert!(!builder.prefers_webview());
+        assert_eq!(
+            builder.to_text(),
+            "video playback plan builder: source url, content type false, prefer webview false, webview text tracks 0, webview start position false"
+        );
+        assert!(!builder.to_text().contains("cdn.example.com"));
+
+        let plan = builder.build_checked().unwrap();
 
         assert!(plan.target().is_native());
         assert!(plan.route().is_native());
@@ -3711,20 +6280,48 @@ mod tests {
         assert!(plan.webview_page_url().is_none());
         assert!(matches!(plan.source(), MediaSource::Url(_)));
         assert!(matches!(plan.controller().source(), MediaSource::Url(_)));
+        assert_eq!(
+            plan.to_text(),
+            "video playback plan: source url, target native, route native, can play probably, content type false, webview text tracks 0"
+        );
+        assert!(!plan.to_text().contains("cdn.example.com"));
+        assert_eq!(plan.target().to_text(), "native");
+
+        match plan.render_instruction() {
+            ref instruction @ VideoPlaybackRenderInstruction::Native { ref controller } => {
+                assert!(matches!(controller.source(), MediaSource::Url(_)));
+                assert_eq!(
+                    instruction.to_text(),
+                    "video render instruction: target native, controller true"
+                );
+            }
+            VideoPlaybackRenderInstruction::WebViewFallback { .. } => {
+                panic!("expected native render instruction")
+            }
+        }
     }
 
     #[test]
     fn video_playback_plan_routes_adaptive_streams_to_webview() {
-        let plan = VideoPlaybackPlanBuilder::url("https://cdn.example.com/live?id=123")
+        let builder = VideoPlaybackPlanBuilder::url("https://cdn.example.com/live?id=123")
             .content_type("application/vnd.apple.mpegurl; charset=utf-8")
             .webview_options(
                 WebViewVideoOptions::default()
                     .autoplay(true)
                     .muted(true)
                     .object_fit("cover"),
-            )
-            .build_checked()
-            .unwrap();
+            );
+
+        assert!(builder.has_content_type());
+        assert!(!builder.prefers_webview());
+        assert_eq!(
+            builder.to_text(),
+            "video playback plan builder: source url, content type true, prefer webview false, webview text tracks 0, webview start position false"
+        );
+        assert!(!builder.to_text().contains("live?id"));
+        assert!(!builder.to_text().contains("mpegurl"));
+
+        let plan = builder.build_checked().unwrap();
 
         assert!(plan.target().is_webview_fallback());
         assert!(plan.route().should_use_webview());
@@ -3733,6 +6330,11 @@ mod tests {
             plan.content_type(),
             Some("application/vnd.apple.mpegurl; charset=utf-8")
         );
+        assert_eq!(
+            plan.to_text(),
+            "video playback plan: source url, target webview fallback, route webview recommended, can play no, content type true, webview text tracks 0"
+        );
+        assert!(!plan.to_text().contains("cdn.example.com"));
         assert!(
             plan.webview_page_url()
                 .unwrap()
@@ -3749,6 +6351,547 @@ mod tests {
             }
             VideoPlaybackPlanTarget::Native => panic!("expected WebView fallback target"),
         }
+
+        match plan.render_instruction() {
+            ref instruction @ VideoPlaybackRenderInstruction::WebViewFallback {
+                ref page_url,
+                ref element_id,
+                ref reason,
+            } => {
+                assert!(page_url.starts_with("data:text/html"));
+                assert!(element_id.starts_with("kael-video-player-"));
+                assert!(reason.contains("HLS"));
+                assert_eq!(
+                    instruction.to_text(),
+                    "video render instruction: target webview fallback, controller false"
+                );
+                assert!(!instruction.to_text().contains("data:text/html"));
+                assert!(!instruction.to_text().contains("HLS"));
+            }
+            VideoPlaybackRenderInstruction::Native { .. } => {
+                panic!("expected WebView render instruction")
+            }
+        }
+    }
+
+    #[test]
+    fn video_url_playback_handoff_builds_native_url_player() {
+        let handoff =
+            VideoUrlPlaybackHandoff::url("https://cdn.example.com/private/movie.mp4").unwrap();
+
+        assert!(handoff.is_native());
+        assert!(!handoff.uses_webview_fallback());
+        assert!(handoff.route().is_native());
+        assert_eq!(handoff.can_play(), VideoCanPlay::Probably);
+        assert!(handoff.webview_page_url().is_none());
+        assert!(handoff.webview_element_id().is_none());
+        assert!(matches!(handoff.controller().source(), MediaSource::Url(_)));
+        assert!(matches!(handoff.plan().source(), MediaSource::Url(_)));
+
+        match handoff.render_instruction() {
+            VideoPlaybackRenderInstruction::Native { controller } => {
+                assert!(matches!(controller.source(), MediaSource::Url(_)));
+            }
+            VideoPlaybackRenderInstruction::WebViewFallback { .. } => {
+                panic!("expected native render instruction")
+            }
+        }
+
+        let summary = handoff.to_text();
+        assert_eq!(
+            summary,
+            "video URL playback handoff: target native, route native, can play probably, controller true, webview page false, webview element false"
+        );
+        assert!(!summary.contains("cdn.example.com"));
+        assert!(!summary.contains("private"));
+        assert!(!summary.contains("movie.mp4"));
+    }
+
+    #[test]
+    fn video_url_playback_handoff_reports_baseline_requirements() {
+        let handoff =
+            VideoUrlPlaybackHandoff::url("https://cdn.example.com/private/movie.mp4").unwrap();
+
+        assert_eq!(VideoPlaybackRequirement::all().len(), 11);
+        assert_eq!(
+            VideoPlaybackRequirement::url_player_baseline(),
+            &[
+                VideoPlaybackRequirement::BasicPlayback,
+                VideoPlaybackRequirement::SourceReplacement,
+                VideoPlaybackRequirement::CanPlayProbe,
+                VideoPlaybackRequirement::TextTracks,
+                VideoPlaybackRequirement::FastSeek,
+                VideoPlaybackRequirement::PlaybackRate,
+                VideoPlaybackRequirement::Fullscreen,
+            ]
+        );
+
+        let baseline = handoff.baseline_requirement_plan();
+        assert!(baseline.target().is_native());
+        assert_eq!(baseline.requirement_count(), 7);
+        assert_eq!(baseline.satisfied_count(), 5);
+        assert_eq!(baseline.limited_count(), 2);
+        assert_eq!(baseline.missing_count(), 0);
+        assert_eq!(
+            baseline.limited_requirements(),
+            vec![
+                VideoPlaybackRequirement::FastSeek,
+                VideoPlaybackRequirement::PlaybackRate
+            ]
+        );
+        assert_eq!(
+            handoff.baseline_next_action(),
+            VideoPlaybackRequirementNextAction::AcceptLimitedSupport
+        );
+        assert!(!handoff.baseline_ready());
+        assert!(!baseline.requires_webview_fallback());
+        assert!(!baseline.requires_native_backend_work());
+        assert!(!baseline.to_text().contains("cdn.example.com"));
+        assert!(!baseline.to_text().contains("private"));
+
+        let full = handoff.full_requirement_plan();
+        assert_eq!(
+            full.requirement_count(),
+            VideoPlaybackRequirement::all().len()
+        );
+        assert!(full.requires_webview_fallback());
+        assert!(full.requires_native_backend_work());
+        assert_eq!(
+            full.next_action_for(VideoPlaybackRequirement::PictureInPicture),
+            Some(VideoPlaybackRequirementNextAction::UseWebViewFallback)
+        );
+        assert_eq!(
+            full.next_action_for(VideoPlaybackRequirement::HardwareDecode),
+            Some(VideoPlaybackRequirementNextAction::BuildNativeBackend)
+        );
+    }
+
+    #[test]
+    fn video_element_handoff_builds_url_player_with_controls_and_playlist() {
+        let playlist = VideoPlaylist::new([
+            MediaSource::url("https://cdn.example.com/private/movie.mp4"),
+            MediaSource::url("https://cdn.example.com/private/trailer.mp4"),
+        ])
+        .repeat(true);
+
+        let builder = VideoElementHandoffBuilder::url("https://cdn.example.com/private/movie.mp4")
+            .initial_controls(
+                VideoPlaybackControlsBuilder::new()
+                    .volume(0.4)
+                    .muted(true)
+                    .playback_rate(1.25)
+                    .looping(true),
+            )
+            .playlist(playlist);
+
+        assert_eq!(builder.requirement_count(), 7);
+        assert!(builder.has_initial_controls());
+        assert!(builder.has_playlist());
+        assert_eq!(
+            builder.to_text(),
+            "video element handoff builder: source url, content type false, prefer webview false, controls true, playlist true, requirements 7"
+        );
+        assert!(!builder.to_text().contains("cdn.example.com"));
+
+        let handoff = builder.build_checked().unwrap();
+        assert!(handoff.is_native());
+        assert!(!handoff.uses_webview_fallback());
+        assert!(handoff.has_initial_controls());
+        assert!(handoff.has_playlist());
+        assert_eq!(handoff.playlist_source_count(), 2);
+        assert_eq!(
+            handoff.next_action(),
+            VideoElementHandoffNextAction::AcceptLimitedSupport
+        );
+        assert!(!handoff.is_ready());
+        assert_eq!(
+            handoff.requirement_plan().limited_requirements(),
+            vec![
+                VideoPlaybackRequirement::FastSeek,
+                VideoPlaybackRequirement::PlaybackRate
+            ]
+        );
+
+        let controller = handoff.controller_checked().unwrap();
+        assert_eq!(controller.volume_level(), 0.4);
+        assert!(controller.is_muted());
+        assert_eq!(controller.playback_rate_value(), 1.25);
+        assert!(controller.is_looping());
+
+        let media_keys = handoff
+            .media_key_binding_builder_checked()
+            .unwrap()
+            .unwrap();
+        assert!(media_keys.has_video());
+        assert!(media_keys.has_playlist());
+        assert_eq!(media_keys.playlist_source_count(), 2);
+
+        assert_eq!(
+            handoff.to_text(),
+            "video element handoff: target native, route native, can play probably, controls true, playlist true, playlist sources 2, requirements 7, satisfied 5, limited 2, missing 0, next action accept limited support"
+        );
+        assert!(!handoff.to_text().contains("cdn.example.com"));
+        assert!(!handoff.to_text().contains("private"));
+    }
+
+    #[test]
+    fn video_element_handoff_routes_adaptive_player_to_webview_fallback() {
+        let handoff = VideoElementHandoffBuilder::url("https://cdn.example.com/live/master.m3u8")
+            .content_type("application/vnd.apple.mpegurl")
+            .requirements([
+                VideoPlaybackRequirement::BasicPlayback,
+                VideoPlaybackRequirement::AdaptiveStreaming,
+                VideoPlaybackRequirement::PictureInPicture,
+            ])
+            .build_checked()
+            .unwrap();
+
+        assert!(!handoff.is_native());
+        assert!(handoff.uses_webview_fallback());
+        assert!(handoff.is_ready());
+        assert_eq!(
+            handoff.next_action(),
+            VideoElementHandoffNextAction::RenderWebViewFallback
+        );
+        match handoff.render_instruction() {
+            VideoPlaybackRenderInstruction::WebViewFallback { element_id, .. } => {
+                assert!(element_id.starts_with("kael-video-player-"));
+            }
+            VideoPlaybackRenderInstruction::Native { .. } => panic!("expected WebView fallback"),
+        }
+        assert_eq!(
+            handoff.to_text(),
+            "video element handoff: target webview fallback, route webview recommended, can play no, controls false, playlist false, playlist sources 0, requirements 3, satisfied 3, limited 0, missing 0, next action render webview fallback"
+        );
+        assert!(!handoff.to_text().contains("master.m3u8"));
+        assert!(!handoff.to_text().contains("mpegurl"));
+    }
+
+    #[test]
+    fn video_element_customization_plan_audits_html_video_like_controls() {
+        let playlist = VideoPlaylist::new([
+            MediaSource::url("https://cdn.example.com/private/movie.mp4"),
+            MediaSource::url("https://cdn.example.com/private/trailer.mp4"),
+        ]);
+        let handoff = VideoElementHandoffBuilder::url("https://cdn.example.com/private/movie.mp4")
+            .initial_controls(
+                VideoPlaybackControlsBuilder::new()
+                    .volume(0.5)
+                    .playback_rate(1.25),
+            )
+            .playlist(playlist)
+            .build_checked()
+            .unwrap();
+
+        let plan = VideoElementCustomizationPlanBuilder::new(handoff)
+            .html_video_baseline()
+            .timeline_scrubbing()
+            .captions_ui()
+            .fullscreen()
+            .playlist_media_keys()
+            .build_checked()
+            .unwrap();
+
+        assert_eq!(plan.feature_count(), 8);
+        assert_eq!(plan.event_handler_count(), 8);
+        assert_eq!(plan.custom_control_count(), 5);
+        assert!(plan.has_feature(VideoElementCustomizationFeature::CustomControls));
+        assert!(plan.has_feature(VideoElementCustomizationFeature::PlaylistMediaKeys));
+        assert_eq!(plan.missing_count(), 0);
+        assert_eq!(plan.limited_count(), 2);
+        assert_eq!(
+            plan.next_action(),
+            VideoElementCustomizationNextAction::AcceptLimitedSupport
+        );
+        assert!(!plan.is_ready());
+        assert!(!plan.requires_webview_fallback());
+        assert!(!plan.requires_native_backend_work());
+        assert!(!plan.requires_playlist_or_handlers());
+
+        let timeline = plan
+            .findings()
+            .iter()
+            .find(|finding| {
+                finding.feature() == VideoElementCustomizationFeature::TimelineScrubbing
+            })
+            .unwrap();
+        assert_eq!(timeline.status(), VideoElementCustomizationStatus::Limited);
+        assert_eq!(
+            timeline.next_action(),
+            VideoElementCustomizationNextAction::AcceptLimitedSupport
+        );
+        assert_eq!(
+            plan.to_text(),
+            "video element customization plan: features 8, satisfied 6, limited 2, missing 0, event handlers 8, custom controls 5, native true, webview fallback false, next action accept limited support"
+        );
+        assert!(!plan.to_text().contains("cdn.example.com"));
+        assert!(!timeline.to_text().contains("movie.mp4"));
+    }
+
+    #[test]
+    fn video_element_customization_plan_routes_browser_and_backend_gaps() {
+        let native_handoff =
+            VideoElementHandoffBuilder::url("https://cdn.example.com/private/movie.mp4")
+                .all_requirements()
+                .build_checked()
+                .unwrap();
+        let native_plan = VideoElementCustomizationPlanBuilder::new(native_handoff)
+            .picture_in_picture()
+            .feature(VideoElementCustomizationFeature::PlaylistMediaKeys)
+            .feature(VideoElementCustomizationFeature::Properties)
+            .build_checked()
+            .unwrap();
+
+        assert_eq!(native_plan.missing_count(), 2);
+        assert!(native_plan.requires_webview_fallback());
+        assert!(native_plan.requires_playlist_or_handlers());
+        assert_eq!(
+            native_plan.next_action(),
+            VideoElementCustomizationNextAction::UseWebViewFallback
+        );
+
+        let backend_handoff =
+            VideoElementHandoffBuilder::url("https://cdn.example.com/private/movie.mp4")
+                .all_requirements()
+                .build_checked()
+                .unwrap();
+        let backend_plan = VideoElementCustomizationPlanBuilder::new(backend_handoff)
+            .hardware_decode()
+            .build_checked()
+            .unwrap();
+
+        assert!(backend_plan.requires_native_backend_work());
+        assert_eq!(
+            backend_plan.next_action(),
+            VideoElementCustomizationNextAction::BuildNativeBackend
+        );
+        assert!(!backend_plan.to_text().contains("private"));
+    }
+
+    #[test]
+    fn video_element_customization_plan_rejects_invalid_generated_requests() {
+        let handoff = VideoElementHandoffBuilder::url("https://cdn.example.com/private/movie.mp4")
+            .build_checked()
+            .unwrap();
+
+        assert!(
+            VideoElementCustomizationPlanBuilder::new(handoff.clone())
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            VideoElementCustomizationPlanBuilder::new(handoff.clone())
+                .event_handlers(65)
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            VideoElementCustomizationPlanBuilder::new(handoff)
+                .custom_controls(33)
+                .build_checked()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn video_url_playback_handoff_routes_adaptive_streams_to_webview() {
+        let handoff = VideoUrlPlaybackHandoff::url_with_content_type(
+            "https://cdn.example.com/live/master.m3u8",
+            "application/vnd.apple.mpegurl",
+        )
+        .unwrap();
+
+        assert!(!handoff.is_native());
+        assert!(handoff.uses_webview_fallback());
+        assert!(handoff.route().should_use_webview());
+        assert_eq!(handoff.can_play(), VideoCanPlay::No);
+        assert!(
+            handoff
+                .webview_page_url()
+                .unwrap()
+                .starts_with("data:text/html")
+        );
+        assert!(
+            handoff
+                .webview_element_id()
+                .unwrap()
+                .starts_with("kael-video-player-")
+        );
+
+        match handoff.render_instruction() {
+            VideoPlaybackRenderInstruction::WebViewFallback {
+                page_url,
+                element_id,
+                reason,
+            } => {
+                assert!(page_url.starts_with("data:text/html"));
+                assert!(element_id.starts_with("kael-video-player-"));
+                assert!(reason.contains("HLS"));
+            }
+            VideoPlaybackRenderInstruction::Native { .. } => {
+                panic!("expected WebView render instruction")
+            }
+        }
+
+        let summary = handoff.to_text();
+        assert_eq!(
+            summary,
+            "video URL playback handoff: target webview fallback, route webview recommended, can play no, controller true, webview page true, webview element true"
+        );
+        assert!(!summary.contains("cdn.example.com"));
+        assert!(!summary.contains("master.m3u8"));
+        assert!(!summary.contains("mpegurl"));
+        assert!(!summary.contains("data:text/html"));
+    }
+
+    #[test]
+    fn video_playback_requirement_plan_reports_native_route_gaps() {
+        let plan = VideoPlaybackPlanBuilder::url("https://cdn.example.com/movie.mp4")
+            .build_checked()
+            .unwrap();
+
+        let requirements = plan.requirement_plan([
+            VideoPlaybackRequirement::BasicPlayback,
+            VideoPlaybackRequirement::TextTracks,
+            VideoPlaybackRequirement::PlaybackRate,
+            VideoPlaybackRequirement::AdaptiveStreaming,
+            VideoPlaybackRequirement::HardwareDecode,
+            VideoPlaybackRequirement::BasicPlayback,
+        ]);
+
+        assert!(requirements.target().is_native());
+        assert_eq!(requirements.requirement_count(), 5);
+        assert_eq!(requirements.satisfied_count(), 2);
+        assert_eq!(requirements.limited_count(), 1);
+        assert_eq!(requirements.missing_count(), 2);
+        assert_eq!(
+            requirements.satisfied_requirements(),
+            vec![
+                VideoPlaybackRequirement::BasicPlayback,
+                VideoPlaybackRequirement::TextTracks
+            ]
+        );
+        assert_eq!(
+            requirements.limited_requirements(),
+            vec![VideoPlaybackRequirement::PlaybackRate]
+        );
+        assert_eq!(
+            requirements.missing_requirements(),
+            vec![
+                VideoPlaybackRequirement::AdaptiveStreaming,
+                VideoPlaybackRequirement::HardwareDecode
+            ]
+        );
+        assert_eq!(
+            requirements.webview_fallback_requirements(),
+            vec![VideoPlaybackRequirement::AdaptiveStreaming]
+        );
+        assert_eq!(
+            requirements.native_backend_work_requirements(),
+            vec![VideoPlaybackRequirement::HardwareDecode]
+        );
+        assert!(requirements.requires_webview_fallback());
+        assert!(requirements.requires_native_backend_work());
+        assert_eq!(
+            requirements.next_action(),
+            VideoPlaybackRequirementNextAction::BuildNativeBackend
+        );
+        assert_eq!(
+            requirements.next_action_for(VideoPlaybackRequirement::AdaptiveStreaming),
+            Some(VideoPlaybackRequirementNextAction::UseWebViewFallback)
+        );
+        assert_eq!(
+            requirements.next_action_for(VideoPlaybackRequirement::PlaybackRate),
+            Some(VideoPlaybackRequirementNextAction::AcceptLimitedSupport)
+        );
+        assert!(requirements.has_gaps());
+        assert!(!requirements.is_ready());
+        assert_eq!(
+            requirements.to_text(),
+            "video playback requirements: target native, requested 5, satisfied 2, limited 1, missing 2, next action build native backend, ready false"
+        );
+        assert!(!requirements.to_text().contains("cdn.example.com"));
+
+        let finding = requirements
+            .findings()
+            .iter()
+            .find(|finding| finding.requirement() == VideoPlaybackRequirement::PlaybackRate)
+            .unwrap();
+        assert_eq!(finding.status(), VideoPlaybackRequirementStatus::Limited);
+        assert_eq!(
+            finding.to_text(),
+            "video playback requirement: playback rate limited"
+        );
+        assert!(finding.is_limited());
+    }
+
+    #[test]
+    fn video_playback_requirement_plan_covers_browser_fallback_requirements() {
+        let requirements = VideoPlaybackPlanBuilder::url("https://cdn.example.com/live.m3u8")
+            .content_type("application/vnd.apple.mpegurl")
+            .build_requirement_plan_checked([
+                VideoPlaybackRequirement::BasicPlayback,
+                VideoPlaybackRequirement::AdaptiveStreaming,
+                VideoPlaybackRequirement::PictureInPicture,
+                VideoPlaybackRequirement::NativeTrackSelection,
+            ])
+            .unwrap();
+
+        assert!(requirements.target().is_webview_fallback());
+        assert_eq!(requirements.requirement_count(), 4);
+        assert_eq!(requirements.satisfied_count(), 3);
+        assert_eq!(requirements.limited_count(), 0);
+        assert_eq!(requirements.missing_count(), 1);
+        assert_eq!(
+            requirements.missing_requirements(),
+            vec![VideoPlaybackRequirement::NativeTrackSelection]
+        );
+        assert!(!requirements.requires_webview_fallback());
+        assert!(requirements.requires_native_backend_work());
+        assert_eq!(
+            requirements.native_backend_work_requirements(),
+            vec![VideoPlaybackRequirement::NativeTrackSelection]
+        );
+        assert_eq!(
+            requirements.next_action_for(VideoPlaybackRequirement::AdaptiveStreaming),
+            Some(VideoPlaybackRequirementNextAction::RenderPlannedRoute)
+        );
+        assert_eq!(
+            requirements.to_text(),
+            "video playback requirements: target webview fallback, requested 4, satisfied 3, limited 0, missing 1, next action build native backend, ready false"
+        );
+        assert!(!requirements.to_text().contains("live.m3u8"));
+        assert_eq!(
+            VideoPlaybackRequirement::HardwareDecode.to_text(),
+            "hardware decode"
+        );
+        assert_eq!(VideoPlaybackRequirementStatus::Missing.to_text(), "missing");
+        assert_eq!(
+            VideoPlaybackRequirementNextAction::UseWebViewFallback.to_text(),
+            "use webview fallback"
+        );
+    }
+
+    #[test]
+    fn video_playback_requirement_plan_summary_is_content_safe() {
+        let plan = VideoPlaybackPlanBuilder::url("https://secret.example.com/private/movie.mp4")
+            .content_type("video/mp4; codecs=\"secret-codec\"")
+            .build_checked()
+            .unwrap();
+
+        let requirements = plan.requirement_plan([
+            VideoPlaybackRequirement::CanPlayProbe,
+            VideoPlaybackRequirement::FastSeek,
+            VideoPlaybackRequirement::HardwareDecode,
+        ]);
+
+        assert_eq!(
+            requirements.to_text(),
+            "video playback requirements: target native, requested 3, satisfied 1, limited 1, missing 1, next action build native backend, ready false"
+        );
+        assert!(!requirements.to_text().contains("secret.example.com"));
+        assert!(!requirements.to_text().contains("private"));
+        assert!(!requirements.to_text().contains("secret-codec"));
     }
 
     #[test]
@@ -3867,6 +7010,23 @@ mod tests {
             .build_checked()
             .unwrap();
         assert!(matches!(source, MediaSource::Url(_)));
+        let source_builder = MediaSourceBuilder::url("https://cdn.example.com/private.mp4");
+        assert_eq!(source_builder.source_kind(), "url");
+        assert_eq!(
+            source_builder.to_text(),
+            "media source: kind url, require existing file false, canonicalize file false"
+        );
+        assert!(!source_builder.to_text().contains("private.mp4"));
+        let file_builder = MediaSourceBuilder::file("/tmp/movie.mp4")
+            .require_existing_file()
+            .canonicalize_file();
+        assert!(file_builder.requires_existing_file());
+        assert!(file_builder.canonicalizes_file());
+        assert_eq!(
+            file_builder.to_text(),
+            "media source: kind file, require existing file true, canonicalize file true"
+        );
+        assert!(!file_builder.to_text().contains("/tmp/movie.mp4"));
 
         assert!(
             MediaSourceBuilder::url(" https://cdn.example.com/movie.mp4")
@@ -3929,6 +7089,19 @@ mod tests {
 
         assert!(options.validate().is_ok());
         assert!(options.checked().is_ok());
+        assert_eq!(options.controls_list_count(), 2);
+        assert_eq!(options.text_track_count(), 2);
+        assert!(options.has_poster());
+        assert!(!options.has_preload());
+        assert!(!options.has_cross_origin());
+        assert!(!options.has_start_position());
+        assert_eq!(
+            options.to_text(),
+            "webview video options: controls true, autoplay false, muted false, looping false, plays inline true, poster true, preload false, cross origin false, controls-list 2, disable picture-in-picture false, start position false, text tracks 2, object fit cover"
+        );
+        assert!(!options.to_text().contains("poster.jpg"));
+        assert!(!options.to_text().contains("captions.vtt"));
+        assert!(!options.to_text().contains("WEBVTT"));
         assert!(
             WebViewVideoOptions::default()
                 .poster("javascript:alert(1)")
@@ -4055,6 +7228,127 @@ mod tests {
     }
 
     #[test]
+    fn webview_video_command_builder_validates_generated_commands() {
+        assert!(WebViewVideoCommandBuilder::volume(0.5).validate().is_ok());
+        let volume = WebViewVideoCommandBuilder::volume(0.5);
+        assert_eq!(volume.command_kind(), "volume");
+        assert!(!volume.is_seek_command());
+        assert!(volume.is_audio_command());
+        assert!(!volume.is_presentation_command());
+        assert_eq!(
+            volume.to_text(),
+            "webview video command: kind volume, seek false, audio true, presentation false"
+        );
+        assert!(!volume.to_text().contains("0.5"));
+
+        assert!(
+            WebViewVideoCommandBuilder::volume(f32::NAN)
+                .validate()
+                .is_err()
+        );
+        assert!(WebViewVideoCommandBuilder::volume(1.5).validate().is_err());
+        assert!(
+            WebViewVideoCommandBuilder::playback_rate(1.25)
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            WebViewVideoCommandBuilder::playback_rate(0.0)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WebViewVideoCommandBuilder::playback_rate(f32::INFINITY)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WebViewVideoCommandBuilder::seek_secs(12.5)
+                .validate()
+                .is_ok()
+        );
+        let seek = WebViewVideoCommandBuilder::seek_secs(12.5);
+        assert_eq!(seek.command_kind(), "seek");
+        assert!(seek.is_seek_command());
+        assert!(!seek.is_audio_command());
+        assert_eq!(
+            seek.to_text(),
+            "webview video command: kind seek, seek true, audio false, presentation false"
+        );
+        assert!(!seek.to_text().contains("12.5"));
+
+        assert!(
+            WebViewVideoCommandBuilder::seek_secs(f64::NAN)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WebViewVideoCommandBuilder::fast_seek_secs(-1.0)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WebViewVideoCommandBuilder::select_text_track("en")
+                .validate()
+                .is_ok()
+        );
+        let track = WebViewVideoCommandBuilder::select_text_track("English captions");
+        assert_eq!(track.command_kind(), "select text track");
+        assert!(!track.is_seek_command());
+        assert_eq!(
+            track.to_text(),
+            "webview video command: kind select text track, seek false, audio false, presentation false"
+        );
+        assert!(!track.to_text().contains("English"));
+
+        assert!(
+            WebViewVideoCommandBuilder::select_text_track("   ")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            WebViewVideoCommandBuilder::select_text_track("en\n")
+                .validate()
+                .is_err()
+        );
+
+        let command = WebViewVideoCommandBuilder::fast_seek_secs(2.5)
+            .build_checked()
+            .unwrap();
+        assert_eq!(
+            command,
+            WebViewVideoCommand::FastSeek(Duration::from_secs_f64(2.5))
+        );
+        assert!(
+            WebViewVideoCommandBuilder::command(WebViewVideoCommand::SetVolume(2.0))
+                .build_checked()
+                .is_err()
+        );
+        let fullscreen = WebViewVideoCommandBuilder::request_fullscreen();
+        assert_eq!(fullscreen.command_kind(), "request fullscreen");
+        assert!(fullscreen.is_presentation_command());
+        assert_eq!(
+            fullscreen.to_text(),
+            "webview video command: kind request fullscreen, seek false, audio false, presentation true"
+        );
+    }
+
+    #[test]
+    fn video_controller_returns_checked_webview_command_scripts() {
+        let controller = VideoController::url("https://cdn.example.com/movie.mp4");
+        let script = controller
+            .webview_command_script_checked(WebViewVideoCommandBuilder::playback_rate(1.5))
+            .unwrap();
+        assert!(script.contains("video.playbackRate=1.5"));
+
+        assert!(
+            controller
+                .webview_command_script_checked(WebViewVideoCommandBuilder::playback_rate(f32::NAN))
+                .is_err()
+        );
+    }
+
+    #[test]
     fn webview_video_player_url_handles_file_sources_and_rejects_memory_sources() {
         let url = webview_video_player_url(
             &MediaSource::file("/tmp/movie file.mp4"),
@@ -4078,6 +7372,9 @@ mod tests {
 
         assert!(!report.is_full());
         assert_eq!(report.source_types, VideoCapabilityStatus::Full);
+        assert_eq!(VideoCapabilityStatus::Full.to_text(), "full");
+        assert_eq!(VideoCapabilityStatus::Partial.to_text(), "partial");
+        assert_eq!(VideoCapabilityStatus::Roadmap.to_text(), "roadmap");
         assert_eq!(report.controller, VideoCapabilityStatus::Full);
         assert_eq!(report.source_replacement, VideoCapabilityStatus::Full);
         assert_eq!(report.can_play_type, VideoCapabilityStatus::Full);
@@ -4095,6 +7392,19 @@ mod tests {
         assert_eq!(
             report.native_track_selection,
             VideoCapabilityStatus::Roadmap
+        );
+        assert_eq!(report.full_count(), 8);
+        assert_eq!(report.partial_count(), 2);
+        assert_eq!(report.roadmap_count(), 3);
+        assert_eq!(report.native_gap_count(), 5);
+        assert_eq!(report.count_status(VideoCapabilityStatus::Full), 8);
+        assert_eq!(report.count_status(VideoCapabilityStatus::Partial), 2);
+        assert_eq!(report.count_status(VideoCapabilityStatus::Roadmap), 3);
+        assert!(report.has_native_gaps());
+        assert!(report.has_webview_fallback());
+        assert_eq!(
+            report.to_text(),
+            "video capabilities: full 8, partial 2, roadmap 3, all full false"
         );
     }
 
@@ -4148,6 +7458,13 @@ mod tests {
         ]);
 
         assert_eq!(playlist.current_index(), Some(0));
+        assert!(playlist.has_current_source());
+        assert_eq!(
+            playlist.to_text(),
+            "video playlist: sources 3, current true, repeat false"
+        );
+        assert!(!playlist.to_text().contains("one.mp4"));
+        assert!(!playlist.to_text().contains("example.com"));
         assert!(matches!(
             playlist.current_source(),
             Some(MediaSource::Url(url)) if url.as_ref() == "https://example.com/one.mp4"
@@ -4203,6 +7520,11 @@ mod tests {
         assert_eq!(playlist.len(), 1);
         assert!(!playlist.is_empty());
         assert!(playlist.repeat_enabled());
+        assert_eq!(
+            playlist.to_text(),
+            "video playlist: sources 1, current true, repeat true"
+        );
+        assert!(!playlist.to_text().contains("one.mp4"));
     }
 
     #[test]
@@ -4218,6 +7540,27 @@ mod tests {
         );
 
         let controller = VideoController::url("https://example.com/one.mp4");
+        let binding = MediaKeyBindingBuilder::new()
+            .video(controller.clone())
+            .playlist(VideoPlaylist::new([MediaSource::url(
+                "https://example.com/two.mp4",
+            )]))
+            .on_next_track(|_| {})
+            .on_unhandled(|_, _| {});
+        assert!(binding.has_video());
+        assert!(binding.has_playlist());
+        assert_eq!(binding.playlist_source_count(), 1);
+        assert!(binding.has_next_track_callback());
+        assert!(!binding.has_previous_track_callback());
+        assert!(binding.has_unhandled_callback());
+        assert_eq!(
+            binding.to_text(),
+            "media-key binding: audio false, video true, playlist true, playlist sources 1, next callback true, previous callback false, unhandled callback true"
+        );
+        assert!(!binding.to_text().contains("two.mp4"));
+        assert!(!binding.to_text().contains("example.com"));
+        assert!(binding.validate().is_ok());
+
         assert!(
             MediaKeyBindingBuilder::new()
                 .video(controller)
@@ -4262,6 +7605,114 @@ mod tests {
                 VideoEvent::LoopChange { looping: true },
             ]
         );
+    }
+
+    #[test]
+    fn video_playback_controls_builder_validates_generated_controls() {
+        assert!(VideoPlaybackControlsBuilder::new().validate().is_err());
+        assert!(
+            VideoPlaybackControlsBuilder::new()
+                .volume(0.5)
+                .muted(true)
+                .playback_rate(1.25)
+                .looping(true)
+                .fast_seek_secs(42.0)
+                .validate()
+                .is_ok()
+        );
+        let builder = VideoPlaybackControlsBuilder::new()
+            .volume(0.5)
+            .muted(true)
+            .playback_rate(1.25)
+            .fast_seek_secs(42.0);
+        assert_eq!(builder.configured_update_count(), 4);
+        assert_eq!(
+            builder.to_text(),
+            "video playback controls: updates 4, volume true, muted true, playback rate true, looping false, seek true, fast seek true"
+        );
+        assert!(
+            VideoPlaybackControlsBuilder::new()
+                .volume(f32::NAN)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            VideoPlaybackControlsBuilder::new()
+                .volume(1.1)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            VideoPlaybackControlsBuilder::new()
+                .playback_rate(0.0)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            VideoPlaybackControlsBuilder::new()
+                .playback_rate(f32::INFINITY)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            VideoPlaybackControlsBuilder::new()
+                .seek_secs(f64::NAN)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            VideoPlaybackControlsBuilder::new()
+                .seek_secs(-1.0)
+                .validate()
+                .is_err()
+        );
+
+        let controls = VideoPlaybackControlsBuilder::new()
+            .volume(0.25)
+            .fast_seek_secs(2.5)
+            .build_checked()
+            .unwrap();
+        assert_eq!(controls.volume(), Some(0.25));
+        assert_eq!(controls.seek_position(), Some(Duration::from_secs_f64(2.5)));
+        assert!(controls.uses_fast_seek());
+        assert_eq!(controls.update_count(), 2);
+        assert_eq!(
+            controls.to_text(),
+            "video playback controls: updates 2, volume true, muted false, playback rate false, looping false, seek true, fast seek true"
+        );
+    }
+
+    #[test]
+    fn video_controller_applies_checked_control_batch() {
+        let controller = VideoController::bytes(Arc::<[u8]>::from([]));
+        let controls = controller
+            .apply_controls_checked(
+                VideoPlaybackControlsBuilder::new()
+                    .volume(0.6)
+                    .muted(true)
+                    .playback_rate(1.25)
+                    .looping(true),
+            )
+            .unwrap();
+
+        assert_eq!(controls.volume(), Some(0.6));
+        assert_eq!(controls.muted(), Some(true));
+        assert_eq!(controls.playback_rate(), Some(1.25));
+        assert_eq!(controls.looping(), Some(true));
+
+        let snapshot = controller.snapshot();
+        assert_eq!(snapshot.volume, 0.6);
+        assert!(snapshot.muted);
+        assert_eq!(snapshot.playback_rate, 1.25);
+        assert!(snapshot.looping);
+        assert_eq!(controller.audio_handle().speed(), 1.25);
+
+        assert!(
+            controller
+                .apply_controls_checked(VideoPlaybackControlsBuilder::new().volume(2.0))
+                .is_err()
+        );
+        assert_eq!(controller.volume_level(), 0.6);
     }
 
     #[test]
@@ -4318,6 +7769,76 @@ mod tests {
                     current_time: Duration::ZERO,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn video_controller_checked_source_replacement_validates_before_mutation() {
+        let controller = VideoController::url("https://cdn.example.com/initial.mp4")
+            .volume(0.4)
+            .muted(true)
+            .playback_rate(1.5)
+            .looping(true);
+        controller.drain_events();
+
+        assert!(
+            controller
+                .set_url_checked(" https://cdn.example.com/next.mp4")
+                .is_err()
+        );
+        assert_eq!(
+            controller.source(),
+            MediaSource::url("https://cdn.example.com/initial.mp4")
+        );
+        assert!(controller.drain_events().is_empty());
+
+        let source = controller
+            .set_bytes_checked(Arc::<[u8]>::from([4, 5, 6]))
+            .unwrap();
+        assert_eq!(source, MediaSource::bytes(Arc::<[u8]>::from([4, 5, 6])));
+        assert_eq!(controller.source(), source);
+        assert_eq!(controller.volume_level(), 0.4);
+        assert!(controller.is_muted());
+        assert_eq!(controller.playback_rate_value(), 1.5);
+        assert!(controller.is_looping());
+        assert_eq!(
+            controller.drain_events(),
+            vec![
+                VideoEvent::SourceChanged {
+                    source: MediaSource::bytes(Arc::<[u8]>::from([4, 5, 6])),
+                },
+                VideoEvent::ReadyStateChange {
+                    ready_state: VideoReadyState::Nothing,
+                },
+                VideoEvent::Progress {
+                    buffered_ranges: Vec::new(),
+                },
+                VideoEvent::TimeUpdate {
+                    current_time: Duration::ZERO,
+                },
+            ]
+        );
+
+        assert!(controller.set_bytes_checked(Arc::<[u8]>::from([])).is_err());
+        assert_eq!(controller.source(), source);
+        assert!(controller.drain_events().is_empty());
+    }
+
+    #[test]
+    fn video_controller_checked_source_replacement_accepts_configured_builder() {
+        let controller = VideoController::bytes(Arc::<[u8]>::from([1]));
+
+        assert!(
+            controller
+                .set_source_checked(MediaSourceBuilder::file("/definitely/not/a/movie.mp4"))
+                .is_ok()
+        );
+        assert!(
+            controller
+                .set_source_checked(
+                    MediaSourceBuilder::file("/definitely/not/a/movie.mp4").require_existing_file()
+                )
+                .is_err()
         );
     }
 
@@ -4388,6 +7909,163 @@ mod tests {
         controller.disable_text_track();
         assert_eq!(controller.selected_text_track_id(), None);
         assert_eq!(controller.active_text_track(), None);
+    }
+
+    #[test]
+    fn video_controller_checked_text_track_selection_validates_before_mutation() {
+        let controller = VideoController::bytes(Arc::<[u8]>::from([]))
+            .srt_text_track(
+                "en",
+                "English",
+                Some("en"),
+                "1\n00:00:01,000 --> 00:00:04,000\nHello world\n",
+            )
+            .srt_text_track(
+                "es",
+                "Spanish",
+                Some("es"),
+                "1\n00:00:01,000 --> 00:00:04,000\nHola mundo\n",
+            );
+        controller.drain_events();
+
+        let selected = controller.select_text_track_checked("es").unwrap();
+        assert_eq!(selected.id.as_ref(), "es");
+        assert_eq!(
+            controller
+                .selected_text_track_id()
+                .map(|id| id.to_string())
+                .as_deref(),
+            Some("es")
+        );
+        assert_eq!(
+            controller.drain_events(),
+            vec![VideoEvent::TextTrackChanged {
+                id: Some("es".into())
+            }]
+        );
+
+        assert!(controller.select_text_track_checked("   ").is_err());
+        assert!(controller.select_text_track_checked("es\n").is_err());
+        assert!(controller.select_text_track_checked("fr").is_err());
+        assert_eq!(
+            controller
+                .selected_text_track_id()
+                .map(|id| id.to_string())
+                .as_deref(),
+            Some("es")
+        );
+        assert!(controller.drain_events().is_empty());
+
+        let disabled = controller.disable_text_track_checked().unwrap();
+        assert_eq!(disabled.id.as_ref(), "es");
+        assert_eq!(controller.selected_text_track_id(), None);
+        assert_eq!(
+            controller.drain_events(),
+            vec![VideoEvent::TextTrackChanged { id: None }]
+        );
+        assert!(controller.disable_text_track_checked().is_err());
+        assert!(controller.drain_events().is_empty());
+    }
+
+    #[test]
+    fn text_track_builder_validates_generated_tracks() {
+        let srt = "1\n00:00:01,000 --> 00:00:04,000\nHello world\n";
+        assert!(
+            TextTrackBuilder::srt("en", "English", Some("en"), srt)
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            TextTrackBuilder::srt("", "English", Some("en"), srt)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            TextTrackBuilder::srt("en", "   ", Some("en"), srt)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            TextTrackBuilder::srt("en", "English", Some(""), srt)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            TextTrackBuilder::srt("en", "English", Some("en"), "not a caption")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            TextTrackBuilder::new(
+                "en",
+                "English",
+                Some("en"),
+                TextTrackKind::Subtitles,
+                vec![TextTrackCue::new(
+                    Duration::from_secs(3),
+                    Duration::from_secs(2),
+                    "backwards"
+                )],
+            )
+            .validate()
+            .is_err()
+        );
+        assert!(
+            TextTrackBuilder::new(
+                "en",
+                "English",
+                Some("en"),
+                TextTrackKind::Subtitles,
+                vec![TextTrackCue::new(
+                    Duration::from_secs(1),
+                    Duration::from_secs(2),
+                    "   "
+                )],
+            )
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn video_controller_adds_checked_text_tracks_before_mutation() {
+        let controller = VideoController::bytes(Arc::<[u8]>::from([]));
+        let srt = "1\n00:00:01,000 --> 00:00:04,000\nHello world\n";
+
+        let track = controller
+            .add_srt_text_track_checked("en", "English", Some("en"), srt)
+            .unwrap();
+        assert_eq!(track.id.as_ref(), "en");
+        assert_eq!(controller.text_tracks().len(), 1);
+        assert_eq!(
+            controller
+                .selected_text_track_id()
+                .map(|id| id.to_string())
+                .as_deref(),
+            Some("en")
+        );
+        assert_eq!(
+            controller.drain_events(),
+            vec![
+                VideoEvent::TextTrackChanged {
+                    id: Some("en".into())
+                },
+                VideoEvent::TextTrackAdded { id: "en".into() },
+            ]
+        );
+
+        assert!(
+            controller
+                .add_srt_text_track_checked("en", "Duplicate", Some("en"), srt)
+                .is_err()
+        );
+        assert!(
+            controller
+                .add_webvtt_text_track_checked("es", "Spanish", Some("es"), "not captions")
+                .is_err()
+        );
+        assert_eq!(controller.text_tracks().len(), 1);
+        assert!(controller.drain_events().is_empty());
     }
 
     #[test]

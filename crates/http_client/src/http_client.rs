@@ -9,9 +9,8 @@ use http::HeaderValue;
 pub use http::{self, Method, Request, Response, StatusCode, Uri};
 
 use futures::{
-    FutureExt as _,
+    FutureExt as _, StreamExt as _,
     future::{self, BoxFuture},
-    io::AsyncReadExt as _,
 };
 use http::request::Builder;
 #[cfg(feature = "test-support")]
@@ -24,6 +23,9 @@ use std::{
     sync::{Arc, OnceLock},
 };
 pub use url::Url;
+
+/// Maximum body size buffered by the reqwest adapter for a request or response.
+pub const MAX_BUFFERED_HTTP_BODY_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RedirectPolicy {
@@ -139,9 +141,10 @@ pub struct HttpClientWithProxy {
 impl HttpClientWithProxy {
     /// Returns a new [`HttpClientWithProxy`] with the given proxy URL.
     pub fn new(client: Arc<dyn HttpClient>, proxy_url: Option<String>) -> Self {
-        let proxy_url = proxy_url
-            .and_then(|proxy| proxy.parse().ok())
-            .or_else(read_proxy_from_env);
+        let proxy_url = match proxy_url {
+            Some(proxy) => proxy.parse().ok(),
+            None => read_proxy_from_env(),
+        };
 
         Self::new_url(client, proxy_url)
     }
@@ -241,17 +244,30 @@ impl HttpClientWithUrl {
 
     /// Builds a URL using the given path.
     pub fn build_url(&self, path: &str) -> String {
+        self.try_build_url(path)
+            .map(|url| url.to_string())
+            .unwrap_or_else(|_| {
+                let base_url = self.base_url.read();
+                format!("{}{}", base_url.as_ref(), path)
+            })
+    }
+
+    /// Builds and validates a URL from the configured base and `path`.
+    pub fn try_build_url(&self, path: &str) -> Result<Url> {
         let base_url = self.base_url.read();
-        format!("{}{}", base_url.as_ref(), path)
+        let combined = format!(
+            "{}/{}",
+            base_url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        );
+        Ok(Url::parse(&combined)?)
     }
 
     /// Builds a URL with query parameters using the base URL and the given path.
     pub fn build_url_with_params(&self, path: &str, query: &[(&str, &str)]) -> Result<Url> {
-        let base_url = self.base_url.read();
-        Ok(Url::parse_with_params(
-            &format!("{}{}", base_url.as_ref(), path),
-            query,
-        )?)
+        let mut url = self.try_build_url(path)?;
+        url.query_pairs_mut().extend_pairs(query.iter().copied());
+        Ok(url)
     }
 }
 
@@ -334,7 +350,7 @@ impl ReqwestClient {
         match policy {
             RedirectPolicy::NoFollow => reqwest::redirect::Policy::none(),
             RedirectPolicy::FollowLimit(limit) => {
-                reqwest::redirect::Policy::limited(*limit as usize)
+                reqwest::redirect::Policy::limited(usize::try_from(*limit).unwrap_or(usize::MAX))
             }
             // Reqwest does not expose an unbounded follow policy, so we pick a
             // generous ceiling for "follow all" behavior.
@@ -355,24 +371,48 @@ impl ReqwestClient {
     }
 
     async fn read_body(mut body: AsyncBody) -> Result<Vec<u8>> {
-        let mut bytes = Vec::new();
-        body.read_to_end(&mut bytes).await?;
-        Ok(bytes)
+        Ok(body
+            .read_to_end_limited(MAX_BUFFERED_HTTP_BODY_BYTES)
+            .await?)
     }
 
     async fn into_response(response: reqwest::Response) -> Result<Response<AsyncBody>> {
         let status = response.status();
         let version = response.version();
         let headers = response.headers().clone();
-        let body = response.bytes().await?;
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_BUFFERED_HTTP_BODY_BYTES as u64)
+        {
+            anyhow::bail!(
+                "HTTP response exceeds {} byte limit",
+                MAX_BUFFERED_HTTP_BODY_BYTES
+            );
+        }
+        let mut stream = response.bytes_stream();
+        let mut body = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            let next_len = body
+                .len()
+                .checked_add(chunk.len())
+                .ok_or_else(|| anyhow!("HTTP response size overflow"))?;
+            if next_len > MAX_BUFFERED_HTTP_BODY_BYTES {
+                anyhow::bail!(
+                    "HTTP response exceeds {} byte limit",
+                    MAX_BUFFERED_HTTP_BODY_BYTES
+                );
+            }
+            body.try_reserve(chunk.len())?;
+            body.extend_from_slice(&chunk);
+        }
 
-        let mut builder = Response::builder().status(status).version(version);
-        builder
-            .headers_mut()
-            .expect("response builder should expose mutable headers")
-            .extend(headers);
-
-        Ok(builder.body(AsyncBody::from(body.to_vec()))?)
+        let mut response = Response::builder()
+            .status(status)
+            .version(version)
+            .body(AsyncBody::from(body))?;
+        *response.headers_mut() = headers;
+        Ok(response)
     }
 
     fn runtime() -> Result<&'static tokio::runtime::Runtime> {
@@ -603,5 +643,35 @@ impl HttpClient for FakeHttpClient {
 
     fn as_fake(&self) -> &FakeHttpClient {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    #[test]
+    fn explicit_invalid_proxy_does_not_fall_back_to_environment() {
+        let client = HttpClientWithProxy::new(
+            Arc::new(BlockedHttpClient::new()),
+            Some("not a proxy URL".into()),
+        );
+        assert_eq!(client.proxy(), None);
+    }
+
+    #[test]
+    fn base_url_joining_normalizes_slashes_and_encodes_query_values() {
+        let client = HttpClientWithUrl::new(
+            Arc::new(BlockedHttpClient::new()),
+            "https://example.com/api/",
+            Some("invalid".into()),
+        );
+        assert_eq!(client.build_url("/v1"), "https://example.com/api/v1");
+        let url = client
+            .build_url_with_params("search", &[("q", "a b&c")])
+            .unwrap();
+        assert_eq!(url.as_str(), "https://example.com/api/search?q=a+b%26c");
     }
 }

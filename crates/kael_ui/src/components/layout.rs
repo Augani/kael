@@ -2,6 +2,7 @@
 
 use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
+use std::panic::Location;
 
 #[derive(IntoElement)]
 pub struct LayoutHeader {
@@ -37,9 +38,13 @@ impl RenderOnce for LayoutHeader {
         let user_style = self.style;
 
         div()
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group).label("Page header"),
+            )
             .flex_shrink_0()
             .px(px(16.0))
             .py(px(12.0))
+            .bg(theme.tokens.card)
             .when(self.has_divider, |this| {
                 this.border_b_1().border_color(theme.tokens.border)
             })
@@ -54,6 +59,7 @@ impl RenderOnce for LayoutHeader {
 
 #[derive(IntoElement)]
 pub struct LayoutContent {
+    id: ElementId,
     child: AnyElement,
     padding: Pixels,
     scrollable: bool,
@@ -61,8 +67,19 @@ pub struct LayoutContent {
 }
 
 impl LayoutContent {
+    #[track_caller]
     pub fn new(child: impl IntoElement) -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "layout-content-{}-{}-{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             child: child.into_any_element(),
             padding: px(16.0),
             scrollable: true,
@@ -72,6 +89,11 @@ impl LayoutContent {
 
     pub fn padding(mut self, padding: impl Into<Pixels>) -> Self {
         self.padding = padding.into();
+        self
+    }
+
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
         self
     }
 
@@ -92,10 +114,15 @@ impl RenderOnce for LayoutContent {
         let user_style = self.style;
 
         div()
+            .id(self.id)
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Pane).label("Page content"),
+            )
             .flex_1()
             .min_h(px(0.0))
             .min_w(px(0.0))
             .p(self.padding)
+            .when(self.scrollable, |this| this.overflow_y_auto())
             .when(!self.scrollable, |this| this.overflow_hidden())
             .child(self.child)
             .map(|this| {
@@ -140,9 +167,13 @@ impl RenderOnce for LayoutFooter {
         let user_style = self.style;
 
         div()
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group).label("Page footer"),
+            )
             .flex_shrink_0()
             .px(px(16.0))
             .py(px(12.0))
+            .bg(theme.tokens.card)
             .when(self.has_divider, |this| {
                 this.border_t_1().border_color(theme.tokens.border)
             })
@@ -157,20 +188,39 @@ impl RenderOnce for LayoutFooter {
 
 #[derive(IntoElement)]
 pub struct LayoutPanel {
+    id: ElementId,
     child: AnyElement,
     width: Pixels,
     has_divider: bool,
+    scrollable: bool,
     style: StyleRefinement,
 }
 
 impl LayoutPanel {
+    #[track_caller]
     pub fn new(child: impl IntoElement) -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "layout-panel-{}-{}-{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             child: child.into_any_element(),
             width: px(240.0),
             has_divider: false,
+            scrollable: true,
             style: StyleRefinement::default(),
         }
+    }
+
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
     }
 
     pub fn width(mut self, width: impl Into<Pixels>) -> Self {
@@ -180,6 +230,11 @@ impl LayoutPanel {
 
     pub fn has_divider(mut self, has_divider: bool) -> Self {
         self.has_divider = has_divider;
+        self
+    }
+
+    pub fn scrollable(mut self, scrollable: bool) -> Self {
+        self.scrollable = scrollable;
         self
     }
 }
@@ -196,9 +251,18 @@ impl RenderOnce for LayoutPanel {
         let user_style = self.style;
 
         div()
+            .id(self.id)
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Pane).label("Side panel"),
+            )
             .w(self.width)
+            .max_w(relative(1.0))
             .h_full()
+            .min_h(px(0.0))
             .flex_shrink_0()
+            .when(self.scrollable, |this| this.overflow_y_auto())
+            .when(!self.scrollable, |this| this.overflow_hidden())
+            .bg(theme.tokens.card)
             .when(self.has_divider, |this| {
                 this.border_r_1().border_color(theme.tokens.border)
             })
@@ -213,6 +277,7 @@ impl RenderOnce for LayoutPanel {
 
 #[derive(IntoElement)]
 pub struct Layout {
+    id: ElementId,
     header: Option<AnyElement>,
     panel: Option<AnyElement>,
     content: Option<AnyElement>,
@@ -223,8 +288,19 @@ pub struct Layout {
 }
 
 impl Layout {
+    #[track_caller]
     pub fn new() -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "layout-{}-{}-{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             header: None,
             panel: None,
             content: None,
@@ -233,6 +309,11 @@ impl Layout {
             gap: px(0.0),
             style: StyleRefinement::default(),
         }
+    }
+
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
     }
 
     pub fn header(mut self, header: impl IntoElement) -> Self {
@@ -284,6 +365,10 @@ impl RenderOnce for Layout {
         let user_style = self.style;
 
         div()
+            .id(self.id)
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group).label("Page layout"),
+            )
             .flex()
             .flex_col()
             .size_full()
@@ -291,27 +376,16 @@ impl RenderOnce for Layout {
             .bg(theme.tokens.background)
             .gap(self.gap)
             .when_some(self.header, |this, header| {
-                this.child(
-                    div()
-                        .flex_shrink_0()
-                        .border_b_1()
-                        .border_color(theme.tokens.border)
-                        .child(header),
-                )
+                this.child(div().flex_shrink_0().child(header))
             })
             .child(
                 div()
                     .flex()
                     .flex_1()
                     .min_h(px(0.0))
+                    .min_w(px(0.0))
                     .when_some(self.panel, |this, panel| {
-                        this.child(
-                            div()
-                                .h_full()
-                                .border_r_1()
-                                .border_color(theme.tokens.border)
-                                .child(panel),
-                        )
+                        this.child(div().h_full().flex_shrink_0().child(panel))
                     })
                     .child(
                         div()
@@ -322,6 +396,8 @@ impl RenderOnce for Layout {
                             .child(
                                 div()
                                     .size_full()
+                                    .min_h(px(0.0))
+                                    .min_w(px(0.0))
                                     .when_some(self.content_width, |this, width| {
                                         this.max_w(width).mx_auto()
                                     })
@@ -332,13 +408,7 @@ impl RenderOnce for Layout {
                     ),
             )
             .when_some(self.footer, |this, footer| {
-                this.child(
-                    div()
-                        .flex_shrink_0()
-                        .border_t_1()
-                        .border_color(theme.tokens.border)
-                        .child(footer),
-                )
+                this.child(div().flex_shrink_0().child(footer))
             })
             .map(|this| {
                 let mut div = this;

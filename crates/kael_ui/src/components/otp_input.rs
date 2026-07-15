@@ -64,6 +64,8 @@ pub struct OTPState {
     masked: bool,
     disabled: bool,
     state: OTPInputState,
+    on_change: Option<Rc<dyn Fn(String, &mut App)>>,
+    on_complete: Option<Rc<dyn Fn(String, &mut App)>>,
 }
 
 impl EventEmitter<OTPInputEvent> for OTPState {}
@@ -81,13 +83,19 @@ impl OTPState {
             masked: false,
             disabled: false,
             state: OTPInputState::Default,
+            on_change: None,
+            on_complete: None,
         }
     }
 
     pub fn digit_count(mut self, count: usize) -> Self {
-        let count = count.clamp(4, 8);
+        // Focus handles are created with the state and require an app context.
+        // This builder may safely reduce the initial count; callers that need
+        // more digits should pass that count to `OTPState::new`.
+        let count = count.clamp(4, 8).min(self.focus_handles.len());
         self.digit_count = count;
         self.digits.resize(count, None);
+        self.focused_index = self.focused_index.min(count.saturating_sub(1));
         self
     }
 
@@ -107,16 +115,19 @@ impl OTPState {
     pub fn set_value(&mut self, value: &str, cx: &mut Context<Self>) {
         self.digits.fill(None);
 
-        for (i, ch) in value.chars().take(self.digit_count).enumerate() {
-            if ch.is_ascii_digit() {
-                self.digits[i] = Some(ch);
-            }
+        for (i, ch) in value
+            .chars()
+            .filter(char::is_ascii_digit)
+            .take(self.digit_count)
+            .enumerate()
+        {
+            self.digits[i] = Some(ch);
         }
 
-        cx.emit(OTPInputEvent::Change(self.value()));
+        self.emit_change(cx);
 
         if self.is_complete() {
-            cx.emit(OTPInputEvent::Complete(self.value()));
+            self.emit_complete(cx);
         }
 
         cx.notify();
@@ -125,7 +136,7 @@ impl OTPState {
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         self.digits.fill(None);
         self.focused_index = 0;
-        cx.emit(OTPInputEvent::Change(String::new()));
+        self.emit_change(cx);
         cx.notify();
     }
 
@@ -164,10 +175,10 @@ impl OTPState {
         }
 
         self.digits[index] = Some(digit);
-        cx.emit(OTPInputEvent::Change(self.value()));
+        self.emit_change(cx);
 
         if self.is_complete() {
-            cx.emit(OTPInputEvent::Complete(self.value()));
+            self.emit_complete(cx);
         } else if index + 1 < self.digit_count {
             self.focused_index = index + 1;
             window.focus(&self.focus_handles[index + 1]);
@@ -182,8 +193,24 @@ impl OTPState {
         }
 
         self.digits[index] = None;
-        cx.emit(OTPInputEvent::Change(self.value()));
+        self.emit_change(cx);
         cx.notify();
+    }
+
+    fn emit_change(&self, cx: &mut Context<Self>) {
+        let value = self.value();
+        cx.emit(OTPInputEvent::Change(value.clone()));
+        if let Some(callback) = self.on_change.as_ref() {
+            callback(value, cx);
+        }
+    }
+
+    fn emit_complete(&self, cx: &mut Context<Self>) {
+        let value = self.value();
+        cx.emit(OTPInputEvent::Complete(value.clone()));
+        if let Some(callback) = self.on_complete.as_ref() {
+            callback(value, cx);
+        }
     }
 
     fn move_left(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -252,7 +279,7 @@ impl OTPState {
         self.move_end(window, cx);
     }
 
-    pub fn paste(&mut self, _: &OTPPaste, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn paste(&mut self, _: &OTPPaste, window: &mut Window, cx: &mut Context<Self>) {
         if self.disabled {
             return;
         }
@@ -265,6 +292,13 @@ impl OTPState {
         {
             let digits: String = text.chars().filter(|c| c.is_ascii_digit()).collect();
             self.set_value(&digits, cx);
+            self.focused_index = self
+                .digits
+                .iter()
+                .position(Option::is_none)
+                .unwrap_or(self.digit_count.saturating_sub(1));
+            window.focus(&self.focus_handles[self.focused_index]);
+            cx.notify();
         }
     }
 
@@ -297,6 +331,7 @@ impl Render for OTPState {
 #[derive(IntoElement)]
 pub struct OTPInput {
     state: Entity<OTPState>,
+    label: SharedString,
     size: OTPInputSize,
     disabled: bool,
     masked: bool,
@@ -311,6 +346,7 @@ impl OTPInput {
     pub fn new(state: &Entity<OTPState>) -> Self {
         Self {
             state: state.clone(),
+            label: "Verification code".into(),
             size: OTPInputSize::default(),
             disabled: false,
             masked: false,
@@ -324,6 +360,12 @@ impl OTPInput {
 
     pub fn size(mut self, size: OTPInputSize) -> Self {
         self.size = size;
+        self
+    }
+
+    /// Set the accessible name for the complete code input.
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = label.into();
         self
     }
 
@@ -365,9 +407,9 @@ impl OTPInput {
 
     fn box_size(&self) -> Pixels {
         match self.size {
-            OTPInputSize::Sm => px(28.0),
-            OTPInputSize::Md => px(32.0),
-            OTPInputSize::Lg => px(36.0),
+            OTPInputSize::Sm => px(36.0),
+            OTPInputSize::Md => px(40.0),
+            OTPInputSize::Lg => px(44.0),
         }
     }
 
@@ -402,7 +444,10 @@ impl RenderOnce for OTPInput {
         let input_gap = self.input_gap();
 
         let otp_state = self.state.read(cx);
-        let digit_count = otp_state.digit_count;
+        let digit_count = otp_state
+            .digit_count
+            .min(otp_state.digits.len())
+            .min(otp_state.focus_handles.len());
         let digits = otp_state.digits.clone();
         let _focused_index = otp_state.focused_index;
         let state = otp_state.state;
@@ -410,34 +455,14 @@ impl RenderOnce for OTPInput {
         let disabled = self.disabled || otp_state.disabled;
         let focus_handles: Vec<FocusHandle> = otp_state.focus_handles.to_vec();
 
+        let on_change_callback = self.on_change.clone();
+        let on_complete_callback = self.on_complete.clone();
         self.state.update(cx, |state, _| {
             state.disabled = disabled;
             state.masked = masked;
+            state.on_change = on_change_callback;
+            state.on_complete = on_complete_callback;
         });
-
-        let on_change_callback = self.on_change.clone();
-        let on_complete_callback = self.on_complete.clone();
-
-        if on_change_callback.is_some() || on_complete_callback.is_some() {
-            let state_entity = self.state.clone();
-            cx.subscribe(
-                &state_entity,
-                move |_emitter: Entity<OTPState>, event: &OTPInputEvent, cx: &mut App| match event {
-                    OTPInputEvent::Change(value) => {
-                        if let Some(callback) = on_change_callback.as_ref() {
-                            callback(value.clone(), cx);
-                        }
-                    }
-                    OTPInputEvent::Complete(value) => {
-                        if let Some(callback) = on_complete_callback.as_ref() {
-                            callback(value.clone(), cx);
-                        }
-                    }
-                    _ => {}
-                },
-            )
-            .detach();
-        }
 
         let (border_color, focus_border_color) = match state {
             OTPInputState::Default => (theme.tokens.border, theme.tokens.ring),
@@ -447,10 +472,19 @@ impl RenderOnce for OTPInput {
 
         let user_style = self.style;
         let separator = self.separator.clone();
-        let separator_position = self.separator_position.unwrap_or(digit_count / 2);
+        let separator_position = self
+            .separator_position
+            .unwrap_or(digit_count / 2)
+            .clamp(1, digit_count.saturating_sub(1));
+        let entity_id = self.state.entity_id().as_u64();
 
         div()
-            .id(("otp-input", self.state.entity_id()))
+            .id(("otp-input", entity_id))
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group)
+                    .label(self.label.to_string())
+                    .description(format!("Enter a {digit_count}-digit verification code")),
+            )
             .key_context("OTPInput")
             .flex()
             .items_center()
@@ -472,6 +506,28 @@ impl RenderOnce for OTPInput {
                 let focus_handle_for_click = focus_handle.clone();
                 let is_focused = focus_handle.is_focused(window);
                 let digit = digits[i];
+                let mut accessibility_state = AccessibilityState::NONE;
+                if disabled {
+                    accessibility_state |= AccessibilityState::DISABLED;
+                }
+                if is_focused {
+                    accessibility_state |= AccessibilityState::FOCUSED;
+                }
+                if matches!(state, OTPInputState::Error) {
+                    accessibility_state |= AccessibilityState::INVALID;
+                }
+                let accessible_value = match (digit, masked) {
+                    (Some(_), true) => "Filled".to_owned(),
+                    (Some(digit), false) => digit.to_string(),
+                    (None, _) => "Empty".to_owned(),
+                };
+                let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::TextInput)
+                    .label(format!("Digit {} of {digit_count}", i + 1))
+                    .value(AccessibilityValue::Text(accessible_value))
+                    .states(accessibility_state);
+                if !disabled {
+                    accessibility = accessibility.actions(vec![AccessibilityAction::Focus]);
+                }
 
                 let display_char = if let Some(d) = digit {
                     if masked {
@@ -484,8 +540,14 @@ impl RenderOnce for OTPInput {
                 };
 
                 let digit_box = div()
-                    .id(ElementId::NamedInteger("otp-digit".into(), i as u64))
-                    .track_focus(&focus_handle_for_track.tab_index(0).tab_stop(true))
+                    .id(ElementId::NamedInteger(
+                        format!("otp-digit-{entity_id}").into(),
+                        i as u64,
+                    ))
+                    .accessibility(accessibility)
+                    .when(!disabled, |this| {
+                        this.track_focus(&focus_handle_for_track.tab_index(0).tab_stop(true))
+                    })
                     .size(box_size)
                     .flex()
                     .items_center()
@@ -517,15 +579,15 @@ impl RenderOnce for OTPInput {
                         this.cursor(CursorStyle::IBeam)
                             .hover(|style| style.border_color(focus_border_color))
                     })
-                    .on_mouse_down(MouseButton::Left, {
+                    .when(!disabled, |this| {
                         let state = state_clone.clone();
-                        move |_, window, cx| {
+                        this.on_mouse_down(MouseButton::Left, move |_, window, cx| {
                             window.focus(&focus_handle_for_click);
                             state.update(cx, |s, cx| {
                                 s.focused_index = i;
                                 cx.notify();
                             });
-                        }
+                        })
                     })
                     .on_key_down({
                         let state = state_clone.clone();
@@ -551,15 +613,15 @@ impl RenderOnce for OTPInput {
                     .into_any_element();
 
                 let should_show_separator =
-                    separator.is_some() && i == separator_position - 1 && i + 1 < digit_count;
+                    separator.is_some() && i + 1 == separator_position && i + 1 < digit_count;
 
-                if should_show_separator {
+                if let Some(separator) = separator.clone().filter(|_| should_show_separator) {
                     vec![
                         digit_box,
                         div()
                             .text_size(font_size)
                             .text_color(theme.tokens.muted_foreground)
-                            .child(separator.clone().unwrap())
+                            .child(separator)
                             .into_any_element(),
                     ]
                 } else {

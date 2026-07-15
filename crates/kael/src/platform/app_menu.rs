@@ -41,6 +41,37 @@ impl Menu {
         validate_menu(self)
     }
 
+    /// Number of menu items, including nested submenu items.
+    pub fn item_count(&self) -> usize {
+        count_menu_items(self)
+    }
+
+    /// Number of action items, including nested submenu action items.
+    pub fn action_count(&self) -> usize {
+        count_menu_actions(self)
+    }
+
+    /// Whether any item maps to a native OS menu role.
+    pub fn has_os_actions(&self) -> bool {
+        menu_has_os_action(self)
+    }
+
+    /// Whether this menu contains a system-managed submenu.
+    pub fn has_system_menus(&self) -> bool {
+        menu_has_system_menu(self)
+    }
+
+    /// Return a content-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "menu: items {}, actions {}, os actions {}, system menus {}",
+            self.item_count(),
+            self.action_count(),
+            self.has_os_actions(),
+            self.has_system_menus()
+        )
+    }
+
     /// Create an OwnedMenu from this Menu
     pub fn owned(self) -> OwnedMenu {
         OwnedMenu {
@@ -66,7 +97,7 @@ impl MenuBuilder {
 
     /// Create a standard Edit menu with native OS role mappings.
     ///
-    /// This mirrors the common Electron `role` menu shape while preserving
+    /// This mirrors the common browser-runtime `role` menu shape while preserving
     /// Kael's typed action dispatch. The resulting menu contains Undo, Redo,
     /// Cut, Copy, Paste, and Select All with separators between edit groups.
     pub fn standard_edit(
@@ -142,6 +173,31 @@ impl MenuBuilder {
         &self.menu.items
     }
 
+    /// Number of configured menu items, including nested submenu items.
+    pub fn item_count(&self) -> usize {
+        self.menu.item_count()
+    }
+
+    /// Number of configured action items, including nested submenu action items.
+    pub fn action_count(&self) -> usize {
+        self.menu.action_count()
+    }
+
+    /// Whether any configured item maps to a native OS menu role.
+    pub fn has_os_actions(&self) -> bool {
+        self.menu.has_os_actions()
+    }
+
+    /// Whether the menu contains a system-managed submenu.
+    pub fn has_system_menus(&self) -> bool {
+        self.menu.has_system_menus()
+    }
+
+    /// Return a content-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        self.menu.to_text()
+    }
+
     /// Validate the menu before installing it.
     pub fn validate(&self) -> Result<()> {
         self.menu.validate()
@@ -176,6 +232,70 @@ pub struct MenuBarBuilder {
     menus: Vec<Menu>,
 }
 
+/// Checked, inspectable plan for installing an application menu bar.
+pub struct MenuBarPlan {
+    menus: Vec<Menu>,
+}
+
+impl MenuBarPlan {
+    /// Top-level menus in install order.
+    pub fn menus(&self) -> &[Menu] {
+        &self.menus
+    }
+
+    /// Consume the plan and return the validated menu bar.
+    pub fn into_menus(self) -> Vec<Menu> {
+        self.menus
+    }
+
+    /// Number of top-level menus.
+    pub fn menu_count(&self) -> usize {
+        self.menus.len()
+    }
+
+    /// Whether this plan contains no top-level menus.
+    pub fn is_empty(&self) -> bool {
+        self.menus.is_empty()
+    }
+
+    /// Top-level menu names in install order.
+    pub fn top_level_names(&self) -> Vec<&str> {
+        self.menus.iter().map(|menu| menu.name.as_ref()).collect()
+    }
+
+    /// Total number of menu items, including nested submenu items.
+    pub fn item_count(&self) -> usize {
+        self.menus.iter().map(count_menu_items).sum()
+    }
+
+    /// Total number of action items, including nested submenu action items.
+    pub fn action_count(&self) -> usize {
+        self.menus.iter().map(count_menu_actions).sum()
+    }
+
+    /// Whether any menu item maps to a native OS menu role.
+    pub fn has_os_actions(&self) -> bool {
+        self.menus.iter().any(menu_has_os_action)
+    }
+
+    /// Whether any menu contains a system-managed submenu.
+    pub fn has_system_menus(&self) -> bool {
+        self.menus.iter().any(menu_has_system_menu)
+    }
+
+    /// Return a content-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "menu bar: {} menus, {} items, {} actions, os actions {}, system menus {}",
+            self.menu_count(),
+            self.item_count(),
+            self.action_count(),
+            self.has_os_actions(),
+            self.has_system_menus()
+        )
+    }
+}
+
 impl MenuBarBuilder {
     /// Create an empty menu bar builder.
     pub fn new() -> Self {
@@ -191,6 +311,53 @@ impl MenuBarBuilder {
     /// Return the configured top-level menus.
     pub fn menus(&self) -> &[Menu] {
         &self.menus
+    }
+
+    /// Number of configured top-level menus.
+    pub fn menu_count(&self) -> usize {
+        self.menus.len()
+    }
+
+    /// Whether this builder contains no top-level menus.
+    pub fn is_empty(&self) -> bool {
+        self.menus.is_empty()
+    }
+
+    /// Top-level menu names in configured order.
+    pub fn top_level_names(&self) -> Vec<&str> {
+        self.menus.iter().map(|menu| menu.name.as_ref()).collect()
+    }
+
+    /// Total number of configured menu items, including nested submenu items.
+    pub fn item_count(&self) -> usize {
+        self.menus.iter().map(count_menu_items).sum()
+    }
+
+    /// Total number of configured action items, including nested submenu action items.
+    pub fn action_count(&self) -> usize {
+        self.menus.iter().map(count_menu_actions).sum()
+    }
+
+    /// Whether any configured item maps to a native OS menu role.
+    pub fn has_os_actions(&self) -> bool {
+        self.menus.iter().any(menu_has_os_action)
+    }
+
+    /// Whether any configured menu contains a system-managed submenu.
+    pub fn has_system_menus(&self) -> bool {
+        self.menus.iter().any(menu_has_system_menu)
+    }
+
+    /// Return a content-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "menu bar builder: {} menus, {} items, {} actions, os actions {}, system menus {}",
+            self.menu_count(),
+            self.item_count(),
+            self.action_count(),
+            self.has_os_actions(),
+            self.has_system_menus()
+        )
     }
 
     /// Validate the menu bar before installing it.
@@ -216,8 +383,13 @@ impl MenuBarBuilder {
 
     /// Build the validated menu bar.
     pub fn build_checked(self) -> Result<Vec<Menu>> {
+        Ok(self.build_plan_checked()?.into_menus())
+    }
+
+    /// Build a checked, inspectable menu bar plan.
+    pub fn build_plan_checked(self) -> Result<MenuBarPlan> {
         self.validate()?;
-        Ok(self.menus)
+        Ok(MenuBarPlan { menus: self.menus })
     }
 
     /// Build the menu bar.
@@ -236,6 +408,43 @@ impl From<MenuBarBuilder> for Vec<Menu> {
     fn from(value: MenuBarBuilder) -> Self {
         value.build()
     }
+}
+
+fn count_menu_items(menu: &Menu) -> usize {
+    menu.items
+        .iter()
+        .map(|item| match item {
+            MenuItem::Submenu(submenu) => 1 + count_menu_items(submenu),
+            MenuItem::Separator | MenuItem::SystemMenu(_) | MenuItem::Action { .. } => 1,
+        })
+        .sum()
+}
+
+fn count_menu_actions(menu: &Menu) -> usize {
+    menu.items
+        .iter()
+        .map(|item| match item {
+            MenuItem::Action { .. } => 1,
+            MenuItem::Submenu(submenu) => count_menu_actions(submenu),
+            MenuItem::Separator | MenuItem::SystemMenu(_) => 0,
+        })
+        .sum()
+}
+
+fn menu_has_os_action(menu: &Menu) -> bool {
+    menu.items.iter().any(|item| match item {
+        MenuItem::Action { os_action, .. } => os_action.is_some(),
+        MenuItem::Submenu(submenu) => menu_has_os_action(submenu),
+        MenuItem::Separator | MenuItem::SystemMenu(_) => false,
+    })
+}
+
+fn menu_has_system_menu(menu: &Menu) -> bool {
+    menu.items.iter().any(|item| match item {
+        MenuItem::SystemMenu(_) => true,
+        MenuItem::Submenu(submenu) => menu_has_system_menu(submenu),
+        MenuItem::Separator | MenuItem::Action { .. } => false,
+    })
 }
 
 /// Builder for the app icon dock/taskbar context menu.

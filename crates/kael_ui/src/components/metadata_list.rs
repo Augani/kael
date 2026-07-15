@@ -1,10 +1,15 @@
 //! MetadataList component - read-only label/value metadata.
 
 use crate::{
-    components::{icon::Icon, icon_source::IconSource},
+    components::{
+        button::{Button, ButtonSize, ButtonVariant},
+        icon::Icon,
+        icon_source::IconSource,
+    },
     theme::Theme,
 };
 use kael::{prelude::FluentBuilder as _, *};
+use std::panic::Location;
 use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -52,6 +57,8 @@ impl MetadataListItem {
 
 #[derive(IntoElement)]
 pub struct MetadataList {
+    id: ElementId,
+    accessible_label: SharedString,
     title: Option<AnyElement>,
     items: Vec<MetadataListItem>,
     columns: MetadataListColumns,
@@ -64,8 +71,20 @@ pub struct MetadataList {
 }
 
 impl MetadataList {
+    #[track_caller]
     pub fn new() -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "metadata-list-{}-{}-{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
+            accessible_label: "Metadata".into(),
             title: None,
             items: Vec::new(),
             columns: MetadataListColumns::Single,
@@ -76,6 +95,17 @@ impl MetadataList {
             on_toggle: None,
             style: StyleRefinement::default(),
         }
+    }
+
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
+    }
+
+    /// Set the name announced for the metadata collection.
+    pub fn accessible_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessible_label = label.into();
+        self
     }
 
     pub fn title(mut self, title: impl IntoElement) -> Self {
@@ -151,11 +181,16 @@ impl Styled for MetadataList {
 }
 
 impl RenderOnce for MetadataList {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = Theme::of(cx);
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let user_style = self.style;
-        let is_multi = matches!(self.columns, MetadataListColumns::Multi)
-            || matches!(self.columns, MetadataListColumns::Count(count) if count > 1);
+        let explicit_column_count = match self.columns {
+            MetadataListColumns::Count(count) if count > 1 => {
+                Some(count.min(u16::MAX as usize) as u16)
+            }
+            _ => None,
+        };
+        let is_fluid_multi = matches!(self.columns, MetadataListColumns::Multi);
+        let is_multi = is_fluid_multi || explicit_column_count.is_some();
         let label_position = self.label_position.unwrap_or(
             if is_multi || self.orientation == MetadataListOrientation::Horizontal {
                 MetadataLabelPosition::Top
@@ -167,12 +202,32 @@ impl RenderOnce for MetadataList {
             || self.orientation == MetadataListOrientation::Horizontal;
         let total_items = self.items.len();
         let max_items = self.max_items.unwrap_or(total_items);
-        let is_collapsed = self.max_items.is_some() && !self.expanded && total_items > max_items;
+        let is_controlled = self.on_toggle.is_some();
+        let local_expanded = window.use_keyed_state(
+            ElementId::NamedChild(Box::new(self.id.clone()), "expanded".into()),
+            cx,
+            |_, _| self.expanded,
+        );
+        let expanded = if is_controlled {
+            self.expanded
+        } else {
+            *local_expanded.read(cx)
+        };
+        let theme = Theme::of(cx);
+        let is_collapsed = self.max_items.is_some() && !expanded && total_items > max_items;
         let show_toggle = self.max_items.is_some() && total_items > max_items;
-        let expanded_next = !self.expanded;
+        let expanded_next = !expanded;
         let on_toggle = self.on_toggle;
+        let list_id = self.id.clone();
+        let list_id_for_items = list_id.clone();
+        let list_id_for_toggle = list_id.clone();
 
         div()
+            .id(list_id)
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::List)
+                    .label(self.accessible_label.to_string()),
+            )
             .flex()
             .flex_col()
             .font_family(theme.tokens.font_family.clone())
@@ -181,13 +236,17 @@ impl RenderOnce for MetadataList {
             })
             .child(
                 div()
-                    .flex()
+                    .when_some(explicit_column_count, |this, column_count| {
+                        this.grid().grid_cols(column_count).gap(px(16.0))
+                    })
                     .when(
-                        self.orientation == MetadataListOrientation::Horizontal,
+                        explicit_column_count.is_none()
+                            && self.orientation == MetadataListOrientation::Horizontal,
                         |this| this.flex_row().flex_wrap().gap(px(16.0)),
                     )
                     .when(
-                        self.orientation == MetadataListOrientation::Vertical,
+                        explicit_column_count.is_none()
+                            && self.orientation == MetadataListOrientation::Vertical,
                         |this| {
                             if is_multi {
                                 this.flex_row().flex_wrap().gap(px(16.0))
@@ -204,33 +263,46 @@ impl RenderOnce for MetadataList {
                                 if is_collapsed && idx >= max_items {
                                     return None;
                                 }
-                                Some(
-                                    render_metadata_item(item, is_stacked, is_multi, &theme)
-                                        .into_any_element(),
-                                )
+                                Some({
+                                    let item_id = ElementId::NamedChild(
+                                        Box::new(list_id_for_items.clone()),
+                                        format!("item-{idx}").into(),
+                                    );
+                                    render_metadata_item(
+                                        item,
+                                        item_id,
+                                        is_stacked,
+                                        is_fluid_multi,
+                                        theme,
+                                    )
+                                    .into_any_element()
+                                })
                             }),
                     ),
             )
             .when(show_toggle, |this| {
                 this.child(
-                    div()
-                        .mt(px(8.0))
-                        .py(px(8.0))
-                        .text_size(px(14.0))
-                        .line_height(relative(1.4))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.tokens.primary)
-                        .cursor_pointer()
-                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                            if let Some(handler) = on_toggle.as_ref() {
-                                handler(expanded_next, window, cx);
-                            }
-                        })
-                        .child(if is_collapsed {
-                            "Show more"
+                    Button::new(
+                        ElementId::NamedChild(Box::new(list_id_for_toggle), "toggle".into()),
+                        if is_collapsed {
+                            format!("Show {} more", total_items - max_items)
                         } else {
-                            "Show less"
-                        }),
+                            "Show less".to_owned()
+                        },
+                    )
+                    .size(ButtonSize::Sm)
+                    .variant(ButtonVariant::Ghost)
+                    .mt(px(8.0))
+                    .on_click(move |_, window, cx| {
+                        if let Some(handler) = on_toggle.as_ref() {
+                            handler(expanded_next, window, cx);
+                        } else {
+                            local_expanded.update(cx, |expanded, cx| {
+                                *expanded = expanded_next;
+                                cx.notify();
+                            });
+                        }
+                    }),
                 )
             })
             .map(|this| {
@@ -243,11 +315,13 @@ impl RenderOnce for MetadataList {
 
 fn render_metadata_item(
     item: MetadataListItem,
+    id: ElementId,
     is_stacked: bool,
-    is_multi: bool,
+    is_fluid_multi: bool,
     theme: &Theme,
 ) -> impl IntoElement {
     let label_text = item.label.clone();
+    let accessible_label = item.label.clone();
     let icon = item.icon.clone();
     let label = || {
         div()
@@ -278,6 +352,11 @@ fn render_metadata_item(
 
     let item = if is_stacked {
         div()
+            .id(id)
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::ListItem)
+                    .label(accessible_label.to_string()),
+            )
             .flex()
             .flex_col()
             .gap(px(2.0))
@@ -285,6 +364,11 @@ fn render_metadata_item(
             .child(value)
     } else {
         div()
+            .id(id)
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::ListItem)
+                    .label(accessible_label.to_string()),
+            )
             .flex()
             .items_start()
             .gap(px(16.0))
@@ -292,5 +376,5 @@ fn render_metadata_item(
             .child(div().flex_1().child(value))
     };
 
-    item.when(is_multi, |this| this.min_w(px(280.0)).flex_1())
+    item.when(is_fluid_multi, |this| this.min_w(px(220.0)).flex_1())
 }

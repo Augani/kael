@@ -1,8 +1,8 @@
 use crate::{
-    self as kael, AbsoluteLength, AlignContent, AlignItems, Background, BlendMode, BorderStyle,
-    CursorStyle, DefiniteLength, Display, Fill, FlexDirection, FlexWrap, Font, FontStyle,
-    FontWeight, GridAutoFlow, GridPlacement, GridTrack, Hsla, JustifyContent, Length, Pixels,
-    SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow, TextShadow,
+    self as kael, AbsoluteLength, AlignContent, AlignItems, AlignSelf, Background, BlendMode,
+    BorderStyle, CursorStyle, DefiniteLength, Display, Fill, FlexDirection, FlexWrap, Font,
+    FontStyle, FontWeight, GridAutoFlow, GridPlacement, GridTrack, Hsla, JustifyContent, Length,
+    Pixels, SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow, TextShadow,
     TextStyleRefinement, UnderlineStyle, WhiteSpace, point, px, relative, rems,
 };
 pub use kael_macros::{
@@ -432,6 +432,12 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Stretches flex items across the container's cross axis.
+    fn items_stretch(mut self) -> Self {
+        self.style().align_items = Some(AlignItems::Stretch);
+        self
+    }
+
     /// Sets the element to align flex items along the baseline of the container's cross axis.
     /// [Docs](https://tailwindcss.com/docs/align-items#baseline)
     fn items_baseline(mut self) -> Self {
@@ -473,6 +479,38 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/justify-content#space-around)
     fn justify_around(mut self) -> Self {
         self.style().justify_content = Some(JustifyContent::SpaceAround);
+        self
+    }
+
+    /// Sets the element to distribute items so every gap, including the gaps at
+    /// the container edges, has the same size.
+    /// [Docs](https://tailwindcss.com/docs/justify-content#space-evenly)
+    fn justify_evenly(mut self) -> Self {
+        self.style().justify_content = Some(JustifyContent::SpaceEvenly);
+        self
+    }
+
+    /// Aligns this flex or grid item to the start of its container's cross axis.
+    fn self_start(mut self) -> Self {
+        self.style().align_self = Some(AlignSelf::Start);
+        self
+    }
+
+    /// Centers this flex or grid item on its container's cross axis.
+    fn self_center(mut self) -> Self {
+        self.style().align_self = Some(AlignSelf::Center);
+        self
+    }
+
+    /// Aligns this flex or grid item to the end of its container's cross axis.
+    fn self_end(mut self) -> Self {
+        self.style().align_self = Some(AlignSelf::End);
+        self
+    }
+
+    /// Stretches this flex or grid item across its container's cross axis.
+    fn self_stretch(mut self) -> Self {
+        self.style().align_self = Some(AlignSelf::Stretch);
         self
     }
 

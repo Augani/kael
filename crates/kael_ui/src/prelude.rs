@@ -24,6 +24,10 @@ pub use crate::charts::chart::{
     Axis, AxisPosition, Chart, ChartArea, ChartPadding, DataPoint, DataRange, Legend,
     LegendPosition, Series, SeriesType, TooltipConfig,
 };
+pub use crate::charts::contribution_calendar::{
+    ContributionCalendar, ContributionCalendarSize, ContributionCellShape, ContributionDay,
+    ContributionPalette,
+};
 pub use crate::charts::line_chart::{LineChart, LineChartPoint, LineChartSeries};
 pub use crate::charts::pie_chart::{
     PieChart, PieChartLabelPosition, PieChartSegment, PieChartSize, PieChartVariant,
@@ -88,7 +92,9 @@ pub use crate::components::countdown::{
 pub use crate::components::date_picker::{DateFormat, DatePicker, DatePickerState};
 pub use crate::components::date_range_input::{date_range, DateRangeInput};
 pub use crate::components::date_time_input::DateTimeInput;
-pub use crate::components::drag_drop::{DragData, Draggable, DropZone, DropZoneStyle};
+pub use crate::components::drag_drop::{
+    DragData, DragDropKeyboardState, Draggable, DropZone, DropZoneStyle,
+};
 pub use crate::components::dropdown::{
     Dropdown, DropdownAlign, DropdownItem, DropdownMenuDivider, DropdownMenuItem,
     DropdownMenuItemData, DropdownMenuOption, DropdownMenuSection, DropdownState,
@@ -184,7 +190,7 @@ pub use crate::components::resizable::{
 };
 pub use crate::components::ripple::Ripple;
 pub use crate::components::scrollable::{
-    scrollable_both, scrollable_horizontal, scrollable_vertical,
+    scrollable_both, scrollable_horizontal, scrollable_vertical, Scrollable,
 };
 pub use crate::components::search_input::{SearchFilter, SearchInput, SearchInputState};
 pub use crate::components::section::{Section, SectionDivider, SectionVariant};
@@ -217,7 +223,7 @@ pub use crate::components::text::{
     label_small, muted, muted_small, Text, TextColor, TextDisplay, TextJustify, TextSize, TextType,
     TextVariant, TextWeight, TextWrap, WordBreak,
 };
-pub use crate::components::text_field::{TextField, TextFieldSize};
+pub use crate::components::text_field::{TextField, TextFieldSize, TextFieldState};
 pub use crate::components::textarea::Textarea;
 pub use crate::components::thumbnail::{Thumbnail, ThumbnailProps};
 pub use crate::components::time_picker::{
@@ -270,7 +276,8 @@ pub use crate::display::selectable_card::SelectableCard;
 pub use crate::display::table::{
     pixel, proportional, ColumnWidth, PixelWidth, ProportionalWidth, Table, TableBody, TableCell,
     TableColumn, TableColumnAlign, TableDensity, TableDividers, TableFooter, TableHeader,
-    TableHeaderCell, TableRow, TableTextOverflow, TableVerticalAlign, DEFAULT_MIN_COLUMN_WIDTH,
+    TableHeaderCell, TableRow, TableSortDirection, TableTextOverflow, TableVerticalAlign,
+    DEFAULT_MIN_COLUMN_WIDTH,
 };
 pub use crate::headless::{
     AccordionController, CarouselController, ComboboxController, DisclosureController,
@@ -337,7 +344,7 @@ pub use crate::overlays::layer::{
 pub use crate::overlays::overlay::{
     Overlay, OverlayAlign, OverlayPosition, OverlayScrimMode, OverlayShowOn, OverlayTone,
 };
-pub use crate::overlays::popover::Popover;
+pub use crate::overlays::popover::{Popover, PopoverContent};
 pub use crate::overlays::popover_menu::{PopoverMenu, PopoverMenuItem};
 pub use crate::overlays::sheet::{Sheet, SheetSide, SheetSize};
 pub use crate::overlays::toast::{
@@ -391,7 +398,7 @@ pub use crate::charts::heatmap::Heatmap;
 pub use crate::charts::radar_chart::{RadarChart, RadarChartSize, RadarDataset};
 
 pub use crate::components::animated_list::{AnimatedList, AnimatedListState};
-pub use crate::components::aurora::Aurora;
+pub use crate::components::aurora::{Aurora, AuroraState};
 pub use crate::components::confetti::{Confetti, ConfettiState};
 pub use crate::components::crop_area::{CropArea, CropAreaState, DragHandle};
 pub use crate::components::dock::{Dock, DockState};
@@ -402,6 +409,7 @@ pub use crate::components::particle_emitter::{
     ParticleEmitter, ParticleEmitterConfig, ParticleEmitterState,
 };
 pub use crate::components::qr_code::QRCodeComponent;
+pub use crate::components::scrollbar::{Scrollbar, ScrollbarAxis, ScrollbarState};
 pub use crate::components::shared_element_transition::{
     SharedElementState, SharedElementTransition,
 };

@@ -43,12 +43,36 @@ pub enum Error {
     /// A required environment variable for path resolution was missing.
     #[error("required environment variable was not set: {0}")]
     MissingEnvironmentVariable(&'static str),
+    /// An application or database identifier was empty or contained path separators.
+    #[error("invalid storage identifier: {0:?}")]
+    InvalidStorageIdentifier(String),
+    /// A JSON store exceeded its bounded on-disk size.
+    #[error("JSON store is {actual} bytes, exceeding the {limit} byte limit")]
+    JsonStoreTooLarge {
+        /// Observed or serialized size.
+        actual: u64,
+        /// Maximum accepted size.
+        limit: u64,
+    },
+    /// Migration version zero is reserved for an unmigrated database.
+    #[error("migration version zero is not valid")]
+    InvalidMigrationVersion,
     /// The configured migrations were not in strictly increasing order.
     #[error("migrations must be sorted in strictly increasing version order")]
     InvalidMigrationOrder,
     /// The configured migrations contained a duplicate version.
     #[error("duplicate migration version {0}")]
     DuplicateMigrationVersion(u32),
+    /// The database schema is newer than the newest supplied migration.
+    #[error(
+        "database schema version {current} is newer than the latest configured migration {latest}"
+    )]
+    DatabaseVersionNewer {
+        /// Version recorded in the database.
+        current: u32,
+        /// Highest version in the configured migration list.
+        latest: u32,
+    },
     /// A rollback was requested for a migration without a `down` script.
     #[error("migration {0} cannot be rolled back because it does not define a down script")]
     MissingDownMigration(u32),

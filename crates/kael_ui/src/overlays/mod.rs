@@ -30,5 +30,6 @@ pub use dialog::{
 pub use hover_card::{HoverCard, HoverCardAlignment, HoverCardPosition};
 pub use layer::{Layer, LayerPlacement};
 pub use overlay::{Overlay, OverlayTone};
+pub use popover::{Popover, PopoverContent};
 pub use popover_menu::{PopoverMenu, PopoverMenuItem};
 pub use sheet::{init_sheet, Sheet, SheetSide, SheetSize};

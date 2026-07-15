@@ -37,6 +37,9 @@ pub mod core_media {
             unsafe {
                 let attachments =
                     CMSampleBufferGetSampleAttachmentsArray(self.as_concrete_TypeRef(), true);
+                if attachments.is_null() {
+                    return Vec::new();
+                }
                 CFArray::<CFDictionary>::wrap_under_get_rule(attachments)
                     .into_iter()
                     .map(|attachments| {
@@ -59,6 +62,7 @@ pub mod core_media {
 
         pub fn sample_timing_info(&self, index: usize) -> Result<CMSampleTimingInfo> {
             unsafe {
+                let index = checked_item_index(index)?;
                 let mut timing_info = CMSampleTimingInfo {
                     duration: kCMTimeInvalid,
                     presentationTimeStamp: kCMTimeInvalid,
@@ -66,7 +70,7 @@ pub mod core_media {
                 };
                 let result = CMSampleBufferGetSampleTimingInfo(
                     self.as_concrete_TypeRef(),
-                    index as CMItemIndex,
+                    index,
                     &mut timing_info,
                 );
                 anyhow::ensure!(
@@ -77,11 +81,14 @@ pub mod core_media {
             }
         }
 
-        pub fn format_description(&self) -> CMFormatDescription {
+        pub fn format_description(&self) -> Option<CMFormatDescription> {
             unsafe {
-                CMFormatDescription::wrap_under_get_rule(CMSampleBufferGetFormatDescription(
-                    self.as_concrete_TypeRef(),
-                ))
+                let description = CMSampleBufferGetFormatDescription(self.as_concrete_TypeRef());
+                if description.is_null() {
+                    None
+                } else {
+                    Some(CMFormatDescription::wrap_under_get_rule(description))
+                }
             }
         }
 
@@ -94,6 +101,22 @@ pub mod core_media {
                     Some(CMBlockBuffer::wrap_under_get_rule(ptr))
                 }
             }
+        }
+    }
+
+    fn checked_item_index(index: usize) -> Result<CMItemIndex> {
+        CMItemIndex::try_from(index)
+            .map_err(|_| anyhow::anyhow!("sample timing index {index} is out of range"))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::checked_item_index;
+
+        #[test]
+        fn sample_timing_index_must_fit_core_media_signed_index() {
+            assert_eq!(checked_item_index(0).unwrap(), 0);
+            assert!(checked_item_index(usize::MAX).is_err());
         }
     }
 
@@ -159,6 +182,13 @@ pub mod core_media {
                     ptr::null_mut(),
                 );
                 anyhow::ensure!(result == 0, "error getting parameter set, code: {result}");
+                if len == 0 {
+                    return Ok(&[]);
+                }
+                anyhow::ensure!(
+                    !bytes.is_null(),
+                    "parameter set returned a null data pointer"
+                );
                 Ok(std::slice::from_raw_parts(bytes, len))
             }
         }
@@ -189,23 +219,54 @@ pub mod core_media {
         pub fn bytes(&self) -> Result<&[u8]> {
             unsafe {
                 let mut bytes = ptr::null();
-                let mut len = 0;
+                let mut contiguous_len = 0;
+                let mut total_len = 0;
                 let result = CMBlockBufferGetDataPointer(
                     self.as_concrete_TypeRef(),
                     0,
-                    &mut 0,
-                    &mut len,
+                    &mut contiguous_len,
+                    &mut total_len,
                     &mut bytes,
                 );
                 anyhow::ensure!(
                     result == 0,
                     "could not get block buffer data, code: {result}"
                 );
-                if len == 0 {
+                if total_len == 0 {
                     return Ok(&[]);
                 }
                 anyhow::ensure!(!bytes.is_null(), "block buffer returned null data pointer");
-                Ok(std::slice::from_raw_parts(bytes, len))
+                anyhow::ensure!(
+                    contiguous_len == total_len,
+                    "block buffer is non-contiguous; use copy_bytes() to read all data"
+                );
+                Ok(std::slice::from_raw_parts(bytes, total_len))
+            }
+        }
+
+        /// Copies all bytes from this block buffer, including non-contiguous buffers.
+        pub fn copy_bytes(&self) -> Result<Vec<u8>> {
+            unsafe {
+                let len = CMBlockBufferGetDataLength(self.as_concrete_TypeRef());
+                let mut bytes = Vec::new();
+                bytes.try_reserve_exact(len).map_err(|error| {
+                    anyhow::anyhow!("could not allocate {len} bytes for block buffer: {error}")
+                })?;
+                bytes.resize(len, 0);
+                if len == 0 {
+                    return Ok(bytes);
+                }
+                let result = CMBlockBufferCopyDataBytes(
+                    self.as_concrete_TypeRef(),
+                    0,
+                    len,
+                    bytes.as_mut_ptr().cast(),
+                );
+                anyhow::ensure!(
+                    result == 0,
+                    "could not copy block buffer data, code: {result}"
+                );
+                Ok(bytes)
             }
         }
     }
@@ -219,6 +280,13 @@ pub mod core_media {
             length_at_offset_out: *mut usize,
             total_length_out: *mut usize,
             data_pointer_out: *mut *const u8,
+        ) -> OSStatus;
+        fn CMBlockBufferGetDataLength(buffer: CMBlockBufferRef) -> usize;
+        fn CMBlockBufferCopyDataBytes(
+            buffer: CMBlockBufferRef,
+            offset_to_data: usize,
+            data_length: usize,
+            destination: *mut c_void,
         ) -> OSStatus;
     }
 }
@@ -280,6 +348,10 @@ pub mod core_video {
                 result == kCVReturnSuccess,
                 "could not create texture cache, code: {result}"
             );
+            anyhow::ensure!(
+                !this.is_null(),
+                "texture cache creation returned a null object"
+            );
             unsafe { Ok(CVMetalTextureCache::wrap_under_create_rule(this)) }
         }
 
@@ -313,6 +385,7 @@ pub mod core_video {
                 result == kCVReturnSuccess,
                 "could not create texture, code: {result}"
             );
+            anyhow::ensure!(!this.is_null(), "texture creation returned a null object");
             unsafe { Ok(CVMetalTexture::wrap_under_create_rule(this)) }
         }
     }
@@ -349,10 +422,14 @@ pub mod core_video {
     impl_CFTypeDescription!(CVMetalTexture);
 
     impl CVMetalTexture {
-        pub fn as_texture_ref(&self) -> &metal::TextureRef {
+        pub fn as_texture_ref(&self) -> Option<&metal::TextureRef> {
             unsafe {
                 let texture = CVMetalTextureGetTexture(self.as_concrete_TypeRef());
-                metal::TextureRef::from_ptr(texture as *mut _)
+                if texture.is_null() {
+                    None
+                } else {
+                    Some(metal::TextureRef::from_ptr(texture.cast()))
+                }
             }
         }
     }

@@ -60,8 +60,8 @@ struct PolishV2Demo {
 impl PolishV2Demo {
     fn new(cx: &mut Context<Self>) -> Self {
         Self {
-            input_state: cx.new(|cx| InputState::new(cx)),
-            toast_manager: cx.new(|cx| ToastManager::new(cx)),
+            input_state: cx.new(InputState::new),
+            toast_manager: cx.new(ToastManager::new),
             content_key: 0,
             transition_state: ContentTransitionState::new(),
         }
@@ -327,8 +327,10 @@ impl PolishV2Demo {
     }
 
     fn render_easing_showcase(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+        type NamedEasing = (&'static str, fn(f32) -> f32);
+
         let theme = use_theme();
-        let easings_list: Vec<(&str, fn(f32) -> f32)> = vec![
+        let easings_list: Vec<NamedEasing> = vec![
             ("ease_out_cubic", easings::ease_out_cubic),
             ("ease_out_quart", easings::ease_out_quart),
             ("ease_out_expo", easings::ease_out_expo),
@@ -998,7 +1000,7 @@ fn main() {
                     }),
                     ..Default::default()
                 },
-                |_window, cx| cx.new(|cx| PolishV2Demo::new(cx)),
+                |_window, cx| cx.new(PolishV2Demo::new),
             )
             .unwrap();
 

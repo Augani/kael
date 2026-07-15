@@ -34,17 +34,29 @@ unsafe impl Sync for WindowsDisplay {}
 impl WindowsDisplay {
     pub(crate) fn new(display_id: DisplayId) -> Option<Self> {
         let screen = available_monitors().into_iter().nth(display_id.0 as _)?;
-        let info = get_monitor_info(screen).log_err()?;
+        Self::new_with_handle_and_id(screen, display_id)
+    }
+
+    pub fn new_with_handle(monitor: HMONITOR) -> Option<Self> {
+        let display_id = available_monitors()
+            .iter()
+            .position(|handle| handle.0 == monitor.0)
+            .map(|id| DisplayId(id as _))?;
+        Self::new_with_handle_and_id(monitor, display_id)
+    }
+
+    fn new_with_handle_and_id(handle: HMONITOR, display_id: DisplayId) -> Option<Self> {
+        let info = get_monitor_info(handle).log_err()?;
         let monitor_size = info.monitorInfo.rcMonitor;
         let uuid = generate_uuid(&info.szDevice);
-        let scale_factor = get_scale_factor_for_monitor(screen).log_err()?;
+        let scale_factor = get_scale_factor_for_monitor(handle).log_err()?;
         let physical_size = size(
             (monitor_size.right - monitor_size.left).into(),
             (monitor_size.bottom - monitor_size.top).into(),
         );
 
         Some(WindowsDisplay {
-            handle: screen,
+            handle,
             display_id,
             scale_factor,
             bounds: Bounds {
@@ -63,72 +75,6 @@ impl WindowsDisplay {
         })
     }
 
-    pub fn new_with_handle(monitor: HMONITOR) -> Self {
-        let info = get_monitor_info(monitor).expect("unable to get monitor info");
-        let monitor_size = info.monitorInfo.rcMonitor;
-        let uuid = generate_uuid(&info.szDevice);
-        let display_id = available_monitors()
-            .iter()
-            .position(|handle| handle.0 == monitor.0)
-            .unwrap();
-        let scale_factor =
-            get_scale_factor_for_monitor(monitor).expect("unable to get scale factor for monitor");
-        let physical_size = size(
-            (monitor_size.right - monitor_size.left).into(),
-            (monitor_size.bottom - monitor_size.top).into(),
-        );
-
-        WindowsDisplay {
-            handle: monitor,
-            display_id: DisplayId(display_id as _),
-            scale_factor,
-            bounds: Bounds {
-                origin: logical_point(
-                    monitor_size.left as f32,
-                    monitor_size.top as f32,
-                    scale_factor,
-                ),
-                size: physical_size.to_pixels(scale_factor),
-            },
-            physical_bounds: Bounds {
-                origin: point(monitor_size.left.into(), monitor_size.top.into()),
-                size: physical_size,
-            },
-            uuid,
-        }
-    }
-
-    fn new_with_handle_and_id(handle: HMONITOR, display_id: DisplayId) -> Self {
-        let info = get_monitor_info(handle).expect("unable to get monitor info");
-        let monitor_size = info.monitorInfo.rcMonitor;
-        let uuid = generate_uuid(&info.szDevice);
-        let scale_factor =
-            get_scale_factor_for_monitor(handle).expect("unable to get scale factor for monitor");
-        let physical_size = size(
-            (monitor_size.right - monitor_size.left).into(),
-            (monitor_size.bottom - monitor_size.top).into(),
-        );
-
-        WindowsDisplay {
-            handle,
-            display_id,
-            scale_factor,
-            bounds: Bounds {
-                origin: logical_point(
-                    monitor_size.left as f32,
-                    monitor_size.top as f32,
-                    scale_factor,
-                ),
-                size: physical_size.to_pixels(scale_factor),
-            },
-            physical_bounds: Bounds {
-                origin: point(monitor_size.left.into(), monitor_size.top.into()),
-                size: physical_size,
-            },
-            uuid,
-        }
-    }
-
     pub fn primary_monitor() -> Option<Self> {
         // https://devblogs.microsoft.com/oldnewthing/20070809-00/?p=25643
         const POINT_ZERO: POINT = POINT { x: 0, y: 0 };
@@ -140,7 +86,7 @@ impl WindowsDisplay {
             );
             return None;
         }
-        Some(WindowsDisplay::new_with_handle(monitor))
+        WindowsDisplay::new_with_handle(monitor)
     }
 
     /// Check if the center point of given bounds is inside this monitor
@@ -154,8 +100,8 @@ impl WindowsDisplay {
         if monitor.is_invalid() {
             false
         } else {
-            let display = WindowsDisplay::new_with_handle(monitor);
-            display.uuid == self.uuid
+            WindowsDisplay::new_with_handle(monitor)
+                .is_some_and(|display| display.uuid == self.uuid)
         }
     }
 
@@ -163,11 +109,11 @@ impl WindowsDisplay {
         available_monitors()
             .into_iter()
             .enumerate()
-            .map(|(id, handle)| {
-                Rc::new(WindowsDisplay::new_with_handle_and_id(
+            .filter_map(|(id, handle)| {
+                Some(Rc::new(WindowsDisplay::new_with_handle_and_id(
                     handle,
                     DisplayId(id as _),
-                )) as Rc<dyn PlatformDisplay>
+                )?) as Rc<dyn PlatformDisplay>)
             })
             .collect()
     }
@@ -200,6 +146,10 @@ impl PlatformDisplay for WindowsDisplay {
         // composition; on multi-monitor setups it tracks the active composition clock
         // rather than a specific monitor.
         super::vsync::get_display_refresh_rate_hz()
+    }
+
+    fn scale_factor(&self) -> f32 {
+        self.scale_factor
     }
 }
 

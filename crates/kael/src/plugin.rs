@@ -7,13 +7,19 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    io::Read as _,
     path::{Path, PathBuf},
 };
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::security::Capability;
+use crate::{
+    process_model::{HelperProcessExecutionPlan, HelperProcessLaunch, HelperProcessLaunchBuilder},
+    security::{Capability, IpcSchema, PermissionKind, PluginPermissionManifest},
+};
+
+const MAX_PLUGIN_MANIFEST_BYTES: u64 = 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Plugin Manifest
@@ -57,10 +63,24 @@ pub enum ExecutionModel {
     Wasm,
 }
 
+impl ExecutionModel {
+    /// Stable execution model key for content-safe diagnostics.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::ExternalProcess => "external-process",
+            Self::Wasm => "wasm",
+        }
+    }
+}
+
 impl PluginManifest {
     /// Validate the manifest for well-formedness.
     pub fn validate(&self) -> Result<()> {
         validate_plugin_id(&self.id, "plugin id")?;
+        anyhow::ensure!(
+            !self.id.contains('/'),
+            "plugin id cannot contain path separators"
+        );
         validate_plugin_label(&self.name, "plugin name")?;
         validate_plugin_version(&self.version, "plugin version")?;
         validate_plugin_version(&self.api_version, "plugin api version")?;
@@ -71,6 +91,21 @@ impl PluginManifest {
         if let Some(author) = &self.author {
             validate_optional_plugin_text(author, "plugin author")?;
         }
+        anyhow::ensure!(
+            self.capabilities.len() <= 64,
+            "plugin cannot request more than 64 capabilities"
+        );
+        let mut capabilities = HashSet::new();
+        anyhow::ensure!(
+            self.capabilities
+                .iter()
+                .all(|capability| capabilities.insert(capability)),
+            "plugin cannot request the same capability more than once"
+        );
+        anyhow::ensure!(
+            self.args.len() <= 1_024,
+            "plugin cannot include more than 1024 arguments"
+        );
         for arg in &self.args {
             validate_optional_plugin_text(arg, "plugin argument")?;
         }
@@ -85,6 +120,92 @@ impl PluginManifest {
             .filter(|capability| capability.is_high_risk())
             .cloned()
             .collect()
+    }
+
+    /// Byte length of the plugin id without exposing it.
+    pub fn id_len_bytes(&self) -> usize {
+        self.id.len()
+    }
+
+    /// Byte length of the plugin name without exposing it.
+    pub fn name_len_bytes(&self) -> usize {
+        self.name.len()
+    }
+
+    /// Byte length of the plugin version without exposing it.
+    pub fn version_len_bytes(&self) -> usize {
+        self.version.len()
+    }
+
+    /// Byte length of the API version without exposing it.
+    pub fn api_version_len_bytes(&self) -> usize {
+        self.api_version.len()
+    }
+
+    /// Byte length of the entry point path text without exposing it.
+    pub fn entry_point_len_bytes(&self) -> usize {
+        self.entry_point.len()
+    }
+
+    /// Returns true when the manifest includes a description.
+    pub fn has_description(&self) -> bool {
+        self.description.is_some()
+    }
+
+    /// Byte length of the description without exposing it.
+    pub fn description_len_bytes(&self) -> usize {
+        self.description
+            .as_ref()
+            .map_or(0, |description| description.len())
+    }
+
+    /// Returns true when the manifest includes an author.
+    pub fn has_author(&self) -> bool {
+        self.author.is_some()
+    }
+
+    /// Byte length of the author without exposing it.
+    pub fn author_len_bytes(&self) -> usize {
+        self.author.as_ref().map_or(0, |author| author.len())
+    }
+
+    /// Number of requested capabilities.
+    pub fn capability_count(&self) -> usize {
+        self.capabilities.len()
+    }
+
+    /// Number of requested high-risk capabilities.
+    pub fn high_risk_capability_count(&self) -> usize {
+        self.capabilities
+            .iter()
+            .filter(|capability| capability.is_high_risk())
+            .count()
+    }
+
+    /// Number of command-line arguments.
+    pub fn arg_count(&self) -> usize {
+        self.args.len()
+    }
+
+    /// Content-safe manifest summary.
+    pub fn to_text(&self) -> String {
+        format!(
+            "plugin_manifest(id_len_bytes={}, name_len_bytes={}, version_len_bytes={}, api_version_len_bytes={}, entry_point_len_bytes={}, execution_model={}, capabilities={}, high_risk_capabilities={}, args={}, has_description={}, description_len_bytes={}, has_author={}, author_len_bytes={}, contributions={})",
+            self.id_len_bytes(),
+            self.name_len_bytes(),
+            self.version_len_bytes(),
+            self.api_version_len_bytes(),
+            self.entry_point_len_bytes(),
+            self.execution_model.to_text(),
+            self.capability_count(),
+            self.high_risk_capability_count(),
+            self.arg_count(),
+            self.has_description(),
+            self.description_len_bytes(),
+            self.has_author(),
+            self.author_len_bytes(),
+            self.contributions.to_text()
+        )
     }
 
     /// Parse a plugin manifest from a JSON string.
@@ -104,7 +225,23 @@ impl PluginManifest {
     /// Load a plugin manifest from a filesystem path.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let contents = std::fs::read_to_string(path)?;
+        let metadata = std::fs::symlink_metadata(path)?;
+        anyhow::ensure!(
+            metadata.file_type().is_file(),
+            "plugin manifest must be a regular file"
+        );
+        anyhow::ensure!(
+            metadata.len() <= MAX_PLUGIN_MANIFEST_BYTES,
+            "plugin manifest exceeds {MAX_PLUGIN_MANIFEST_BYTES} byte limit"
+        );
+        let mut contents = String::new();
+        std::fs::File::open(path)?
+            .take(MAX_PLUGIN_MANIFEST_BYTES + 1)
+            .read_to_string(&mut contents)?;
+        anyhow::ensure!(
+            contents.len() as u64 <= MAX_PLUGIN_MANIFEST_BYTES,
+            "plugin manifest exceeds {MAX_PLUGIN_MANIFEST_BYTES} byte limit"
+        );
         match path.extension().and_then(|ext| ext.to_str()) {
             Some("json") => Self::from_json(&contents),
             Some("toml") => Self::from_toml(&contents),
@@ -289,6 +426,18 @@ pub enum PanelPosition {
 impl Contributions {
     /// Validate contributed commands, menus, panels, and settings schema.
     pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.commands.len() <= 4_096,
+            "plugin cannot contribute more than 4096 commands"
+        );
+        anyhow::ensure!(
+            self.menu_items.len() <= 4_096,
+            "plugin cannot contribute more than 4096 menu items"
+        );
+        anyhow::ensure!(
+            self.panels.len() <= 4_096,
+            "plugin cannot contribute more than 4096 panels"
+        );
         let mut command_ids = HashSet::new();
         for command in &self.commands {
             command.validate()?;
@@ -323,9 +472,44 @@ impl Contributions {
                 schema.is_object(),
                 "plugin settings schema must be a JSON object"
             );
+            anyhow::ensure!(
+                serde_json::to_vec(schema)?.len() <= MAX_PLUGIN_MANIFEST_BYTES as usize,
+                "plugin settings schema exceeds {MAX_PLUGIN_MANIFEST_BYTES} byte limit"
+            );
         }
 
         Ok(())
+    }
+
+    /// Number of command contributions.
+    pub fn command_count(&self) -> usize {
+        self.commands.len()
+    }
+
+    /// Number of menu-item contributions.
+    pub fn menu_item_count(&self) -> usize {
+        self.menu_items.len()
+    }
+
+    /// Number of panel contributions.
+    pub fn panel_count(&self) -> usize {
+        self.panels.len()
+    }
+
+    /// Returns true when a settings schema is contributed.
+    pub fn has_settings_schema(&self) -> bool {
+        self.settings_schema.is_some()
+    }
+
+    /// Content-safe contribution summary.
+    pub fn to_text(&self) -> String {
+        format!(
+            "plugin_contributions(commands={}, menu_items={}, panels={}, has_settings_schema={})",
+            self.command_count(),
+            self.menu_item_count(),
+            self.panel_count(),
+            self.has_settings_schema()
+        )
     }
 }
 
@@ -339,6 +523,39 @@ impl ContributedCommand {
         }
         Ok(())
     }
+
+    /// Byte length of the command id without exposing it.
+    pub fn id_len_bytes(&self) -> usize {
+        self.id.len()
+    }
+
+    /// Byte length of the title without exposing it.
+    pub fn title_len_bytes(&self) -> usize {
+        self.title.len()
+    }
+
+    /// Returns true when a keybinding is configured.
+    pub fn has_keybinding(&self) -> bool {
+        self.keybinding.is_some()
+    }
+
+    /// Byte length of the keybinding without exposing it.
+    pub fn keybinding_len_bytes(&self) -> usize {
+        self.keybinding
+            .as_ref()
+            .map_or(0, |keybinding| keybinding.len())
+    }
+
+    /// Content-safe command contribution summary.
+    pub fn to_text(&self) -> String {
+        format!(
+            "contributed_command(id_len_bytes={}, title_len_bytes={}, has_keybinding={}, keybinding_len_bytes={})",
+            self.id_len_bytes(),
+            self.title_len_bytes(),
+            self.has_keybinding(),
+            self.keybinding_len_bytes()
+        )
+    }
 }
 
 impl ContributedMenuItem {
@@ -349,6 +566,31 @@ impl ContributedMenuItem {
         validate_plugin_id(&self.command_id, "plugin menu command id")?;
         Ok(())
     }
+
+    /// Byte length of the target menu id without exposing it.
+    pub fn target_menu_len_bytes(&self) -> usize {
+        self.target_menu.len()
+    }
+
+    /// Byte length of the label without exposing it.
+    pub fn label_len_bytes(&self) -> usize {
+        self.label.len()
+    }
+
+    /// Byte length of the command id without exposing it.
+    pub fn command_id_len_bytes(&self) -> usize {
+        self.command_id.len()
+    }
+
+    /// Content-safe menu contribution summary.
+    pub fn to_text(&self) -> String {
+        format!(
+            "contributed_menu_item(target_menu_len_bytes={}, label_len_bytes={}, command_id_len_bytes={})",
+            self.target_menu_len_bytes(),
+            self.label_len_bytes(),
+            self.command_id_len_bytes()
+        )
+    }
 }
 
 impl ContributedPanel {
@@ -357,6 +599,43 @@ impl ContributedPanel {
         validate_plugin_id(&self.id, "plugin panel id")?;
         validate_plugin_label(&self.title, "plugin panel title")?;
         Ok(())
+    }
+
+    /// Byte length of the panel id without exposing it.
+    pub fn id_len_bytes(&self) -> usize {
+        self.id.len()
+    }
+
+    /// Byte length of the panel title without exposing it.
+    pub fn title_len_bytes(&self) -> usize {
+        self.title.len()
+    }
+
+    /// Stable default dock position key.
+    pub fn position_key(&self) -> &'static str {
+        self.default_position.to_text()
+    }
+
+    /// Content-safe panel contribution summary.
+    pub fn to_text(&self) -> String {
+        format!(
+            "contributed_panel(id_len_bytes={}, title_len_bytes={}, position={})",
+            self.id_len_bytes(),
+            self.title_len_bytes(),
+            self.position_key()
+        )
+    }
+}
+
+impl PanelPosition {
+    /// Stable panel position key for content-safe diagnostics.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Bottom => "bottom",
+            Self::Floating => "floating",
+        }
     }
 }
 
@@ -447,6 +726,30 @@ pub struct ExtensionInfo {
     /// Whether the extension was loaded in dev mode (not copied).
     #[serde(default)]
     pub dev_mode: bool,
+}
+
+impl ExtensionInfo {
+    /// Returns true when the extension has an associated running process.
+    pub fn has_process(&self) -> bool {
+        self.process_id.is_some()
+    }
+
+    /// Returns true when the extension has a load path.
+    pub fn has_load_path(&self) -> bool {
+        self.load_path.is_some()
+    }
+
+    /// Content-safe extension info summary.
+    pub fn to_text(&self) -> String {
+        format!(
+            "extension_info(active={}, has_process={}, has_load_path={}, dev_mode={}, manifest={})",
+            self.is_active,
+            self.has_process(),
+            self.has_load_path(),
+            self.dev_mode,
+            self.manifest.to_text()
+        )
+    }
 }
 
 /// The extension host manages plugin lifecycle and IPC.
@@ -579,6 +882,49 @@ impl ExtensionHost {
             .flat_map(|extension| extension.manifest.contributions.panels.iter())
             .collect()
     }
+
+    /// Number of loaded extensions.
+    pub fn loaded_count(&self) -> usize {
+        self.extensions.len()
+    }
+
+    /// Number of active extensions.
+    pub fn active_count(&self) -> usize {
+        self.extensions
+            .values()
+            .filter(|extension| extension.is_active)
+            .count()
+    }
+
+    /// Number of extensions loaded in dev mode.
+    pub fn dev_mode_count(&self) -> usize {
+        self.extensions
+            .values()
+            .filter(|extension| extension.dev_mode)
+            .count()
+    }
+
+    /// Number of extensions with an attached process.
+    pub fn process_count(&self) -> usize {
+        self.extensions
+            .values()
+            .filter(|extension| extension.process_id.is_some())
+            .count()
+    }
+
+    /// Content-safe extension host summary.
+    pub fn to_text(&self) -> String {
+        format!(
+            "extension_host(loaded={}, active={}, dev_mode={}, processes={}, active_commands={}, active_menu_items={}, active_panels={})",
+            self.loaded_count(),
+            self.active_count(),
+            self.dev_mode_count(),
+            self.process_count(),
+            self.active_commands().len(),
+            self.active_menu_items().len(),
+            self.active_panels().len()
+        )
+    }
 }
 
 impl Default for ExtensionHost {
@@ -672,6 +1018,60 @@ impl ExtensionManifest {
             ContributionPoint::FileType { extensions, .. } => extensions.iter().any(|e| e == ext),
             _ => false,
         })
+    }
+
+    /// Byte length of the extension id without exposing it.
+    pub fn id_len_bytes(&self) -> usize {
+        self.id.len()
+    }
+
+    /// Byte length of the extension name without exposing it.
+    pub fn name_len_bytes(&self) -> usize {
+        self.name.len()
+    }
+
+    /// Byte length of the extension version without exposing it.
+    pub fn version_len_bytes(&self) -> usize {
+        self.version.len()
+    }
+
+    /// Byte length of the description without exposing it.
+    pub fn description_len_bytes(&self) -> usize {
+        self.description.len()
+    }
+
+    /// Returns true when the manifest includes an author.
+    pub fn has_author(&self) -> bool {
+        self.author.is_some()
+    }
+
+    /// Returns true when the manifest includes a license.
+    pub fn has_license(&self) -> bool {
+        self.license.is_some()
+    }
+
+    /// Number of contribution points.
+    pub fn contribution_point_count(&self) -> usize {
+        self.contribution_points.len()
+    }
+
+    /// Content-safe extension manifest summary.
+    pub fn to_text(&self) -> String {
+        format!(
+            "extension_manifest(id_len_bytes={}, name_len_bytes={}, version_len_bytes={}, description_len_bytes={}, has_author={}, has_license={}, contribution_points={}, permissions={}, activation_events={}, commands={}, panels={}, themes={})",
+            self.id_len_bytes(),
+            self.name_len_bytes(),
+            self.version_len_bytes(),
+            self.description_len_bytes(),
+            self.has_author(),
+            self.has_license(),
+            self.contribution_point_count(),
+            self.permissions.len(),
+            self.activation_events.len(),
+            self.commands().len(),
+            self.panels().len(),
+            self.themes().len()
+        )
     }
 }
 
@@ -773,6 +1173,33 @@ pub enum ExtensionState {
     Crashed,
 }
 
+impl ExtensionState {
+    /// Stable extension lifecycle state key.
+    pub fn to_text(&self) -> &'static str {
+        match self {
+            Self::Inactive => "inactive",
+            Self::Activating => "activating",
+            Self::Active => "active",
+            Self::Deactivating => "deactivating",
+            Self::Error(_) => "error",
+            Self::Crashed => "crashed",
+        }
+    }
+
+    /// Returns true when the state carries an error message.
+    pub fn has_error_message(&self) -> bool {
+        matches!(self, Self::Error(_))
+    }
+
+    /// Byte length of the error message without exposing it.
+    pub fn error_message_len_bytes(&self) -> usize {
+        match self {
+            Self::Error(message) => message.len(),
+            _ => 0,
+        }
+    }
+}
+
 /// Diagnostic information for a running extension.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExtensionDiagnostics {
@@ -808,6 +1235,47 @@ impl ExtensionDiagnostics {
         let msg = message.into();
         self.error_count += 1;
         self.last_error = Some(msg);
+    }
+
+    /// Byte length of the extension id without exposing it.
+    pub fn id_len_bytes(&self) -> usize {
+        self.id.len()
+    }
+
+    /// Returns true when activation timing is available.
+    pub fn has_activation_time(&self) -> bool {
+        self.activation_time_ms.is_some()
+    }
+
+    /// Returns true when memory usage is available.
+    pub fn has_memory_usage(&self) -> bool {
+        self.memory_usage_bytes.is_some()
+    }
+
+    /// Returns true when a last error message is stored.
+    pub fn has_last_error(&self) -> bool {
+        self.last_error.is_some()
+    }
+
+    /// Byte length of the last error without exposing it.
+    pub fn last_error_len_bytes(&self) -> usize {
+        self.last_error.as_ref().map_or(0, |error| error.len())
+    }
+
+    /// Content-safe diagnostics summary.
+    pub fn to_text(&self) -> String {
+        format!(
+            "extension_diagnostics(id_len_bytes={}, state={}, has_state_error_message={}, state_error_message_len_bytes={}, has_activation_time={}, has_memory_usage={}, error_count={}, has_last_error={}, last_error_len_bytes={})",
+            self.id_len_bytes(),
+            self.state.to_text(),
+            self.state.has_error_message(),
+            self.state.error_message_len_bytes(),
+            self.has_activation_time(),
+            self.has_memory_usage(),
+            self.error_count,
+            self.has_last_error(),
+            self.last_error_len_bytes()
+        )
     }
 }
 
@@ -903,6 +1371,51 @@ impl ExtensionRegistry {
             .values()
             .filter(|m| m.handles_file_extension(extension))
             .collect()
+    }
+
+    /// Number of registered extensions.
+    pub fn extension_count(&self) -> usize {
+        self.extensions.len()
+    }
+
+    /// Number of diagnostics entries.
+    pub fn diagnostics_count(&self) -> usize {
+        self.diagnostics.len()
+    }
+
+    /// Total recorded extension errors.
+    pub fn total_error_count(&self) -> u32 {
+        self.diagnostics
+            .values()
+            .map(|diagnostics| diagnostics.error_count)
+            .sum()
+    }
+
+    /// Number of extensions currently in an error-like state.
+    pub fn unhealthy_count(&self) -> usize {
+        self.diagnostics
+            .values()
+            .filter(|diagnostics| {
+                matches!(
+                    diagnostics.state,
+                    ExtensionState::Error(_) | ExtensionState::Crashed
+                )
+            })
+            .count()
+    }
+
+    /// Content-safe extension registry summary.
+    pub fn to_text(&self) -> String {
+        format!(
+            "extension_registry(extensions={}, diagnostics={}, commands={}, panels={}, themes={}, total_errors={}, unhealthy={})",
+            self.extension_count(),
+            self.diagnostics_count(),
+            self.commands().len(),
+            self.panels().len(),
+            self.themes().len(),
+            self.total_error_count(),
+            self.unhealthy_count()
+        )
     }
 }
 
@@ -1063,6 +1576,414 @@ impl CrashRecord {
     }
 }
 
+/// Next action for a checked helper process or plugin host handoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HelperPluginNextAction {
+    /// Plugin manifest, permission manifest, IPC schema, and crash policy must be paired first.
+    ConfigurePluginContracts,
+    /// Permission broker grants and process context must be installed before launch.
+    InstallBrokerAndContext,
+    /// Restart, heartbeat, or crash policy should be attached to supervision first.
+    ConfigureSupervisorPolicy,
+    /// Checked helper/plugin launch descriptors can be handed to the native supervisor.
+    SpawnNativeHelper,
+}
+
+impl HelperPluginNextAction {
+    /// Stable key for logs, tests, and generated-agent routing.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::ConfigurePluginContracts => "configure-plugin-contracts",
+            Self::InstallBrokerAndContext => "install-broker-and-context",
+            Self::ConfigureSupervisorPolicy => "configure-supervisor-policy",
+            Self::SpawnNativeHelper => "spawn-native-helper",
+        }
+    }
+}
+
+/// Checked helper/plugin request inside a launch handoff.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HelperPluginRequest {
+    /// Build and validate a helper launch descriptor.
+    LaunchBuilder(HelperProcessLaunchBuilder),
+    /// Use an already-built helper launch descriptor.
+    Launch(HelperProcessLaunch),
+    /// Validate a plugin manifest before loading or spawning its host.
+    PluginManifest(PluginManifest),
+    /// Validate a plugin permission manifest against granted permission kinds.
+    PluginPermissions {
+        /// Permission manifest declared by the plugin/package.
+        manifest: PluginPermissionManifest,
+        /// Permission kinds granted by policy or user approval.
+        granted: Vec<PermissionKind>,
+    },
+    /// Validate an IPC schema used by helper/plugin traffic.
+    IpcSchema(IpcSchema),
+    /// Validate extension crash/restart policy and current crash record together.
+    CrashPolicy {
+        /// Crash policy used by the supervisor.
+        policy: CrashPolicy,
+        /// Optional current crash record for the extension/plugin.
+        record: Option<CrashRecord>,
+    },
+}
+
+impl HelperPluginRequest {
+    /// Validate this request without spawning a process or mutating host state.
+    pub fn validate(&self) -> Result<()> {
+        match self {
+            Self::LaunchBuilder(builder) => builder.validate(),
+            Self::Launch(launch) => launch.validate(),
+            Self::PluginManifest(manifest) => manifest.validate(),
+            Self::PluginPermissions { manifest, granted } => {
+                validate_plugin_permission_manifest(manifest)?;
+                let granted = granted.iter().copied().collect();
+                manifest.validate(&granted).map_err(|missing| {
+                    anyhow::anyhow!(
+                        "plugin permission manifest is missing {} required grants",
+                        missing.len()
+                    )
+                })
+            }
+            Self::IpcSchema(schema) => validate_plugin_ipc_schema(schema),
+            Self::CrashPolicy { policy, record } => {
+                policy.validate()?;
+                if let Some(record) = record {
+                    record.validate()?;
+                    record.should_restart_checked(policy)?;
+                    record.next_restart_delay_checked(policy)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn execution_plan(&self) -> Option<HelperProcessExecutionPlan> {
+        match self {
+            Self::Launch(launch) => Some(launch.execution_plan()),
+            Self::LaunchBuilder(builder) => builder
+                .clone()
+                .build_checked()
+                .ok()
+                .map(|launch| launch.execution_plan()),
+            _ => None,
+        }
+    }
+}
+
+/// Checked handoff for helper-process and plugin-host startup.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HelperPluginHandoff {
+    requests: Vec<HelperPluginRequest>,
+    next_action: HelperPluginNextAction,
+    launch_count: usize,
+    plugin_manifest_count: usize,
+    permission_manifest_count: usize,
+    ipc_schema_count: usize,
+    crash_policy_count: usize,
+    helper_plans: Vec<HelperProcessExecutionPlan>,
+}
+
+impl HelperPluginHandoff {
+    /// Requests included in this handoff.
+    pub fn requests(&self) -> &[HelperPluginRequest] {
+        &self.requests
+    }
+
+    /// Number of checked handoff requests.
+    pub fn request_count(&self) -> usize {
+        self.requests.len()
+    }
+
+    /// Next action builders or agents should take.
+    pub fn next_action(&self) -> HelperPluginNextAction {
+        self.next_action
+    }
+
+    /// Checked helper execution plans derived from launch descriptors.
+    pub fn helper_plans(&self) -> &[HelperProcessExecutionPlan] {
+        &self.helper_plans
+    }
+
+    /// Number of helper launch descriptors in this handoff.
+    pub fn launch_count(&self) -> usize {
+        self.launch_count
+    }
+
+    /// Number of plugin manifests in this handoff.
+    pub fn plugin_manifest_count(&self) -> usize {
+        self.plugin_manifest_count
+    }
+
+    /// Number of plugin permission manifests in this handoff.
+    pub fn permission_manifest_count(&self) -> usize {
+        self.permission_manifest_count
+    }
+
+    /// Number of IPC schemas in this handoff.
+    pub fn ipc_schema_count(&self) -> usize {
+        self.ipc_schema_count
+    }
+
+    /// Number of crash policies in this handoff.
+    pub fn crash_policy_count(&self) -> usize {
+        self.crash_policy_count
+    }
+
+    /// Whether this handoff includes plugin host contracts.
+    pub fn has_plugin_contracts(&self) -> bool {
+        self.plugin_manifest_count > 0
+            || self.permission_manifest_count > 0
+            || self.ipc_schema_count > 0
+    }
+
+    /// Whether this handoff includes supervision or crash restart policy.
+    pub fn has_supervisor_policy(&self) -> bool {
+        self.crash_policy_count > 0
+            || self
+                .helper_plans
+                .iter()
+                .any(HelperProcessExecutionPlan::requires_supervisor_policy)
+    }
+
+    /// Whether any launch plan still needs broker grants or process context.
+    pub fn requires_broker_and_context(&self) -> bool {
+        self.helper_plans
+            .iter()
+            .any(HelperProcessExecutionPlan::requires_broker_and_context)
+    }
+
+    /// Whether checked launch descriptors are ready for a native supervisor.
+    pub fn can_spawn_native_helpers(&self) -> bool {
+        self.next_action == HelperPluginNextAction::SpawnNativeHelper
+    }
+
+    /// Content-safe summary for logs, audits, and generated-agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "helper plugin handoff: {} requests, next action {}, launches {}, plugin manifests {}, permission manifests {}, ipc schemas {}, crash policies {}, broker context {}, supervisor {}",
+            self.request_count(),
+            self.next_action.key(),
+            self.launch_count(),
+            self.plugin_manifest_count(),
+            self.permission_manifest_count(),
+            self.ipc_schema_count(),
+            self.crash_policy_count(),
+            self.requires_broker_and_context(),
+            self.has_supervisor_policy()
+        )
+    }
+}
+
+/// Builder for checked helper-process and plugin-host startup handoffs.
+#[derive(Debug, Clone, Default)]
+pub struct HelperPluginHandoffBuilder {
+    requests: Vec<HelperPluginRequest>,
+}
+
+impl HelperPluginHandoffBuilder {
+    /// Create an empty helper/plugin handoff builder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a helper launch builder.
+    pub fn launch_builder(mut self, builder: HelperProcessLaunchBuilder) -> Self {
+        self.requests
+            .push(HelperPluginRequest::LaunchBuilder(builder));
+        self
+    }
+
+    /// Add an already-built helper launch descriptor.
+    pub fn launch(mut self, launch: HelperProcessLaunch) -> Self {
+        self.requests.push(HelperPluginRequest::Launch(launch));
+        self
+    }
+
+    /// Add a plugin manifest.
+    pub fn plugin_manifest(mut self, manifest: PluginManifest) -> Self {
+        self.requests
+            .push(HelperPluginRequest::PluginManifest(manifest));
+        self
+    }
+
+    /// Add a plugin permission manifest and its granted permission kinds.
+    pub fn plugin_permissions(
+        mut self,
+        manifest: PluginPermissionManifest,
+        granted: impl IntoIterator<Item = PermissionKind>,
+    ) -> Self {
+        self.requests.push(HelperPluginRequest::PluginPermissions {
+            manifest,
+            granted: granted.into_iter().collect(),
+        });
+        self
+    }
+
+    /// Add an IPC schema.
+    pub fn ipc_schema(mut self, schema: IpcSchema) -> Self {
+        self.requests.push(HelperPluginRequest::IpcSchema(schema));
+        self
+    }
+
+    /// Add crash policy without a current crash record.
+    pub fn crash_policy(mut self, policy: CrashPolicy) -> Self {
+        self.requests.push(HelperPluginRequest::CrashPolicy {
+            policy,
+            record: None,
+        });
+        self
+    }
+
+    /// Add crash policy with a current crash record.
+    pub fn crash_policy_record(mut self, policy: CrashPolicy, record: CrashRecord) -> Self {
+        self.requests.push(HelperPluginRequest::CrashPolicy {
+            policy,
+            record: Some(record),
+        });
+        self
+    }
+
+    /// Validate without consuming this builder.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.requests.is_empty(),
+            "helper plugin handoff must include at least one request"
+        );
+        anyhow::ensure!(
+            self.requests.len() <= 32,
+            "helper plugin handoff cannot include more than 32 requests"
+        );
+        for request in &self.requests {
+            request.validate()?;
+        }
+        Ok(())
+    }
+
+    /// Build the checked helper/plugin handoff.
+    pub fn build_checked(self) -> Result<HelperPluginHandoff> {
+        self.validate()?;
+
+        let mut launch_count = 0;
+        let mut plugin_manifest_count = 0;
+        let mut permission_manifest_count = 0;
+        let mut ipc_schema_count = 0;
+        let mut crash_policy_count = 0;
+        let mut helper_plans = Vec::new();
+
+        for request in &self.requests {
+            match request {
+                HelperPluginRequest::LaunchBuilder(_) | HelperPluginRequest::Launch(_) => {
+                    launch_count += 1;
+                    if let Some(plan) = request.execution_plan() {
+                        helper_plans.push(plan);
+                    }
+                }
+                HelperPluginRequest::PluginManifest(_) => plugin_manifest_count += 1,
+                HelperPluginRequest::PluginPermissions { .. } => permission_manifest_count += 1,
+                HelperPluginRequest::IpcSchema(_) => ipc_schema_count += 1,
+                HelperPluginRequest::CrashPolicy { .. } => crash_policy_count += 1,
+            }
+        }
+
+        let next_action = helper_plugin_next_action(
+            &helper_plans,
+            plugin_manifest_count,
+            permission_manifest_count,
+            ipc_schema_count,
+            crash_policy_count,
+        );
+
+        Ok(HelperPluginHandoff {
+            requests: self.requests,
+            next_action,
+            launch_count,
+            plugin_manifest_count,
+            permission_manifest_count,
+            ipc_schema_count,
+            crash_policy_count,
+            helper_plans,
+        })
+    }
+}
+
+fn helper_plugin_next_action(
+    plans: &[HelperProcessExecutionPlan],
+    plugin_manifest_count: usize,
+    permission_manifest_count: usize,
+    ipc_schema_count: usize,
+    crash_policy_count: usize,
+) -> HelperPluginNextAction {
+    if plans
+        .iter()
+        .any(HelperProcessExecutionPlan::requires_plugin_host_contracts)
+        || plugin_manifest_count > 0
+        || permission_manifest_count > 0
+        || ipc_schema_count > 0
+    {
+        HelperPluginNextAction::ConfigurePluginContracts
+    } else if plans
+        .iter()
+        .any(HelperProcessExecutionPlan::requires_broker_and_context)
+    {
+        HelperPluginNextAction::InstallBrokerAndContext
+    } else if crash_policy_count > 0
+        || plans
+            .iter()
+            .any(HelperProcessExecutionPlan::requires_supervisor_policy)
+    {
+        HelperPluginNextAction::ConfigureSupervisorPolicy
+    } else {
+        HelperPluginNextAction::SpawnNativeHelper
+    }
+}
+
+fn validate_plugin_permission_manifest(manifest: &PluginPermissionManifest) -> Result<()> {
+    validate_plugin_id(&manifest.plugin_id, "plugin permission manifest id")?;
+    anyhow::ensure!(
+        manifest.required.len() <= 64,
+        "plugin permission manifest cannot include more than 64 required permissions"
+    );
+    anyhow::ensure!(
+        manifest.optional.len() <= 64,
+        "plugin permission manifest cannot include more than 64 optional permissions"
+    );
+    let all_permissions = manifest.all_permissions();
+    anyhow::ensure!(
+        all_permissions.len() == manifest.required.len() + manifest.optional.len(),
+        "plugin permission manifest cannot duplicate permissions across required and optional sets"
+    );
+    Ok(())
+}
+
+fn validate_plugin_ipc_schema(schema: &IpcSchema) -> Result<()> {
+    anyhow::ensure!(
+        schema.version > 0,
+        "plugin IPC schema version must be greater than zero"
+    );
+    anyhow::ensure!(
+        schema.min_compatible > 0,
+        "plugin IPC schema minimum compatible version must be greater than zero"
+    );
+    anyhow::ensure!(
+        schema.min_compatible <= schema.version,
+        "plugin IPC schema minimum compatible version cannot exceed current version"
+    );
+    anyhow::ensure!(
+        schema.message_types.len() <= 128,
+        "plugin IPC schema cannot include more than 128 message types"
+    );
+    let mut seen = HashSet::new();
+    for message_type in &schema.message_types {
+        validate_plugin_id(message_type, "plugin IPC message type")?;
+        anyhow::ensure!(
+            seen.insert(message_type),
+            "plugin IPC schema message type is duplicated"
+        );
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Plugin API Version Negotiation
 // ---------------------------------------------------------------------------
@@ -1146,6 +2067,15 @@ mod tests {
 
         assert!(
             PluginManifest {
+                id: "../outside".to_string(),
+                ..valid.clone()
+            }
+            .validate()
+            .is_err()
+        );
+
+        assert!(
+            PluginManifest {
                 id: " com.example.plugin".to_string(),
                 ..valid.clone()
             }
@@ -1184,6 +2114,48 @@ mod tests {
             .validate()
             .is_err()
         );
+        assert!(
+            PluginManifest {
+                capabilities: vec![Capability::ShellExecute, Capability::ShellExecute],
+                ..valid.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            PluginManifest {
+                args: vec!["--flag".to_string(); 1_025],
+                ..valid
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn plugin_manifest_load_is_bounded_and_rejects_symlinks() {
+        let root =
+            std::env::temp_dir().join(format!("kael-plugin-manifest-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let oversized = root.join("oversized.json");
+        std::fs::write(
+            &oversized,
+            vec![b' '; MAX_PLUGIN_MANIFEST_BYTES as usize + 1],
+        )
+        .unwrap();
+        assert!(PluginManifest::load(&oversized).is_err());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let target = root.join("target.json");
+            std::fs::write(&target, b"{}").unwrap();
+            let link = root.join("link.json");
+            symlink(&target, &link).unwrap();
+            assert!(PluginManifest::load(&link).is_err());
+        }
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -1385,6 +2357,195 @@ mod tests {
         assert_eq!(host.active_commands().len(), 1);
         assert_eq!(host.active_menu_items().len(), 1);
         assert_eq!(host.active_panels().len(), 1);
+    }
+
+    #[test]
+    fn plugin_manifest_and_contribution_summary_is_content_safe() {
+        let command = ContributedCommand {
+            id: "private.customer.export".to_string(),
+            title: "Export Secret Customer List".to_string(),
+            keybinding: Some("cmd+shift+e".to_string()),
+        };
+        let menu_item = ContributedMenuItem {
+            target_menu: "private/tools".to_string(),
+            label: "Secret Export".to_string(),
+            command_id: "private.customer.export".to_string(),
+        };
+        let panel = ContributedPanel {
+            id: "private.customer.panel".to_string(),
+            title: "Secret Customer Panel".to_string(),
+            default_position: PanelPosition::Floating,
+        };
+        let contributions = Contributions {
+            commands: vec![command.clone()],
+            menu_items: vec![menu_item.clone()],
+            panels: vec![panel.clone()],
+            settings_schema: Some(serde_json::json!({ "type": "object" })),
+        };
+        let manifest = PluginManifest::builder(
+            "com.private.customer-plugin",
+            "Secret Customer Plugin",
+            "1.2.3",
+            "1.0.0",
+            "/private/extensions/customer-plugin/main.wasm",
+            ExecutionModel::Wasm,
+        )
+        .description("Handles confidential customer workflows")
+        .author("Private Author")
+        .arg("--customer-token=secret")
+        .capability(Capability::ClipboardRead)
+        .contributions(contributions.clone())
+        .build()
+        .unwrap();
+
+        assert_eq!(ExecutionModel::Wasm.to_text(), "wasm");
+        assert_eq!(PanelPosition::Floating.to_text(), "floating");
+        assert_eq!(manifest.capability_count(), 1);
+        assert_eq!(manifest.arg_count(), 1);
+        assert_eq!(contributions.command_count(), 1);
+        assert_eq!(contributions.menu_item_count(), 1);
+        assert_eq!(contributions.panel_count(), 1);
+        assert!(contributions.has_settings_schema());
+
+        let command_summary = command.to_text();
+        assert!(command_summary.contains("has_keybinding=true"));
+        assert!(!command_summary.contains("private.customer"));
+        assert!(!command_summary.contains("Secret Customer"));
+        assert!(!command_summary.contains("cmd+shift+e"));
+
+        let menu_summary = menu_item.to_text();
+        assert!(!menu_summary.contains("private/tools"));
+        assert!(!menu_summary.contains("Secret Export"));
+        assert!(!menu_summary.contains("private.customer"));
+
+        let panel_summary = panel.to_text();
+        assert!(panel_summary.contains("position=floating"));
+        assert!(!panel_summary.contains("Secret Customer"));
+        assert!(!panel_summary.contains("private.customer"));
+
+        let manifest_summary = manifest.to_text();
+        assert!(manifest_summary.contains("execution_model=wasm"));
+        assert!(manifest_summary.contains("capabilities=1"));
+        assert!(manifest_summary.contains("args=1"));
+        assert!(manifest_summary.contains("has_description=true"));
+        assert!(manifest_summary.contains("has_author=true"));
+        assert!(manifest_summary.contains("commands=1"));
+        assert!(!manifest_summary.contains("Secret Customer"));
+        assert!(!manifest_summary.contains("confidential"));
+        assert!(!manifest_summary.contains("Private Author"));
+        assert!(!manifest_summary.contains("/private/extensions"));
+        assert!(!manifest_summary.contains("customer-token"));
+    }
+
+    #[test]
+    fn extension_host_registry_and_diagnostics_summary_is_content_safe() {
+        let mut host = ExtensionHost::new();
+        let manifest = PluginManifest::builder(
+            "com.private.active",
+            "Private Active Extension",
+            "1.0.0",
+            "1.0.0",
+            "private.wasm",
+            ExecutionModel::Wasm,
+        )
+        .command(ContributedCommand {
+            id: "private.run".to_string(),
+            title: "Run Private Command".to_string(),
+            keybinding: None,
+        })
+        .build()
+        .unwrap();
+
+        host.load_manifest_with_options(
+            manifest.clone(),
+            Some(PathBuf::from("/private/extensions/active")),
+            true,
+        )
+        .unwrap();
+        host.activate("com.private.active").unwrap();
+
+        let info_summary = host.get("com.private.active").unwrap().to_text();
+        assert!(info_summary.contains("active=true"));
+        assert!(info_summary.contains("has_load_path=true"));
+        assert!(info_summary.contains("dev_mode=true"));
+        assert!(!info_summary.contains("Private Active"));
+        assert!(!info_summary.contains("/private/extensions"));
+        assert!(!info_summary.contains("private.run"));
+
+        assert_eq!(host.loaded_count(), 1);
+        assert_eq!(host.active_count(), 1);
+        assert_eq!(host.dev_mode_count(), 1);
+        assert_eq!(host.process_count(), 0);
+        let host_summary = host.to_text();
+        assert_eq!(
+            host_summary,
+            "extension_host(loaded=1, active=1, dev_mode=1, processes=0, active_commands=1, active_menu_items=0, active_panels=0)"
+        );
+
+        let mut registry = ExtensionRegistry::new();
+        let extension_manifest = ExtensionManifest {
+            id: "com.private.registry".to_string(),
+            name: "Private Registry Extension".to_string(),
+            version: "2.0.0".to_string(),
+            description: "Private registry description".to_string(),
+            author: Some("Private Registry Author".to_string()),
+            license: Some("Private-License".to_string()),
+            contribution_points: vec![
+                ContributionPoint::Command {
+                    id: "private.registry.command".to_string(),
+                    title: "Private Registry Command".to_string(),
+                    keybinding: Some("cmd+r".to_string()),
+                },
+                ContributionPoint::Panel {
+                    id: "private.registry.panel".to_string(),
+                    title: "Private Registry Panel".to_string(),
+                    icon: Some("private-icon".to_string()),
+                },
+            ],
+            permissions: vec!["private.permission".to_string()],
+            activation_events: vec!["onPrivateData".to_string()],
+        };
+        registry.register(extension_manifest.clone()).unwrap();
+        registry
+            .update_diagnostics(
+                "com.private.registry",
+                ExtensionState::Error("Secret extension failure".to_string()),
+            )
+            .unwrap();
+
+        let manifest_summary = extension_manifest.to_text();
+        assert!(manifest_summary.contains("contribution_points=2"));
+        assert!(manifest_summary.contains("commands=1"));
+        assert!(manifest_summary.contains("panels=1"));
+        assert!(!manifest_summary.contains("Private Registry"));
+        assert!(!manifest_summary.contains("private.registry"));
+        assert!(!manifest_summary.contains("Private-License"));
+        assert!(!manifest_summary.contains("onPrivateData"));
+
+        let diagnostics = registry.get_diagnostics("com.private.registry").unwrap();
+        assert_eq!(diagnostics.state.to_text(), "error");
+        assert!(diagnostics.state.has_error_message());
+        assert_eq!(
+            diagnostics.state.error_message_len_bytes(),
+            "Secret extension failure".len()
+        );
+        assert_eq!(diagnostics.error_count, 1);
+        assert!(diagnostics.has_last_error());
+        let diagnostics_summary = diagnostics.to_text();
+        assert!(diagnostics_summary.contains("state=error"));
+        assert!(diagnostics_summary.contains("error_count=1"));
+        assert!(!diagnostics_summary.contains("Secret extension failure"));
+        assert!(!diagnostics_summary.contains("com.private.registry"));
+
+        assert_eq!(registry.extension_count(), 1);
+        assert_eq!(registry.diagnostics_count(), 1);
+        assert_eq!(registry.total_error_count(), 1);
+        assert_eq!(registry.unhealthy_count(), 1);
+        let registry_summary = registry.to_text();
+        assert_eq!(
+            registry_summary,
+            "extension_registry(extensions=1, diagnostics=1, commands=1, panels=1, themes=0, total_errors=1, unhealthy=1)"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1946,5 +3107,131 @@ mod tests {
         let json = serde_json::to_string(&policy).unwrap();
         let decoded: CrashPolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(policy, decoded);
+    }
+
+    #[test]
+    fn helper_plugin_handoff_validates_plugin_host_startup() {
+        let executable = std::env::current_exe().unwrap();
+        let manifest = PluginManifestBuilder::new(
+            "com.example.notes",
+            "Notes Plugin",
+            "1.0.0",
+            "1.0.0",
+            "notes-plugin",
+            ExecutionModel::ExternalProcess,
+        )
+        .capability(Capability::Network {
+            hosts: vec!["api.example.com".into()],
+        })
+        .build()
+        .unwrap();
+        let permission_manifest = PluginPermissionManifest {
+            plugin_id: "com.example.notes".into(),
+            required: vec![PermissionKind::Network],
+            optional: vec![PermissionKind::Notifications],
+        };
+        let schema = IpcSchema::new(2, 1, vec!["plugin.ping".into(), "plugin.progress".into()]);
+
+        let handoff = HelperPluginHandoffBuilder::new()
+            .launch_builder(HelperProcessLaunch::plugin_host(
+                crate::ProcessId(90),
+                "notes-plugin-host",
+                &executable,
+            ))
+            .plugin_manifest(manifest)
+            .plugin_permissions(permission_manifest, [PermissionKind::Network])
+            .ipc_schema(schema)
+            .crash_policy_record(
+                CrashPolicy::default(),
+                CrashRecord::new_checked("com.example.notes").unwrap(),
+            )
+            .build_checked()
+            .unwrap();
+
+        assert_eq!(handoff.request_count(), 5);
+        assert_eq!(handoff.launch_count(), 1);
+        assert_eq!(handoff.plugin_manifest_count(), 1);
+        assert_eq!(handoff.permission_manifest_count(), 1);
+        assert_eq!(handoff.ipc_schema_count(), 1);
+        assert_eq!(handoff.crash_policy_count(), 1);
+        assert!(handoff.has_plugin_contracts());
+        assert!(handoff.has_supervisor_policy());
+        assert!(handoff.requires_broker_and_context());
+        assert!(!handoff.can_spawn_native_helpers());
+        assert_eq!(
+            handoff.next_action(),
+            HelperPluginNextAction::ConfigurePluginContracts
+        );
+        assert_eq!(
+            HelperPluginNextAction::SpawnNativeHelper.key(),
+            "spawn-native-helper"
+        );
+        assert_eq!(
+            handoff.to_text(),
+            "helper plugin handoff: 5 requests, next action configure-plugin-contracts, launches 1, plugin manifests 1, permission manifests 1, ipc schemas 1, crash policies 1, broker context true, supervisor true"
+        );
+
+        let utility = HelperPluginHandoffBuilder::new()
+            .launch_builder(HelperProcessLaunch::utility(
+                crate::ProcessId(91),
+                "thumbnailer",
+                &executable,
+            ))
+            .build_checked()
+            .unwrap();
+        assert_eq!(
+            utility.next_action(),
+            HelperPluginNextAction::SpawnNativeHelper
+        );
+        assert!(!utility.has_supervisor_policy());
+        assert!(utility.can_spawn_native_helpers());
+    }
+
+    #[test]
+    fn helper_plugin_handoff_rejects_invalid_generated_contracts() {
+        let executable = std::env::current_exe().unwrap();
+        let permission_manifest = PluginPermissionManifest {
+            plugin_id: "com.example.notes".into(),
+            required: vec![PermissionKind::Network],
+            optional: Vec::new(),
+        };
+
+        assert!(
+            HelperPluginHandoffBuilder::new()
+                .plugin_permissions(permission_manifest, [])
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            HelperPluginHandoffBuilder::new()
+                .ipc_schema(IpcSchema::new(
+                    1,
+                    1,
+                    vec!["plugin.ping".into(), "plugin.ping".into()],
+                ))
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            HelperPluginHandoffBuilder::new()
+                .crash_policy(CrashPolicy {
+                    max_restarts: 2,
+                    restart_delay_ms: 0,
+                    backoff_factor: 2.0,
+                })
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            HelperPluginHandoffBuilder::new()
+                .launch_builder(HelperProcessLaunch::utility(
+                    crate::ProcessId(92),
+                    "bad\0helper",
+                    &executable,
+                ))
+                .build_checked()
+                .is_err()
+        );
+        assert!(HelperPluginHandoffBuilder::new().build_checked().is_err());
     }
 }

@@ -1,10 +1,22 @@
 //! Hover card component with popover on hover.
 
 use kael::{prelude::FluentBuilder as _, *};
-use std::time::Duration;
+use std::{panic::Location, time::Duration};
 
 use crate::overlays::layer::{LayerAlignment, LayerPlacement};
 use crate::theme::Theme;
+
+struct HoverCardContentView {
+    content: Option<AnyElement>,
+}
+
+impl Render for HoverCardContentView {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        self.content
+            .take()
+            .unwrap_or_else(|| div().into_any_element())
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum HoverCardPosition {
@@ -103,6 +115,7 @@ pub struct HoverCardReturn {
 
 #[derive(IntoElement)]
 pub struct HoverCard {
+    id: ElementId,
     trigger: AnyElement,
     content: AnyElement,
     position: HoverCardPosition,
@@ -115,13 +128,24 @@ pub struct HoverCard {
     is_default_open: bool,
     hover_indication: HoverCardHoverIndication,
     on_open_change: Option<Box<dyn Fn(bool, &mut Window, &mut App)>>,
-    _arrow: bool,
+    arrow: bool,
     style: StyleRefinement,
 }
 
 impl HoverCard {
+    #[track_caller]
     pub fn new() -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "hover-card:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             trigger: div().into_any_element(),
             content: div().into_any_element(),
             position: HoverCardPosition::default(),
@@ -134,7 +158,7 @@ impl HoverCard {
             is_default_open: false,
             hover_indication: HoverCardHoverIndication::Auto,
             on_open_change: None,
-            _arrow: true,
+            arrow: true,
             style: StyleRefinement::default(),
         }
     }
@@ -193,7 +217,7 @@ impl HoverCard {
     }
 
     pub fn arrow(mut self, show_arrow: bool) -> Self {
-        self._arrow = show_arrow;
+        self.arrow = show_arrow;
         self
     }
 
@@ -309,8 +333,8 @@ impl Styled for HoverCard {
 }
 
 impl RenderOnce for HoverCard {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = Theme::of(cx);
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx).clone();
         let user_style = self.style;
         let position = match self.position {
             HoverCardPosition::Above => HoverCardPosition::Top,
@@ -322,15 +346,60 @@ impl RenderOnce for HoverCard {
         let is_open = self.is_enabled && self.is_open.unwrap_or(self.is_default_open);
         let show_hover_indication =
             matches!(self.hover_indication, HoverCardHoverIndication::Always);
-        let _ = (
-            self.open_delay,
-            self.close_delay,
-            self.focus_trigger,
-            self.on_open_change,
-        );
-
-        div()
+        let open_delay = self.open_delay;
+        let close_delay = self.close_delay;
+        let on_open_change = self.on_open_change;
+        let arrow = self.arrow;
+        let focus_behavior = match self.focus_trigger {
+            HoverCardFocusTrigger::Auto => TooltipFocusBehavior::Auto,
+            HoverCardFocusTrigger::Always => TooltipFocusBehavior::Always,
+            HoverCardFocusTrigger::Never => TooltipFocusBehavior::Never,
+        };
+        let focus_handle = window
+            .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone();
+        let card = div()
             .relative()
+            .min_w(px(200.0))
+            .max_w(px(400.0))
+            .p(px(12.0))
+            .bg(theme.tokens.popover)
+            .rounded(theme.tokens.radius_lg)
+            .shadow(theme.tokens.shadow_md.to_vec())
+            .map(|mut this| {
+                this.style().refine(&user_style);
+                this
+            })
+            .when(arrow, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .size(px(8.0))
+                        .bg(theme.tokens.popover)
+                        .rotate(45.0)
+                        .when(position == HoverCardPosition::Bottom, |this| {
+                            this.top(px(-4.0)).left(relative(0.5)).ml(px(-4.0))
+                        })
+                        .when(position == HoverCardPosition::Top, |this| {
+                            this.bottom(px(-4.0)).left(relative(0.5)).ml(px(-4.0))
+                        })
+                        .when(position == HoverCardPosition::Left, |this| {
+                            this.right(px(-4.0)).top(relative(0.5)).mt(px(-4.0))
+                        })
+                        .when(position == HoverCardPosition::Right, |this| {
+                            this.left(px(-4.0)).top(relative(0.5)).mt(px(-4.0))
+                        }),
+                )
+            })
+            .child(self.content);
+
+        let root = div()
+            .relative()
+            .accessibility(AccessibilityAttributes::new(AccessibilityRole::Group))
+            .when(focus_behavior != TooltipFocusBehavior::Never, |this| {
+                this.track_focus(&focus_handle).tab_stop(false)
+            })
             .child(
                 div()
                     .when(show_hover_indication, |this| {
@@ -338,50 +407,65 @@ impl RenderOnce for HoverCard {
                     })
                     .child(self.trigger),
             )
-            .when(is_open, |this: Div| {
-                this.child(
-                    div()
-                        .absolute()
-                        .when(position == HoverCardPosition::Bottom, |this: Div| {
-                            this.top_full().mt(px(8.0))
-                        })
-                        .when(position == HoverCardPosition::Top, |this: Div| {
-                            this.bottom_full().mb(px(8.0))
-                        })
-                        .when(position == HoverCardPosition::Left, |this: Div| {
-                            this.right_full().mr(px(8.0))
-                        })
-                        .when(position == HoverCardPosition::Right, |this: Div| {
-                            this.left_full().ml(px(8.0))
-                        })
-                        .when(
-                            (position == HoverCardPosition::Top
-                                || position == HoverCardPosition::Bottom)
-                                && self.alignment == HoverCardAlignment::Start,
-                            |this: Div| this.left_0(),
-                        )
-                        .when(
-                            (position == HoverCardPosition::Top
-                                || position == HoverCardPosition::Bottom)
-                                && self.alignment == HoverCardAlignment::End,
-                            |this: Div| this.right_0(),
-                        )
-                        .child(
-                            div()
-                                .min_w(px(200.0))
-                                .max_w(px(400.0))
-                                .p(px(12.0))
-                                .bg(theme.tokens.popover)
-                                .rounded(theme.tokens.radius_lg)
-                                .shadow(theme.tokens.shadow_md.to_vec())
-                                .map(|this| {
-                                    let mut div = this;
-                                    div.style().refine(&user_style);
-                                    div
-                                })
-                                .child(self.content),
-                        ),
+            .id(self.id);
+
+        if is_open {
+            root.child(
+                div()
+                    .absolute()
+                    .when(position == HoverCardPosition::Bottom, |this| {
+                        this.top_full().mt(px(8.0))
+                    })
+                    .when(position == HoverCardPosition::Top, |this| {
+                        this.bottom_full().mb(px(8.0))
+                    })
+                    .when(position == HoverCardPosition::Left, |this| {
+                        this.right_full().mr(px(8.0))
+                    })
+                    .when(position == HoverCardPosition::Right, |this| {
+                        this.left_full().ml(px(8.0))
+                    })
+                    .when(
+                        matches!(position, HoverCardPosition::Top | HoverCardPosition::Bottom)
+                            && self.alignment == HoverCardAlignment::Start,
+                        |this| this.left_0(),
+                    )
+                    .when(
+                        matches!(position, HoverCardPosition::Top | HoverCardPosition::Bottom)
+                            && self.alignment == HoverCardAlignment::End,
+                        |this| this.right_0(),
+                    )
+                    .when(
+                        matches!(position, HoverCardPosition::Top | HoverCardPosition::Bottom)
+                            && self.alignment == HoverCardAlignment::Center,
+                        |this| this.left_0().right_0().flex().justify_center(),
+                    )
+                    .when(
+                        matches!(position, HoverCardPosition::Left | HoverCardPosition::Right)
+                            && self.alignment == HoverCardAlignment::Center,
+                        |this| this.top_0().bottom_0().flex().items_center(),
+                    )
+                    .child(card),
+            )
+        } else if self.is_enabled {
+            let card_view = cx.new(|_| HoverCardContentView {
+                content: Some(card.into_any_element()),
+            });
+            let build_card = move || card_view.clone();
+            if let Some(handler) = on_open_change {
+                root.hoverable_tooltip_element_with_options(
+                    open_delay,
+                    close_delay,
+                    move |open, window, cx| handler(open, window, cx),
+                    build_card,
                 )
-            })
+                .tooltip_focus_behavior(focus_behavior)
+            } else {
+                root.hoverable_tooltip_element_with_delays(open_delay, close_delay, build_card)
+                    .tooltip_focus_behavior(focus_behavior)
+            }
+        } else {
+            root
+        }
     }
 }

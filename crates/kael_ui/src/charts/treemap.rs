@@ -1,6 +1,9 @@
 //! Squarified treemap chart for hierarchical data visualization.
 
-use crate::theme::Theme;
+use crate::{
+    charts::{finite_or_zero, readable_text_color},
+    theme::Theme,
+};
 use kael::{prelude::FluentBuilder as _, *};
 
 const CHART_COLORS: [u32; 8] = crate::astryx::CHART_PALETTE;
@@ -25,7 +28,7 @@ impl TreeMapNode {
     pub fn new(label: impl Into<SharedString>, value: f64) -> Self {
         Self {
             label: label.into(),
-            value: value.max(0.0),
+            value: finite_or_zero(value).max(0.0),
             children: Vec::new(),
             color: None,
         }
@@ -43,9 +46,17 @@ impl TreeMapNode {
 
     fn total_value(&self) -> f64 {
         if self.children.is_empty() {
-            self.value
+            finite_or_zero(self.value).max(0.0)
         } else {
             self.children.iter().map(|c| c.total_value()).sum()
+        }
+    }
+
+    fn leaf_count(&self) -> usize {
+        if self.children.is_empty() {
+            usize::from(self.total_value() > 0.0)
+        } else {
+            self.children.iter().map(Self::leaf_count).sum()
         }
     }
 }
@@ -305,12 +316,22 @@ impl TreeMap {
     }
 
     pub fn padding(mut self, padding: Pixels) -> Self {
-        self.padding = padding;
+        let value = f32::from(padding);
+        self.padding = if value.is_finite() && value >= 0.0 {
+            padding
+        } else {
+            px(2.0)
+        };
         self
     }
 
     pub fn min_cell_size(mut self, size: Pixels) -> Self {
-        self.min_cell_size = size;
+        let value = f32::from(size);
+        self.min_cell_size = if value.is_finite() && value >= 0.0 {
+            size
+        } else {
+            px(20.0)
+        };
         self
     }
 }
@@ -331,10 +352,24 @@ impl RenderOnce for TreeMap {
         let pad = pixels_to_f32(self.padding);
         let min_cell = pixels_to_f32(self.min_cell_size);
         let border_color = theme.tokens.background;
+        let leaf_count = data.iter().map(TreeMapNode::leaf_count).sum::<usize>();
+        let total_value = data.iter().map(TreeMapNode::total_value).sum::<f64>();
+        let is_empty = leaf_count == 0 || total_value <= 0.0;
+        let description = if is_empty {
+            "Treemap. No data".to_string()
+        } else {
+            format!("Treemap with {leaf_count} items totaling {total_value:.2}")
+        };
 
         div()
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Image)
+                    .label("Treemap")
+                    .description(description),
+            )
             .w_full()
             .h(px(300.0))
+            .relative()
             .overflow_hidden()
             .bg(theme.tokens.background)
             .rounded(px(6.0))
@@ -391,16 +426,12 @@ impl RenderOnce for TreeMap {
                                 }
 
                                 let label_text = rect.label.clone();
-                                let contrast = if rect.color.l > 0.5 {
-                                    hsla(0.0, 0.0, 0.1, 1.0)
-                                } else {
-                                    hsla(0.0, 0.0, 0.95, 1.0)
-                                };
+                                let contrast = readable_text_color(rect.color);
 
                                 let font_size = if rect.w > 80.0 && rect.h > 30.0 {
                                     12.0
                                 } else {
-                                    10.0
+                                    11.0
                                 };
 
                                 let text_style = window.text_style();
@@ -435,8 +466,71 @@ impl RenderOnce for TreeMap {
                     },
                 )
                 .absolute()
-                .inset_0()
-                .size_full(),
+                .inset_0(),
             )
+            .when(is_empty, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_sm()
+                        .text_color(theme.tokens.muted_foreground)
+                        .child("No data"),
+                )
+            })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn hierarchy_reports_positive_leaves_and_total() {
+        let root = TreeMapNode::new("root", 999.0).children(vec![
+            TreeMapNode::new("one", 2.0),
+            TreeMapNode::new("zero", 0.0),
+            TreeMapNode::new("group", 0.0).children(vec![TreeMapNode::new("two", 3.0)]),
+        ]);
+        assert_eq!(root.leaf_count(), 2);
+        assert_eq!(root.total_value(), 5.0);
+    }
+
+    #[::core::prelude::v1::test]
+    fn invalid_geometry_uses_safe_defaults() {
+        let chart = TreeMap::new().padding(px(f32::NAN)).min_cell_size(px(-1.0));
+        assert_eq!(f32::from(chart.padding), 2.0);
+        assert_eq!(f32::from(chart.min_cell_size), 20.0);
+    }
+
+    #[::core::prelude::v1::test]
+    fn layout_only_emits_finite_positive_rectangles() {
+        let nodes = vec![TreeMapNode::new("one", 3.0), TreeMapNode::new("two", 2.0)];
+        let mut rects = Vec::new();
+        let mut depth_index = 0;
+        squarify_layout(
+            &nodes,
+            0.0,
+            0.0,
+            200.0,
+            120.0,
+            &[],
+            &mut depth_index,
+            2.0,
+            1.0,
+            &mut rects,
+        );
+        assert_eq!(rects.len(), 2);
+        assert!(rects.iter().all(|rect| {
+            rect.x.is_finite()
+                && rect.y.is_finite()
+                && rect.w.is_finite()
+                && rect.h.is_finite()
+                && rect.w > 0.0
+                && rect.h > 0.0
+        }));
     }
 }

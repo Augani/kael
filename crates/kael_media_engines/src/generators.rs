@@ -12,7 +12,7 @@ use crate::compositor::FrameProvider;
 
 /// Fill an image with a solid color.
 pub fn solid(color: [f32; 4], width: u32, height: u32) -> Image {
-    Image::filled(width, height, color)
+    Image::try_filled(width, height, sanitize_color(color)).unwrap_or_else(|_| Image::new(0, 0))
 }
 
 /// A two-color linear gradient along the horizontal (default) or vertical axis.
@@ -23,7 +23,11 @@ pub fn linear_gradient(
     width: u32,
     height: u32,
 ) -> Image {
-    let mut image = Image::new(width, height);
+    let Ok(mut image) = Image::try_new(width, height) else {
+        return Image::new(0, 0);
+    };
+    let start = sanitize_color(start);
+    let end = sanitize_color(end);
     for y in 0..height {
         for x in 0..width {
             let t = if vertical {
@@ -33,7 +37,10 @@ pub fn linear_gradient(
             };
             let mut color = [0.0f32; 4];
             for channel in 0..4 {
-                color[channel] = start[channel] * (1.0 - t) + end[channel] * t;
+                color[channel] = finite_channel(
+                    start[channel] * (1.0 - t) + end[channel] * t,
+                    start[channel],
+                );
             }
             image.pixels[(y * width + x) as usize] = color;
         }
@@ -52,7 +59,11 @@ fn axis_fraction(position: u32, extent: u32) -> f32 {
 /// A two-color checkerboard test pattern with `cell`-pixel squares.
 pub fn checkerboard(a: [f32; 4], b: [f32; 4], cell: u32, width: u32, height: u32) -> Image {
     let cell = cell.max(1);
-    let mut image = Image::new(width, height);
+    let Ok(mut image) = Image::try_new(width, height) else {
+        return Image::new(0, 0);
+    };
+    let a = sanitize_color(a);
+    let b = sanitize_color(b);
     for y in 0..height {
         for x in 0..width {
             let even = ((x / cell) + (y / cell)).is_multiple_of(2);
@@ -68,7 +79,11 @@ pub fn radial_gradient(center: [f32; 4], edge: [f32; 4], width: u32, height: u32
     let cx = (width as f32 - 1.0) / 2.0;
     let cy = (height as f32 - 1.0) / 2.0;
     let max_distance = (cx * cx + cy * cy).sqrt().max(f32::EPSILON);
-    let mut image = Image::new(width, height);
+    let Ok(mut image) = Image::try_new(width, height) else {
+        return Image::new(0, 0);
+    };
+    let center = sanitize_color(center);
+    let edge = sanitize_color(edge);
     for y in 0..height {
         for x in 0..width {
             let dx = x as f32 - cx;
@@ -76,7 +91,10 @@ pub fn radial_gradient(center: [f32; 4], edge: [f32; 4], width: u32, height: u32
             let t = ((dx * dx + dy * dy).sqrt() / max_distance).min(1.0);
             let mut color = [0.0f32; 4];
             for channel in 0..4 {
-                color[channel] = center[channel] * (1.0 - t) + edge[channel] * t;
+                color[channel] = finite_channel(
+                    center[channel] * (1.0 - t) + edge[channel] * t,
+                    center[channel],
+                );
             }
             image.pixels[(y * width + x) as usize] = color;
         }
@@ -97,7 +115,9 @@ pub fn color_bars(width: u32, height: u32) -> Image {
         [0.75, 0.0, 0.0],
         [0.0, 0.0, 0.75],
     ];
-    let mut image = Image::new(width, height);
+    let Ok(mut image) = Image::try_new(width, height) else {
+        return Image::new(0, 0);
+    };
     if width == 0 || height == 0 {
         return image;
     }
@@ -109,6 +129,17 @@ pub fn color_bars(width: u32, height: u32) -> Image {
         }
     }
     image
+}
+
+fn sanitize_color(mut color: [f32; 4]) -> [f32; 4] {
+    for (index, channel) in color.iter_mut().enumerate() {
+        *channel = finite_channel(*channel, if index == 3 { 1.0 } else { 0.0 });
+    }
+    color
+}
+
+fn finite_channel(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() { value } else { fallback }
 }
 
 /// A procedural source: the parsed form of a generator clip's `source` string.
@@ -221,7 +252,11 @@ fn parse_color(text: &str) -> Option<[f32; 4]> {
     }
     let mut color = [0.0f32; 4];
     for (channel, part) in parts.iter().enumerate() {
-        color[channel] = part.trim().parse::<f32>().ok()?;
+        let value = part.trim().parse::<f32>().ok()?;
+        if !value.is_finite() {
+            return None;
+        }
+        color[channel] = value;
     }
     Some(color)
 }
@@ -372,6 +407,8 @@ mod tests {
         assert_eq!(Generator::parse("file.mp4"), None);
         assert_eq!(Generator::parse("color:1,0,0"), None);
         assert_eq!(Generator::parse("gradient:bad"), None);
+        assert_eq!(Generator::parse("color:NaN,0,0,1"), None);
+        assert_eq!(Generator::parse("gradient:0,0,0,1|inf,1,1,1|h"), None);
     }
 
     #[test]
@@ -434,5 +471,15 @@ mod tests {
                 .iter()
                 .all(|pixel| *pixel == [0.0, 1.0, 0.0, 1.0])
         );
+    }
+
+    #[test]
+    fn generators_fail_soft_for_invalid_dimensions_and_channels() {
+        let image = solid([f32::NAN, 0.5, f32::INFINITY, f32::NAN], 1, 1);
+        assert_eq!(image.pixel(0, 0), [0.0, 0.5, 0.0, 1.0]);
+
+        let impossible = color_bars(u32::MAX, u32::MAX);
+        assert_eq!((impossible.width, impossible.height), (0, 0));
+        assert!(impossible.pixels.is_empty());
     }
 }

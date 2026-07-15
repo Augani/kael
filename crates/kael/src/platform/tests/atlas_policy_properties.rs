@@ -154,3 +154,52 @@ fn atlas_eviction_frees_what_it_can_when_evictable_tiles_are_insufficient() {
     let tiles = [(10u64, 100u64), (1, 100), (10, 100)];
     assert_eq!(crate::select_atlas_evictions(&tiles, 300, 50, 10), vec![1]);
 }
+
+#[test]
+fn atlas_payload_validation_rejects_invalid_dimensions_and_byte_lengths() {
+    let valid = Size {
+        width: DevicePixels(4),
+        height: DevicePixels(3),
+    };
+    assert_eq!(
+        crate::validate_atlas_payload(valid, AtlasTextureKind::Monochrome, 12).unwrap(),
+        12
+    );
+    assert_eq!(
+        crate::validate_atlas_payload(valid, AtlasTextureKind::Polychrome, 48).unwrap(),
+        48
+    );
+    assert!(crate::validate_atlas_payload(valid, AtlasTextureKind::Polychrome, 47).is_err());
+    assert!(
+        crate::validate_atlas_payload(
+            Size {
+                width: DevicePixels(0),
+                height: DevicePixels(3),
+            },
+            AtlasTextureKind::Monochrome,
+            0,
+        )
+        .is_err()
+    );
+    assert!(
+        crate::validate_atlas_payload(
+            Size {
+                width: DevicePixels(crate::MAX_ATLAS_TEXTURE_DIMENSION + 1),
+                height: DevicePixels(1),
+            },
+            AtlasTextureKind::Monochrome,
+            1,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn gpu_dimensions_are_finite_nonzero_and_capped() {
+    assert_eq!(super::super::safe_gpu_dimension(f32::NAN), 1);
+    assert_eq!(super::super::safe_gpu_dimension(f32::INFINITY), 1);
+    assert_eq!(super::super::safe_gpu_dimension(-10.0), 1);
+    assert_eq!(super::super::safe_gpu_dimension(0.0), 1);
+    assert_eq!(super::super::safe_gpu_dimension(42.9), 42);
+    assert_eq!(super::super::safe_gpu_dimension(100_000.0), 16_384);
+}

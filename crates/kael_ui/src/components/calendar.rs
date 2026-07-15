@@ -1,6 +1,7 @@
 //! Calendar component - Date selection with month/year navigation.
 
 use kael::{prelude::FluentBuilder as _, *};
+use std::panic::Location;
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -215,6 +216,16 @@ impl DateValue {
         Self { year, month, day }
     }
 
+    /// Construct a date only when its month and day form a valid calendar date.
+    pub fn try_new(year: i32, month: u32, day: u32) -> Option<Self> {
+        let value = Self::new(year, month, day);
+        value.is_valid().then_some(value)
+    }
+
+    pub fn is_valid(&self) -> bool {
+        (1..=12).contains(&self.month) && self.day >= 1 && self.day <= self.days_in_month()
+    }
+
     pub fn from_iso(date: impl AsRef<str>) -> Option<Self> {
         let date = date.as_ref();
         let mut parts = date.split('-');
@@ -225,11 +236,7 @@ impl DateValue {
             return None;
         }
 
-        let value = Self::new(year, month, day);
-        if day == 0 || day > value.days_in_month() {
-            return None;
-        }
-        Some(value)
+        Self::try_new(year, month, day)
     }
 
     pub fn to_iso(self) -> ISODateString {
@@ -304,8 +311,8 @@ impl DateValue {
             self.year
         };
 
-        let h = (q + (13 * (m + 1)) / 5 + y + y / 4 - y / 100 + y / 400) % 7;
-        ((h + 6) % 7) as u32
+        let h = (q + (13 * (m + 1)) / 5 + y + y / 4 - y / 100 + y / 400).rem_euclid(7);
+        (h + 6).rem_euclid(7) as u32
     }
 
     fn to_unix_days(self) -> i64 {
@@ -571,6 +578,8 @@ pub fn formatAccessibleDate(date: &DateValue, locale: &CalendarLocale) -> Shared
 
 #[derive(IntoElement)]
 pub struct Calendar {
+    id: ElementId,
+    label: SharedString,
     current_month: DateValue,
     selected_date: Option<DateValue>,
     selected_range: Option<DateRange>,
@@ -593,11 +602,23 @@ pub struct Calendar {
 }
 
 impl Calendar {
+    #[track_caller]
     pub fn new() -> Self {
+        let caller = Location::caller();
         let today = DateValue::today();
         let current_month = DateValue::new(today.year, today.month, 1);
 
         Self {
+            id: ElementId::Name(
+                format!(
+                    "calendar:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
+            label: "Calendar".into(),
             current_month,
             selected_date: None,
             selected_range: None,
@@ -620,8 +641,18 @@ impl Calendar {
         }
     }
 
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
+    }
+
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = label.into();
+        self
+    }
+
     pub fn current_month(mut self, date: DateValue) -> Self {
-        self.current_month = date;
+        self.current_month = DateValue::new(date.year, date.month.clamp(1, 12), 1);
         self
     }
 
@@ -814,9 +845,59 @@ impl Styled for Calendar {
     }
 }
 
+fn calendar_keyboard_target(
+    date: DateValue,
+    key: &str,
+    week_starts_on: DayOfWeek,
+) -> Option<DateValue> {
+    match key {
+        "left" => Some(date.add_days(-1)),
+        "right" => Some(date.add_days(1)),
+        "up" => Some(date.add_days(-7)),
+        "down" => Some(date.add_days(7)),
+        "pageup" => Some(date.add_months(-1)),
+        "pagedown" => Some(date.add_months(1)),
+        "home" => {
+            let offset =
+                (date.day_of_week().index() as i64 - week_starts_on.index() as i64).rem_euclid(7);
+            Some(date.add_days(-offset))
+        }
+        "end" => {
+            let offset =
+                (date.day_of_week().index() as i64 - week_starts_on.index() as i64).rem_euclid(7);
+            Some(date.add_days(6 - offset))
+        }
+        _ => None,
+    }
+}
+
+fn calendar_keyboard_enabled_target(
+    date: DateValue,
+    key: &str,
+    week_starts_on: DayOfWeek,
+    rendered_dates: &[DateValue],
+    enabled_dates: &[DateValue],
+) -> Option<DateValue> {
+    let target = calendar_keyboard_target(date, key, week_starts_on)?;
+    if !rendered_dates.contains(&target) || enabled_dates.contains(&target) {
+        return Some(target);
+    }
+
+    let direction = match key {
+        "left" | "up" | "home" | "pageup" => -1,
+        _ => 1,
+    };
+    (1..=rendered_dates.len())
+        .map(|offset| target.add_days(direction * offset as i64))
+        .find(|candidate| enabled_dates.contains(candidate))
+        .or(Some(target))
+}
+
 impl RenderOnce for Calendar {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = Theme::of(cx);
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx).clone();
+        let calendar_id = self.id.clone();
+        let calendar_label = self.label.clone();
         let current_month = self.current_month;
         let selected_date = self.selected_date;
         let locale = self.locale.clone();
@@ -871,11 +952,78 @@ impl RenderOnce for Calendar {
             })
             .collect::<Vec<_>>()
             .join(" - ");
+        let day_month_change_handler = on_month_change_handler.clone();
+        let day_focus_change_handler = on_focus_date_change_handler.clone();
+        let visible_month_data = visible_months
+            .into_iter()
+            .map(|month| {
+                let calendar_days = use_calendar_days(
+                    UseCalendarDaysOptions::new(month.year, month.month)
+                        .week_starts_on(week_starts_on)
+                        .has_variable_row_count(has_variable_row_count),
+                );
+                let focus_handles = calendar_days
+                    .days
+                    .iter()
+                    .map(|day| {
+                        let day_id =
+                            ElementId::NamedChild(Box::new(calendar_id.clone()), day.iso.clone());
+                        (
+                            day.date,
+                            window
+                                .use_keyed_state(day_id, cx, |_, cx| cx.focus_handle())
+                                .read(cx)
+                                .clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                (month, calendar_days, focus_handles)
+            })
+            .collect::<Vec<_>>();
+        let all_focus_handles = visible_month_data
+            .iter()
+            .flat_map(|(_, _, handles)| handles.iter().cloned())
+            .collect::<Vec<_>>();
+        let rendered_dates = all_focus_handles
+            .iter()
+            .map(|(date, _)| *date)
+            .collect::<Vec<_>>();
+        let enabled_focus_handles = all_focus_handles
+            .iter()
+            .filter(|(date, _)| {
+                let is_visible = has_outside_days
+                    || visible_month_data
+                        .iter()
+                        .any(|(month, _, _)| date.year == month.year && date.month == month.month);
+                is_visible
+                    && !constraints.is_date_disabled(date)
+                    && !is_date_disabled_fn
+                        .as_ref()
+                        .is_some_and(|checker| checker(date))
+                    && !disabled_dates.contains(date)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let selected_is_visible = selected_date.is_some_and(|selected| {
+            enabled_focus_handles
+                .iter()
+                .any(|(date, _)| *date == selected)
+        });
+        let today_is_visible = enabled_focus_handles.iter().any(|(date, _)| *date == today);
 
         div()
+            .id(calendar_id.clone())
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group)
+                    .label(calendar_label.to_string())
+                    .description(month_label.clone()),
+            )
+            .tab_group()
             .flex()
             .flex_col()
             .w(px(if number_of_months == 1 { 220.0 } else { 456.0 }))
+            .max_w(relative(1.0))
+            .overflow_x_auto()
             .p(px(12.0))
             .bg(theme.tokens.card)
             .rounded(theme.tokens.radius_md)
@@ -889,21 +1037,28 @@ impl RenderOnce for Calendar {
                     .child({
                         let handler = on_month_change_handler.clone();
                         IconButton::new("chevron-left")
+                            .id(ElementId::NamedChild(
+                                Box::new(calendar_id.clone()),
+                                "previous-month".into(),
+                            ))
+                            .label("Previous month")
                             .variant(ButtonVariant::Ghost)
                             .size(px(32.0))
                             .icon_size(px(16.0))
-                            .disabled(!can_navigate_previous)
-                            .when(can_navigate_previous && handler.is_some(), |btn| {
-                                let month_handler = handler.unwrap();
-                                let focus_handler = on_focus_date_change_handler.clone();
-                                btn.on_click(move |_, window, cx| {
-                                    month_handler(&prev_month_date, window, cx);
-                                    if let Some(focus_handler) = &focus_handler {
-                                        let iso = prev_month_date.to_iso();
-                                        focus_handler(&iso, window, cx);
-                                    }
-                                })
-                            })
+                            .disabled(!can_navigate_previous || handler.is_none())
+                            .when_some(
+                                handler.filter(|_| can_navigate_previous),
+                                |btn, month_handler| {
+                                    let focus_handler = on_focus_date_change_handler.clone();
+                                    btn.on_click(move |_, window, cx| {
+                                        month_handler(&prev_month_date, window, cx);
+                                        if let Some(focus_handler) = &focus_handler {
+                                            let iso = prev_month_date.to_iso();
+                                            focus_handler(&iso, window, cx);
+                                        }
+                                    })
+                                },
+                            )
                     })
                     .child(
                         div()
@@ -917,250 +1072,511 @@ impl RenderOnce for Calendar {
                     .child({
                         let handler = on_month_change_handler;
                         IconButton::new("chevron-right")
+                            .id(ElementId::NamedChild(
+                                Box::new(calendar_id.clone()),
+                                "next-month".into(),
+                            ))
+                            .label("Next month")
                             .variant(ButtonVariant::Ghost)
                             .size(px(32.0))
                             .icon_size(px(16.0))
-                            .disabled(!can_navigate_next)
-                            .when(can_navigate_next && handler.is_some(), |btn| {
-                                let month_handler = handler.unwrap();
-                                let focus_handler = on_focus_date_change_handler.clone();
-                                btn.on_click(move |_, window, cx| {
-                                    month_handler(&next_month_date, window, cx);
-                                    if let Some(focus_handler) = &focus_handler {
-                                        let iso = next_month_date.to_iso();
-                                        focus_handler(&iso, window, cx);
-                                    }
-                                })
-                            })
+                            .disabled(!can_navigate_next || handler.is_none())
+                            .when_some(
+                                handler.filter(|_| can_navigate_next),
+                                |btn, month_handler| {
+                                    let focus_handler = on_focus_date_change_handler.clone();
+                                    btn.on_click(move |_, window, cx| {
+                                        month_handler(&next_month_date, window, cx);
+                                        if let Some(focus_handler) = &focus_handler {
+                                            let iso = next_month_date.to_iso();
+                                            focus_handler(&iso, window, cx);
+                                        }
+                                    })
+                                },
+                            )
                     }),
             )
             .child(
                 div()
                     .flex()
                     .gap(px(16.0))
-                    .children(visible_months.into_iter().map(move |month| {
-                        let calendar_days = use_calendar_days(
-                            UseCalendarDaysOptions::new(month.year, month.month)
-                                .week_starts_on(week_starts_on)
-                                .has_variable_row_count(has_variable_row_count),
-                        );
-                        let weekday_names = (0..7)
-                            .map(|index| {
-                                locale.weekdays[(index + week_starts_on.index() as usize) % 7]
-                                    .clone()
-                            })
-                            .collect::<Vec<_>>();
-                        let on_date_select_for_weeks = on_date_select_handler.clone();
-                        let is_date_disabled_for_weeks = is_date_disabled_fn.clone();
-                        let disabled_dates_for_weeks = disabled_dates.clone();
-                        let constraints_for_month = constraints.clone();
+                    .children(visible_month_data.into_iter().map(
+                        move |(_month, calendar_days, focus_handles)| {
+                            let weekday_names = (0..7)
+                                .map(|index| {
+                                    locale.weekdays[(index + week_starts_on.index() as usize) % 7]
+                                        .clone()
+                                })
+                                .collect::<Vec<_>>();
+                            let on_date_select_for_weeks = on_date_select_handler.clone();
+                            let is_date_disabled_for_weeks = is_date_disabled_fn.clone();
+                            let disabled_dates_for_weeks = disabled_dates.clone();
+                            let constraints_for_month = constraints.clone();
+                            let enabled_focus_handles_for_month = enabled_focus_handles.clone();
+                            let rendered_dates_for_month = rendered_dates.clone();
+                            let month_change_for_month = day_month_change_handler.clone();
+                            let focus_change_for_month = day_focus_change_handler.clone();
+                            let locale_for_month = locale.clone();
+                            let calendar_id_for_month = calendar_id.clone();
 
-                        div()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .flex()
-                                    .mb(px(4.0))
-                                    .when(has_week_numbers, |this| {
-                                        this.child(div().w(px(32.0)).h(px(32.0)))
-                                    })
-                                    .children(weekday_names.into_iter().map(|day| {
-                                        div()
-                                            .w(px(28.0))
-                                            .h(px(32.0))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .text_size(px(12.0))
-                                            .font_weight(FontWeight::NORMAL)
-                                            .text_color(theme.tokens.muted_foreground)
-                                            .child(day)
-                                    })),
-                            )
-                            .child(div().flex().flex_col().children(
-                                calendar_days.weeks.into_iter().map(move |week| {
-                                    let on_date_select_for_days = on_date_select_for_weeks.clone();
-                                    let is_date_disabled_for_days =
-                                        is_date_disabled_for_weeks.clone();
-                                    let disabled_dates_for_days = disabled_dates_for_weeks.clone();
-                                    let range_for_week = selected_range;
-                                    let range_start_for_week = range_start_temp;
-                                    let constraints_for_week = constraints_for_month.clone();
-                                    let week_number =
-                                        week.first().map(|day| get_week_number(&day.date));
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child(
                                     div()
                                         .flex()
+                                        .mb(px(4.0))
                                         .when(has_week_numbers, |this| {
-                                            this.child(
-                                                div()
-                                                    .w(px(32.0))
-                                                    .h(px(32.0))
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .text_size(px(11.0))
-                                                    .text_color(
-                                                        theme.tokens.muted_foreground.opacity(0.72),
-                                                    )
-                                                    .child(
-                                                        week_number.unwrap_or_default().to_string(),
-                                                    ),
-                                            )
+                                            this.child(div().w(px(32.0)).h(px(32.0)))
                                         })
-                                        .children(week.into_iter().map(move |calendar_day| {
-                                            let date = calendar_day.date;
-                                            let is_selected = selected_date == Some(date);
-
-                                            // Check if date is disabled
-                                            let is_outside_hidden =
-                                                calendar_day.is_outside && !has_outside_days;
-                                            let is_disabled = is_outside_hidden
-                                                || constraints_for_week.is_date_disabled(&date)
-                                                || is_date_disabled_for_days
-                                                    .as_ref()
-                                                    .map(|f| f(&date))
-                                                    .unwrap_or_else(|| {
-                                                        disabled_dates_for_days
-                                                            .iter()
-                                                            .any(|d| d == &date)
-                                                    });
-
-                                            // Check if date is in selected range
-                                            let is_in_range = range_for_week
-                                                .map(|r| Calendar::is_date_in_range(&date, &r))
-                                                .unwrap_or(false);
-
-                                            // Check if date is the range start (first click in range mode)
-                                            let is_range_start = range_start_for_week == Some(date);
-
-                                            // Check if date is a range endpoint
-                                            let is_range_endpoint = range_for_week
-                                                .map(|r| date == r.start || date == r.end)
-                                                .unwrap_or(false);
-                                            let is_today = date == today;
-
-                                            let handler = if is_disabled {
-                                                None
-                                            } else {
-                                                on_date_select_for_days.clone()
-                                            };
-
-                                            let day_button = div()
-                                                .size(px(28.0))
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .rounded_full()
-                                                .text_size(px(14.0))
-                                                .transition(theme.tokens.transition_fast)
-                                                .when(
-                                                    is_today && !is_selected && !is_in_range,
-                                                    |this| {
-                                                        this.inset_ring(
-                                                            theme.tokens.border,
-                                                            px(1.0),
-                                                        )
-                                                    },
-                                                )
-                                                .when(
-                                                    is_today && is_in_range && !is_range_endpoint,
-                                                    |this| {
-                                                        this.inset_ring(
-                                                            theme.tokens.foreground,
-                                                            px(1.0),
-                                                        )
-                                                    },
-                                                )
-                                                .when(
-                                                    !is_disabled
-                                                        && (is_range_endpoint
-                                                            || is_selected
-                                                            || is_range_start),
-                                                    |this| {
-                                                        this.bg(theme.tokens.primary)
-                                                            .text_color(
-                                                                theme.tokens.primary_foreground,
-                                                            )
-                                                            .font_weight(FontWeight::MEDIUM)
-                                                    },
-                                                )
-                                                .when(
-                                                    !is_disabled
-                                                        && !(is_range_endpoint
-                                                            || is_selected
-                                                            || is_range_start),
-                                                    |this| this.text_color(theme.tokens.foreground),
-                                                )
-                                                .when(calendar_day.is_outside, |this| {
-                                                    this.text_color(theme.tokens.muted_foreground)
-                                                        .opacity(0.64)
-                                                })
-                                                .when(is_outside_hidden, |this| this.opacity(0.0))
-                                                .child(calendar_day.day_number.to_string());
-
+                                        .children(weekday_names.into_iter().map(|day| {
                                             div()
-                                                .relative()
                                                 .w(px(28.0))
                                                 .h(px(32.0))
                                                 .flex()
                                                 .items_center()
                                                 .justify_center()
-                                                .transition(theme.tokens.transition_fast)
-                                                .when(!is_disabled && is_in_range, |this| {
-                                                    this.child(
-                                                        div()
-                                                            .absolute()
-                                                            .top(px(2.0))
-                                                            .bottom(px(2.0))
-                                                            .left_0()
-                                                            .right_0()
-                                                            .bg(theme.tokens.primary.opacity(0.16))
-                                                            .when(
-                                                                is_range_endpoint || is_range_start,
-                                                                |bg| {
-                                                                    bg.left(px(2.0))
-                                                                        .right(px(2.0))
-                                                                        .rounded_full()
-                                                                },
-                                                            ),
+                                                .text_size(px(12.0))
+                                                .font_weight(FontWeight::NORMAL)
+                                                .text_color(theme.tokens.muted_foreground)
+                                                .child(day)
+                                        })),
+                                )
+                                .child(div().flex().flex_col().children(
+                                    calendar_days.weeks.into_iter().map(move |week| {
+                                        let on_date_select_for_days =
+                                            on_date_select_for_weeks.clone();
+                                        let is_date_disabled_for_days =
+                                            is_date_disabled_for_weeks.clone();
+                                        let disabled_dates_for_days =
+                                            disabled_dates_for_weeks.clone();
+                                        let range_for_week = selected_range;
+                                        let range_start_for_week = range_start_temp;
+                                        let constraints_for_week = constraints_for_month.clone();
+                                        let focus_handles_for_week = focus_handles.clone();
+                                        let enabled_focus_handles_for_week =
+                                            enabled_focus_handles_for_month.clone();
+                                        let rendered_dates_for_week =
+                                            rendered_dates_for_month.clone();
+                                        let month_change_for_week = month_change_for_month.clone();
+                                        let focus_change_for_week = focus_change_for_month.clone();
+                                        let locale_for_week = locale_for_month.clone();
+                                        let calendar_id_for_week = calendar_id_for_month.clone();
+                                        let week_number =
+                                            week.first().map(|day| get_week_number(&day.date));
+                                        div()
+                                            .flex()
+                                            .when(has_week_numbers, |this| {
+                                                this.child(
+                                                    div()
+                                                        .w(px(32.0))
+                                                        .h(px(32.0))
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .text_size(px(11.0))
+                                                        .text_color(
+                                                            theme
+                                                                .tokens
+                                                                .muted_foreground
+                                                                .opacity(0.72),
+                                                        )
+                                                        .child(
+                                                            week_number
+                                                                .unwrap_or_default()
+                                                                .to_string(),
+                                                        ),
+                                                )
+                                            })
+                                            .children(week.into_iter().map(move |calendar_day| {
+                                                let date = calendar_day.date;
+                                                let is_selected = selected_date == Some(date);
+
+                                                // Check if date is disabled
+                                                let is_outside_hidden =
+                                                    calendar_day.is_outside && !has_outside_days;
+                                                let is_disabled = is_outside_hidden
+                                                    || constraints_for_week.is_date_disabled(&date)
+                                                    || is_date_disabled_for_days
+                                                        .as_ref()
+                                                        .is_some_and(|f| f(&date))
+                                                    || disabled_dates_for_days.contains(&date);
+
+                                                // Check if date is in selected range
+                                                let is_in_range = range_for_week
+                                                    .map(|r| Calendar::is_date_in_range(&date, &r))
+                                                    .unwrap_or(false);
+
+                                                // Check if date is the range start (first click in range mode)
+                                                let is_range_start =
+                                                    range_start_for_week == Some(date);
+
+                                                // Check if date is a range endpoint
+                                                let is_range_endpoint = range_for_week
+                                                    .map(|r| date == r.start || date == r.end)
+                                                    .unwrap_or(false);
+                                                let is_today = date == today;
+                                                let handler = if is_disabled {
+                                                    None
+                                                } else {
+                                                    on_date_select_for_days.clone()
+                                                };
+                                                let is_tab_stop = !is_disabled
+                                                    && (is_selected
+                                                        || (!selected_is_visible
+                                                            && ((today_is_visible && is_today)
+                                                                || (!today_is_visible
+                                                                    && date == current_month))));
+                                                let focus_handle = focus_handles_for_week
+                                                    .iter()
+                                                    .find_map(|(candidate, handle)| {
+                                                        (*candidate == date).then(|| handle.clone())
+                                                    })
+                                                    .expect("calendar day focus handle must exist");
+                                                let focus_on_mouse = focus_handle.clone();
+                                                let focus_for_keys =
+                                                    enabled_focus_handles_for_week.clone();
+                                                let rendered_dates_for_keys =
+                                                    rendered_dates_for_week.clone();
+                                                let enabled_dates_for_keys = focus_for_keys
+                                                    .iter()
+                                                    .map(|(date, _)| *date)
+                                                    .collect::<Vec<_>>();
+                                                let month_change_for_day =
+                                                    month_change_for_week.clone();
+                                                let focus_change_for_day =
+                                                    focus_change_for_week.clone();
+                                                let accessible_label =
+                                                    format_accessible_date(&date, &locale_for_week);
+                                                let mut accessibility_state =
+                                                    AccessibilityState::NONE;
+                                                if is_selected
+                                                    || is_range_endpoint
+                                                    || is_range_start
+                                                {
+                                                    accessibility_state |=
+                                                        AccessibilityState::SELECTED;
+                                                }
+                                                if is_disabled {
+                                                    accessibility_state |=
+                                                        AccessibilityState::DISABLED;
+                                                }
+                                                if is_outside_hidden {
+                                                    accessibility_state |=
+                                                        AccessibilityState::HIDDEN;
+                                                }
+                                                let mut accessibility =
+                                                    AccessibilityAttributes::new(
+                                                        AccessibilityRole::Button,
                                                     )
-                                                })
-                                                // Disabled state styling
-                                                .when(is_disabled, |this: Div| {
-                                                    this.text_color(theme.tokens.muted_foreground)
+                                                    .label(accessible_label.to_string())
+                                                    .states(accessibility_state);
+                                                let mut descriptions = Vec::new();
+                                                if is_today {
+                                                    descriptions.push("Today");
+                                                }
+                                                if calendar_day.is_outside {
+                                                    descriptions.push("Outside the current month");
+                                                }
+                                                if is_in_range && !is_range_endpoint {
+                                                    descriptions.push("In selected range");
+                                                }
+                                                if !descriptions.is_empty() {
+                                                    accessibility = accessibility
+                                                        .description(descriptions.join(", "));
+                                                }
+                                                if !is_disabled {
+                                                    let mut actions =
+                                                        vec![AccessibilityAction::Focus];
+                                                    if handler.is_some() {
+                                                        actions.push(AccessibilityAction::Click);
+                                                    }
+                                                    accessibility = accessibility.actions(actions);
+                                                }
+
+                                                let handler_for_key = handler.clone();
+
+                                                let day_button = div()
+                                                    .size(px(28.0))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .rounded_full()
+                                                    .text_size(px(14.0))
+                                                    .transition(theme.tokens.transition_fast)
+                                                    .when(
+                                                        is_today && !is_selected && !is_in_range,
+                                                        |this| {
+                                                            this.inset_ring(
+                                                                theme.tokens.border,
+                                                                px(1.0),
+                                                            )
+                                                        },
+                                                    )
+                                                    .when(
+                                                        is_today
+                                                            && is_in_range
+                                                            && !is_range_endpoint,
+                                                        |this| {
+                                                            this.inset_ring(
+                                                                theme.tokens.foreground,
+                                                                px(1.0),
+                                                            )
+                                                        },
+                                                    )
+                                                    .when(
+                                                        !is_disabled
+                                                            && (is_range_endpoint
+                                                                || is_selected
+                                                                || is_range_start),
+                                                        |this| {
+                                                            this.bg(theme.tokens.primary)
+                                                                .text_color(
+                                                                    theme.tokens.primary_foreground,
+                                                                )
+                                                                .font_weight(FontWeight::MEDIUM)
+                                                        },
+                                                    )
+                                                    .when(
+                                                        !(is_disabled
+                                                            || is_range_endpoint
+                                                            || is_selected
+                                                            || is_range_start),
+                                                        |this| {
+                                                            this.text_color(theme.tokens.foreground)
+                                                        },
+                                                    )
+                                                    .when(calendar_day.is_outside, |this| {
+                                                        this.text_color(
+                                                            theme.tokens.muted_foreground,
+                                                        )
+                                                        .opacity(0.64)
+                                                    })
+                                                    .when(is_outside_hidden, |this| {
+                                                        this.opacity(0.0)
+                                                    })
+                                                    .child(calendar_day.day_number.to_string());
+
+                                                div()
+                                                    .id(ElementId::NamedChild(
+                                                        Box::new(calendar_id_for_week.clone()),
+                                                        calendar_day.iso.clone(),
+                                                    ))
+                                                    .accessibility(accessibility)
+                                                    .relative()
+                                                    .w(px(28.0))
+                                                    .h(px(32.0))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .transition(theme.tokens.transition_fast)
+                                                    .when(!is_disabled, |this| {
+                                                        this.track_focus(
+                                                            &focus_handle
+                                                                .tab_index(if is_tab_stop {
+                                                                    0
+                                                                } else {
+                                                                    -1
+                                                                })
+                                                                .tab_stop(is_tab_stop),
+                                                        )
+                                                        .on_mouse_down(
+                                                            MouseButton::Left,
+                                                            move |_, window, _| {
+                                                                window.focus(&focus_on_mouse);
+                                                            },
+                                                        )
+                                                    })
+                                                    .when(!is_disabled && is_in_range, |this| {
+                                                        this.child(
+                                                            div()
+                                                                .absolute()
+                                                                .top(px(2.0))
+                                                                .bottom(px(2.0))
+                                                                .left_0()
+                                                                .right_0()
+                                                                .bg(theme
+                                                                    .tokens
+                                                                    .primary
+                                                                    .opacity(0.16))
+                                                                .when(
+                                                                    is_range_endpoint
+                                                                        || is_range_start,
+                                                                    |bg| {
+                                                                        bg.left(px(2.0))
+                                                                            .right(px(2.0))
+                                                                            .rounded_full()
+                                                                    },
+                                                                ),
+                                                        )
+                                                    })
+                                                    // Disabled state styling
+                                                    .when(is_disabled, |this| {
+                                                        this.text_color(
+                                                            theme.tokens.muted_foreground,
+                                                        )
                                                         .opacity(if is_outside_hidden {
                                                             0.0
                                                         } else {
                                                             0.3
                                                         })
                                                         .cursor(CursorStyle::OperationNotAllowed)
-                                                })
-                                                .when(!is_disabled, |this: Div| {
-                                                    this.cursor(CursorStyle::PointingHand)
-                                                        .hover(move |style| style.bg(hover_overlay))
-                                                })
-                                                // Click handler only for non-disabled dates
-                                                .when(handler.is_some(), |this: Div| {
-                                                    let handler = handler.unwrap();
-                                                    this.on_mouse_down(
-                                                        MouseButton::Left,
-                                                        move |_, window, cx| {
+                                                    })
+                                                    .when(!is_disabled, |this| {
+                                                        this.cursor(CursorStyle::PointingHand)
+                                                            .hover(move |style| {
+                                                                style.bg(hover_overlay)
+                                                            })
+                                                    })
+                                                    .when_some(handler, |this, handler| {
+                                                        this.on_click(move |_, window, cx| {
                                                             handler(&date, window, cx);
-                                                        },
-                                                    )
-                                                })
-                                                .child(day_button)
-                                                .into_any_element()
-                                        }))
-                                }),
-                            ))
-                    })),
+                                                        })
+                                                    })
+                                                    .when(!is_disabled, |this| {
+                                                        this.on_key_down(
+                                                            move |event, window, cx| {
+                                                                if matches!(
+                                                                    event.keystroke.key.as_str(),
+                                                                    "enter" | "space"
+                                                                ) {
+                                                                    if let Some(handler) =
+                                                                        handler_for_key.as_ref()
+                                                                    {
+                                                                        handler(&date, window, cx);
+                                                                    }
+                                                                    cx.stop_propagation();
+                                                                    window.prevent_default();
+                                                                    return;
+                                                                }
+
+                                                                let Some(target) =
+                                                            calendar_keyboard_enabled_target(
+                                                                date,
+                                                                event.keystroke.key.as_str(),
+                                                                week_starts_on,
+                                                                &rendered_dates_for_keys,
+                                                                &enabled_dates_for_keys,
+                                                            )
+                                                        else {
+                                                            return;
+                                                        };
+
+                                                                if let Some((_, handle)) =
+                                                                    focus_for_keys.iter().find(
+                                                                        |(candidate, _)| {
+                                                                            *candidate == target
+                                                                        },
+                                                                    )
+                                                                {
+                                                                    window.focus(handle);
+                                                                } else if let Some(month_handler) =
+                                                                    month_change_for_day.as_ref()
+                                                                {
+                                                                    let target_month =
+                                                                        DateValue::new(
+                                                                            target.year,
+                                                                            target.month,
+                                                                            1,
+                                                                        );
+                                                                    month_handler(
+                                                                        &target_month,
+                                                                        window,
+                                                                        cx,
+                                                                    );
+                                                                }
+                                                                if let Some(focus_handler) =
+                                                                    focus_change_for_day.as_ref()
+                                                                {
+                                                                    focus_handler(
+                                                                        &target.to_iso(),
+                                                                        window,
+                                                                        cx,
+                                                                    );
+                                                                }
+                                                                cx.stop_propagation();
+                                                                window.prevent_default();
+                                                            },
+                                                        )
+                                                    })
+                                                    .child(day_button)
+                                                    .into_any_element()
+                                            }))
+                                    }),
+                                ))
+                        },
+                    )),
             )
             .map(|this| {
                 let mut div = this;
                 div.style().refine(&user_style);
                 div
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        calendar_keyboard_enabled_target, use_calendar_days, DateValue, DayOfWeek,
+        UseCalendarDaysOptions,
+    };
+
+    #[test]
+    fn date_construction_rejects_impossible_days() {
+        assert_eq!(
+            DateValue::try_new(2024, 2, 29),
+            Some(DateValue::new(2024, 2, 29))
+        );
+        assert_eq!(DateValue::try_new(2025, 2, 29), None);
+        assert_eq!(DateValue::try_new(2025, 13, 1), None);
+        assert_eq!(DateValue::from_iso("2025-04-31"), None);
+    }
+
+    #[test]
+    fn calendar_days_respect_week_start_and_row_mode() {
+        let fixed = use_calendar_days(
+            UseCalendarDaysOptions::new(2026, 7).week_starts_on(DayOfWeek::MONDAY),
+        );
+        let variable = use_calendar_days(
+            UseCalendarDaysOptions::new(2026, 7)
+                .week_starts_on(DayOfWeek::MONDAY)
+                .has_variable_row_count(true),
+        );
+        assert_eq!(fixed.total_cells, 42);
+        assert_eq!(variable.total_cells, 35);
+        assert_eq!(fixed.day_names[0].as_ref(), "Mo");
+    }
+
+    #[test]
+    fn keyboard_navigation_skips_disabled_rendered_dates() {
+        let rendered = (1..=7)
+            .map(|day| DateValue::new(2026, 7, day))
+            .collect::<Vec<_>>();
+        let enabled = rendered
+            .iter()
+            .copied()
+            .filter(|date| date.day != 3 && date.day != 4)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            calendar_keyboard_enabled_target(
+                DateValue::new(2026, 7, 2),
+                "right",
+                DayOfWeek::SUNDAY,
+                &rendered,
+                &enabled,
+            ),
+            Some(DateValue::new(2026, 7, 5))
+        );
+        assert_eq!(
+            calendar_keyboard_enabled_target(
+                DateValue::new(2026, 7, 5),
+                "left",
+                DayOfWeek::SUNDAY,
+                &rendered,
+                &enabled,
+            ),
+            Some(DateValue::new(2026, 7, 2))
+        );
     }
 }

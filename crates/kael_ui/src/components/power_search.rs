@@ -2,11 +2,18 @@
 
 use crate::{
     astryx,
-    components::{icon::Icon, token::Token},
+    components::{
+        icon::Icon,
+        icon_button::IconButton,
+        input::{Input, InputSize, InputVariant},
+        input_state::InputState,
+        token::Token,
+    },
     theme::Theme,
 };
 use kael::{prelude::FluentBuilder as _, *};
 use std::collections::BTreeMap;
+use std::panic::Location;
 use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -483,7 +490,9 @@ impl PowerSearchFilter {
 
 #[derive(IntoElement)]
 pub struct PowerSearch {
+    id: ElementId,
     query: SharedString,
+    query_state: Option<Entity<InputState>>,
     placeholder: SharedString,
     filters: Vec<PowerSearchFilter>,
     fields: Vec<PowerSearchField>,
@@ -495,13 +504,27 @@ pub struct PowerSearch {
     readonly: bool,
     disabled: bool,
     on_filter_remove: Option<Rc<dyn Fn(usize, &mut Window, &mut App)>>,
+    on_field_select: Option<Rc<dyn Fn(PowerSearchField, &mut Window, &mut App)>>,
+    on_clear: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
     style: StyleRefinement,
 }
 
 impl PowerSearch {
+    #[track_caller]
     pub fn new() -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "power-search:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             query: "".into(),
+            query_state: None,
             placeholder: "Search or filter...".into(),
             filters: Vec::new(),
             fields: Vec::new(),
@@ -513,12 +536,26 @@ impl PowerSearch {
             readonly: false,
             disabled: false,
             on_filter_remove: None,
+            on_field_select: None,
+            on_clear: None,
             style: StyleRefinement::default(),
         }
     }
 
     pub fn query(mut self, query: impl Into<SharedString>) -> Self {
         self.query = query.into();
+        self
+    }
+
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
+    }
+
+    /// Connects an editable query input. When supplied, this state is the
+    /// authoritative query value and [`Self::query`] is ignored.
+    pub fn query_state(mut self, state: &Entity<InputState>) -> Self {
+        self.query_state = Some(state.clone());
         self
     }
 
@@ -580,6 +617,21 @@ impl PowerSearch {
         self.on_filter_remove = Some(Rc::new(handler));
         self
     }
+
+    pub fn on_field_select(
+        mut self,
+        handler: impl Fn(PowerSearchField, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_field_select = Some(Rc::new(handler));
+        self
+    }
+
+    /// Handles clearing the query when no editable [`Self::query_state`] is
+    /// connected. Stateful inputs clear themselves directly.
+    pub fn on_clear(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_clear = Some(Rc::new(handler));
+        self
+    }
 }
 
 impl Default for PowerSearch {
@@ -599,11 +651,33 @@ impl RenderOnce for PowerSearch {
         let theme = Theme::of(cx);
         let hover_ring = astryx::input_hover_ring(theme.tokens.input);
         let on_remove = self.on_filter_remove.clone();
-        let query_is_empty = self.query.is_empty();
+        let on_field_select = self.on_field_select.clone();
+        let on_clear = self.on_clear.clone();
+        let query_state = self.query_state.clone();
+        let query_is_empty = query_state.as_ref().map_or_else(
+            || self.query.is_empty(),
+            |state| state.read(cx).content().is_empty(),
+        );
         let size = self.size.control_size();
+        let input_size = match self.size {
+            PowerSearchSize::Sm => InputSize::Sm,
+            PowerSearchSize::Md => InputSize::Md,
+            PowerSearchSize::Lg => InputSize::Lg,
+        };
         let disabled = self.disabled || self.readonly;
+        let editable_state = query_state.clone();
+        let fallback_query = self.query.clone();
+        let fallback_placeholder = self.placeholder.clone();
+        let input_placeholder = self.placeholder.clone();
+        let input_label = self.label.clone();
+        let input_readonly = self.readonly;
+        let input_disabled = self.disabled;
+        let root_id = self.id.clone();
+        let filter_id = root_id.clone();
+        let field_id = root_id.clone();
 
         div()
+            .id(root_id)
             .flex()
             .flex_col()
             .gap(px(6.0))
@@ -652,7 +726,11 @@ impl RenderOnce for PowerSearch {
                                     );
                                     let on_remove = on_remove.clone();
                                     let readonly = filter.readonly || disabled;
-                                    let mut token = Token::new(label).icon("filter");
+                                    let mut token = Token::new(label)
+                                        .id(ElementId::Name(
+                                            format!("{filter_id}-filter-{index}").into(),
+                                        ))
+                                        .icon("filter");
                                     if !readonly {
                                         token = token.on_remove(move |window, cx| {
                                             if let Some(handler) = on_remove.as_ref() {
@@ -663,38 +741,75 @@ impl RenderOnce for PowerSearch {
                                     token.into_any_element()
                                 },
                             ))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.0))
-                                    .flex_1()
-                                    .min_w(px(96.0))
-                                    .text_size(px(14.0))
-                                    .line_height(px(20.0))
-                                    .text_color(if query_is_empty {
-                                        theme.tokens.muted_foreground
-                                    } else {
-                                        theme.tokens.foreground
-                                    })
-                                    .child(
-                                        Icon::new("search")
-                                            .size(px(14.0))
-                                            .color(theme.tokens.muted_foreground),
-                                    )
-                                    .child(if query_is_empty {
-                                        self.placeholder.clone()
-                                    } else {
-                                        self.query.clone()
-                                    }),
-                            )
-                            .when(self.clearable && !query_is_empty && !disabled, |this| {
+                            .when_some(editable_state, |this, state| {
                                 this.child(
-                                    Icon::new("close")
-                                        .size(px(14.0))
-                                        .color(theme.tokens.muted_foreground),
+                                    Input::new(&state)
+                                        .placeholder(input_placeholder)
+                                        .variant(InputVariant::Ghost)
+                                        .size(input_size)
+                                        .is_label_hidden(true)
+                                        .aria_label(input_label)
+                                        .read_only(input_readonly)
+                                        .disabled(input_disabled)
+                                        .clearable(self.clearable)
+                                        .prefix(
+                                            Icon::new("search")
+                                                .size(px(14.0))
+                                                .color(theme.tokens.muted_foreground),
+                                        )
+                                        .flex_1()
+                                        .min_w(px(120.0)),
                                 )
-                            }),
+                            })
+                            .when(query_state.is_none(), |this| {
+                                this.child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(6.0))
+                                        .flex_1()
+                                        .min_w(px(96.0))
+                                        .text_size(px(14.0))
+                                        .line_height(px(20.0))
+                                        .text_color(if query_is_empty {
+                                            theme.tokens.muted_foreground
+                                        } else {
+                                            theme.tokens.foreground
+                                        })
+                                        .child(
+                                            Icon::new("search")
+                                                .size(px(14.0))
+                                                .color(theme.tokens.muted_foreground),
+                                        )
+                                        .child(if query_is_empty {
+                                            fallback_placeholder
+                                        } else {
+                                            fallback_query
+                                        }),
+                                )
+                            })
+                            .when(
+                                query_state.is_none()
+                                    && self.clearable
+                                    && !query_is_empty
+                                    && !disabled
+                                    && on_clear.is_some(),
+                                |this| {
+                                    let on_clear = on_clear.clone();
+                                    this.child(
+                                        IconButton::new("x")
+                                            .label("Clear search query")
+                                            .size(px(24.0))
+                                            .icon_size(px(14.0))
+                                            .no_background(true)
+                                            .on_click(move |_, window, cx| {
+                                                if let Some(handler) = on_clear.as_ref() {
+                                                    handler(window, cx);
+                                                }
+                                            }),
+                                    )
+                                },
+                            ),
                     ),
             )
             .when(!self.fields.is_empty(), |this| {
@@ -702,9 +817,63 @@ impl RenderOnce for PowerSearch {
                     div().flex().flex_wrap().gap(px(4.0)).children(
                         self.fields
                             .into_iter()
-                            .map(|field| Token::new(field.label).icon("plus").into_any_element()),
+                            .enumerate()
+                            .map(move |(index, field)| {
+                                let mut token = Token::new(field.label.clone())
+                                    .id(ElementId::Name(format!("{field_id}-field-{index}").into()))
+                                    .icon("plus")
+                                    .disabled(disabled);
+                                if !disabled {
+                                    if let Some(handler) = on_field_select.clone() {
+                                        let selected = field.clone();
+                                        token = token.on_click(move |window, cx| {
+                                            handler(selected.clone(), window, cx);
+                                        });
+                                    }
+                                }
+                                token.into_any_element()
+                            }),
                     ),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn editable_query_and_actions_are_explicitly_connected() {
+        let mut cx = TestAppContext::single();
+        let state = cx.new(InputState::new);
+        let search = PowerSearch::new()
+            .query("fallback")
+            .query_state(&state)
+            .on_field_select(|_, _, _| {})
+            .on_filter_remove(|_, _, _| {})
+            .on_clear(|_, _| {});
+
+        assert!(search.query_state.is_some());
+        assert!(search.on_field_select.is_some());
+        assert!(search.on_filter_remove.is_some());
+        assert!(search.on_clear.is_some());
+    }
+
+    #[::core::prelude::v1::test]
+    fn filter_values_produce_stable_user_facing_text() {
+        assert_eq!(FilterValue::Empty.display_text().as_ref(), "");
+        assert_eq!(
+            FilterValue::StringList(vec!["one".into(), "two".into()])
+                .display_text()
+                .as_ref(),
+            "one, two"
+        );
+        assert_eq!(
+            FilterValue::Nested(vec![PowerSearchFilter::new("a", "is", "b")])
+                .display_text()
+                .as_ref(),
+            "1 filters"
+        );
     }
 }

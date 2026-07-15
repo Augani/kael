@@ -25,8 +25,8 @@ struct FocusTestApp {
 impl FocusTestApp {
     fn new(cx: &mut Context<Self>) -> Self {
         let mut app = Self {
-            first_name: cx.new(|cx| InputState::new(cx)),
-            last_name: cx.new(|cx| InputState::new(cx)),
+            first_name: cx.new(InputState::new),
+            last_name: cx.new(InputState::new),
             email: cx.new(|cx| InputState::new(cx).input_type(InputType::Email)),
             phone: cx.new(|cx| InputState::new(cx).input_type(InputType::Tel)),
             password: cx.new(|cx| InputState::new(cx).input_type(InputType::Password)),
@@ -431,7 +431,7 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|cx| FocusTestApp::new(cx)),
+            |_window, cx| cx.new(FocusTestApp::new),
         )
         .unwrap();
     });

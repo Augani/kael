@@ -7,7 +7,7 @@
 
 use std::ops::Range;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// A named marker pinned to a timeline frame.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -39,9 +39,25 @@ impl Marker {
 }
 
 /// An ordered collection of timeline markers.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct MarkerSet {
     markers: Vec<Marker>,
+}
+
+impl<'de> Deserialize<'de> for MarkerSet {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct MarkerSetData {
+            #[serde(default)]
+            markers: Vec<Marker>,
+        }
+
+        let data = MarkerSetData::deserialize(deserializer)?;
+        Ok(Self::from_markers(data.markers))
+    }
 }
 
 impl MarkerSet {
@@ -188,5 +204,18 @@ mod tests {
         assert_eq!(restored.nearest(65).map(|m| m.frame), Some(60));
         assert_eq!(restored.next_after(20).map(|m| m.frame), Some(60));
         assert_eq!(restored, set);
+    }
+
+    #[test]
+    fn deserialization_restores_iteration_order() {
+        let json = r#"{"markers":[{"frame":100,"label":"c"},{"frame":20,"label":"a"}]}"#;
+        let restored: MarkerSet = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            restored
+                .iter()
+                .map(|marker| marker.frame)
+                .collect::<Vec<_>>(),
+            vec![20, 100]
+        );
     }
 }

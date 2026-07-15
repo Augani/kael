@@ -4,7 +4,11 @@
 /// to ensure only one instance of an application runs at a time.
 use anyhow::Result;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
-use std::path::PathBuf;
+use std::{
+    fs::File,
+    path::{Path, PathBuf},
+    sync::{Arc, atomic::AtomicBool},
+};
 
 /// Error returned when another instance of the application is already running.
 #[derive(Debug)]
@@ -29,6 +33,12 @@ pub struct SingleInstance {
     _listener: std::os::unix::net::UnixListener,
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
     _socket_path: PathBuf,
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
+    _lock_file: File,
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
+    activation_listener_started: AtomicBool,
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
+    activation_stop: Arc<AtomicBool>,
     #[cfg(target_os = "windows")]
     _mutex: WindowsMutexHandle,
 }
@@ -48,11 +58,71 @@ impl Drop for WindowsMutexHandle {
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
-fn socket_path(app_id: &str) -> PathBuf {
-    let dir = std::env::var("XDG_RUNTIME_DIR")
+fn socket_path(app_id: &str) -> Result<PathBuf> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    let base_dir = std::env::var("XDG_RUNTIME_DIR")
         .or_else(|_| std::env::var("TMPDIR"))
         .unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(dir).join(format!("{}.sock", app_id))
+    let effective_user = unsafe { libc::geteuid() };
+    let dir = PathBuf::from(base_dir).join(format!("kael-{effective_user}"));
+    match std::fs::create_dir(&dir) {
+        Ok(()) => {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => {
+            return Err(anyhow::anyhow!(
+                "creating single-instance runtime directory {dir:?}: {error}"
+            ));
+        }
+    }
+    let metadata = std::fs::symlink_metadata(&dir).map_err(|error| {
+        anyhow::anyhow!("inspecting single-instance runtime directory {dir:?}: {error}")
+    })?;
+    anyhow::ensure!(
+        metadata.file_type().is_dir() && !metadata.file_type().is_symlink(),
+        "single-instance runtime path is not a real directory: {dir:?}"
+    );
+    anyhow::ensure!(
+        metadata.uid() == effective_user,
+        "single-instance runtime directory is owned by another user: {dir:?}"
+    );
+    if metadata.permissions().mode() & 0o077 != 0 {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).map_err(
+            |error| anyhow::anyhow!("securing single-instance runtime directory {dir:?}: {error}"),
+        )?;
+    }
+    Ok(dir.join(format!("{app_id}.sock")))
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
+fn lock_path(socket_path: &Path) -> PathBuf {
+    socket_path.with_extension("lock")
+}
+
+fn validate_single_instance_app_id(app_id: &str) -> Result<()> {
+    anyhow::ensure!(
+        !app_id.trim().is_empty(),
+        "single-instance app id cannot be empty"
+    );
+    anyhow::ensure!(
+        app_id == app_id.trim(),
+        "single-instance app id cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        app_id.len() <= 128,
+        "single-instance app id cannot be longer than 128 bytes"
+    );
+    anyhow::ensure!(
+        !app_id.chars().any(char::is_control),
+        "single-instance app id cannot contain control characters"
+    );
+    anyhow::ensure!(
+        !app_id.contains('/') && !app_id.contains('\\'),
+        "single-instance app id cannot contain path separators"
+    );
+    Ok(())
 }
 
 impl SingleInstance {
@@ -66,7 +136,19 @@ impl SingleInstance {
     /// Returns `Ok(SingleInstance)` if this is the first instance, or
     /// `Err(AlreadyRunning)` if another instance already holds the lock.
     pub fn acquire(app_id: &str) -> std::result::Result<Self, AlreadyRunning> {
-        Self::platform_acquire(app_id)
+        Self::try_acquire(app_id)
+            .ok()
+            .flatten()
+            .ok_or(AlreadyRunning)
+    }
+
+    /// Attempt to acquire the single-instance lock while preserving operating-system errors.
+    ///
+    /// `Ok(Some(_))` means this process is primary, `Ok(None)` means another process owns the
+    /// lock, and `Err` reports an actual lock, socket, or platform initialization failure.
+    pub fn try_acquire(app_id: &str) -> Result<Option<Self>> {
+        validate_single_instance_app_id(app_id)?;
+        Self::platform_try_acquire(app_id)
     }
 
     /// Register a callback to be invoked when another instance attempts to start
@@ -84,6 +166,7 @@ impl SingleInstance {
 /// This is typically called after `SingleInstance::acquire` returns `Err(AlreadyRunning)`
 /// to signal the existing instance to come to the foreground.
 pub fn send_activate_to_existing(app_id: &str) -> Result<()> {
+    validate_single_instance_app_id(app_id)?;
     platform_send_activate(app_id)
 }
 
@@ -139,9 +222,26 @@ impl SingleInstanceLaunch {
     pub fn notified_existing(&self) -> bool {
         matches!(self, Self::Duplicate { notified: true, .. })
     }
+
+    /// Human-readable, deterministic summary for startup logs and agent audits.
+    pub fn to_text(&self) -> String {
+        match self {
+            Self::Primary(instance) => {
+                format!("single-instance primary for {}", instance.app_id())
+            }
+            Self::Duplicate { app_id, notified } => {
+                let notification = if *notified {
+                    "notified existing instance"
+                } else {
+                    "did not notify existing instance"
+                };
+                format!("single-instance duplicate for {app_id}: {notification}")
+            }
+        }
+    }
 }
 
-/// Builder for Electron-style single-instance startup handling.
+/// Builder for native desktop single-instance startup handling.
 #[derive(Debug, Clone)]
 pub struct SingleInstanceBuilder {
     app_id: String,
@@ -175,35 +275,15 @@ impl SingleInstanceBuilder {
 
     /// Validate the builder before attempting to acquire the lock.
     pub fn validate(&self) -> Result<()> {
-        anyhow::ensure!(
-            !self.app_id.trim().is_empty(),
-            "single-instance app id cannot be empty"
-        );
-        anyhow::ensure!(
-            self.app_id == self.app_id.trim(),
-            "single-instance app id cannot have leading or trailing whitespace"
-        );
-        anyhow::ensure!(
-            self.app_id.len() <= 128,
-            "single-instance app id cannot be longer than 128 bytes"
-        );
-        anyhow::ensure!(
-            !self.app_id.chars().any(char::is_control),
-            "single-instance app id cannot contain control characters"
-        );
-        anyhow::ensure!(
-            !self.app_id.contains('/') && !self.app_id.contains('\\'),
-            "single-instance app id cannot contain path separators"
-        );
-        Ok(())
+        validate_single_instance_app_id(&self.app_id)
     }
 
     /// Acquire the single-instance lock or notify the already-running process.
     pub fn launch(self) -> Result<SingleInstanceLaunch> {
         self.validate()?;
-        match SingleInstance::acquire(&self.app_id) {
-            Ok(instance) => Ok(SingleInstanceLaunch::Primary(instance)),
-            Err(_) => {
+        match SingleInstance::try_acquire(&self.app_id)? {
+            Some(instance) => Ok(SingleInstanceLaunch::Primary(instance)),
+            None => {
                 let notified = if self.notify_existing {
                     send_activate_to_existing(&self.app_id)?;
                     true
@@ -221,62 +301,146 @@ impl SingleInstanceBuilder {
 
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
 impl SingleInstance {
-    fn platform_acquire(app_id: &str) -> std::result::Result<Self, AlreadyRunning> {
+    fn platform_try_acquire(app_id: &str) -> Result<Option<Self>> {
+        use std::fs::OpenOptions;
+        use std::os::fd::AsRawFd as _;
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
         use std::os::unix::net::UnixListener;
 
-        let path = socket_path(app_id);
-
-        if std::os::unix::net::UnixStream::connect(&path).is_ok() {
-            return Err(AlreadyRunning);
+        let path = socket_path(app_id)?;
+        let lock_path = lock_path(&path);
+        let lock_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .open(&lock_path)
+            .map_err(|error| {
+                anyhow::anyhow!("opening single-instance lock {lock_path:?}: {error}")
+            })?;
+        let lock_result =
+            unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if lock_result != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                return Ok(None);
+            }
+            return Err(anyhow::anyhow!(
+                "locking single-instance file {lock_path:?}: {error}"
+            ));
         }
 
-        let _ = std::fs::remove_file(&path);
-        let listener = UnixListener::bind(&path).map_err(|_| AlreadyRunning)?;
-        listener.set_nonblocking(true).ok();
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(anyhow::anyhow!(
+                    "removing stale single-instance socket {path:?}: {error}"
+                ));
+            }
+        }
+        let listener = UnixListener::bind(&path)
+            .map_err(|error| anyhow::anyhow!("binding single-instance socket {path:?}: {error}"))?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(
+            |error| anyhow::anyhow!("securing single-instance socket {path:?}: {error}"),
+        )?;
 
-        Ok(Self {
+        Ok(Some(Self {
             app_id: app_id.to_string(),
             _listener: listener,
             _socket_path: path,
-        })
+            _lock_file: lock_file,
+            activation_listener_started: AtomicBool::new(false),
+            activation_stop: Arc::new(AtomicBool::new(false)),
+        }))
     }
 
     fn platform_on_activate(&self, callback: Box<dyn Fn() + Send + 'static>) {
         use std::io::Read;
         use std::os::unix::net::UnixListener;
+        use std::sync::atomic::Ordering;
+
+        if self
+            .activation_listener_started
+            .swap(true, Ordering::AcqRel)
+        {
+            log::warn!("ignoring duplicate single-instance activation listener registration");
+            return;
+        }
 
         let listener = unsafe {
             use std::os::unix::io::{AsRawFd, FromRawFd};
             let fd = self._listener.as_raw_fd();
             let dup_fd = libc::dup(fd);
             if dup_fd < 0 {
+                self.activation_listener_started
+                    .store(false, Ordering::Release);
+                log::error!(
+                    "failed to duplicate single-instance activation socket: {}",
+                    std::io::Error::last_os_error()
+                );
                 return;
             }
             UnixListener::from_raw_fd(dup_fd)
         };
-        listener.set_nonblocking(false).ok();
-
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                match stream {
-                    Ok(mut stream) => {
-                        let mut buf = [0u8; 64];
-                        if let Ok(n) = stream.read(&mut buf) {
-                            if n > 0 && &buf[..n.min(8)] == b"activate" {
-                                callback();
+        if let Err(error) = listener.set_nonblocking(true) {
+            self.activation_listener_started
+                .store(false, Ordering::Release);
+            log::error!("failed to configure single-instance activation socket: {error}");
+            return;
+        }
+        let stop = self.activation_stop.clone();
+        let listener_thread = std::thread::Builder::new()
+            .name(format!("single-instance-{}", self.app_id))
+            .spawn(move || {
+                while !stop.load(Ordering::Acquire) {
+                    match listener.accept() {
+                        Ok((mut stream, _address)) => {
+                            if let Err(error) = stream.set_nonblocking(false) {
+                                log::warn!("failed to configure activation client socket: {error}");
+                                continue;
+                            }
+                            if let Err(error) =
+                                stream.set_read_timeout(Some(std::time::Duration::from_secs(1)))
+                            {
+                                log::warn!("failed to set activation socket read timeout: {error}");
+                            }
+                            let mut message = [0u8; 8];
+                            if stream.read_exact(&mut message).is_ok() && &message == b"activate" {
+                                crate::platform::catch_platform_callback(
+                                    "single instance",
+                                    "activation",
+                                    (),
+                                    &callback,
+                                );
                             }
                         }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(std::time::Duration::from_millis(25));
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(error) => {
+                            log::debug!("single-instance activation listener stopped: {error}");
+                            break;
+                        }
                     }
-                    Err(_) => break,
                 }
-            }
-        });
+            });
+        if let Err(error) = listener_thread {
+            self.activation_listener_started
+                .store(false, Ordering::Release);
+            log::error!("failed to spawn single-instance activation listener: {error}");
+        }
     }
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
 impl Drop for SingleInstance {
     fn drop(&mut self) {
+        use std::sync::atomic::Ordering;
+
+        self.activation_stop.store(true, Ordering::Release);
         let _ = std::fs::remove_file(&self._socket_path);
     }
 }
@@ -286,7 +450,7 @@ fn platform_send_activate(app_id: &str) -> Result<()> {
     use std::io::Write;
     use std::os::unix::net::UnixStream;
 
-    let path = socket_path(app_id);
+    let path = socket_path(app_id)?;
     let mut stream = UnixStream::connect(&path)?;
     stream.write_all(b"activate")?;
     Ok(())
@@ -294,7 +458,7 @@ fn platform_send_activate(app_id: &str) -> Result<()> {
 
 #[cfg(target_os = "windows")]
 impl SingleInstance {
-    fn platform_acquire(app_id: &str) -> std::result::Result<Self, AlreadyRunning> {
+    fn platform_try_acquire(app_id: &str) -> Result<Option<Self>> {
         use windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
         use windows::Win32::Foundation::GetLastError;
         use windows::Win32::System::Threading::CreateMutexW;
@@ -302,15 +466,15 @@ impl SingleInstance {
 
         let name = HSTRING::from(format!("Global\\{}", app_id));
         unsafe {
-            let handle = CreateMutexW(None, true, &name).map_err(|_| AlreadyRunning)?;
+            let handle = CreateMutexW(None, true, &name)?;
             if GetLastError() == ERROR_ALREADY_EXISTS {
                 let _ = windows::Win32::Foundation::CloseHandle(handle);
-                return Err(AlreadyRunning);
+                return Ok(None);
             }
-            Ok(Self {
+            Ok(Some(Self {
                 app_id: app_id.to_string(),
                 _mutex: WindowsMutexHandle { handle },
-            })
+            }))
         }
     }
 
@@ -373,6 +537,8 @@ mod tests {
                 .validate()
                 .is_ok()
         );
+        assert!(SingleInstance::try_acquire("/tmp/escaped").is_err());
+        assert!(send_activate_to_existing("../escaped").is_err());
     }
 
     #[test]
@@ -385,6 +551,10 @@ mod tests {
         assert_eq!(primary.app_id(), app_id);
         assert!(primary.primary().is_some());
         assert_eq!(primary.primary().unwrap().app_id(), app_id);
+        assert_eq!(
+            primary.to_text(),
+            format!("single-instance primary for {app_id}")
+        );
 
         let duplicate = SingleInstanceBuilder::new(&app_id)
             .notify_existing(false)
@@ -395,6 +565,10 @@ mod tests {
         assert!(!duplicate.is_primary());
         assert_eq!(duplicate.app_id(), app_id);
         assert!(!duplicate.notified_existing());
+        assert_eq!(
+            duplicate.to_text(),
+            format!("single-instance duplicate for {app_id}: did not notify existing instance")
+        );
         match duplicate {
             SingleInstanceLaunch::Duplicate {
                 app_id: duplicate_app_id,
@@ -405,5 +579,38 @@ mod tests {
             }
             SingleInstanceLaunch::Primary(_) => panic!("expected duplicate launch"),
         }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
+    #[test]
+    fn activation_listener_contains_callback_panics_and_keeps_listening() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+            mpsc,
+        };
+        use std::time::Duration;
+
+        let app_id = unique_app_id("activation");
+        let instance = SingleInstance::try_acquire(&app_id)
+            .expect("lock acquisition should not fail")
+            .expect("test process should be primary");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let callback_calls = calls.clone();
+        let (tx, rx) = mpsc::channel();
+        instance.on_activate(Box::new(move || {
+            let call = callback_calls.fetch_add(1, Ordering::SeqCst);
+            let _ = tx.send(call);
+            if call == 0 {
+                panic!("first activation callback panic should be contained");
+            }
+        }));
+
+        send_activate_to_existing(&app_id).expect("first activation should be delivered");
+        assert_eq!(rx.recv_timeout(Duration::from_secs(2)), Ok(0));
+
+        send_activate_to_existing(&app_id).expect("second activation should be delivered");
+        assert_eq!(rx.recv_timeout(Duration::from_secs(2)), Ok(1));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

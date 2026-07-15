@@ -74,9 +74,12 @@ impl DirectXDevices {
                 D3D_FEATURE_LEVEL_10_1 => {
                     log::info!("Created device with Direct3D 10.1 feature level.")
                 }
-                _ => unreachable!(),
+                other => anyhow::bail!("unsupported Direct3D feature level: {other:?}"),
             }
-            (device, context.unwrap())
+            let context = context.ok_or_else(|| {
+                anyhow::anyhow!("D3D11CreateDevice succeeded without returning a device context")
+            })?;
+            (device, context)
         };
 
         Ok(Self {
@@ -120,7 +123,8 @@ fn get_dxgi_factory(debug_layer_available: bool) -> Result<IDXGIFactory6> {
 
 #[inline]
 fn get_adapter(dxgi_factory: &IDXGIFactory6, debug_layer_available: bool) -> Result<IDXGIAdapter1> {
-    for adapter_index in 0.. {
+    let mut adapter_index = 0_u32;
+    loop {
         let adapter: IDXGIAdapter1 = unsafe {
             dxgi_factory
                 .EnumAdapterByGpuPreference(adapter_index, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE)?
@@ -139,9 +143,10 @@ fn get_adapter(dxgi_factory: &IDXGIFactory6, debug_layer_available: bool) -> Res
         {
             return Ok(adapter);
         }
+        adapter_index = adapter_index
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("DXGI adapter index exhausted"))?;
     }
-
-    unreachable!()
 }
 
 #[inline]
@@ -175,7 +180,8 @@ fn get_device(
             context,
         )?;
     }
-    let device = device.unwrap();
+    let device = device
+        .ok_or_else(|| anyhow::anyhow!("D3D11CreateDevice succeeded without returning a device"))?;
     let mut data = D3D11_FEATURE_DATA_D3D10_X_HARDWARE_OPTIONS::default();
     unsafe {
         device

@@ -12,6 +12,40 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use parking_lot::Mutex;
+use zeroize::Zeroizing;
+
+const MAX_IDENTIFIER_BYTES: usize = 4 * 1024;
+const MAX_SECRET_BYTES: usize = 16 * 1024 * 1024;
+
+fn validate_address(service: &str, account: &str) -> Result<()> {
+    validate_identifier("service", service)?;
+    validate_identifier("account", account)
+}
+
+fn validate_identifier(label: &str, value: &str) -> Result<()> {
+    anyhow::ensure!(!value.is_empty(), "secret {label} must not be empty");
+    anyhow::ensure!(
+        !value.contains('\0'),
+        "secret {label} must not contain a NUL character"
+    );
+    anyhow::ensure!(
+        value.len() <= MAX_IDENTIFIER_BYTES,
+        "secret {label} exceeds the {MAX_IDENTIFIER_BYTES} byte limit"
+    );
+    Ok(())
+}
+
+fn validate_secret(secret: &[u8]) -> Result<()> {
+    validate_secret_len(secret.len())
+}
+
+fn validate_secret_len(secret_len: usize) -> Result<()> {
+    anyhow::ensure!(
+        secret_len <= MAX_SECRET_BYTES,
+        "secret exceeds the {MAX_SECRET_BYTES} byte limit"
+    );
+    Ok(())
+}
 
 /// A keyed secret store. Secrets are addressed by a `(service, account)` pair.
 pub trait SecretStore: Send + Sync {
@@ -44,7 +78,7 @@ pub trait SecretStore: Send + Sync {
 /// tests. Secrets live only for the lifetime of the process.
 #[derive(Default)]
 pub struct MemorySecretStore {
-    entries: Mutex<HashMap<(String, String), Vec<u8>>>,
+    entries: Mutex<HashMap<(String, String), Zeroizing<Vec<u8>>>>,
 }
 
 impl MemorySecretStore {
@@ -56,21 +90,26 @@ impl MemorySecretStore {
 
 impl SecretStore for MemorySecretStore {
     fn set_secret(&self, service: &str, account: &str, secret: &[u8]) -> Result<()> {
-        self.entries
-            .lock()
-            .insert((service.to_string(), account.to_string()), secret.to_vec());
+        validate_address(service, account)?;
+        validate_secret(secret)?;
+        self.entries.lock().insert(
+            (service.to_string(), account.to_string()),
+            Zeroizing::new(secret.to_vec()),
+        );
         Ok(())
     }
 
     fn get_secret(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>> {
+        validate_address(service, account)?;
         Ok(self
             .entries
             .lock()
             .get(&(service.to_string(), account.to_string()))
-            .cloned())
+            .map(|secret| secret.to_vec()))
     }
 
     fn delete_secret(&self, service: &str, account: &str) -> Result<()> {
+        validate_address(service, account)?;
         self.entries
             .lock()
             .remove(&(service.to_string(), account.to_string()));
@@ -80,7 +119,7 @@ impl SecretStore for MemorySecretStore {
 
 #[cfg(target_os = "macos")]
 mod keychain {
-    use super::{Result, SecretStore};
+    use super::{Result, SecretStore, validate_address, validate_secret};
     use anyhow::anyhow;
 
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
@@ -90,11 +129,14 @@ mod keychain {
 
     impl SecretStore for KeychainSecretStore {
         fn set_secret(&self, service: &str, account: &str, secret: &[u8]) -> Result<()> {
+            validate_address(service, account)?;
+            validate_secret(secret)?;
             security_framework::passwords::set_generic_password(service, account, secret)
                 .map_err(|error| anyhow!("keychain write failed: {error}"))
         }
 
         fn get_secret(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>> {
+            validate_address(service, account)?;
             match security_framework::passwords::get_generic_password(service, account) {
                 Ok(secret) => Ok(Some(secret)),
                 Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(None),
@@ -103,6 +145,7 @@ mod keychain {
         }
 
         fn delete_secret(&self, service: &str, account: &str) -> Result<()> {
+            validate_address(service, account)?;
             match security_framework::passwords::delete_generic_password(service, account) {
                 Ok(()) => Ok(()),
                 Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(()),
@@ -117,7 +160,7 @@ pub use keychain::KeychainSecretStore;
 
 #[cfg(target_os = "windows")]
 mod windows_backend {
-    use super::{Result, SecretStore};
+    use super::{Result, SecretStore, validate_address, validate_secret};
     use anyhow::anyhow;
     use windows::Win32::Foundation::ERROR_NOT_FOUND;
     use windows::Win32::Security::Credentials::{
@@ -125,12 +168,15 @@ mod windows_backend {
         CredReadW, CredWriteW,
     };
     use windows::core::{PCWSTR, PWSTR};
+    use zeroize::Zeroizing;
 
     /// A [`SecretStore`] backed by the Windows Credential Manager (generic credentials).
     pub struct CredentialStore;
 
+    const MAX_CREDENTIAL_BLOB_BYTES: usize = 5 * 512;
+
     fn target_name(service: &str, account: &str) -> Vec<u16> {
-        format!("{service}/{account}")
+        format!("{}:{service}{account}", service.encode_utf16().count())
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect()
@@ -138,12 +184,20 @@ mod windows_backend {
 
     impl SecretStore for CredentialStore {
         fn set_secret(&self, service: &str, account: &str, secret: &[u8]) -> Result<()> {
+            validate_address(service, account)?;
+            validate_secret(secret)?;
+            anyhow::ensure!(
+                secret.len() <= MAX_CREDENTIAL_BLOB_BYTES,
+                "secret exceeds the Windows Credential Manager {MAX_CREDENTIAL_BLOB_BYTES} byte limit"
+            );
             let mut name = target_name(service, account);
-            let mut blob = secret.to_vec();
+            let mut blob = Zeroizing::new(secret.to_vec());
+            let blob_size = u32::try_from(blob.len())
+                .map_err(|_| anyhow!("credential blob length does not fit in u32"))?;
             let credential = CREDENTIALW {
                 Type: CRED_TYPE_GENERIC,
                 TargetName: PWSTR(name.as_mut_ptr()),
-                CredentialBlobSize: blob.len() as u32,
+                CredentialBlobSize: blob_size,
                 CredentialBlob: blob.as_mut_ptr(),
                 Persist: CRED_PERSIST_LOCAL_MACHINE,
                 ..Default::default()
@@ -155,6 +209,7 @@ mod windows_backend {
         }
 
         fn get_secret(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>> {
+            validate_address(service, account)?;
             let name = target_name(service, account);
             let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
             unsafe {
@@ -165,13 +220,22 @@ mod windows_backend {
                     &mut credential,
                 ) {
                     Ok(()) => {
-                        let cred = &*credential;
-                        let bytes = std::slice::from_raw_parts(
-                            cred.CredentialBlob,
-                            cred.CredentialBlobSize as usize,
-                        )
-                        .to_vec();
-                        CredFree(credential as *const core::ffi::c_void);
+                        let guard = CredentialGuard(credential);
+                        let cred = guard
+                            .0
+                            .as_ref()
+                            .ok_or_else(|| anyhow!("credential read returned a null pointer"))?;
+                        let blob_size = usize::try_from(cred.CredentialBlobSize)
+                            .map_err(|_| anyhow!("credential blob length does not fit in usize"))?;
+                        let bytes = if blob_size == 0 {
+                            Vec::new()
+                        } else {
+                            anyhow::ensure!(
+                                !cred.CredentialBlob.is_null(),
+                                "credential read returned a null blob"
+                            );
+                            std::slice::from_raw_parts(cred.CredentialBlob, blob_size).to_vec()
+                        };
                         Ok(Some(bytes))
                     }
                     Err(error) if error.code() == ERROR_NOT_FOUND.to_hresult() => Ok(None),
@@ -181,12 +245,25 @@ mod windows_backend {
         }
 
         fn delete_secret(&self, service: &str, account: &str) -> Result<()> {
+            validate_address(service, account)?;
             let name = target_name(service, account);
             unsafe {
                 match CredDeleteW(PCWSTR(name.as_ptr()), CRED_TYPE_GENERIC, None) {
                     Ok(()) => Ok(()),
                     Err(error) if error.code() == ERROR_NOT_FOUND.to_hresult() => Ok(()),
                     Err(error) => Err(anyhow!("credential delete failed: {error}")),
+                }
+            }
+        }
+    }
+
+    struct CredentialGuard(*mut CREDENTIALW);
+
+    impl Drop for CredentialGuard {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    CredFree(self.0.cast());
                 }
             }
         }
@@ -200,7 +277,7 @@ pub use windows_backend::CredentialStore;
 mod linux_backend {
     use std::collections::HashMap;
 
-    use super::{Result, SecretStore};
+    use super::{Result, SecretStore, validate_address, validate_secret};
     use anyhow::anyhow;
     use secret_service::EncryptionType;
     use secret_service::blocking::SecretService;
@@ -214,6 +291,8 @@ mod linux_backend {
 
     impl SecretStore for SecretServiceStore {
         fn set_secret(&self, service: &str, account: &str, secret: &[u8]) -> Result<()> {
+            validate_address(service, account)?;
+            validate_secret(secret)?;
             let session = SecretService::connect(EncryptionType::Dh)
                 .map_err(|error| anyhow!("secret service connect failed: {error}"))?;
             let collection = session
@@ -232,29 +311,37 @@ mod linux_backend {
         }
 
         fn get_secret(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>> {
+            validate_address(service, account)?;
             let session = SecretService::connect(EncryptionType::Dh)
                 .map_err(|error| anyhow!("secret service connect failed: {error}"))?;
             let result = session
                 .search_items(attributes(service, account))
                 .map_err(|error| anyhow!("secret service search failed: {error}"))?;
-            match result.unlocked.first() {
-                Some(item) => {
-                    let secret = item
-                        .get_secret()
-                        .map_err(|error| anyhow!("secret service read failed: {error}"))?;
-                    Ok(Some(secret))
-                }
-                None => Ok(None),
+            let item = if let Some(item) = result.unlocked.first() {
+                item
+            } else if let Some(item) = result.locked.first() {
+                item.unlock()
+                    .map_err(|error| anyhow!("secret service unlock failed: {error}"))?;
+                item
+            } else {
+                return Ok(None);
+            };
+            {
+                let secret = item
+                    .get_secret()
+                    .map_err(|error| anyhow!("secret service read failed: {error}"))?;
+                Ok(Some(secret))
             }
         }
 
         fn delete_secret(&self, service: &str, account: &str) -> Result<()> {
+            validate_address(service, account)?;
             let session = SecretService::connect(EncryptionType::Dh)
                 .map_err(|error| anyhow!("secret service connect failed: {error}"))?;
             let result = session
                 .search_items(attributes(service, account))
                 .map_err(|error| anyhow!("secret service search failed: {error}"))?;
-            for item in result.unlocked {
+            for item in result.unlocked.into_iter().chain(result.locked) {
                 item.delete()
                     .map_err(|error| anyhow!("secret service delete failed: {error}"))?;
             }
@@ -349,6 +436,19 @@ mod tests {
             store.get_secret("b", "x").unwrap().as_deref(),
             Some(&b"3"[..])
         );
+    }
+
+    #[test]
+    fn rejects_ambiguous_addresses_and_oversized_secrets() {
+        let store = MemorySecretStore::new();
+        assert!(store.set_secret("", "account", b"secret").is_err());
+        assert!(store.set_secret("service", "", b"secret").is_err());
+        assert!(
+            store
+                .set_secret("service\0alias", "account", b"secret")
+                .is_err()
+        );
+        assert!(validate_secret_len(MAX_SECRET_BYTES + 1).is_err());
     }
 
     #[test]

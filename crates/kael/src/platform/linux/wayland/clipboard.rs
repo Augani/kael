@@ -79,14 +79,21 @@ impl<T: ReceiveData> DataOffer<T> {
     }
 
     fn read_bytes(&self, connection: &Connection, mime_type: &str) -> Option<Vec<u8>> {
-        let pipe = Pipe::new().unwrap();
+        let pipe = Pipe::new()
+            .map_err(|error| {
+                log::error!("failed to create clipboard pipe: {error}");
+            })
+            .ok()?;
         self.inner.receive_data(mime_type.to_string(), unsafe {
             BorrowedFd::borrow_raw(pipe.write.as_raw_fd())
         });
         let fd = pipe.read;
         drop(pipe.write);
 
-        connection.flush().unwrap();
+        if let Err(error) = connection.flush() {
+            log::error!("failed to flush Wayland clipboard request: {error}");
+            return None;
+        }
 
         match unsafe { read_fd(fd) } {
             Ok(bytes) => Some(bytes),
@@ -159,6 +166,12 @@ impl Clipboard {
 
     pub fn set(&mut self, item: ClipboardItem) {
         self.contents = Some(item);
+    }
+
+    pub fn clear(&mut self) {
+        self.contents = None;
+        self.cached_read = None;
+        self.current_offer = None;
     }
 
     pub fn set_primary(&mut self, item: ClipboardItem) {
@@ -244,6 +257,7 @@ impl Clipboard {
                     let mut file = unsafe { file.get_mut() };
                     loop {
                         match file.write(&bytes[written..]) {
+                            Ok(0) => break Ok(PostAction::Remove),
                             Ok(n) if written + n == bytes.len() => {
                                 written += n;
                                 break Ok(PostAction::Remove);
@@ -257,6 +271,8 @@ impl Clipboard {
                     }
                 },
             )
-            .unwrap();
+            .unwrap_or_else(|error| {
+                log::error!("failed to register Wayland clipboard writer: {error:?}");
+            });
     }
 }

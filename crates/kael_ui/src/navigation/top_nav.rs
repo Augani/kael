@@ -19,8 +19,13 @@ pub struct TopNavHeading {
 
 impl TopNavHeading {
     pub fn new(heading: impl Into<SharedString>) -> Self {
+        let heading = heading.into();
         Self {
-            heading: heading.into(),
+            heading: if heading.trim().is_empty() {
+                "Navigation".into()
+            } else {
+                heading
+            },
             superheading: None,
             logo: None,
             style: StyleRefinement::default(),
@@ -28,12 +33,14 @@ impl TopNavHeading {
     }
 
     pub fn superheading(mut self, superheading: impl Into<SharedString>) -> Self {
-        self.superheading = Some(superheading.into());
+        let superheading = superheading.into();
+        self.superheading = (!superheading.trim().is_empty()).then_some(superheading);
         self
     }
 
     pub fn logo(mut self, logo: impl Into<SharedString>) -> Self {
-        self.logo = Some(logo.into());
+        let logo = logo.into();
+        self.logo = (!logo.trim().is_empty()).then_some(logo);
         self
     }
 }
@@ -50,6 +57,10 @@ impl RenderOnce for TopNavHeading {
         let user_style = self.style;
 
         div()
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group).label("Primary navigation"),
+            )
+            .tab_group()
             .flex()
             .items_center()
             .gap(px(8.0))
@@ -107,12 +118,14 @@ impl TopNav {
     }
 
     pub fn brand(mut self, brand: impl Into<SharedString>) -> Self {
-        self.brand = Some(brand.into());
+        let brand = brand.into();
+        self.brand = (!brand.trim().is_empty()).then_some(brand);
         self
     }
 
     pub fn leading_icon(mut self, icon: impl Into<SharedString>) -> Self {
-        self.leading_icon = Some(icon.into());
+        let icon = icon.into();
+        self.leading_icon = (!icon.trim().is_empty()).then_some(icon);
         self
     }
 
@@ -190,5 +203,22 @@ impl RenderOnce for TopNav {
                 div.style().refine(&user_style);
                 div
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn empty_heading_and_optional_brand_content_are_normalized() {
+        let heading = TopNavHeading::new(" ").superheading("").logo(" ");
+        assert_eq!(heading.heading.as_ref(), "Navigation");
+        assert!(heading.superheading.is_none());
+        assert!(heading.logo.is_none());
+
+        let nav = TopNav::new().brand(" ").leading_icon("");
+        assert!(nav.brand.is_none());
+        assert!(nav.leading_icon.is_none());
     }
 }

@@ -6,8 +6,11 @@
 
 /// Apply a linear gain to an interleaved buffer in place.
 pub fn apply_gain(buffer: &mut [f32], gain: f32) {
+    let gain = if gain.is_finite() { gain } else { 1.0 };
     for sample in buffer.iter_mut() {
-        *sample *= gain;
+        let input = if sample.is_finite() { *sample } else { 0.0 };
+        *sample = (f64::from(input) * f64::from(gain))
+            .clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32;
     }
 }
 
@@ -19,6 +22,12 @@ pub fn apply_fade(buffer: &mut [f32], channels: u16, start_gain: f32, end_gain: 
     if frames == 0 {
         return;
     }
+    let start_gain = if start_gain.is_finite() {
+        start_gain
+    } else {
+        1.0
+    };
+    let end_gain = if end_gain.is_finite() { end_gain } else { 1.0 };
     for frame in 0..frames {
         let t = if frames > 1 {
             frame as f32 / (frames - 1) as f32
@@ -27,7 +36,10 @@ pub fn apply_fade(buffer: &mut [f32], channels: u16, start_gain: f32, end_gain: 
         };
         let gain = start_gain + (end_gain - start_gain) * t;
         for channel in 0..channels {
-            buffer[frame * channels + channel] *= gain;
+            let sample = &mut buffer[frame * channels + channel];
+            let input = if sample.is_finite() { *sample } else { 0.0 };
+            *sample = (f64::from(input) * f64::from(gain))
+                .clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32;
         }
     }
 }
@@ -35,20 +47,24 @@ pub fn apply_fade(buffer: &mut [f32], channels: u16, start_gain: f32, end_gain: 
 /// Equal-power pan for an interleaved stereo buffer. `pan` is `-1.0` (hard left)
 /// to `1.0` (hard right); `0.0` is center (both channels × ~0.707).
 pub fn apply_stereo_pan(buffer: &mut [f32], pan: f32) {
-    let pan = pan.clamp(-1.0, 1.0);
+    let pan = if pan.is_finite() { pan } else { 0.0 }.clamp(-1.0, 1.0);
     let angle = (pan + 1.0) * 0.25 * std::f32::consts::PI;
     let (left_gain, right_gain) = (angle.cos(), angle.sin());
     for frame in buffer.chunks_exact_mut(2) {
-        frame[0] *= left_gain;
-        frame[1] *= right_gain;
+        frame[0] = if frame[0].is_finite() { frame[0] } else { 0.0 } * left_gain;
+        frame[1] = if frame[1].is_finite() { frame[1] } else { 0.0 } * right_gain;
     }
 }
 
 /// Hard peak limiter: clamps every sample to `±ceiling`.
 pub fn apply_hard_limit(buffer: &mut [f32], ceiling: f32) {
-    let ceiling = ceiling.abs();
+    let ceiling = if ceiling.is_finite() {
+        ceiling.abs()
+    } else {
+        1.0
+    };
     for sample in buffer.iter_mut() {
-        *sample = sample.clamp(-ceiling, ceiling);
+        *sample = if sample.is_finite() { *sample } else { 0.0 }.clamp(-ceiling, ceiling);
     }
 }
 
@@ -56,6 +72,7 @@ pub fn apply_hard_limit(buffer: &mut [f32], ceiling: f32) {
 pub fn peak(buffer: &[f32]) -> f32 {
     buffer
         .iter()
+        .filter(|sample| sample.is_finite())
         .fold(0.0, |peak, &sample| peak.max(sample.abs()))
 }
 
@@ -64,8 +81,12 @@ pub fn rms(buffer: &[f32]) -> f32 {
     if buffer.is_empty() {
         return 0.0;
     }
-    let sum_squares: f32 = buffer.iter().map(|&sample| sample * sample).sum();
-    (sum_squares / buffer.len() as f32).sqrt()
+    let sum_squares = buffer
+        .iter()
+        .filter(|sample| sample.is_finite())
+        .map(|&sample| f64::from(sample).powi(2))
+        .sum::<f64>();
+    (sum_squares / buffer.len() as f64).sqrt() as f32
 }
 
 /// A one-pole IIR filter (low- or high-pass), processed sample-by-sample.
@@ -97,13 +118,22 @@ impl OnePole {
 
     fn alpha(cutoff_hz: f32, sample_rate: u32) -> f32 {
         let sample_rate = sample_rate.max(1) as f32;
-        let cutoff = cutoff_hz.clamp(0.0, sample_rate * 0.5);
+        let cutoff = if cutoff_hz.is_finite() {
+            cutoff_hz
+        } else {
+            0.0
+        }
+        .clamp(0.0, sample_rate * 0.5);
         1.0 - (-2.0 * std::f32::consts::PI * cutoff / sample_rate).exp()
     }
 
     /// Process a single sample.
     pub fn process_sample(&mut self, input: f32) -> f32 {
+        let input = if input.is_finite() { input } else { 0.0 };
         self.state += self.alpha * (input - self.state);
+        if !self.state.is_finite() {
+            self.state = 0.0;
+        }
         if self.high_pass {
             input - self.state
         } else {
@@ -141,15 +171,27 @@ pub fn waveform_peaks(samples: &[f32], channels: u16, buckets: usize) -> Vec<Wav
     if frames == 0 || buckets == 0 {
         return Vec::new();
     }
-    let mut peaks = Vec::with_capacity(buckets);
+    let buckets = buckets.min(frames);
+    let mut peaks = Vec::new();
+    if peaks.try_reserve_exact(buckets).is_err() {
+        return Vec::new();
+    }
     for bucket in 0..buckets {
-        let start = bucket * frames / buckets;
-        let end = (((bucket + 1) * frames / buckets).max(start + 1)).min(frames);
+        let start = ((bucket as u128) * (frames as u128) / (buckets as u128)) as usize;
+        let end = ((((bucket + 1) as u128) * (frames as u128) / (buckets as u128)) as usize)
+            .max(start + 1)
+            .min(frames);
         let mut min = f32::INFINITY;
         let mut max = f32::NEG_INFINITY;
         for frame in start..end {
             let base = frame * channels;
-            let mono = samples[base..base + channels].iter().sum::<f32>() / channels as f32;
+            let mono = samples[base..base + channels]
+                .iter()
+                .filter(|sample| sample.is_finite())
+                .map(|&sample| f64::from(sample))
+                .sum::<f64>()
+                / channels as f64;
+            let mono = mono.clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32;
             min = min.min(mono);
             max = max.max(mono);
         }
@@ -182,6 +224,13 @@ pub struct Biquad {
 
 impl Biquad {
     fn from_coeffs(b0: f32, b1: f32, b2: f32, a0: f32, a1: f32, a2: f32) -> Self {
+        if ![b0, b1, b2, a0, a1, a2]
+            .iter()
+            .all(|value| value.is_finite())
+            || a0.abs() <= f32::EPSILON
+        {
+            return Self::identity();
+        }
         Self {
             b0: b0 / a0,
             b1: b1 / a0,
@@ -195,15 +244,31 @@ impl Biquad {
         }
     }
 
+    fn identity() -> Self {
+        Self {
+            b0: 1.0,
+            b1: 0.0,
+            b2: 0.0,
+            a1: 0.0,
+            a2: 0.0,
+            x1: 0.0,
+            x2: 0.0,
+            y1: 0.0,
+            y2: 0.0,
+        }
+    }
+
     fn omega(freq_hz: f32, sample_rate: u32) -> (f32, f32, f32) {
-        let w0 = 2.0 * std::f32::consts::PI * (freq_hz / sample_rate as f32);
+        let sample_rate = sample_rate.max(1) as f32;
+        let freq_hz = if freq_hz.is_finite() { freq_hz } else { 0.0 }.clamp(0.0, sample_rate * 0.5);
+        let w0 = 2.0 * std::f32::consts::PI * (freq_hz / sample_rate);
         (w0.sin(), w0.cos(), w0.sin())
     }
 
     /// A low-pass filter at `freq_hz` with resonance `q` (0.707 is maximally flat).
     pub fn low_pass(freq_hz: f32, sample_rate: u32, q: f32) -> Self {
         let (sin_w, cos_w, _) = Self::omega(freq_hz, sample_rate);
-        let alpha = sin_w / (2.0 * q.max(1e-4));
+        let alpha = sin_w / (2.0 * finite_q(q));
         Self::from_coeffs(
             (1.0 - cos_w) / 2.0,
             1.0 - cos_w,
@@ -217,7 +282,7 @@ impl Biquad {
     /// A high-pass filter at `freq_hz` with resonance `q`.
     pub fn high_pass(freq_hz: f32, sample_rate: u32, q: f32) -> Self {
         let (sin_w, cos_w, _) = Self::omega(freq_hz, sample_rate);
-        let alpha = sin_w / (2.0 * q.max(1e-4));
+        let alpha = sin_w / (2.0 * finite_q(q));
         Self::from_coeffs(
             (1.0 + cos_w) / 2.0,
             -(1.0 + cos_w),
@@ -231,15 +296,15 @@ impl Biquad {
     /// A band-pass filter (0 dB peak gain) centered at `freq_hz` with width set by `q`.
     pub fn band_pass(freq_hz: f32, sample_rate: u32, q: f32) -> Self {
         let (sin_w, cos_w, _) = Self::omega(freq_hz, sample_rate);
-        let alpha = sin_w / (2.0 * q.max(1e-4));
+        let alpha = sin_w / (2.0 * finite_q(q));
         Self::from_coeffs(alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cos_w, 1.0 - alpha)
     }
 
     /// A peaking EQ that boosts or cuts `gain_db` around `freq_hz` (the parametric band).
     pub fn peaking_eq(freq_hz: f32, sample_rate: u32, q: f32, gain_db: f32) -> Self {
         let (sin_w, cos_w, _) = Self::omega(freq_hz, sample_rate);
-        let alpha = sin_w / (2.0 * q.max(1e-4));
-        let amp = 10f32.powf(gain_db / 40.0);
+        let alpha = sin_w / (2.0 * finite_q(q));
+        let amp = 10f32.powf(finite_db(gain_db) / 40.0);
         Self::from_coeffs(
             1.0 + alpha * amp,
             -2.0 * cos_w,
@@ -253,8 +318,8 @@ impl Biquad {
     /// A low-shelf filter applying `gain_db` below `freq_hz`.
     pub fn low_shelf(freq_hz: f32, sample_rate: u32, q: f32, gain_db: f32) -> Self {
         let (sin_w, cos_w, _) = Self::omega(freq_hz, sample_rate);
-        let alpha = sin_w / (2.0 * q.max(1e-4));
-        let amp = 10f32.powf(gain_db / 40.0);
+        let alpha = sin_w / (2.0 * finite_q(q));
+        let amp = 10f32.powf(finite_db(gain_db) / 40.0);
         let beta = 2.0 * amp.sqrt() * alpha;
         Self::from_coeffs(
             amp * ((amp + 1.0) - (amp - 1.0) * cos_w + beta),
@@ -269,8 +334,8 @@ impl Biquad {
     /// A high-shelf filter applying `gain_db` above `freq_hz`.
     pub fn high_shelf(freq_hz: f32, sample_rate: u32, q: f32, gain_db: f32) -> Self {
         let (sin_w, cos_w, _) = Self::omega(freq_hz, sample_rate);
-        let alpha = sin_w / (2.0 * q.max(1e-4));
-        let amp = 10f32.powf(gain_db / 40.0);
+        let alpha = sin_w / (2.0 * finite_q(q));
+        let amp = 10f32.powf(finite_db(gain_db) / 40.0);
         let beta = 2.0 * amp.sqrt() * alpha;
         Self::from_coeffs(
             amp * ((amp + 1.0) + (amp - 1.0) * cos_w + beta),
@@ -284,9 +349,17 @@ impl Biquad {
 
     /// Process one sample, advancing the filter state.
     pub fn process_sample(&mut self, input: f32) -> f32 {
-        let output = self.b0 * input + self.b1 * self.x1 + self.b2 * self.x2
-            - self.a1 * self.y1
-            - self.a2 * self.y2;
+        let input = if input.is_finite() { input } else { 0.0 };
+        let output = f64::from(self.b0) * f64::from(input)
+            + f64::from(self.b1) * f64::from(self.x1)
+            + f64::from(self.b2) * f64::from(self.x2)
+            - f64::from(self.a1) * f64::from(self.y1)
+            - f64::from(self.a2) * f64::from(self.y2);
+        let output = if output.is_finite() {
+            output.clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32
+        } else {
+            0.0
+        };
         self.x2 = self.x1;
         self.x1 = input;
         self.y2 = self.y1;
@@ -303,7 +376,8 @@ impl Biquad {
 
     /// The steady-state gain at DC (0 Hz), useful for validating filter type.
     pub fn dc_gain(&self) -> f32 {
-        (self.b0 + self.b1 + self.b2) / (1.0 + self.a1 + self.a2)
+        let gain = (self.b0 + self.b1 + self.b2) / (1.0 + self.a1 + self.a2);
+        if gain.is_finite() { gain } else { 0.0 }
     }
 
     /// Clear the delay state without changing the coefficients.
@@ -312,6 +386,18 @@ impl Biquad {
         self.x2 = 0.0;
         self.y1 = 0.0;
         self.y2 = 0.0;
+    }
+}
+
+fn finite_q(q: f32) -> f32 {
+    if q.is_finite() { q.max(1e-4) } else { 0.707 }
+}
+
+fn finite_db(db: f32) -> f32 {
+    if db.is_finite() {
+        db.clamp(-240.0, 240.0)
+    } else {
+        0.0
     }
 }
 
@@ -338,17 +424,22 @@ impl Compressor {
         sample_rate: u32,
     ) -> Self {
         Self {
-            threshold_db,
-            ratio: ratio.max(1.0),
+            threshold_db: finite_db(threshold_db),
+            ratio: if ratio.is_finite() {
+                ratio.max(1.0)
+            } else {
+                1.0
+            },
             attack_coeff: time_coeff(attack_ms, sample_rate),
             release_coeff: time_coeff(release_ms, sample_rate),
-            makeup_db,
+            makeup_db: finite_db(makeup_db),
             envelope: 0.0,
         }
     }
 
     /// Process one sample, returning the gain-adjusted output.
     pub fn process_sample(&mut self, input: f32) -> f32 {
+        let input = if input.is_finite() { input } else { 0.0 };
         let level = input.abs();
         let coeff = if level > self.envelope {
             self.attack_coeff
@@ -365,7 +456,7 @@ impl Compressor {
             0.0
         };
         let gain = 10f32.powf((reduction_db + self.makeup_db) / 20.0);
-        input * gain
+        (f64::from(input) * f64::from(gain)).clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32
     }
 
     /// Process a mono buffer in place.
@@ -377,7 +468,7 @@ impl Compressor {
 }
 
 fn time_coeff(time_ms: f32, sample_rate: u32) -> f32 {
-    if time_ms <= 0.0 {
+    if !time_ms.is_finite() || time_ms <= 0.0 || sample_rate == 0 {
         return 0.0;
     }
     (-1.0 / (time_ms * 0.001 * sample_rate as f32)).exp()
@@ -563,6 +654,43 @@ mod tests {
             (out / 0.1 - 1.995).abs() < 0.05,
             "makeup off: {}",
             out / 0.1
+        );
+    }
+
+    #[test]
+    fn non_finite_dsp_inputs_fail_soft() {
+        let mut buffer = [f32::NAN, f32::INFINITY, 0.5, -0.5];
+        apply_gain(&mut buffer, f32::NAN);
+        apply_fade(&mut buffer, 2, f32::NAN, f32::INFINITY);
+        apply_stereo_pan(&mut buffer, f32::NAN);
+        apply_hard_limit(&mut buffer, f32::NAN);
+        assert!(buffer.iter().all(|sample| sample.is_finite()));
+        assert!(peak(&[f32::NAN, 0.5]).is_finite());
+        assert!(rms(&[f32::INFINITY, 0.5]).is_finite());
+
+        let mut one_pole = OnePole::low_pass(f32::NAN, 0);
+        assert!(one_pole.process_sample(f32::NAN).is_finite());
+        let mut biquad = Biquad::peaking_eq(f32::NAN, 0, f32::NAN, f32::INFINITY);
+        assert!(biquad.process_sample(f32::NAN).is_finite());
+        let mut compressor = Compressor::new(
+            f32::NAN,
+            f32::NAN,
+            f32::NAN,
+            f32::INFINITY,
+            f32::INFINITY,
+            0,
+        );
+        assert!(compressor.process_sample(f32::NAN).is_finite());
+    }
+
+    #[test]
+    fn waveform_peaks_bounds_buckets_and_ignores_non_finite_samples() {
+        let peaks = waveform_peaks(&[f32::NAN, 0.5], 1, usize::MAX);
+        assert_eq!(peaks.len(), 2);
+        assert!(
+            peaks
+                .iter()
+                .all(|peak| peak.min.is_finite() && peak.max.is_finite())
         );
     }
 }

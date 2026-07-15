@@ -4,7 +4,7 @@ Beyond the element tree, Kael gives you direct GPU drawing: an immediate-mode ca
 
 ## Visual escape-hatch ladder
 
-When porting an Electron app or giving an AI agent a graphics task, choose the
+When porting an browser-runtime stack app or giving an AI agent a graphics task, choose the
 lowest rung that solves the problem:
 
 | Need | Use today | Notes |
@@ -26,7 +26,38 @@ graphics fallback; and roadmap status for public render targets/custom shaders.
 
 ## Canvas
 
-`canvas` takes two closures — a prepaint pass (compute layout/state, returns a value) and a paint pass (draw into the bounds). Inside paint you call `window.paint_quad` and `window.paint_path`:
+For most custom graphics, use the immediate-mode `canvas(size, draw)` form. It
+records native draw commands for the current pass and lets generated code
+inspect composition before the commands flush into the window:
+
+```rust
+use kael::{canvas, point, px, size, stroke, Bounds};
+
+canvas(size(px(320.0), px(180.0)), |draw, _window, _app| {
+    draw.fill_rect(
+        Bounds::new(point(px(0.0), px(0.0)), draw.size()),
+        kael::rgb(0x1e1e1e),
+    );
+    draw.stroke_rect(
+        Bounds::new(point(px(24.0), px(24.0)), size(px(120.0), px(64.0))),
+        stroke(px(2.0), kael::rgb(0xffffff)),
+    );
+
+    tracing::info!(summary = draw.to_text(), "canvas draw");
+})
+```
+
+`DrawContext::to_text()` reports queued command count, path count, quad count,
+filled/stroked quad counts, text count, image count, saved-state depth, and
+canvas size without logging text, image data, colors, or drawing coordinates.
+Use `command_count()`, `path_count()`, `quad_count()`, `filled_quad_count()`,
+`stroked_quad_count()`, `text_count()`, `image_count()`, `state_stack_depth()`,
+and `is_empty()` when agents or tests need to verify generated chart, timeline,
+waveform, canvas editor, or game HUD drawing.
+
+`canvas` also supports the lower-level two-closure form — a prepaint pass
+(compute layout/state, returns a value) and a paint pass (draw into the bounds).
+Inside paint you call `window.paint_quad` and `window.paint_path`:
 
 ```rust
 use kael::{canvas, fill, quad, px, rgb, Bounds, Pixels, Window, App};
@@ -89,15 +120,104 @@ div()
     .rounded_xl()
 ```
 
+Use `cached(child)` when a subtree is expensive but only depends on tracked
+state, `deferred(child)` when a subtree should keep layout in-tree but paint
+after ancestors, and `effect_layer(child)` when a subtree needs native
+CSS-style content blur or drop shadow. Use `LayerStack` with `LayerOptions`
+when the app needs native in-window modal, fullscreen, or anchored overlay
+composition instead of a WebView-hosted DOM overlay:
+
+```rust
+use kael::{cached, deferred, effect_layer, LayerOptions, px};
+
+let preview = cached(render_preview()).id("preview-cache");
+tracing::info!(summary = preview.to_text(), "cached subtree");
+
+let overlay = deferred(effect_layer(render_panel()).content_blur(px(8.))).with_priority(120);
+tracing::info!(summary = overlay.to_text(), "deferred overlay");
+
+let modal = LayerOptions::modal();
+tracing::info!(summary = modal.to_text(), "native layer options");
+```
+
+Inspect `Cached::to_text()`, `Deferred::to_text()`, and
+`EffectLayer::to_text()` in generated graphics, overlays, previews, and
+inspectors. Inspect `LayerAnchor::to_text()`, `LayerOptions::to_text()`, and
+`LayerStack::to_text()` before generated modal/popover/fullscreen layer flows.
+These helpers report child presence, explicit cache-key presence, draw
+priority/class, effect combination, blur class, shadow presence, placement,
+backdrop/dismissal policy, and active layer counts without logging cache ids,
+child contents, colors, coordinates, margins, blur radii, shadow offsets, shadow
+colors, or geometry.
+
 ## SVG
 
 `svg()` renders a vector asset; `text_color` fills monochrome SVGs and `with_transformation` applies rotation/scale:
 
 ```rust
-use kael::{svg, px, rgb};
+use kael::{svg, Transformation, px, rgb, size};
 
-svg().path("icons/logo.svg").size(px(24.0)).text_color(rgb(0x2563eb))
+let icon = svg()
+    .path("icons/logo.svg")
+    .with_transformation(Transformation::scale(size(1.25, 1.25)))
+    .size(px(24.0))
+    .text_color(rgb(0x2563eb));
+
+tracing::info!(summary = icon.to_text(), "svg");
 ```
+
+Use `Svg::to_text()`, `Transformation::to_text()`, `has_path()`,
+`path_len_bytes()`, `has_transformation()`, and `transformation_key()` when
+generated icon, diagram, or vector-asset UI needs diagnostics. Summaries report
+path presence/byte length and coarse transform kind without logging SVG paths,
+asset names, transform coordinates, scale values, or rotation values.
+
+## Images and Surfaces
+
+`img(source)` renders URL, embedded, file-path, cached, decoded, and custom
+loader image sources with native object-fit behavior:
+
+```rust
+use kael::{img, ObjectFit, StyledImage};
+
+let poster = img("https://cdn.example.com/poster.png")
+    .object_fit(ObjectFit::Cover)
+    .with_fallback(|| fallback_art().into_any_element());
+
+tracing::info!(summary = poster.to_text(), "image");
+```
+
+Use `ImageSource::to_text()`, `ImageStyle::to_text()`, and `Img::to_text()` for
+asset-heavy generated UI. The helpers expose source kind, resource identifier
+byte length, grayscale state, object-fit key, loading/fallback hook presence,
+and explicit cache binding without logging URLs, file paths, embedded asset
+names, raw bytes, decoded image IDs, pixel dimensions, or child contents.
+
+For native image caching, scope cache providers around the subtree that owns the
+asset working set:
+
+```rust
+use kael::{image_cache, lru, retain_all};
+
+let cache = lru("gallery-cache", 64);
+tracing::info!(summary = cache.to_text(), "image cache policy");
+
+image_cache(cache).child(gallery)
+```
+
+Use `retain_all(id)` for bounded asset sets and `lru(id, max_images)` for
+feeds, galleries, maps, and other churning image sets. Inspect
+`RetainAllImageCacheProvider::to_text()`, `LruImageCacheProvider::to_text()`,
+`ImageCacheElement::to_text()`, `RetainAllImageCache::to_text()`,
+`LruImageCache::to_text()`, and `ImageCacheItem::to_text()` when generated UI or
+agents need cache policy, entry counts, loading/loaded/error counts, capacity,
+capacity class, and scoped child count without logging resource identifiers,
+element ids, image ids, image bytes, error details, or asset names.
+
+`surface(source)` renders platform-native external image buffers, such as
+CoreVideo pixel buffers on macOS. Use `SurfaceSource::to_text()` and
+`Surface::to_text()` to report source class and object-fit key without logging
+pixel contents or dimensions.
 
 ## Lottie
 

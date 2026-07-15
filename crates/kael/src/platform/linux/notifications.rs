@@ -45,7 +45,7 @@ pub fn show_notification_with_actions(
     foreground_executor
         .spawn(async move {
             if let Ok(action_id) = rx.await {
-                callback(action_id);
+                super::catch_platform_callback("notification action", (), || callback(action_id));
             }
         })
         .detach();

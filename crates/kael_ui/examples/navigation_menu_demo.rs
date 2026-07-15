@@ -244,7 +244,7 @@ impl Render for NavigationMenuDemo {
                                                                                         .text_size(px(13.0))
                                                                                         .child(format!(
                                                                                             "Selected: {}",
-                                                                                            self.selected_vertical_item.as_ref().map(|s| s.as_str()).unwrap_or("None")
+                                                    self.selected_vertical_item.as_deref().unwrap_or("None")
                                                                                         ))
                                                                                 )
                                                                                 .child(
@@ -375,7 +375,7 @@ impl Render for NavigationMenuDemo {
                                                                         .text_size(px(13.0))
                                                                         .child(format!(
                                                                             "Selected: {}",
-                                                                            self.selected_horizontal_item.as_ref().map(|s| s.as_str()).unwrap_or("None")
+                                                    self.selected_horizontal_item.as_deref().unwrap_or("None")
                                                                         ))
                                                                 )
                                                                 .child(
@@ -468,7 +468,7 @@ fn main() {
                     }),
                     ..Default::default()
                 },
-                |_window, cx| cx.new(|cx| NavigationMenuDemo::new(cx)),
+                |_window, cx| cx.new(NavigationMenuDemo::new),
             )
             .unwrap();
         });

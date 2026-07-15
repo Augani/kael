@@ -1,5 +1,7 @@
 use kael::prelude::FluentBuilder as _;
 use kael::*;
+use std::panic::Location;
+use std::rc::Rc;
 
 use crate::components::code_block::CodeBlock;
 use crate::components::separator::Separator;
@@ -168,7 +170,15 @@ impl InlineFlattener {
                 RichInline::Link { text, url } => {
                     let prev = self.in_link.take();
                     self.in_link = Some(url.clone());
+                    let start = self.text.len();
                     self.walk(text);
+                    let end = self.text.len();
+                    if start < end {
+                        self.links.push(LinkInfo {
+                            range: start..end,
+                            url: url.clone(),
+                        });
+                    }
                     self.in_link = prev;
                 }
                 RichInline::Image { alt, .. } => {
@@ -217,7 +227,6 @@ impl InlineFlattener {
             return;
         }
 
-        let start = self.text.len();
         self.text.push_str(text);
         let len = text.len();
 
@@ -290,18 +299,43 @@ impl InlineFlattener {
             underline,
             strikethrough,
         });
-
-        if let Some(ref url) = self.in_link {
-            self.links.push(LinkInfo {
-                range: start..(start + len),
-                url: url.clone(),
-            });
-        }
     }
 }
 
-pub type LinkClickHandler = Box<dyn Fn(&str, &mut Window, &mut App) + 'static>;
+pub type LinkClickHandler = Rc<dyn Fn(&str, &mut Window, &mut App) + 'static>;
 
+fn can_open_external_url(url: &str) -> bool {
+    let Some((scheme, _)) = url.trim().split_once(':') else {
+        return false;
+    };
+    matches!(
+        scheme.to_ascii_lowercase().as_str(),
+        "http" | "https" | "mailto" | "tel"
+    )
+}
+
+fn activate_link(url: &str, handler: Option<&LinkClickHandler>, window: &mut Window, cx: &mut App) {
+    if let Some(handler) = handler {
+        handler(url, window, cx);
+    } else if can_open_external_url(url) {
+        let _ = cx.open_url(url);
+    }
+}
+
+fn rich_text_callsite_id(prefix: &str, caller: &'static Location<'static>) -> ElementId {
+    ElementId::Name(
+        format!(
+            "{}:{}:{}:{}",
+            prefix,
+            caller.file(),
+            caller.line(),
+            caller.column()
+        )
+        .into(),
+    )
+}
+
+#[track_caller]
 pub fn render_inlines(
     inlines: &[RichInline],
     base_size: Pixels,
@@ -324,28 +358,25 @@ pub fn render_inlines(
 
     let styled = StyledText::new(SharedString::from(flattened.text)).with_runs(flattened.runs);
 
-    if !flattened.links.is_empty() && link_handler.is_some() {
-        let id = element_id.unwrap_or_else(|| ElementId::Name("rich-text-inline".into()));
+    if !flattened.links.is_empty() {
+        let id = element_id
+            .unwrap_or_else(|| rich_text_callsite_id("rich-text-inline", Location::caller()));
         let click_ranges: Vec<std::ops::Range<usize>> =
             flattened.links.iter().map(|l| l.range.clone()).collect();
-        let link_urls: Vec<String> = flattened.links.iter().map(|l| l.url.clone()).collect();
-        let handler = link_handler.is_some();
-
-        if handler {
-            let urls = link_urls;
-            return div()
-                .text_size(base_size)
-                .line_height(relative(1.5))
-                .child(InteractiveText::new(id, styled).on_click(
-                    click_ranges,
-                    move |idx, _window, cx| {
-                        if let Some(url) = urls.get(idx) {
-                            let _ = cx.open_url(url);
-                        }
-                    },
-                ))
-                .into_any_element();
-        }
+        let urls: Vec<String> = flattened.links.iter().map(|l| l.url.clone()).collect();
+        let handler = link_handler.cloned();
+        return div()
+            .text_size(base_size)
+            .line_height(relative(1.5))
+            .child(InteractiveText::new(id, styled).on_click(
+                click_ranges,
+                move |idx, window, cx| {
+                    if let Some(url) = urls.get(idx) {
+                        activate_link(url, handler.as_ref(), window, cx);
+                    }
+                },
+            ))
+            .into_any_element();
     }
 
     div()
@@ -355,6 +386,7 @@ pub fn render_inlines(
         .into_any_element()
 }
 
+#[track_caller]
 pub fn render_inlines_with_handler(
     inlines: &[RichInline],
     base_size: Pixels,
@@ -379,39 +411,25 @@ pub fn render_inlines_with_handler(
     let styled = StyledText::new(SharedString::from(flattened.text)).with_runs(flattened.runs);
 
     if !flattened.links.is_empty() {
-        let id = element_id.unwrap_or_else(|| ElementId::Name("rich-text-inline".into()));
+        let id = element_id
+            .unwrap_or_else(|| rich_text_callsite_id("rich-text-inline", Location::caller()));
         let click_ranges: Vec<std::ops::Range<usize>> =
             flattened.links.iter().map(|l| l.range.clone()).collect();
 
-        if let Some(_handler) = on_link_click {
-            let urls: Vec<String> = flattened.links.iter().map(|l| l.url.clone()).collect();
-            return div()
-                .text_size(base_size)
-                .line_height(relative(1.5))
-                .child(InteractiveText::new(id, styled).on_click(
-                    click_ranges,
-                    move |idx, _window, cx| {
-                        if let Some(url) = urls.get(idx) {
-                            let _ = cx.open_url(url);
-                        }
-                    },
-                ))
-                .into_any_element();
-        } else {
-            let urls: Vec<String> = flattened.links.iter().map(|l| l.url.clone()).collect();
-            return div()
-                .text_size(base_size)
-                .line_height(relative(1.5))
-                .child(InteractiveText::new(id, styled).on_click(
-                    click_ranges,
-                    move |idx, _window, cx| {
-                        if let Some(url) = urls.get(idx) {
-                            let _ = cx.open_url(url);
-                        }
-                    },
-                ))
-                .into_any_element();
-        }
+        let urls: Vec<String> = flattened.links.iter().map(|l| l.url.clone()).collect();
+        let handler = on_link_click.clone();
+        return div()
+            .text_size(base_size)
+            .line_height(relative(1.5))
+            .child(InteractiveText::new(id, styled).on_click(
+                click_ranges,
+                move |idx, window, cx| {
+                    if let Some(url) = urls.get(idx) {
+                        activate_link(url, handler.as_ref(), window, cx);
+                    }
+                },
+            ))
+            .into_any_element();
     }
 
     div()
@@ -561,6 +579,7 @@ fn render_block(
     }
 }
 
+#[track_caller]
 fn render_inline_element(
     inlines: &[RichInline],
     base_size: Pixels,
@@ -584,38 +603,24 @@ fn render_inline_element(
     let styled = StyledText::new(SharedString::from(flattened.text)).with_runs(flattened.runs);
 
     if !flattened.links.is_empty() {
-        let id = element_id.unwrap_or_else(|| ElementId::Name("rich-inline".into()));
+        let id =
+            element_id.unwrap_or_else(|| rich_text_callsite_id("rich-inline", Location::caller()));
         let click_ranges: Vec<std::ops::Range<usize>> =
             flattened.links.iter().map(|l| l.range.clone()).collect();
         let urls: Vec<String> = flattened.links.iter().map(|l| l.url.clone()).collect();
-
-        if let Some(_handler) = on_link_click {
-            return div()
-                .text_size(base_size)
-                .line_height(relative(1.5))
-                .child(InteractiveText::new(id, styled).on_click(
-                    click_ranges,
-                    move |idx, _window, cx| {
-                        if let Some(url) = urls.get(idx) {
-                            let _ = cx.open_url(url);
-                        }
-                    },
-                ))
-                .into_any_element();
-        } else {
-            return div()
-                .text_size(base_size)
-                .line_height(relative(1.5))
-                .child(InteractiveText::new(id, styled).on_click(
-                    click_ranges,
-                    move |idx, _window, cx| {
-                        if let Some(url) = urls.get(idx) {
-                            let _ = cx.open_url(url);
-                        }
-                    },
-                ))
-                .into_any_element();
-        }
+        let handler = on_link_click.clone();
+        return div()
+            .text_size(base_size)
+            .line_height(relative(1.5))
+            .child(InteractiveText::new(id, styled).on_click(
+                click_ranges,
+                move |idx, window, cx| {
+                    if let Some(url) = urls.get(idx) {
+                        activate_link(url, handler.as_ref(), window, cx);
+                    }
+                },
+            ))
+            .into_any_element();
     }
 
     div()
@@ -783,4 +788,64 @@ fn render_table(
     }
 
     table.into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_flattener() -> InlineFlattener {
+        let color = hsla(0.0, 0.0, 0.0, 1.0);
+        InlineFlattener::new("sans".into(), "mono".into(), color, color, color)
+    }
+
+    #[::core::prelude::v1::test]
+    fn styled_runs_inside_one_link_share_one_interaction_range() {
+        let result = test_flattener().flatten(&[RichInline::Link {
+            text: vec![
+                RichInline::Text("Read ".into()),
+                RichInline::Bold(vec![RichInline::Text("the docs".into())]),
+            ],
+            url: "https://example.com/docs".into(),
+        }]);
+
+        assert_eq!(result.text, "Read the docs");
+        assert_eq!(
+            result.runs.len(),
+            2,
+            "visual styling should retain both runs"
+        );
+        assert_eq!(result.links.len(), 1);
+        assert_eq!(result.links[0].range, 0..13);
+        assert_eq!(result.links[0].url, "https://example.com/docs");
+    }
+
+    #[::core::prelude::v1::test]
+    fn adjacent_links_remain_distinct_targets() {
+        let result = test_flattener().flatten(&[
+            RichInline::Link {
+                text: vec![RichInline::Text("one".into())],
+                url: "app:one".into(),
+            },
+            RichInline::Link {
+                text: vec![RichInline::Text("two".into())],
+                url: "app:two".into(),
+            },
+        ]);
+
+        assert_eq!(result.links.len(), 2);
+        assert_eq!(result.links[0].range, 0..3);
+        assert_eq!(result.links[1].range, 3..6);
+    }
+
+    #[::core::prelude::v1::test]
+    fn built_in_navigation_only_accepts_explicit_external_schemes() {
+        assert!(can_open_external_url("https://example.com"));
+        assert!(can_open_external_url("HTTP://example.com"));
+        assert!(can_open_external_url("mailto:hello@example.com"));
+        assert!(can_open_external_url("tel:+233000000000"));
+        assert!(!can_open_external_url("javascript:alert(1)"));
+        assert!(!can_open_external_url("data:text/html,unsafe"));
+        assert!(!can_open_external_url("/relative/path"));
+    }
 }

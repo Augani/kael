@@ -6,6 +6,7 @@ use crate::components::icon::Icon;
 use crate::components::icon_source::IconSource;
 use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
+use std::panic::Location;
 use std::rc::Rc;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
@@ -42,6 +43,7 @@ impl BannerVariant {
 
 #[derive(IntoElement)]
 pub struct Banner {
+    id: ElementId,
     variant: BannerVariant,
     message: SharedString,
     description: Option<SharedString>,
@@ -59,8 +61,19 @@ pub struct Banner {
 }
 
 impl Banner {
+    #[track_caller]
     pub fn new(message: impl Into<SharedString>) -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "banner:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             variant: BannerVariant::default(),
             message: message.into(),
             description: None,
@@ -76,6 +89,11 @@ impl Banner {
             action: None,
             style: StyleRefinement::default(),
         }
+    }
+
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
     }
 
     pub fn variant(mut self, variant: BannerVariant) -> Self {
@@ -99,18 +117,22 @@ impl Banner {
         self
     }
 
+    #[track_caller]
     pub fn success(message: impl Into<SharedString>) -> Self {
         Self::new(message).variant(BannerVariant::Success)
     }
 
+    #[track_caller]
     pub fn warning(message: impl Into<SharedString>) -> Self {
         Self::new(message).variant(BannerVariant::Warning)
     }
 
+    #[track_caller]
     pub fn error(message: impl Into<SharedString>) -> Self {
         Self::new(message).variant(BannerVariant::Error)
     }
 
+    #[track_caller]
     pub fn announcement(message: impl Into<SharedString>) -> Self {
         Self::new(message).variant(BannerVariant::Announcement)
     }
@@ -194,8 +216,15 @@ impl Styled for Banner {
 }
 
 impl RenderOnce for Banner {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        if self.dismissed {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let banner_id = self.id.clone();
+        let runtime_state = window.use_keyed_state(
+            ElementId::NamedChild(Box::new(banner_id.clone()), "runtime-state".into()),
+            cx,
+            |_, _| (self.expanded, self.dismissed),
+        );
+        let (expanded, dismissed) = *runtime_state.read(cx);
+        if dismissed {
             return div().into_any_element();
         }
 
@@ -217,13 +246,23 @@ impl RenderOnce for Banner {
             .icon
             .unwrap_or_else(|| IconSource::Named(self.variant.default_icon().into()));
         let has_children = !self.children.is_empty();
-        let show_content = has_children && self.expanded;
+        let show_content = has_children && expanded;
         let is_card = self.container == BannerContainer::Card;
         let has_actions =
             self.action.is_some() || self.end_content.is_some() || self.dismissible || has_children;
         let single_line = self.description.is_none() && has_actions;
 
         div()
+            .id(banner_id.clone())
+            .accessibility({
+                let attributes = AccessibilityAttributes::new(AccessibilityRole::Alert)
+                    .label(self.message.to_string());
+                if let Some(description) = &self.description {
+                    attributes.description(description.to_string())
+                } else {
+                    attributes
+                }
+            })
             .flex()
             .flex_col()
             .w_full()
@@ -265,7 +304,10 @@ impl RenderOnce for Banner {
                                     .line_height(px(20.0))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(title_color)
-                                    .child(self.message.clone()),
+                                    .child(
+                                        StyledText::new(self.message.clone())
+                                            .accessibility_hidden(true),
+                                    ),
                             )
                             .when_some(self.description.clone(), |this, description| {
                                 this.child(
@@ -274,7 +316,9 @@ impl RenderOnce for Banner {
                                         .line_height(px(16.0))
                                         .font_weight(FontWeight::NORMAL)
                                         .text_color(description_color)
-                                        .child(description),
+                                        .child(
+                                            StyledText::new(description).accessibility_hidden(true),
+                                        ),
                                 )
                             }),
                     )
@@ -290,46 +334,68 @@ impl RenderOnce for Banner {
                     })
                     .when_some(self.action.clone(), |this, (label, handler)| {
                         this.child(
-                            Button::new("banner-action", label)
-                                .variant(ButtonVariant::Ghost)
-                                .size(ButtonSize::Sm)
-                                .flex_shrink_0()
-                                .on_click(move |_, window, cx| {
-                                    (handler)(window, cx);
-                                }),
+                            Button::new(
+                                ElementId::NamedChild(Box::new(banner_id.clone()), "action".into()),
+                                label,
+                            )
+                            .variant(ButtonVariant::Ghost)
+                            .size(ButtonSize::Sm)
+                            .flex_shrink_0()
+                            .on_click(move |_, window, cx| {
+                                (handler)(window, cx);
+                            }),
                         )
                     })
                     .when(has_children, |this| {
                         this.child(
                             Button::new(
-                                "banner-expand",
-                                if self.expanded { "Collapse" } else { "Expand" },
+                                ElementId::NamedChild(Box::new(banner_id.clone()), "expand".into()),
+                                if expanded { "Collapse" } else { "Expand" },
                             )
                             .variant(ButtonVariant::Ghost)
                             .size(ButtonSize::Icon)
-                            .icon(if self.expanded {
+                            .icon(if expanded {
                                 "chevron-up"
                             } else {
                                 "chevron-down"
                             })
-                            .tooltip(if self.expanded { "Collapse" } else { "Expand" })
-                            .flex_shrink_0(),
+                            .tooltip(if expanded { "Collapse" } else { "Expand" })
+                            .flex_shrink_0()
+                            .on_click({
+                                let runtime_state = runtime_state.clone();
+                                move |_, _, cx| {
+                                    runtime_state.update(cx, |state, cx| {
+                                        state.0 = !state.0;
+                                        cx.notify();
+                                    });
+                                }
+                            }),
                         )
                     })
                     .when(self.dismissible, |this| {
                         let dismiss_handler = self.on_dismiss.clone();
                         this.child(
-                            Button::new("banner-dismiss", "Dismiss")
-                                .variant(ButtonVariant::Ghost)
-                                .size(ButtonSize::Icon)
-                                .icon("x")
-                                .tooltip("Dismiss")
-                                .flex_shrink_0()
-                                .on_click(move |_, window, cx| {
-                                    if let Some(ref handler) = dismiss_handler {
-                                        (handler)(window, cx);
-                                    }
-                                }),
+                            Button::new(
+                                ElementId::NamedChild(
+                                    Box::new(banner_id.clone()),
+                                    "dismiss".into(),
+                                ),
+                                "Dismiss",
+                            )
+                            .variant(ButtonVariant::Ghost)
+                            .size(ButtonSize::Icon)
+                            .icon("x")
+                            .tooltip("Dismiss")
+                            .flex_shrink_0()
+                            .on_click(move |_, window, cx| {
+                                runtime_state.update(cx, |state, cx| {
+                                    state.1 = true;
+                                    cx.notify();
+                                });
+                                if let Some(ref handler) = dismiss_handler {
+                                    (handler)(window, cx);
+                                }
+                            }),
                         )
                     }),
             )

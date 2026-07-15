@@ -33,7 +33,10 @@ fn render_loading_spinner(size: Pixels, color: Hsla) -> impl IntoElement {
     } else {
         SpinnerSize::Md
     };
-    Spinner::new().size(spinner_size).color(color)
+    Spinner::new()
+        .size(spinner_size)
+        .color(color)
+        .decorative(true)
 }
 
 /// A fully custom color set for [`ButtonVariant::Custom`], letting an app define any
@@ -123,6 +126,8 @@ pub struct Button {
     size: ButtonSize,
     disabled: bool,
     selected: bool,
+    pressed: Option<bool>,
+    expanded: Option<bool>,
     loading: bool,
     icon: Option<IconSource>,
     icon_position: IconPosition,
@@ -157,6 +162,8 @@ impl Button {
             size: ButtonSize::Md,
             disabled: false,
             selected: false,
+            pressed: None,
+            expanded: None,
             loading: false,
             icon: None,
             icon_position: IconPosition::Start,
@@ -193,6 +200,21 @@ impl Button {
 
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// Expose this button as a two-state toggle to assistive technology.
+    ///
+    /// Leave unset for ordinary push buttons. Passing either value advertises
+    /// the button's current pressed state without changing its visual styling.
+    pub fn pressed(mut self, pressed: bool) -> Self {
+        self.pressed = Some(pressed);
+        self
+    }
+
+    /// Expose whether this button controls expanded or collapsed content.
+    pub fn expanded(mut self, expanded: bool) -> Self {
+        self.expanded = Some(expanded);
         self
     }
 
@@ -352,13 +374,51 @@ impl RenderOnce for Button {
             .clone();
         let is_focused = focus_handle.is_focused(window);
         let ring_color = theme.tokens.ring;
+        let accessibility_label = if !self.label.is_empty() {
+            self.label.clone()
+        } else {
+            self.tooltip
+                .clone()
+                .unwrap_or_else(|| SharedString::from("Button"))
+        };
+        let mut accessibility_state = AccessibilityState::NONE;
+        if self.disabled {
+            accessibility_state |= AccessibilityState::DISABLED;
+        }
+        if is_focused {
+            accessibility_state |= AccessibilityState::FOCUSED;
+        }
+        if self.selected && self.pressed.is_none() {
+            accessibility_state |= AccessibilityState::SELECTED;
+        }
+        if self.pressed == Some(true) {
+            accessibility_state |= AccessibilityState::PRESSED;
+        }
+        if let Some(expanded) = self.expanded {
+            accessibility_state |= if expanded {
+                AccessibilityState::EXPANDED
+            } else {
+                AccessibilityState::COLLAPSED
+            };
+        }
+        if self.loading {
+            accessibility_state |= AccessibilityState::BUSY;
+        }
+        let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::Button)
+            .label(accessibility_label.to_string())
+            .states(accessibility_state);
+        if clickable {
+            accessibility =
+                accessibility.actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]);
+        }
 
         let label_text = Text::new(self.label.clone())
             .variant(TextVariant::Custom)
             .size(text_size)
             .weight(FontWeight::MEDIUM)
             .font(theme.tokens.font_family.clone())
-            .color(fg);
+            .color(fg)
+            .accessibility_hidden(true);
 
         let icon_size = if is_icon_only {
             px(16.0)
@@ -370,12 +430,14 @@ impl RenderOnce for Button {
         let is_loading = self.loading;
         let is_selected = self.selected;
         let user_style = self.style;
+        let focus_on_mouse = focus_handle.clone();
 
         self.base
             .when(!self.disabled && !is_loading, |this| {
                 this.track_focus(&focus_handle.tab_index(0).tab_stop(true))
             })
             .relative()
+            .accessibility(accessibility)
             .overflow_hidden()
             .flex()
             .items_center()
@@ -420,14 +482,40 @@ impl RenderOnce for Button {
             })
             .on_mouse_down(MouseButton::Left, move |_event, window, _| {
                 window.prevent_default();
+                if !is_loading && !self.disabled {
+                    window.focus(&focus_on_mouse);
+                }
                 if ripple_enabled {
                     window.refresh();
                 }
             })
             .when_some(handler.filter(|_| clickable), |this, on_click| {
+                let on_key = on_click.clone();
                 this.on_click(move |event, window, cx| {
                     cx.stop_propagation();
                     (on_click)(event, window, cx);
+                })
+                .on_key_down(move |event, window, cx| {
+                    if event.keystroke.modifiers.modified() {
+                        return;
+                    }
+                    let Some(button) = (match event.keystroke.key.as_str() {
+                        "enter" => Some(KeyboardButton::Enter),
+                        "space" => Some(KeyboardButton::Space),
+                        _ => None,
+                    }) else {
+                        return;
+                    };
+                    on_key(
+                        &ClickEvent::Keyboard(KeyboardClickEvent {
+                            button,
+                            ..Default::default()
+                        }),
+                        window,
+                        cx,
+                    );
+                    cx.stop_propagation();
+                    window.prevent_default();
                 })
             })
             .when(self.ripple_enabled && clickable, |this| {
@@ -500,5 +588,14 @@ mod tests {
         let custom = outline.hover(kael::white(), kael::black());
         assert_eq!(custom.hover_background, kael::white());
         assert_eq!(custom.hover_foreground, kael::black());
+    }
+
+    #[test]
+    fn pressed_state_is_opt_in_for_toggle_buttons() {
+        let push_button = Button::new("push", "Push");
+        let toggle_button = Button::new("toggle", "Toggle").pressed(true);
+
+        assert_eq!(push_button.pressed, None);
+        assert_eq!(toggle_button.pressed, Some(true));
     }
 }

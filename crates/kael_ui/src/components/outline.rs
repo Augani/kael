@@ -2,6 +2,7 @@
 
 use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
+use std::panic::Location;
 use std::rc::Rc;
 
 #[derive(Clone)]
@@ -35,18 +36,42 @@ impl OutlineItem {
 
 #[derive(IntoElement)]
 pub struct Outline {
+    id: ElementId,
+    label: SharedString,
     items: Vec<OutlineItem>,
     on_select: Option<Rc<dyn Fn(SharedString, &mut Window, &mut App)>>,
     style: StyleRefinement,
 }
 
 impl Outline {
+    #[track_caller]
     pub fn new() -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "outline:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
+            label: "On this page".into(),
             items: Vec::new(),
             on_select: None,
             style: StyleRefinement::default(),
         }
+    }
+
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
+    }
+
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = label.into();
+        self
     }
 
     pub fn item(mut self, item: OutlineItem) -> Self {
@@ -88,6 +113,11 @@ impl RenderOnce for Outline {
         let overlay_hover = crate::astryx::overlay_hover(theme.tokens.background.l < 0.5);
 
         div()
+            .id(self.id.clone())
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::List).label(self.label.to_string()),
+            )
+            .tab_group()
             .flex()
             .flex_row()
             .gap(px(2.0))
@@ -108,7 +138,27 @@ impl RenderOnce for Outline {
                     .min_w(px(0.0))
                     .children(self.items.into_iter().map(move |item| {
                         let id = item.id.clone();
+                        let item_element_id =
+                            ElementId::NamedChild(Box::new(self.id.clone()), item.id.clone());
                         let on_select = on_select.clone();
+                        let interactive = on_select.is_some();
+                        let mut accessibility = AccessibilityAttributes::new(if interactive {
+                            AccessibilityRole::Link
+                        } else {
+                            AccessibilityRole::ListItem
+                        })
+                        .label(item.label.to_string())
+                        .states(if item.active {
+                            AccessibilityState::SELECTED
+                        } else {
+                            AccessibilityState::NONE
+                        });
+                        if interactive {
+                            accessibility = accessibility.actions(vec![
+                                AccessibilityAction::Focus,
+                                AccessibilityAction::Click,
+                            ]);
+                        }
                         let indent = match item.level {
                             0..=2 => px(12.0),
                             3 => px(28.0),
@@ -117,6 +167,8 @@ impl RenderOnce for Outline {
                         };
 
                         div()
+                            .id(item_element_id)
+                            .accessibility(accessibility)
                             .flex()
                             .items_center()
                             .h(px(36.0))
@@ -135,9 +187,22 @@ impl RenderOnce for Outline {
                             } else {
                                 theme.tokens.muted_foreground
                             })
-                            .cursor_pointer()
-                            .hover(move |style| {
-                                style.bg(overlay_hover).text_color(theme.tokens.foreground)
+                            .when(interactive, |this| {
+                                this.focusable()
+                                    .tab_index(0)
+                                    .tab_stop(true)
+                                    .cursor_pointer()
+                                    .hover(move |style| {
+                                        style.bg(overlay_hover).text_color(theme.tokens.foreground)
+                                    })
+                                    .focus_visible(move |style| {
+                                        style
+                                            .bg(overlay_hover)
+                                            .text_color(theme.tokens.foreground)
+                                            .shadow(smallvec::smallvec![
+                                                crate::astryx::focus_ring_outer(theme.tokens.ring)
+                                            ])
+                                    })
                             })
                             .child(
                                 div()
@@ -147,9 +212,21 @@ impl RenderOnce for Outline {
                                     .child(item.label),
                             )
                             .when_some(on_select, |this, handler| {
-                                this.on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                                let key_handler = handler.clone();
+                                let key_id = id.clone();
+                                this.on_click(move |_event, window, cx| {
                                     handler(id.clone(), window, cx);
                                 })
+                                .on_key_down(
+                                    move |event, window, cx| {
+                                        if matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                        {
+                                            key_handler(key_id.clone(), window, cx);
+                                            cx.stop_propagation();
+                                            window.prevent_default();
+                                        }
+                                    },
+                                )
                             })
                     })),
             )

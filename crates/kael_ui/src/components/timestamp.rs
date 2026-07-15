@@ -27,7 +27,7 @@ impl From<i64> for TimestampValue {
 
 impl From<u64> for TimestampValue {
     fn from(value: u64) -> Self {
-        Self::UnixSeconds(value as i64)
+        Self::UnixSeconds(value.min(i64::MAX as u64) as i64)
     }
 }
 
@@ -170,15 +170,16 @@ fn format_timestamp(
         TimestampValue::Text(value) => value.to_string(),
         _ => {
             let seconds = timestamp_seconds(value);
-            let diff = now - seconds;
-            let effective_format =
-                if format == TimestampFormat::Auto && diff.abs() <= auto_threshold_seconds {
-                    TimestampFormat::Relative
-                } else if format == TimestampFormat::Auto {
-                    TimestampFormat::DateTime
-                } else {
-                    format
-                };
+            let diff = now.saturating_sub(seconds);
+            let effective_format = if format == TimestampFormat::Auto
+                && diff.saturating_abs() <= auto_threshold_seconds
+            {
+                TimestampFormat::Relative
+            } else if format == TimestampFormat::Auto {
+                TimestampFormat::DateTime
+            } else {
+                format
+            };
 
             match effective_format {
                 TimestampFormat::Relative => relative_time(diff),
@@ -207,22 +208,30 @@ fn timestamp_seconds(value: &TimestampValue) -> i64 {
 
 fn unix_seconds(value: SystemTime) -> i64 {
     match value.duration_since(UNIX_EPOCH) {
-        Ok(duration) => duration.as_secs() as i64,
-        Err(err) => -(err.duration().as_secs() as i64),
+        Ok(duration) => duration.as_secs().min(i64::MAX as u64) as i64,
+        Err(err) => {
+            let seconds = err.duration().as_secs().min(i64::MAX as u64) as i64;
+            seconds.saturating_neg()
+        }
     }
 }
 
 fn relative_time(diff_seconds: i64) -> String {
     if diff_seconds < 0 {
-        let abs = diff_seconds.abs();
+        let abs = diff_seconds.saturating_abs();
         if abs < MINUTE {
             return "in a few seconds".to_string();
+        }
+        if (DAY..2 * DAY).contains(&abs) {
+            return "tomorrow".to_string();
         }
         return format!("in {}", relative_unit(abs));
     }
 
     if diff_seconds < 10 {
         "just now".to_string()
+    } else if (DAY..2 * DAY).contains(&diff_seconds) {
+        "yesterday".to_string()
     } else {
         format!("{} ago", relative_unit(diff_seconds))
     }
@@ -232,17 +241,57 @@ fn relative_unit(seconds: i64) -> String {
     if seconds < MINUTE {
         plural(seconds, "second")
     } else if seconds < HOUR {
-        plural((seconds + MINUTE / 2) / MINUTE, "minute")
+        plural(rounded_div(seconds, MINUTE), "minute")
     } else if seconds < DAY {
-        plural((seconds + HOUR / 2) / HOUR, "hour")
-    } else if seconds < 2 * DAY {
-        "yesterday".to_string()
+        plural(rounded_div(seconds, HOUR), "hour")
     } else if seconds < MONTH {
-        plural((seconds + DAY / 2) / DAY, "day")
+        plural(rounded_div(seconds, DAY), "day")
     } else if seconds < YEAR {
-        plural((seconds + MONTH / 2) / MONTH, "month")
+        plural(rounded_div(seconds, MONTH), "month")
     } else {
-        plural((seconds + YEAR / 2) / YEAR, "year")
+        plural(rounded_div(seconds, YEAR), "year")
+    }
+}
+
+fn rounded_div(value: i64, divisor: i64) -> i64 {
+    let quotient = value / divisor;
+    let remainder = value % divisor;
+    quotient + i64::from(remainder >= divisor / 2)
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::{
+        format_timestamp, relative_time, TimestampFormat, TimestampValue, DAY,
+        DEFAULT_AUTO_THRESHOLD,
+    };
+
+    #[test]
+    fn relative_time_distinguishes_tomorrow_from_yesterday() {
+        assert_eq!(relative_time(DAY), "yesterday");
+        assert_eq!(relative_time(-DAY), "tomorrow");
+    }
+
+    #[test]
+    fn extreme_differences_do_not_overflow() {
+        assert!(!relative_time(i64::MIN).is_empty());
+        assert!(!format_timestamp(
+            &TimestampValue::UnixSeconds(i64::MIN),
+            TimestampFormat::Auto,
+            DEFAULT_AUTO_THRESHOLD,
+            false,
+            i64::MAX,
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn u64_timestamp_saturates() {
+        assert!(matches!(
+            TimestampValue::from(u64::MAX),
+            TimestampValue::UnixSeconds(i64::MAX)
+        ));
     }
 }
 
@@ -255,8 +304,8 @@ fn plural(value: i64, unit: &str) -> String {
 }
 
 fn absolute_time(seconds: i64, format: TimestampFormat, show_timezone: bool) -> String {
-    let days = div_floor(seconds, DAY);
-    let seconds_of_day = seconds - days * DAY;
+    let days = seconds.div_euclid(DAY);
+    let seconds_of_day = seconds.rem_euclid(DAY);
     let (year, month, day) = civil_from_days(days);
     let hour = seconds_of_day / HOUR;
     let minute = (seconds_of_day % HOUR) / MINUTE;
@@ -335,15 +384,6 @@ fn month_name(month: u32) -> &'static str {
         11 => "Nov",
         _ => "Dec",
     }
-}
-
-fn div_floor(a: i64, b: i64) -> i64 {
-    let mut q = a / b;
-    let r = a % b;
-    if r != 0 && ((r > 0) != (b > 0)) {
-        q -= 1;
-    }
-    q
 }
 
 fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {

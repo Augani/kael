@@ -46,6 +46,7 @@ pub struct AvatarStatusDot {
     avatar_size: AvatarSize,
     label: Option<SharedString>,
     icon: Option<IconSource>,
+    decorative: bool,
     style: StyleRefinement,
 }
 
@@ -56,6 +57,7 @@ impl AvatarStatusDot {
             avatar_size: AvatarSize::Md,
             label: None,
             icon: None,
+            decorative: false,
             style: StyleRefinement::default(),
         }
     }
@@ -78,6 +80,19 @@ impl AvatarStatusDot {
     pub fn icon(mut self, icon: impl Into<IconSource>) -> Self {
         self.icon = Some(icon.into());
         self
+    }
+
+    pub fn decorative(mut self, decorative: bool) -> Self {
+        self.decorative = decorative;
+        self
+    }
+
+    fn accessibility_label(&self) -> SharedString {
+        self.label.clone().unwrap_or_else(|| match self.variant {
+            AvatarStatusDotVariant::Success => "Online".into(),
+            AvatarStatusDotVariant::Neutral => "Away".into(),
+            AvatarStatusDotVariant::Error => "Busy".into(),
+        })
     }
 
     fn metrics(avatar_size: AvatarSize) -> (Pixels, Pixels, Pixels) {
@@ -107,6 +122,7 @@ impl Styled for AvatarStatusDot {
 impl RenderOnce for AvatarStatusDot {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let theme = use_theme();
+        let accessibility_label = self.accessibility_label();
         let user_style = self.style;
         let (dot_size, border_width, icon_size) = Self::metrics(self.avatar_size);
         let color = match self.variant {
@@ -115,7 +131,16 @@ impl RenderOnce for AvatarStatusDot {
             AvatarStatusDotVariant::Error => theme.tokens.destructive,
         };
 
+        let accessibility = if self.decorative {
+            AccessibilityAttributes::new(AccessibilityRole::Group)
+                .states(AccessibilityState::HIDDEN)
+        } else {
+            AccessibilityAttributes::new(AccessibilityRole::Image)
+                .label(accessibility_label.to_string())
+        };
+
         div()
+            .accessibility(accessibility)
             .relative()
             .size(dot_size)
             .flex()
@@ -125,17 +150,6 @@ impl RenderOnce for AvatarStatusDot {
             .bg(color)
             .border(border_width)
             .border_color(theme.tokens.background)
-            .when_some(self.label, |this, label| {
-                this.child(
-                    div()
-                        .absolute()
-                        .left(px(-10000.0))
-                        .top(px(0.0))
-                        .size(px(1.0))
-                        .overflow_hidden()
-                        .child(label),
-                )
-            })
             .when(icon_size > px(0.0), |this| {
                 this.when_some(self.icon, |this, icon| {
                     this.child(
@@ -306,7 +320,27 @@ impl RenderOnce for Avatar {
             .or_else(|| self.name.clone())
             .unwrap_or_else(|| "Avatar".into());
 
-        let (content, bg_color, text_color) = if let Some(src) = self.src.or(self.fallback_src) {
+        let (content, bg_color, text_color) = if let Some(src) = self.src {
+            let image_size = px(size_px);
+            (
+                img(src)
+                    .size(image_size)
+                    .rounded_full()
+                    .object_fit(ObjectFit::Cover)
+                    .when_some(self.fallback_src, move |image, fallback_src| {
+                        image.with_fallback(move || {
+                            img(fallback_src.clone())
+                                .size(image_size)
+                                .rounded_full()
+                                .object_fit(ObjectFit::Cover)
+                                .into_any_element()
+                        })
+                    })
+                    .into_any_element(),
+                theme.tokens.muted,
+                theme.tokens.foreground,
+            )
+        } else if let Some(src) = self.fallback_src {
             (
                 img(src)
                     .size(px(size_px))
@@ -331,7 +365,7 @@ impl RenderOnce for Avatar {
                 div()
                     .text_size(px(text_size_px))
                     .font_weight(FontWeight::MEDIUM)
-                    .child(initials)
+                    .child(StyledText::new(initials).accessibility_hidden(true))
                     .into_any_element(),
                 bg_color,
                 text_color,
@@ -341,7 +375,7 @@ impl RenderOnce for Avatar {
                 div()
                     .text_size(px(text_size_px))
                     .font_weight(FontWeight::MEDIUM)
-                    .child(fallback)
+                    .child(StyledText::new(fallback).accessibility_hidden(true))
                     .into_any_element(),
                 theme.tokens.muted,
                 theme.tokens.muted_foreground,
@@ -358,9 +392,20 @@ impl RenderOnce for Avatar {
         };
 
         let status = self.status;
+        let status_description = self
+            .status_dot
+            .as_ref()
+            .map(AvatarStatusDot::accessibility_label);
         let status_dot = self.status_dot;
 
+        let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::Image)
+            .label(accessible_name.to_string());
+        if let Some(description) = status_description {
+            accessibility = accessibility.description(description.to_string());
+        }
+
         div()
+            .accessibility(accessibility)
             .relative()
             .size(px(size_px))
             .flex()
@@ -371,15 +416,6 @@ impl RenderOnce for Avatar {
             .bg(bg_color)
             .text_color(text_color)
             .font_family(theme.tokens.font_family.clone())
-            .child(
-                div()
-                    .absolute()
-                    .left(px(-10000.0))
-                    .top(px(0.0))
-                    .size(px(1.0))
-                    .overflow_hidden()
-                    .child(accessible_name),
-            )
             .map(|this| {
                 let mut div = this;
                 div.style().refine(&user_style);
@@ -419,8 +455,36 @@ impl RenderOnce for Avatar {
                         .absolute()
                         .right(px(offset))
                         .bottom(px(offset))
-                        .child(status.avatar_size(self.size)),
+                        .child(status.avatar_size(self.size).decorative(true)),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn initials_are_stable_for_names_and_empty_input() {
+        assert_eq!(Avatar::extract_initials("Ada Lovelace"), "AL");
+        assert_eq!(Avatar::extract_initials("  Grace   Hopper  "), "GH");
+        assert_eq!(Avatar::extract_initials("Prince"), "P");
+        assert_eq!(Avatar::extract_initials(" "), "??");
+    }
+
+    #[::core::prelude::v1::test]
+    fn status_dots_have_meaningful_default_labels() {
+        assert_eq!(
+            AvatarStatusDot::new().accessibility_label().as_ref(),
+            "Online"
+        );
+        assert_eq!(
+            AvatarStatusDot::new()
+                .variant(AvatarStatusDotVariant::Error)
+                .accessibility_label()
+                .as_ref(),
+            "Busy"
+        );
     }
 }

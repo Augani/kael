@@ -17,13 +17,16 @@ pub struct IconButton {
     id: ElementId,
     base: Stateful<Div>,
     icon_source: IconSource,
+    label: Option<SharedString>,
     variant: ButtonVariant,
     size: Pixels,
     icon_size: Option<Pixels>,
     disabled: bool,
+    tab_stop: bool,
     no_background: bool,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     ripple_enabled: bool,
+    rotation: Option<Radians>,
     style: StyleRefinement,
 }
 
@@ -41,19 +44,34 @@ impl IconButton {
             id: id.clone(),
             base: div().flex_shrink_0().id(id),
             icon_source,
+            label: None,
             variant: ButtonVariant::Secondary,
             size: px(32.0),
             icon_size: None,
             disabled: false,
+            tab_stop: true,
             no_background: false,
             on_click: None,
             ripple_enabled: false,
+            rotation: None,
             style: StyleRefinement::default(),
         }
     }
 
     pub fn ripple(mut self, enabled: bool) -> Self {
         self.ripple_enabled = enabled;
+        self
+    }
+
+    pub fn rotate(mut self, radians: impl Into<Radians>) -> Self {
+        self.rotation = Some(radians.into());
+        self
+    }
+
+    /// Override the generated element id when multiple instances use the same icon.
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self.base.interactivity().element_id = Some(self.id.clone());
         self
     }
 
@@ -72,8 +90,20 @@ impl IconButton {
         self
     }
 
+    /// Set the accessible name for this icon-only action.
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// Control whether the button participates in sequential keyboard navigation.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
         self
     }
 
@@ -214,12 +244,35 @@ impl RenderOnce for IconButton {
             .clone();
         let is_focused = focus_handle.is_focused(window);
         let focus_ring = crate::astryx::focus_ring_outer(theme.tokens.ring);
+        let accessibility_label = self
+            .label
+            .clone()
+            .unwrap_or_else(|| match &self.icon_source {
+                IconSource::Named(name) => SharedString::from(name.replace(['-', '_'], " ")),
+                IconSource::FilePath(_) => SharedString::from("Icon button"),
+            });
+        let mut accessibility_state = AccessibilityState::NONE;
+        if self.disabled {
+            accessibility_state |= AccessibilityState::DISABLED;
+        }
+        if is_focused {
+            accessibility_state |= AccessibilityState::FOCUSED;
+        }
+        let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::Button)
+            .label(accessibility_label.to_string())
+            .states(accessibility_state);
+        if clickable {
+            accessibility =
+                accessibility.actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]);
+        }
+        let focus_on_mouse = focus_handle.clone();
 
         self.base
             .when(!self.disabled, |this| {
-                this.track_focus(&focus_handle.tab_index(0).tab_stop(true))
+                this.track_focus(&focus_handle.tab_index(0).tab_stop(self.tab_stop))
             })
             .relative()
+            .accessibility(accessibility)
             .overflow_hidden()
             .flex()
             .items_center()
@@ -255,6 +308,9 @@ impl RenderOnce for IconButton {
             })
             .on_mouse_down(MouseButton::Left, move |_, window, _| {
                 window.prevent_default();
+                if !self.disabled {
+                    window.focus(&focus_on_mouse);
+                }
                 if ripple_enabled {
                     window.refresh();
                 }
@@ -267,9 +323,32 @@ impl RenderOnce for IconButton {
                 )
             })
             .when_some(handler.filter(|_| clickable), |this, on_click| {
+                let on_key = on_click.clone();
                 this.on_click(move |event, window, cx| {
                     cx.stop_propagation();
                     (on_click)(event, window, cx);
+                })
+                .on_key_down(move |event, window, cx| {
+                    if event.keystroke.modifiers.modified() {
+                        return;
+                    }
+                    let Some(button) = (match event.keystroke.key.as_str() {
+                        "enter" => Some(KeyboardButton::Enter),
+                        "space" => Some(KeyboardButton::Space),
+                        _ => None,
+                    }) else {
+                        return;
+                    };
+                    on_key(
+                        &ClickEvent::Keyboard(KeyboardClickEvent {
+                            button,
+                            ..Default::default()
+                        }),
+                        window,
+                        cx,
+                    );
+                    cx.stop_propagation();
+                    window.prevent_default();
                 })
             })
             .when_some(svg_path, |this, path| {
@@ -290,6 +369,9 @@ impl RenderOnce for IconButton {
                                     theme.tokens.primary
                                 } else {
                                     fg
+                                })
+                                .when_some(self.rotation, |this, rotation| {
+                                    this.with_transformation(Transformation::rotate(rotation))
                                 }),
                         ),
                 )

@@ -1,4 +1,4 @@
-// Feature: platform-parity-electron-features, Property 6: Clipboard round-trip
+// Feature: platform-parity-browser-runtime-features, Property 6: Clipboard round-trip
 
 use proptest::prelude::*;
 use std::sync::{Arc, Mutex};

@@ -1,4 +1,4 @@
-use crate::theme::Theme;
+use crate::{charts::finite_or_zero, components::icon::Icon, theme::Theme};
 use kael::{prelude::FluentBuilder as _, *};
 
 const DEFAULT_LINE_COLOR: u32 = 0x3b82f6;
@@ -55,7 +55,7 @@ impl SparklineSize {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SparklineTrend {
     Up,
     Down,
@@ -130,6 +130,14 @@ fn compute_trend(data: &[f64]) -> SparklineTrend {
     }
 }
 
+fn trend_label(trend: SparklineTrend) -> &'static str {
+    match trend {
+        SparklineTrend::Up => "up",
+        SparklineTrend::Down => "down",
+        SparklineTrend::Neutral => "neutral",
+    }
+}
+
 struct SparklinePaintData {
     data: Vec<f64>,
     variant: SparklineVariant,
@@ -158,7 +166,7 @@ pub struct Sparkline {
 impl Sparkline {
     pub fn new(data: Vec<f64>) -> Self {
         Self {
-            data,
+            data: data.into_iter().map(finite_or_zero).collect(),
             variant: SparklineVariant::Line,
             size: SparklineSize::Md,
             line_color: None,
@@ -281,6 +289,21 @@ impl RenderOnce for Sparkline {
             None
         };
 
+        let mut description = if self.data.is_empty() {
+            "Sparkline. No data".to_string()
+        } else {
+            let range = DataRange::from_data(&self.data);
+            format!(
+                "Sparkline with {} points. Minimum {:.2}, maximum {:.2}",
+                self.data.len(),
+                range.min,
+                range.max
+            )
+        };
+        if let Some(trend) = trend {
+            description.push_str(&format!(". Trend {}", trend_label(trend)));
+        }
+
         let paint_data = SparklinePaintData {
             data: self.data,
             variant: self.variant,
@@ -294,15 +317,19 @@ impl RenderOnce for Sparkline {
         let user_style = self.style;
 
         let trend_icon = trend.map(|t| {
-            let (icon_char, color) = match t {
-                SparklineTrend::Up => ("↑", rgb(TREND_UP_COLOR).into()),
-                SparklineTrend::Down => ("↓", rgb(TREND_DOWN_COLOR).into()),
-                SparklineTrend::Neutral => ("→", muted_foreground),
+            let (icon_name, color) = match t {
+                SparklineTrend::Up => ("arrow-up", rgb(TREND_UP_COLOR).into()),
+                SparklineTrend::Down => ("arrow-down", rgb(TREND_DOWN_COLOR).into()),
+                SparklineTrend::Neutral => ("arrow-right", muted_foreground),
             };
-            (icon_char, color)
+            (icon_name, color)
         });
-
         div()
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Image)
+                    .label("Sparkline")
+                    .description(description),
+            )
             .flex()
             .items_center()
             .gap(px(4.0))
@@ -317,13 +344,7 @@ impl RenderOnce for Sparkline {
                 .h(height),
             )
             .when_some(trend_icon, |this, (icon, color)| {
-                this.child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(color)
-                        .child(icon),
-                )
+                this.child(Icon::new(icon).size(px(14.0)).color(color))
             })
             .map(|this| {
                 let mut d = this;
@@ -519,5 +540,20 @@ fn paint_bar_sparkline(bounds: Bounds<Pixels>, data: &SparklinePaintData, window
             Bounds::new(point(x, y), size(bar_width, bar_height)),
             bar_color,
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn trend_labels_match_the_visual_direction() {
+        assert_eq!(compute_trend(&[1.0, 2.0]), SparklineTrend::Up);
+        assert_eq!(compute_trend(&[2.0, 1.0]), SparklineTrend::Down);
+        assert_eq!(compute_trend(&[1.0, 1.0]), SparklineTrend::Neutral);
+        assert_eq!(trend_label(SparklineTrend::Up), "up");
+        assert_eq!(trend_label(SparklineTrend::Down), "down");
+        assert_eq!(trend_label(SparklineTrend::Neutral), "neutral");
     }
 }

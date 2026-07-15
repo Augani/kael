@@ -545,7 +545,7 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|cx| OverlaysDemo::new(cx)),
+            |_window, cx| cx.new(OverlaysDemo::new),
         )
         .unwrap();
     });

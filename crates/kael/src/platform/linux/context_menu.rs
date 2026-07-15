@@ -374,7 +374,7 @@ pub(crate) fn show_x11_context_menu(
 
     // Invoke callback if an item was selected
     if let Some(id) = selected_id {
-        callback(id);
+        super::catch_platform_callback("context menu", (), || callback(id));
     }
 }
 
@@ -471,7 +471,7 @@ pub(crate) fn show_wayland_context_menu(
     }
 
     if let Some(id) = selected {
-        callback(id);
+        super::catch_platform_callback("context menu", (), || callback(id));
     }
 }
 

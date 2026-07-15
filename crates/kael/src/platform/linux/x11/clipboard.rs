@@ -968,7 +968,9 @@ impl Clipboard {
                     }
                 }
             })
-            .unwrap();
+            .map_err(|error| Error::Unknown {
+                description: format!("failed to spawn X11 clipboard worker: {error}"),
+            })?;
         *global_cb = Some(GlobalClipboard {
             inner: Arc::clone(&ctx),
             server_handle: join_handle,

@@ -4,8 +4,8 @@ use crate::{
     MediaKeyEvent, NetworkStatus, NoopTextSystem, PathPromptOptions, Platform, PlatformDisplay,
     PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem, PowerMode,
     PowerSaveBlockerKind, PromptButton, ScreenCaptureFrame, ScreenCaptureSource,
-    ScreenCaptureStream, SourceMetadata, SystemPowerEvent, Task, TestDisplay, TestWindow,
-    TrayMenuItem, WindowAppearance, WindowParams, size,
+    ScreenCaptureStream, SourceMetadata, SystemPowerEvent, SystemPowerSource, Task, TestDisplay,
+    TestWindow, TrayMenuItem, WindowAppearance, WindowParams, size,
 };
 use anyhow::Result;
 use collections::VecDeque;
@@ -40,6 +40,8 @@ pub(crate) struct TestPlatform {
     screen_capture_sources: RefCell<Vec<TestScreenCaptureSource>>,
     registered_url_schemes: RefCell<Vec<String>>,
     recent_documents: RefCell<Vec<PathBuf>>,
+    trashed_paths: RefCell<Vec<PathBuf>>,
+    dock_menu_action_count: Cell<usize>,
     tray_menu: RefCell<Vec<TrayMenuItem>>,
     tray_tooltip: RefCell<String>,
     tray_panel_mode: Cell<bool>,
@@ -48,6 +50,8 @@ pub(crate) struct TestPlatform {
     pub opened_url: RefCell<Option<String>>,
     pub text_system: Arc<dyn PlatformTextSystem>,
     power_mode: Cell<PowerMode>,
+    system_power_source: Cell<SystemPowerSource>,
+    battery_percentage: Cell<Option<u8>>,
     next_power_save_blocker_id: Cell<u32>,
     power_save_blockers: RefCell<Vec<(u32, PowerSaveBlockerKind)>>,
     user_attention: Cell<Option<AttentionType>>,
@@ -140,6 +144,8 @@ impl TestPlatform {
             screen_capture_sources: Default::default(),
             registered_url_schemes: Default::default(),
             recent_documents: Default::default(),
+            trashed_paths: Default::default(),
+            dock_menu_action_count: Cell::new(0),
             tray_menu: Default::default(),
             tray_tooltip: Default::default(),
             tray_panel_mode: Cell::new(false),
@@ -155,6 +161,8 @@ impl TestPlatform {
             weak: weak.clone(),
             opened_url: Default::default(),
             power_mode: Cell::new(PowerMode::Performance),
+            system_power_source: Cell::new(SystemPowerSource::Unknown),
+            battery_percentage: Cell::new(None),
             next_power_save_blocker_id: Cell::new(1),
             power_save_blockers: Default::default(),
             user_attention: Cell::new(None),
@@ -241,6 +249,10 @@ impl TestPlatform {
         self.registered_url_schemes.borrow().clone()
     }
 
+    pub(crate) fn trashed_paths(&self) -> Vec<PathBuf> {
+        self.trashed_paths.borrow().clone()
+    }
+
     pub(crate) fn recent_documents(&self) -> Vec<PathBuf> {
         self.recent_documents.borrow().clone()
     }
@@ -299,6 +311,15 @@ impl TestPlatform {
 
     pub(crate) fn set_power_mode(&self, power_mode: PowerMode) {
         self.power_mode.set(power_mode);
+    }
+
+    pub(crate) fn set_system_power_source(&self, source: SystemPowerSource) {
+        self.system_power_source.set(source);
+    }
+
+    pub(crate) fn set_battery_percentage(&self, percentage: Option<u8>) {
+        self.battery_percentage
+            .set(percentage.map(|percentage| percentage.min(100)));
     }
 
     pub(crate) fn power_save_blockers(&self) -> Vec<(u32, PowerSaveBlockerKind)> {
@@ -511,6 +532,14 @@ impl Platform for TestPlatform {
         self.power_mode.get()
     }
 
+    fn system_power_source(&self) -> SystemPowerSource {
+        self.system_power_source.get()
+    }
+
+    fn battery_percentage(&self) -> Option<u8> {
+        self.battery_percentage.get()
+    }
+
     fn should_reduce_motion(&self) -> bool {
         self.reduce_motion.get()
     }
@@ -632,10 +661,24 @@ impl Platform for TestPlatform {
     fn on_reopen(&self, _callback: Box<dyn FnMut()>) {}
 
     fn set_menus(&self, _menus: Vec<crate::Menu>, _keymap: &Keymap) {}
-    fn set_dock_menu(&self, _menu: Vec<crate::MenuItem>, _keymap: &Keymap) {}
+    fn set_dock_menu(&self, menu: Vec<crate::MenuItem>, _keymap: &Keymap) {
+        self.dock_menu_action_count.set(
+            menu.into_iter()
+                .filter(|item| matches!(item, crate::MenuItem::Action { .. }))
+                .count(),
+        );
+    }
+
+    fn dock_menu_action_count(&self) -> Option<usize> {
+        Some(self.dock_menu_action_count.get())
+    }
 
     fn add_recent_document(&self, path: &Path) {
         self.recent_documents.borrow_mut().push(path.to_path_buf());
+    }
+
+    fn clear_recent_documents(&self) {
+        self.recent_documents.borrow_mut().clear();
     }
 
     fn on_app_menu_action(&self, _callback: Box<dyn FnMut(&dyn crate::Action)>) {}
@@ -673,6 +716,10 @@ impl Platform for TestPlatform {
         *self.current_clipboard_item.lock() = Some(item);
     }
 
+    fn clear_clipboard(&self) {
+        *self.current_clipboard_item.lock() = None;
+    }
+
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn read_from_primary(&self) -> Option<ClipboardItem> {
         self.current_primary_item.lock().clone()
@@ -706,6 +753,11 @@ impl Platform for TestPlatform {
     }
 
     fn open_with_system(&self, _path: &Path) {}
+
+    fn move_path_to_trash(&self, path: &Path) -> Result<()> {
+        self.trashed_paths.borrow_mut().push(path.to_path_buf());
+        Ok(())
+    }
 }
 
 impl TestScreenCaptureSource {

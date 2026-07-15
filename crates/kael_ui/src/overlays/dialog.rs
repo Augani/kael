@@ -1,8 +1,8 @@
 //! Dialog component with focus trap and backdrop.
 
 use kael::{prelude::FluentBuilder as _, *};
-use std::rc::Rc;
 use std::time::Duration;
+use std::{panic::Location, rc::Rc};
 
 use crate::animations::easings;
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
@@ -48,27 +48,68 @@ impl DialogPosition {
     }
 
     pub fn top(mut self, top: Pixels) -> Self {
-        self.top = Some(top);
+        self.top = finite_edge(top);
         self
     }
 
     pub fn right(mut self, right: Pixels) -> Self {
-        self.right = Some(right);
+        self.right = finite_edge(right);
         self
     }
 
     pub fn bottom(mut self, bottom: Pixels) -> Self {
-        self.bottom = Some(bottom);
+        self.bottom = finite_edge(bottom);
         self
     }
 
     pub fn left(mut self, left: Pixels) -> Self {
-        self.left = Some(left);
+        self.left = finite_edge(left);
         self
+    }
+
+    /// Number of positioned edges supplied by the caller.
+    pub fn edge_count(&self) -> usize {
+        usize::from(self.top.is_some())
+            + usize::from(self.right.is_some())
+            + usize::from(self.bottom.is_some())
+            + usize::from(self.left.is_some())
+    }
+
+    /// Returns true when any edge is configured.
+    pub fn has_edges(&self) -> bool {
+        self.edge_count() > 0
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "dialog_position(edges={}, top={}, right={}, bottom={}, left={})",
+            self.edge_count(),
+            self.top.is_some(),
+            self.right.is_some(),
+            self.bottom.is_some(),
+            self.left.is_some()
+        )
     }
 }
 
+fn finite_edge(edge: Pixels) -> Option<Pixels> {
+    let edge = f32::from(edge);
+    edge.is_finite().then(|| px(edge.max(0.0)))
+}
+
 impl DialogSize {
+    /// Stable size key for content-safe diagnostics.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Sm => "sm",
+            Self::Md => "md",
+            Self::Lg => "lg",
+            Self::Xl => "xl",
+            Self::Full => "full",
+        }
+    }
+
     fn width(&self) -> Length {
         match self {
             Self::Sm => px(320.0).into(),
@@ -83,6 +124,27 @@ impl DialogSize {
         match self {
             Self::Full => relative(1.0).into(),
             _ => relative(0.75).into(),
+        }
+    }
+}
+
+impl DialogVariant {
+    /// Stable variant key for content-safe diagnostics.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::Fullscreen => "fullscreen",
+        }
+    }
+}
+
+impl DialogPurpose {
+    /// Stable purpose key for content-safe diagnostics.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Required => "required",
+            Self::Form => "form",
+            Self::Info => "info",
         }
     }
 }
@@ -158,6 +220,49 @@ impl DialogHeader {
     pub fn onOpenChange(self, handler: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
         self.on_open_change(handler)
     }
+
+    /// Returns the title length without exposing title text.
+    pub fn title_len_bytes(&self) -> usize {
+        self.title.len()
+    }
+
+    /// Returns true when a subtitle is configured.
+    pub fn has_subtitle(&self) -> bool {
+        self.subtitle.is_some()
+    }
+
+    /// Returns true when start content is configured.
+    pub fn has_start_content(&self) -> bool {
+        self.start_content.is_some()
+    }
+
+    /// Returns true when end content is configured.
+    pub fn has_end_content(&self) -> bool {
+        self.end_content.is_some()
+    }
+
+    /// Returns true when a close/open-change handler is configured.
+    pub fn has_open_change_handler(&self) -> bool {
+        self.on_open_change.is_some()
+    }
+
+    /// Returns true when the header divider is enabled.
+    pub fn has_divider_enabled(&self) -> bool {
+        self.has_divider
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "dialog_header(title_len_bytes={}, has_subtitle={}, start_content={}, end_content={}, divider={}, open_change_handler={})",
+            self.title_len_bytes(),
+            self.has_subtitle(),
+            self.has_start_content(),
+            self.has_end_content(),
+            self.has_divider_enabled(),
+            self.has_open_change_handler()
+        )
+    }
 }
 
 impl Styled for DialogHeader {
@@ -231,6 +336,7 @@ impl RenderOnce for DialogHeader {
 }
 
 pub struct Dialog {
+    id: ElementId,
     focus_handle: FocusHandle,
     header: Option<AnyElement>,
     title: Option<SharedString>,
@@ -240,11 +346,14 @@ pub struct Dialog {
     purpose: DialogPurpose,
     position: Option<DialogPosition>,
     children: Vec<AnyElement>,
+    content_builder: Option<Rc<dyn Fn() -> AnyElement>>,
     footer: Option<AnyElement>,
+    footer_builder: Option<Rc<dyn Fn() -> AnyElement>>,
     show_close_button: bool,
     close_on_backdrop_click: bool,
     close_on_escape: bool,
     on_close: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    previous_focus_handle: Option<FocusHandle>,
     focused: bool,
     dismissing: bool,
     dismiss_complete: bool,
@@ -252,8 +361,19 @@ pub struct Dialog {
 }
 
 impl Dialog {
+    #[track_caller]
     pub fn new(cx: &mut Context<Self>) -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "dialog:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             focus_handle: cx.focus_handle(),
             header: None,
             title: None,
@@ -263,16 +383,24 @@ impl Dialog {
             purpose: DialogPurpose::Info,
             position: None,
             children: vec![],
+            content_builder: None,
             footer: None,
+            footer_builder: None,
             show_close_button: true,
             close_on_backdrop_click: true,
             close_on_escape: true,
             on_close: None,
+            previous_focus_handle: None,
             focused: false,
             dismissing: false,
             dismiss_complete: false,
             style: StyleRefinement::default(),
         }
+    }
+
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
     }
 
     pub fn header(mut self, header: impl IntoElement) -> Self {
@@ -340,8 +468,26 @@ impl Dialog {
         self
     }
 
+    /// Build persistent content again for every render of a reusable dialog.
+    pub fn content_builder<E>(mut self, builder: impl Fn() -> E + 'static) -> Self
+    where
+        E: IntoElement,
+    {
+        self.content_builder = Some(Rc::new(move || builder().into_any_element()));
+        self
+    }
+
     pub fn footer(mut self, footer: impl IntoElement) -> Self {
         self.footer = Some(footer.into_any_element());
+        self
+    }
+
+    /// Build a persistent footer again for every render of a reusable dialog.
+    pub fn footer_builder<E>(mut self, builder: impl Fn() -> E + 'static) -> Self
+    where
+        E: IntoElement,
+    {
+        self.footer_builder = Some(Rc::new(move || builder().into_any_element()));
         self
     }
 
@@ -389,6 +535,100 @@ impl Dialog {
         self.on_open_change(handler)
     }
 
+    /// Stable size key for content-safe diagnostics.
+    pub fn size_key(&self) -> &'static str {
+        self.size.to_text()
+    }
+
+    /// Stable variant key for content-safe diagnostics.
+    pub fn variant_key(&self) -> &'static str {
+        self.variant.to_text()
+    }
+
+    /// Stable purpose key for content-safe diagnostics.
+    pub fn purpose_key(&self) -> &'static str {
+        self.purpose.to_text()
+    }
+
+    /// Returns true when a custom header element is configured.
+    pub fn has_header_slot(&self) -> bool {
+        self.header.is_some()
+    }
+
+    /// Returns true when title text is configured.
+    pub fn has_title(&self) -> bool {
+        self.title.is_some()
+    }
+
+    /// Returns true when description text is configured.
+    pub fn has_description(&self) -> bool {
+        self.description.is_some()
+    }
+
+    /// Returns true when a custom position is configured.
+    pub fn has_position(&self) -> bool {
+        self.position.is_some()
+    }
+
+    /// Returns the configured position edge count.
+    pub fn position_edge_count(&self) -> usize {
+        self.position.map_or(0, |position| position.edge_count())
+    }
+
+    /// Returns the number of child content elements.
+    pub fn child_count(&self) -> usize {
+        self.children.len()
+    }
+
+    /// Returns true when body content is configured through either API.
+    pub fn has_content(&self) -> bool {
+        !self.children.is_empty() || self.content_builder.is_some()
+    }
+
+    /// Returns true when a footer element is configured.
+    pub fn has_footer(&self) -> bool {
+        self.footer.is_some() || self.footer_builder.is_some()
+    }
+
+    /// Returns true when a close handler is configured.
+    pub fn has_close_handler(&self) -> bool {
+        self.on_close.is_some()
+    }
+
+    /// Stable dismissal policy key.
+    pub fn dismissal_mode(&self) -> &'static str {
+        match (self.close_on_backdrop_click, self.close_on_escape) {
+            (false, false) => "none",
+            (true, false) => "backdrop",
+            (false, true) => "escape",
+            (true, true) => "backdrop_escape",
+        }
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "dialog(size={}, variant={}, purpose={}, header_slot={}, has_title={}, has_description={}, content={}, children={}, footer={}, close_button={}, dismissal={}, close_handler={}, positioned={}, position_edges={}, focused={}, dismissing={}, dismiss_complete={})",
+            self.size_key(),
+            self.variant_key(),
+            self.purpose_key(),
+            self.has_header_slot(),
+            self.has_title(),
+            self.has_description(),
+            self.has_content(),
+            self.child_count(),
+            self.has_footer(),
+            self.show_close_button,
+            self.dismissal_mode(),
+            self.has_close_handler(),
+            self.has_position(),
+            self.position_edge_count(),
+            self.focused,
+            self.dismissing,
+            self.dismiss_complete
+        )
+    }
+
     fn handle_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.dismissing {
             return;
@@ -416,7 +656,14 @@ impl Styled for Dialog {
 impl Render for Dialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.dismiss_complete {
-            if let Some(handler) = &self.on_close {
+            let handler = self.on_close.clone();
+            if let Some(previous_focus_handle) = self.previous_focus_handle.take() {
+                window.focus(&previous_focus_handle);
+            }
+            self.dismissing = false;
+            self.dismiss_complete = false;
+            self.focused = false;
+            if let Some(handler) = handler {
                 (handler)(window, cx);
             }
             return div().into_any_element();
@@ -433,14 +680,48 @@ impl Render for Dialog {
         let user_style = self.style.clone();
         let dismissing = self.dismissing;
         let position = self.position;
+        let dialog_id = self.id.clone();
+        let accessibility_label = self
+            .title
+            .clone()
+            .unwrap_or_else(|| "Dialog".into())
+            .to_string();
+        let mut dialog_accessibility =
+            AccessibilityAttributes::new(AccessibilityRole::Dialog).label(accessibility_label);
+        if let Some(description) = self.description.as_ref() {
+            dialog_accessibility = dialog_accessibility.description(description.to_string());
+        }
+        let content = self
+            .content_builder
+            .as_ref()
+            .map(|builder| builder())
+            .or_else(|| {
+                (!self.children.is_empty()).then(|| {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(16.0))
+                        .children(std::mem::take(&mut self.children))
+                        .into_any_element()
+                })
+            });
+        let footer = self
+            .footer_builder
+            .as_ref()
+            .map(|builder| builder())
+            .or_else(|| self.footer.take());
 
         if !self.focused {
+            self.previous_focus_handle = window.focused(cx);
             window.focus(&self.focus_handle);
             self.focused = true;
         }
 
         div()
-            .id("dialog-overlay")
+            .id(ElementId::NamedChild(
+                Box::new(dialog_id.clone()),
+                "overlay".into(),
+            ))
             .absolute()
             .inset_0()
             .flex()
@@ -450,7 +731,8 @@ impl Render for Dialog {
             .bg(kael::black().opacity(0.5))
             .child(
                 div()
-                    .id("dialog-content")
+                    .id(dialog_id.clone())
+                    .accessibility(dialog_accessibility)
                     .occlude()
                     .key_context("Dialog")
                     .track_focus(&self.focus_handle)
@@ -492,10 +774,9 @@ impl Render for Dialog {
                                     .px(px(24.0))
                                     .pt(px(24.0))
                                     .pb(px(16.0))
-                                    .when(
-                                        self.footer.is_none() && self.children.is_empty(),
-                                        |this| this.pb(px(24.0)),
-                                    )
+                                    .when(footer.is_none() && content.is_none(), |this| {
+                                        this.pb(px(24.0))
+                                    })
                                     .child(
                                         div()
                                             .flex()
@@ -508,6 +789,7 @@ impl Render for Dialog {
                                                     .flex_col()
                                                     .gap(px(4.0))
                                                     .flex_1()
+                                                    .min_w(px(0.0))
                                                     .when_some(self.title.clone(), |this, title| {
                                                         this.child(
                                                             div()
@@ -521,7 +803,10 @@ impl Render for Dialog {
                                                                 .font_weight(FontWeight::SEMIBOLD)
                                                                 .text_color(theme.tokens.foreground)
                                                                 .line_height(px(22.0))
-                                                                .child(title),
+                                                                .child(
+                                                                    StyledText::new(title)
+                                                                        .accessibility_hidden(true),
+                                                                ),
                                                         )
                                                     })
                                                     .when_some(
@@ -541,8 +826,14 @@ impl Render for Dialog {
                                                                             .tokens
                                                                             .muted_foreground,
                                                                     )
+                                                                    .whitespace_normal()
                                                                     .line_height(px(20.0))
-                                                                    .child(desc),
+                                                                    .child(
+                                                                        StyledText::new(desc)
+                                                                            .accessibility_hidden(
+                                                                                true,
+                                                                            ),
+                                                                    ),
                                                             )
                                                         },
                                                     ),
@@ -550,27 +841,33 @@ impl Render for Dialog {
                                             .when(self.show_close_button, |this| {
                                                 let dialog_entity = dialog_entity.clone();
                                                 this.child(
-                                                    Button::new("dialog-close-btn", "Close")
-                                                        .variant(ButtonVariant::Ghost)
-                                                        .size(ButtonSize::Icon)
-                                                        .icon("x")
-                                                        .tooltip("Close")
-                                                        .on_click(move |_, window, cx| {
-                                                            cx.update_entity(
-                                                                &dialog_entity,
-                                                                |dialog, cx| {
-                                                                    dialog.handle_close(window, cx);
-                                                                },
-                                                            );
-                                                        }),
+                                                    Button::new(
+                                                        ElementId::NamedChild(
+                                                            Box::new(dialog_id.clone()),
+                                                            "close".into(),
+                                                        ),
+                                                        "Close",
+                                                    )
+                                                    .variant(ButtonVariant::Ghost)
+                                                    .size(ButtonSize::Icon)
+                                                    .flex_shrink_0()
+                                                    .icon("x")
+                                                    .tooltip("Close")
+                                                    .on_click(move |_, window, cx| {
+                                                        cx.update_entity(
+                                                            &dialog_entity,
+                                                            |dialog, cx| {
+                                                                dialog.handle_close(window, cx);
+                                                            },
+                                                        );
+                                                    }),
                                                 )
                                             }),
                                     ),
                             )
                         }
                     })
-                    .when(!self.children.is_empty(), |this| {
-                        let children = std::mem::take(&mut self.children);
+                    .when_some(content, |this, content| {
                         this.child(
                             div()
                                 .flex()
@@ -579,7 +876,7 @@ impl Render for Dialog {
                                 .px(px(24.0))
                                 .py(px(16.0))
                                 .flex_1()
-                                .children(children),
+                                .child(content),
                         )
                     })
                     .map(|this| {
@@ -587,7 +884,7 @@ impl Render for Dialog {
                         div.style().refine(&user_style);
                         div
                     })
-                    .when_some(self.footer.take(), |this, footer| {
+                    .when_some(footer, |this, footer| {
                         this.child(
                             div()
                                 .flex()
@@ -655,4 +952,125 @@ impl EventEmitter<()> for Dialog {}
 
 pub fn init_dialog(cx: &mut App) {
     cx.bind_keys([KeyBinding::new("escape", DialogCancel, Some("Dialog"))]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kael::{div, px, TestAppContext};
+
+    #[::core::prelude::v1::test]
+    fn dialog_position_and_header_summary_is_content_safe() {
+        let position = DialogPosition::new().top(px(48.0)).left(px(96.0));
+        assert_eq!(position.edge_count(), 2);
+        assert!(position.has_edges());
+
+        let position_summary = position.to_text();
+        assert!(position_summary.contains("edges=2"));
+        assert!(position_summary.contains("top=true"));
+        assert!(position_summary.contains("left=true"));
+        assert!(!position_summary.contains("48"));
+        assert!(!position_summary.contains("96"));
+
+        let header = DialogHeader::new("Private Account")
+            .subtitle("Secret workspace settings")
+            .start_content(div().child("private start"))
+            .end_content(div().child("private end"))
+            .has_divider(true)
+            .on_open_change(|_, _, _| {});
+
+        assert_eq!(header.title_len_bytes(), "Private Account".len());
+        assert!(header.has_subtitle());
+        assert!(header.has_start_content());
+        assert!(header.has_end_content());
+        assert!(header.has_divider_enabled());
+        assert!(header.has_open_change_handler());
+
+        let header_summary = header.to_text();
+        assert!(header_summary.contains("has_subtitle=true"));
+        assert!(header_summary.contains("divider=true"));
+        assert!(!header_summary.contains("Private Account"));
+        assert!(!header_summary.contains("Secret workspace"));
+        assert!(!header_summary.contains("private start"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn dialog_summary_is_content_safe() {
+        let cx = TestAppContext::single();
+        let dialog = cx.update(|cx| {
+            cx.new(|cx| {
+                Dialog::new(cx)
+                    .title("Delete Private Workspace")
+                    .description("This removes secret project data")
+                    .purpose(DialogPurpose::Required)
+                    .position(DialogPosition::new().right(px(24.0)).bottom(px(32.0)))
+                    .child(div().child("private child content"))
+                    .footer(div().child("private footer"))
+                    .on_close(|_, _| {})
+            })
+        });
+
+        cx.update(|cx| {
+            let dialog = dialog.read(cx);
+            assert_eq!(dialog.size_key(), "md");
+            assert_eq!(dialog.variant_key(), "standard");
+            assert_eq!(dialog.purpose_key(), "required");
+            assert!(dialog.has_title());
+            assert!(dialog.has_description());
+            assert_eq!(dialog.child_count(), 1);
+            assert!(dialog.has_footer());
+            assert!(!dialog.show_close_button);
+            assert_eq!(dialog.dismissal_mode(), "none");
+            assert!(dialog.has_close_handler());
+            assert!(dialog.has_position());
+            assert_eq!(dialog.position_edge_count(), 2);
+
+            let summary = dialog.to_text();
+            assert!(summary.contains("purpose=required"));
+            assert!(summary.contains("dismissal=none"));
+            assert!(summary.contains("children=1"));
+            assert!(!summary.contains("Delete Private Workspace"));
+            assert!(!summary.contains("secret project"));
+            assert!(!summary.contains("private child"));
+            assert!(!summary.contains("private footer"));
+            assert!(!summary.contains("24"));
+            assert!(!summary.contains("32"));
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn invalid_position_edges_are_ignored_and_negative_edges_are_clamped() {
+        let position = DialogPosition::new()
+            .top(px(f32::NAN))
+            .right(px(f32::INFINITY))
+            .bottom(px(-12.0))
+            .left(px(24.0));
+        assert!(position.top.is_none());
+        assert!(position.right.is_none());
+        assert_eq!(position.bottom, Some(px(0.0)));
+        assert_eq!(position.left, Some(px(24.0)));
+        assert_eq!(position.edge_count(), 2);
+    }
+
+    #[::core::prelude::v1::test]
+    fn persistent_builders_are_reported_as_content_and_footer() {
+        let cx = TestAppContext::single();
+        let dialog = cx.update(|cx| {
+            cx.new(|cx| {
+                Dialog::new(cx)
+                    .content_builder(|| div().child("rebuilt body"))
+                    .footer_builder(|| div().child("rebuilt footer"))
+            })
+        });
+
+        cx.update(|cx| {
+            let dialog = dialog.read(cx);
+            assert!(dialog.has_content());
+            assert!(dialog.has_footer());
+            assert_eq!(dialog.child_count(), 0);
+            assert!(dialog.to_text().contains("content=true"));
+            assert!(!dialog.to_text().contains("rebuilt body"));
+            assert!(!dialog.to_text().contains("rebuilt footer"));
+        });
+    }
 }

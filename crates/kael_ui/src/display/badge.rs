@@ -31,10 +31,27 @@ pub enum BadgeVariant {
     Hue(Hue),
 }
 
+fn categorical_hue(variant: BadgeVariant) -> Option<Hue> {
+    match variant {
+        BadgeVariant::Info | BadgeVariant::Blue => Some(Hue::Blue),
+        BadgeVariant::Cyan => Some(Hue::Cyan),
+        BadgeVariant::Green => Some(Hue::Green),
+        BadgeVariant::Orange => Some(Hue::Orange),
+        BadgeVariant::Pink => Some(Hue::Pink),
+        BadgeVariant::Purple => Some(Hue::Purple),
+        BadgeVariant::Red => Some(Hue::Red),
+        BadgeVariant::Teal => Some(Hue::Teal),
+        BadgeVariant::Yellow => Some(Hue::Yellow),
+        BadgeVariant::Hue(hue) => Some(hue),
+        _ => None,
+    }
+}
+
 pub struct Badge {
     label: SharedString,
     variant: BadgeVariant,
     icon: Option<IconSource>,
+    accessibility_hidden: bool,
     style: StyleRefinement,
 }
 
@@ -44,6 +61,7 @@ impl Badge {
             label: label.into(),
             variant: BadgeVariant::Default,
             icon: None,
+            accessibility_hidden: false,
             style: StyleRefinement::default(),
         }
     }
@@ -70,6 +88,13 @@ impl Badge {
         self.icon = Some(icon.into());
         self
     }
+
+    /// Hide the badge label when a semantic parent already exposes the same
+    /// status. The badge remains visible.
+    pub fn accessibility_hidden(mut self, hidden: bool) -> Self {
+        self.accessibility_hidden = hidden;
+        self
+    }
 }
 
 impl Styled for Badge {
@@ -86,84 +111,61 @@ impl IntoElement for Badge {
         let user_style = self.style;
         let dark = theme.tokens.background.l < 0.5;
 
-        let (bg_color, fg_color, border_color, has_border) = match self.variant {
-            BadgeVariant::Default | BadgeVariant::Neutral => (
-                theme.tokens.secondary,
-                theme.tokens.secondary_foreground,
-                kael::transparent_black(),
-                false,
-            ),
-            BadgeVariant::Secondary | BadgeVariant::Info => (
-                theme.tokens.primary,
-                theme.tokens.primary_foreground,
-                kael::transparent_black(),
-                false,
-            ),
-            BadgeVariant::Destructive | BadgeVariant::Error => (
-                theme.tokens.destructive,
-                theme.tokens.destructive_foreground,
-                kael::transparent_black(),
-                false,
-            ),
-            BadgeVariant::Success => (
-                theme.tokens.success,
-                theme.tokens.success_foreground,
-                kael::transparent_black(),
-                false,
-            ),
-            BadgeVariant::Warning => (
-                theme.tokens.warning,
-                theme.tokens.warning_foreground,
-                kael::transparent_black(),
-                false,
-            ),
-            BadgeVariant::Outline => (
-                kael::transparent_black(),
-                theme.tokens.foreground,
-                theme.tokens.border,
-                true,
-            ),
-            BadgeVariant::Blue => {
-                let c = Hue::Blue.colors(dark);
-                (c.background, c.text, c.border, false)
-            }
-            BadgeVariant::Cyan => {
-                let c = Hue::Cyan.colors(dark);
-                (c.background, c.text, c.border, false)
-            }
-            BadgeVariant::Green => {
-                let c = Hue::Green.colors(dark);
-                (c.background, c.text, c.border, false)
-            }
-            BadgeVariant::Orange => {
-                let c = Hue::Orange.colors(dark);
-                (c.background, c.text, c.border, false)
-            }
-            BadgeVariant::Pink => {
-                let c = Hue::Pink.colors(dark);
-                (c.background, c.text, c.border, false)
-            }
-            BadgeVariant::Purple => {
-                let c = Hue::Purple.colors(dark);
-                (c.background, c.text, c.border, false)
-            }
-            BadgeVariant::Red => {
-                let c = Hue::Red.colors(dark);
-                (c.background, c.text, c.border, false)
-            }
-            BadgeVariant::Teal => {
-                let c = Hue::Teal.colors(dark);
-                (c.background, c.text, c.border, false)
-            }
-            BadgeVariant::Yellow => {
-                let c = Hue::Yellow.colors(dark);
-                (c.background, c.text, c.border, false)
-            }
-            BadgeVariant::Hue(hue) => {
-                let c = hue.colors(dark);
-                (c.background, c.text, c.border, false)
-            }
-        };
+        let categorical_colors = categorical_hue(self.variant).map(|hue| hue.colors(dark));
+        let (bg_color, fg_color, border_color, has_border) =
+            if let Some(colors) = categorical_colors {
+                (colors.background, colors.text, colors.border, true)
+            } else {
+                match self.variant {
+                    BadgeVariant::Default | BadgeVariant::Neutral => (
+                        theme.tokens.secondary,
+                        theme.tokens.secondary_foreground,
+                        kael::transparent_black(),
+                        false,
+                    ),
+                    BadgeVariant::Secondary => (
+                        theme.tokens.primary,
+                        theme.tokens.primary_foreground,
+                        kael::transparent_black(),
+                        false,
+                    ),
+                    BadgeVariant::Destructive | BadgeVariant::Error => (
+                        theme.tokens.destructive,
+                        theme.tokens.destructive_foreground,
+                        kael::transparent_black(),
+                        false,
+                    ),
+                    BadgeVariant::Success => (
+                        theme.tokens.success,
+                        theme.tokens.success_foreground,
+                        kael::transparent_black(),
+                        false,
+                    ),
+                    BadgeVariant::Warning => (
+                        theme.tokens.warning,
+                        theme.tokens.warning_foreground,
+                        kael::transparent_black(),
+                        false,
+                    ),
+                    BadgeVariant::Outline => (
+                        kael::transparent_black(),
+                        theme.tokens.foreground,
+                        theme.tokens.border,
+                        true,
+                    ),
+                    BadgeVariant::Info
+                    | BadgeVariant::Blue
+                    | BadgeVariant::Cyan
+                    | BadgeVariant::Green
+                    | BadgeVariant::Orange
+                    | BadgeVariant::Pink
+                    | BadgeVariant::Purple
+                    | BadgeVariant::Red
+                    | BadgeVariant::Teal
+                    | BadgeVariant::Yellow
+                    | BadgeVariant::Hue(_) => unreachable!("categorical variants resolve above"),
+                }
+            };
 
         div()
             .flex()
@@ -190,6 +192,22 @@ impl IntoElement for Badge {
             .when_some(self.icon, |this, source| {
                 this.child(Icon::new(source).size(px(12.0)).color(fg_color))
             })
-            .child(self.label)
+            .child(StyledText::new(self.label).accessibility_hidden(self.accessibility_hidden))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn categorical_variants_resolve_to_the_expected_hues() {
+        assert_eq!(categorical_hue(BadgeVariant::Info), Some(Hue::Blue));
+        assert_eq!(categorical_hue(BadgeVariant::Purple), Some(Hue::Purple));
+        assert_eq!(
+            categorical_hue(BadgeVariant::Hue(Hue::Gray)),
+            Some(Hue::Gray)
+        );
+        assert_eq!(categorical_hue(BadgeVariant::Secondary), None);
     }
 }

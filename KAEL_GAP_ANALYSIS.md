@@ -1,4 +1,4 @@
-# kael Gap Analysis — Can it be the go-to Electron alternative for huge, beautiful, complex apps?
+# kael Gap Analysis — Can it be the go-to native desktop alternative for huge, beautiful, complex apps?
 
 *Lead framework architect assessment. All findings trace to a verified audit (10 dimensions, adversarial verdicts). Refuted gaps are dropped; partially-confirmed gaps are softened to match their corrections.*
 
@@ -338,7 +338,7 @@ Ordered. The theme is "connect what already exists, fix what is silently wrong, 
 7. ~~**`kael::dev::watch_styles()` token hot-reload (M, scoped slice of the XL).**~~ **DONE** — `kael::dev::watch_styles(cx, path)` extends the existing theme `FileWatcher` so spacing/color/typography/radii/shadows iterate live without recompiling (delegates to `App::observe_theme_file`, applies each reload to the global `Theme`; spacing-token live-apply unit-tested). The cheapest meaningful dent in the #1 DX problem; full code hot-patch still scoped.
 8. ~~**Publish `kael-cli` with `kael new` (M).**~~ **BUILT (publish pending creds).** `crates/kael-cli` produces the `kael` binary; `kael new <name>` scaffolds a ready-to-run app from `include_str!`-embedded templates (offline-capable), tested + smoke-run. Only `cargo publish` needs crates.io credentials. Gives agents and humans a real front door.
 
-Everything above is additive, traces to confirmed audit findings, and leans on machinery kael already built. Land Wave 1 + the top of Wave 2 and kael moves from "a fast native toolkit with great docs" to "a credible Electron alternative for beautiful, complex, agent-built apps."
+Everything above is additive, traces to confirmed audit findings, and leans on machinery kael already built. Land Wave 1 + the top of Wave 2 and kael moves from "a fast native toolkit with great docs" to "a credible native desktop alternative for beautiful, complex, agent-built apps."
 
 ---
 

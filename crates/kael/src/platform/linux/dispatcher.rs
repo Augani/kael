@@ -34,62 +34,86 @@ impl LinuxDispatcher {
             .map(|i| i.get())
             .unwrap_or(1);
 
-        let mut background_threads = (0..thread_count)
-            .map(|i| {
-                let receiver = background_receiver.clone();
-                std::thread::Builder::new()
-                    .name(format!("Worker-{i}"))
-                    .spawn(move || {
-                        for runnable in receiver {
-                            let start = Instant::now();
+        let mut background_threads = Vec::with_capacity(thread_count + 1);
+        for i in 0..thread_count {
+            let receiver = background_receiver.clone();
+            match std::thread::Builder::new()
+                .name(format!("Worker-{i}"))
+                .spawn(move || {
+                    for runnable in receiver {
+                        let start = Instant::now();
 
-                            runnable.run();
+                        crate::platform::catch_platform_callback(
+                            "Linux",
+                            "background task",
+                            (),
+                            || {
+                                runnable.run();
+                            },
+                        );
 
-                            log::trace!(
-                                "background thread {}: ran runnable. took: {:?}",
-                                i,
-                                start.elapsed()
-                            );
-                        }
-                    })
-                    .unwrap()
-            })
-            .collect::<Vec<_>>();
+                        log::trace!(
+                            "background thread {}: ran runnable. took: {:?}",
+                            i,
+                            start.elapsed()
+                        );
+                    }
+                }) {
+                Ok(thread) => background_threads.push(thread),
+                Err(error) => log::error!("failed to spawn Linux worker {i}: {error}"),
+            }
+        }
 
         let (timer_sender, timer_channel) = calloop::channel::channel::<TimerAfter>();
         let timer_thread = std::thread::Builder::new()
             .name("Timer".to_owned())
             .spawn(|| {
-                let mut event_loop: EventLoop<()> =
-                    EventLoop::try_new().expect("Failed to initialize timer loop!");
+                let mut event_loop: EventLoop<()> = match EventLoop::try_new() {
+                    Ok(event_loop) => event_loop,
+                    Err(error) => {
+                        log::error!("failed to initialize Linux timer loop: {error:?}");
+                        return;
+                    }
+                };
 
                 let handle = event_loop.handle();
                 let timer_handle = event_loop.handle();
-                handle
-                    .insert_source(timer_channel, move |e, _, _| {
-                        if let channel::Event::Msg(timer) = e {
-                            // This has to be in an option to satisfy the borrow checker. The callback below should only be scheduled once.
-                            let mut runnable = Some(timer.runnable);
-                            timer_handle
-                                .insert_source(
-                                    calloop::timer::Timer::from_duration(timer.duration),
-                                    move |_, _, _| {
-                                        if let Some(runnable) = runnable.take() {
+                let timer_registration = handle.insert_source(timer_channel, move |e, _, _| {
+                    if let channel::Event::Msg(timer) = e {
+                        // This has to be in an option to satisfy the borrow checker. The callback below should only be scheduled once.
+                        let mut runnable = Some(timer.runnable);
+                        if let Err(error) = timer_handle.insert_source(
+                            calloop::timer::Timer::from_duration(timer.duration),
+                            move |_, _, _| {
+                                if let Some(runnable) = runnable.take() {
+                                    crate::platform::catch_platform_callback(
+                                        "Linux",
+                                        "timer task",
+                                        (),
+                                        || {
                                             runnable.run();
-                                        }
-                                        TimeoutAction::Drop
-                                    },
-                                )
-                                .expect("Failed to start timer");
+                                        },
+                                    );
+                                }
+                                TimeoutAction::Drop
+                            },
+                        ) {
+                            log::error!("failed to start Linux timer: {error:?}");
                         }
-                    })
-                    .expect("Failed to start timer thread");
+                    }
+                });
+                if let Err(error) = timer_registration {
+                    log::error!("failed to register Linux timer channel: {error:?}");
+                    return;
+                }
 
                 event_loop.run(None, &mut (), |_| {}).log_err();
             })
-            .unwrap();
+            .map_err(|error| log::error!("failed to spawn Linux timer thread: {error}"));
 
-        background_threads.push(timer_thread);
+        if let Ok(timer_thread) = timer_thread {
+            background_threads.push(timer_thread);
+        }
 
         Self {
             parker: Mutex::new(Parker::new()),
@@ -108,7 +132,9 @@ impl PlatformDispatcher for LinuxDispatcher {
     }
 
     fn dispatch(&self, runnable: Runnable, _: Option<TaskLabel>) {
-        self.background_sender.send(runnable).unwrap();
+        if self.background_sender.send(runnable).is_err() {
+            log::debug!("discarding background task because the Linux dispatcher is stopping");
+        }
     }
 
     fn dispatch_on_main_thread(&self, runnable: Runnable) {

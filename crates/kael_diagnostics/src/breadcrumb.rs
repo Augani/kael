@@ -58,8 +58,10 @@ impl BreadcrumbBuffer {
     pub fn new(max_breadcrumbs: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(BreadcrumbBufferState {
-                max_breadcrumbs: max_breadcrumbs.max(1),
-                items: VecDeque::with_capacity(max_breadcrumbs.max(1)),
+                max_breadcrumbs,
+                // Do not eagerly reserve caller-controlled capacity. A very
+                // large retention limit should not be able to OOM at setup.
+                items: VecDeque::new(),
             })),
         }
     }
@@ -71,6 +73,9 @@ impl BreadcrumbBuffer {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
 
+        if inner.max_breadcrumbs == 0 {
+            return;
+        }
         if inner.items.len() >= inner.max_breadcrumbs {
             inner.items.pop_front();
         }
@@ -132,5 +137,18 @@ mod tests {
         assert_eq!(snapshot.len(), 2);
         assert_eq!(snapshot[0].message, "two");
         assert_eq!(snapshot[1].message, "three");
+    }
+
+    #[test]
+    fn zero_capacity_discards_breadcrumbs() {
+        let buffer = BreadcrumbBuffer::new(0);
+        buffer.push(Breadcrumb {
+            category: "test".to_string(),
+            message: "discarded".to_string(),
+            level: Level::Info,
+            timestamp: SystemTime::UNIX_EPOCH,
+            data: HashMap::new(),
+        });
+        assert!(buffer.snapshot().is_empty());
     }
 }

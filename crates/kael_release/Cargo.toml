@@ -21,6 +21,8 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = "0.8"
 hex = "0.4"
 base64 = "0.22"
+sha2 = "0.10"
+url = "2.5"
 
 [dev-dependencies]
 tempfile = "3"

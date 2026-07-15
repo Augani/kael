@@ -115,8 +115,11 @@ fn map_key_to_vk(key: &str) -> Result<VIRTUAL_KEY> {
         "left" => VK_LEFT,
         "right" => VK_RIGHT,
         other => {
-            if other.len() == 1 {
-                let ch = other.chars().next().unwrap().to_ascii_uppercase();
+            let mut chars = other.chars();
+            if let (Some(ch), None) = (chars.next(), chars.next())
+                && ch.is_ascii()
+            {
+                let ch = ch.to_ascii_uppercase();
                 VIRTUAL_KEY(ch as u16)
             } else {
                 return Err(anyhow::anyhow!(

@@ -5,7 +5,7 @@
 //! interpolating between the surrounding keyframes; before the first and after the last
 //! keyframe the curve holds the endpoint value.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// How a keyframe's value transitions to the next keyframe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -40,10 +40,43 @@ pub struct Keyframe {
 }
 
 /// A keyframed automation curve for one scalar parameter.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Automation {
     keyframes: Vec<Keyframe>,
     default: f32,
+}
+
+impl<'de> Deserialize<'de> for Automation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct AutomationData {
+            #[serde(default)]
+            keyframes: Vec<Keyframe>,
+            #[serde(default)]
+            default: f32,
+        }
+
+        let mut data = AutomationData::deserialize(deserializer)?;
+        data.keyframes.sort_by_key(|keyframe| keyframe.time_ms);
+        let mut keyframes: Vec<Keyframe> = Vec::with_capacity(data.keyframes.len());
+        for keyframe in data.keyframes {
+            if let Some(existing) = keyframes
+                .last_mut()
+                .filter(|existing| existing.time_ms == keyframe.time_ms)
+            {
+                *existing = keyframe;
+            } else {
+                keyframes.push(keyframe);
+            }
+        }
+        Ok(Self {
+            keyframes,
+            default: data.default,
+        })
+    }
 }
 
 impl Automation {
@@ -208,5 +241,29 @@ mod tests {
         assert!(close(curve(Interpolation::EaseOutQuad).sample(50), 0.75)); // 0.5*(2-0.5)
         assert!(close(curve(Interpolation::EaseInCubic).sample(50), 0.125)); // 0.5^3
         assert!(close(curve(Interpolation::EaseOutCubic).sample(50), 0.875)); // 1-0.5^3
+    }
+
+    #[test]
+    fn deserialization_restores_order_and_resolves_duplicate_times() {
+        let json = r#"{
+            "keyframes": [
+                {"time_ms": 100, "value": 1.0},
+                {"time_ms": 0, "value": 0.0},
+                {"time_ms": 100, "value": 0.75}
+            ],
+            "default": 0.5
+        }"#;
+        let curve: Automation = serde_json::from_str(json).unwrap();
+
+        assert_eq!(
+            curve
+                .keyframes()
+                .iter()
+                .map(|keyframe| keyframe.time_ms)
+                .collect::<Vec<_>>(),
+            vec![0, 100]
+        );
+        assert_eq!(curve.sample(100), 0.75);
+        assert!((curve.sample(50) - 0.375).abs() < 1e-6);
     }
 }

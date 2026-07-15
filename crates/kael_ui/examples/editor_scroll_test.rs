@@ -9,7 +9,7 @@ struct EditorScrollTestApp {
 
 impl EditorScrollTestApp {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        let editor = cx.new(|cx| EditorState::new(cx));
+        let editor = cx.new(EditorState::new);
         Self { editor }
     }
 }
@@ -68,7 +68,7 @@ fn main() {
                 ))),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|cx| EditorScrollTestApp::new(cx)),
+            |_window, cx| cx.new(EditorScrollTestApp::new),
         )
         .unwrap();
     });

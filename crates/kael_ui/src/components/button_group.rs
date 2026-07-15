@@ -91,13 +91,14 @@ impl RenderOnce for ButtonGroup {
         let font_size = self.size.font_size();
         let icon_size = self.size.icon_size();
         let id = self.id.clone();
+        let id_key = id.to_string();
         let orientation = self.orientation;
 
         let mut row = div()
             .id(id)
             .flex()
             .when(orientation == ButtonGroupOrientation::Vertical, |this| {
-                this.flex_col().w_full()
+                this.flex_col().min_w(px(140.0))
             })
             .when(orientation == ButtonGroupOrientation::Horizontal, |this| {
                 this.flex_row().items_center().h(height)
@@ -112,45 +113,55 @@ impl RenderOnce for ButtonGroup {
         for (index, item) in self.items.into_iter().enumerate() {
             let handler = item.on_click.clone();
             let icon = item.icon.clone();
-            let cell = div()
-                .id(ElementId::Name(format!("bg-item-{index}").into()))
-                .flex()
-                .items_center()
-                .justify_center()
-                .gap(px(6.0))
-                .when(orientation == ButtonGroupOrientation::Horizontal, |this| {
-                    this.h_full()
-                })
-                .when(orientation == ButtonGroupOrientation::Vertical, |this| {
-                    this.h(height).w_full()
-                })
-                .px(padding_x)
-                .text_size(font_size)
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.tokens.secondary_foreground)
-                .cursor(CursorStyle::PointingHand)
-                .when(
-                    index > 0 && orientation == ButtonGroupOrientation::Horizontal,
-                    |this| this.border_l_1().border_color(theme.tokens.border),
-                )
-                .when(
-                    index > 0 && orientation == ButtonGroupOrientation::Vertical,
-                    |this| this.border_t_1().border_color(theme.tokens.border),
-                )
-                .hover(|style| style.bg(theme.tokens.accent))
-                .when_some(icon, |this, icon_src| {
-                    this.child(
-                        Icon::new(icon_src)
-                            .size(icon_size)
-                            .color(theme.tokens.secondary_foreground),
-                    )
-                })
-                .child(item.label.clone())
+            let label = item.label.clone();
+            let cell_theme = theme.clone();
+            let cell = button(ElementId::Name(format!("{id_key}-item-{index}").into()))
+                .label(label.clone())
                 .when_some(handler, |this, handler| {
                     this.on_click(move |_, window, cx| {
                         cx.stop_propagation();
                         (handler)(window, cx);
                     })
+                })
+                .render_with(move |state, _, _| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(6.0))
+                        .when(orientation == ButtonGroupOrientation::Horizontal, |this| {
+                            this.h(height)
+                        })
+                        .when(orientation == ButtonGroupOrientation::Vertical, |this| {
+                            this.h(height).w_full()
+                        })
+                        .px(padding_x)
+                        .text_size(font_size)
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(cell_theme.tokens.secondary_foreground)
+                        .when(
+                            index > 0 && orientation == ButtonGroupOrientation::Horizontal,
+                            |this| this.border_l_1().border_color(cell_theme.tokens.border),
+                        )
+                        .when(
+                            index > 0 && orientation == ButtonGroupOrientation::Vertical,
+                            |this| this.border_t_1().border_color(cell_theme.tokens.border),
+                        )
+                        .when(state.focused, |this| {
+                            this.shadow(smallvec::smallvec![crate::astryx::focus_ring_outer(
+                                cell_theme.tokens.ring
+                            ),])
+                        })
+                        .hover(|style| style.bg(cell_theme.tokens.accent))
+                        .when_some(icon.clone(), |this, icon_src| {
+                            this.child(
+                                Icon::new(icon_src)
+                                    .size(icon_size)
+                                    .color(cell_theme.tokens.secondary_foreground),
+                            )
+                        })
+                        .child(label.clone())
+                        .into_any_element()
                 });
             row = row.child(cell);
         }

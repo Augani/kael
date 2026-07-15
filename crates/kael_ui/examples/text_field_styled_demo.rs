@@ -59,7 +59,7 @@ fn main() {
                 |_, cx| {
                     // Create Input states
                     let states: Vec<Entity<InputState>> =
-                        (0..10).map(|_| cx.new(|cx| InputState::new(cx))).collect();
+                        (0..10).map(|_| cx.new(InputState::new)).collect();
 
                     cx.new(|_| InputStyledDemo::new(states))
                 },

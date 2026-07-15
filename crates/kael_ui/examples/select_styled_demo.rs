@@ -56,7 +56,7 @@ fn main() {
                     })),
                     ..Default::default()
                 },
-                |_, cx| cx.new(|cx| SelectStyledDemo::new(cx)),
+                |_, cx| cx.new(SelectStyledDemo::new),
             )
             .unwrap();
         });

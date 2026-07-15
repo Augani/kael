@@ -28,7 +28,8 @@ impl fmt::Display for ScaffoldError {
         match self {
             ScaffoldError::InvalidName(name) => write!(
                 f,
-                "invalid project name {name:?}: use letters, digits, '-' or '_', not starting with a digit"
+                "invalid project name ({} bytes): use at most 64 ASCII letters, digits, '-' or '_', not starting with a digit",
+                name.len()
             ),
             ScaffoldError::AlreadyExists(path) => {
                 write!(f, "destination {} already exists", path.display())
@@ -39,6 +40,9 @@ impl fmt::Display for ScaffoldError {
 }
 
 fn is_valid_project_name(name: &str) -> bool {
+    if name.len() > 64 {
+        return false;
+    }
     let mut chars = name.chars();
     match chars.next() {
         Some(first) if first.is_ascii_alphabetic() || first == '_' => {}
@@ -59,28 +63,55 @@ pub fn scaffold(name: &str, dest: &Path) -> Result<Vec<PathBuf>, ScaffoldError> 
     }
 
     let root = dest.join(name);
-    if root.exists() {
-        return Err(ScaffoldError::AlreadyExists(root));
+    match fs::create_dir(&root) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(ScaffoldError::AlreadyExists(root));
+        }
+        Err(error) => return Err(ScaffoldError::Io(error.to_string())),
     }
-
     let src = root.join("src");
-    fs::create_dir_all(&src).map_err(|err| ScaffoldError::Io(err.to_string()))?;
+    let result = (|| {
+        fs::create_dir(&src).map_err(|err| ScaffoldError::Io(err.to_string()))?;
 
-    let files = [
-        (root.join("Cargo.toml"), CARGO_TEMPLATE),
-        (src.join("main.rs"), MAIN_TEMPLATE),
-        (root.join("README.md"), README_TEMPLATE),
-        (root.join(".gitignore"), GITIGNORE_TEMPLATE),
-    ];
+        let files = [
+            (root.join("Cargo.toml"), CARGO_TEMPLATE),
+            (src.join("main.rs"), MAIN_TEMPLATE),
+            (root.join("README.md"), README_TEMPLATE),
+            (root.join(".gitignore"), GITIGNORE_TEMPLATE),
+        ];
 
-    let mut written = Vec::with_capacity(files.len());
-    for (path, template) in files {
-        let contents = template.replace("{{name}}", name);
-        fs::write(&path, contents).map_err(|err| ScaffoldError::Io(err.to_string()))?;
-        written.push(path);
+        let mut written = Vec::with_capacity(files.len());
+        for (path, template) in files {
+            let contents = template.replace("{{name}}", name);
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map_err(|err| ScaffoldError::Io(err.to_string()))?;
+            use std::io::Write as _;
+            file.write_all(contents.as_bytes())
+                .and_then(|()| file.sync_all())
+                .map_err(|err| ScaffoldError::Io(err.to_string()))?;
+            written.push(path);
+        }
+        sync_directory(&root).map_err(|err| ScaffoldError::Io(err.to_string()))?;
+        Ok(written)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&root);
     }
+    result
+}
 
-    Ok(written)
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> std::io::Result<()> {
+    fs::File::open(path)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 fn print_help() {
@@ -129,6 +160,10 @@ fn run_new(name: Option<&str>) -> ExitCode {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() > 3 {
+        eprintln!("error: too many arguments");
+        return ExitCode::FAILURE;
+    }
     match args.get(1).map(String::as_str) {
         Some("new") => run_new(args.get(2).map(String::as_str)),
         Some("-V") | Some("--version") => {
@@ -181,6 +216,8 @@ mod tests {
         let main = fs::read_to_string(dest.join("my_app/src/main.rs")).unwrap();
         assert!(main.contains("Hello, Kael!"));
         assert!(main.contains("Some(\"my_app\".into())"));
+        assert!(main.contains("Application::try_new()?"));
+        assert!(!main.contains(".unwrap()"));
         assert!(
             !main.contains("{{name}}"),
             "all placeholders must be substituted"
@@ -204,7 +241,7 @@ mod tests {
     #[test]
     fn scaffold_rejects_invalid_names() {
         let dest = temp_dir();
-        for bad in ["1app", "my app", "weird!", ""] {
+        for bad in ["1app", "my app", "weird!", "", &"x".repeat(65)] {
             assert!(
                 matches!(scaffold(bad, &dest), Err(ScaffoldError::InvalidName(_))),
                 "{bad:?} must be rejected"
@@ -214,5 +251,44 @@ mod tests {
         assert!(is_valid_project_name("my-app"));
         assert!(is_valid_project_name("App2"));
         fs::remove_dir_all(&dest).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scaffold_treats_dangling_symlink_as_existing_destination() {
+        let dest = temp_dir();
+        let root = dest.join("linked");
+        std::os::unix::fs::symlink(dest.join("missing-target"), &root).unwrap();
+        assert!(matches!(
+            scaffold("linked", &dest),
+            Err(ScaffoldError::AlreadyExists(path)) if path == root
+        ));
+        assert!(
+            fs::symlink_metadata(&root)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        fs::remove_file(root).ok();
+        fs::remove_dir_all(dest).ok();
+    }
+
+    #[test]
+    fn concurrent_scaffolds_never_overwrite_each_other() {
+        let dest = temp_dir();
+        let first_dest = dest.clone();
+        let second_dest = dest.clone();
+        let first = std::thread::spawn(move || scaffold("race", &first_dest));
+        let second = std::thread::spawn(move || scaffold("race", &second_dest));
+        let results = [first.join().unwrap(), second.join().unwrap()];
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Err(ScaffoldError::AlreadyExists(_))))
+                .count(),
+            1
+        );
+        fs::remove_dir_all(dest).ok();
     }
 }

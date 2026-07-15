@@ -176,7 +176,7 @@ impl EntityMap {
         ref_counts
             .slots
             .get(entity_id)
-            .map(|slot| slot.generation.fetch_add(1, SeqCst) + 1)
+            .map(|slot| slot.generation.fetch_add(1, SeqCst).wrapping_add(1))
     }
 
     pub fn take_dropped(&mut self) -> Vec<(EntityId, Box<dyn Any>)> {
@@ -308,8 +308,11 @@ impl Clone for AnyEntity {
                 .slots
                 .get(self.entity_id)
                 .expect("detected over-release of a entity");
-            let prev_count = slot.ref_count.fetch_add(1, SeqCst);
-            assert_ne!(prev_count, 0, "Detected over-release of a entity.");
+            assert_ne!(
+                atomic_incr_if_not_zero(&slot.ref_count),
+                0,
+                "detected an over-released entity or exhausted entity reference count"
+            );
         }
 
         Self {

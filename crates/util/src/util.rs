@@ -99,6 +99,9 @@ pub fn truncate_and_remove_front(s: &str, max_chars: usize) -> String {
 /// a newline and "..." to the string, so that `max_lines` are returned.
 /// Returns string unchanged if its length is smaller than max_lines.
 pub fn truncate_lines_and_trailoff(s: &str, max_lines: usize) -> String {
+    if max_lines == 0 {
+        return String::new();
+    }
     let mut lines = s.lines().take(max_lines).collect::<Vec<_>>();
     if lines.len() > max_lines - 1 {
         lines.pop();
@@ -180,6 +183,11 @@ where
     I: IntoIterator<Item = T>,
     F: FnMut(&T, &T) -> Ordering,
 {
+    if limit == 0 {
+        vec.clear();
+        return;
+    }
+    vec.truncate(limit);
     let mut start_index = 0;
     for new_item in new_items {
         if let Err(i) = vec[start_index..].binary_search_by(|m| cmp(m, &new_item)) {
@@ -260,17 +268,16 @@ fn load_shell_from_passwd() -> Result<()> {
             &mut result,
         )
     };
-    anyhow::ensure!(!result.is_null(), "passwd entry for uid {} not found", uid);
-
-    // SAFETY: If `getpwuid_r` doesn't error, we have the entry here.
-    let entry = unsafe { pwd.assume_init() };
-
     anyhow::ensure!(
         status == 0,
         "call to getpwuid_r failed. uid: {}, status: {}",
         uid,
         status
     );
+    anyhow::ensure!(!result.is_null(), "passwd entry for uid {} not found", uid);
+
+    // SAFETY: A successful `getpwuid_r` call with a non-null result initialized `pwd`.
+    let entry = unsafe { pwd.assume_init() };
     anyhow::ensure!(
         entry.pw_uid == uid,
         "passwd entry has different uid ({}) than getuid ({}) returned",
@@ -278,7 +285,11 @@ fn load_shell_from_passwd() -> Result<()> {
         uid,
     );
 
-    let shell = unsafe { std::ffi::CStr::from_ptr(entry.pw_shell).to_str().unwrap() };
+    anyhow::ensure!(!entry.pw_shell.is_null(), "passwd entry has no shell");
+    // SAFETY: `pw_shell` is non-null and points into `buffer`, which remains alive here.
+    let shell = unsafe { std::ffi::CStr::from_ptr(entry.pw_shell) }
+        .to_str()
+        .context("passwd shell is not valid UTF-8")?;
     if env::var("SHELL").map_or(true, |shell_env| shell_env != shell) {
         log::info!(
             "updating SHELL environment variable to value from passwd entry: {:?}",
@@ -375,8 +386,11 @@ pub fn set_pre_exec_to_start_new_session(
     unsafe {
         use std::os::unix::process::CommandExt;
         command.pre_exec(|| {
-            libc::setsid();
-            Ok(())
+            if libc::setsid() == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
         });
     };
     command
@@ -477,26 +491,33 @@ pub fn expanded_and_wrapped_usize_range(
     additional_after: usize,
     wrap_length: usize,
 ) -> impl Iterator<Item = usize> {
+    if wrap_length == 0 {
+        return Either::Left(0..0);
+    }
     let start_wraps = range.start < additional_before;
-    let end_wraps = wrap_length < range.end + additional_after;
+    let end_with_after = range.end.saturating_add(additional_after);
+    let end_wraps = wrap_length < end_with_after;
     if start_wraps && end_wraps {
         Either::Left(0..wrap_length)
     } else if start_wraps {
-        let wrapped_start = (range.start + wrap_length).saturating_sub(additional_before);
+        let wrapped_start = range
+            .start
+            .saturating_add(wrap_length)
+            .saturating_sub(additional_before);
         if wrapped_start <= range.end {
             Either::Left(0..wrap_length)
         } else {
-            Either::Right((0..range.end + additional_after).chain(wrapped_start..wrap_length))
+            Either::Right((0..end_with_after).chain(wrapped_start..wrap_length))
         }
     } else if end_wraps {
-        let wrapped_end = range.end + additional_after - wrap_length;
+        let wrapped_end = end_with_after - wrap_length;
         if range.start <= wrapped_end {
             Either::Left(0..wrap_length)
         } else {
             Either::Right((0..wrapped_end).chain(range.start - additional_before..wrap_length))
         }
     } else {
-        Either::Left((range.start - additional_before)..(range.end + additional_after))
+        Either::Left((range.start - additional_before)..end_with_after)
     }
 }
 
@@ -509,6 +530,11 @@ pub fn wrapped_usize_outward_from(
     additional_after: usize,
     wrap_length: usize,
 ) -> impl Iterator<Item = usize> {
+    let start = if wrap_length == 0 {
+        0
+    } else {
+        start % wrap_length
+    };
     let mut count = 0;
     let mut after_offset = 1;
     let mut before_offset = 1;
@@ -518,23 +544,41 @@ pub fn wrapped_usize_outward_from(
         if count > wrap_length {
             None
         } else if count == 1 {
-            Some(start % wrap_length)
+            Some(start)
         } else if after_offset <= additional_after && after_offset <= before_offset {
-            let value = (start + after_offset) % wrap_length;
+            let value = wrapping_add(start, after_offset, wrap_length);
             after_offset += 1;
             Some(value)
         } else if before_offset <= additional_before {
-            let value = (start + wrap_length - before_offset) % wrap_length;
+            let value = wrapping_sub(start, before_offset, wrap_length);
             before_offset += 1;
             Some(value)
         } else if after_offset <= additional_after {
-            let value = (start + after_offset) % wrap_length;
+            let value = wrapping_add(start, after_offset, wrap_length);
             after_offset += 1;
             Some(value)
         } else {
             None
         }
     })
+}
+
+fn wrapping_add(value: usize, offset: usize, modulus: usize) -> usize {
+    let offset = offset % modulus;
+    if offset >= modulus - value {
+        offset - (modulus - value)
+    } else {
+        value + offset
+    }
+}
+
+fn wrapping_sub(value: usize, offset: usize, modulus: usize) -> usize {
+    let offset = offset % modulus;
+    if offset <= value {
+        value - offset
+    } else {
+        modulus - (offset - value)
+    }
 }
 
 pub trait ResultExt<E> {
@@ -1034,6 +1078,9 @@ mod tests {
 
         extend_sorted(&mut vec, vec![1000, 19, 17, 9, 5], 8, |a, b| b.cmp(a));
         assert_eq!(vec, &[1000, 101, 21, 19, 17, 13, 9, 8]);
+
+        extend_sorted(&mut vec, [2000], 0, |a, b| b.cmp(a));
+        assert!(vec.is_empty());
     }
 
     #[test]
@@ -1203,6 +1250,7 @@ Line 2
 Line 2
 Line 3"#
         );
+        assert_eq!(truncate_lines_and_trailoff(text, 0), "");
     }
 
     #[test]
@@ -1285,6 +1333,12 @@ Line 3"#
         assert_eq!(
             wrapped_usize_outward_from(4, 2, 2, 0).collect::<Vec<usize>>(),
             Vec::<usize>::new()
+        );
+        assert_eq!(
+            wrapped_usize_outward_from(usize::MAX, 1, 1, usize::MAX)
+                .take(3)
+                .collect::<Vec<_>>(),
+            vec![0, 1, usize::MAX - 1]
         );
     }
 

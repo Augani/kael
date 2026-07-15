@@ -59,14 +59,14 @@ impl InputDemoApp {
                 .new(|cx| InputState::new(cx).placeholder("Use arrow keys, Home, End...")),
 
             // Input Variants
-            variant_default: cx.new(|cx| InputState::new(cx)),
-            variant_outline: cx.new(|cx| InputState::new(cx)),
-            variant_ghost: cx.new(|cx| InputState::new(cx)),
+            variant_default: cx.new(InputState::new),
+            variant_outline: cx.new(InputState::new),
+            variant_ghost: cx.new(InputState::new),
 
             // Input Sizes
-            size_small: cx.new(|cx| InputState::new(cx)),
-            size_medium: cx.new(|cx| InputState::new(cx)),
-            size_large: cx.new(|cx| InputState::new(cx)),
+            size_small: cx.new(InputState::new),
+            size_medium: cx.new(InputState::new),
+            size_large: cx.new(InputState::new),
 
             // Input States
             state_normal: cx.new(|cx| {
@@ -74,7 +74,7 @@ impl InputDemoApp {
                 state.content = "Some text".into();
                 state
             }),
-            state_disabled: cx.new(|cx| InputState::new(cx)),
+            state_disabled: cx.new(InputState::new),
             state_error: cx.new(|cx| {
                 let mut state = InputState::new(cx);
                 state.content = "invalid@".into();
@@ -94,19 +94,19 @@ impl InputDemoApp {
             }),
 
             // Prefix/Suffix
-            prefix_input: cx.new(|cx| InputState::new(cx)),
+            prefix_input: cx.new(InputState::new),
             suffix_input: cx.new(|cx| {
                 let mut state = InputState::new(cx);
                 state.content = "100".into();
                 state
             }),
-            both_input: cx.new(|cx| InputState::new(cx)),
+            both_input: cx.new(InputState::new),
 
             // Form example
-            form_name: cx.new(|cx| InputState::new(cx)),
-            form_email: cx.new(|cx| InputState::new(cx)),
-            form_password: cx.new(|cx| InputState::new(cx)),
-            form_bio: cx.new(|cx| InputState::new(cx)),
+            form_name: cx.new(InputState::new),
+            form_email: cx.new(InputState::new),
+            form_password: cx.new(InputState::new),
+            form_bio: cx.new(InputState::new),
         }
     }
 }
@@ -719,7 +719,7 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|cx| InputDemoApp::new(cx)),
+            |_window, cx| cx.new(InputDemoApp::new),
         )
         .unwrap();
     });

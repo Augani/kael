@@ -22,6 +22,9 @@ use windows_numerics::Vector2;
 use crate::util::ResultExt;
 use crate::*;
 
+const MAX_DIRECTWRITE_GLYPHS: usize = 1_000_000;
+const MAX_DIRECTWRITE_TEXT_UNITS: usize = 16_000_000;
+
 #[derive(Debug)]
 struct FontInfo {
     font_family: String,
@@ -1149,6 +1152,11 @@ impl DirectWriteState {
         let mut glyph_layers = Vec::new();
         loop {
             let color_run = unsafe { color_enumerator.GetCurrentRun() }?;
+            if color_run.is_null() {
+                return Err(anyhow::anyhow!(
+                    "DirectWrite returned no current color glyph run"
+                ));
+            }
             let color_run = unsafe { &*color_run };
             let image_format = color_run.glyphImageFormat & !DWRITE_GLYPH_IMAGE_FORMATS_TRUETYPE;
             if image_format == DWRITE_GLYPH_IMAGE_FORMATS_COLR {
@@ -1598,7 +1606,6 @@ struct RendererContext<'t, 'a, 'b> {
 #[derive(Debug)]
 struct ClusterAnalyzer<'t> {
     utf16_idx: usize,
-    glyph_idx: usize,
     glyph_count: usize,
     cluster_map: &'t [u16],
 }
@@ -1607,7 +1614,6 @@ impl<'t> ClusterAnalyzer<'t> {
     pub fn new(cluster_map: &'t [u16], glyph_count: usize) -> Self {
         ClusterAnalyzer {
             utf16_idx: 0,
-            glyph_idx: 0,
             glyph_count,
             cluster_map,
         }
@@ -1645,8 +1651,6 @@ impl Iterator for ClusterAnalyzer<'_> {
 
         // Update state for next call
         self.utf16_idx = end_utf16_idx;
-        self.glyph_idx = next_glyph;
-
         Some((utf16_len, glyph_count))
     }
 }
@@ -1665,6 +1669,12 @@ impl IDWritePixelSnapping_Impl for TextRenderer_Impl {
         _clientdrawingcontext: *const ::core::ffi::c_void,
         transform: *mut DWRITE_MATRIX,
     ) -> windows::core::Result<()> {
+        if transform.is_null() {
+            return Err(windows::core::Error::new(
+                E_POINTER,
+                "DirectWrite provided no transform output pointer",
+            ));
+        }
         unsafe {
             *transform = DWRITE_MATRIX {
                 m11: 1.0,
@@ -1698,12 +1708,54 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
         glyphrundescription: *const DWRITE_GLYPH_RUN_DESCRIPTION,
         _clientdrawingeffect: windows::core::Ref<windows::core::IUnknown>,
     ) -> windows::core::Result<()> {
+        if glyphrun.is_null() || glyphrundescription.is_null() {
+            return Err(windows::core::Error::new(
+                E_POINTER,
+                "DirectWrite provided a null glyph run",
+            ));
+        }
+        if clientdrawingcontext.is_null() {
+            return Err(windows::core::Error::new(
+                E_POINTER,
+                "DirectWrite provided no renderer context",
+            ));
+        }
+
         let glyphrun = unsafe { &*glyphrun };
         let glyph_count = glyphrun.glyphCount as usize;
         if glyph_count == 0 || glyphrun.fontFace.is_none() {
             return Ok(());
         }
+        if glyph_count > MAX_DIRECTWRITE_GLYPHS {
+            return Err(windows::core::Error::new(
+                E_INVALIDARG,
+                "DirectWrite glyph run is unreasonably large",
+            ));
+        }
+        if glyphrun.glyphIndices.is_null()
+            || glyphrun.glyphAdvances.is_null()
+            || glyphrun.glyphOffsets.is_null()
+        {
+            return Err(windows::core::Error::new(
+                E_POINTER,
+                "DirectWrite glyph run contains a null data pointer",
+            ));
+        }
+
         let desc = unsafe { &*glyphrundescription };
+        let text_unit_count = desc.stringLength as usize;
+        if text_unit_count > MAX_DIRECTWRITE_TEXT_UNITS {
+            return Err(windows::core::Error::new(
+                E_INVALIDARG,
+                "DirectWrite glyph description is unreasonably large",
+            ));
+        }
+        if text_unit_count > 0 && desc.clusterMap.is_null() {
+            return Err(windows::core::Error::new(
+                E_POINTER,
+                "DirectWrite glyph description contains no cluster map",
+            ));
+        }
         let context = unsafe {
             &mut *(clientdrawingcontext as *const RendererContext as *mut RendererContext)
         };
@@ -1740,8 +1792,22 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
             unsafe { std::slice::from_raw_parts(glyphrun.glyphAdvances, glyph_count) };
         let glyph_offsets =
             unsafe { std::slice::from_raw_parts(glyphrun.glyphOffsets, glyph_count) };
-        let cluster_map =
-            unsafe { std::slice::from_raw_parts(desc.clusterMap, desc.stringLength as usize) };
+        let cluster_map = if text_unit_count == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(desc.clusterMap, text_unit_count) }
+        };
+        if cluster_map.first().is_some_and(|index| *index != 0)
+            || cluster_map
+                .iter()
+                .any(|index| usize::from(*index) > glyph_count)
+            || cluster_map.windows(2).any(|pair| pair[0] > pair[1])
+        {
+            return Err(windows::core::Error::new(
+                E_INVALIDARG,
+                "DirectWrite provided an invalid cluster map",
+            ));
+        }
 
         let mut cluster_analyzer = ClusterAnalyzer::new(cluster_map, glyph_count);
         let mut utf16_idx = desc.textPosition as usize;
@@ -1749,12 +1815,16 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
         let mut glyphs = Vec::with_capacity(glyph_count);
         for (cluster_utf16_len, cluster_glyph_count) in cluster_analyzer {
             context.index_converter.advance_to_utf16_ix(utf16_idx);
-            utf16_idx += cluster_utf16_len;
-            for (cluster_glyph_idx, glyph_id) in glyph_ids
-                [glyph_idx..(glyph_idx + cluster_glyph_count)]
-                .iter()
-                .enumerate()
-            {
+            utf16_idx = utf16_idx.checked_add(cluster_utf16_len).ok_or_else(|| {
+                windows::core::Error::new(E_INVALIDARG, "DirectWrite text position overflowed")
+            })?;
+            let glyph_end = glyph_idx.checked_add(cluster_glyph_count).ok_or_else(|| {
+                windows::core::Error::new(E_INVALIDARG, "DirectWrite glyph position overflowed")
+            })?;
+            let cluster_glyphs = glyph_ids.get(glyph_idx..glyph_end).ok_or_else(|| {
+                windows::core::Error::new(E_INVALIDARG, "DirectWrite cluster exceeds glyph run")
+            })?;
+            for (cluster_glyph_idx, glyph_id) in cluster_glyphs.iter().enumerate() {
                 let id = GlyphId(*glyph_id as u32);
                 let is_emoji = color_font
                     && is_color_glyph(&font_face, id, &context.text_system.components.factory);
@@ -1770,7 +1840,7 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
                 });
                 context.width += glyph_advances[this_glyph_idx];
             }
-            glyph_idx += cluster_glyph_count;
+            glyph_idx = glyph_end;
         }
         context.runs.push(ShapedRun { font_id, glyphs });
         Ok(())
@@ -1878,7 +1948,10 @@ impl From<DWRITE_FONT_STYLE> for FontStyle {
             0 => FontStyle::Normal,
             1 => FontStyle::Italic,
             2 => FontStyle::Oblique,
-            _ => unreachable!(),
+            other => {
+                log::warn!("unknown DirectWrite font style {other}; using normal");
+                FontStyle::Normal
+            }
         }
     }
 }

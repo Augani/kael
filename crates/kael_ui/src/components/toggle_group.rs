@@ -1,12 +1,12 @@
 //! Toggle group component - Grouped toggle buttons for toolbars and view switchers.
 
 use kael::{prelude::FluentBuilder as _, *};
+use std::panic::Location;
 use std::rc::Rc;
 
 use crate::{
     components::{
         button::{Button, ButtonColors, ButtonSize, ButtonVariant},
-        icon::Icon,
         icon_source::IconSource,
     },
     theme::Theme,
@@ -119,6 +119,7 @@ impl RenderOnce for ToggleButton {
 
         let mut button = Button::new(self.id, self.label.clone())
             .variant(ButtonVariant::Ghost)
+            .pressed(self.pressed)
             .size(if self.icon_only {
                 ButtonSize::Icon
             } else {
@@ -235,8 +236,19 @@ impl ToggleGroupItem {
     }
 }
 
+fn toggled_values(values: &[SharedString], value: &SharedString) -> Vec<SharedString> {
+    let mut next_values = values.to_vec();
+    if let Some(position) = next_values.iter().position(|selected| selected == value) {
+        next_values.remove(position);
+    } else {
+        next_values.push(value.clone());
+    }
+    next_values
+}
+
 #[derive(IntoElement)]
 pub struct ToggleGroup {
+    id: ElementId,
     variant: ToggleGroupVariant,
     size: ToggleGroupSize,
     items: Vec<ToggleGroupItem>,
@@ -250,8 +262,19 @@ pub struct ToggleGroup {
 
 impl ToggleGroup {
     /// Create a new toggle group
+    #[track_caller]
     pub fn new() -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "toggle-group:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             variant: ToggleGroupVariant::default(),
             size: ToggleGroupSize::default(),
             items: Vec::new(),
@@ -326,6 +349,7 @@ impl ToggleGroup {
 }
 
 impl Default for ToggleGroup {
+    #[track_caller]
     fn default() -> Self {
         Self::new()
     }
@@ -347,93 +371,102 @@ impl RenderOnce for ToggleGroup {
         let disabled = self.disabled;
         let size = self.size;
         let on_change = self.on_change;
+        let on_multiple_change = self.on_multiple_change;
         let user_style = self.style;
+        let id = self.id;
+        let id_key = id.to_string();
 
         div()
+            .id(id)
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Toolbar).label("Toggle group"),
+            )
+            .tab_group()
             .flex()
             .items_center()
             .gap(px(2.0))
             .p(px(2.0))
             .bg(theme.tokens.muted)
             .rounded(theme.tokens.radius_md)
-            .children(self.items.into_iter().map(move |item| {
-                let is_selected = match variant {
-                    ToggleGroupVariant::Single => current_value.as_ref() == Some(&item.value),
-                    ToggleGroupVariant::Multiple => current_values.contains(&item.value),
-                };
-                let is_disabled = disabled || item.disabled;
-                let value = item.value.clone();
-                let handler = on_change.clone();
-
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(6.0))
-                    .h(size.height())
-                    .px(size.px_value())
-                    .rounded(theme.tokens.radius_sm)
-                    .text_size(size.text_size())
-                    .font_weight(FontWeight::MEDIUM)
-                    .cursor(if is_disabled {
-                        CursorStyle::Arrow
-                    } else {
-                        CursorStyle::PointingHand
-                    })
-                    .when(is_selected, |this: Div| {
-                        this.bg(theme.tokens.background)
-                            .text_color(theme.tokens.foreground)
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .shadow(smallvec::smallvec![BoxShadow {
-                                color: hsla(0.0, 0.0, 0.0, 0.08),
-                                offset: point(px(0.0), px(1.0)),
-                                blur_radius: px(2.0),
-                                spread_radius: px(0.0),
-                                inset: false,
-                            }])
-                    })
-                    .when(!is_selected, |this: Div| {
-                        this.text_color(theme.tokens.muted_foreground)
-                    })
-                    .when(is_disabled, |this: Div| this.opacity(0.5))
-                    .when(!is_disabled && !is_selected, |this: Div| {
-                        this.hover(|style| {
-                            style
-                                .bg(theme.tokens.muted.opacity(0.5))
-                                .text_color(theme.tokens.foreground)
-                        })
-                    })
-                    .when(!is_disabled, |this: Div| {
-                        this.on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                            if let Some(h) = &handler {
-                                h(&value, window, cx);
+            .children(
+                self.items
+                    .into_iter()
+                    .enumerate()
+                    .map(move |(index, item)| {
+                        let is_selected = match variant {
+                            ToggleGroupVariant::Single => {
+                                current_value.as_ref() == Some(&item.value)
                             }
-                        })
-                    })
-                    .when_some(item.icon, |this: Div, _icon| {
-                        this.child(
-                            div()
-                                .size(px(16.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(
-                                    Icon::new(IconSource::Named(_icon.to_string()))
-                                        .size(px(16.0))
-                                        .color(if is_selected {
-                                            theme.tokens.foreground
-                                        } else {
-                                            theme.tokens.muted_foreground
-                                        }),
-                                ),
+                            ToggleGroupVariant::Multiple => current_values.contains(&item.value),
+                        };
+                        let has_handler = match variant {
+                            ToggleGroupVariant::Single => on_change.is_some(),
+                            ToggleGroupVariant::Multiple => on_multiple_change.is_some(),
+                        };
+                        let is_disabled = disabled || item.disabled || !has_handler;
+                        let value = item.value.clone();
+                        let single_handler = on_change.clone();
+                        let multiple_handler = on_multiple_change.clone();
+                        let selected_values = current_values.clone();
+                        let icon = item.icon.clone();
+                        let label = item.label.clone();
+                        let mut button = Button::new(
+                            ElementId::Name(format!("{id_key}-item-{index}").into()),
+                            label,
                         )
-                    })
-                    .child(item.label)
-            }))
+                        .variant(ButtonVariant::Ghost)
+                        .pressed(is_selected)
+                        .selected(is_selected)
+                        .disabled(is_disabled)
+                        .when(has_handler, |this| {
+                            this.on_click(move |_, window, cx| match variant {
+                                ToggleGroupVariant::Single => {
+                                    if let Some(handler) = &single_handler {
+                                        handler(&value, window, cx);
+                                    }
+                                }
+                                ToggleGroupVariant::Multiple => {
+                                    if let Some(handler) = &multiple_handler {
+                                        let next_values = toggled_values(&selected_values, &value);
+                                        handler(&next_values, window, cx);
+                                    }
+                                }
+                            })
+                        });
+                        if let Some(icon) = icon {
+                            button = button.icon(IconSource::Named(icon.to_string()));
+                        }
+                        button.style().refine(
+                            &StyleRefinement::default()
+                                .h(size.height())
+                                .px(size.px_value())
+                                .text_size(size.text_size()),
+                        );
+                        button
+                    }),
+            )
             .map(|this| {
                 let mut div = this;
                 div.style().refine(&user_style);
                 div
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::toggled_values;
+    use kael::SharedString;
+
+    #[test]
+    fn multiple_selection_adds_and_removes_values() {
+        let alpha = SharedString::from("alpha");
+        let beta = SharedString::from("beta");
+
+        assert_eq!(
+            toggled_values(std::slice::from_ref(&alpha), &beta),
+            vec![alpha.clone(), beta]
+        );
+        assert!(toggled_values(std::slice::from_ref(&alpha), &alpha).is_empty());
     }
 }

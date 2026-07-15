@@ -5,6 +5,7 @@ use std::time::Duration;
 use std::{cell::RefCell, rc::Rc};
 
 use crate::animations::easings;
+use crate::components::button::{Button, ButtonVariant};
 use crate::theme::Theme;
 
 const POPOVER_MARGIN: Pixels = px(8.0);
@@ -19,6 +20,7 @@ pub fn init(cx: &mut App) {
 pub struct PopoverContent {
     focus_handle: FocusHandle,
     content: Rc<dyn Fn(&mut Window, &mut Context<Self>) -> AnyElement>,
+    accessibility_label: SharedString,
     dismissing: bool,
 }
 
@@ -30,8 +32,20 @@ impl PopoverContent {
         Self {
             focus_handle: cx.focus_handle(),
             content: Rc::new(content),
+            accessibility_label: "Popover".into(),
             dismissing: false,
         }
+    }
+
+    /// Describe this non-modal surface to assistive technologies.
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        let label = label.into();
+        self.accessibility_label = if label.trim().is_empty() {
+            "Popover".into()
+        } else {
+            label
+        };
+        self
     }
 }
 
@@ -49,6 +63,10 @@ impl Render for PopoverContent {
         let dismissing = self.dismissing;
 
         div()
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group)
+                    .label(self.accessibility_label.to_string()),
+            )
             .p(px(12.0))
             .min_w(px(200.0))
             .max_w(px(400.0))
@@ -102,8 +120,12 @@ pub struct Popover {
     id: ElementId,
     anchor: Corner,
     trigger: Option<Box<dyn FnOnce(bool, &Window, &App) -> AnyElement + 'static>>,
+    trigger_button: Option<SharedString>,
+    trigger_button_variant: ButtonVariant,
     content: Option<Rc<dyn Fn(&mut Window, &mut App) -> Entity<PopoverContent> + 'static>>,
+    on_open_change: Option<Rc<dyn Fn(bool, &mut Window, &mut App)>>,
     mouse_button: MouseButton,
+    disabled: bool,
     style: StyleRefinement,
 }
 
@@ -113,8 +135,12 @@ impl Popover {
             id: id.into(),
             anchor: Corner::TopLeft,
             trigger: None,
+            trigger_button: None,
+            trigger_button_variant: ButtonVariant::Outline,
             content: None,
+            on_open_change: None,
             mouse_button: MouseButton::Left,
+            disabled: false,
             style: StyleRefinement::default(),
         }
     }
@@ -129,11 +155,30 @@ impl Popover {
         self
     }
 
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
     pub fn trigger<T>(mut self, trigger: T) -> Self
     where
         T: IntoElement + 'static,
     {
         self.trigger = Some(Box::new(move |_is_open, _, _| trigger.into_any_element()));
+        self.trigger_button = None;
+        self
+    }
+
+    /// Use a fully wired, keyboard- and assistive-technology-accessible trigger button.
+    pub fn trigger_button(mut self, label: impl Into<SharedString>) -> Self {
+        self.trigger = None;
+        self.trigger_button = Some(label.into());
+        self
+    }
+
+    /// Customize the visual variant used by [`Self::trigger_button`].
+    pub fn trigger_button_variant(mut self, variant: ButtonVariant) -> Self {
+        self.trigger_button_variant = variant;
         self
     }
 
@@ -145,12 +190,51 @@ impl Popover {
         self
     }
 
-    fn render_trigger(&mut self, open: bool, window: &mut Window, cx: &mut App) -> AnyElement {
-        let Some(trigger) = self.trigger.take() else {
-            return div().child("Trigger").into_any_element();
-        };
+    pub fn on_open_change(
+        mut self,
+        handler: impl Fn(bool, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_open_change = Some(Rc::new(handler));
+        self
+    }
+
+    fn render_trigger(
+        &mut self,
+        open: bool,
+        content_view: Rc<RefCell<Option<Entity<PopoverContent>>>>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
         let user_style = self.style.clone();
-        let trigger_element = (trigger)(open, window, cx);
+        let content_build = self.content.clone();
+        let on_open_change = self.on_open_change.clone();
+        let trigger_element = if let Some(label) = self.trigger_button.take() {
+            let button_id = ElementId::NamedChild(Box::new(self.id.clone()), "trigger".into());
+            let button_content = content_build.clone();
+            let button_view = content_view.clone();
+            let button_open_change = on_open_change.clone();
+            Button::new(button_id, label)
+                .variant(self.trigger_button_variant)
+                .expanded(open)
+                .disabled(self.disabled || button_content.is_none())
+                .on_click(move |_, window, cx| {
+                    let Some(content) = button_content.as_ref() else {
+                        return;
+                    };
+                    open_popover_content(
+                        content.clone(),
+                        button_view.clone(),
+                        button_open_change.clone(),
+                        window,
+                        cx,
+                    );
+                })
+                .into_any_element()
+        } else if let Some(trigger) = self.trigger.take() {
+            (trigger)(open, window, cx)
+        } else {
+            div().child("Trigger").into_any_element()
+        };
 
         div()
             .map(|mut this| {
@@ -158,6 +242,27 @@ impl Popover {
                 this
             })
             .child(trigger_element)
+            .when_some(
+                content_build.filter(|_| !self.disabled),
+                |this, content_build| {
+                    this.on_key_down(move |event, window, cx| {
+                        if !matches!(event.keystroke.key.as_str(), "enter" | "space" | "down") {
+                            return;
+                        }
+                        if content_view.borrow().is_none() {
+                            open_popover_content(
+                                content_build.clone(),
+                                content_view.clone(),
+                                on_open_change.clone(),
+                                window,
+                                cx,
+                            );
+                        }
+                        cx.stop_propagation();
+                        window.prevent_default();
+                    })
+                },
+            )
             .into_any_element()
     }
 
@@ -186,6 +291,49 @@ impl Popover {
             },
         )
     }
+}
+
+fn open_popover_content(
+    content_build: Rc<dyn Fn(&mut Window, &mut App) -> Entity<PopoverContent> + 'static>,
+    content_view: Rc<RefCell<Option<Entity<PopoverContent>>>>,
+    on_open_change: Option<Rc<dyn Fn(bool, &mut Window, &mut App)>>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if content_view.borrow().is_some() {
+        return;
+    }
+
+    let new_content_view = content_build(window, cx);
+    let view_for_dismiss = content_view.clone();
+    let previous_focus_handle = window.focused(cx);
+    let close_callback = on_open_change.clone();
+
+    window
+        .subscribe(
+            &new_content_view,
+            cx,
+            move |modal, _: &DismissEvent, window, cx| {
+                if modal.focus_handle(cx).contains_focused(window, cx) {
+                    if let Some(previous_focus_handle) = previous_focus_handle.as_ref() {
+                        window.focus(previous_focus_handle);
+                    }
+                }
+                *view_for_dismiss.borrow_mut() = None;
+                if let Some(callback) = close_callback.as_ref() {
+                    callback(false, window, cx);
+                }
+                window.refresh();
+            },
+        )
+        .detach();
+
+    window.focus(&new_content_view.focus_handle(cx));
+    *content_view.borrow_mut() = Some(new_content_view);
+    if let Some(callback) = on_open_change.as_ref() {
+        callback(true, window, cx);
+    }
+    window.refresh();
 }
 
 impl IntoElement for Popover {
@@ -274,9 +422,11 @@ impl Element for Popover {
                                         }
                                     })
                                     .child(content_view.clone())
-                                    .on_mouse_down_out(move |_, window, _| {
-                                        *content_view_mut.borrow_mut() = None;
-                                        window.refresh();
+                                    .on_mouse_down_out(move |_, _, cx| {
+                                        let content = content_view_mut.borrow().clone();
+                                        if let Some(content) = content {
+                                            content.update(cx, |_, cx| cx.emit(DismissEvent));
+                                        }
                                     }),
                             ),
                         )
@@ -288,7 +438,8 @@ impl Element for Popover {
                     popover_element = Some(element);
                 }
 
-                let mut trigger_element = view.render_trigger(is_open, window, cx);
+                let mut trigger_element =
+                    view.render_trigger(is_open, element_state.content_view.clone(), window, cx);
                 let trigger_layout_id = trigger_element.request_layout(window, cx);
 
                 let layout_id = window.request_layout(
@@ -366,13 +517,18 @@ impl Element for Popover {
                     return;
                 }
 
-                let Some(content_build) = this.content.take() else {
+                let Some(content_build) = this.content.clone() else {
                     return;
                 };
 
                 let old_content_view = element_state.content_view.clone();
+                let on_open_change = this.on_open_change.clone();
                 let hitbox_id = prepaint.hitbox.id;
                 let mouse_button = this.mouse_button;
+
+                if this.disabled {
+                    return;
+                }
 
                 window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
                     if phase == DispatchPhase::Bubble
@@ -381,33 +537,13 @@ impl Element for Popover {
                     {
                         cx.stop_propagation();
                         window.prevent_default();
-
-                        let new_content_view = (content_build)(window, cx);
-                        let old_content_view1 = old_content_view.clone();
-
-                        let previous_focus_handle = window.focused(cx);
-
-                        window
-                            .subscribe(
-                                &new_content_view,
-                                cx,
-                                move |modal, _: &DismissEvent, window, cx| {
-                                    if modal.focus_handle(cx).contains_focused(window, cx) {
-                                        if let Some(previous_focus_handle) =
-                                            previous_focus_handle.as_ref()
-                                        {
-                                            window.focus(previous_focus_handle);
-                                        }
-                                    }
-                                    *old_content_view1.borrow_mut() = None;
-                                    window.refresh();
-                                },
-                            )
-                            .detach();
-
-                        window.focus(&new_content_view.focus_handle(cx));
-                        *old_content_view.borrow_mut() = Some(new_content_view);
-                        window.refresh();
+                        open_popover_content(
+                            content_build.clone(),
+                            old_content_view.clone(),
+                            on_open_change.clone(),
+                            window,
+                            cx,
+                        );
                     }
                 });
             },

@@ -6,6 +6,7 @@ use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 
 use kael::*;
+use std::rc::Rc;
 
 use crate::display::rich_text::LinkClickHandler;
 #[cfg(feature = "html-render")]
@@ -68,7 +69,8 @@ impl Html {
     }
 
     pub fn base_font_size(mut self, size: Pixels) -> Self {
-        self.base_font_size = Some(size);
+        let value = f32::from(size);
+        self.base_font_size = (value.is_finite() && value > 0.0).then_some(size);
         self
     }
 
@@ -76,7 +78,7 @@ impl Html {
         mut self,
         handler: impl Fn(&str, &mut Window, &mut App) + 'static,
     ) -> Self {
-        self.on_link_click = Some(Box::new(handler));
+        self.on_link_click = Some(Rc::new(handler));
         self
     }
 }
@@ -84,10 +86,12 @@ impl Html {
 #[cfg(feature = "html-render")]
 fn parse_html(source: &str) -> Vec<RichBlock> {
     let wrapped = format!("<html><body>{}</body></html>", source);
-    let dom = parse_document(RcDom::default(), Default::default())
+    let Ok(dom) = parse_document(RcDom::default(), Default::default())
         .from_utf8()
         .read_from(&mut wrapped.as_bytes())
-        .expect("html parse");
+    else {
+        return Vec::new();
+    };
 
     let body = find_body(&dom.document);
     match body {
@@ -522,11 +526,15 @@ fn parse_inline_style(style: &str) -> InlineStyle {
                 "font-size" => {
                     if let Some(stripped) = value.strip_suffix("px") {
                         if let Ok(size) = stripped.trim().parse::<f32>() {
-                            result.font_size = Some(size);
+                            if size.is_finite() && size > 0.0 {
+                                result.font_size = Some(size);
+                            }
                         }
                     } else if let Some(stripped) = value.strip_suffix("em") {
                         if let Ok(size) = stripped.trim().parse::<f32>() {
-                            result.font_size = Some(size * 14.0);
+                            if size.is_finite() && size > 0.0 {
+                                result.font_size = Some(size * 14.0);
+                            }
                         }
                     }
                 }
@@ -629,6 +637,11 @@ fn parse_hex_color(hex: &str) -> Option<Hsla> {
 
 #[cfg(feature = "html-render")]
 fn rgb_to_hsla(r: u8, g: u8, b: u8, a: f32) -> Hsla {
+    let a = if a.is_finite() {
+        a.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
     let rf = r as f32 / 255.0;
     let gf = g as f32 / 255.0;
     let bf = b as f32 / 255.0;
@@ -690,5 +703,40 @@ impl RenderOnce for Html {
 impl Styled for Html {
     fn style(&mut self) -> &mut StyleRefinement {
         self.base.style()
+    }
+}
+
+#[cfg(all(test, feature = "html-render"))]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn parser_drops_disallowed_elements_and_their_contents() {
+        let blocks = parse_html("<p>Safe<script>alert('bad')</script> text</p>");
+        let debug = format!("{blocks:?}");
+        assert!(debug.contains("Safe"));
+        assert!(debug.contains("text"));
+        assert!(!debug.contains("alert"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn inline_style_rejects_invalid_sizes_and_bounds_alpha() {
+        assert!(parse_inline_style("font-size: -2px").font_size.is_none());
+        assert!(parse_inline_style("font-size: NaNpx").font_size.is_none());
+        assert_eq!(parse_inline_style("font-size: 1.5em").font_size, Some(21.0));
+        assert_eq!(parse_css_color("rgba(10, 20, 30, 2)").unwrap().a, 1.0);
+        assert_eq!(parse_css_color("rgba(10, 20, 30, -1)").unwrap().a, 0.0);
+    }
+
+    #[::core::prelude::v1::test]
+    fn invalid_base_font_size_is_ignored() {
+        assert!(Html::new("<p>text</p>")
+            .base_font_size(px(0.0))
+            .base_font_size
+            .is_none());
+        assert!(Html::new("<p>text</p>")
+            .base_font_size(px(f32::NAN))
+            .base_font_size
+            .is_none());
     }
 }

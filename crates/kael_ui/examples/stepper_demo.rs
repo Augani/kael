@@ -54,7 +54,7 @@ fn main() {
                     })),
                     ..Default::default()
                 },
-                |_, cx| cx.new(|cx| StepperDemo::new(cx)),
+                |_, cx| cx.new(StepperDemo::new),
             )
             .unwrap();
         });

@@ -13,10 +13,14 @@ use windows::Win32::{
 
 static QPC_TICKS_PER_SECOND: LazyLock<u64> = LazyLock::new(|| {
     let mut frequency = 0;
-    // On systems that run Windows XP or later, the function will always succeed and
-    // will thus never return zero.
-    unsafe { QueryPerformanceFrequency(&mut frequency).unwrap() };
-    frequency as u64
+    if unsafe { QueryPerformanceFrequency(&mut frequency) }.is_err() || frequency <= 0 {
+        // Modern Windows documents this as infallible, but a defensive fallback keeps
+        // malformed timing state from turning a presentation thread into a process crash.
+        log::error!("QueryPerformanceFrequency failed; using the documented 10 MHz baseline");
+        10_000_000
+    } else {
+        frequency as u64
+    }
 });
 
 const VSYNC_INTERVAL_THRESHOLD: Duration = Duration::from_millis(1);

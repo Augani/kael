@@ -4,7 +4,7 @@ A high-performance, GPU-accelerated UI framework for building native-first deskt
 
 > **Kael is a fork of [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui)** from [Zed Industries](https://zed.dev), previously distributed as the *adabraka GPUI fork* (`adabraka-gpui`) and since renamed to Kael — the same project, continued under a new name. It is an independent project and is not affiliated with or endorsed by Zed Industries.
 
-Where upstream GPUI prioritizes APIs that serve the Zed editor, Kael is the home for general-purpose features the wider community asks for: radial and conic gradients (shipped), webviews, form controls, rich text, Lottie animations, blur effects, gesture recognition, theming, a built-in component library — and a public render-target + custom shader API as the top of the GPU roadmap. See [VISION.md](VISION.md) for the project's direction and [`docs/src/electron-bridge.md`](docs/src/electron-bridge.md) for the current Electron-gap roadmap.
+Where upstream GPUI prioritizes APIs that serve the Zed editor, Kael is the home for general-purpose features the wider community asks for: radial and conic gradients (shipped), webviews, form controls, rich text, Lottie animations, blur effects, gesture recognition, theming, a built-in component library — and a public render-target + custom shader API as the top of the GPU roadmap. See [VISION.md](VISION.md) for the project's direction and [`docs/src/native-capability-bridge.md`](docs/src/native-capability-bridge.md) for the current browser-runtime stack-gap roadmap.
 
 Kael targets macOS, Linux, and Windows with platform-native rendering backends (Metal, Vulkan/Blade, DirectX 11) and delivers 60fps with minimal CPU usage through dirty tracking and render-on-demand.
 

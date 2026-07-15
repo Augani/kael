@@ -1,6 +1,6 @@
 # Multi-Process & IPC
 
-Kael supports an Electron-style multi-process architecture: the UI runs in the main process while heavy or untrusted work runs in supervised child processes that communicate over typed IPC. Transport is platform-native — Unix domain sockets on macOS/Linux, named pipes on Windows — and the framework handles framing, request/response correlation, progress streaming, and crash reporting for you.
+Kael supports an native desktop multi-process architecture: the UI runs in the main process while heavy or untrusted work runs in supervised child processes that communicate over typed IPC. Transport is platform-native — Unix domain sockets on macOS/Linux, named pipes on Windows — and the framework handles framing, request/response correlation, progress streaming, and crash reporting for you.
 
 ## Process model
 

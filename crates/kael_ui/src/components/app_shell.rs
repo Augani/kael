@@ -112,7 +112,9 @@ impl RenderOnce for AppShell {
                 _ => theme.tokens.background,
             })
             .text_color(theme.tokens.foreground)
-            .when_some(self.top, |this, top| this.child(top))
+            .when_some(self.top, |this, top| {
+                this.child(div().flex_shrink_0().child(top))
+            })
             .child(
                 div()
                     .flex()
@@ -126,6 +128,9 @@ impl RenderOnce for AppShell {
                             div()
                                 .w(self.sidebar_width)
                                 .h_full()
+                                .min_h(px(0.0))
+                                .flex_shrink_0()
+                                .overflow_hidden()
                                 .when(variant == AppShellVariant::Section, |this| {
                                     this.border_r_1().border_color(theme.tokens.border)
                                 })
@@ -149,6 +154,7 @@ impl RenderOnce for AppShell {
             .when_some(self.footer, |this, footer| {
                 this.child(
                     div()
+                        .flex_shrink_0()
                         .border_t_1()
                         .border_color(theme.tokens.border)
                         .child(footer),

@@ -1,6 +1,47 @@
 use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 
+fn finite_progress(value: f32, max: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(0.0, max)
+    } else {
+        0.0
+    }
+}
+
+fn finite_nonnegative(value: f32) -> f32 {
+    if value.is_finite() {
+        value.max(0.0)
+    } else {
+        0.0
+    }
+}
+
+fn finite_max(max: f32) -> f32 {
+    if max.is_finite() && max > 0.0 {
+        max
+    } else {
+        1.0
+    }
+}
+
+fn finite_positive_pixels(value: Pixels, fallback: Pixels) -> Pixels {
+    let value = f32::from(value);
+    if value.is_finite() && value > 0.0 {
+        px(value)
+    } else {
+        fallback
+    }
+}
+
+fn non_empty_label(label: SharedString, fallback: &'static str) -> SharedString {
+    if label.trim().is_empty() {
+        fallback.into()
+    } else {
+        label
+    }
+}
+
 /// Progress bar variants
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ProgressVariant {
@@ -66,7 +107,7 @@ impl ProgressBar {
     /// Create a new progress bar with a value (0.0 to 1.0)
     pub fn new(value: f32) -> Self {
         Self {
-            value: Some(value.clamp(0.0, 1.0)),
+            value: Some(finite_nonnegative(value)),
             max: 1.0,
             variant: ProgressVariant::Default,
             size: ProgressSize::Md,
@@ -94,16 +135,17 @@ impl ProgressBar {
     }
 
     pub fn value(mut self, value: f32) -> Self {
-        self.value = Some(value.clamp(0.0, self.max));
+        self.value = Some(finite_nonnegative(value));
         self
     }
 
     pub fn max(mut self, max: f32) -> Self {
-        self.max = max.max(f32::EPSILON);
-        if let Some(value) = self.value {
-            self.value = Some(value.clamp(0.0, self.max));
-        }
+        self.max = finite_max(max);
         self
+    }
+
+    fn normalized_value(&self) -> Option<f32> {
+        self.value.map(|value| finite_progress(value, self.max))
     }
 
     /// Set the progress variant
@@ -126,7 +168,7 @@ impl ProgressBar {
 
     /// Set a custom label
     pub fn label(mut self, label: impl Into<SharedString>) -> Self {
-        self.label = Some(label.into());
+        self.label = Some(non_empty_label(label.into(), "Progress"));
         self
     }
 
@@ -183,12 +225,13 @@ impl Styled for ProgressBar {
 }
 
 impl RenderOnce for ProgressBar {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = &Theme::of(cx).tokens;
         let primary = tokens.primary;
         let destructive = tokens.destructive;
         let foreground = tokens.foreground;
         let muted_foreground = tokens.muted_foreground;
+        let normalized_value = self.normalized_value();
         let user_style = self.style;
 
         let height = match self.size {
@@ -209,17 +252,38 @@ impl RenderOnce for ProgressBar {
             bar_color = tokens.muted_foreground;
         }
 
-        let progress_width = if let Some(value) = self.value {
+        let progress_width = if let Some(value) = normalized_value {
             relative((value / self.max).clamp(0.0, 1.0))
         } else {
             relative(0.4)
         };
 
-        let percentage_text = self
-            .value
-            .map(|v| format!("{}%", ((v / self.max) * 100.0).round() as u32));
+        let percentage_text =
+            normalized_value.map(|v| format!("{}%", ((v / self.max) * 100.0).round() as u32));
+        let accessibility_label = self
+            .label
+            .clone()
+            .unwrap_or_else(|| "Progress".into())
+            .to_string();
+        let mut accessibility = if let Some(value) = normalized_value {
+            AccessibilityAttributes::progress_bar(
+                accessibility_label,
+                value as f64,
+                0.0,
+                self.max as f64,
+            )
+        } else {
+            AccessibilityAttributes::new(AccessibilityRole::ProgressBar)
+                .label(accessibility_label)
+                .value(AccessibilityValue::Text("Loading".into()))
+                .busy(true)
+        };
+        if self.disabled {
+            accessibility = accessibility.states(AccessibilityState::DISABLED);
+        }
 
         div()
+            .accessibility(accessibility)
             .flex()
             .flex_col()
             .gap(px(8.0))
@@ -243,15 +307,17 @@ impl RenderOnce for ProgressBar {
                                         } else {
                                             foreground
                                         })
-                                        .child(label),
+                                        .child(StyledText::new(label).accessibility_hidden(true)),
                                 )
                             })
                             .when(self.show_percentage && percentage_text.is_some(), |this| {
                                 this.child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(muted_foreground)
-                                        .child(percentage_text.unwrap_or_default()),
+                                    div().text_sm().text_color(muted_foreground).child(
+                                        StyledText::new(SharedString::from(
+                                            percentage_text.unwrap_or_default(),
+                                        ))
+                                        .accessibility_hidden(true),
+                                    ),
                                 )
                             }),
                     )
@@ -275,7 +341,7 @@ impl RenderOnce for ProgressBar {
                             .bg(bar_color)
                             .rounded_full()
                             .map(|this| {
-                                if self.value.is_none() {
+                                if normalized_value.is_none() && window.animations_enabled() {
                                     this.with_animation(
                                         "indeterminate-progress",
                                         Animation::new(std::time::Duration::from_millis(1500))
@@ -312,6 +378,8 @@ pub struct CircularProgress {
     stroke_width: Pixels,
     variant: ProgressVariant,
     spinner_type: SpinnerType,
+    label: SharedString,
+    animation_repeat: Repeat,
     style: StyleRefinement,
 }
 
@@ -319,11 +387,13 @@ impl CircularProgress {
     /// Create a new circular progress with a value
     pub fn new(value: f32) -> Self {
         Self {
-            value: Some(value.clamp(0.0, 1.0)),
+            value: Some(finite_progress(value, 1.0)),
             size: px(40.0),
             stroke_width: px(4.0),
             variant: ProgressVariant::Default,
             spinner_type: SpinnerType::Dot,
+            label: "Progress".into(),
+            animation_repeat: Repeat::Forever,
             style: StyleRefinement::default(),
         }
     }
@@ -336,14 +406,33 @@ impl CircularProgress {
             stroke_width: px(4.0),
             variant: ProgressVariant::Default,
             spinner_type: SpinnerType::Dot,
+            label: "Loading".into(),
+            animation_repeat: Repeat::Forever,
             style: StyleRefinement::default(),
         }
     }
 
     /// Set the size
     pub fn size(mut self, size: Pixels) -> Self {
-        self.size = size;
-        self.stroke_width = size * 0.1; // Stroke is 10% of size
+        self.size = finite_positive_pixels(size, px(40.0));
+        self.stroke_width = self.size * 0.1; // Stroke is 10% of size
+        self
+    }
+
+    pub fn value(mut self, value: f32) -> Self {
+        self.value = Some(finite_progress(value, 1.0));
+        self
+    }
+
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = non_empty_label(
+            label.into(),
+            if self.value.is_some() {
+                "Progress"
+            } else {
+                "Loading"
+            },
+        );
         self
     }
 
@@ -364,6 +453,12 @@ impl CircularProgress {
         self.spinner_type = spinner_type;
         self
     }
+
+    /// Limit an indeterminate spinner to a finite number of cycles.
+    pub fn animation_cycles(mut self, cycles: u32) -> Self {
+        self.animation_repeat = Repeat::Count(cycles.max(1));
+        self
+    }
 }
 
 impl Styled for CircularProgress {
@@ -373,12 +468,33 @@ impl Styled for CircularProgress {
 }
 
 impl RenderOnce for CircularProgress {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = &Theme::of(cx).tokens;
         let primary = tokens.primary;
         let destructive = tokens.destructive;
         let muted = tokens.muted;
         let user_style = self.style;
+        let animations_enabled = window.animations_enabled();
+        let animation_repeat = if animations_enabled {
+            self.animation_repeat
+        } else {
+            Repeat::Once
+        };
+        let animation_duration = move |millis| {
+            if animations_enabled {
+                std::time::Duration::from_millis(millis)
+            } else {
+                std::time::Duration::ZERO
+            }
+        };
+        let accessibility = if let Some(value) = self.value {
+            AccessibilityAttributes::progress_bar(self.label.to_string(), value as f64, 0.0, 1.0)
+        } else {
+            AccessibilityAttributes::new(AccessibilityRole::ProgressBar)
+                .label(self.label.to_string())
+                .value(AccessibilityValue::Text("Loading".into()))
+                .busy(true)
+        };
 
         let stroke_color = match self.variant {
             ProgressVariant::Default | ProgressVariant::Accent => primary,
@@ -390,6 +506,7 @@ impl RenderOnce for CircularProgress {
         };
 
         div()
+            .accessibility(accessibility)
             .flex()
             .items_center()
             .justify_center()
@@ -445,17 +562,37 @@ impl RenderOnce for CircularProgress {
                                     }))
                                     .into_any_element()
                             }
-                            (Some(value), _) => container
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .inset_0()
-                                        .border(stroke_w)
-                                        .border_color(stroke_color)
-                                        .rounded(px(9999.0))
-                                        .opacity(value * 0.7 + 0.3),
-                                )
-                                .into_any_element(),
+                            (Some(value), _) => {
+                                let progress_bg = conic_gradient(
+                                    0.5,
+                                    0.5,
+                                    270.0,
+                                    &[
+                                        linear_color_stop(stroke_color, 0.0),
+                                        linear_color_stop(stroke_color, value),
+                                        linear_color_stop(muted, value),
+                                        linear_color_stop(muted, 1.0),
+                                    ],
+                                );
+                                container
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .inset_0()
+                                            .rounded_full()
+                                            .bg(progress_bg)
+                                            .child(
+                                                div()
+                                                    .absolute()
+                                                    .left(stroke_w)
+                                                    .top(stroke_w)
+                                                    .size(self.size - stroke_w * 2.0)
+                                                    .rounded_full()
+                                                    .bg(tokens.background),
+                                            ),
+                                    )
+                                    .into_any_element()
+                            }
                             (None, SpinnerType::Dot) => {
                                 let size_px = self.size;
                                 let dot_diameter = stroke_w * 1.5;
@@ -472,11 +609,11 @@ impl RenderOnce for CircularProgress {
                                             .bg(stroke_color)
                                             .with_animation(
                                                 "spinner-orbit",
-                                                Animation::new(std::time::Duration::from_millis(
-                                                    800,
-                                                ))
-                                                .repeat_forever()
-                                                .with_easing(crate::animations::easings::linear),
+                                                Animation::new(animation_duration(800))
+                                                    .repeat(animation_repeat)
+                                                    .with_easing(
+                                                        crate::animations::easings::linear,
+                                                    ),
                                                 move |dot, delta| {
                                                     let angle = delta * std::f32::consts::TAU;
                                                     let x = center + path_radius * angle.cos()
@@ -515,11 +652,11 @@ impl RenderOnce for CircularProgress {
                                             )
                                             .with_animation(
                                                 ("spinner-arc", i as u32),
-                                                Animation::new(std::time::Duration::from_millis(
-                                                    1000,
-                                                ))
-                                                .repeat_forever()
-                                                .with_easing(crate::animations::easings::linear),
+                                                Animation::new(animation_duration(1000))
+                                                    .repeat(animation_repeat)
+                                                    .with_easing(
+                                                        crate::animations::easings::linear,
+                                                    ),
                                                 move |dot, delta| {
                                                     let visibility = ((delta
                                                         + i as f32 / num_dots as f32)
@@ -548,11 +685,11 @@ impl RenderOnce for CircularProgress {
                                             .bg(stroke_color)
                                             .with_animation(
                                                 ("spinner-arc-no-track", i as u32),
-                                                Animation::new(std::time::Duration::from_millis(
-                                                    1000,
-                                                ))
-                                                .repeat_forever()
-                                                .with_easing(crate::animations::easings::linear),
+                                                Animation::new(animation_duration(1000))
+                                                    .repeat(animation_repeat)
+                                                    .with_easing(
+                                                        crate::animations::easings::linear,
+                                                    ),
                                                 move |dot, delta| {
                                                     let angle = delta * std::f32::consts::TAU
                                                         + (i as f32 / num_dots as f32)
@@ -583,11 +720,11 @@ impl RenderOnce for CircularProgress {
                                             .bg(stroke_color)
                                             .with_animation(
                                                 ("growing-circle", i as u32),
-                                                Animation::new(std::time::Duration::from_millis(
-                                                    2000,
-                                                ))
-                                                .repeat_forever()
-                                                .with_easing(crate::animations::easings::linear),
+                                                Animation::new(animation_duration(2000))
+                                                    .repeat(animation_repeat)
+                                                    .with_easing(
+                                                        crate::animations::easings::linear,
+                                                    ),
                                                 move |dot, delta| {
                                                     let segment_angle = (i as f32
                                                         / num_segments as f32)
@@ -625,12 +762,60 @@ impl RenderOnce for CircularProgress {
 }
 
 #[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn invalid_ranges_and_circular_sizes_use_safe_defaults() {
+        assert_eq!(finite_max(f32::NAN), 1.0);
+        assert_eq!(finite_max(f32::INFINITY), 1.0);
+        assert_eq!(finite_max(-1.0), 1.0);
+
+        let bar = ProgressBar::new(0.5).max(f32::INFINITY).label("  ");
+        assert_eq!(bar.max, 1.0);
+        assert_eq!(
+            bar.label.as_ref().map(SharedString::as_ref),
+            Some("Progress")
+        );
+
+        let circular = CircularProgress::new(0.5).size(px(f32::NAN)).label("");
+        assert_eq!(circular.size, px(40.0));
+        assert_eq!(circular.stroke_width, px(4.0));
+        assert_eq!(circular.label.as_ref(), "Progress");
+    }
+}
+
+#[cfg(test)]
 mod tests {
-    use super::{ProgressBar, ProgressVariant};
+    use super::{CircularProgress, ProgressBar, ProgressVariant};
+    use kael::Repeat;
 
     #[test]
     fn color_sets_custom_progress_variant() {
         let bar = ProgressBar::new(0.5).color(kael::black());
         assert!(matches!(bar.variant, ProgressVariant::Custom(_)));
+    }
+
+    #[test]
+    fn non_finite_progress_values_are_sanitized() {
+        assert_eq!(ProgressBar::new(f32::NAN).value, Some(0.0));
+        assert_eq!(CircularProgress::new(f32::INFINITY).value, Some(0.0));
+    }
+
+    #[test]
+    fn progress_value_and_max_are_builder_order_independent() {
+        let value_then_max = ProgressBar::new(0.0).value(62.0).max(100.0);
+        let max_then_value = ProgressBar::new(0.0).max(100.0).value(62.0);
+
+        assert_eq!(value_then_max.value, Some(62.0));
+        assert_eq!(max_then_value.value, Some(62.0));
+        assert_eq!(value_then_max.normalized_value(), Some(62.0));
+        assert_eq!(max_then_value.normalized_value(), Some(62.0));
+    }
+
+    #[test]
+    fn circular_spinner_can_use_finite_preview_cycles() {
+        let spinner = CircularProgress::indeterminate().animation_cycles(0);
+        assert_eq!(spinner.animation_repeat, Repeat::Count(1));
     }
 }

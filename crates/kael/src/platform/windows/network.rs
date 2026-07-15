@@ -22,22 +22,24 @@ pub(crate) fn query_network_status() -> NetworkStatus {
                         NetworkStatus::Offline
                     }
                 }
-                Err(_) => NetworkStatus::Online,
+                Err(_) => NetworkStatus::Offline,
             },
-            Err(_) => NetworkStatus::Online,
+            Err(_) => NetworkStatus::Offline,
         }
     }
 }
 
 pub(crate) fn start_network_monitoring(platform_hwnd: HWND, _validation_number: usize) {
+    if platform_hwnd.is_invalid() {
+        return;
+    }
     let hwnd_raw = platform_hwnd.0 as usize;
     std::thread::Builder::new()
         .name("NetworkMonitor".to_owned())
         .spawn(move || {
             let platform_hwnd = HWND(hwnd_raw as *mut _);
-            unsafe {
-                let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            }
+            let apartment =
+                ComApartment(unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).is_ok() });
             let manager: Result<INetworkListManager, _> =
                 unsafe { CoCreateInstance(&NetworkListManager, None, CLSCTX_ALL) };
             let Ok(manager) = manager else {
@@ -57,7 +59,7 @@ pub(crate) fn start_network_monitoring(platform_hwnd: HWND, _validation_number: 
             let sink = NetworkEventSink { platform_hwnd };
             let sink: INetworkListManagerEvents = sink.into();
             let cookie = unsafe { cp.Advise(&sink) };
-            let Ok(_cookie) = cookie else {
+            let Ok(cookie) = cookie else {
                 log::warn!("Failed to advise network events");
                 return;
             };
@@ -65,15 +67,29 @@ pub(crate) fn start_network_monitoring(platform_hwnd: HWND, _validation_number: 
             let mut msg = MSG::default();
             loop {
                 let result = unsafe { GetMessageW(&mut msg, None, 0, 0) };
-                if !result.as_bool() {
+                if result.0 <= 0 {
                     break;
                 }
                 unsafe {
                     DispatchMessageW(&msg);
                 }
             }
+            unsafe {
+                let _ = cp.Unadvise(cookie);
+            }
+            drop(apartment);
         })
         .ok();
+}
+
+struct ComApartment(bool);
+
+impl Drop for ComApartment {
+    fn drop(&mut self) {
+        if self.0 {
+            unsafe { CoUninitialize() };
+        }
+    }
 }
 
 #[windows::core::implement(INetworkListManagerEvents)]

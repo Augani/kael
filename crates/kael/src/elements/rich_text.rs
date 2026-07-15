@@ -196,9 +196,191 @@ impl RichText {
         self
     }
 
+    /// Total number of configured rich text segments.
+    pub fn segment_count(&self) -> usize {
+        self.segments.len()
+    }
+
+    /// Number of configured text segments.
+    pub fn text_segment_count(&self) -> usize {
+        self.segments
+            .iter()
+            .filter(|segment| matches!(segment, RichTextSegment::Text { .. }))
+            .count()
+    }
+
+    /// Total UTF-8 byte length across configured text segments.
+    pub fn text_len_bytes(&self) -> usize {
+        self.segments
+            .iter()
+            .map(|segment| match segment {
+                RichTextSegment::Text { text, .. } => text.len(),
+                RichTextSegment::Inline { .. } => 0,
+            })
+            .sum()
+    }
+
+    /// Number of inline element placeholders configured in the rich text block.
+    pub fn inline_element_count(&self) -> usize {
+        self.segments
+            .iter()
+            .filter(|segment| matches!(segment, RichTextSegment::Inline { .. }))
+            .count()
+    }
+
+    /// Number of inline elements with explicit baseline offsets.
+    pub fn inline_baseline_count(&self) -> usize {
+        self.segments
+            .iter()
+            .filter(|segment| {
+                matches!(
+                    segment,
+                    RichTextSegment::Inline {
+                        baseline_offset: Some(_),
+                        ..
+                    }
+                )
+            })
+            .count()
+    }
+
+    /// Number of highlighted text segments.
+    pub fn highlighted_segment_count(&self) -> usize {
+        self.segments
+            .iter()
+            .filter(|segment| {
+                matches!(
+                    segment,
+                    RichTextSegment::Text {
+                        style: RichTextSegmentStyle::Highlight(_),
+                        ..
+                    }
+                )
+            })
+            .count()
+    }
+
+    /// Number of inline code text segments.
+    pub fn code_segment_count(&self) -> usize {
+        self.segments
+            .iter()
+            .filter(|segment| {
+                matches!(
+                    segment,
+                    RichTextSegment::Text {
+                        style: RichTextSegmentStyle::Code,
+                        ..
+                    }
+                )
+            })
+            .count()
+    }
+
+    /// Number of text entity spans across links, mentions, and hashtags.
+    pub fn entity_count(&self) -> usize {
+        self.segments
+            .iter()
+            .filter(|segment| {
+                matches!(
+                    segment,
+                    RichTextSegment::Text {
+                        entity: Some(_),
+                        ..
+                    }
+                )
+            })
+            .count()
+    }
+
+    /// Number of link entity spans.
+    pub fn link_count(&self) -> usize {
+        self.entity_kind_count(|kind| matches!(kind, TextEntityKind::Link(_)))
+    }
+
+    /// Number of mention entity spans.
+    pub fn mention_count(&self) -> usize {
+        self.entity_kind_count(|kind| matches!(kind, TextEntityKind::Mention(_)))
+    }
+
+    /// Number of hashtag entity spans.
+    pub fn hashtag_count(&self) -> usize {
+        self.entity_kind_count(|kind| matches!(kind, TextEntityKind::Hashtag(_)))
+    }
+
+    /// Number of entity spans with click handlers.
+    pub fn click_handler_count(&self) -> usize {
+        self.segments
+            .iter()
+            .filter(|segment| {
+                matches!(
+                    segment,
+                    RichTextSegment::Text {
+                        entity: Some(PendingTextEntity {
+                            on_click: Some(_),
+                            ..
+                        }),
+                        ..
+                    }
+                )
+            })
+            .count()
+    }
+
+    /// Whether the rich text block supports mouse selection.
+    pub fn is_selectable(&self) -> bool {
+        self.selectable
+    }
+
+    /// Whether an explicit selection highlight color is configured.
+    pub fn has_selection_color(&self) -> bool {
+        self.selection_color.is_some()
+    }
+
+    /// Whether a persistent element id is configured.
+    pub fn has_element_id(&self) -> bool {
+        self.element_id.is_some()
+    }
+
+    /// Content-safe summary that avoids logging text, URLs, mentions, hashtags, or payloads.
+    pub fn to_text(&self) -> String {
+        format!(
+            "rich text: {} segments, text-segments {}, text-bytes {}, inline {}, baselined-inline {}, highlighted {}, code {}, entities {}, links {}, mentions {}, hashtags {}, click-handlers {}, selectable {}, selection-color {}, element-id {}",
+            self.segment_count(),
+            self.text_segment_count(),
+            self.text_len_bytes(),
+            self.inline_element_count(),
+            self.inline_baseline_count(),
+            self.highlighted_segment_count(),
+            self.code_segment_count(),
+            self.entity_count(),
+            self.link_count(),
+            self.mention_count(),
+            self.hashtag_count(),
+            self.click_handler_count(),
+            self.is_selectable(),
+            self.has_selection_color(),
+            self.has_element_id()
+        )
+    }
+
     /// Finalizes the builder and returns the rich text element.
     pub fn build(self) -> Self {
         self
+    }
+
+    fn entity_kind_count(&self, is_match: impl Fn(&TextEntityKind) -> bool) -> usize {
+        self.segments
+            .iter()
+            .filter(|segment| {
+                matches!(
+                    segment,
+                    RichTextSegment::Text {
+                        entity: Some(PendingTextEntity { kind, .. }),
+                        ..
+                    } if is_match(kind)
+                )
+            })
+            .count()
     }
 
     fn push_text_segment(
@@ -1501,6 +1683,48 @@ mod tests {
         Context, InteractiveElement, Modifiers, ParentElement, Render, Styled, TestAppContext,
         Window, div, point, px, rgb,
     };
+
+    #[test]
+    fn rich_text_builder_summaries_are_content_safe() {
+        let block = rich_text()
+            .id("audit-rich-text")
+            .selectable()
+            .selection_color(rgb(0x2255ff).into())
+            .text("Hello ")
+            .styled("important", HighlightStyle::default())
+            .link("docs", "https://example.com/private", |_, _| {})
+            .mention("@ada", "user-123", |_, _| {})
+            .hashtag("#launch", "launch-plan", |_, _| {})
+            .code("secret_token")
+            .inline_element(div())
+            .inline_element_with_baseline(div(), px(8.));
+
+        assert_eq!(block.segment_count(), 8);
+        assert_eq!(block.text_segment_count(), 6);
+        assert_eq!(block.text_len_bytes(), 42);
+        assert_eq!(block.inline_element_count(), 2);
+        assert_eq!(block.inline_baseline_count(), 1);
+        assert_eq!(block.highlighted_segment_count(), 1);
+        assert_eq!(block.code_segment_count(), 1);
+        assert_eq!(block.entity_count(), 3);
+        assert_eq!(block.link_count(), 1);
+        assert_eq!(block.mention_count(), 1);
+        assert_eq!(block.hashtag_count(), 1);
+        assert_eq!(block.click_handler_count(), 3);
+        assert!(block.is_selectable());
+        assert!(block.has_selection_color());
+        assert!(block.has_element_id());
+        assert_eq!(
+            block.to_text(),
+            "rich text: 8 segments, text-segments 6, text-bytes 42, inline 2, baselined-inline 1, highlighted 1, code 1, entities 3, links 1, mentions 1, hashtags 1, click-handlers 3, selectable true, selection-color true, element-id true"
+        );
+        assert!(!block.to_text().contains("Hello"));
+        assert!(!block.to_text().contains("important"));
+        assert!(!block.to_text().contains("https://example.com/private"));
+        assert!(!block.to_text().contains("user-123"));
+        assert!(!block.to_text().contains("launch-plan"));
+        assert!(!block.to_text().contains("secret_token"));
+    }
 
     struct LinkRoot {
         layout: RichTextLayout,

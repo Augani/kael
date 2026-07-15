@@ -32,6 +32,17 @@ impl HeadingLevel {
             Self::H6 => TextVariant::H6,
         }
     }
+
+    fn number(self) -> usize {
+        match self {
+            Self::H1 => 1,
+            Self::H2 => 2,
+            Self::H3 => 3,
+            Self::H4 => 4,
+            Self::H5 => 5,
+            Self::H6 => 6,
+        }
+    }
 }
 
 #[derive(IntoElement)]
@@ -155,6 +166,7 @@ impl Styled for Heading {
 
 impl RenderOnce for Heading {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let semantic_level = self.level.number();
         let mut text = Text::new(self.content)
             .variant(
                 self.heading_type
@@ -169,6 +181,7 @@ impl RenderOnce for Heading {
             .word_break(self.word_break)
             .text_wrap(self.text_wrap)
             .justify(self.justify)
+            .semantic_heading_level(semantic_level)
             .has_strikethrough(self.has_strikethrough);
         if let Some(color) = self.color {
             text = text.color(color);

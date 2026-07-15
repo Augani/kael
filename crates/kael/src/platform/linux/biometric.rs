@@ -107,12 +107,12 @@ fn authenticate_fprintd(reason: &str, callback: Box<dyn FnOnce(bool) + Send>) {
     let _ = reason; // fprintd doesn't use a reason string in its D-Bus API
 
     // Use fprintd-verify which handles the full verification flow
-    let output = std::process::Command::new("fprintd-verify").output();
-
-    match output {
-        Ok(o) => callback(o.status.success()),
-        Err(_) => callback(false),
-    }
+    let verified = std::process::Command::new("fprintd-verify")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    complete_authentication(callback, verified);
 }
 
 /// Authenticate using polkit (pkexec or pkttyagent).
@@ -124,7 +124,7 @@ fn authenticate_polkit(reason: &str, callback: Box<dyn FnOnce(bool) + Send>) {
 
     // Use pkcheck with a well-known action that requires auth
     let pid = std::process::id();
-    let output = std::process::Command::new("pkcheck")
+    let verified = std::process::Command::new("pkcheck")
         .args([
             "--action-id",
             "org.freedesktop.policykit.exec",
@@ -132,12 +132,11 @@ fn authenticate_polkit(reason: &str, callback: Box<dyn FnOnce(bool) + Send>) {
             &pid.to_string(),
             "--allow-user-interaction",
         ])
-        .output();
-
-    match output {
-        Ok(o) => callback(o.status.success()),
-        Err(_) => callback(false),
-    }
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    complete_authentication(callback, verified);
 }
 
 /// Authenticate the user via biometrics on Linux.
@@ -157,7 +156,13 @@ pub fn authenticate_biometric(reason: &str, callback: Box<dyn FnOnce(bool) + Sen
     }
 
     // No authentication method available
-    callback(false);
+    complete_authentication(callback, false);
+}
+
+fn complete_authentication(callback: Box<dyn FnOnce(bool) + Send>, verified: bool) {
+    crate::platform::catch_platform_callback("Linux", "biometric authentication", (), || {
+        callback(verified)
+    });
 }
 
 /// Parse a D-Bus object path from dbus-send --print-reply output.

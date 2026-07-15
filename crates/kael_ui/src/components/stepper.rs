@@ -122,7 +122,7 @@ impl StepperState {
     }
 
     pub fn with_steps(mut self, steps: Vec<StepItem>) -> Self {
-        self.steps = steps;
+        self.replace_steps(steps);
         self
     }
 
@@ -136,9 +136,7 @@ impl StepperState {
     }
 
     pub fn set_steps(&mut self, steps: Vec<StepItem>, cx: &mut Context<Self>) {
-        self.steps = steps;
-        self.current_step = 0;
-        self.completed_steps.clear();
+        self.replace_steps(steps);
         cx.notify();
     }
 
@@ -147,7 +145,8 @@ impl StepperState {
     }
 
     pub fn set_current_step(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index < self.steps.len() && self.is_step_accessible(index) {
+        if index < self.steps.len() && self.is_step_accessible(index) && self.current_step != index
+        {
             self.current_step = index;
             cx.notify();
         }
@@ -158,13 +157,15 @@ impl StepperState {
     }
 
     pub fn set_linear(&mut self, linear: bool, cx: &mut Context<Self>) {
-        self.linear = linear;
-        cx.notify();
+        if self.linear != linear {
+            self.linear = linear;
+            cx.notify();
+        }
     }
 
     pub fn next(&mut self, cx: &mut Context<Self>) -> bool {
         if self.current_step + 1 < self.steps.len() {
-            self.mark_completed(self.current_step, cx);
+            self.completed_steps.insert(self.current_step);
             self.current_step += 1;
             cx.notify();
             return true;
@@ -182,7 +183,8 @@ impl StepperState {
     }
 
     pub fn go_to(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
-        if index < self.steps.len() && self.is_step_accessible(index) {
+        if index < self.steps.len() && self.is_step_accessible(index) && self.current_step != index
+        {
             self.current_step = index;
             cx.notify();
             return true;
@@ -191,15 +193,15 @@ impl StepperState {
     }
 
     pub fn mark_completed(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index < self.steps.len() {
-            self.completed_steps.insert(index);
+        if index < self.steps.len() && self.completed_steps.insert(index) {
             cx.notify();
         }
     }
 
     pub fn unmark_completed(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.completed_steps.remove(&index);
-        cx.notify();
+        if self.completed_steps.remove(&index) {
+            cx.notify();
+        }
     }
 
     pub fn is_completed(&self, index: usize) -> bool {
@@ -241,6 +243,24 @@ impl StepperState {
             cx.notify();
         }
     }
+
+    fn replace_steps(&mut self, steps: Vec<StepItem>) {
+        self.completed_steps = steps
+            .iter()
+            .enumerate()
+            .filter_map(|(index, step)| (step.status == StepStatus::Completed).then_some(index))
+            .collect();
+        self.current_step = steps
+            .iter()
+            .position(|step| step.status == StepStatus::Current)
+            .or_else(|| {
+                steps
+                    .iter()
+                    .position(|step| step.status != StepStatus::Completed)
+            })
+            .unwrap_or_else(|| steps.len().saturating_sub(1));
+        self.steps = steps;
+    }
 }
 
 impl Focusable for StepperState {
@@ -262,6 +282,7 @@ pub struct Stepper {
     orientation: StepperOrientation,
     clickable: bool,
     show_connector: bool,
+    accessibility_label: SharedString,
     on_step_change: Option<Rc<dyn Fn(usize, &mut Window, &mut App) + 'static>>,
     style: StyleRefinement,
 }
@@ -274,6 +295,7 @@ impl Stepper {
             orientation: StepperOrientation::Horizontal,
             clickable: true,
             show_connector: true,
+            accessibility_label: "Progress".into(),
             on_step_change: None,
             style: StyleRefinement::default(),
         }
@@ -301,6 +323,11 @@ impl Stepper {
 
     pub fn show_connector(mut self, show: bool) -> Self {
         self.show_connector = show;
+        self
+    }
+
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessibility_label = label.into();
         self
     }
 
@@ -409,6 +436,7 @@ impl Stepper {
     ) -> Div {
         let steps_len = steps.len();
         let state = self.state.clone();
+        let entity_id = state.entity_id().as_u64();
 
         div()
             .flex()
@@ -423,7 +451,7 @@ impl Stepper {
                     StepStatus::Error
                 } else if index == current_step {
                     StepStatus::Current
-                } else if completed_steps.contains(&index) {
+                } else if step.status == StepStatus::Completed || completed_steps.contains(&index) {
                     StepStatus::Completed
                 } else {
                     StepStatus::Pending
@@ -438,9 +466,60 @@ impl Stepper {
                 let is_last = index == steps_len - 1;
                 let on_change = self.on_step_change.clone();
                 let state_clone = state.clone();
-                let clickable = self.clickable && is_accessible;
+                let supports_step_selection = self.clickable;
+                let clickable = supports_step_selection && is_accessible;
+                let mut accessibility_state = AccessibilityState::NONE;
+                if status == StepStatus::Current {
+                    accessibility_state |= AccessibilityState::SELECTED;
+                }
+                if status == StepStatus::Error {
+                    accessibility_state |= AccessibilityState::INVALID;
+                }
+                if supports_step_selection && !is_accessible {
+                    accessibility_state |= AccessibilityState::DISABLED;
+                }
+                let role = if supports_step_selection {
+                    AccessibilityRole::Tab
+                } else {
+                    AccessibilityRole::ListItem
+                };
+                let status_description = match status {
+                    StepStatus::Pending => "Pending step",
+                    StepStatus::Current => "Current step",
+                    StepStatus::Completed => "Completed step",
+                    StepStatus::Error => "Step has an error",
+                };
+                let mut accessibility = AccessibilityAttributes::new(role)
+                    .label(step.title.to_string())
+                    .description(status_description)
+                    .states(accessibility_state);
+                if let Some(description) = step.description.as_ref() {
+                    accessibility =
+                        accessibility.description(format!("{status_description}. {description}"));
+                }
+                if clickable {
+                    accessibility = accessibility.actions(vec![AccessibilityAction::Click]);
+                }
 
                 div()
+                    .id(ElementId::NamedInteger(
+                        format!("stepper-step-{entity_id}").into(),
+                        index as u64,
+                    ))
+                    .accessibility(accessibility)
+                    .when(clickable, |this| {
+                        this.cursor(CursorStyle::PointingHand)
+                            .on_click(window.listener_for(
+                                &state_clone,
+                                move |state, _, window, cx| {
+                                    if state.go_to(index, cx) {
+                                        if let Some(ref handler) = on_change {
+                                            handler(index, window, cx);
+                                        }
+                                    }
+                                },
+                            ))
+                    })
                     .flex()
                     .flex_1()
                     .items_center()
@@ -450,21 +529,6 @@ impl Stepper {
                             .flex_col()
                             .items_center()
                             .gap(px(8.0))
-                            .when(clickable, |this| {
-                                this.cursor(CursorStyle::PointingHand).on_mouse_down(
-                                    MouseButton::Left,
-                                    window.listener_for(
-                                        &state_clone,
-                                        move |state, _, window, cx| {
-                                            if state.go_to(index, cx) {
-                                                if let Some(ref handler) = on_change {
-                                                    handler(index, window, cx);
-                                                }
-                                            }
-                                        },
-                                    ),
-                                )
-                            })
                             .when(!is_accessible, |this| this.opacity(0.5))
                             .child(self.render_step_indicator(index, status, &step, &theme))
                             .child(
@@ -512,6 +576,7 @@ impl Stepper {
     ) -> Div {
         let steps_len = steps.len();
         let state = self.state.clone();
+        let entity_id = state.entity_id().as_u64();
 
         div()
             .flex()
@@ -526,7 +591,7 @@ impl Stepper {
                     StepStatus::Error
                 } else if index == current_step {
                     StepStatus::Current
-                } else if completed_steps.contains(&index) {
+                } else if step.status == StepStatus::Completed || completed_steps.contains(&index) {
                     StepStatus::Completed
                 } else {
                     StepStatus::Pending
@@ -541,10 +606,61 @@ impl Stepper {
                 let is_last = index == steps_len - 1;
                 let on_change = self.on_step_change.clone();
                 let state_clone = state.clone();
-                let clickable = self.clickable && is_accessible;
+                let supports_step_selection = self.clickable;
+                let clickable = supports_step_selection && is_accessible;
                 let indicator_size = self.size.indicator_size();
+                let mut accessibility_state = AccessibilityState::NONE;
+                if status == StepStatus::Current {
+                    accessibility_state |= AccessibilityState::SELECTED;
+                }
+                if status == StepStatus::Error {
+                    accessibility_state |= AccessibilityState::INVALID;
+                }
+                if supports_step_selection && !is_accessible {
+                    accessibility_state |= AccessibilityState::DISABLED;
+                }
+                let role = if supports_step_selection {
+                    AccessibilityRole::Tab
+                } else {
+                    AccessibilityRole::ListItem
+                };
+                let status_description = match status {
+                    StepStatus::Pending => "Pending step",
+                    StepStatus::Current => "Current step",
+                    StepStatus::Completed => "Completed step",
+                    StepStatus::Error => "Step has an error",
+                };
+                let mut accessibility = AccessibilityAttributes::new(role)
+                    .label(step.title.to_string())
+                    .description(status_description)
+                    .states(accessibility_state);
+                if let Some(description) = step.description.as_ref() {
+                    accessibility =
+                        accessibility.description(format!("{status_description}. {description}"));
+                }
+                if clickable {
+                    accessibility = accessibility.actions(vec![AccessibilityAction::Click]);
+                }
 
                 div()
+                    .id(ElementId::NamedInteger(
+                        format!("stepper-step-{entity_id}").into(),
+                        index as u64,
+                    ))
+                    .accessibility(accessibility)
+                    .when(clickable, |this| {
+                        this.cursor(CursorStyle::PointingHand)
+                            .on_click(window.listener_for(
+                                &state_clone,
+                                move |state, _, window, cx| {
+                                    if state.go_to(index, cx) {
+                                        if let Some(ref handler) = on_change {
+                                            handler(index, window, cx);
+                                        }
+                                    }
+                                },
+                            ))
+                    })
                     .flex()
                     .child(
                         div()
@@ -552,26 +668,9 @@ impl Stepper {
                             .flex_col()
                             .items_center()
                             .child(
-                                div()
-                                    .when(clickable, |this| {
-                                        this.cursor(CursorStyle::PointingHand).on_mouse_down(
-                                            MouseButton::Left,
-                                            window.listener_for(
-                                                &state_clone.clone(),
-                                                move |state, _, window, cx| {
-                                                    if state.go_to(index, cx) {
-                                                        if let Some(ref handler) = on_change {
-                                                            handler(index, window, cx);
-                                                        }
-                                                    }
-                                                },
-                                            ),
-                                        )
-                                    })
-                                    .when(!is_accessible, |this| this.opacity(0.5))
-                                    .child(
-                                        self.render_step_indicator(index, status, &step, &theme),
-                                    ),
+                                div().when(!is_accessible, |this| this.opacity(0.5)).child(
+                                    self.render_step_indicator(index, status, &step, &theme),
+                                ),
                             )
                             .when(self.show_connector && !is_last, |this| {
                                 this.child(
@@ -626,9 +725,17 @@ impl RenderOnce for Stepper {
         let current_step = state.current_step;
         let completed_steps = state.completed_steps.clone();
         let linear = state.linear;
+        let steps_len = steps.len();
+        let focus_handle = state.focus_handle.clone();
+        let is_focused = focus_handle.is_focused(window);
+        let entity_id = self.state.entity_id().as_u64();
+        let state_entity = self.state.clone();
+        let on_step_change = self.on_step_change.clone();
+        let clickable = self.clickable;
+        let accessibility_label = self.accessibility_label.clone();
         let user_style = self.style.clone();
 
-        match self.orientation {
+        let content = match self.orientation {
             StepperOrientation::Horizontal => self.render_horizontal(
                 window,
                 theme,
@@ -647,6 +754,94 @@ impl RenderOnce for Stepper {
                 linear,
                 user_style,
             ),
+        };
+
+        let mut group_state = AccessibilityState::NONE;
+        if is_focused {
+            group_state |= AccessibilityState::FOCUSED;
         }
+        div()
+            .id(("stepper", entity_id))
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group)
+                    .label(accessibility_label.to_string())
+                    .value(AccessibilityValue::Text(format!(
+                        "Step {} of {}",
+                        current_step.saturating_add(1).min(steps_len),
+                        steps_len
+                    )))
+                    .states(group_state),
+            )
+            .when(clickable && steps_len > 0, |this| {
+                this.track_focus(&focus_handle.tab_index(0).tab_stop(true))
+                    .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                        let key = event.keystroke.key.as_str();
+                        let handled =
+                            matches!(key, "left" | "up" | "right" | "down" | "home" | "end");
+                        if handled {
+                            state_entity.update(cx, |state, cx| {
+                                let changed = match key {
+                                    "left" | "up" => state.previous(cx),
+                                    "right" | "down" => state.next(cx),
+                                    "home" => state.go_to(0, cx),
+                                    "end" => state
+                                        .steps
+                                        .len()
+                                        .checked_sub(1)
+                                        .is_some_and(|index| state.go_to(index, cx)),
+                                    _ => false,
+                                };
+                                if changed {
+                                    if let Some(handler) = on_step_change.as_ref() {
+                                        handler(state.current_step, window, cx);
+                                    }
+                                }
+                            });
+                            cx.stop_propagation();
+                            window.prevent_default();
+                        }
+                    })
+            })
+            .child(content)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{StepItem, StepStatus, StepperState};
+    use kael::{AppContext, TestAppContext};
+
+    #[kael::test]
+    fn initial_step_statuses_seed_progress_state(cx: &mut TestAppContext) {
+        let state = cx.new(|cx| {
+            StepperState::new(cx).with_steps(vec![
+                StepItem::new("Account").status(StepStatus::Completed),
+                StepItem::new("Profile").status(StepStatus::Current),
+                StepItem::new("Confirm"),
+            ])
+        });
+
+        cx.read(|cx| {
+            let state = state.read(cx);
+            assert_eq!(state.current_step(), 1);
+            assert!(state.is_completed(0));
+            assert!(state.is_step_accessible(2));
+        });
+    }
+
+    #[kael::test]
+    fn advancing_marks_the_previous_step_once(cx: &mut TestAppContext) {
+        let state = cx.new(|cx| {
+            StepperState::new(cx).with_steps(vec![StepItem::new("One"), StepItem::new("Two")])
+        });
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                assert!(state.next(cx));
+                assert!(!state.next(cx));
+                assert_eq!(state.current_step(), 1);
+                assert!(state.is_completed(0));
+            });
+        });
     }
 }

@@ -9,7 +9,7 @@ use kael_release::update::{
     verify_manifest,
 };
 
-use crate::DistConfig;
+use crate::{DistConfig, MAX_METADATA_FILE_BYTES, atomic_write, read_bounded_utf8_file};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateFeed {
@@ -49,8 +49,7 @@ pub fn run(
         println!("dry-run: would write update feed to {}", output.display());
         println!("{}", json);
     } else {
-        fs::create_dir_all(output.parent().unwrap_or(Path::new(".")))?;
-        fs::write(output, json)
+        atomic_write(output, json.as_bytes())
             .with_context(|| format!("failed to write update feed: {}", output.display()))?;
     }
 
@@ -65,7 +64,7 @@ pub fn verify(feed_path: &Path, signing_key_hex: &str) -> Result<()> {
         .context("KAEL_UPDATE_SIGNING_KEY is not a valid ed25519 key")?;
     let verifying_key = signing_key.verifying_key();
 
-    let json = fs::read_to_string(feed_path)
+    let json = read_bounded_utf8_file(feed_path, MAX_METADATA_FILE_BYTES)
         .with_context(|| format!("failed to read update feed: {}", feed_path.display()))?;
     let feed: UpdateFeed = serde_json::from_str(&json)
         .with_context(|| format!("failed to parse update feed: {}", feed_path.display()))?;

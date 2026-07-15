@@ -1,23 +1,41 @@
 //! NavItem component - ASTRYX navigation row primitive.
 
-use crate::{navigation::nav_icon::NavIcon, theme::Theme};
+use crate::{navigation::nav_icon::NavIcon, styled_ext::StyledExt, theme::Theme};
 use kael::{prelude::FluentBuilder as _, *};
+use std::{panic::Location, rc::Rc};
 
 #[derive(IntoElement)]
 pub struct NavItem {
+    id: ElementId,
     label: SharedString,
     icon: Option<SharedString>,
     badge: Option<SharedString>,
     selected: bool,
     disabled: bool,
-    on_click: Option<Box<dyn Fn(&mut Window, &mut App)>>,
+    on_click: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
     style: StyleRefinement,
 }
 
 impl NavItem {
+    #[track_caller]
     pub fn new(label: impl Into<SharedString>) -> Self {
+        let caller = Location::caller();
+        let label = label.into();
         Self {
-            label: label.into(),
+            id: ElementId::Name(
+                format!(
+                    "nav-item:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
+            label: if label.trim().is_empty() {
+                "Navigation item".into()
+            } else {
+                label
+            },
             icon: None,
             badge: None,
             selected: false,
@@ -29,6 +47,11 @@ impl NavItem {
 
     pub fn icon(mut self, icon: impl Into<SharedString>) -> Self {
         self.icon = Some(icon.into());
+        self
+    }
+
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
         self
     }
 
@@ -48,7 +71,7 @@ impl NavItem {
     }
 
     pub fn on_click(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
-        self.on_click = Some(Box::new(handler));
+        self.on_click = Some(Rc::new(handler));
         self
     }
 }
@@ -66,8 +89,31 @@ impl RenderOnce for NavItem {
         let selected = self.selected;
         let user_style = self.style;
         let overlay_hover = crate::astryx::overlay_hover(theme.tokens.background.l < 0.5);
+        let is_control = self.on_click.is_some();
+        let handler = self.on_click.filter(|_| !disabled);
+        let mut accessibility_state = AccessibilityState::NONE;
+        if selected {
+            accessibility_state |= AccessibilityState::SELECTED;
+        }
+        if disabled {
+            accessibility_state |= AccessibilityState::DISABLED;
+        }
+        let role = if is_control || disabled {
+            AccessibilityRole::Button
+        } else {
+            AccessibilityRole::ListItem
+        };
+        let mut accessibility = AccessibilityAttributes::new(role)
+            .label(self.label.to_string())
+            .states(accessibility_state);
+        if handler.is_some() {
+            accessibility =
+                accessibility.actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]);
+        }
 
         div()
+            .id(self.id)
+            .accessibility(accessibility)
             .flex()
             .items_center()
             .gap(px(8.0))
@@ -80,18 +126,31 @@ impl RenderOnce for NavItem {
                 transparent_black()
             })
             .when(disabled, |this| this.opacity(0.5))
-            .when(!disabled, |this| {
-                this.cursor_pointer().hover(move |style| {
-                    style.bg(if selected {
-                        theme.tokens.accent
-                    } else {
-                        overlay_hover
+            .when(!disabled && handler.is_some(), |this| {
+                this.focusable()
+                    .tab_index(0)
+                    .tab_stop(true)
+                    .focus_visible(|style| style.inset_ring(theme.tokens.ring, px(2.0)))
+                    .cursor_pointer()
+                    .hover(move |style| {
+                        style.bg(if selected {
+                            theme.tokens.accent
+                        } else {
+                            overlay_hover
+                        })
                     })
-                })
             })
-            .when_some(self.on_click.filter(|_| !disabled), |this, handler| {
-                this.on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+            .when_some(handler, |this, handler| {
+                let on_key = handler.clone();
+                this.on_click(move |_, window, cx| {
                     handler(window, cx);
+                })
+                .on_key_down(move |event, window, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        on_key(window, cx);
+                        cx.stop_propagation();
+                        window.prevent_default();
+                    }
                 })
             })
             .when_some(self.icon, |this, icon| {
@@ -108,7 +167,7 @@ impl RenderOnce for NavItem {
                         FontWeight::NORMAL
                     })
                     .text_color(theme.tokens.foreground)
-                    .child(self.label),
+                    .child(StyledText::new(self.label).accessibility_hidden(true)),
             )
             .when_some(self.badge, |this, badge| {
                 this.child(
@@ -120,7 +179,7 @@ impl RenderOnce for NavItem {
                         .text_size(px(11.0))
                         .line_height(px(14.0))
                         .text_color(theme.tokens.muted_foreground)
-                        .child(badge),
+                        .child(StyledText::new(badge).accessibility_hidden(true)),
                 )
             })
             .map(|this| {
@@ -128,5 +187,15 @@ impl RenderOnce for NavItem {
                 div.style().refine(&user_style);
                 div
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn empty_labels_use_a_meaningful_default() {
+        assert_eq!(NavItem::new(" ").label.as_ref(), "Navigation item");
     }
 }

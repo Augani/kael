@@ -7,3 +7,4 @@ tdesktop/
 docs/book/.claude/worktrees/
 examples/native_comparison/
 .playwright-mcp/
+.artifacts/

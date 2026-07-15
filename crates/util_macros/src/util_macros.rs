@@ -1,4 +1,3 @@
-#![cfg_attr(not(target_os = "windows"), allow(unused))]
 #![allow(clippy::test_attr_in_doctest)]
 
 #[cfg(feature = "perf-enabled")]
@@ -24,19 +23,9 @@ use syn::{ItemFn, LitStr, parse_macro_input, parse_quote};
 #[proc_macro]
 pub fn path(input: TokenStream) -> TokenStream {
     let path = parse_macro_input!(input as LitStr);
-    let mut path = path.value();
-
-    #[cfg(target_os = "windows")]
-    {
-        path = path.replace("/", "\\");
-        if path.starts_with("\\") {
-            path = format!("C:{}", path);
-        }
-    }
-
-    TokenStream::from(quote! {
-        #path
-    })
+    let native = path.value();
+    let windows = windows_path(&native);
+    target_string_literal(&native, &windows, path.span())
 }
 
 /// This macro replaces the path prefix `file:///` with `file:///C:/` for Windows.
@@ -55,14 +44,9 @@ pub fn path(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn uri(input: TokenStream) -> TokenStream {
     let uri = parse_macro_input!(input as LitStr);
-    let uri = uri.value();
-
-    #[cfg(target_os = "windows")]
-    let uri = uri.replace("file:///", "file:///C:/");
-
-    TokenStream::from(quote! {
-        #uri
-    })
+    let native = uri.value();
+    let windows = windows_uri(&native);
+    target_string_literal(&native, &windows, uri.span())
 }
 
 /// This macro replaces the line endings `\n` with `\r\n` for Windows.
@@ -81,14 +65,47 @@ pub fn uri(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn line_endings(input: TokenStream) -> TokenStream {
     let text = parse_macro_input!(input as LitStr);
-    let text = text.value();
+    let native = text.value();
+    let windows = windows_line_endings(&native);
+    target_string_literal(&native, &windows, text.span())
+}
 
-    #[cfg(target_os = "windows")]
-    let text = text.replace("\n", "\r\n");
+fn target_string_literal(native: &str, windows: &str, span: proc_macro2::Span) -> TokenStream {
+    let native = LitStr::new(native, span);
+    let windows = LitStr::new(windows, span);
+    quote! {
+        if cfg!(target_os = "windows") { #windows } else { #native }
+    }
+    .into()
+}
 
-    TokenStream::from(quote! {
-        #text
-    })
+fn windows_path(path: &str) -> String {
+    let path = path.replace('/', "\\");
+    if path.starts_with('\\') {
+        format!("C:{path}")
+    } else {
+        path
+    }
+}
+
+fn windows_uri(uri: &str) -> String {
+    let Some(path) = uri.strip_prefix("file:///") else {
+        return uri.to_owned();
+    };
+    let bytes = path.as_bytes();
+    let already_has_drive = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\');
+    if already_has_drive {
+        uri.to_owned()
+    } else {
+        format!("file:///C:/{path}")
+    }
+}
+
+fn windows_line_endings(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\n', "\r\n")
 }
 
 #[cfg(not(feature = "perf-enabled"))]
@@ -298,4 +315,39 @@ pub fn perf(our_attr: TokenStream, input: TokenStream) -> TokenStream {
     fns.into_iter()
         .flat_map(|f| TokenStream::from(f.into_token_stream()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{windows_line_endings, windows_path, windows_uri};
+
+    #[test]
+    fn windows_path_conversion_is_independent_of_the_macro_host() {
+        assert_eq!(
+            windows_path("/Users/user/file.txt"),
+            "C:\\Users\\user\\file.txt"
+        );
+        assert_eq!(windows_path("relative/file.txt"), "relative\\file.txt");
+    }
+
+    #[test]
+    fn windows_uri_conversion_only_adds_a_missing_drive_prefix() {
+        assert_eq!(
+            windows_uri("file:///path/to/file"),
+            "file:///C:/path/to/file"
+        );
+        assert_eq!(
+            windows_uri("file:///D:/path/to/file"),
+            "file:///D:/path/to/file"
+        );
+        assert_eq!(windows_uri("https://example.com"), "https://example.com");
+    }
+
+    #[test]
+    fn windows_line_endings_do_not_double_existing_carriage_returns() {
+        assert_eq!(
+            windows_line_endings("one\ntwo\r\nthree"),
+            "one\r\ntwo\r\nthree"
+        );
+    }
 }

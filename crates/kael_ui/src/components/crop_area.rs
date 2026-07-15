@@ -45,6 +45,9 @@ impl CropAreaState {
 
     fn to_normalized(&self, pos: Point<Pixels>) -> Point<f32> {
         if let Some(bounds) = self.bounds {
+            if bounds.size.width <= px(0.0) || bounds.size.height <= px(0.0) {
+                return Point::default();
+            }
             let x = (pos.x - bounds.left()) / bounds.size.width;
             let y = (pos.y - bounds.top()) / bounds.size.height;
             point(x, y)
@@ -93,6 +96,35 @@ impl CropAreaState {
         }
 
         DragHandle::None
+    }
+
+    fn normalize_selection(&mut self) {
+        let values = [
+            self.selection.origin.x,
+            self.selection.origin.y,
+            self.selection.size.width,
+            self.selection.size.height,
+        ];
+        if !values.into_iter().all(f32::is_finite)
+            || self.selection.size.width <= 0.0
+            || self.selection.size.height <= 0.0
+        {
+            self.selection = Bounds::new(point(0.1, 0.1), size(0.8, 0.8));
+            return;
+        }
+
+        self.selection.size.width = self.selection.size.width.clamp(0.01, 1.0);
+        self.selection.size.height = self.selection.size.height.clamp(0.01, 1.0);
+        self.selection.origin.x = self
+            .selection
+            .origin
+            .x
+            .clamp(0.0, 1.0 - self.selection.size.width);
+        self.selection.origin.y = self
+            .selection
+            .origin
+            .y
+            .clamp(0.0, 1.0 - self.selection.size.height);
     }
 
     fn apply_drag(&mut self, norm: Point<f32>, min_size: f32, aspect_ratio: Option<f32>) {
@@ -199,12 +231,72 @@ impl CropAreaState {
             DragHandle::None => {}
         }
     }
+
+    fn move_selection(&mut self, dx: f32, dy: f32) {
+        self.normalize_selection();
+        self.selection.origin.x =
+            (self.selection.origin.x + dx).clamp(0.0, 1.0 - self.selection.size.width);
+        self.selection.origin.y =
+            (self.selection.origin.y + dy).clamp(0.0, 1.0 - self.selection.size.height);
+    }
+
+    fn resize_selection(
+        &mut self,
+        width_delta: f32,
+        height_delta: f32,
+        min_size: f32,
+        aspect_ratio: Option<f32>,
+    ) {
+        self.normalize_selection();
+        let max_width = 1.0 - self.selection.origin.x;
+        let max_height = 1.0 - self.selection.origin.y;
+        let mut width = (self.selection.size.width + width_delta).clamp(min_size, max_width);
+        let mut height = (self.selection.size.height + height_delta).clamp(min_size, max_height);
+
+        if let Some(ratio) = aspect_ratio.filter(|ratio| ratio.is_finite() && *ratio > 0.0) {
+            if width_delta != 0.0 {
+                height = (width / ratio).clamp(min_size, max_height);
+                width = (height * ratio).clamp(min_size, max_width);
+            } else {
+                width = (height * ratio).clamp(min_size, max_width);
+                height = (width / ratio).clamp(min_size, max_height);
+            }
+        }
+
+        self.selection.size = size(width, height);
+    }
 }
 
 impl Render for CropAreaState {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         Empty
     }
+}
+
+fn crop_selection_from_action(request: &AccessibilityActionRequest) -> Option<Bounds<f32>> {
+    let AccessibilityActionPayload::Value(value) = request.payload.as_ref()? else {
+        return None;
+    };
+    let values = value
+        .split(|character: char| {
+            !character.is_ascii_digit() && character != '.' && character != '-'
+        })
+        .filter(|part| !part.is_empty())
+        .map(str::parse::<f32>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    if values.len() != 4 || !values.iter().all(|value| value.is_finite()) {
+        return None;
+    }
+    let scale = if value.contains('%') || values.iter().any(|value| *value > 1.0) {
+        0.01
+    } else {
+        1.0
+    };
+    Some(Bounds::new(
+        point(values[0] * scale, values[1] * scale),
+        size(values[2] * scale, values[3] * scale),
+    ))
 }
 
 #[derive(Clone)]
@@ -218,6 +310,7 @@ struct CropPaintData {
 #[derive(IntoElement)]
 pub struct CropArea {
     id: ElementId,
+    label: SharedString,
     state: Entity<CropAreaState>,
     aspect_ratio: Option<f32>,
     min_size: f32,
@@ -229,6 +322,7 @@ impl CropArea {
     pub fn new(id: impl Into<ElementId>, state: Entity<CropAreaState>) -> Self {
         Self {
             id: id.into(),
+            label: "Crop selection".into(),
             state,
             aspect_ratio: None,
             min_size: 0.05,
@@ -237,13 +331,22 @@ impl CropArea {
         }
     }
 
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = label.into();
+        self
+    }
+
     pub fn aspect_ratio(mut self, ratio: f32) -> Self {
-        self.aspect_ratio = Some(ratio);
+        if ratio.is_finite() && ratio > 0.0 {
+            self.aspect_ratio = Some(ratio);
+        }
         self
     }
 
     pub fn min_size(mut self, min: f32) -> Self {
-        self.min_size = min.clamp(0.01, 0.5);
+        if min.is_finite() {
+            self.min_size = min.clamp(0.01, 0.5);
+        }
         self
     }
 }
@@ -262,9 +365,18 @@ impl ParentElement for CropArea {
 
 impl RenderOnce for CropArea {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = Theme::of(cx);
+        let theme = Theme::of(cx).clone();
         let user_style = self.style;
+        self.state
+            .update(cx, |state, _| state.normalize_selection());
         let selection = self.state.read(cx).selection;
+        let selection_value = format!(
+            "x {:.0}%, y {:.0}%, width {:.0}%, height {:.0}%",
+            selection.origin.x * 100.0,
+            selection.origin.y * 100.0,
+            selection.size.width * 100.0,
+            selection.size.height * 100.0,
+        );
 
         let dim_color = hsla(0.0, 0.0, 0.0, 0.5);
         let border_color = theme.tokens.primary;
@@ -276,22 +388,50 @@ impl RenderOnce for CropArea {
             border_color,
             handle_color,
         };
+        let state_bounds = self.state.clone();
 
         let state_down = self.state.clone();
         let state_move = self.state.clone();
         let state_up = self.state.clone();
+        let state_key = self.state.clone();
+        let state_accessibility = self.state.clone();
         let min_size = self.min_size;
         let aspect_ratio = self.aspect_ratio;
 
         div()
             .id(self.id)
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group)
+                    .label(self.label.to_string())
+                    .description(
+                        "Drag to move or resize. Arrow keys move the crop; Shift plus arrow keys resize it",
+                    )
+                    .value(AccessibilityValue::Text(selection_value))
+                    .actions(vec![
+                        AccessibilityAction::Focus,
+                        AccessibilityAction::SetValue,
+                    ]),
+            )
             .relative()
             .overflow_hidden()
             .cursor_crosshair()
+            .focusable()
+            .tab_index(0)
+            .tab_stop(true)
+            .focus_visible(|style| {
+                style.shadow(smallvec::smallvec![crate::astryx::focus_ring_outer(
+                    theme.tokens.ring,
+                )])
+            })
             .children(self.children)
             .child(
                 canvas_with_prepaint(
-                    move |_, _, _| paint_data,
+                    move |bounds, _, cx| {
+                        state_bounds.update(cx, |state, _| {
+                            state.bounds = Some(bounds);
+                        });
+                        paint_data
+                    },
                     move |bounds, data, window, _cx| {
                         let sel = &data.selection;
                         let bw = bounds.size.width;
@@ -371,6 +511,7 @@ impl RenderOnce for CropArea {
                 MouseButton::Left,
                 move |event: &MouseDownEvent, _window, cx| {
                     state_down.update(cx, |s, cx| {
+                        s.normalize_selection();
                         let norm = s.to_normalized(event.position);
                         let handle = s.hit_test(norm);
                         if handle != DragHandle::None {
@@ -402,10 +543,102 @@ impl RenderOnce for CropArea {
                     });
                 },
             )
+            .on_key_down(move |event, window, cx| {
+                let delta = 0.02;
+                let direction = match event.keystroke.key.as_str() {
+                    "left" => Some((-delta, 0.0)),
+                    "right" => Some((delta, 0.0)),
+                    "up" => Some((0.0, -delta)),
+                    "down" => Some((0.0, delta)),
+                    _ => None,
+                };
+                if let Some((dx, dy)) = direction {
+                    state_key.update(cx, |state, cx| {
+                        if event.keystroke.modifiers.shift {
+                            state.resize_selection(dx, dy, min_size, aspect_ratio);
+                        } else {
+                            state.move_selection(dx, dy);
+                        }
+                        cx.notify();
+                    });
+                    cx.stop_propagation();
+                    window.prevent_default();
+                }
+            })
+            .on_accessibility_action(
+                AccessibilityAction::SetValue,
+                move |request, _window, cx| {
+                    let Some(selection) = crop_selection_from_action(request) else {
+                        return;
+                    };
+                    state_accessibility.update(cx, |state, cx| {
+                        state.selection = selection;
+                        state.normalize_selection();
+                        cx.notify();
+                    });
+                },
+            )
             .map(|this: Stateful<Div>| {
                 let mut el = this;
                 el.style().refine(&user_style);
                 el
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn invalid_public_selection_is_restored_to_a_safe_region() {
+        let mut cx = TestAppContext::single();
+        let state = cx.new(CropAreaState::new);
+
+        cx.update(|cx| {
+            state.update(cx, |state, _| {
+                state.selection = Bounds::new(point(f32::NAN, -20.0), size(f32::INFINITY, 0.0));
+                state.normalize_selection();
+                assert_eq!(
+                    state.selection,
+                    Bounds::new(point(0.1, 0.1), size(0.8, 0.8))
+                );
+            });
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn invalid_builder_constraints_keep_defaults() {
+        let mut cx = TestAppContext::single();
+        let state = cx.new(CropAreaState::new);
+        let crop = CropArea::new("crop", state)
+            .aspect_ratio(f32::NAN)
+            .min_size(f32::NAN);
+        assert_eq!(crop.aspect_ratio, None);
+        assert_eq!(crop.min_size, 0.05);
+    }
+
+    #[::core::prelude::v1::test]
+    fn accessibility_value_accepts_percent_and_normalized_regions() {
+        let percent = AccessibilityActionRequest::with_payload(
+            AccessibilityId::new(),
+            AccessibilityAction::SetValue,
+            AccessibilityActionPayload::Value("x 20%, y 10%, width 60%, height 70%".into()),
+        );
+        let normalized = AccessibilityActionRequest::with_payload(
+            AccessibilityId::new(),
+            AccessibilityAction::SetValue,
+            AccessibilityActionPayload::Value("0.2 0.1 0.6 0.7".into()),
+        );
+
+        for selection in [
+            crop_selection_from_action(&percent).unwrap(),
+            crop_selection_from_action(&normalized).unwrap(),
+        ] {
+            assert!((selection.origin.x - 0.2).abs() < 0.0001);
+            assert!((selection.origin.y - 0.1).abs() < 0.0001);
+            assert!((selection.size.width - 0.6).abs() < 0.0001);
+            assert!((selection.size.height - 0.7).abs() < 0.0001);
+        }
     }
 }

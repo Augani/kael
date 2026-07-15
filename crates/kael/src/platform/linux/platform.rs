@@ -44,6 +44,9 @@ pub(crate) const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(400);
 pub(crate) const DOUBLE_CLICK_DISTANCE: Pixels = px(5.0);
 pub(crate) const KEYRING_LABEL: &str = "kael-github-account";
 
+#[cfg(any(feature = "wayland", feature = "x11"))]
+const MAX_EXTERNAL_FD_BYTES: u64 = 256 * 1024 * 1024;
+
 pub trait LinuxClient {
     fn compositor_name(&self) -> &'static str;
     fn with_common<R>(&self, f: impl FnOnce(&mut LinuxCommon) -> R) -> R;
@@ -69,6 +72,7 @@ pub trait LinuxClient {
     fn reveal_path(&self, path: PathBuf);
     fn write_to_primary(&self, item: ClipboardItem);
     fn write_to_clipboard(&self, item: ClipboardItem);
+    fn clear_clipboard(&self);
     fn read_from_primary(&self) -> Option<ClipboardItem>;
     fn read_from_clipboard(&self) -> Option<ClipboardItem>;
     fn active_window(&self) -> Option<AnyWindowHandle>;
@@ -243,7 +247,7 @@ impl<P: LinuxClient + 'static> Platform for P {
     }
 
     fn run(&self, on_finish_launching: Box<dyn FnOnce()>) {
-        on_finish_launching();
+        super::catch_platform_callback("finish launching", (), on_finish_launching);
 
         // On Linux, URL scheme handlers are invoked by launching the app with the URL
         // as a command-line argument. Check args for URLs and dispatch to on_open_urls.
@@ -252,9 +256,13 @@ impl<P: LinuxClient + 'static> Platform for P {
             .filter(|arg| arg.contains("://"))
             .collect();
         if !url_args.is_empty() {
+            let mut callback = self.with_common(|common| common.callbacks.open_urls.take());
+            if let Some(ref mut callback) = callback {
+                super::catch_platform_callback("open URLs", (), || callback(url_args));
+            }
             self.with_common(|common| {
-                if let Some(callback) = common.callbacks.open_urls.as_mut() {
-                    callback(url_args);
+                if common.callbacks.open_urls.is_none() {
+                    common.callbacks.open_urls = callback;
                 }
             });
         }
@@ -263,7 +271,7 @@ impl<P: LinuxClient + 'static> Platform for P {
 
         let quit = self.with_common(|common| common.callbacks.quit.take());
         if let Some(mut fun) = quit {
-            fun();
+            super::catch_platform_callback("application quit", (), &mut fun);
         }
     }
 
@@ -476,13 +484,18 @@ impl<P: LinuxClient + 'static> Platform for P {
                 let suggested_name = suggested_name.map(|s| s.to_owned());
 
                 async move {
-                    let mut request_builder =
-                        ashpd::desktop::file_chooser::SaveFileRequest::default()
-                            .identifier(identifier.await)
-                            .modal(true)
-                            .title("Save File")
-                            .current_folder(directory.clone())
-                            .expect("pathbuf should not be nul terminated");
+                    let request_builder = ashpd::desktop::file_chooser::SaveFileRequest::default()
+                        .identifier(identifier.await)
+                        .modal(true)
+                        .title("Save File")
+                        .current_folder(directory.clone());
+                    let mut request_builder = match request_builder {
+                        Ok(request_builder) => request_builder,
+                        Err(error) => {
+                            let _ = done_tx.send(Err(error.into()));
+                            return;
+                        }
+                    };
 
                     if let Some(ref suggested_name) = suggested_name {
                         request_builder = request_builder.current_name(suggested_name.as_str());
@@ -555,6 +568,16 @@ impl<P: LinuxClient + 'static> Platform for P {
                 Some(())
             })
             .detach();
+    }
+
+    fn move_path_to_trash(&self, path: &Path) -> Result<()> {
+        let status = Command::new("gio")
+            .arg("trash")
+            .arg(path)
+            .status()
+            .context("invoking gio trash")?;
+        anyhow::ensure!(status.success(), "gio trash failed with {status}");
+        Ok(())
     }
 
     fn on_quit(&self, callback: Box<dyn FnMut()>) {
@@ -800,6 +823,10 @@ impl<P: LinuxClient + 'static> Platform for P {
         self.write_to_clipboard(item)
     }
 
+    fn clear_clipboard(&self) {
+        self.clear_clipboard()
+    }
+
     fn read_from_primary(&self) -> Option<ClipboardItem> {
         self.read_from_primary()
     }
@@ -810,6 +837,10 @@ impl<P: LinuxClient + 'static> Platform for P {
 
     fn add_recent_document(&self, path: &Path) {
         super::dock::add_recent_document(path);
+    }
+
+    fn clear_recent_documents(&self) {
+        super::dock::clear_recent_documents();
     }
 
     fn set_keep_alive_without_windows(&self, keep_alive: bool) {
@@ -1045,7 +1076,9 @@ impl<P: LinuxClient + 'static> Platform for P {
         // (which prompts on first device access) or not enforced at all (PulseAudio).
         // We check the current status synchronously, matching the Windows pattern.
         let status = super::microphone::microphone_status();
-        callback(status != PermissionStatus::Denied);
+        super::catch_platform_callback("microphone permission", (), || {
+            callback(status != PermissionStatus::Denied)
+        });
     }
 
     fn accessibility_status(&self) -> PermissionStatus {
@@ -1163,7 +1196,13 @@ pub(super) fn get_xkb_compose_state(cx: &xkb::Context) -> Option<xkb::compose::S
 pub(super) unsafe fn read_fd(fd: filedescriptor::FileDescriptor) -> Result<Vec<u8>> {
     let mut file = unsafe { File::from_raw_fd(fd.into_raw_fd()) };
     let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)?;
+    file.by_ref()
+        .take(MAX_EXTERNAL_FD_BYTES + 1)
+        .read_to_end(&mut buffer)?;
+    anyhow::ensure!(
+        buffer.len() as u64 <= MAX_EXTERNAL_FD_BYTES,
+        "external file-descriptor payload exceeds {MAX_EXTERNAL_FD_BYTES} bytes"
+    );
     Ok(buffer)
 }
 
@@ -1197,12 +1236,7 @@ impl CursorStyle {
             CursorStyle::DragLink => &["alias"],
             CursorStyle::DragCopy => &["copy"],
             CursorStyle::ContextualMenu => &["context-menu"],
-            CursorStyle::None => {
-                #[cfg(debug_assertions)]
-                panic!("CursorStyle::None should be handled separately in the client");
-                #[cfg(not(debug_assertions))]
-                &[DEFAULT_CURSOR_ICON_NAME]
-            }
+            CursorStyle::None => &[DEFAULT_CURSOR_ICON_NAME],
         }
     }
 }

@@ -1,17 +1,27 @@
-use crate::icon_config::resolve_icon_path;
+use crate::components::button::{Button, ButtonSize, ButtonVariant};
+use crate::components::icon_button::IconButton;
 use crate::theme::Theme;
 use kael::{prelude::*, *};
 #[cfg(feature = "audio")]
-use std::io::BufReader;
-use std::rc::Rc;
+use std::cell::RefCell;
 #[cfg(feature = "audio")]
-use std::sync::{Arc, Mutex};
+use std::io::BufReader;
+use std::{panic::Location, rc::Rc};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum AudioPlayerSize {
     Compact,
     #[default]
     Full,
+}
+
+impl AudioPlayerSize {
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Compact => "compact",
+            Self::Full => "full",
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
@@ -24,6 +34,15 @@ pub enum PlaybackSpeed {
 }
 
 impl PlaybackSpeed {
+    pub fn to_text(self) -> &'static str {
+        match self {
+            PlaybackSpeed::Half => "half",
+            PlaybackSpeed::Normal => "normal",
+            PlaybackSpeed::OneAndHalf => "one-and-half",
+            PlaybackSpeed::Double => "double",
+        }
+    }
+
     pub fn value(&self) -> f32 {
         match self {
             PlaybackSpeed::Half => 0.5,
@@ -124,13 +143,15 @@ pub struct AudioPlayerState {
     volume: f32,
     playback_speed: PlaybackSpeed,
     focus_handle: FocusHandle,
+    progress_focus_handle: FocusHandle,
+    volume_focus_handle: FocusHandle,
     progress_dragging: bool,
     volume_dragging: bool,
     progress_bounds: Bounds<Pixels>,
     volume_bounds: Bounds<Pixels>,
     source_path: Option<String>,
     #[cfg(feature = "audio")]
-    backend: Option<Arc<Mutex<AudioBackend>>>,
+    backend: Option<Rc<RefCell<AudioBackend>>>,
 }
 
 impl AudioPlayerState {
@@ -143,13 +164,15 @@ impl AudioPlayerState {
             volume: 0.8,
             playback_speed: PlaybackSpeed::Normal,
             focus_handle: cx.focus_handle(),
+            progress_focus_handle: cx.focus_handle(),
+            volume_focus_handle: cx.focus_handle(),
             progress_dragging: false,
             volume_dragging: false,
             progress_bounds: Bounds::default(),
             volume_bounds: Bounds::default(),
             source_path: None,
             #[cfg(feature = "audio")]
-            backend: AudioBackend::new().map(|b| Arc::new(Mutex::new(b))),
+            backend: AudioBackend::new().map(|backend| Rc::new(RefCell::new(backend))),
         }
     }
 
@@ -159,7 +182,7 @@ impl AudioPlayerState {
         self.source_path = Some(path_str.clone());
 
         if let Some(ref backend) = self.backend {
-            if let Ok(mut backend) = backend.lock() {
+            if let Ok(mut backend) = backend.try_borrow_mut() {
                 match backend.load(&path_str) {
                     Ok(duration) => {
                         self.duration = duration.as_secs_f32();
@@ -195,7 +218,7 @@ impl AudioPlayerState {
         self.is_playing = playing;
         #[cfg(feature = "audio")]
         if let Some(ref backend) = self.backend {
-            if let Ok(backend) = backend.lock() {
+            if let Ok(backend) = backend.try_borrow() {
                 if playing {
                     backend.play();
                 } else {
@@ -210,7 +233,7 @@ impl AudioPlayerState {
         self.is_playing = !self.is_playing;
         #[cfg(feature = "audio")]
         if let Some(ref backend) = self.backend {
-            if let Ok(backend) = backend.lock() {
+            if let Ok(backend) = backend.try_borrow() {
                 if self.is_playing {
                     backend.play();
                 } else {
@@ -243,8 +266,16 @@ impl AudioPlayerState {
         self.current_time
     }
 
+    pub fn progress_class(&self) -> &'static str {
+        audio_fraction_class(self.progress_percentage())
+    }
+
     pub fn set_current_time(&mut self, time: f32, cx: &mut Context<Self>) {
-        self.current_time = time.clamp(0.0, self.duration);
+        self.current_time = if time.is_finite() {
+            time.clamp(0.0, self.duration)
+        } else {
+            0.0
+        };
         cx.notify();
     }
 
@@ -253,7 +284,7 @@ impl AudioPlayerState {
     }
 
     pub fn set_duration(&mut self, duration: f32, cx: &mut Context<Self>) {
-        if duration < 0.0 {
+        if !duration.is_finite() || duration < 0.0 {
             return;
         }
         self.duration = duration;
@@ -266,7 +297,11 @@ impl AudioPlayerState {
     }
 
     pub fn set_volume(&mut self, volume: f32, cx: &mut Context<Self>) {
-        self.volume = volume.clamp(0.0, 1.0);
+        self.volume = if volume.is_finite() {
+            volume.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         if self.volume > 0.0 {
             self.is_muted = false;
         }
@@ -278,7 +313,7 @@ impl AudioPlayerState {
     #[cfg(feature = "audio")]
     fn apply_volume(&self) {
         if let Some(ref backend) = self.backend {
-            if let Ok(backend) = backend.lock() {
+            if let Ok(backend) = backend.try_borrow() {
                 let effective_vol = if self.is_muted { 0.0 } else { self.volume };
                 backend.set_volume(effective_vol);
             }
@@ -293,15 +328,23 @@ impl AudioPlayerState {
         }
     }
 
+    pub fn volume_class(&self) -> &'static str {
+        audio_fraction_class(self.effective_volume())
+    }
+
     pub fn playback_speed(&self) -> PlaybackSpeed {
         self.playback_speed
+    }
+
+    pub fn speed_key(&self) -> &'static str {
+        self.playback_speed.to_text()
     }
 
     pub fn set_playback_speed(&mut self, speed: PlaybackSpeed, cx: &mut Context<Self>) {
         self.playback_speed = speed;
         #[cfg(feature = "audio")]
         if let Some(ref backend) = self.backend {
-            if let Ok(backend) = backend.lock() {
+            if let Ok(backend) = backend.try_borrow() {
                 backend.set_speed(speed.value());
             }
         }
@@ -312,7 +355,7 @@ impl AudioPlayerState {
         self.playback_speed = self.playback_speed.next();
         #[cfg(feature = "audio")]
         if let Some(ref backend) = self.backend {
-            if let Ok(backend) = backend.lock() {
+            if let Ok(backend) = backend.try_borrow() {
                 backend.set_speed(self.playback_speed.value());
             }
         }
@@ -324,7 +367,7 @@ impl AudioPlayerState {
         self.current_time = 0.0;
         #[cfg(feature = "audio")]
         if let Some(ref backend) = self.backend {
-            if let Ok(backend) = backend.lock() {
+            if let Ok(backend) = backend.try_borrow() {
                 backend.stop();
             }
         }
@@ -334,7 +377,7 @@ impl AudioPlayerState {
     #[cfg(feature = "audio")]
     pub fn is_finished(&self) -> bool {
         if let Some(ref backend) = self.backend {
-            if let Ok(backend) = backend.lock() {
+            if let Ok(backend) = backend.try_borrow() {
                 return backend.is_empty();
             }
         }
@@ -383,6 +426,25 @@ impl AudioPlayerState {
     pub fn is_audio_loaded(&self) -> bool {
         false
     }
+
+    pub fn has_source_path(&self) -> bool {
+        self.source_path.is_some()
+    }
+
+    pub fn to_text(&self) -> String {
+        format!(
+            "audio player state: playing {}, muted {}, progress {}, volume {}, speed {}, source {}, loaded {}, progress dragging {}, volume dragging {}",
+            self.is_playing,
+            self.is_muted,
+            self.progress_class(),
+            self.volume_class(),
+            self.speed_key(),
+            self.has_source_path(),
+            self.is_audio_loaded(),
+            self.progress_dragging,
+            self.volume_dragging
+        )
+    }
 }
 
 impl Focusable for AudioPlayerState {
@@ -404,8 +466,51 @@ fn format_time(seconds: f32) -> String {
     format!("{:02}:{:02}", minutes, secs)
 }
 
+fn handle_seek_accessibility_action(
+    request: &AccessibilityActionRequest,
+    state: &Entity<AudioPlayerState>,
+    handler: &Option<Rc<dyn Fn(f32, &mut Window, &mut App) + 'static>>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let (current, duration) = {
+        let state = state.read(cx);
+        (state.current_time as f64, state.duration.max(0.0) as f64)
+    };
+    let Some(next) =
+        crate::util::accessibility_adjusted_value(request, current, 0.0, duration, 5.0)
+    else {
+        return;
+    };
+    state.update(cx, |state, cx| {
+        state.set_current_time(next as f32, cx);
+        if let Some(handler) = handler {
+            handler(state.current_time, window, cx);
+        }
+    });
+}
+
+fn handle_volume_accessibility_action(
+    request: &AccessibilityActionRequest,
+    state: &Entity<AudioPlayerState>,
+    handler: &Option<Rc<dyn Fn(f32, &mut Window, &mut App) + 'static>>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let current = state.read(cx).volume as f64;
+    let Some(next) = crate::util::accessibility_adjusted_value(request, current, 0.0, 1.0, 0.05)
+    else {
+        return;
+    };
+    state.update(cx, |state, cx| state.set_volume(next as f32, cx));
+    if let Some(handler) = handler {
+        handler(next as f32, window, cx);
+    }
+}
+
 #[derive(IntoElement)]
 pub struct AudioPlayer {
+    id: ElementId,
     state: Entity<AudioPlayerState>,
     size: AudioPlayerSize,
     disabled: bool,
@@ -419,8 +524,19 @@ pub struct AudioPlayer {
 }
 
 impl AudioPlayer {
+    #[track_caller]
     pub fn new(state: Entity<AudioPlayerState>) -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "audio-player:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             state,
             size: AudioPlayerSize::Full,
             disabled: false,
@@ -434,9 +550,49 @@ impl AudioPlayer {
         }
     }
 
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
+    }
+
     pub fn size(mut self, size: AudioPlayerSize) -> Self {
         self.size = size;
         self
+    }
+
+    pub fn size_key(&self) -> &'static str {
+        self.size.to_text()
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
+    pub fn has_title(&self) -> bool {
+        self.title.is_some()
+    }
+
+    pub fn handler_count(&self) -> usize {
+        [
+            self.on_play.is_some(),
+            self.on_pause.is_some(),
+            self.on_seek.is_some(),
+            self.on_volume_change.is_some(),
+            self.on_speed_change.is_some(),
+        ]
+        .into_iter()
+        .filter(|present| *present)
+        .count()
+    }
+
+    pub fn to_text(&self) -> String {
+        format!(
+            "audio player: size {}, disabled {}, title {}, handlers {}",
+            self.size_key(),
+            self.is_disabled(),
+            self.has_title(),
+            self.handler_count()
+        )
     }
 
     pub fn compact(mut self) -> Self {
@@ -491,6 +647,91 @@ impl AudioPlayer {
     }
 }
 
+fn audio_fraction_class(value: f32) -> &'static str {
+    if value <= 0.0 {
+        "empty"
+    } else if value < 0.25 {
+        "low"
+    } else if value < 0.75 {
+        "medium"
+    } else if value < 1.0 {
+        "high"
+    } else {
+        "full"
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::*;
+    use kael::TestAppContext;
+
+    #[::core::prelude::v1::test]
+    fn audio_player_state_summary_is_content_safe() {
+        let cx = TestAppContext::single();
+        let state = cx.update(|cx| cx.new(AudioPlayerState::new));
+
+        let summary = cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.load_file("/Users/person/private-audio.wav", cx);
+                state.set_duration(120.0, cx);
+                state.set_current_time(64.0, cx);
+                state.set_volume(0.4, cx);
+                state.set_playback_speed(PlaybackSpeed::OneAndHalf, cx);
+                state.set_playing(true, cx);
+                state.to_text()
+            })
+        });
+
+        assert!(summary.contains("playing true"));
+        assert!(summary.contains("progress medium"));
+        assert!(summary.contains("volume medium"));
+        assert!(summary.contains("speed one-and-half"));
+        assert!(summary.contains("source true"));
+        assert!(!summary.contains("private-audio"));
+        assert!(!summary.contains("64"));
+        assert!(!summary.contains("0.4"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn audio_player_summary_is_content_safe() {
+        let cx = TestAppContext::single();
+        let state = cx.update(|cx| cx.new(AudioPlayerState::new));
+        let summary = AudioPlayer::new(state)
+            .compact()
+            .title("Secret Podcast")
+            .on_play(|_, _| {})
+            .on_seek(|_, _, _| {})
+            .to_text();
+
+        assert!(summary.contains("size compact"));
+        assert!(summary.contains("title true"));
+        assert!(summary.contains("handlers 2"));
+        assert!(!summary.contains("Secret Podcast"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn audio_player_state_rejects_non_finite_values() {
+        let cx = TestAppContext::single();
+        let state = cx.update(|cx| cx.new(AudioPlayerState::new));
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.set_duration(120.0, cx);
+                state.set_current_time(f32::NAN, cx);
+                assert_eq!(state.current_time(), 0.0);
+
+                state.set_duration(f32::INFINITY, cx);
+                assert_eq!(state.duration(), 120.0);
+
+                state.set_volume(f32::NAN, cx);
+                assert_eq!(state.volume(), 0.0);
+            });
+        });
+    }
+}
+
 impl Styled for AudioPlayer {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.style
@@ -508,6 +749,8 @@ impl RenderOnce for AudioPlayer {
         let volume = state.volume;
         let progress_percentage = state.progress_percentage();
         let playback_speed = state.playback_speed;
+        let progress_focus_handle = state.progress_focus_handle.clone();
+        let volume_focus_handle = state.volume_focus_handle.clone();
         let user_style = self.style.clone();
 
         let (padding, gap, button_size, icon_size, track_height, thumb_size) = match self.size {
@@ -524,7 +767,23 @@ impl RenderOnce for AudioPlayer {
             "volume-2"
         };
 
+        let accessibility_label = self
+            .title
+            .clone()
+            .unwrap_or_else(|| "Audio player".into())
+            .to_string();
+        let accessibility_state = if self.disabled {
+            AccessibilityState::DISABLED
+        } else {
+            AccessibilityState::NONE
+        };
         let base = div()
+            .id(self.id.clone())
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group)
+                    .label(accessibility_label)
+                    .states(accessibility_state),
+            )
             .flex()
             .items_center()
             .gap(gap)
@@ -554,6 +813,9 @@ impl RenderOnce for AudioPlayer {
                     window,
                     theme,
                     progress_percentage,
+                    current_time,
+                    duration,
+                    progress_focus_handle.clone(),
                     track_height,
                     thumb_size,
                 ))
@@ -586,7 +848,7 @@ impl RenderOnce for AudioPlayer {
                             .text_color(theme.tokens.foreground)
                             .overflow_hidden()
                             .text_ellipsis()
-                            .child(title),
+                            .child(StyledText::new(title).accessibility_hidden(true)),
                     )
                 })
                 .child(
@@ -599,6 +861,9 @@ impl RenderOnce for AudioPlayer {
                             window,
                             theme,
                             progress_percentage,
+                            current_time,
+                            duration,
+                            progress_focus_handle,
                             track_height,
                             thumb_size,
                         ))
@@ -640,6 +905,7 @@ impl RenderOnce for AudioPlayer {
                                     window,
                                     theme,
                                     volume_icon,
+                                    is_muted || volume == 0.0,
                                     px(28.0),
                                     px(14.0),
                                 ))
@@ -647,6 +913,7 @@ impl RenderOnce for AudioPlayer {
                                     window,
                                     theme,
                                     volume,
+                                    volume_focus_handle,
                                     px(80.0),
                                     px(4.0),
                                     px(12.0),
@@ -661,9 +928,9 @@ impl AudioPlayer {
     fn render_play_button(
         &self,
         window: &mut Window,
-        theme: &crate::theme::Theme,
+        _theme: &crate::theme::Theme,
         icon_name: &str,
-        _is_playing: bool,
+        is_playing: bool,
         button_size: Pixels,
         icon_size: Pixels,
     ) -> impl IntoElement {
@@ -672,37 +939,31 @@ impl AudioPlayer {
         let on_pause = self.on_pause.clone();
         let disabled = self.disabled;
 
-        div()
-            .id("audio-play-button")
-            .flex()
-            .items_center()
-            .justify_center()
-            .size(button_size)
-            .rounded_full()
-            .bg(theme.tokens.primary)
-            .transition(theme.tokens.transition_fast)
-            .when(!disabled, |this| {
-                this.cursor(CursorStyle::PointingHand)
-                    .hover(|style| style.bg(theme.tokens.primary.opacity(0.9)))
+        IconButton::new(icon_name)
+            .id(ElementId::NamedChild(
+                Box::new(self.id.clone()),
+                "play".into(),
+            ))
+            .label(if is_playing {
+                "Pause audio"
+            } else {
+                "Play audio"
             })
-            .child(
-                svg()
-                    .path(resolve_icon_path(icon_name))
-                    .size(icon_size)
-                    .text_color(theme.tokens.primary_foreground),
-            )
-            .when(!disabled, |this| {
-                this.on_click(window.listener_for(&state, move |state, _, window, cx| {
-                    state.toggle_playing(cx);
-                    if state.is_playing {
-                        if let Some(ref handler) = on_play {
-                            handler(window, cx);
-                        }
-                    } else if let Some(ref handler) = on_pause {
+            .variant(ButtonVariant::Default)
+            .size(button_size)
+            .icon_size(icon_size)
+            .disabled(disabled)
+            .rounded_full()
+            .on_click(window.listener_for(&state, move |state, _, window, cx| {
+                state.toggle_playing(cx);
+                if state.is_playing {
+                    if let Some(ref handler) = on_play {
                         handler(window, cx);
                     }
-                }))
-            })
+                } else if let Some(ref handler) = on_pause {
+                    handler(window, cx);
+                }
+            }))
     }
 
     fn render_progress_bar(
@@ -710,6 +971,9 @@ impl AudioPlayer {
         window: &mut Window,
         theme: &crate::theme::Theme,
         percentage: f32,
+        current_time: f32,
+        duration: f32,
+        focus_handle: FocusHandle,
         track_height: Pixels,
         thumb_size: Pixels,
     ) -> impl IntoElement {
@@ -717,7 +981,36 @@ impl AudioPlayer {
         let on_seek = self.on_seek.clone();
         let disabled = self.disabled;
 
+        let state_for_key = state.clone();
+        let on_seek_key = on_seek.clone();
+        let focus_on_mouse = focus_handle.clone();
+        let mut accessibility = AccessibilityAttributes::progress_bar(
+            "Playback position",
+            current_time as f64,
+            0.0,
+            duration.max(0.0) as f64,
+        );
+        accessibility.role = Some(AccessibilityRole::Slider);
+        if disabled {
+            accessibility = accessibility.states(AccessibilityState::DISABLED);
+        } else {
+            accessibility = accessibility.actions(vec![
+                AccessibilityAction::Focus,
+                AccessibilityAction::Increment,
+                AccessibilityAction::Decrement,
+                AccessibilityAction::SetValue,
+            ]);
+        }
+
         div()
+            .id(ElementId::NamedChild(
+                Box::new(self.id.clone()),
+                "progress".into(),
+            ))
+            .accessibility(accessibility)
+            .when(!disabled, |track| {
+                track.track_focus(&focus_handle.tab_index(0).tab_stop(true))
+            })
             .flex_1()
             .h(thumb_size)
             .flex()
@@ -767,17 +1060,60 @@ impl AudioPlayer {
                     .when(!disabled, |this| this.cursor(CursorStyle::PointingHand)),
             )
             .when(!disabled, |this| {
+                let state_increment = state.clone();
+                let on_seek_increment = on_seek.clone();
+                let state_decrement = state.clone();
+                let on_seek_decrement = on_seek.clone();
+                let state_set_value = state.clone();
+                let on_seek_set_value = on_seek.clone();
                 let state_down = state.clone();
                 let on_seek_down = on_seek.clone();
                 let state_move = state.clone();
                 let on_seek_move = on_seek.clone();
                 let state_up = state.clone();
 
-                this.on_mouse_down(
+                this.on_accessibility_action(
+                    AccessibilityAction::Increment,
+                    move |request, window, cx| {
+                        handle_seek_accessibility_action(
+                            request,
+                            &state_increment,
+                            &on_seek_increment,
+                            window,
+                            cx,
+                        );
+                    },
+                )
+                .on_accessibility_action(
+                    AccessibilityAction::Decrement,
+                    move |request, window, cx| {
+                        handle_seek_accessibility_action(
+                            request,
+                            &state_decrement,
+                            &on_seek_decrement,
+                            window,
+                            cx,
+                        );
+                    },
+                )
+                .on_accessibility_action(
+                    AccessibilityAction::SetValue,
+                    move |request, window, cx| {
+                        handle_seek_accessibility_action(
+                            request,
+                            &state_set_value,
+                            &on_seek_set_value,
+                            window,
+                            cx,
+                        );
+                    },
+                )
+                .on_mouse_down(
                     MouseButton::Left,
                     window.listener_for(
                         &state_down,
                         move |state, e: &MouseDownEvent, window, cx| {
+                            window.focus(&focus_on_mouse);
                             state.progress_dragging = true;
                             state.update_progress_from_position(e.position, cx);
                             if let Some(ref handler) = on_seek_down {
@@ -803,43 +1139,63 @@ impl AudioPlayer {
                         state.progress_dragging = false;
                     }),
                 )
+                .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                    let delta = match event.keystroke.key.as_str() {
+                        "left" | "down" => Some(-5.0),
+                        "right" | "up" => Some(5.0),
+                        "home" => Some(f32::NEG_INFINITY),
+                        "end" => Some(f32::INFINITY),
+                        _ => None,
+                    };
+                    if let Some(delta) = delta {
+                        state_for_key.update(cx, |state, cx| {
+                            let next = if delta == f32::NEG_INFINITY {
+                                0.0
+                            } else if delta == f32::INFINITY {
+                                state.duration
+                            } else {
+                                state.current_time + delta
+                            };
+                            state.set_current_time(next, cx);
+                            if let Some(ref handler) = on_seek_key {
+                                handler(state.current_time, window, cx);
+                            }
+                        });
+                        cx.stop_propagation();
+                    }
+                })
             })
     }
 
     fn render_mute_button(
         &self,
         window: &mut Window,
-        theme: &crate::theme::Theme,
+        _theme: &crate::theme::Theme,
         icon_name: &str,
+        is_muted: bool,
         button_size: Pixels,
         icon_size: Pixels,
     ) -> impl IntoElement {
         let state = self.state.clone();
         let disabled = self.disabled;
 
-        div()
-            .id("audio-mute-button")
-            .flex()
-            .items_center()
-            .justify_center()
+        IconButton::new(icon_name)
+            .id(ElementId::NamedChild(
+                Box::new(self.id.clone()),
+                "mute".into(),
+            ))
+            .label(if is_muted {
+                "Unmute audio"
+            } else {
+                "Mute audio"
+            })
+            .variant(ButtonVariant::Ghost)
             .size(button_size)
-            .rounded(theme.tokens.radius_md)
-            .transition(theme.tokens.transition_fast)
-            .when(!disabled, |this| {
-                this.cursor(CursorStyle::PointingHand)
-                    .hover(|style| style.bg(theme.tokens.accent))
-            })
-            .child(
-                svg()
-                    .path(resolve_icon_path(icon_name))
-                    .size(icon_size)
-                    .text_color(theme.tokens.muted_foreground),
-            )
-            .when(!disabled, |this| {
-                this.on_click(window.listener_for(&state, move |state, _, _, cx| {
-                    state.toggle_muted(cx);
-                }))
-            })
+            .icon_size(icon_size)
+            .disabled(disabled)
+            .on_click(window.listener_for(&state, move |state, _, _, cx| {
+                state.toggle_muted(cx);
+            }))
     }
 
     fn render_volume_slider(
@@ -847,6 +1203,7 @@ impl AudioPlayer {
         window: &mut Window,
         theme: &crate::theme::Theme,
         volume: f32,
+        focus_handle: FocusHandle,
         width: Pixels,
         track_height: Pixels,
         thumb_size: Pixels,
@@ -855,7 +1212,24 @@ impl AudioPlayer {
         let on_volume_change = self.on_volume_change.clone();
         let disabled = self.disabled;
 
+        let state_for_key = state.clone();
+        let on_volume_key = on_volume_change.clone();
+        let focus_on_mouse = focus_handle.clone();
+        let mut accessibility =
+            AccessibilityAttributes::slider("Volume", volume as f64, 0.0, 1.0, Some(0.05));
+        if disabled {
+            accessibility = accessibility.states(AccessibilityState::DISABLED);
+        }
+
         div()
+            .id(ElementId::NamedChild(
+                Box::new(self.id.clone()),
+                "volume".into(),
+            ))
+            .accessibility(accessibility)
+            .when(!disabled, |slider| {
+                slider.track_focus(&focus_handle.tab_index(0).tab_stop(true))
+            })
             .w(width)
             .h(thumb_size)
             .flex()
@@ -905,17 +1279,60 @@ impl AudioPlayer {
                     .when(!disabled, |this| this.cursor(CursorStyle::PointingHand)),
             )
             .when(!disabled, |this| {
+                let state_increment = state.clone();
+                let on_volume_increment = on_volume_change.clone();
+                let state_decrement = state.clone();
+                let on_volume_decrement = on_volume_change.clone();
+                let state_set_value = state.clone();
+                let on_volume_set_value = on_volume_change.clone();
                 let state_down = state.clone();
                 let on_vol_down = on_volume_change.clone();
                 let state_move = state.clone();
                 let on_vol_move = on_volume_change.clone();
                 let state_up = state.clone();
 
-                this.on_mouse_down(
+                this.on_accessibility_action(
+                    AccessibilityAction::Increment,
+                    move |request, window, cx| {
+                        handle_volume_accessibility_action(
+                            request,
+                            &state_increment,
+                            &on_volume_increment,
+                            window,
+                            cx,
+                        );
+                    },
+                )
+                .on_accessibility_action(
+                    AccessibilityAction::Decrement,
+                    move |request, window, cx| {
+                        handle_volume_accessibility_action(
+                            request,
+                            &state_decrement,
+                            &on_volume_decrement,
+                            window,
+                            cx,
+                        );
+                    },
+                )
+                .on_accessibility_action(
+                    AccessibilityAction::SetValue,
+                    move |request, window, cx| {
+                        handle_volume_accessibility_action(
+                            request,
+                            &state_set_value,
+                            &on_volume_set_value,
+                            window,
+                            cx,
+                        );
+                    },
+                )
+                .on_mouse_down(
                     MouseButton::Left,
                     window.listener_for(
                         &state_down,
                         move |state, e: &MouseDownEvent, window, cx| {
+                            window.focus(&focus_on_mouse);
                             state.volume_dragging = true;
                             state.update_volume_from_position(e.position, cx);
                             if let Some(ref handler) = on_vol_down {
@@ -941,43 +1358,48 @@ impl AudioPlayer {
                         state.volume_dragging = false;
                     }),
                 )
+                .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                    let next = match event.keystroke.key.as_str() {
+                        "left" | "down" => Some((volume - 0.05).max(0.0)),
+                        "right" | "up" => Some((volume + 0.05).min(1.0)),
+                        "home" => Some(0.0),
+                        "end" => Some(1.0),
+                        _ => None,
+                    };
+                    if let Some(next) = next {
+                        state_for_key.update(cx, |state, cx| state.set_volume(next, cx));
+                        if let Some(ref handler) = on_volume_key {
+                            handler(next, window, cx);
+                        }
+                        cx.stop_propagation();
+                    }
+                })
             })
     }
 
     fn render_speed_button(
         &self,
         window: &mut Window,
-        theme: &crate::theme::Theme,
+        _theme: &crate::theme::Theme,
         speed: PlaybackSpeed,
     ) -> impl IntoElement {
         let state = self.state.clone();
         let on_speed_change = self.on_speed_change.clone();
         let disabled = self.disabled;
 
-        div()
-            .id("audio-speed-button")
-            .flex()
-            .items_center()
-            .justify_center()
-            .px(px(8.0))
-            .h(px(28.0))
-            .rounded(theme.tokens.radius_md)
-            .text_size(px(12.0))
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(theme.tokens.muted_foreground)
-            .transition(theme.tokens.transition_fast)
-            .when(!disabled, |this| {
-                this.cursor(CursorStyle::PointingHand)
-                    .hover(|style| style.bg(theme.tokens.accent))
-            })
-            .child(speed.label())
-            .when(!disabled, |this| {
-                this.on_click(window.listener_for(&state, move |state, _, window, cx| {
-                    state.cycle_playback_speed(cx);
-                    if let Some(ref handler) = on_speed_change {
-                        handler(state.playback_speed, window, cx);
-                    }
-                }))
-            })
+        Button::new(
+            ElementId::NamedChild(Box::new(self.id.clone()), "speed".into()),
+            speed.label(),
+        )
+        .variant(ButtonVariant::Ghost)
+        .size(ButtonSize::Sm)
+        .disabled(disabled)
+        .tooltip("Change playback speed")
+        .on_click(window.listener_for(&state, move |state, _, window, cx| {
+            state.cycle_playback_speed(cx);
+            if let Some(ref handler) = on_speed_change {
+                handler(state.playback_speed, window, cx);
+            }
+        }))
     }
 }

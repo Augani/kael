@@ -52,7 +52,7 @@ impl fmt::Debug for ApiRequest {
         formatter
             .debug_struct("ApiRequest")
             .field("method", &self.method)
-            .field("path", &self.path)
+            .field("path", &redacted_path(&self.path))
             .field("headers", &headers)
             .field("body", &body)
             .field("timeout_ms", &self.timeout_ms)
@@ -68,13 +68,22 @@ fn is_sensitive_header(key: &str) -> bool {
         "cookie",
         "set-cookie",
         "x-api-key",
+        "api-key",
+        "x-auth-token",
     ]
     .iter()
     .any(|header| key.eq_ignore_ascii_case(header))
 }
 
+fn redacted_path(path: &str) -> String {
+    match path.split_once('?') {
+        Some((base, _)) => format!("{base}?<redacted>"),
+        None => path.to_owned(),
+    }
+}
+
 /// A typed API response.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ApiResponse {
     /// HTTP status code.
     pub status: u16,
@@ -82,6 +91,23 @@ pub struct ApiResponse {
     pub headers: HashMap<String, String>,
     /// Response body as raw bytes.
     pub body: Vec<u8>,
+}
+
+impl fmt::Debug for ApiResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut headers = self.headers.clone();
+        for (key, value) in &mut headers {
+            if is_sensitive_header(key) {
+                *value = "<redacted>".to_string();
+            }
+        }
+        formatter
+            .debug_struct("ApiResponse")
+            .field("status", &self.status)
+            .field("headers", &headers)
+            .field("body", &format!("<{} bytes>", self.body.len()))
+            .finish()
+    }
 }
 
 impl ApiRequest {
@@ -258,8 +284,9 @@ mod tests {
 
     #[test]
     fn debug_redacts_authorization_and_body() {
-        let req = ApiRequest::post("/login")
+        let req = ApiRequest::post("/login?access_token=query-secret")
             .with_header("Authorization", "Bearer token123")
+            .with_header("X-Auth-Token", "header-secret")
             .with_json_body(&serde_json::json!({ "password": "secret" }))
             .unwrap();
         let debug = format!("{req:?}");
@@ -267,6 +294,8 @@ mod tests {
         assert!(debug.contains("<redacted>"));
         assert!(debug.contains("bytes"));
         assert!(!debug.contains("token123"));
+        assert!(!debug.contains("query-secret"));
+        assert!(!debug.contains("header-secret"));
         assert!(!debug.contains("password"));
         assert!(!debug.contains("secret"));
     }
@@ -366,6 +395,20 @@ mod tests {
             body: vec![0xff, 0xfe],
         };
         assert!(resp.text().is_err());
+    }
+
+    #[test]
+    fn response_debug_redacts_headers_and_body() {
+        let resp = ApiResponse {
+            status: 401,
+            headers: HashMap::from([("Set-Cookie".into(), "session=secret".into())]),
+            body: b"private response".to_vec(),
+        };
+        let debug = format!("{resp:?}");
+        assert!(debug.contains("<redacted>"));
+        assert!(debug.contains("16 bytes"));
+        assert!(!debug.contains("session=secret"));
+        assert!(!debug.contains("private response"));
     }
 
     #[test]

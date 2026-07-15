@@ -63,7 +63,7 @@ impl PdfPage {
         self.document.page_size(self.page_index)
     }
 
-    /// Renders a raster preview of the page at the requested scale.
+    /// Renders a schematic text-and-annotation preview at the requested scale.
     pub async fn render(&self, scale: f32) -> Result<RenderedPage> {
         let document = self.document.clone();
         let page_index = self.page_index;
@@ -71,17 +71,17 @@ impl PdfPage {
     }
 
     /// Returns the extracted text for the page.
-    pub fn text(&self) -> String {
-        self.document.page_text(self.page_index).unwrap_or_default()
+    pub fn text(&self) -> Result<String> {
+        self.document.page_text(self.page_index)
     }
 
     /// Searches the extracted page text for a query string.
-    pub fn search(&self, query: &str) -> Vec<TextMatch> {
+    pub fn search(&self, query: &str) -> Result<Vec<TextMatch>> {
         self.document.search_page_text(self.page_index, query)
     }
 
     /// Returns the detected link annotations for the page.
-    pub fn links(&self) -> Vec<PdfLink> {
+    pub fn links(&self) -> Result<Vec<PdfLink>> {
         self.document.page_links(self.page_index)
     }
 

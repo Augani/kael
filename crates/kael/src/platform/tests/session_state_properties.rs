@@ -1,4 +1,4 @@
-// Feature: platform-parity-electron-features, Property 10: Session state serialization round-trip
+// Feature: platform-parity-browser-runtime-features, Property 10: Session state serialization round-trip
 
 use proptest::prelude::*;
 

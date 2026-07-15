@@ -94,6 +94,17 @@ pub enum ScrollStrategy {
     Bottom,
 }
 
+impl ScrollStrategy {
+    /// Stable text key for diagnostics and generated tests.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Top => "top",
+            Self::Center => "center",
+            Self::Bottom => "bottom",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 #[allow(missing_docs)]
 pub struct DeferredScrollToItem {
@@ -104,6 +115,19 @@ pub struct DeferredScrollToItem {
     /// The offset in number of items
     pub offset: usize,
     pub scroll_strict: bool,
+}
+
+impl DeferredScrollToItem {
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "uniform_list_deferred_scroll(item_index={}, strategy={}, offset_items={}, strict={})",
+            self.item_index,
+            self.strategy.to_text(),
+            self.offset,
+            self.scroll_strict
+        )
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -230,6 +254,68 @@ impl UniformListScrollHandle {
         } else {
             false
         }
+    }
+
+    /// Returns true when a scroll-to-item request is waiting for the next layout pass.
+    pub fn has_deferred_scroll(&self) -> bool {
+        self.0.borrow().deferred_scroll_to_item.is_some()
+    }
+
+    /// Index requested by a pending scroll-to-item operation, if any.
+    pub fn deferred_item_index(&self) -> Option<usize> {
+        self.0
+            .borrow()
+            .deferred_scroll_to_item
+            .as_ref()
+            .map(|deferred| deferred.item_index)
+    }
+
+    /// Stable text key for the pending scroll strategy, or `none`.
+    pub fn deferred_strategy_key(&self) -> &'static str {
+        self.0
+            .borrow()
+            .deferred_scroll_to_item
+            .as_ref()
+            .map_or("none", |deferred| deferred.strategy.to_text())
+    }
+
+    /// Returns true when the most recent layout captured item sizing.
+    pub fn has_last_item_size(&self) -> bool {
+        self.0.borrow().last_item_size.is_some()
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        let state = self.0.borrow();
+        let deferred_item_index = state.deferred_scroll_to_item.as_ref().map_or_else(
+            || "none".to_string(),
+            |deferred| deferred.item_index.to_string(),
+        );
+        let deferred_offset = state.deferred_scroll_to_item.as_ref().map_or_else(
+            || "none".to_string(),
+            |deferred| deferred.offset.to_string(),
+        );
+        let deferred_strict = state
+            .deferred_scroll_to_item
+            .as_ref()
+            .is_some_and(|deferred| deferred.scroll_strict);
+
+        format!(
+            "uniform_list_scroll_handle(has_deferred_scroll={}, deferred_item_index={}, deferred_strategy={}, deferred_offset_items={}, deferred_strict={}, has_last_item_size={}, scrollable={}, y_flipped={})",
+            state.deferred_scroll_to_item.is_some(),
+            deferred_item_index,
+            state
+                .deferred_scroll_to_item
+                .as_ref()
+                .map_or("none", |deferred| deferred.strategy.to_text()),
+            deferred_offset,
+            deferred_strict,
+            state.last_item_size.is_some(),
+            state
+                .last_item_size
+                .is_some_and(|size| size.contents.height > size.item.height),
+            state.y_flipped
+        )
     }
 }
 
@@ -571,15 +657,17 @@ impl Element for UniformList {
             window,
             cx,
             |_, window, cx| {
-                let list_node = crate::AccessibilityNode::new(crate::AccessibilityRole::List);
+                let mut list_node = crate::AccessibilityNode::new(crate::AccessibilityRole::List);
+                list_node.id = window.next_anonymous_accessibility_id();
                 let list_id = list_node.id;
                 window.register_accessibility_node_at(list_node, bounds);
 
                 window.with_accessibility_parent(list_id, |window| {
                     for (ix, item) in request_layout.items.iter_mut().enumerate() {
-                        let item_node =
+                        let mut item_node =
                             crate::AccessibilityNode::new(crate::AccessibilityRole::ListItem)
                                 .with_label(format!("Item {}", ix));
+                        item_node.id = window.next_anonymous_accessibility_id();
                         let item_id = item_node.id;
                         window.register_accessibility_node(item_node);
                         window.with_accessibility_parent(item_id, |window| {
@@ -646,6 +734,56 @@ impl<T: UniformListDecoration + 'static> UniformListDecoration for Entity<T> {
 }
 
 impl UniformList {
+    /// Number of items in the list.
+    pub fn item_count(&self) -> usize {
+        self.item_count
+    }
+
+    /// Returns true when the list has no items.
+    pub fn is_empty(&self) -> bool {
+        self.item_count == 0
+    }
+
+    /// Index used to measure uniform item dimensions, clamped to the item count.
+    pub fn item_to_measure_index(&self) -> usize {
+        self.item_to_measure_index
+            .min(self.item_count.saturating_sub(1))
+    }
+
+    /// Number of decoration layers attached to the list.
+    pub fn decoration_count(&self) -> usize {
+        self.decorations.len()
+    }
+
+    /// Returns true when the list has a bound scroll handle.
+    pub fn has_scroll_tracking(&self) -> bool {
+        self.scroll_handle.is_some()
+    }
+
+    /// Stable text key for the vertical sizing behavior.
+    pub fn sizing_behavior_key(&self) -> &'static str {
+        self.sizing_behavior.to_text()
+    }
+
+    /// Stable text key for the horizontal sizing behavior.
+    pub fn horizontal_sizing_behavior_key(&self) -> &'static str {
+        self.horizontal_sizing_behavior.to_text()
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "uniform_list(item_count={}, empty={}, measure_index={}, decoration_count={}, scroll_tracking={}, sizing={}, horizontal_sizing={})",
+            self.item_count(),
+            self.is_empty(),
+            self.item_to_measure_index(),
+            self.decoration_count(),
+            self.has_scroll_tracking(),
+            self.sizing_behavior_key(),
+            self.horizontal_sizing_behavior_key()
+        )
+    }
+
     /// Selects a specific list item for measurement.
     pub fn with_width_from_item(mut self, item_index: Option<usize>) -> Self {
         self.item_to_measure_index = item_index.unwrap_or(0);
@@ -742,5 +880,63 @@ impl UniformList {
 impl InteractiveElement for UniformList {
     fn interactivity(&mut self) -> &mut crate::Interactivity {
         &mut self.interactivity
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ScrollStrategy, UniformListScrollHandle, uniform_list};
+    use crate::{ListHorizontalSizingBehavior, ListSizingBehavior, ParentElement, div};
+
+    #[test]
+    fn uniform_list_summary_is_content_safe() {
+        let handle = UniformListScrollHandle::new();
+        handle.scroll_to_item_strict_with_offset(42, ScrollStrategy::Bottom, 2);
+
+        let list = uniform_list("rows", 100, |range, _, _| {
+            range
+                .map(|_| div().child("private row value"))
+                .collect::<Vec<_>>()
+        })
+        .with_width_from_item(Some(12))
+        .with_sizing_behavior(ListSizingBehavior::Infer)
+        .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
+        .track_scroll(handle.clone());
+
+        assert_eq!(list.item_count(), 100);
+        assert!(!list.is_empty());
+        assert_eq!(list.item_to_measure_index(), 12);
+        assert_eq!(list.decoration_count(), 0);
+        assert!(list.has_scroll_tracking());
+        assert_eq!(list.sizing_behavior_key(), "infer");
+        assert_eq!(list.horizontal_sizing_behavior_key(), "unconstrained");
+
+        let summary = list.to_text();
+        assert!(summary.contains("uniform_list(item_count=100"));
+        assert!(summary.contains("measure_index=12"));
+        assert!(summary.contains("scroll_tracking=true"));
+        assert!(!summary.contains("private row value"));
+    }
+
+    #[test]
+    fn uniform_list_scroll_handle_summary_is_content_safe() {
+        let handle = UniformListScrollHandle::new();
+        assert!(!handle.has_deferred_scroll());
+        assert_eq!(handle.deferred_item_index(), None);
+        assert_eq!(handle.deferred_strategy_key(), "none");
+
+        handle.scroll_to_item_with_offset(7, ScrollStrategy::Center, 3);
+
+        assert!(handle.has_deferred_scroll());
+        assert_eq!(handle.deferred_item_index(), Some(7));
+        assert_eq!(handle.deferred_strategy_key(), "center");
+        assert!(!handle.has_last_item_size());
+
+        let summary = handle.to_text();
+        assert!(summary.contains("has_deferred_scroll=true"));
+        assert!(summary.contains("deferred_item_index=7"));
+        assert!(summary.contains("deferred_strategy=center"));
+        assert!(summary.contains("deferred_offset_items=3"));
+        assert!(!summary.contains("private row value"));
     }
 }

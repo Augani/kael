@@ -43,7 +43,7 @@ impl InfiniteScrollState {
     }
 
     pub fn set_loaded(&mut self) {
-        self.page += 1;
+        self.page = self.page.saturating_add(1);
         self.has_more = true;
         self.loading_state = LoadingState::Idle;
     }
@@ -105,7 +105,9 @@ impl InfiniteScroll {
     }
 
     pub fn threshold(mut self, threshold: f32) -> Self {
-        self.threshold = threshold.clamp(0.0, 1.0);
+        if threshold.is_finite() {
+            self.threshold = threshold.clamp(0.0, 1.0);
+        }
         self
     }
 
@@ -176,6 +178,10 @@ impl RenderOnce for InfiniteScroll {
                     }
                 };
                 if should_load {
+                    state_c.update(cx, |state, cx| {
+                        state.set_loading();
+                        cx.notify();
+                    });
                     callback(page, window, cx);
                 }
             });
@@ -230,5 +236,25 @@ impl RenderOnce for InfiniteScroll {
             this.style().refine(&user_style);
             this
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn page_progress_saturates_instead_of_overflowing() {
+        let mut state = InfiniteScrollState {
+            loading_state: LoadingState::Loading,
+            page: usize::MAX,
+            has_more: true,
+            scroll_handle: ScrollHandle::new(),
+        };
+
+        state.set_loaded();
+
+        assert_eq!(state.page(), usize::MAX);
+        assert_eq!(state.loading_state(), &LoadingState::Idle);
     }
 }

@@ -37,13 +37,23 @@ pub enum FlowDirection {
     Vertical,
 }
 
+fn nonnegative_pixels(value: Pixels) -> Pixels {
+    let value = f32::from(value);
+    if value.is_finite() {
+        px(value.max(0.0))
+    } else {
+        px(0.0)
+    }
+}
+
 fn apply_justify_div(div: Div, justify: Justify) -> Div {
     match justify {
         Justify::Start => div.justify_start(),
         Justify::Center => div.justify_center(),
         Justify::End => div.justify_end(),
         Justify::Between => div.justify_between(),
-        Justify::Around | Justify::Evenly => div.justify_around(),
+        Justify::Around => div.justify_around(),
+        Justify::Evenly => div.justify_evenly(),
     }
 }
 
@@ -71,7 +81,7 @@ impl VStack {
     }
 
     pub fn spacing(mut self, spacing: impl Into<Pixels>) -> Self {
-        self.spacing = Some(spacing.into());
+        self.spacing = Some(nonnegative_pixels(spacing.into()));
         self
     }
 
@@ -128,7 +138,7 @@ impl VStack {
     }
 
     pub fn padding(mut self, padding: impl Into<Pixels>) -> Self {
-        self.base = self.base.p(padding.into());
+        self.base = self.base.p(nonnegative_pixels(padding.into()));
         self
     }
 
@@ -171,7 +181,7 @@ impl IntoElement for VStack {
                 Align::Start => self.base.items_start(),
                 Align::Center => self.base.items_center(),
                 Align::End => self.base.items_end(),
-                Align::Stretch => self.base,
+                Align::Stretch => self.base.items_stretch(),
             };
         }
 
@@ -207,7 +217,7 @@ impl HStack {
     }
 
     pub fn spacing(mut self, spacing: impl Into<Pixels>) -> Self {
-        self.spacing = Some(spacing.into());
+        self.spacing = Some(nonnegative_pixels(spacing.into()));
         self
     }
 
@@ -264,7 +274,7 @@ impl HStack {
     }
 
     pub fn padding(mut self, padding: impl Into<Pixels>) -> Self {
-        self.base = self.base.p(padding.into());
+        self.base = self.base.p(nonnegative_pixels(padding.into()));
         self
     }
 
@@ -312,7 +322,7 @@ impl IntoElement for HStack {
                 Align::Start => self.base.items_start(),
                 Align::Center => self.base.items_center(),
                 Align::End => self.base.items_end(),
-                Align::Stretch => self.base,
+                Align::Stretch => self.base.items_stretch(),
             };
         }
 
@@ -353,7 +363,7 @@ impl Flow {
     }
 
     pub fn spacing(mut self, spacing: impl Into<Pixels>) -> Self {
-        self.spacing = Some(spacing.into());
+        self.spacing = Some(nonnegative_pixels(spacing.into()));
         self
     }
 
@@ -401,7 +411,7 @@ impl IntoElement for Flow {
                 Align::Start => self.base.items_start(),
                 Align::Center => self.base.items_center(),
                 Align::End => self.base.items_end(),
-                Align::Stretch => self.base,
+                Align::Stretch => self.base.items_stretch(),
             };
         }
 
@@ -449,12 +459,12 @@ impl Grid {
     }
 
     pub fn columns(mut self, columns: usize) -> Self {
-        self.columns = columns.max(1);
+        self.columns = columns.clamp(1, u16::MAX as usize);
         self
     }
 
     pub fn grid_columns(mut self, columns: GridColumns) -> Self {
-        self.columns = columns.max(1);
+        self.columns = columns.clamp(1, u16::MAX as usize);
         self
     }
 
@@ -475,12 +485,12 @@ impl Grid {
     }
 
     pub fn gap(mut self, gap: impl Into<Pixels>) -> Self {
-        self.gap = Some(gap.into());
+        self.gap = Some(nonnegative_pixels(gap.into()));
         self
     }
 
     pub fn row_gap(mut self, gap: impl Into<Pixels>) -> Self {
-        self.row_gap = Some(gap.into());
+        self.row_gap = Some(nonnegative_pixels(gap.into()));
         self
     }
 
@@ -490,7 +500,7 @@ impl Grid {
     }
 
     pub fn column_gap(mut self, gap: impl Into<Pixels>) -> Self {
-        self.column_gap = Some(gap.into());
+        self.column_gap = Some(nonnegative_pixels(gap.into()));
         self
     }
 
@@ -628,9 +638,7 @@ impl RenderOnce for GridSpan {
         let user_style = self.style;
 
         div()
-            .grid()
             .min_w(px(0.0))
-            .h_full()
             .when_some(self.columns, |this, columns| match columns {
                 GridSpanColumns::Count(columns) => this.col_span(columns),
                 GridSpanColumns::Full => this.col_span_full(),
@@ -660,14 +668,14 @@ impl Default for Cluster {
 impl Cluster {
     pub fn new() -> Self {
         Self {
-            base: div().flex().flex_row(),
+            base: div().flex().flex_row().flex_wrap(),
             spacing: None,
             align: None,
         }
     }
 
     pub fn spacing(mut self, spacing: impl Into<Pixels>) -> Self {
-        self.spacing = Some(spacing.into());
+        self.spacing = Some(nonnegative_pixels(spacing.into()));
         self
     }
 
@@ -710,7 +718,7 @@ impl IntoElement for Cluster {
                 Align::Start => self.base.items_start(),
                 Align::Center => self.base.items_center(),
                 Align::End => self.base.items_end(),
-                Align::Stretch => self.base,
+                Align::Stretch => self.base.items_stretch(),
             };
         }
 
@@ -735,7 +743,7 @@ impl Spacer {
 
     pub fn fixed(size: impl Into<Pixels>) -> Self {
         Self {
-            size: Some(size.into()),
+            size: Some(nonnegative_pixels(size.into())),
         }
     }
 }
@@ -1409,6 +1417,11 @@ pub struct MasonryItem {
 
 impl MasonryItem {
     pub fn new(element: impl IntoElement, estimated_height: f32) -> Self {
+        let estimated_height = if estimated_height.is_finite() {
+            estimated_height.max(1.0)
+        } else {
+            100.0
+        };
         Self {
             element: element.into_any_element(),
             estimated_height,
@@ -1440,12 +1453,12 @@ impl MasonryGrid {
     }
 
     pub fn columns(mut self, columns: usize) -> Self {
-        self.columns = columns.max(1);
+        self.columns = columns.clamp(1, u16::MAX as usize);
         self
     }
 
     pub fn gap(mut self, gap: impl Into<Pixels>) -> Self {
-        self.gap = Some(gap.into());
+        self.gap = Some(nonnegative_pixels(gap.into()));
         self
     }
 
@@ -1505,13 +1518,14 @@ impl IntoElement for MasonryGrid {
     type Element = Div;
 
     fn into_element(mut self) -> Self::Element {
+        let column_count = self.columns.min(self.items.len().max(1));
         if let Some(gap) = self.gap {
             self.base = self.base.gap(gap);
         }
 
-        let mut column_heights: Vec<f32> = vec![0.0; self.columns];
+        let mut column_heights: Vec<f32> = vec![0.0; column_count];
         let mut column_items: Vec<Vec<AnyElement>> =
-            (0..self.columns).map(|_| Vec::new()).collect();
+            (0..column_count).map(|_| Vec::new()).collect();
 
         let gap_value: f32 = self.gap.map(f32::from).unwrap_or(0.0);
 
@@ -1524,11 +1538,17 @@ impl IntoElement for MasonryGrid {
                 .unwrap_or(0);
 
             column_heights[min_column] += item.estimated_height + gap_value;
-            column_items[min_column].push(item.element);
+            column_items[min_column].push(
+                div()
+                    .w_full()
+                    .h(px(item.estimated_height))
+                    .child(item.element)
+                    .into_any_element(),
+            );
         }
 
         for column_children in column_items {
-            let mut column = div().flex().flex_col().flex_1();
+            let mut column = div().flex().flex_col().flex_1().min_w(px(0.0));
 
             if let Some(gap) = self.gap {
                 column = column.gap(gap);
@@ -1636,5 +1656,42 @@ impl IntoElement for ScrollList {
         let mut scroll_container = self.scroll_container;
         scroll_container = scroll_container.child(self.stack);
         scroll_container.into_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn masonry_item_heights_are_always_renderable() {
+        assert_eq!(MasonryItem::new(div(), f32::NAN).estimated_height, 100.0);
+        assert_eq!(MasonryItem::new(div(), 0.0).estimated_height, 1.0);
+        assert_eq!(MasonryItem::new(div(), 72.0).estimated_height, 72.0);
+    }
+
+    #[::core::prelude::v1::test]
+    fn grid_and_masonry_geometry_is_bounded() {
+        let grid = Grid::new().columns(usize::MAX).gap(px(f32::NAN));
+        assert_eq!(grid.columns, u16::MAX as usize);
+        assert_eq!(grid.gap, Some(px(0.0)));
+
+        let masonry = MasonryGrid::new()
+            .columns(usize::MAX)
+            .gap(px(-12.0))
+            .item(div(), 40.0)
+            .item(div(), 60.0);
+        assert_eq!(masonry.columns, u16::MAX as usize);
+        assert_eq!(masonry.gap, Some(px(0.0)));
+        assert_eq!(masonry.columns.min(masonry.items.len().max(1)), 2);
+    }
+
+    #[::core::prelude::v1::test]
+    fn stack_spacing_and_fixed_spacers_reject_invalid_sizes() {
+        let stack = VStack::new().spacing(px(f32::INFINITY));
+        assert_eq!(stack.spacing, Some(px(0.0)));
+
+        let spacer = Spacer::fixed(px(-20.0));
+        assert_eq!(spacer.size, Some(px(0.0)));
     }
 }

@@ -9,8 +9,8 @@ struct InputTestApp {
 
 impl InputTestApp {
     fn new(cx: &mut Context<Self>) -> Self {
-        let input_state = cx.new(|cx| InputState::new(cx));
-        let password_input_state = cx.new(|cx| InputState::new(cx));
+        let input_state = cx.new(InputState::new);
+        let password_input_state = cx.new(InputState::new);
 
         Self {
             input_state,
@@ -121,7 +121,7 @@ fn main() {
                 })),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|cx| InputTestApp::new(cx)),
+            |_window, cx| cx.new(InputTestApp::new),
         )
         .unwrap();
     });

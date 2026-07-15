@@ -42,22 +42,21 @@ impl Render for SidebarDemo {
                             .position(SidebarPosition::Left)
                             .expanded_width(px(280.0))
                             .collapsed_width(px(64.0))
-                            .items({
-                                let mut items = Vec::new();
-                                items.push(SidebarItem::new("dashboard".to_string(), "Dashboard".to_string())
-                                    .with_icon(IconSource::Named("globe".to_string())));
-                                items.push(SidebarItem::new("analytics".to_string(), "Analytics".to_string())
+                            .items(vec![
+                                SidebarItem::new("dashboard".to_string(), "Dashboard".to_string())
+                                    .with_icon(IconSource::Named("globe".to_string())),
+                                SidebarItem::new("analytics".to_string(), "Analytics".to_string())
                                     .with_icon(IconSource::Named("search".to_string()))
-                                    .with_badge("3".to_string()));
-                                items.push(SidebarItem::new("separator1".to_string(), "".to_string()).separator(true));
-                                items.push(SidebarItem::new("projects".to_string(), "Projects".to_string())
-                                    .with_icon(IconSource::Named("globe".to_string())));
-                                items.push(SidebarItem::new("team".to_string(), "Team".to_string())
-                                    .with_icon(IconSource::Named("search".to_string())));
-                                items.push(SidebarItem::new("settings".to_string(), "Settings".to_string())
-                                    .with_icon(IconSource::Named("palette".to_string())));
-                                items
-                            })
+                                    .with_badge("3".to_string()),
+                                SidebarItem::new("separator1".to_string(), "".to_string())
+                                    .separator(true),
+                                SidebarItem::new("projects".to_string(), "Projects".to_string())
+                                    .with_icon(IconSource::Named("globe".to_string())),
+                                SidebarItem::new("team".to_string(), "Team".to_string())
+                                    .with_icon(IconSource::Named("search".to_string())),
+                                SidebarItem::new("settings".to_string(), "Settings".to_string())
+                                    .with_icon(IconSource::Named("palette".to_string())),
+                            ])
                             .selected_id(self.selected_sidebar_item.clone().unwrap_or("dashboard".to_string()))
                             .show_toggle_button(true)
                             .on_select(move |id, _window, cx| {

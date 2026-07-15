@@ -7,6 +7,24 @@ use syn::{Data, DeriveInput, LitStr, Token, parse::ParseStream};
 pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as DeriveInput);
 
+    if !input.generics.params.is_empty() {
+        return syn::Error::new_spanned(
+            &input.generics,
+            "Action cannot be derived for generic types because actions are registered globally",
+        )
+        .into_compile_error()
+        .into();
+    }
+    if matches!(input.data, Data::Union(_)) {
+        return syn::Error::new_spanned(&input.ident, "Action cannot be derived for unions")
+            .into_compile_error()
+            .into();
+    }
+    let kael = match crate::kael_crate_path() {
+        Ok(path) => path,
+        Err(error) => return error.into_compile_error().into(),
+    };
+
     let struct_name = &input.ident;
     let mut name_argument = None;
     let mut deprecated_aliases = Vec::new();
@@ -25,7 +43,7 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
     */
     for attr in &input.attrs {
         if attr.path().is_ident("action") {
-            attr.parse_nested_meta(|meta| {
+            if let Err(error) = attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("name") {
                     if name_argument.is_some() {
                         return Err(meta.error("'name' argument specified multiple times"));
@@ -80,8 +98,9 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
                     )));
                 }
                 Ok(())
-            })
-            .unwrap_or_else(|e| panic!("in #[action] attribute: {}", e));
+            }) {
+                return error.into_compile_error().into();
+            }
         } else if attr.path().is_ident("doc") {
             use syn::{Expr::Lit, ExprLit, Lit::Str, Meta, MetaNameValue};
             if let Meta::NameValue(MetaNameValue {
@@ -104,10 +123,19 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
     let name = name_argument.unwrap_or_else(|| struct_name.to_string());
 
     if name.contains("::") {
-        panic!(
-            "in #[action] attribute: `name = \"{name}\"` must not contain `::`, \
-            also specify `namespace` instead"
-        );
+        return syn::Error::new_spanned(
+            struct_name,
+            format!(
+                "in #[action] attribute: `name = \"{name}\"` must not contain `::`; specify `namespace` instead"
+            ),
+        )
+        .into_compile_error()
+        .into();
+    }
+    if name.is_empty() {
+        return syn::Error::new_spanned(struct_name, "action name must not be empty")
+            .into_compile_error()
+            .into();
     }
 
     let full_name = if let Some(namespace) = namespace {
@@ -120,17 +148,17 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
 
     let build_fn_body = if no_json {
         let error_msg = format!("{} cannot be built from JSON", full_name);
-        quote! { Err(kael::private::anyhow::anyhow!(#error_msg)) }
+        quote! { Err(#kael::private::anyhow::anyhow!(#error_msg)) }
     } else if is_unit_struct {
         quote! { Ok(Box::new(Self)) }
     } else {
-        quote! { Ok(Box::new(kael::private::serde_json::from_value::<Self>(_value)?)) }
+        quote! { Ok(Box::new(#kael::private::serde_json::from_value::<Self>(_value)?)) }
     };
 
     let json_schema_fn_body = if no_json || is_unit_struct {
         quote! { None }
     } else {
-        quote! { Some(<Self as kael::private::schemars::JsonSchema>::json_schema(_generator)) }
+        quote! { Some(<Self as #kael::private::schemars::JsonSchema>::json_schema(_generator)) }
     };
 
     let deprecated_aliases_fn_body = if deprecated_aliases.is_empty() {
@@ -156,13 +184,13 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
     let registration = if no_register {
         quote! {}
     } else {
-        generate_register_action(struct_name)
+        generate_register_action(struct_name, &kael)
     };
 
     TokenStream::from(quote! {
         #registration
 
-        impl kael::Action for #struct_name {
+        impl #kael::Action for #struct_name {
             fn name(&self) -> &'static str {
                 #full_name
             }
@@ -174,24 +202,24 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
                 #full_name
             }
 
-            fn partial_eq(&self, action: &dyn kael::Action) -> bool {
+            fn partial_eq(&self, action: &dyn #kael::Action) -> bool {
                 action
                     .as_any()
                     .downcast_ref::<Self>()
                     .map_or(false, |a| self == a)
             }
 
-            fn boxed_clone(&self) -> Box<dyn kael::Action> {
+            fn boxed_clone(&self) -> Box<dyn #kael::Action> {
                 Box::new(self.clone())
             }
 
-            fn build(_value: kael::private::serde_json::Value) -> kael::Result<Box<dyn kael::Action>> {
+            fn build(_value: #kael::private::serde_json::Value) -> #kael::Result<Box<dyn #kael::Action>> {
                 #build_fn_body
             }
 
             fn action_json_schema(
-                _generator: &mut kael::private::schemars::SchemaGenerator,
-            ) -> Option<kael::private::schemars::Schema> {
+                _generator: &mut #kael::private::schemars::SchemaGenerator,
+            ) -> Option<#kael::private::schemars::Schema> {
                 #json_schema_fn_body
             }
 

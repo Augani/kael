@@ -1,8 +1,11 @@
 //! Global diagnostics configuration and reporting facade.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{
+    Arc, OnceLock,
+    atomic::{AtomicU64, Ordering},
+};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 
 use crate::{
     Breadcrumb, BreadcrumbBuffer, CrashReport, CrashReporter, Level, MetricsRegistry, Span, Tracer,
@@ -73,11 +76,19 @@ pub struct Diagnostics {
     crash_reporter: CrashReporter,
     metrics: MetricsRegistry,
     tracer: Tracer,
+    sample_rate: f64,
+    sample_counter: AtomicU64,
 }
 
 impl Diagnostics {
     /// Creates diagnostics from a configuration.
     pub fn new(config: DiagnosticsConfig) -> Result<Self> {
+        if !config.sample_rate.is_finite() || !(0.0..=1.0).contains(&config.sample_rate) {
+            return Err(anyhow!(
+                "trace sample rate must be finite and between 0.0 and 1.0"
+            ));
+        }
+        let sample_rate = config.sample_rate;
         let breadcrumb_buffer = BreadcrumbBuffer::new(config.max_breadcrumbs);
         let mut crash_reporter = CrashReporter::new(config.app_id, breadcrumb_buffer.clone())?;
         crash_reporter.set_release(config.release);
@@ -100,7 +111,7 @@ impl Diagnostics {
         }
 
         let tracer = Tracer::default();
-        if config.sample_rate > 0.0 {
+        if sample_rate > 0.0 {
             tracer.enable();
             tracer.install_global();
         }
@@ -110,6 +121,8 @@ impl Diagnostics {
             crash_reporter,
             metrics: MetricsRegistry::default(),
             tracer,
+            sample_rate,
+            sample_counter: AtomicU64::new(0),
         })
     }
 
@@ -126,7 +139,8 @@ impl Diagnostics {
 
     /// Starts a transaction tied to the configured tracer.
     pub fn start_transaction(&self, name: &str) -> Transaction {
-        Transaction::new(name, Some(self.tracer.clone()))
+        let tracer = self.should_sample().then(|| self.tracer.clone());
+        Transaction::new(name, tracer)
     }
 
     /// Records a gauge value.
@@ -157,6 +171,25 @@ impl Diagnostics {
     /// Returns the crash reporter.
     pub fn crash_reporter(&self) -> &CrashReporter {
         &self.crash_reporter
+    }
+
+    fn should_sample(&self) -> bool {
+        if self.sample_rate <= 0.0 {
+            return false;
+        }
+        if self.sample_rate >= 1.0 {
+            return true;
+        }
+
+        // SplitMix64 gives a stable, allocation-free distribution and avoids
+        // adding a random-number dependency to a hot diagnostics path.
+        let mut value = self.sample_counter.fetch_add(1, Ordering::Relaxed);
+        value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^= value >> 31;
+        let unit = (value as f64) / (u64::MAX as f64);
+        unit < self.sample_rate
     }
 }
 

@@ -12,6 +12,18 @@ use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
+#[derive(Clone)]
+struct MaxLengthMask(usize);
+
+impl kael::InputMask for MaxLengthMask {
+    fn correct(&self, _was: &str, _cursor: usize, now: &mut String, new_cursor: &mut usize) {
+        if let Some((cutoff, _)) = now.char_indices().nth(self.0) {
+            now.truncate(cutoff);
+            *new_cursor = (*new_cursor).min(cutoff);
+        }
+    }
+}
+
 #[derive(IntoElement)]
 pub struct Textarea {
     id: SharedString,
@@ -293,7 +305,8 @@ impl Textarea {
             InputSize::Md => 6.0,
             InputSize::Lg => 8.0,
         };
-        px(self.rows as f32 * line_height + padding_y * 2.0)
+        let rows = self.min_rows.map_or(self.rows, |min| self.rows.max(min));
+        px(rows as f32 * line_height + padding_y * 2.0)
     }
 
     fn padding_y(&self) -> Pixels {
@@ -394,12 +407,105 @@ impl RenderOnce for Textarea {
             theme.tokens.primary
         });
 
+        let max_visible_rows = self.max_rows.unwrap_or(self.rows).max(1);
+        let mut editor = text_input(
+            (ElementId::Name(self.id.clone()), "editor"),
+            self.value.clone(),
+        )
+        .placeholder(self.placeholder.clone())
+        .multi_line()
+        .max_lines(max_visible_rows);
+        if let Some(max_length) = self.max_length {
+            editor = editor.mask(MaxLengthMask(max_length));
+        }
+        if let Some(on_change) = self.on_change.clone() {
+            editor = editor.on_change(move |value, window, cx| {
+                on_change(value, window, cx);
+            });
+        }
+        if let Some(on_focus) = self.on_focus.clone() {
+            editor = editor.on_focus(move |value, window, cx| {
+                on_focus(value, window, cx);
+            });
+        }
+        if let Some(on_blur) = self.on_blur.clone() {
+            editor = editor.on_blur(move |value, window, cx| {
+                on_blur(value, window, cx);
+            });
+        }
+
+        let editor = editor.render_with({
+            let foreground = text_color;
+            let muted_foreground = theme.tokens.muted_foreground;
+            let primary = if self.error {
+                theme.tokens.destructive
+            } else {
+                theme.tokens.primary
+            };
+            let radius = theme.tokens.radius_md;
+            move |render_state, window, cx| {
+                render_state.paint_selection(primary.opacity(0.22), window);
+                window.with_text_style(
+                    Some(TextStyleRefinement {
+                        color: Some(if render_state.showing_placeholder {
+                            muted_foreground
+                        } else {
+                            foreground
+                        }),
+                        ..Default::default()
+                    }),
+                    |window| render_state.paint_text(window, cx),
+                );
+                render_state.paint_cursor(primary, window);
+                if render_state.focused {
+                    window.paint_quad(
+                        outline(
+                            render_state.outer_bounds,
+                            primary.opacity(0.5),
+                            BorderStyle::default(),
+                        )
+                        .corner_radii(radius),
+                    );
+                }
+            }
+        });
+
+        let content = if effectively_disabled {
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_size(font_size)
+                .font_family(theme.tokens.font_family.clone())
+                .text_color(text_color)
+                .line_height(relative(1.4))
+                .child(if has_value {
+                    self.value.to_string()
+                } else {
+                    self.placeholder.to_string()
+                })
+                .when(!has_value, |this| {
+                    this.text_color(theme.tokens.muted_foreground)
+                })
+                .into_any_element()
+        } else {
+            div()
+                .flex_1()
+                .min_w_0()
+                .size_full()
+                .text_size(font_size)
+                .font_family(theme.tokens.font_family.clone())
+                .text_color(text_color)
+                .line_height(relative(1.4))
+                .child(editor)
+                .into_any_element()
+        };
+
         let mut control = div()
             .id(textarea_id)
             .relative()
             .w_full()
-            .h(height)
-            .when(self.auto_grow, |this| this.min_h(height))
+            .min_h(height)
+            .when(!self.auto_grow, |this| this.h(height))
             .px(px(8.0))
             .py(padding_y)
             .bg(bg_color)
@@ -429,7 +535,6 @@ impl RenderOnce for Textarea {
             .when(self.error, |this| {
                 this.shadow(smallvec::smallvec![focus_ring])
             })
-            .when(!self.resizable, |this| this)
             .map(|this| {
                 let mut div = this;
                 div.style().refine(&user_style);
@@ -452,23 +557,7 @@ impl RenderOnce for Textarea {
                             })
                             .mt(px(2.0)),
                     )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_size(font_size)
-                            .font_family(theme.tokens.font_family.clone())
-                            .text_color(text_color)
-                            .line_height(relative(1.4))
-                            .child(if has_value {
-                                self.value.to_string()
-                            } else {
-                                self.placeholder.to_string()
-                            })
-                            .when(!has_value, |this| {
-                                this.text_color(theme.tokens.muted_foreground)
-                            }),
-                    ),
+                    .child(content),
             )
             .when(is_busy, |this| {
                 this.child(

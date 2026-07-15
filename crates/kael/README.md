@@ -19,7 +19,7 @@ kael = "0.2"
 
 ```rust,no_run
 use kael::prelude::*;
-use kael::{button, div, Application, Window, WindowOptions};
+use kael::{button, div, Application, Window, WindowOptionsBuilder};
 
 struct Counter {
     count: i32,
@@ -53,6 +53,23 @@ fn main() {
     });
 }
 ```
+
+For applications that need to present startup failures instead of terminating, use the fallible
+constructor:
+
+```rust,no_run
+use kael::Application;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    Application::try_new()?.run(|_cx| {
+        // Initialize application state and windows.
+    });
+    Ok(())
+}
+```
+
+`Application::try_headless()` and `try_background_executor()` provide the same error-reporting
+behavior for services, tests, and command-line processes.
 
 ## What's Included
 

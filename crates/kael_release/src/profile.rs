@@ -2,6 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
+const MAX_PROFILE_NAME_BYTES: usize = 128;
+const MAX_FEATURES: usize = 256;
+const MAX_FEATURE_BYTES: usize = 128;
+
 /// Supported build targets for release packaging.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BuildTarget {
@@ -79,8 +83,14 @@ impl ReleaseProfile {
 
     /// Validates the release profile configuration.
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.name.is_empty() {
-            anyhow::bail!("profile name must not be empty");
+        if self.name.is_empty()
+            || self.name.len() > MAX_PROFILE_NAME_BYTES
+            || !self
+                .name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            anyhow::bail!("profile name is invalid");
         }
 
         let valid_opt_levels = ["0", "1", "2", "3", "s", "z"];
@@ -90,6 +100,21 @@ impl ReleaseProfile {
                 self.opt_level,
                 valid_opt_levels
             );
+        }
+        if self.features.len() > MAX_FEATURES
+            || self.features.iter().any(|feature| {
+                feature.is_empty()
+                    || feature.len() > MAX_FEATURE_BYTES
+                    || !feature
+                        .as_bytes()
+                        .first()
+                        .is_some_and(u8::is_ascii_alphanumeric)
+                    || !feature
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            })
+        {
+            anyhow::bail!("Cargo feature list contains invalid or excessive entries");
         }
 
         Ok(())
@@ -213,6 +238,14 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(profile.features, vec!["gpu", "audio", "video"]);
+    }
+
+    #[test]
+    fn rejects_argument_like_features() {
+        let result = ReleaseProfile::builder("release", BuildTarget::LinuxX64)
+            .feature("--manifest-path")
+            .build();
+        assert!(result.is_err());
     }
 
     #[test]

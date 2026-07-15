@@ -2,6 +2,7 @@
 
 use crate::{astryx, components::icon::Icon, theme::Theme};
 use kael::{prelude::FluentBuilder as _, *};
+use std::{cell::RefCell, panic::Location, rc::Rc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ItemAlign {
@@ -45,6 +46,7 @@ impl ItemDensity {
 
 #[derive(IntoElement)]
 pub struct Item {
+    id: ElementId,
     title: SharedString,
     description: Option<SharedString>,
     icon: Option<SharedString>,
@@ -63,8 +65,19 @@ pub struct Item {
 }
 
 impl Item {
+    #[track_caller]
     pub fn new(title: impl Into<SharedString>) -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "item:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             title: title.into(),
             description: None,
             icon: None,
@@ -162,6 +175,8 @@ impl Item {
         self
     }
 
+    /// Preserve web-style relationship metadata for API compatibility.
+    /// Native URL launches do not send a referrer or expose an opener window.
     pub fn rel(mut self, rel: impl Into<SharedString>) -> Self {
         self.rel = Some(rel.into());
         self
@@ -186,85 +201,134 @@ impl Styled for Item {
 
 impl RenderOnce for Item {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = Theme::of(cx);
+        let theme = Theme::of(cx).clone();
         let user_style = self.style;
         let disabled = self.disabled;
         let interactive = self.on_click.is_some() || self.href.is_some();
         let dark = theme.tokens.background.l < 0.5;
-        let _ = (self.target, self.rel);
+        let announces_external_target = self
+            .target
+            .as_ref()
+            .is_some_and(|target| target.as_ref() == "_blank");
+        let href = self.href;
+        let on_click = self.on_click;
+        let title = self.title;
+        let accessible_label: SharedString = if announces_external_target {
+            format!("{title}, opens externally").into()
+        } else {
+            title.clone()
+        };
+        let icon = self.icon;
+        let leading = Rc::new(RefCell::new(self.leading));
+        let trailing = Rc::new(RefCell::new(self.trailing));
+        let description = self.description;
+        let align = self.align;
+        let density = self.density;
+        let selected = self.selected;
+        let highlighted = self.highlighted;
 
-        div()
-            .flex()
-            .when(self.align == ItemAlign::Center, |this| this.items_center())
-            .when(self.align == ItemAlign::Start, |this| this.items_start())
-            .gap(px(8.0))
-            .w_full()
-            .min_h(self.density.min_height())
-            .px(self.density.padding_x())
-            .py(self.density.padding_y())
-            .rounded(theme.tokens.radius_md)
-            .bg(if self.selected {
-                theme.tokens.accent
-            } else if self.highlighted {
-                astryx::overlay_hover(dark)
-            } else {
-                transparent_black()
-            })
-            .when(disabled, |this| this.opacity(0.5))
-            .when(!disabled && interactive, |this| {
-                this.cursor_pointer()
-                    .hover(move |style| style.bg(astryx::overlay_hover(dark)))
-            })
-            .when_some(self.on_click.filter(|_| !disabled), |this, handler| {
-                this.on_mouse_down(MouseButton::Left, move |_event, window, cx| {
-                    handler(window, cx);
+        let render_body = move |focused: bool| {
+            let leading = leading.borrow_mut().take();
+            let trailing = trailing.borrow_mut().take();
+
+            div()
+                .flex()
+                .when(align == ItemAlign::Center, |this| this.items_center())
+                .when(align == ItemAlign::Start, |this| this.items_start())
+                .gap(px(8.0))
+                .w_full()
+                .min_h(density.min_height())
+                .px(density.padding_x())
+                .py(density.padding_y())
+                .rounded(theme.tokens.radius_md)
+                .bg(if selected {
+                    theme.tokens.accent
+                } else if highlighted {
+                    astryx::overlay_hover(dark)
+                } else {
+                    transparent_black()
                 })
-            })
-            .when_some(self.icon, |this, icon| {
-                this.child(
-                    div()
-                        .size(px(20.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_color(theme.tokens.muted_foreground)
-                        .child(Icon::new(icon).size(px(16.0))),
-                )
-            })
-            .when_some(self.leading, |this, leading| {
-                this.child(div().flex().flex_shrink_0().child(leading))
-            })
-            .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .gap(px(1.0))
-                    .overflow_hidden()
-                    .child(
+                .when(disabled, |this| this.opacity(0.5))
+                .when(focused && !disabled, |this| {
+                    this.shadow(smallvec::smallvec![astryx::focus_ring_outer(
+                        theme.tokens.ring
+                    )])
+                })
+                .when(!disabled && interactive, |this| {
+                    this.cursor_pointer()
+                        .hover(move |style| style.bg(astryx::overlay_hover(dark)))
+                })
+                .when_some(icon.clone(), |this, icon| {
+                    this.child(
                         div()
-                            .text_size(px(14.0))
-                            .line_height(px(20.0))
-                            .text_color(theme.tokens.foreground)
-                            .child(self.title),
+                            .size(px(20.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(theme.tokens.muted_foreground)
+                            .child(Icon::new(icon).size(px(16.0))),
                     )
-                    .when_some(self.description, |this, description| {
-                        this.child(
+                })
+                .when_some(leading, |this, leading| {
+                    this.child(div().flex().flex_shrink_0().child(leading))
+                })
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .gap(px(1.0))
+                        .overflow_hidden()
+                        .child(
                             div()
-                                .text_size(px(12.0))
-                                .line_height(px(16.0))
-                                .text_color(theme.tokens.muted_foreground)
-                                .child(description),
+                                .text_size(px(14.0))
+                                .line_height(px(20.0))
+                                .text_color(theme.tokens.foreground)
+                                .child(title.clone()),
                         )
-                    }),
-            )
-            .when_some(self.trailing, |this, trailing| {
-                this.child(div().ml_auto().flex().child(trailing))
-            })
-            .map(|this| {
-                let mut div = this;
-                div.style().refine(&user_style);
-                div
-            })
+                        .when_some(description.clone(), |this, description| {
+                            this.child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .line_height(px(16.0))
+                                    .text_color(theme.tokens.muted_foreground)
+                                    .child(description),
+                            )
+                        }),
+                )
+                .when_some(trailing, |this, trailing| {
+                    this.child(div().ml_auto().flex().child(trailing))
+                })
+                .map(|this| {
+                    let mut div = this;
+                    div.style().refine(&user_style);
+                    div.into_any_element()
+                })
+        };
+
+        if interactive {
+            button(self.id)
+                .role(if href.is_some() {
+                    AccessibilityRole::Link
+                } else {
+                    AccessibilityRole::Button
+                })
+                .label(accessible_label)
+                .when(disabled, |this| this.disabled())
+                .when(!disabled, |this| {
+                    this.on_click(move |_, window, cx| {
+                        if let Some(href) = href.as_ref() {
+                            let _ = cx.open_url(href.as_ref());
+                        }
+                        if let Some(handler) = on_click.as_ref() {
+                            handler(window, cx);
+                        }
+                    })
+                })
+                .render_with(move |state, _, _| render_body(state.focused))
+                .into_any_element()
+        } else {
+            render_body(false)
+        }
     }
 }

@@ -62,7 +62,7 @@ pub enum ClipEffect {
 impl ClipEffect {
     /// The reference compositor op that applies this effect to a single input image.
     pub fn to_pass_op(self) -> PassOp<'static> {
-        match self {
+        match self.sanitized() {
             ClipEffect::GaussianBlur { sigma } => gaussian_blur(sigma),
             ClipEffect::Exposure { stops } => exposure(stops),
             ClipEffect::Gamma { power } => gamma(power),
@@ -79,7 +79,7 @@ impl ClipEffect {
 
     /// A stable hash of this effect's identity and parameters, for render-graph cache keys.
     pub fn param_hash(self) -> u64 {
-        let (tag, params): (u8, [f32; 3]) = match self {
+        let (tag, params): (u8, [f32; 3]) = match self.sanitized() {
             ClipEffect::GaussianBlur { sigma } => (1, [sigma, 0.0, 0.0]),
             ClipEffect::Exposure { stops } => (2, [stops, 0.0, 0.0]),
             ClipEffect::Gamma { power } => (3, [power, 0.0, 0.0]),
@@ -97,6 +97,48 @@ impl ClipEffect {
             hash = fnv_mix(hash, value.to_bits() as u64);
         }
         hash
+    }
+
+    fn sanitized(self) -> Self {
+        match self {
+            Self::GaussianBlur { sigma } => Self::GaussianBlur {
+                sigma: finite_or(sigma, 0.0),
+            },
+            Self::Exposure { stops } => Self::Exposure {
+                stops: finite_or(stops, 0.0),
+            },
+            Self::Gamma { power } => Self::Gamma {
+                power: finite_or(power, 1.0),
+            },
+            Self::Saturation { amount } => Self::Saturation {
+                amount: finite_or(amount, 1.0),
+            },
+            Self::WhiteBalance { temperature, tint } => Self::WhiteBalance {
+                temperature: finite_or(temperature, 0.0),
+                tint: finite_or(tint, 0.0),
+            },
+            Self::Vignette {
+                amount,
+                radius,
+                softness,
+            } => Self::Vignette {
+                amount: finite_or(amount, 0.0),
+                radius: finite_or(radius, 0.5),
+                softness: finite_or(softness, 0.5),
+            },
+            Self::Solarize { threshold } => Self::Solarize {
+                threshold: finite_or(threshold, 2.0),
+            },
+        }
+    }
+}
+
+fn finite_or(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() {
+        // Canonicalize signed zero so equivalent renders share one cache key.
+        if value == 0.0 { 0.0 } else { value }
+    } else {
+        fallback
     }
 }
 
@@ -483,5 +525,46 @@ mod tests {
         let json = serde_json::to_string(&effect).unwrap();
         let restored: AnimatedEffect = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, effect);
+    }
+
+    #[test]
+    fn non_finite_effect_controls_fail_soft_and_hash_the_sanitized_value() {
+        let source = Image::filled(1, 1, [0.25, 0.5, 0.75, 1.0]);
+        let invalid = [
+            ClipEffect::Exposure { stops: f32::NAN },
+            ClipEffect::Gamma {
+                power: f32::INFINITY,
+            },
+            ClipEffect::Saturation {
+                amount: f32::NEG_INFINITY,
+            },
+            ClipEffect::WhiteBalance {
+                temperature: f32::NAN,
+                tint: f32::NAN,
+            },
+            ClipEffect::Vignette {
+                amount: f32::NAN,
+                radius: f32::NAN,
+                softness: f32::NAN,
+            },
+            ClipEffect::Solarize {
+                threshold: f32::NAN,
+            },
+        ];
+        for effect in invalid {
+            let output = EffectStack {
+                effects: vec![effect],
+            }
+            .apply(&source);
+            assert!(output.pixels[0].iter().all(|channel| channel.is_finite()));
+        }
+        assert_eq!(
+            ClipEffect::Exposure { stops: f32::NAN }.param_hash(),
+            ClipEffect::Exposure { stops: 0.0 }.param_hash()
+        );
+        assert_eq!(
+            ClipEffect::Exposure { stops: -0.0 }.param_hash(),
+            ClipEffect::Exposure { stops: 0.0 }.param_hash()
+        );
     }
 }

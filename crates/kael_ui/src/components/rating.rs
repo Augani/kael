@@ -52,6 +52,9 @@ impl RatingState {
     }
 
     pub fn set_value(&mut self, value: f32, cx: &mut Context<Self>) {
+        if !value.is_finite() {
+            return;
+        }
         let max = self.max_rating as f32;
         let clamped = value.clamp(0.0, max);
         let stepped = if self.allows_half {
@@ -222,8 +225,27 @@ impl RenderOnce for Rating {
         let inactive_color = self.inactive_color.unwrap_or(muted_foreground.opacity(0.4));
 
         let user_style = self.style.clone();
+        let rating_id: ElementId = ("rating", self.state.entity_id()).into();
+        let focus_on_mouse = focus_handle.clone();
+        let star_bounds = Rc::new(std::cell::RefCell::new(Vec::<Bounds<Pixels>>::new()));
 
         div()
+            .on_children_prepainted({
+                let star_bounds = star_bounds.clone();
+                move |bounds, _, _| *star_bounds.borrow_mut() = bounds
+            })
+            .id(rating_id)
+            .accessibility(
+                AccessibilityAttributes::slider(
+                    "Rating",
+                    state.value as f64,
+                    0.0,
+                    max_rating as f64,
+                    Some(if allows_half { 0.5 } else { 1.0 }),
+                )
+                .disabled(self.read_only)
+                .focused(is_focused),
+            )
             .flex()
             .items_center()
             .gap(gap)
@@ -241,35 +263,48 @@ impl RenderOnce for Rating {
                     &state_for_key,
                     move |state, e: &KeyDownEvent, window, cx| {
                         let key = e.keystroke.key.as_str();
-                        match key {
+                        let handled = match key {
                             "left" | "down" => {
                                 state.decrement(cx);
                                 if let Some(ref handler) = on_change_for_key {
                                     handler(state.value, window, cx);
                                 }
+                                true
                             }
                             "right" | "up" => {
                                 state.increment(cx);
                                 if let Some(ref handler) = on_change_for_key {
                                     handler(state.value, window, cx);
                                 }
+                                true
                             }
                             "home" => {
                                 state.set_value(0.0, cx);
                                 if let Some(ref handler) = on_change_for_key {
                                     handler(state.value, window, cx);
                                 }
+                                true
                             }
                             "end" => {
                                 state.set_value(state.max_rating as f32, cx);
                                 if let Some(ref handler) = on_change_for_key {
                                     handler(state.value, window, cx);
                                 }
+                                true
                             }
-                            _ => {}
+                            _ => false,
+                        };
+                        if handled {
+                            cx.stop_propagation();
+                            window.prevent_default();
                         }
                     },
                 ))
+            })
+            .when(!self.read_only, |this| {
+                this.on_mouse_down(MouseButton::Left, move |_, window, _| {
+                    window.focus(&focus_on_mouse);
+                })
             })
             .when(!self.read_only, |this| {
                 let state_for_leave = self.state.clone();
@@ -301,6 +336,8 @@ impl RenderOnce for Rating {
                 let state_for_star = self.state.clone();
                 let on_change_for_star = self.on_change.clone();
                 let state_for_hover = self.state.clone();
+                let bounds_for_click = star_bounds.clone();
+                let bounds_for_hover = star_bounds.clone();
                 let read_only = self.read_only;
 
                 div()
@@ -318,7 +355,7 @@ impl RenderOnce for Rating {
                                     let new_value = calculate_click_value(
                                         e.position,
                                         position,
-                                        icon_size,
+                                        bounds_for_click.borrow().get(index as usize).copied(),
                                         allows_half,
                                     );
                                     state.set_value(new_value, cx);
@@ -335,7 +372,7 @@ impl RenderOnce for Rating {
                                 let hover_val = calculate_click_value(
                                     e.position,
                                     position,
-                                    icon_size,
+                                    bounds_for_hover.borrow().get(index as usize).copied(),
                                     allows_half,
                                 );
                                 state.set_hover_value(Some(hover_val), cx);
@@ -374,14 +411,52 @@ fn get_star_fill_state(value: f32, position: f32, allows_half: bool) -> StarFill
 }
 
 fn calculate_click_value(
-    _position: Point<Pixels>,
+    position: Point<Pixels>,
     star_position: f32,
-    _icon_size: Pixels,
+    star_bounds: Option<Bounds<Pixels>>,
     allows_half: bool,
 ) -> f32 {
-    if allows_half {
+    if allows_half
+        && star_bounds.is_some_and(|bounds| position.x < bounds.origin.x + bounds.size.width / 2.0)
+    {
         star_position - 0.5
     } else {
         star_position
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{calculate_click_value, RatingState};
+    use kael::{point, px, size, AppContext, Bounds, TestAppContext};
+
+    #[test]
+    fn half_ratings_use_the_clicked_side_of_each_star() {
+        let bounds = Bounds::new(point(px(100.0), px(20.0)), size(px(24.0), px(24.0)));
+        assert_eq!(
+            calculate_click_value(point(px(105.0), px(25.0)), 3.0, Some(bounds), true),
+            2.5
+        );
+        assert_eq!(
+            calculate_click_value(point(px(119.0), px(25.0)), 3.0, Some(bounds), true),
+            3.0
+        );
+        assert_eq!(
+            calculate_click_value(point(px(105.0), px(25.0)), 3.0, Some(bounds), false),
+            3.0
+        );
+    }
+
+    #[kael::test]
+    fn rating_ignores_non_finite_values(cx: &mut TestAppContext) {
+        let state = cx.new(RatingState::new);
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.set_value(3.0, cx);
+                state.set_value(f32::NAN, cx);
+                state.set_value(f32::INFINITY, cx);
+                assert_eq!(state.value(), 3.0);
+            });
+        });
     }
 }

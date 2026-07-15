@@ -3,7 +3,19 @@
 /// Provides element tree inspection, layout overlay visualization,
 /// frame timeline profiling, job queue monitoring, structured logging,
 /// and privacy-aware telemetry collection.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+use anyhow::Result;
+
+const MAX_INSPECTED_ELEMENTS: usize = 10_000;
+const MAX_INSPECTED_DEPTH: usize = 256;
+const MAX_INSPECTED_STYLES: usize = 256;
+const MAX_DEV_TEXT_BYTES: usize = 4_096;
+const MAX_OVERLAYS: usize = 10_000;
+const MAX_FRAME_TIMELINE_CAPACITY: usize = 100_000;
+const MAX_JOB_SNAPSHOTS: usize = 10_000;
+const MAX_LOG_ENTRIES: usize = 10_000;
+const MAX_TELEMETRY_EVENTS: usize = 10_000;
 
 /// A snapshot of an element in the UI tree for developer inspection.
 #[derive(Debug, Clone)]
@@ -34,7 +46,14 @@ impl ElementInspector {
 
     /// Sets the root of the inspected element tree.
     pub fn build_tree(&mut self, root: InspectedElement) {
+        let _ = self.build_tree_checked(root);
+    }
+
+    /// Sets the root after validating tree depth, size, geometry, and text.
+    pub fn build_tree_checked(&mut self, root: InspectedElement) -> Result<()> {
+        validate_inspected_tree(&root)?;
         self.root = Some(root);
+        Ok(())
     }
 
     /// Returns a reference to the root element, if any.
@@ -65,6 +84,55 @@ impl ElementInspector {
     pub fn count(&self) -> usize {
         self.root.as_ref().map_or(0, tree_count)
     }
+}
+
+fn validate_inspected_tree(root: &InspectedElement) -> Result<()> {
+    let mut stack = vec![(root, 1_usize)];
+    let mut count = 0_usize;
+    let mut ids = HashSet::new();
+    while let Some((element, depth)) = stack.pop() {
+        count += 1;
+        anyhow::ensure!(
+            count <= MAX_INSPECTED_ELEMENTS,
+            "inspected tree cannot exceed {MAX_INSPECTED_ELEMENTS} elements"
+        );
+        anyhow::ensure!(
+            depth <= MAX_INSPECTED_DEPTH,
+            "inspected tree cannot exceed depth {MAX_INSPECTED_DEPTH}"
+        );
+        validate_dev_text(&element.id, "element id")?;
+        anyhow::ensure!(
+            ids.insert(&element.id),
+            "inspected element ids must be unique"
+        );
+        validate_dev_text(&element.element_type, "element type")?;
+        anyhow::ensure!(
+            element.styles.len() <= MAX_INSPECTED_STYLES,
+            "inspected element cannot exceed {MAX_INSPECTED_STYLES} styles"
+        );
+        for (name, value) in &element.styles {
+            validate_dev_text(name, "style name")?;
+            validate_dev_text(value, "style value")?;
+        }
+        if let Some(bounds) = element.bounds {
+            validate_geometry(bounds, "element bounds")?;
+        }
+        anyhow::ensure!(
+            count
+                .checked_add(stack.len())
+                .and_then(|pending| pending.checked_add(element.children.len()))
+                .is_some_and(|pending| pending <= MAX_INSPECTED_ELEMENTS),
+            "inspected tree cannot exceed {MAX_INSPECTED_ELEMENTS} elements"
+        );
+        stack.extend(
+            element
+                .children
+                .iter()
+                .rev()
+                .map(|child| (child, depth + 1)),
+        );
+    }
+    Ok(())
 }
 
 fn find_by_id_recursive<'a>(
@@ -139,7 +207,24 @@ impl OverlayManager {
 
     /// Adds an overlay to the manager.
     pub fn add(&mut self, overlay: LayoutOverlay) {
+        let _ = self.add_checked(overlay);
+    }
+
+    /// Adds a validated overlay while enforcing bounded retention.
+    pub fn add_checked(&mut self, overlay: LayoutOverlay) -> Result<()> {
+        anyhow::ensure!(
+            self.overlays.len() < MAX_OVERLAYS,
+            "overlay manager cannot exceed {MAX_OVERLAYS} overlays"
+        );
+        validate_dev_text(&overlay.element_id, "overlay element id")?;
+        validate_geometry(overlay.bounds, "overlay bounds")?;
+        validate_insets(overlay.margin, "overlay margin")?;
+        validate_insets(overlay.padding, "overlay padding")?;
+        if let Some(label) = &overlay.label {
+            validate_dev_text(label, "overlay label")?;
+        }
         self.overlays.push(overlay);
+        Ok(())
     }
 
     /// Removes all overlays matching the given element id.
@@ -207,13 +292,23 @@ impl FrameTimeline {
 
     /// Creates a new frame timeline with the given ring buffer capacity.
     pub fn with_capacity(capacity: usize) -> Self {
-        let capacity = capacity.max(1);
+        let capacity = capacity.clamp(1, MAX_FRAME_TIMELINE_CAPACITY);
         Self {
             buffer: Vec::with_capacity(capacity),
             head: 0,
             len: 0,
             capacity,
         }
+    }
+
+    /// Creates a timeline after validating its requested retention capacity.
+    pub fn with_capacity_checked(capacity: usize) -> Result<Self> {
+        anyhow::ensure!(capacity > 0, "frame timeline capacity must be nonzero");
+        anyhow::ensure!(
+            capacity <= MAX_FRAME_TIMELINE_CAPACITY,
+            "frame timeline capacity cannot exceed {MAX_FRAME_TIMELINE_CAPACITY}"
+        );
+        Ok(Self::with_capacity(capacity))
     }
 
     /// Records a new frame in the timeline.
@@ -254,9 +349,9 @@ impl FrameTimeline {
         if self.len == 0 {
             return None;
         }
-        let sum: u64 = self.buffer[..self.buffer.len().min(self.len)]
+        let sum: u128 = self.buffer[..self.buffer.len().min(self.len)]
             .iter()
-            .map(|f| f.duration_us)
+            .map(|f| u128::from(f.duration_us))
             .sum();
         Some(sum as f64 / self.len as f64)
     }
@@ -334,16 +429,45 @@ impl JobQueueViewer {
 
     /// Adds a job snapshot to the viewer.
     pub fn add(&mut self, snapshot: JobSnapshot) {
+        let _ = self.add_checked(snapshot);
+    }
+
+    /// Adds a validated snapshot while enforcing bounded retention.
+    pub fn add_checked(&mut self, snapshot: JobSnapshot) -> Result<()> {
+        validate_job_snapshot(&snapshot)?;
+        anyhow::ensure!(
+            self.snapshots.len() < MAX_JOB_SNAPSHOTS,
+            "job viewer cannot exceed {MAX_JOB_SNAPSHOTS} snapshots"
+        );
+        anyhow::ensure!(
+            !self
+                .snapshots
+                .iter()
+                .any(|existing| existing.id == snapshot.id),
+            "job snapshot id is already present"
+        );
         self.snapshots.push(snapshot);
+        Ok(())
     }
 
     /// Updates an existing job snapshot by id, or adds it if not found.
     pub fn update(&mut self, snapshot: JobSnapshot) {
+        let _ = self.update_checked(snapshot);
+    }
+
+    /// Updates or inserts a validated snapshot.
+    pub fn update_checked(&mut self, snapshot: JobSnapshot) -> Result<()> {
+        validate_job_snapshot(&snapshot)?;
         if let Some(existing) = self.snapshots.iter_mut().find(|s| s.id == snapshot.id) {
             *existing = snapshot;
         } else {
+            anyhow::ensure!(
+                self.snapshots.len() < MAX_JOB_SNAPSHOTS,
+                "job viewer cannot exceed {MAX_JOB_SNAPSHOTS} snapshots"
+            );
             self.snapshots.push(snapshot);
         }
+        Ok(())
     }
 
     /// Returns a slice of all job snapshots.
@@ -369,20 +493,44 @@ impl JobQueueViewer {
 
     /// Returns the average duration of completed jobs in microseconds, or `None` if none completed.
     pub fn average_duration_us(&self) -> Option<f64> {
-        let completed: Vec<&JobSnapshot> = self
-            .snapshots
-            .iter()
-            .filter(|s| s.started_at.is_some() && s.completed_at.is_some())
-            .collect();
-        if completed.is_empty() {
+        let mut count = 0_u64;
+        let total = self.snapshots.iter().fold(0_u128, |total, snapshot| {
+            let Some((started, completed)) = snapshot.started_at.zip(snapshot.completed_at) else {
+                return total;
+            };
+            count += 1;
+            total + u128::from(completed.saturating_sub(started))
+        });
+        if count == 0 {
             return None;
         }
-        let total: u64 = completed
-            .iter()
-            .map(|s| s.completed_at.unwrap() - s.started_at.unwrap())
-            .sum();
-        Some(total as f64 / completed.len() as f64)
+        Some(total as f64 / count as f64)
     }
+}
+
+fn validate_job_snapshot(snapshot: &JobSnapshot) -> Result<()> {
+    validate_dev_text(&snapshot.id, "job id")?;
+    validate_dev_text(&snapshot.name, "job name")?;
+    validate_dev_text(&snapshot.status, "job status")?;
+    if let Some(progress) = snapshot.progress {
+        anyhow::ensure!(
+            progress.is_finite() && (0.0..=1.0).contains(&progress),
+            "job progress must be finite and between zero and one"
+        );
+    }
+    if let Some(started) = snapshot.started_at {
+        anyhow::ensure!(
+            started >= snapshot.queued_at,
+            "job starts before it is queued"
+        );
+    }
+    if let Some(completed) = snapshot.completed_at {
+        let started = snapshot
+            .started_at
+            .ok_or_else(|| anyhow::anyhow!("completed job is missing its start timestamp"))?;
+        anyhow::ensure!(completed >= started, "job completes before it starts");
+    }
+    Ok(())
 }
 
 /// Severity level for log entries.
@@ -429,7 +577,18 @@ impl LogViewer {
 
     /// Appends a log entry.
     pub fn append(&mut self, entry: LogEntry) {
+        let _ = self.append_checked(entry);
+    }
+
+    /// Appends a validated log entry and evicts the oldest entry at capacity.
+    pub fn append_checked(&mut self, entry: LogEntry) -> Result<()> {
+        validate_dev_text(&entry.source, "log source")?;
+        validate_dev_text(&entry.message, "log message")?;
+        if self.entries.len() == MAX_LOG_ENTRIES {
+            self.entries.remove(0);
+        }
         self.entries.push(entry);
+        Ok(())
     }
 
     /// Returns entries at or above the given severity level.
@@ -529,14 +688,27 @@ impl TelemetryCollector {
     /// Sets the telemetry mode.
     pub fn set_mode(&mut self, mode: TelemetryMode) {
         self.mode = mode;
+        if mode == TelemetryMode::Disabled {
+            self.events.clear();
+        }
     }
 
     /// Records a telemetry event if the mode is not `Disabled`.
     pub fn record(&mut self, event: TelemetryEvent) {
+        let _ = self.record_checked(event);
+    }
+
+    /// Records a validated event while enforcing bounded retention.
+    pub fn record_checked(&mut self, event: TelemetryEvent) -> Result<bool> {
         if self.mode == TelemetryMode::Disabled {
-            return;
+            return Ok(false);
+        }
+        validate_telemetry_event(&event)?;
+        if self.events.len() == MAX_TELEMETRY_EVENTS {
+            self.events.remove(0);
         }
         self.events.push(event);
+        Ok(true)
     }
 
     /// Drains and returns all collected events, clearing the internal buffer.
@@ -594,6 +766,22 @@ impl TelemetryCollector {
     }
 }
 
+fn validate_telemetry_event(event: &TelemetryEvent) -> Result<()> {
+    match event {
+        TelemetryEvent::Performance { metric, value } => {
+            validate_dev_text(metric, "telemetry metric")?;
+            anyhow::ensure!(value.is_finite(), "telemetry value must be finite");
+        }
+        TelemetryEvent::Lifecycle { event } => {
+            validate_dev_text(event, "telemetry lifecycle event")?;
+        }
+        TelemetryEvent::FeatureUsage { feature, .. } => {
+            validate_dev_text(feature, "telemetry feature")?;
+        }
+    }
+    Ok(())
+}
+
 impl Default for TelemetryCollector {
     fn default() -> Self {
         Self::new(TelemetryMode::Disabled)
@@ -601,14 +789,46 @@ impl Default for TelemetryCollector {
 }
 
 fn strip_pii(input: &str) -> String {
-    let mut result = input.to_string();
-    if result.contains('@') && result.contains('.') {
-        result = "[email_redacted]".to_string();
-    } else if result.contains('/') && result.len() > 3 {
-        let last_segment = result.rsplit('/').next().unwrap_or(&result);
-        result = format!("[path]/{last_segment}");
+    if input.contains('@') || input.contains('/') || input.contains('\\') {
+        "[redacted]".to_string()
+    } else {
+        input.to_string()
     }
-    result
+}
+
+fn validate_dev_text(value: &str, field: &str) -> Result<()> {
+    anyhow::ensure!(!value.trim().is_empty(), "{field} cannot be empty");
+    anyhow::ensure!(
+        value.len() <= MAX_DEV_TEXT_BYTES,
+        "{field} cannot exceed {MAX_DEV_TEXT_BYTES} bytes"
+    );
+    anyhow::ensure!(
+        !value.chars().any(char::is_control),
+        "{field} cannot contain control characters"
+    );
+    Ok(())
+}
+
+fn validate_geometry(bounds: (f32, f32, f32, f32), field: &str) -> Result<()> {
+    let (x, y, width, height) = bounds;
+    anyhow::ensure!(
+        [x, y, width, height].into_iter().all(f32::is_finite),
+        "{field} must contain finite values"
+    );
+    anyhow::ensure!(
+        width >= 0.0 && height >= 0.0,
+        "{field} dimensions cannot be negative"
+    );
+    Ok(())
+}
+
+fn validate_insets(insets: (f32, f32, f32, f32), field: &str) -> Result<()> {
+    let (top, right, bottom, left) = insets;
+    anyhow::ensure!(
+        [top, right, bottom, left].into_iter().all(f32::is_finite),
+        "{field} must contain finite values"
+    );
+    Ok(())
 }
 
 /// Live-reload design tokens from a styles file without recompiling.
@@ -1245,7 +1465,7 @@ mod tests {
         });
         collector.privacy_filter();
         if let TelemetryEvent::Lifecycle { event } = &collector.events()[0] {
-            assert_eq!(event, "[email_redacted]");
+            assert_eq!(event, "[redacted]");
         } else {
             panic!("expected lifecycle event");
         }
@@ -1260,9 +1480,7 @@ mod tests {
         });
         collector.privacy_filter();
         if let TelemetryEvent::Performance { metric, .. } = &collector.events()[0] {
-            assert!(metric.starts_with("[path]/"));
-            assert!(metric.contains("report.txt"));
-            assert!(!metric.contains("home"));
+            assert_eq!(metric, "[redacted]");
         } else {
             panic!("expected performance event");
         }
@@ -1326,5 +1544,102 @@ mod tests {
         });
         mgr.remove("nonexistent");
         assert_eq!(mgr.list().len(), 1);
+    }
+
+    #[test]
+    fn inspector_rejects_duplicate_ids_and_excessive_depth() {
+        let mut duplicate = sample_tree();
+        duplicate.children[1].id = "header".into();
+        let mut inspector = ElementInspector::new();
+        assert!(inspector.build_tree_checked(duplicate).is_err());
+        assert!(inspector.root().is_none());
+
+        let mut tree = InspectedElement {
+            id: format!("node-{MAX_INSPECTED_DEPTH}"),
+            element_type: "Div".into(),
+            bounds: None,
+            styles: HashMap::new(),
+            children: Vec::new(),
+        };
+        for depth in (0..MAX_INSPECTED_DEPTH).rev() {
+            tree = InspectedElement {
+                id: format!("node-{depth}"),
+                element_type: "Div".into(),
+                bounds: None,
+                styles: HashMap::new(),
+                children: vec![tree],
+            };
+        }
+        assert!(inspector.build_tree_checked(tree).is_err());
+    }
+
+    #[test]
+    fn frame_timeline_bounds_capacity_and_overflow_safe_average() {
+        assert!(FrameTimeline::with_capacity_checked(0).is_err());
+        assert!(FrameTimeline::with_capacity_checked(MAX_FRAME_TIMELINE_CAPACITY + 1).is_err());
+        assert_eq!(
+            FrameTimeline::with_capacity(usize::MAX).capacity,
+            MAX_FRAME_TIMELINE_CAPACITY
+        );
+
+        let mut timeline = FrameTimeline::with_capacity(2);
+        timeline.record(make_frame(1, u64::MAX));
+        timeline.record(make_frame(2, u64::MAX));
+        assert_eq!(timeline.average_duration_us(), Some(u64::MAX as f64));
+    }
+
+    #[test]
+    fn diagnostic_ingestion_rejects_invalid_values_and_bounds_retention() {
+        let mut jobs = JobQueueViewer::new();
+        assert!(
+            jobs.add_checked(JobSnapshot {
+                id: "job".into(),
+                name: "Job".into(),
+                status: "running".into(),
+                progress: Some(f32::NAN),
+                queued_at: 2,
+                started_at: Some(1),
+                completed_at: None,
+            })
+            .is_err()
+        );
+        assert!(jobs.list().is_empty());
+
+        let mut logs = LogViewer::new();
+        assert!(
+            logs.append_checked(LogEntry {
+                timestamp: 0,
+                level: LogLevel::Info,
+                source: "source".into(),
+                message: "bad\nmessage".into(),
+            })
+            .is_err()
+        );
+        for timestamp in 0..=MAX_LOG_ENTRIES as u64 {
+            logs.append(LogEntry {
+                timestamp,
+                level: LogLevel::Info,
+                source: "source".into(),
+                message: "message".into(),
+            });
+        }
+        assert_eq!(logs.count(), MAX_LOG_ENTRIES);
+        assert_eq!(logs.entries[0].timestamp, 1);
+
+        let mut telemetry = TelemetryCollector::new(TelemetryMode::LocalOnly);
+        assert!(
+            telemetry
+                .record_checked(TelemetryEvent::Performance {
+                    metric: "latency".into(),
+                    value: f64::INFINITY,
+                })
+                .is_err()
+        );
+        assert!(telemetry.events().is_empty());
+        telemetry.record(TelemetryEvent::Lifecycle {
+            event: "started".into(),
+        });
+        telemetry.set_mode(TelemetryMode::Disabled);
+        assert!(telemetry.events().is_empty());
     }
 }

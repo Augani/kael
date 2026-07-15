@@ -45,7 +45,12 @@ impl GradientText {
     }
 
     pub fn text_size(mut self, size: Pixels) -> Self {
-        self.text_size = Some(size);
+        let size = size / px(1.0);
+        self.text_size = Some(px(if size.is_finite() {
+            size.max(1.0)
+        } else {
+            16.0
+        }));
         self
     }
 
@@ -80,6 +85,11 @@ fn sample_stops(stops: &[Hsla], t: f32) -> Hsla {
 
 impl RenderOnce for GradientText {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let accessible_text = if self.text.trim().is_empty() {
+            "Gradient text".to_string()
+        } else {
+            self.text.to_string()
+        };
         let start = self.start_color.unwrap_or(hsla(0.6, 0.8, 0.6, 1.0));
         let end = self.end_color.unwrap_or(hsla(0.8, 0.8, 0.6, 1.0));
         let stops = self.stops;
@@ -93,10 +103,18 @@ impl RenderOnce for GradientText {
         let font_family = self.font_family;
         let user_style = self.style;
 
-        let mut row = div().flex().flex_row().items_center().map(|mut el| {
-            el.style().refine(&user_style);
-            el
-        });
+        let mut row = div()
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::StaticText).label(accessible_text),
+            )
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .map(|mut el| {
+                el.style().refine(&user_style);
+                el
+            });
 
         for (i, ch) in chars.into_iter().enumerate() {
             let t = i as f32 / max_index as f32;
@@ -107,7 +125,9 @@ impl RenderOnce for GradientText {
             };
             let s: SharedString = ch.to_string().into();
 
-            let mut span = div().text_color(color).child(s);
+            let mut span = div()
+                .text_color(color)
+                .child(StyledText::new(s).accessibility_hidden(true));
 
             if let Some(size) = text_size {
                 span = span.text_size(size);

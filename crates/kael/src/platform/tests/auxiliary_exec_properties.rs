@@ -1,4 +1,4 @@
-// Feature: platform-parity-electron-features, Property 7: Auxiliary executable path resolution
+// Feature: platform-parity-browser-runtime-features, Property 7: Auxiliary executable path resolution
 
 use proptest::prelude::*;
 use std::fs;
@@ -113,7 +113,7 @@ proptest! {
         let binary_path = path_dir.join(&name);
         fs::write(&binary_path, b"fake-executable-content").unwrap();
 
-        let result = resolve_auxiliary_executable(&name, &app_dir, &[path_dir.clone()]);
+        let result = resolve_auxiliary_executable(&name, &app_dir, std::slice::from_ref(&path_dir));
         let _ = fs::remove_dir_all(&app_dir);
         let _ = fs::remove_dir_all(&path_dir);
 
@@ -153,7 +153,7 @@ proptest! {
         fs::write(&app_binary, b"app-version").unwrap();
         fs::write(&path_binary, b"path-version").unwrap();
 
-        let result = resolve_auxiliary_executable(&name, &app_dir, &[path_dir.clone()]);
+        let result = resolve_auxiliary_executable(&name, &app_dir, std::slice::from_ref(&path_dir));
         let _ = fs::remove_dir_all(&app_dir);
         let _ = fs::remove_dir_all(&path_dir);
 

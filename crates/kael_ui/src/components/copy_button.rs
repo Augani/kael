@@ -1,4 +1,4 @@
-use crate::theme::Theme;
+use crate::{components::icon::Icon, theme::Theme};
 use kael::{prelude::FluentBuilder as _, *};
 use std::time::Duration;
 
@@ -58,31 +58,56 @@ impl RenderOnce for CopyButton {
         let copied = self.state.read(cx).copied;
         let state = self.state.clone();
         let user_style = self.style;
+        let render_theme = theme.clone();
+        let label: SharedString = if copied { "Copied" } else { "Copy" }.into();
 
-        div()
-            .id(self.id)
-            .flex()
-            .items_center()
-            .justify_center()
-            .h(px(24.0))
-            .px(px(8.0))
-            .rounded(theme.tokens.radius_sm)
-            .cursor_pointer()
-            .text_size(px(12.0))
-            .text_color(theme.tokens.muted_foreground)
-            .transition(theme.tokens.transition_fast)
-            .hover(|s| s.bg(theme.tokens.muted))
-            .active(|s| s.opacity(0.7))
-            .when(copied, |el| el.text_color(theme.tokens.success))
+        button(self.id)
+            .label(label.clone())
             .on_click(move |_, window, cx| {
                 state.update(cx, |s, cx| s.copy(window, cx));
             })
-            .map(|this| {
-                let mut d = this;
-                d.style().refine(&user_style);
-                d
+            .render_with(move |render_state, _, _| {
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(6.0))
+                    .h(px(30.0))
+                    .px(px(10.0))
+                    .rounded(render_theme.tokens.radius_md)
+                    .border_1()
+                    .border_color(render_theme.tokens.border)
+                    .bg(render_theme.tokens.card)
+                    .text_size(px(12.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(if copied {
+                        render_theme.tokens.success
+                    } else {
+                        render_theme.tokens.foreground
+                    })
+                    .transition(render_theme.tokens.transition_fast)
+                    .hover(|style| style.bg(render_theme.tokens.accent))
+                    .when(render_state.focused, |this| {
+                        this.shadow(smallvec::smallvec![crate::astryx::focus_ring_outer(
+                            render_theme.tokens.ring,
+                        )])
+                    })
+                    .child(
+                        Icon::new(if copied { "check" } else { "copy" })
+                            .size(px(14.0))
+                            .color(if copied {
+                                render_theme.tokens.success
+                            } else {
+                                render_theme.tokens.muted_foreground
+                            }),
+                    )
+                    .child(StyledText::new(label.clone()).accessibility_hidden(true))
+                    .map(|this| {
+                        let mut div = this;
+                        div.style().refine(&user_style);
+                        div.into_any_element()
+                    })
             })
-            .child(if copied { "\u{2713}" } else { "\u{1F4CB}" })
     }
 }
 

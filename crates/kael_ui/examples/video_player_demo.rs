@@ -52,7 +52,7 @@ fn main() {
                     })),
                     ..Default::default()
                 },
-                |_, cx| cx.new(|cx| VideoPlayerDemoApp::new(cx)),
+                |_, cx| cx.new(VideoPlayerDemoApp::new),
             )
             .unwrap();
         });
@@ -226,7 +226,7 @@ let hls_player = VideoPlayer::url("https://cdn.example.com/playback?id=stream", 
 // For custom decoders, keep using the controls/state overlay:
 
 // 1. Create state
-let video_state = cx.new(|cx| VideoPlayerState::new(cx));
+let video_state = cx.new(VideoPlayerState::new);
 
 // 2. Your video decoder or media controller updates our state
 decoder.on_frame(|frame_path, time| {

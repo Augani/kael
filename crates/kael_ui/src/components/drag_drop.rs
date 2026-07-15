@@ -26,10 +26,8 @@ impl<T: Clone + Debug> Clone for DragData<T> {
 impl<T: Clone + Debug> Debug for DragData<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DragData")
-            .field("data", &self.data)
-            .field("label", &self.label)
-            .field("preview_factory", &self.preview_factory.is_some())
-            .field("position", &self.position)
+            .field("has_label", &self.label.is_some())
+            .field("has_preview", &self.preview_factory.is_some())
             .finish()
     }
 }
@@ -112,10 +110,72 @@ impl<T: Clone + Debug + 'static> Render for DragData<T> {
     }
 }
 
+/// Shared state that provides a keyboard alternative to pointer drag and drop.
+pub struct DragDropKeyboardState<T: Clone + Debug + 'static> {
+    grabbed: Option<(ElementId, DragData<T>)>,
+}
+
+impl<T: Clone + Debug + 'static> DragDropKeyboardState<T> {
+    pub fn new() -> Self {
+        Self { grabbed: None }
+    }
+
+    pub fn has_grabbed_item(&self) -> bool {
+        self.grabbed.is_some()
+    }
+
+    pub fn grabbed_data(&self) -> Option<&DragData<T>> {
+        self.grabbed.as_ref().map(|(_, data)| data)
+    }
+
+    pub fn clear(&mut self, cx: &mut Context<Self>) {
+        if self.grabbed.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn toggle(&mut self, id: ElementId, data: DragData<T>, cx: &mut Context<Self>) {
+        if self
+            .grabbed
+            .as_ref()
+            .is_some_and(|(source_id, _)| *source_id == id)
+        {
+            self.grabbed = None;
+        } else {
+            self.grabbed = Some((id, data));
+        }
+        cx.notify();
+    }
+
+    fn take(&mut self, cx: &mut Context<Self>) -> Option<DragData<T>> {
+        let data = self.grabbed.take().map(|(_, data)| data);
+        if data.is_some() {
+            cx.notify();
+        }
+        data
+    }
+}
+
+impl<T: Clone + Debug + 'static> Default for DragDropKeyboardState<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Clone + Debug + 'static> Render for DragDropKeyboardState<T> {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
+
 #[derive(IntoElement)]
 pub struct Draggable<T: Clone + Debug + 'static> {
+    id: ElementId,
     base: Stateful<Div>,
     drag_data: DragData<T>,
+    keyboard_state: Option<Entity<DragDropKeyboardState<T>>>,
+    accessibility_label: SharedString,
+    disabled: bool,
     cursor_style: CursorStyle,
     hover_bg: Option<Hsla>,
     children: Vec<AnyElement>,
@@ -124,14 +184,38 @@ pub struct Draggable<T: Clone + Debug + 'static> {
 
 impl<T: Clone + Debug + 'static> Draggable<T> {
     pub fn new(id: impl Into<ElementId>, drag_data: DragData<T>) -> Self {
+        let id = id.into();
+        let accessibility_label = drag_data
+            .label
+            .clone()
+            .unwrap_or_else(|| "Draggable item".into());
         Self {
-            base: div().id(id.into()),
+            id: id.clone(),
+            base: div().id(id),
             drag_data,
+            keyboard_state: None,
+            accessibility_label,
+            disabled: false,
             cursor_style: CursorStyle::PointingHand,
             hover_bg: None,
             children: Vec::new(),
             style: StyleRefinement::default(),
         }
+    }
+
+    pub fn keyboard_state(mut self, state: &Entity<DragDropKeyboardState<T>>) -> Self {
+        self.keyboard_state = Some(state.clone());
+        self
+    }
+
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessibility_label = label.into();
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
     }
 
     pub fn cursor_style(mut self, cursor: CursorStyle) -> Self {
@@ -173,17 +257,92 @@ impl<T: Clone + Debug + 'static> ParentElement for Draggable<T> {
 }
 
 impl<T: Clone + Debug + 'static> RenderOnce for Draggable<T> {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let drag_data = self.drag_data.clone();
+        let drag_data_for_key = self.drag_data.clone();
         let user_style = self.style;
+        let keyboard_state = self.keyboard_state.clone();
+        let keyboard_enabled = keyboard_state.is_some() && !self.disabled;
+        let is_grabbed = keyboard_state.as_ref().is_some_and(|state| {
+            state
+                .read(cx)
+                .grabbed
+                .as_ref()
+                .is_some_and(|(source_id, _)| *source_id == self.id)
+        });
+        let focus_handle = window
+            .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone();
+        let keyboard_state_for_key = keyboard_state.clone();
+        let source_id = self.id.clone();
+        let mut states = AccessibilityState::NONE;
+        if self.disabled {
+            states |= AccessibilityState::DISABLED;
+        }
+        if is_grabbed {
+            states |= AccessibilityState::SELECTED;
+        }
 
         self.base
-            .cursor(self.cursor_style)
-            .when_some(self.hover_bg, |this, bg| {
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group)
+                    .label(self.accessibility_label.to_string())
+                    .description(if is_grabbed {
+                        "Picked up. Focus a compatible drop zone and press Enter to drop"
+                    } else if keyboard_enabled {
+                        "Press Enter or Space to pick up"
+                    } else {
+                        "Draggable item"
+                    })
+                    .states(states)
+                    .actions(if keyboard_enabled {
+                        vec![AccessibilityAction::Focus]
+                    } else {
+                        Vec::new()
+                    }),
+            )
+            .cursor(if self.disabled {
+                CursorStyle::Arrow
+            } else {
+                self.cursor_style
+            })
+            .when(self.disabled, |this| this.opacity(0.5))
+            .when_some(self.hover_bg.filter(|_| !self.disabled), |this, bg| {
                 this.hover(move |style| style.bg(bg))
             })
-            .on_drag(drag_data, |data: &DragData<T>, position, _, cx| {
-                cx.new(|_| data.clone().with_position(position))
+            .when(!self.disabled, |this| {
+                this.on_drag(drag_data, |data: &DragData<T>, position, _, cx| {
+                    cx.new(|_| data.clone().with_position(position))
+                })
+            })
+            .when(keyboard_enabled, |this| {
+                this.track_focus(&focus_handle.tab_index(0).tab_stop(true))
+                    .on_key_down(
+                        move |event, window, cx| match event.keystroke.key.as_str() {
+                            "enter" | "space" => {
+                                if let Some(state) = keyboard_state_for_key.as_ref() {
+                                    state.update(cx, |state, cx| {
+                                        state.toggle(
+                                            source_id.clone(),
+                                            drag_data_for_key.clone(),
+                                            cx,
+                                        );
+                                    });
+                                }
+                                cx.stop_propagation();
+                                window.prevent_default();
+                            }
+                            "escape" => {
+                                if let Some(state) = keyboard_state_for_key.as_ref() {
+                                    state.update(cx, DragDropKeyboardState::clear);
+                                }
+                                cx.stop_propagation();
+                                window.prevent_default();
+                            }
+                            _ => {}
+                        },
+                    )
             })
             .map(|this| {
                 let mut div = this;
@@ -203,7 +362,11 @@ pub enum DropZoneStyle {
 
 #[derive(IntoElement)]
 pub struct DropZone<T: Clone + Debug + 'static> {
+    id: ElementId,
     base: Stateful<Div>,
+    keyboard_state: Option<Entity<DragDropKeyboardState<T>>>,
+    accessibility_label: SharedString,
+    disabled: bool,
     drop_style: DropZoneStyle,
     active: bool,
     min_height: Option<Pixels>,
@@ -215,8 +378,13 @@ pub struct DropZone<T: Clone + Debug + 'static> {
 
 impl<T: Clone + Debug + 'static> DropZone<T> {
     pub fn new(id: impl Into<ElementId>) -> Self {
+        let id = id.into();
         Self {
-            base: div().id(id.into()),
+            id: id.clone(),
+            base: div().id(id),
+            keyboard_state: None,
+            accessibility_label: "Drop zone".into(),
+            disabled: false,
             drop_style: DropZoneStyle::Dashed,
             active: false,
             min_height: None,
@@ -225,6 +393,21 @@ impl<T: Clone + Debug + 'static> DropZone<T> {
             on_drop: None,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    pub fn keyboard_state(mut self, state: &Entity<DragDropKeyboardState<T>>) -> Self {
+        self.keyboard_state = Some(state.clone());
+        self
+    }
+
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessibility_label = label.into();
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
     }
 
     pub fn drop_zone_style(mut self, style: DropZoneStyle) -> Self {
@@ -287,12 +470,28 @@ impl<T: Clone + Debug + 'static> ParentElement for DropZone<T> {
 }
 
 impl<T: Clone + Debug + 'static> RenderOnce for DropZone<T> {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = Theme::of(cx);
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx).clone();
         let user_style = self.user_style;
         let on_drop = self.on_drop.clone();
+        let keyboard_state = self.keyboard_state.clone();
+        let keyboard_enabled = keyboard_state.is_some() && on_drop.is_some() && !self.disabled;
+        let has_grabbed_item = keyboard_state
+            .as_ref()
+            .is_some_and(|state| state.read(cx).has_grabbed_item());
+        let active = self.active || has_grabbed_item;
+        let focus_handle = window
+            .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone();
+        let keyboard_state_for_key = keyboard_state.clone();
+        let on_drop_for_key = on_drop.clone();
+        let mut accessibility_state = AccessibilityState::NONE;
+        if self.disabled {
+            accessibility_state |= AccessibilityState::DISABLED;
+        }
 
-        let (border_width, border_color, bg_color) = match (self.drop_style, self.active) {
+        let (border_width, border_color, bg_color) = match (self.drop_style, active) {
             (DropZoneStyle::Dashed, false) => {
                 (px(2.0), theme.tokens.border, kael::transparent_black())
             }
@@ -318,6 +517,23 @@ impl<T: Clone + Debug + 'static> RenderOnce for DropZone<T> {
         };
 
         self.base
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group)
+                    .label(self.accessibility_label.to_string())
+                    .description(if has_grabbed_item {
+                        "Compatible item ready. Press Enter or Space to drop"
+                    } else if keyboard_enabled {
+                        "Pick up a compatible draggable item first"
+                    } else {
+                        "Drop zone"
+                    })
+                    .states(accessibility_state)
+                    .actions(if keyboard_enabled {
+                        vec![AccessibilityAction::Focus]
+                    } else {
+                        Vec::new()
+                    }),
+            )
             .flex()
             .flex_col()
             .items_center()
@@ -340,12 +556,137 @@ impl<T: Clone + Debug + 'static> RenderOnce for DropZone<T> {
                 div.style().refine(&user_style);
                 div
             })
-            .can_drop(|value, _, _| value.downcast_ref::<DragData<T>>().is_some())
-            .on_drop(move |data: &DragData<T>, window, cx| {
-                if let Some(on_drop) = &on_drop {
-                    on_drop(data, window, cx);
-                }
+            .when(!self.disabled, |this| {
+                this.can_drop(|value, _, _| value.downcast_ref::<DragData<T>>().is_some())
+                    .on_drop(move |data: &DragData<T>, window, cx| {
+                        if let Some(on_drop) = &on_drop {
+                            on_drop(data, window, cx);
+                        }
+                    })
+            })
+            .when(keyboard_enabled, |this| {
+                this.track_focus(&focus_handle.tab_index(0).tab_stop(true))
+                    .on_key_down(
+                        move |event, window, cx| match event.keystroke.key.as_str() {
+                            "enter" | "space" if has_grabbed_item => {
+                                let data = keyboard_state_for_key.as_ref().and_then(|state| {
+                                    state.update(cx, DragDropKeyboardState::take)
+                                });
+                                if let (Some(data), Some(handler)) =
+                                    (data.as_ref(), on_drop_for_key.as_ref())
+                                {
+                                    handler(data, window, cx);
+                                }
+                                cx.stop_propagation();
+                                window.prevent_default();
+                            }
+                            "escape" => {
+                                if let Some(state) = keyboard_state_for_key.as_ref() {
+                                    state.update(cx, DragDropKeyboardState::clear);
+                                }
+                                cx.stop_propagation();
+                                window.prevent_default();
+                            }
+                            _ => {}
+                        },
+                    )
             })
             .children(self.children)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DragData, DragDropKeyboardState, Draggable, DropZone};
+    use kael::{
+        div, AccessibilityAction, AccessibilityActionRequest, AppContext, Context, Entity,
+        IntoElement, ParentElement, Render, SharedString, Styled, TestAppContext, Window,
+    };
+    use std::{cell::RefCell, rc::Rc};
+
+    struct DragDropHost {
+        state: Entity<DragDropKeyboardState<SharedString>>,
+        dropped: Rc<RefCell<Option<SharedString>>>,
+    }
+
+    impl Render for DragDropHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let dropped = self.dropped.clone();
+            div()
+                .flex()
+                .child(
+                    Draggable::new(
+                        "keyboard-drag-source",
+                        DragData::new(SharedString::from("Release notes"))
+                            .with_label("Release notes card"),
+                    )
+                    .keyboard_state(&self.state),
+                )
+                .child(
+                    DropZone::new("keyboard-drop-target")
+                        .keyboard_state(&self.state)
+                        .accessibility_label("Publish queue")
+                        .on_drop(move |data, _, _| {
+                            *dropped.borrow_mut() = Some(data.data.clone());
+                        }),
+                )
+        }
+    }
+
+    #[kael::test]
+    fn keyboard_pick_up_and_drop_routes_data(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let state = cx.new(|_| DragDropKeyboardState::new());
+        let dropped = Rc::new(RefCell::new(None));
+        let (_host, window) = cx.add_window_view({
+            let state = state.clone();
+            let dropped = dropped.clone();
+            move |_, _| DragDropHost { state, dropped }
+        });
+
+        let (source_id, target_id) = window.update(|window, cx| {
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            let source = tree
+                .nodes
+                .values()
+                .find(|node| node.label.as_deref() == Some("Release notes card"))
+                .expect("draggable source should be accessible");
+            let target = tree
+                .nodes
+                .values()
+                .find(|node| node.label.as_deref() == Some("Publish queue"))
+                .expect("drop target should be accessible");
+            assert!(source.actions.contains(&AccessibilityAction::Focus));
+            assert!(target.actions.contains(&AccessibilityAction::Focus));
+            (source.id, target.id)
+        });
+
+        window.update(|window, _| {
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                source_id,
+                AccessibilityAction::Focus,
+            ));
+        });
+        window.run_until_parked();
+        window.simulate_keystrokes("enter");
+        window.update(|_, cx| assert!(state.read(cx).has_grabbed_item()));
+
+        window.update(|window, _| {
+            window.dispatch_accessibility_action_for_test(AccessibilityActionRequest::new(
+                target_id,
+                AccessibilityAction::Focus,
+            ));
+        });
+        window.run_until_parked();
+        window.simulate_keystrokes("enter");
+
+        window.update(|_, cx| assert!(!state.read(cx).has_grabbed_item()));
+        assert_eq!(
+            dropped.borrow().as_ref().map(|value| value.as_ref()),
+            Some("Release notes")
+        );
     }
 }

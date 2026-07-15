@@ -44,6 +44,7 @@ pub struct Skeleton {
     secondary: bool,
     radius: Option<SkeletonRadius>,
     index: usize,
+    animated: bool,
 }
 
 impl Skeleton {
@@ -54,6 +55,7 @@ impl Skeleton {
             secondary: false,
             radius: None,
             index: 0,
+            animated: true,
         }
     }
 
@@ -77,10 +79,16 @@ impl Skeleton {
         self.index = index;
         self
     }
+
+    /// Control the pulse animation while keeping the loading placeholder visible.
+    pub fn animated(mut self, animated: bool) -> Self {
+        self.animated = animated;
+        self
+    }
 }
 
 impl RenderOnce for Skeleton {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = &Theme::of(cx).tokens;
         let radius_md = tokens.radius_md;
         let explicit_radius = self.radius.map(|radius| radius.pixels(tokens));
@@ -92,7 +100,8 @@ impl RenderOnce for Skeleton {
         };
         let index = self.index;
 
-        self.base
+        let skeleton = self
+            .base
             .when(self.variant == SkeletonVariant::Text, |this| {
                 this.w_full().h(px(16.0)).rounded(radius_md)
             })
@@ -104,24 +113,31 @@ impl RenderOnce for Skeleton {
             })
             .when_some(explicit_radius, |this, radius| this.rounded(radius))
             .bg(base_color)
-            .opacity(0.25)
-            .with_animation(
-                "skeleton-pulse",
-                Animation::new(Duration::from_millis(1100))
-                    .delay(Duration::from_millis(1000 + 100 * index as u64))
-                    .repeat_forever()
-                    .with_easing(crate::animations::easings::linear),
-                move |this, delta| {
-                    let stepped = (delta * 10.0).floor() / 10.0;
-                    let wave = if stepped <= 0.5 {
-                        stepped * 2.0
-                    } else {
-                        (1.0 - stepped) * 2.0
-                    };
-                    let opacity = 0.25 + wave * 0.75;
-                    this.opacity(opacity)
-                },
-            )
+            .opacity(0.25);
+
+        if self.animated && window.animations_enabled() {
+            skeleton
+                .with_animation(
+                    "skeleton-pulse",
+                    Animation::new(Duration::from_millis(1100))
+                        .delay(Duration::from_millis(1000 + 100 * index as u64))
+                        .repeat_forever()
+                        .with_easing(crate::animations::easings::linear),
+                    move |this, delta| {
+                        let stepped = (delta * 10.0).floor() / 10.0;
+                        let wave = if stepped <= 0.5 {
+                            stepped * 2.0
+                        } else {
+                            (1.0 - stepped) * 2.0
+                        };
+                        let opacity = 0.25 + wave * 0.75;
+                        this.opacity(opacity)
+                    },
+                )
+                .into_any_element()
+        } else {
+            skeleton.into_any_element()
+        }
     }
 }
 
@@ -148,5 +164,16 @@ impl ParentElement for Skeleton {
 impl Styled for Skeleton {
     fn style(&mut self) -> &mut StyleRefinement {
         self.base.style()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn animation_can_be_paused_without_hiding_the_placeholder() {
+        let skeleton = Skeleton::new().animated(false);
+        assert!(!skeleton.animated);
     }
 }

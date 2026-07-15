@@ -128,22 +128,26 @@ impl Card {
     }
 
     pub fn padding(mut self, padding: Pixels) -> Self {
-        self.padding = Some(padding);
+        let value = f32::from(padding);
+        self.padding = (value.is_finite() && value >= 0.0).then_some(padding);
         self
     }
 
     pub fn width(mut self, width: Pixels) -> Self {
-        self.width = Some(width);
+        let value = f32::from(width);
+        self.width = (value.is_finite() && value > 0.0).then_some(width);
         self
     }
 
     pub fn height(mut self, height: Pixels) -> Self {
-        self.height = Some(height);
+        let value = f32::from(height);
+        self.height = (value.is_finite() && value > 0.0).then_some(height);
         self
     }
 
     pub fn max_width(mut self, max_width: Pixels) -> Self {
-        self.max_width = Some(max_width);
+        let value = f32::from(max_width);
+        self.max_width = (value.is_finite() && value > 0.0).then_some(max_width);
         self
     }
 
@@ -153,13 +157,35 @@ impl Card {
     }
 
     pub fn min_height(mut self, min_height: Pixels) -> Self {
-        self.min_height = Some(min_height);
+        let value = f32::from(min_height);
+        self.min_height = (value.is_finite() && value >= 0.0).then_some(min_height);
         self
     }
 
     #[allow(non_snake_case)]
     pub fn minHeight(self, min_height: Pixels) -> Self {
         self.min_height(min_height)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn invalid_geometry_is_ignored() {
+        let card = Card::new()
+            .padding(px(-1.0))
+            .width(px(f32::NAN))
+            .height(px(0.0))
+            .max_width(px(-2.0))
+            .min_height(px(f32::NAN));
+        assert!(card.padding.is_none());
+        assert!(card.width.is_none());
+        assert!(card.height.is_none());
+        assert!(card.max_width.is_none());
+        assert!(card.min_height.is_none());
     }
 }
 
@@ -198,14 +224,6 @@ impl IntoElement for Card {
             .when_some(self.max_width, |this, max_width| this.max_w(max_width))
             .when_some(self.min_height, |this, min_height| this.min_h(min_height));
 
-        if !self.children.is_empty() {
-            base = base.child(
-                div()
-                    .p(self.padding.unwrap_or(px(16.0)))
-                    .children(self.children),
-            );
-        }
-
         if let Some(header) = self.header {
             base = base.child(
                 div()
@@ -214,6 +232,14 @@ impl IntoElement for Card {
                     .border_b_1()
                     .border_color(theme.tokens.border)
                     .child(header),
+            );
+        }
+
+        if !self.children.is_empty() {
+            base = base.child(
+                div()
+                    .p(self.padding.unwrap_or(px(16.0)))
+                    .children(self.children),
             );
         }
 

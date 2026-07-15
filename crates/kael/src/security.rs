@@ -35,6 +35,24 @@ use crate::process_model::{ProcessClass, ProcessId};
 
 type PromptHandler = Arc<dyn Fn(ProcessId, &Capability) -> PermissionResult + Send + Sync>;
 
+const MAX_PERMISSION_REASON_BYTES: usize = 4 * 1024;
+const MAX_CREDENTIAL_LABEL_BYTES: usize = 512;
+const MAX_CREDENTIAL_SECRET_BYTES: usize = 1024 * 1024;
+const MAX_CREDENTIAL_ENTRIES: usize = 4096;
+const MAX_ACCESS_TOKENS: usize = 4096;
+const MAX_BOOKMARK_PATH_BYTES: usize = 16 * 1024;
+const MAX_NETWORK_POLICY_HOSTS: usize = 256;
+const MAX_NETWORK_URL_BYTES: usize = 16 * 1024;
+const MAX_NETWORK_HEADERS: usize = 128;
+const MAX_NETWORK_HEADER_NAME_BYTES: usize = 256;
+const MAX_NETWORK_BODY_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const MAX_PROCESS_VIOLATIONS: usize = 1024;
+const MAX_PROCESS_VIOLATION_BYTES: usize = 1024;
+const MAX_PROCESS_NAME_BYTES: usize = 256;
+const MAX_REALTIME_CONNECTIONS: usize = 64;
+const MAX_IPC_MESSAGE_TYPES: usize = 256;
+const MAX_IPC_MESSAGE_TYPE_BYTES: usize = 128;
+
 // ---------------------------------------------------------------------------
 // Capability Model
 // ---------------------------------------------------------------------------
@@ -187,6 +205,16 @@ impl PermissionBroker {
         self.process_classes.insert(process, class);
     }
 
+    /// Return the registered process class, if this process is known to the broker.
+    pub fn process_class(&self, process: ProcessId) -> Option<ProcessClass> {
+        self.process_classes.get(&process).copied()
+    }
+
+    /// Return whether this process has been registered with the broker.
+    pub fn is_process_registered(&self, process: ProcessId) -> bool {
+        self.process_classes.contains_key(&process)
+    }
+
     /// Remove a process from the broker, clearing grants and class metadata.
     pub fn unregister_process(&mut self, process: ProcessId) {
         self.process_classes.remove(&process);
@@ -278,7 +306,7 @@ impl PermissionBroker {
     /// Explicitly prompt for a capability.
     pub fn prompt(&self, process: ProcessId, capability: &Capability) -> PermissionResult {
         if let Some(handler) = &self.prompt_handler {
-            handler(process, capability)
+            invoke_prompt_handler(handler, process, capability)
         } else {
             PermissionResult::Denied
         }
@@ -295,7 +323,7 @@ impl PermissionBroker {
             return PermissionResult::Granted;
         }
         if let Some(prompt_handler) = &self.prompt_handler {
-            return prompt_handler(process, capability);
+            return invoke_prompt_handler(prompt_handler, process, capability);
         }
         PermissionResult::Denied
     }
@@ -330,6 +358,17 @@ impl PermissionBroker {
         }
         capabilities.into_iter().collect()
     }
+}
+
+fn invoke_prompt_handler(
+    handler: &PromptHandler,
+    process: ProcessId,
+    capability: &Capability,
+) -> PermissionResult {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        handler(process, capability)
+    }))
+    .unwrap_or(PermissionResult::Denied)
 }
 
 // ---------------------------------------------------------------------------
@@ -411,6 +450,29 @@ impl ThreatModel {
         }
     }
 
+    /// Create a threat model whose process-class defaults contain no
+    /// high-risk capabilities. Apps can grant individual capabilities after
+    /// explicit consent or policy evaluation.
+    pub fn strict() -> Self {
+        let mut model = Self::new();
+        model
+            .ui_defaults
+            .retain(|capability| !capability.is_high_risk());
+        model
+            .worker_defaults
+            .retain(|capability| !capability.is_high_risk());
+        model
+            .utility_defaults
+            .retain(|capability| !capability.is_high_risk());
+        model
+            .media_defaults
+            .retain(|capability| !capability.is_high_risk());
+        model
+            .extension_defaults
+            .retain(|capability| !capability.is_high_risk());
+        model
+    }
+
     /// Add a threat to the model.
     pub fn add_threat(mut self, threat: Threat) -> Self {
         self.threats.push(threat);
@@ -461,6 +523,29 @@ pub struct PermissionRequest {
     pub reason: String,
 }
 
+impl PermissionRequest {
+    /// Validate prompt text before showing it to the user.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.reason.trim().is_empty(),
+            "permission request reason cannot be empty"
+        );
+        anyhow::ensure!(
+            self.reason == self.reason.trim(),
+            "permission request reason cannot have leading or trailing whitespace"
+        );
+        anyhow::ensure!(
+            self.reason.len() <= MAX_PERMISSION_REASON_BYTES,
+            "permission request reason exceeds {MAX_PERMISSION_REASON_BYTES} bytes"
+        );
+        anyhow::ensure!(
+            !self.reason.chars().any(char::is_control),
+            "permission request reason cannot contain control characters"
+        );
+        Ok(())
+    }
+}
+
 /// Tracks and manages permission states for the application.
 #[derive(Debug, Clone, Default)]
 pub struct PermissionManager {
@@ -494,7 +579,11 @@ impl PermissionManager {
         if current != PermissionStatus::NotDetermined {
             return current;
         }
-        let result = decide(request);
+        if request.validate().is_err() {
+            return PermissionStatus::Denied;
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decide(request)))
+            .unwrap_or(PermissionStatus::Denied);
         self.states.insert(request.kind, result);
         result
     }
@@ -520,7 +609,7 @@ impl PermissionManager {
 // ===========================================================================
 
 /// A single credential entry stored in the keychain.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CredentialEntry {
     /// The service or application the credential belongs to.
     pub service: String,
@@ -530,13 +619,51 @@ pub struct CredentialEntry {
     pub secret: Vec<u8>,
 }
 
+impl CredentialEntry {
+    /// Validate credential identifiers and secret size before storage.
+    pub fn validate(&self) -> Result<()> {
+        validate_credential_label(&self.service, "credential service")?;
+        validate_credential_label(&self.account, "credential account")?;
+        anyhow::ensure!(!self.secret.is_empty(), "credential secret cannot be empty");
+        anyhow::ensure!(
+            self.secret.len() <= MAX_CREDENTIAL_SECRET_BYTES,
+            "credential secret exceeds {MAX_CREDENTIAL_SECRET_BYTES} bytes"
+        );
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for CredentialEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CredentialEntry")
+            .field("service", &self.service)
+            .field("account", &self.account)
+            .field("secret", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl Drop for CredentialEntry {
+    fn drop(&mut self) {
+        self.secret.fill(0);
+    }
+}
+
 /// An in-memory credential store that mimics system keychain semantics.
 ///
 /// In production, callers should back this with a platform keychain
 /// (macOS Keychain, Windows Credential Manager, libsecret on Linux).
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct KeychainStore {
     entries: HashMap<(String, String), CredentialEntry>,
+}
+
+impl std::fmt::Debug for KeychainStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeychainStore")
+            .field("entry_count", &self.entries.len())
+            .finish()
+    }
 }
 
 impl KeychainStore {
@@ -549,18 +676,31 @@ impl KeychainStore {
 
     /// Store a credential. Overwrites any existing entry with the same
     /// service + account pair.
-    pub fn store(&mut self, entry: CredentialEntry) {
+    pub fn store(&mut self, entry: CredentialEntry) -> Result<()> {
+        entry.validate()?;
         let key = (entry.service.clone(), entry.account.clone());
+        anyhow::ensure!(
+            self.entries.contains_key(&key) || self.entries.len() < MAX_CREDENTIAL_ENTRIES,
+            "credential store cannot contain more than {MAX_CREDENTIAL_ENTRIES} entries"
+        );
         self.entries.insert(key, entry);
+        Ok(())
     }
 
     /// Retrieve a credential by service and account.
     pub fn retrieve(&self, service: &str, account: &str) -> Option<&CredentialEntry> {
+        validate_credential_label(service, "credential service").ok()?;
+        validate_credential_label(account, "credential account").ok()?;
         self.entries.get(&(service.to_owned(), account.to_owned()))
     }
 
     /// Delete a credential by service and account. Returns `true` if removed.
     pub fn delete(&mut self, service: &str, account: &str) -> bool {
+        if validate_credential_label(service, "credential service").is_err()
+            || validate_credential_label(account, "credential account").is_err()
+        {
+            return false;
+        }
         self.entries
             .remove(&(service.to_owned(), account.to_owned()))
             .is_some()
@@ -590,7 +730,7 @@ impl KeychainStore {
 // ===========================================================================
 
 /// A time-scoped token granting access to a specific file path.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccessToken {
     /// The file path this token grants access to.
     pub path: PathBuf,
@@ -602,11 +742,29 @@ pub struct AccessToken {
     pub expires_at: Option<u64>,
 }
 
+impl std::fmt::Debug for AccessToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccessToken")
+            .field("path", &"[REDACTED]")
+            .field("token", &"[REDACTED]")
+            .field("created_at", &self.created_at)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
 /// Manages file-scoped access tokens with optional expiry.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct AccessTokenStore {
     tokens: HashMap<String, AccessToken>,
-    next_id: u64,
+}
+
+impl std::fmt::Debug for AccessTokenStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccessTokenStore")
+            .field("token_count", &self.tokens.len())
+            .finish()
+    }
 }
 
 impl AccessTokenStore {
@@ -614,26 +772,36 @@ impl AccessTokenStore {
     pub fn new() -> Self {
         Self {
             tokens: HashMap::new(),
-            next_id: 0,
         }
     }
 
     /// Issue a new access token for the given path. Returns the token string.
-    pub fn issue(&mut self, path: PathBuf, now: u64, ttl_seconds: Option<u64>) -> String {
-        self.next_id += 1;
-        let token_str = format!(
-            "kat_{:016x}_{}",
-            self.next_id,
-            seahash::hash(path.to_string_lossy().as_bytes())
+    pub fn issue(&mut self, path: PathBuf, now: u64, ttl_seconds: Option<u64>) -> Result<String> {
+        validate_bookmark_path(&path)?;
+        self.purge_expired(now);
+        anyhow::ensure!(
+            self.tokens.len() < MAX_ACCESS_TOKENS,
+            "access token store cannot contain more than {MAX_ACCESS_TOKENS} active tokens"
         );
+        let expires_at = ttl_seconds
+            .map(|ttl| {
+                anyhow::ensure!(ttl > 0, "access token TTL must be greater than zero");
+                now.checked_add(ttl)
+                    .ok_or_else(|| anyhow::anyhow!("access token expiry overflows u64"))
+            })
+            .transpose()?;
+        let token_str = (0..8)
+            .map(|_| format!("kat_{}", uuid::Uuid::new_v4().simple()))
+            .find(|candidate| !self.tokens.contains_key(candidate))
+            .ok_or_else(|| anyhow::anyhow!("failed to generate a unique access token"))?;
         let access_token = AccessToken {
             path,
             token: token_str.clone(),
             created_at: now,
-            expires_at: ttl_seconds.map(|ttl| now + ttl),
+            expires_at,
         };
         self.tokens.insert(token_str.clone(), access_token);
-        token_str
+        Ok(token_str)
     }
 
     /// Validate a token at the given timestamp. Returns the associated path
@@ -746,7 +914,7 @@ impl FileAccessBookmark {
     /// Issue an access token for this bookmark using the provided token store.
     pub fn issue_token(&self, store: &mut AccessTokenStore, now: u64) -> Result<String> {
         self.validate()?;
-        Ok(store.issue(self.path.clone(), now, self.ttl_seconds))
+        store.issue(self.path.clone(), now, self.ttl_seconds)
     }
 }
 
@@ -899,6 +1067,32 @@ fn validate_bookmark_path(path: &PathBuf) -> Result<()> {
         !path_text.chars().any(|ch| ch == '\0'),
         "file access bookmark path cannot contain NUL characters"
     );
+    anyhow::ensure!(
+        path_text.len() <= MAX_BOOKMARK_PATH_BYTES,
+        "file access bookmark path exceeds {MAX_BOOKMARK_PATH_BYTES} bytes"
+    );
+    anyhow::ensure!(
+        path.is_absolute(),
+        "file access bookmark path must be absolute: {}",
+        path.display()
+    );
+    Ok(())
+}
+
+fn validate_credential_label(value: &str, label: &str) -> Result<()> {
+    anyhow::ensure!(!value.trim().is_empty(), "{label} cannot be empty");
+    anyhow::ensure!(
+        value == value.trim(),
+        "{label} cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        value.len() <= MAX_CREDENTIAL_LABEL_BYTES,
+        "{label} exceeds {MAX_CREDENTIAL_LABEL_BYTES} bytes"
+    );
+    anyhow::ensure!(
+        !value.chars().any(char::is_control),
+        "{label} cannot contain control characters"
+    );
     Ok(())
 }
 
@@ -929,6 +1123,15 @@ impl PluginPermissionManifest {
 
     /// Validate that all required permissions are present in the granted set.
     pub fn validate(&self, granted: &HashSet<PermissionKind>) -> Result<(), Vec<PermissionKind>> {
+        if self.validate_declaration().is_err() {
+            let mut declared = Vec::new();
+            for permission in self.required.iter().copied() {
+                if !declared.contains(&permission) {
+                    declared.push(permission);
+                }
+            }
+            return Err(declared);
+        }
         let missing: Vec<PermissionKind> = self
             .required
             .iter()
@@ -940,6 +1143,31 @@ impl PluginPermissionManifest {
         } else {
             Err(missing)
         }
+    }
+
+    /// Validate the plugin identifier and permission declaration shape.
+    pub fn validate_declaration(&self) -> Result<()> {
+        validate_bookmark_id(&self.plugin_id)
+            .map_err(|error| anyhow::anyhow!("invalid plugin permission manifest id: {error}"))?;
+        anyhow::ensure!(
+            self.required.len() <= 7 && self.optional.len() <= 7,
+            "plugin permission manifest cannot contain more than 7 permissions per category"
+        );
+        let required = self.required.iter().copied().collect::<HashSet<_>>();
+        let optional = self.optional.iter().copied().collect::<HashSet<_>>();
+        anyhow::ensure!(
+            required.len() == self.required.len(),
+            "plugin permission manifest contains duplicate required permissions"
+        );
+        anyhow::ensure!(
+            optional.len() == self.optional.len(),
+            "plugin permission manifest contains duplicate optional permissions"
+        );
+        anyhow::ensure!(
+            required.is_disjoint(&optional),
+            "plugin permission cannot be both required and optional"
+        );
+        Ok(())
     }
 
     /// Check whether a specific permission is declared (required or optional).
@@ -954,14 +1182,13 @@ impl PluginPermissionManifest {
 
     /// Return all declared permissions (required + optional), deduplicated.
     pub fn all_permissions(&self) -> Vec<PermissionKind> {
-        let mut set = HashSet::new();
-        for perm in &self.required {
-            set.insert(*perm);
+        let mut permissions = Vec::new();
+        for permission in self.required.iter().chain(&self.optional).copied() {
+            if !permissions.contains(&permission) {
+                permissions.push(permission);
+            }
         }
-        for perm in &self.optional {
-            set.insert(*perm);
-        }
-        set.into_iter().collect()
+        permissions
     }
 }
 
@@ -993,6 +1220,31 @@ impl Default for ProcessLimits {
     }
 }
 
+impl ProcessLimits {
+    /// Validate configured resource limits before starting a process monitor.
+    pub fn validate(&self) -> Result<()> {
+        if let Some(max_memory_bytes) = self.max_memory_bytes {
+            anyhow::ensure!(
+                max_memory_bytes > 0,
+                "process memory limit must be positive"
+            );
+        }
+        if let Some(max_cpu_percent) = self.max_cpu_percent {
+            anyhow::ensure!(
+                max_cpu_percent.is_finite() && (0.0..=100.0).contains(&max_cpu_percent),
+                "process CPU limit must be finite and between 0 and 100 percent"
+            );
+        }
+        if let Some(max_open_files) = self.max_open_files {
+            anyhow::ensure!(
+                max_open_files > 0,
+                "process open-file limit must be positive"
+            );
+        }
+        Ok(())
+    }
+}
+
 /// A process tracked by the capability system, including its limits and
 /// any recorded violations.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1018,9 +1270,60 @@ impl ProcessCapability {
         }
     }
 
+    /// Create a process capability tracker after validating its identity and limits.
+    pub fn try_new(pid: u32, name: impl Into<String>, limits: ProcessLimits) -> Result<Self> {
+        let name = name.into();
+        anyhow::ensure!(pid > 0, "process id must be greater than zero");
+        validate_process_name(&name)?;
+        limits.validate()?;
+        Ok(Self::new(pid, name, limits))
+    }
+
+    /// Validate a process capability record loaded from external state.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(self.pid > 0, "process id must be greater than zero");
+        validate_process_name(&self.name)?;
+        self.limits.validate()?;
+        anyhow::ensure!(
+            self.violations.len() <= MAX_PROCESS_VIOLATIONS,
+            "process violation history exceeds {MAX_PROCESS_VIOLATIONS} entries"
+        );
+        for violation in &self.violations {
+            anyhow::ensure!(
+                !violation.is_empty() && violation.len() <= MAX_PROCESS_VIOLATION_BYTES,
+                "process violation description is empty or too large"
+            );
+            anyhow::ensure!(
+                !violation.chars().any(char::is_control),
+                "process violation description contains control characters"
+            );
+        }
+        Ok(())
+    }
+
     /// Record a violation against this process.
     pub fn record_violation(&mut self, description: impl Into<String>) {
-        self.violations.push(description.into());
+        if self.violations.len() >= MAX_PROCESS_VIOLATIONS {
+            return;
+        }
+        let mut description: String = description
+            .into()
+            .chars()
+            .map(|character| {
+                if character.is_control() {
+                    ' '
+                } else {
+                    character
+                }
+            })
+            .collect();
+        if description.trim().is_empty() {
+            description = "unspecified violation".to_string();
+        }
+        self.violations.push(truncate_security_text(
+            description,
+            MAX_PROCESS_VIOLATION_BYTES,
+        ));
     }
 
     /// Return the number of violations recorded.
@@ -1030,6 +1333,10 @@ impl ProcessCapability {
 
     /// Check whether a memory usage value exceeds the configured limit.
     pub fn check_memory(&mut self, used_bytes: u64) -> bool {
+        if self.limits.validate().is_err() {
+            self.record_violation("invalid process resource limits");
+            return false;
+        }
         if let Some(max) = self.limits.max_memory_bytes {
             if used_bytes > max {
                 self.record_violation(format!("memory limit exceeded: {used_bytes} > {max}"));
@@ -1041,6 +1348,14 @@ impl ProcessCapability {
 
     /// Check whether a CPU usage value exceeds the configured limit.
     pub fn check_cpu(&mut self, cpu_percent: f64) -> bool {
+        if self.limits.validate().is_err() {
+            self.record_violation("invalid process resource limits");
+            return false;
+        }
+        if !cpu_percent.is_finite() || cpu_percent < 0.0 {
+            self.record_violation("invalid CPU usage measurement");
+            return false;
+        }
         if let Some(max) = self.limits.max_cpu_percent {
             if cpu_percent > max {
                 self.record_violation(format!("CPU limit exceeded: {cpu_percent:.1}% > {max:.1}%"));
@@ -1050,8 +1365,27 @@ impl ProcessCapability {
         true
     }
 
+    /// Check whether an open-file count exceeds the configured limit.
+    pub fn check_open_files(&mut self, open_files: u32) -> bool {
+        if self.limits.validate().is_err() {
+            self.record_violation("invalid process resource limits");
+            return false;
+        }
+        if let Some(max) = self.limits.max_open_files {
+            if open_files > max {
+                self.record_violation(format!("open-file limit exceeded: {open_files} > {max}"));
+                return false;
+            }
+        }
+        true
+    }
+
     /// Check whether a network request is allowed.
     pub fn check_network(&mut self) -> bool {
+        if self.limits.validate().is_err() {
+            self.record_violation("invalid process resource limits");
+            return false;
+        }
         if !self.limits.network_allowed {
             self.record_violation("network access denied".to_owned());
             return false;
@@ -1081,11 +1415,18 @@ pub enum NetworkPolicy {
 impl NetworkPolicy {
     /// Check whether a given host is permitted under this policy.
     pub fn check(&self, host: &str) -> bool {
+        if self.validate().is_err() || validate_network_host(host).is_err() {
+            return false;
+        }
         match self {
             NetworkPolicy::AllowAll => true,
             NetworkPolicy::DenyAll => false,
-            NetworkPolicy::AllowList(hosts) => hosts.iter().any(|h| h == host),
-            NetworkPolicy::DenyList(hosts) => !hosts.iter().any(|h| h == host),
+            NetworkPolicy::AllowList(hosts) => {
+                hosts.iter().any(|listed| listed.eq_ignore_ascii_case(host))
+            }
+            NetworkPolicy::DenyList(hosts) => {
+                !hosts.iter().any(|listed| listed.eq_ignore_ascii_case(host))
+            }
         }
     }
 
@@ -1296,9 +1637,55 @@ impl AppNetworkRequest {
         self.network_policy.as_ref()
     }
 
+    /// Number of checked headers on this request.
+    pub fn header_count(&self) -> usize {
+        self.headers.len()
+    }
+
+    /// Whether this request declares outbound body bytes.
+    pub fn has_body(&self) -> bool {
+        self.body_size_bytes.is_some()
+    }
+
+    /// Whether a network policy will be checked before sending.
+    pub fn has_network_policy(&self) -> bool {
+        self.network_policy.is_some()
+    }
+
     /// URL host, normalized to lowercase.
     pub fn host(&self) -> Result<String> {
         network_url_host(&self.url)
+    }
+
+    /// Returns a compact, credential-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        let url = network_url_summary(&self.url);
+        let body = self
+            .body_size_bytes
+            .map(|bytes| format!("{bytes} bytes"))
+            .unwrap_or_else(|| "none".to_string());
+
+        format!(
+            "app network request {} {url}, {} headers, body {body}, network policy {}",
+            self.method.as_str(),
+            self.header_count(),
+            if self.has_network_policy() {
+                "present"
+            } else {
+                "none"
+            }
+        )
+    }
+
+    /// Returns a host/body-size-safe summary for privacy-sensitive agent traces.
+    pub fn to_safe_text(&self) -> String {
+        format!(
+            "app network request {}: headers {}, body {}, network policy {}",
+            self.method.as_str(),
+            self.header_count(),
+            self.has_body(),
+            self.has_network_policy()
+        )
     }
 
     /// Validate URL, headers, method/body shape, and network policy.
@@ -1314,6 +1701,10 @@ impl AppNetworkRequest {
                 self.method.allows_body(),
                 "network request method {} cannot declare a body size",
                 self.method.as_str()
+            );
+            anyhow::ensure!(
+                size <= MAX_NETWORK_BODY_BYTES,
+                "network request body size exceeds {MAX_NETWORK_BODY_BYTES} bytes"
             );
         }
         if let Some(policy) = &self.network_policy {
@@ -1408,17 +1799,56 @@ impl AppNetworkRequestBuilder {
         self
     }
 
+    /// HTTP method configured on this builder.
+    pub fn method(&self) -> AppNetworkMethod {
+        self.method
+    }
+
+    /// Number of configured headers.
+    pub fn header_count(&self) -> usize {
+        self.headers.len()
+    }
+
+    /// Whether this builder declares outbound body bytes.
+    pub fn has_body(&self) -> bool {
+        self.body_size_bytes.is_some()
+    }
+
+    /// Whether a network policy will be checked before sending.
+    pub fn has_network_policy(&self) -> bool {
+        self.network_policy.is_some()
+    }
+
+    /// Validate the planned request without consuming the builder.
+    pub fn validate(&self) -> Result<()> {
+        self.as_request().validate()
+    }
+
+    /// Returns a compact, credential-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        self.as_request().to_text()
+    }
+
+    /// Returns a host/body-size-safe summary for privacy-sensitive agent traces.
+    pub fn to_safe_text(&self) -> String {
+        self.as_request().to_safe_text()
+    }
+
     /// Validate and build the request descriptor.
     pub fn build_checked(self) -> Result<AppNetworkRequest> {
-        let request = AppNetworkRequest {
-            method: self.method,
-            url: self.url,
-            headers: self.headers,
-            body_size_bytes: self.body_size_bytes,
-            network_policy: self.network_policy,
-        };
+        let request = self.as_request();
         request.validate()?;
         Ok(request)
+    }
+
+    fn as_request(&self) -> AppNetworkRequest {
+        AppNetworkRequest {
+            method: self.method,
+            url: self.url.clone(),
+            headers: self.headers.clone(),
+            body_size_bytes: self.body_size_bytes,
+            network_policy: self.network_policy.clone(),
+        }
     }
 }
 
@@ -1448,6 +1878,122 @@ impl AppRealtimeConnectionKind {
     }
 }
 
+/// Checked reconnect/backoff policy for long-lived realtime transports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppRealtimeReconnectPolicy {
+    max_attempts: u8,
+    initial_delay: Duration,
+    max_delay: Duration,
+}
+
+impl AppRealtimeReconnectPolicy {
+    /// Create a reconnect policy with explicit attempts and backoff bounds.
+    pub fn new(max_attempts: u8, initial_delay: Duration, max_delay: Duration) -> Self {
+        Self {
+            max_attempts,
+            initial_delay,
+            max_delay,
+        }
+    }
+
+    /// Common conservative reconnect policy for chat, presence, and collaboration.
+    pub fn conservative() -> Self {
+        Self::new(5, Duration::from_secs(1), Duration::from_secs(30))
+    }
+
+    /// Common reconnect policy for critical background sync and notifications.
+    pub fn persistent() -> Self {
+        Self::new(10, Duration::from_secs(1), Duration::from_secs(60))
+    }
+
+    /// Maximum reconnect attempts after the initial connection attempt.
+    pub fn max_attempts(&self) -> u8 {
+        self.max_attempts
+    }
+
+    /// Initial reconnect delay.
+    pub fn initial_delay(&self) -> Duration {
+        self.initial_delay
+    }
+
+    /// Maximum reconnect delay.
+    pub fn max_delay(&self) -> Duration {
+        self.max_delay
+    }
+
+    /// Whether reconnect is enabled.
+    pub fn reconnects(&self) -> bool {
+        self.max_attempts > 0
+    }
+
+    /// Validate reconnect bounds before a worker starts its loop.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.max_attempts <= 100,
+            "realtime reconnect attempts cannot exceed 100"
+        );
+        if self.max_attempts == 0 {
+            anyhow::ensure!(
+                self.initial_delay == Duration::ZERO && self.max_delay == Duration::ZERO,
+                "disabled realtime reconnect policy must use zero delays"
+            );
+            return Ok(());
+        }
+        anyhow::ensure!(
+            self.initial_delay >= Duration::from_millis(100),
+            "realtime reconnect initial delay must be at least 100ms"
+        );
+        anyhow::ensure!(
+            self.max_delay >= self.initial_delay,
+            "realtime reconnect max delay cannot be less than initial delay"
+        );
+        anyhow::ensure!(
+            self.max_delay <= Duration::from_secs(60 * 60),
+            "realtime reconnect max delay cannot exceed 1 hour"
+        );
+        Ok(())
+    }
+
+    /// Return the capped exponential delay for a one-based retry attempt.
+    /// Returns `None` when reconnect is disabled or the attempt is outside the
+    /// configured retry budget.
+    pub fn delay_for_attempt(&self, attempt: u8) -> Option<Duration> {
+        if self.validate().is_err() || attempt == 0 || attempt > self.max_attempts {
+            return None;
+        }
+        let mut delay = self.initial_delay;
+        for _ in 1..attempt {
+            delay = delay.checked_mul(2).unwrap_or(self.max_delay);
+            if delay >= self.max_delay {
+                return Some(self.max_delay);
+            }
+        }
+        Some(delay.min(self.max_delay))
+    }
+
+    /// Content-safe summary for realtime reconnect policy.
+    pub fn to_text(&self) -> String {
+        format!(
+            "realtime reconnect policy: enabled {}, attempts {}, initial delay {}, max delay {}",
+            self.reconnects(),
+            self.max_attempts,
+            self.initial_delay.as_secs_f64(),
+            self.max_delay.as_secs_f64()
+        )
+    }
+
+    /// Timing-safe summary for privacy-sensitive traces.
+    pub fn to_safe_text(&self) -> String {
+        format!(
+            "realtime reconnect policy: enabled {}, attempts set {}, initial delay set {}, max delay set {}",
+            self.reconnects(),
+            self.max_attempts > 0,
+            self.initial_delay > Duration::ZERO,
+            self.max_delay > Duration::ZERO
+        )
+    }
+}
+
 /// Checked descriptor for app-owned realtime network connections.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppRealtimeConnection {
@@ -1457,6 +2003,7 @@ pub struct AppRealtimeConnection {
     headers: Vec<(String, String)>,
     heartbeat_interval: Option<Duration>,
     max_message_bytes: Option<u64>,
+    reconnect_policy: Option<AppRealtimeReconnectPolicy>,
     network_policy: Option<NetworkPolicy>,
 }
 
@@ -1501,14 +2048,99 @@ impl AppRealtimeConnection {
         self.max_message_bytes
     }
 
+    /// Optional reconnect/backoff policy expected by the app worker.
+    pub fn reconnect_policy(&self) -> Option<AppRealtimeReconnectPolicy> {
+        self.reconnect_policy
+    }
+
     /// Optional outbound network policy.
     pub fn network_policy(&self) -> Option<&NetworkPolicy> {
         self.network_policy.as_ref()
     }
 
+    /// Number of checked headers on this connection.
+    pub fn header_count(&self) -> usize {
+        self.headers.len()
+    }
+
+    /// Number of WebSocket subprotocols on this connection.
+    pub fn protocol_count(&self) -> usize {
+        self.protocols.len()
+    }
+
+    /// Whether this connection declares a heartbeat interval.
+    pub fn has_heartbeat_interval(&self) -> bool {
+        self.heartbeat_interval.is_some()
+    }
+
+    /// Whether this connection declares a maximum inbound message size.
+    pub fn has_max_message_bytes(&self) -> bool {
+        self.max_message_bytes.is_some()
+    }
+
+    /// Whether this connection declares reconnect/backoff behavior.
+    pub fn has_reconnect_policy(&self) -> bool {
+        self.reconnect_policy.is_some()
+    }
+
+    /// Whether a network policy will be checked before connecting.
+    pub fn has_network_policy(&self) -> bool {
+        self.network_policy.is_some()
+    }
+
     /// URL host, normalized to lowercase.
     pub fn host(&self) -> Result<String> {
         realtime_url_host(&self.url, self.kind)
+    }
+
+    /// Returns a compact, credential-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        let url = network_url_summary(&self.url);
+        let heartbeat = self
+            .heartbeat_interval
+            .map(|interval| format!("{}s", interval.as_secs()))
+            .unwrap_or_else(|| "none".to_string());
+        let max_message = self
+            .max_message_bytes
+            .map(|bytes| format!("{bytes} bytes"))
+            .unwrap_or_else(|| "unknown".to_string());
+        let reconnect = self
+            .reconnect_policy
+            .map(|policy| {
+                format!(
+                    "attempts {}, initial {}s, max {}s",
+                    policy.max_attempts(),
+                    policy.initial_delay().as_secs_f64(),
+                    policy.max_delay().as_secs_f64()
+                )
+            })
+            .unwrap_or_else(|| "none".to_string());
+
+        format!(
+            "app realtime {} connection to {url}, {} protocols, {} headers, heartbeat {heartbeat}, max message {max_message}, reconnect {reconnect}, network policy {}",
+            self.kind.key(),
+            self.protocol_count(),
+            self.header_count(),
+            if self.has_network_policy() {
+                "present"
+            } else {
+                "none"
+            }
+        )
+    }
+
+    /// Returns a host/timing/size-safe summary for privacy-sensitive agent traces.
+    pub fn to_safe_text(&self) -> String {
+        format!(
+            "app realtime {} connection: protocols {}, headers {}, heartbeat {}, max message {}, reconnect {}, network policy {}",
+            self.kind.key(),
+            self.protocol_count(),
+            self.header_count(),
+            self.has_heartbeat_interval(),
+            self.has_max_message_bytes(),
+            self.has_reconnect_policy(),
+            self.has_network_policy()
+        )
     }
 
     /// Runtime capability required to open this connection.
@@ -1543,6 +2175,9 @@ impl AppRealtimeConnection {
                 "realtime connection max message bytes cannot exceed 134217728"
             );
         }
+        if let Some(policy) = self.reconnect_policy {
+            policy.validate()?;
+        }
         if let Some(policy) = &self.network_policy {
             policy.validate()?;
             anyhow::ensure!(
@@ -1563,6 +2198,7 @@ pub struct AppRealtimeConnectionBuilder {
     headers: Vec<(String, String)>,
     heartbeat_interval: Option<Duration>,
     max_message_bytes: Option<u64>,
+    reconnect_policy: Option<AppRealtimeReconnectPolicy>,
     network_policy: Option<NetworkPolicy>,
 }
 
@@ -1576,6 +2212,7 @@ impl AppRealtimeConnectionBuilder {
             headers: Vec::new(),
             heartbeat_interval: None,
             max_message_bytes: None,
+            reconnect_policy: None,
             network_policy: None,
         }
     }
@@ -1631,29 +2268,553 @@ impl AppRealtimeConnectionBuilder {
         self
     }
 
+    /// Attach a reconnect/backoff policy for the app realtime worker.
+    pub fn reconnect_policy(mut self, policy: AppRealtimeReconnectPolicy) -> Self {
+        self.reconnect_policy = Some(policy);
+        self
+    }
+
+    /// Use the common conservative reconnect policy.
+    pub fn reconnect_conservative(self) -> Self {
+        self.reconnect_policy(AppRealtimeReconnectPolicy::conservative())
+    }
+
+    /// Use the common persistent reconnect policy.
+    pub fn reconnect_persistent(self) -> Self {
+        self.reconnect_policy(AppRealtimeReconnectPolicy::persistent())
+    }
+
+    /// Disable reconnect behavior explicitly.
+    pub fn without_reconnect(mut self) -> Self {
+        self.reconnect_policy = None;
+        self
+    }
+
     /// Attach an outbound network policy.
     pub fn network_policy(mut self, policy: NetworkPolicy) -> Self {
         self.network_policy = Some(policy);
         self
     }
 
+    /// Realtime transport kind configured on this builder.
+    pub fn kind(&self) -> AppRealtimeConnectionKind {
+        self.kind
+    }
+
+    /// Number of configured WebSocket subprotocols.
+    pub fn protocol_count(&self) -> usize {
+        self.protocols.len()
+    }
+
+    /// Number of configured headers.
+    pub fn header_count(&self) -> usize {
+        self.headers.len()
+    }
+
+    /// Whether this builder declares a heartbeat interval.
+    pub fn has_heartbeat_interval(&self) -> bool {
+        self.heartbeat_interval.is_some()
+    }
+
+    /// Whether this builder declares a maximum inbound message size.
+    pub fn has_max_message_bytes(&self) -> bool {
+        self.max_message_bytes.is_some()
+    }
+
+    /// Whether this builder declares reconnect/backoff behavior.
+    pub fn has_reconnect_policy(&self) -> bool {
+        self.reconnect_policy.is_some()
+    }
+
+    /// Whether a network policy will be checked before connecting.
+    pub fn has_network_policy(&self) -> bool {
+        self.network_policy.is_some()
+    }
+
+    /// Validate the planned connection without consuming the builder.
+    pub fn validate(&self) -> Result<()> {
+        self.as_connection().validate()
+    }
+
+    /// Returns a compact, credential-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        self.as_connection().to_text()
+    }
+
+    /// Returns a host/timing/size-safe summary for privacy-sensitive agent traces.
+    pub fn to_safe_text(&self) -> String {
+        self.as_connection().to_safe_text()
+    }
+
     /// Validate and build the realtime descriptor.
     pub fn build_checked(self) -> Result<AppRealtimeConnection> {
-        let connection = AppRealtimeConnection {
-            kind: self.kind,
-            url: self.url,
-            protocols: self.protocols,
-            headers: self.headers,
-            heartbeat_interval: self.heartbeat_interval,
-            max_message_bytes: self.max_message_bytes,
-            network_policy: self.network_policy,
-        };
+        let connection = self.as_connection();
         connection.validate()?;
         Ok(connection)
+    }
+
+    fn as_connection(&self) -> AppRealtimeConnection {
+        AppRealtimeConnection {
+            kind: self.kind,
+            url: self.url.clone(),
+            protocols: self.protocols.clone(),
+            headers: self.headers.clone(),
+            heartbeat_interval: self.heartbeat_interval,
+            max_message_bytes: self.max_message_bytes,
+            reconnect_policy: self.reconnect_policy,
+            network_policy: self.network_policy.clone(),
+        }
+    }
+}
+
+/// A checked group of app-owned realtime connections that should be opened together.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppRealtimeConnectionSet {
+    connections: Vec<AppRealtimeConnection>,
+}
+
+impl AppRealtimeConnectionSet {
+    /// Create a realtime connection set builder.
+    pub fn builder() -> AppRealtimeConnectionSetBuilder {
+        AppRealtimeConnectionSetBuilder::new()
+    }
+
+    /// Checked connections in declaration order.
+    pub fn connections(&self) -> &[AppRealtimeConnection] {
+        &self.connections
+    }
+
+    /// Consume the set and return its checked connections.
+    pub fn into_connections(self) -> Vec<AppRealtimeConnection> {
+        self.connections
+    }
+
+    /// Number of configured realtime connections.
+    pub fn connection_count(&self) -> usize {
+        self.connections.len()
+    }
+
+    /// Number of WebSocket connections.
+    pub fn websocket_count(&self) -> usize {
+        self.connections
+            .iter()
+            .filter(|connection| connection.kind == AppRealtimeConnectionKind::WebSocket)
+            .count()
+    }
+
+    /// Number of server-sent event connections.
+    pub fn server_sent_events_count(&self) -> usize {
+        self.connections
+            .iter()
+            .filter(|connection| connection.kind == AppRealtimeConnectionKind::ServerSentEvents)
+            .count()
+    }
+
+    /// Total configured header count across connections.
+    pub fn header_count(&self) -> usize {
+        self.connections
+            .iter()
+            .map(AppRealtimeConnection::header_count)
+            .sum()
+    }
+
+    /// Total configured WebSocket subprotocol count across connections.
+    pub fn protocol_count(&self) -> usize {
+        self.connections
+            .iter()
+            .map(AppRealtimeConnection::protocol_count)
+            .sum()
+    }
+
+    /// Number of connections with heartbeat intervals.
+    pub fn heartbeat_count(&self) -> usize {
+        self.connections
+            .iter()
+            .filter(|connection| connection.has_heartbeat_interval())
+            .count()
+    }
+
+    /// Number of connections with inbound message/event budgets.
+    pub fn max_message_count(&self) -> usize {
+        self.connections
+            .iter()
+            .filter(|connection| connection.has_max_message_bytes())
+            .count()
+    }
+
+    /// Number of connections with reconnect/backoff policies.
+    pub fn reconnect_policy_count(&self) -> usize {
+        self.connections
+            .iter()
+            .filter(|connection| connection.has_reconnect_policy())
+            .count()
+    }
+
+    /// Number of connections checked against an outbound network policy.
+    pub fn network_policy_count(&self) -> usize {
+        self.connections
+            .iter()
+            .filter(|connection| connection.has_network_policy())
+            .count()
+    }
+
+    /// Whether the set contains no connections.
+    pub fn is_empty(&self) -> bool {
+        self.connections.is_empty()
+    }
+
+    /// Validate every connection in the set.
+    pub fn validate(&self) -> Result<()> {
+        validate_realtime_connection_set(&self.connections)
+    }
+
+    /// Content-safe summary for realtime connection plans.
+    pub fn to_text(&self) -> String {
+        realtime_connection_set_summary("app realtime connection set", &self.connections)
+    }
+
+    /// Host/timing/size-safe summary for privacy-sensitive agent traces.
+    pub fn to_safe_text(&self) -> String {
+        format!(
+            "app realtime connection set: connections {}, websockets {}, server sent events {}, protocols {}, headers {}, heartbeats {}, max messages {}, reconnect policies {}, network policies {}",
+            self.connection_count(),
+            self.websocket_count(),
+            self.server_sent_events_count(),
+            self.protocol_count(),
+            self.header_count(),
+            self.heartbeat_count(),
+            self.max_message_count(),
+            self.reconnect_policy_count(),
+            self.network_policy_count()
+        )
+    }
+}
+
+/// Builder for checked app-owned realtime connection sets.
+#[derive(Debug, Clone, Default)]
+pub struct AppRealtimeConnectionSetBuilder {
+    connections: Vec<AppRealtimeConnection>,
+}
+
+impl AppRealtimeConnectionSetBuilder {
+    /// Create an empty connection set builder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a prebuilt checked connection.
+    pub fn connection(mut self, connection: AppRealtimeConnection) -> Self {
+        self.connections.push(connection);
+        self
+    }
+
+    /// Add a connection builder after checking it.
+    pub fn connection_builder(mut self, connection: AppRealtimeConnectionBuilder) -> Result<Self> {
+        self.connections.push(connection.build_checked()?);
+        Ok(self)
+    }
+
+    /// Add multiple prebuilt checked connections.
+    pub fn connections(
+        mut self,
+        connections: impl IntoIterator<Item = AppRealtimeConnection>,
+    ) -> Self {
+        self.connections.extend(connections);
+        self
+    }
+
+    /// Number of configured realtime connections.
+    pub fn connection_count(&self) -> usize {
+        self.connections.len()
+    }
+
+    /// Whether this builder has no configured connections.
+    pub fn is_empty(&self) -> bool {
+        self.connections.is_empty()
+    }
+
+    /// Validate the set without consuming the builder.
+    pub fn validate(&self) -> Result<()> {
+        validate_realtime_connection_set(&self.connections)
+    }
+
+    /// Content-safe summary before build.
+    pub fn to_text(&self) -> String {
+        realtime_connection_set_summary("app realtime connection set builder", &self.connections)
+    }
+
+    /// Host/timing/size-safe summary for privacy-sensitive agent traces.
+    pub fn to_safe_text(&self) -> String {
+        AppRealtimeConnectionSet {
+            connections: self.connections.clone(),
+        }
+        .to_safe_text()
+    }
+
+    /// Validate and build the connection set.
+    pub fn build_checked(self) -> Result<AppRealtimeConnectionSet> {
+        validate_realtime_connection_set(&self.connections)?;
+        Ok(AppRealtimeConnectionSet {
+            connections: self.connections,
+        })
+    }
+}
+
+/// Unit of work covered by a checked network/realtime handoff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NetworkRealtimeRequest {
+    /// Validate an app-owned HTTP request descriptor.
+    Request(AppNetworkRequest),
+    /// Validate one app-owned realtime connection descriptor.
+    RealtimeConnection(AppRealtimeConnection),
+    /// Validate a group of app-owned realtime connections.
+    RealtimeConnectionSet(AppRealtimeConnectionSet),
+    /// Validate an outbound network policy.
+    NetworkPolicy(NetworkPolicy),
+    /// Route browser-owned fetch/XHR/resource behavior to a hosted surface.
+    HostedNetworkBridge {
+        /// Hosted surface id.
+        surface_id: String,
+    },
+}
+
+impl NetworkRealtimeRequest {
+    /// Validate one network/realtime handoff request.
+    pub fn validate(&self) -> Result<()> {
+        match self {
+            Self::Request(request) => request.validate(),
+            Self::RealtimeConnection(connection) => connection.validate(),
+            Self::RealtimeConnectionSet(set) => set.validate(),
+            Self::NetworkPolicy(policy) => policy.validate(),
+            Self::HostedNetworkBridge { surface_id } => {
+                validate_network_bridge_surface_id(surface_id)
+            }
+        }
+    }
+
+    /// Privacy-preserving request kind for summaries.
+    pub fn summary_kind(&self) -> &'static str {
+        match self {
+            Self::Request(_) => "request",
+            Self::RealtimeConnection(_) => "realtime-connection",
+            Self::RealtimeConnectionSet(_) => "realtime-connection-set",
+            Self::NetworkPolicy(_) => "network-policy",
+            Self::HostedNetworkBridge { .. } => "hosted-network-bridge",
+        }
+    }
+}
+
+/// Recommended next implementation action for a network/realtime handoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkRealtimeNextAction {
+    /// Dispatch app-owned HTTP requests through the native HTTP client.
+    DispatchNativeRequest,
+    /// Open app-owned realtime transports through native workers.
+    OpenRealtimeTransport,
+    /// Install or evaluate outbound network policy first.
+    ApplyNetworkPolicy,
+    /// Use hosted WebView network/resource bridges.
+    UseHostedNetworkBridge,
+}
+
+/// Checked handoff for native HTTP requests, realtime transports, network policy, and hosted fallback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkRealtimeHandoff {
+    requests: Vec<NetworkRealtimeRequest>,
+}
+
+impl NetworkRealtimeHandoff {
+    /// Start building a network/realtime handoff.
+    pub fn builder() -> NetworkRealtimeHandoffBuilder {
+        NetworkRealtimeHandoffBuilder::new()
+    }
+
+    /// Requests covered by this handoff.
+    pub fn requests(&self) -> &[NetworkRealtimeRequest] {
+        &self.requests
+    }
+
+    /// Number of requests in the handoff.
+    pub fn request_count(&self) -> usize {
+        self.requests.len()
+    }
+
+    /// Whether this handoff includes app-owned HTTP requests.
+    pub fn has_native_requests(&self) -> bool {
+        self.requests
+            .iter()
+            .any(|request| matches!(request, NetworkRealtimeRequest::Request(_)))
+    }
+
+    /// Whether this handoff includes app-owned realtime transports.
+    pub fn has_realtime_transports(&self) -> bool {
+        self.requests.iter().any(|request| {
+            matches!(
+                request,
+                NetworkRealtimeRequest::RealtimeConnection(_)
+                    | NetworkRealtimeRequest::RealtimeConnectionSet(_)
+            )
+        })
+    }
+
+    /// Whether this handoff includes network policy.
+    pub fn has_network_policy(&self) -> bool {
+        self.requests
+            .iter()
+            .any(|request| matches!(request, NetworkRealtimeRequest::NetworkPolicy(_)))
+    }
+
+    /// Whether this handoff includes a hosted network bridge.
+    pub fn has_hosted_network_bridge(&self) -> bool {
+        self.requests
+            .iter()
+            .any(|request| matches!(request, NetworkRealtimeRequest::HostedNetworkBridge { .. }))
+    }
+
+    /// First recommended action for a builder or AI agent.
+    pub fn next_action(&self) -> NetworkRealtimeNextAction {
+        if self.has_native_requests() {
+            NetworkRealtimeNextAction::DispatchNativeRequest
+        } else if self.has_realtime_transports() {
+            NetworkRealtimeNextAction::OpenRealtimeTransport
+        } else if self.has_network_policy() {
+            NetworkRealtimeNextAction::ApplyNetworkPolicy
+        } else {
+            NetworkRealtimeNextAction::UseHostedNetworkBridge
+        }
+    }
+
+    /// Validate all network/realtime handoff requests.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.requests.is_empty(),
+            "network/realtime handoff must include at least one request"
+        );
+        anyhow::ensure!(
+            self.requests.len() <= 32,
+            "network/realtime handoff cannot include more than 32 requests"
+        );
+        for request in &self.requests {
+            request.validate()?;
+        }
+        Ok(())
+    }
+
+    /// Privacy-preserving summary for logs, tests, and AI-agent traces.
+    pub fn to_text(&self) -> String {
+        let kinds = self
+            .requests
+            .iter()
+            .map(NetworkRealtimeRequest::summary_kind)
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "network/realtime handoff: requests={} next_action={:?} kinds=[{}]",
+            self.request_count(),
+            self.next_action(),
+            kinds
+        )
+    }
+}
+
+/// Builder for checked network/realtime handoffs.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NetworkRealtimeHandoffBuilder {
+    requests: Vec<NetworkRealtimeRequest>,
+}
+
+impl NetworkRealtimeHandoffBuilder {
+    /// Create an empty network/realtime handoff builder.
+    pub fn new() -> Self {
+        Self {
+            requests: Vec::new(),
+        }
+    }
+
+    /// Add a checked app-owned HTTP request descriptor.
+    pub fn request(mut self, request: AppNetworkRequest) -> Self {
+        self.requests.push(NetworkRealtimeRequest::Request(request));
+        self
+    }
+
+    /// Add a request builder after checking it.
+    pub fn request_builder(mut self, request: AppNetworkRequestBuilder) -> Result<Self> {
+        self.requests
+            .push(NetworkRealtimeRequest::Request(request.build_checked()?));
+        Ok(self)
+    }
+
+    /// Add a checked realtime connection descriptor.
+    pub fn realtime_connection(mut self, connection: AppRealtimeConnection) -> Self {
+        self.requests
+            .push(NetworkRealtimeRequest::RealtimeConnection(connection));
+        self
+    }
+
+    /// Add a realtime connection builder after checking it.
+    pub fn realtime_connection_builder(
+        mut self,
+        connection: AppRealtimeConnectionBuilder,
+    ) -> Result<Self> {
+        self.requests
+            .push(NetworkRealtimeRequest::RealtimeConnection(
+                connection.build_checked()?,
+            ));
+        Ok(self)
+    }
+
+    /// Add a checked realtime connection set.
+    pub fn realtime_connection_set(mut self, set: AppRealtimeConnectionSet) -> Self {
+        self.requests
+            .push(NetworkRealtimeRequest::RealtimeConnectionSet(set));
+        self
+    }
+
+    /// Add a checked network policy.
+    pub fn network_policy(mut self, policy: NetworkPolicy) -> Self {
+        self.requests
+            .push(NetworkRealtimeRequest::NetworkPolicy(policy));
+        self
+    }
+
+    /// Add a network policy builder after checking it.
+    pub fn network_policy_builder(mut self, policy: NetworkPolicyBuilder) -> Result<Self> {
+        self.requests.push(NetworkRealtimeRequest::NetworkPolicy(
+            policy.build_checked()?,
+        ));
+        Ok(self)
+    }
+
+    /// Add a hosted WebView network/resource bridge request.
+    pub fn hosted_network_bridge(mut self, surface_id: impl Into<String>) -> Self {
+        self.requests
+            .push(NetworkRealtimeRequest::HostedNetworkBridge {
+                surface_id: surface_id.into(),
+            });
+        self
+    }
+
+    /// Validate the handoff without consuming the builder.
+    pub fn validate(&self) -> Result<()> {
+        self.as_handoff().validate()
+    }
+
+    /// Build a checked network/realtime handoff.
+    pub fn build_checked(self) -> Result<NetworkRealtimeHandoff> {
+        let handoff = self.as_handoff();
+        handoff.validate()?;
+        Ok(handoff)
+    }
+
+    fn as_handoff(&self) -> NetworkRealtimeHandoff {
+        NetworkRealtimeHandoff {
+            requests: self.requests.clone(),
+        }
     }
 }
 
 fn network_url_host(url: &str) -> Result<String> {
+    validate_network_url_text(url)?;
     let parsed = http_client::Url::parse(url).map_err(|error| anyhow::anyhow!("{error}"))?;
     anyhow::ensure!(
         matches!(parsed.scheme(), "http" | "https"),
@@ -1666,7 +2827,30 @@ fn network_url_host(url: &str) -> Result<String> {
     Ok(host.to_ascii_lowercase())
 }
 
+fn validate_network_bridge_surface_id(surface_id: &str) -> Result<()> {
+    anyhow::ensure!(
+        !surface_id.trim().is_empty(),
+        "hosted network bridge surface id cannot be empty"
+    );
+    anyhow::ensure!(
+        surface_id == surface_id.trim(),
+        "hosted network bridge surface id cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        surface_id.chars().count() <= 64,
+        "hosted network bridge surface id cannot be longer than 64 characters"
+    );
+    anyhow::ensure!(
+        surface_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_')),
+        "hosted network bridge surface id must contain only ASCII letters, digits, '.', '-', or '_'"
+    );
+    Ok(())
+}
+
 fn realtime_url_host(url: &str, kind: AppRealtimeConnectionKind) -> Result<String> {
+    validate_network_url_text(url)?;
     let parsed = http_client::Url::parse(url).map_err(|error| anyhow::anyhow!("{error}"))?;
     anyhow::ensure!(
         kind.allows_scheme(parsed.scheme()),
@@ -1684,7 +2868,25 @@ fn realtime_url_host(url: &str, kind: AppRealtimeConnectionKind) -> Result<Strin
     Ok(host.to_ascii_lowercase())
 }
 
+fn network_url_summary(url: &str) -> String {
+    let Ok(parsed) = http_client::Url::parse(url) else {
+        return "invalid url".to_string();
+    };
+
+    let host = parsed.host_str().unwrap_or("unknown-host");
+    let port = parsed
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+
+    format!("{}://{}{}", parsed.scheme(), host, port)
+}
+
 fn validate_network_headers(headers: &[(String, String)]) -> Result<()> {
+    anyhow::ensure!(
+        headers.len() <= MAX_NETWORK_HEADERS,
+        "network request cannot contain more than {MAX_NETWORK_HEADERS} headers"
+    );
     let mut seen = HashSet::new();
     for (name, value) in headers {
         validate_network_header_name(name)?;
@@ -1737,6 +2939,75 @@ fn validate_realtime_protocols(
     Ok(())
 }
 
+fn validate_realtime_connection_set(connections: &[AppRealtimeConnection]) -> Result<()> {
+    anyhow::ensure!(
+        !connections.is_empty(),
+        "app realtime connection set must contain at least one connection"
+    );
+    anyhow::ensure!(
+        connections.len() <= MAX_REALTIME_CONNECTIONS,
+        "app realtime connection set cannot contain more than {MAX_REALTIME_CONNECTIONS} connections"
+    );
+
+    for (index, connection) in connections.iter().enumerate() {
+        connection.validate()?;
+        anyhow::ensure!(
+            !connections[..index].contains(connection),
+            "app realtime connection set contains duplicate connections"
+        );
+    }
+
+    Ok(())
+}
+
+fn realtime_connection_set_summary(label: &str, connections: &[AppRealtimeConnection]) -> String {
+    let websocket_count = connections
+        .iter()
+        .filter(|connection| connection.kind == AppRealtimeConnectionKind::WebSocket)
+        .count();
+    let sse_count = connections
+        .iter()
+        .filter(|connection| connection.kind == AppRealtimeConnectionKind::ServerSentEvents)
+        .count();
+    let protocol_count: usize = connections
+        .iter()
+        .map(AppRealtimeConnection::protocol_count)
+        .sum();
+    let header_count: usize = connections
+        .iter()
+        .map(AppRealtimeConnection::header_count)
+        .sum();
+    let heartbeat_count = connections
+        .iter()
+        .filter(|connection| connection.has_heartbeat_interval())
+        .count();
+    let max_message_count = connections
+        .iter()
+        .filter(|connection| connection.has_max_message_bytes())
+        .count();
+    let reconnect_policy_count = connections
+        .iter()
+        .filter(|connection| connection.has_reconnect_policy())
+        .count();
+    let network_policy_count = connections
+        .iter()
+        .filter(|connection| connection.has_network_policy())
+        .count();
+
+    format!(
+        "{label}: connections {}, websockets {}, server sent events {}, protocols {}, headers {}, heartbeats {}, max messages {}, reconnect policies {}, network policies {}",
+        connections.len(),
+        websocket_count,
+        sse_count,
+        protocol_count,
+        header_count,
+        heartbeat_count,
+        max_message_count,
+        reconnect_policy_count,
+        network_policy_count
+    )
+}
+
 fn validate_network_header_name(name: &str) -> Result<()> {
     anyhow::ensure!(
         !name.is_empty(),
@@ -1745,6 +3016,10 @@ fn validate_network_header_name(name: &str) -> Result<()> {
     anyhow::ensure!(
         name.trim() == name,
         "network request header name cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        name.len() <= MAX_NETWORK_HEADER_NAME_BYTES,
+        "network request header name exceeds {MAX_NETWORK_HEADER_NAME_BYTES} bytes"
     );
     anyhow::ensure!(
         name.bytes().all(is_http_token_byte),
@@ -1791,6 +3066,10 @@ fn validate_network_hosts(hosts: &[String]) -> Result<()> {
         !hosts.is_empty(),
         "network policy host list cannot be empty"
     );
+    anyhow::ensure!(
+        hosts.len() <= MAX_NETWORK_POLICY_HOSTS,
+        "network policy cannot contain more than {MAX_NETWORK_POLICY_HOSTS} hosts"
+    );
     let mut seen = HashSet::new();
     for host in hosts {
         validate_network_host(host)?;
@@ -1816,15 +3095,91 @@ fn validate_network_host(host: &str) -> Result<()> {
         "network policy host cannot be longer than 253 bytes"
     );
     anyhow::ensure!(
-        !host.contains("://") && !host.contains('/'),
-        "network policy host must not include a URL scheme or path"
+        !host.contains('/') && !host.contains('[') && !host.contains(']'),
+        "network policy host must not include a URL scheme, path, or IPv6 brackets"
+    );
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return Ok(());
+    }
+    anyhow::ensure!(
+        !host
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.'),
+        "network policy numeric host must be a valid IP address"
     );
     anyhow::ensure!(
-        host.chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-')),
-        "network policy host must contain only ASCII letters, numbers, '.' or '-'"
+        !host.contains(':') && host.is_ascii(),
+        "network policy host must be a valid IP address or ASCII DNS name"
+    );
+    let labels = host.split('.').collect::<Vec<_>>();
+    anyhow::ensure!(
+        !labels.is_empty() && labels.iter().all(|label| !label.is_empty()),
+        "network policy DNS name cannot contain empty labels"
+    );
+    for label in labels {
+        anyhow::ensure!(
+            label.len() <= 63
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                && label
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .as_bytes()
+                    .last()
+                    .is_some_and(u8::is_ascii_alphanumeric),
+            "network policy DNS label is invalid: {label}"
+        );
+    }
+    Ok(())
+}
+
+fn validate_process_name(name: &str) -> Result<()> {
+    anyhow::ensure!(!name.trim().is_empty(), "process name cannot be empty");
+    anyhow::ensure!(
+        name == name.trim(),
+        "process name cannot have surrounding whitespace"
+    );
+    anyhow::ensure!(
+        name.len() <= MAX_PROCESS_NAME_BYTES,
+        "process name exceeds {MAX_PROCESS_NAME_BYTES} bytes"
+    );
+    anyhow::ensure!(
+        !name.chars().any(char::is_control),
+        "process name cannot contain control characters"
     );
     Ok(())
+}
+
+fn validate_network_url_text(url: &str) -> Result<()> {
+    anyhow::ensure!(!url.trim().is_empty(), "network URL cannot be empty");
+    anyhow::ensure!(
+        url == url.trim(),
+        "network URL cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        url.len() <= MAX_NETWORK_URL_BYTES,
+        "network URL exceeds {MAX_NETWORK_URL_BYTES} bytes"
+    );
+    anyhow::ensure!(
+        !url.chars().any(char::is_control),
+        "network URL cannot contain control characters"
+    );
+    Ok(())
+}
+
+fn truncate_security_text(mut text: String, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut boundary = max_bytes;
+    while !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    text.truncate(boundary);
+    text
 }
 
 // ===========================================================================
@@ -1853,12 +3208,60 @@ impl IpcSchema {
         }
     }
 
+    /// Create and validate an IPC schema.
+    pub fn new_checked(
+        version: u32,
+        min_compatible: u32,
+        message_types: Vec<String>,
+    ) -> Result<Self> {
+        let schema = Self::new(version, min_compatible, message_types);
+        schema.validate()?;
+        Ok(schema)
+    }
+
+    /// Validate the version range and message identifiers.
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.version > 0,
+            "IPC schema version must be greater than zero"
+        );
+        anyhow::ensure!(
+            self.min_compatible > 0 && self.min_compatible <= self.version,
+            "IPC schema minimum compatible version must be between 1 and the current version"
+        );
+        anyhow::ensure!(
+            self.message_types.len() <= MAX_IPC_MESSAGE_TYPES,
+            "IPC schema cannot contain more than {MAX_IPC_MESSAGE_TYPES} message types"
+        );
+        let mut seen = HashSet::new();
+        for message_type in &self.message_types {
+            anyhow::ensure!(
+                !message_type.is_empty() && message_type.len() <= MAX_IPC_MESSAGE_TYPE_BYTES,
+                "IPC message type is empty or too long"
+            );
+            anyhow::ensure!(
+                message_type.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b':' | b'/')
+                }),
+                "IPC message type contains invalid characters: {message_type}"
+            );
+            anyhow::ensure!(
+                seen.insert(message_type),
+                "IPC schema contains duplicate message type: {message_type}"
+            );
+        }
+        Ok(())
+    }
+
     /// Check whether this schema is compatible with another schema.
     ///
     /// Two schemas are compatible when each schema's version falls within the
     /// other's supported range (i.e. `>= min_compatible`).
     pub fn is_compatible(&self, other: &IpcSchema) -> bool {
-        self.version >= other.min_compatible && other.version >= self.min_compatible
+        self.validate().is_ok()
+            && other.validate().is_ok()
+            && self.version >= other.min_compatible
+            && other.version >= self.min_compatible
     }
 
     /// Negotiate a common schema version between `self` and `other`.
@@ -1874,6 +3277,9 @@ impl IpcSchema {
 
     /// Return the intersection of message types supported by both schemas.
     pub fn common_message_types(&self, other: &IpcSchema) -> Vec<String> {
+        if self.validate().is_err() || other.validate().is_err() {
+            return Vec::new();
+        }
         let other_set: HashSet<&String> = other.message_types.iter().collect();
         self.message_types
             .iter()
@@ -1999,6 +3405,18 @@ mod tests {
         assert!(!model.worker_defaults.is_empty());
         assert!(!model.media_defaults.is_empty());
         assert!(model.extension_defaults.is_empty());
+
+        let strict = ThreatModel::strict();
+        assert!(
+            strict
+                .ui_defaults
+                .iter()
+                .chain(&strict.worker_defaults)
+                .chain(&strict.utility_defaults)
+                .chain(&strict.media_defaults)
+                .chain(&strict.extension_defaults)
+                .all(|capability| !capability.is_high_risk())
+        );
     }
 
     #[test]
@@ -2042,6 +3460,21 @@ mod tests {
         assert_eq!(
             broker.check(process, &Capability::ShellExecute),
             PermissionResult::Prompt
+        );
+    }
+
+    #[test]
+    fn panicking_permission_prompt_handlers_fail_closed() {
+        let process = ProcessId(5);
+        let broker = PermissionBroker::new().with_prompt_handler(|_, _| panic!("prompt failed"));
+
+        assert_eq!(
+            broker.prompt(process, &Capability::Camera),
+            PermissionResult::Denied
+        );
+        assert_eq!(
+            broker.check(process, &Capability::Camera),
+            PermissionResult::Denied
         );
     }
 
@@ -2123,16 +3556,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn permission_requests_validate_text_and_contain_decider_panics() {
+        let mut manager = PermissionManager::new();
+        let invalid = PermissionRequest {
+            kind: PermissionKind::Camera,
+            reason: " bad\nreason".to_string(),
+        };
+        assert!(invalid.validate().is_err());
+        assert_eq!(
+            manager.request(&invalid, |_| PermissionStatus::Granted),
+            PermissionStatus::Denied
+        );
+        assert_eq!(
+            manager.status(PermissionKind::Camera),
+            PermissionStatus::NotDetermined
+        );
+
+        let valid = PermissionRequest {
+            kind: PermissionKind::Camera,
+            reason: "Join a video call".to_string(),
+        };
+        assert_eq!(
+            manager.request(&valid, |_| panic!("platform prompt failed")),
+            PermissionStatus::Denied
+        );
+        assert_eq!(
+            manager.status(PermissionKind::Camera),
+            PermissionStatus::Denied
+        );
+    }
+
     // === KeychainStore ===
 
     #[test]
     fn test_keychain_store_and_retrieve() {
         let mut store = KeychainStore::new();
-        store.store(CredentialEntry {
-            service: "github".to_string(),
-            account: "user1".to_string(),
-            secret: b"token123".to_vec(),
-        });
+        store
+            .store(CredentialEntry {
+                service: "github".to_string(),
+                account: "user1".to_string(),
+                secret: b"token123".to_vec(),
+            })
+            .unwrap();
         let entry = store.retrieve("github", "user1").unwrap();
         assert_eq!(entry.secret, b"token123");
     }
@@ -2146,11 +3612,13 @@ mod tests {
     #[test]
     fn test_keychain_delete() {
         let mut store = KeychainStore::new();
-        store.store(CredentialEntry {
-            service: "svc".to_string(),
-            account: "acct".to_string(),
-            secret: vec![1, 2, 3],
-        });
+        store
+            .store(CredentialEntry {
+                service: "svc".to_string(),
+                account: "acct".to_string(),
+                secret: vec![1, 2, 3],
+            })
+            .unwrap();
         assert!(store.delete("svc", "acct"));
         assert!(!store.delete("svc", "acct"));
         assert!(store.is_empty());
@@ -2159,16 +3627,20 @@ mod tests {
     #[test]
     fn test_keychain_list() {
         let mut store = KeychainStore::new();
-        store.store(CredentialEntry {
-            service: "a".to_string(),
-            account: "b".to_string(),
-            secret: vec![],
-        });
-        store.store(CredentialEntry {
-            service: "c".to_string(),
-            account: "d".to_string(),
-            secret: vec![],
-        });
+        store
+            .store(CredentialEntry {
+                service: "a".to_string(),
+                account: "b".to_string(),
+                secret: vec![1],
+            })
+            .unwrap();
+        store
+            .store(CredentialEntry {
+                service: "c".to_string(),
+                account: "d".to_string(),
+                secret: vec![2],
+            })
+            .unwrap();
         assert_eq!(store.len(), 2);
         assert_eq!(store.list().len(), 2);
     }
@@ -2176,18 +3648,48 @@ mod tests {
     #[test]
     fn test_keychain_overwrite() {
         let mut store = KeychainStore::new();
-        store.store(CredentialEntry {
-            service: "svc".to_string(),
-            account: "acct".to_string(),
-            secret: b"old".to_vec(),
-        });
-        store.store(CredentialEntry {
-            service: "svc".to_string(),
-            account: "acct".to_string(),
-            secret: b"new".to_vec(),
-        });
+        store
+            .store(CredentialEntry {
+                service: "svc".to_string(),
+                account: "acct".to_string(),
+                secret: b"old".to_vec(),
+            })
+            .unwrap();
+        store
+            .store(CredentialEntry {
+                service: "svc".to_string(),
+                account: "acct".to_string(),
+                secret: b"new".to_vec(),
+            })
+            .unwrap();
         assert_eq!(store.len(), 1);
         assert_eq!(store.retrieve("svc", "acct").unwrap().secret, b"new");
+    }
+
+    #[test]
+    fn credential_validation_and_debug_output_protect_secrets() {
+        let entry = CredentialEntry {
+            service: "service".to_string(),
+            account: "account".to_string(),
+            secret: b"super-secret-token".to_vec(),
+        };
+        assert!(entry.validate().is_ok());
+        let debug = format!("{entry:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("super-secret-token"));
+
+        let mut store = KeychainStore::new();
+        assert!(store.store(entry).is_ok());
+        assert!(!format!("{store:?}").contains("super-secret-token"));
+        assert!(
+            store
+                .store(CredentialEntry {
+                    service: "service".to_string(),
+                    account: "account-2".to_string(),
+                    secret: Vec::new(),
+                })
+                .is_err()
+        );
     }
 
     // === AccessTokenStore ===
@@ -2195,7 +3697,9 @@ mod tests {
     #[test]
     fn test_access_token_issue_and_validate() {
         let mut store = AccessTokenStore::new();
-        let token = store.issue(PathBuf::from("/tmp/file.txt"), 1000, Some(3600));
+        let token = store
+            .issue(PathBuf::from("/tmp/file.txt"), 1000, Some(3600))
+            .unwrap();
         assert!(store.validate(&token, 1000).is_some());
         assert_eq!(
             store.validate(&token, 1000).unwrap(),
@@ -2206,7 +3710,7 @@ mod tests {
     #[test]
     fn test_access_token_expired() {
         let mut store = AccessTokenStore::new();
-        let token = store.issue(PathBuf::from("/f"), 1000, Some(60));
+        let token = store.issue(PathBuf::from("/f"), 1000, Some(60)).unwrap();
         assert!(store.validate(&token, 1059).is_some());
         assert!(store.validate(&token, 1060).is_none());
     }
@@ -2214,14 +3718,14 @@ mod tests {
     #[test]
     fn test_access_token_no_expiry() {
         let mut store = AccessTokenStore::new();
-        let token = store.issue(PathBuf::from("/f"), 0, None);
+        let token = store.issue(PathBuf::from("/f"), 0, None).unwrap();
         assert!(store.validate(&token, u64::MAX - 1).is_some());
     }
 
     #[test]
     fn test_access_token_revoke() {
         let mut store = AccessTokenStore::new();
-        let token = store.issue(PathBuf::from("/f"), 0, None);
+        let token = store.issue(PathBuf::from("/f"), 0, None).unwrap();
         assert!(store.revoke(&token));
         assert!(store.validate(&token, 0).is_none());
         assert!(!store.revoke(&token));
@@ -2230,20 +3734,49 @@ mod tests {
     #[test]
     fn test_access_token_list() {
         let mut store = AccessTokenStore::new();
-        store.issue(PathBuf::from("/a"), 0, None);
-        store.issue(PathBuf::from("/b"), 0, None);
+        store.issue(PathBuf::from("/a"), 0, None).unwrap();
+        store.issue(PathBuf::from("/b"), 0, None).unwrap();
         assert_eq!(store.list().len(), 2);
     }
 
     #[test]
     fn test_access_token_purge_expired() {
         let mut store = AccessTokenStore::new();
-        store.issue(PathBuf::from("/a"), 0, Some(10));
-        store.issue(PathBuf::from("/b"), 0, Some(20));
-        store.issue(PathBuf::from("/c"), 0, None);
+        store.issue(PathBuf::from("/a"), 0, Some(10)).unwrap();
+        store.issue(PathBuf::from("/b"), 0, Some(20)).unwrap();
+        store.issue(PathBuf::from("/c"), 0, None).unwrap();
         let purged = store.purge_expired(15);
         assert_eq!(purged, 1);
         assert_eq!(store.list().len(), 2);
+    }
+
+    #[test]
+    fn access_token_issuance_is_opaque_checked_and_redacted() {
+        let mut store = AccessTokenStore::new();
+        assert!(
+            store
+                .issue(PathBuf::from("relative/file"), 0, None)
+                .is_err()
+        );
+        assert!(
+            store
+                .issue(PathBuf::from("/file"), u64::MAX, Some(1))
+                .is_err()
+        );
+        assert!(store.issue(PathBuf::from("/file"), 0, Some(0)).is_err());
+
+        let token = store
+            .issue(PathBuf::from("/private/customer/file"), 10, Some(20))
+            .unwrap();
+        assert!(token.starts_with("kat_"));
+        assert_eq!(token.len(), 36);
+        assert!(!token.contains("private"));
+        assert!(!token.contains("customer"));
+        let entry_debug = format!("{:?}", store.list()[0]);
+        assert!(entry_debug.contains("[REDACTED]"));
+        assert!(!entry_debug.contains(&token));
+        assert!(!entry_debug.contains("customer"));
+        assert!(!format!("{store:?}").contains(&token));
     }
 
     // === PluginPermissionManifest ===
@@ -2322,6 +3855,43 @@ mod tests {
         assert_eq!(manifest, decoded);
     }
 
+    #[test]
+    fn plugin_permission_manifests_reject_ambiguous_declarations() {
+        let duplicate = PluginPermissionManifest {
+            plugin_id: "plugin".to_string(),
+            required: vec![PermissionKind::Camera, PermissionKind::Camera],
+            optional: vec![],
+        };
+        assert!(duplicate.validate_declaration().is_err());
+        assert!(duplicate.validate(&HashSet::new()).is_err());
+
+        let overlap = PluginPermissionManifest {
+            plugin_id: "plugin".to_string(),
+            required: vec![PermissionKind::Camera],
+            optional: vec![PermissionKind::Camera],
+        };
+        assert!(overlap.validate_declaration().is_err());
+        assert!(
+            PluginPermissionManifest::new("bad plugin")
+                .validate_declaration()
+                .is_err()
+        );
+
+        let ordered = PluginPermissionManifest {
+            plugin_id: "plugin".to_string(),
+            required: vec![PermissionKind::Network, PermissionKind::Camera],
+            optional: vec![PermissionKind::Notifications],
+        };
+        assert_eq!(
+            ordered.all_permissions(),
+            vec![
+                PermissionKind::Network,
+                PermissionKind::Camera,
+                PermissionKind::Notifications
+            ]
+        );
+    }
+
     // === ProcessCapability ===
 
     #[test]
@@ -2388,6 +3958,63 @@ mod tests {
         let json = serde_json::to_string(&limits).unwrap();
         let decoded: ProcessLimits = serde_json::from_str(&json).unwrap();
         assert_eq!(limits, decoded);
+    }
+
+    #[test]
+    fn process_limits_reject_invalid_numbers_and_enforce_open_files() {
+        assert!(
+            ProcessLimits {
+                max_cpu_percent: Some(f64::NAN),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            ProcessLimits {
+                max_memory_bytes: Some(0),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(ProcessCapability::try_new(1, " bad", ProcessLimits::default()).is_err());
+        assert!(ProcessCapability::try_new(0, "worker", ProcessLimits::default()).is_err());
+
+        let mut capability = ProcessCapability::try_new(
+            1,
+            "worker",
+            ProcessLimits {
+                max_cpu_percent: Some(50.0),
+                max_open_files: Some(10),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!capability.check_cpu(f64::NAN));
+        assert!(!capability.check_cpu(-1.0));
+        assert!(capability.check_open_files(10));
+        assert!(!capability.check_open_files(11));
+        assert!(capability.validate().is_ok());
+    }
+
+    #[test]
+    fn process_violation_history_is_bounded_and_utf8_safe() {
+        let mut capability = ProcessCapability::new(1, "worker", ProcessLimits::default());
+        for _ in 0..(MAX_PROCESS_VIOLATIONS + 10) {
+            capability.record_violation("🙂".repeat(MAX_PROCESS_VIOLATION_BYTES));
+        }
+        assert_eq!(capability.violation_count(), MAX_PROCESS_VIOLATIONS);
+        assert!(
+            capability
+                .violations
+                .iter()
+                .all(|violation| violation.len() <= MAX_PROCESS_VIOLATION_BYTES)
+        );
+        capability.violations.clear();
+        capability.record_violation("bad\nlog\rentry");
+        assert_eq!(capability.violations[0], "bad log entry");
+        assert!(capability.validate().is_ok());
     }
 
     // === NetworkPolicy ===
@@ -2507,6 +4134,43 @@ mod tests {
             .validate()
             .is_err()
         );
+        for invalid in [
+            "-bad.example",
+            "bad-.example",
+            "bad..example",
+            "999.999.999.999",
+        ] {
+            assert!(
+                NetworkPolicyBuilder::new()
+                    .allow_host(invalid)
+                    .build_checked()
+                    .is_err(),
+                "accepted invalid host {invalid}"
+            );
+        }
+        assert!(
+            NetworkPolicyBuilder::new()
+                .allow_hosts((0..=MAX_NETWORK_POLICY_HOSTS).map(|index| format!("h{index}.test")))
+                .build_checked()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn network_policy_checks_are_case_insensitive_ip_aware_and_fail_closed() {
+        let allowed = NetworkPolicy::AllowList(vec!["Api.Example.COM".to_string()]);
+        assert!(allowed.check("api.example.com"));
+        assert!(allowed.check("API.EXAMPLE.COM"));
+
+        let ipv6 = NetworkPolicyBuilder::new()
+            .allow_host("2001:db8::1")
+            .build_checked()
+            .unwrap();
+        assert!(ipv6.check("2001:DB8::1"));
+
+        let malformed_deny = NetworkPolicy::DenyList(vec!["bad..host".to_string()]);
+        assert!(!malformed_deny.check("good.example"));
+        assert!(!NetworkPolicy::AllowAll.check("bad..host"));
     }
 
     #[test]
@@ -2516,21 +4180,111 @@ mod tests {
             .build_checked()
             .unwrap();
 
-        let request = AppNetworkRequestBuilder::post("https://api.example.com/v1/sync")
+        let builder = AppNetworkRequestBuilder::post("https://api.example.com/v1/sync")
             .header("Content-Type", "application/json")
             .header("X-Trace-Id", "abc123")
             .body_size_bytes(128)
-            .network_policy(policy)
-            .build_checked()
-            .unwrap();
+            .network_policy(policy);
+
+        assert!(builder.validate().is_ok());
+        assert_eq!(builder.method(), AppNetworkMethod::Post);
+        assert_eq!(builder.header_count(), 2);
+        assert!(builder.has_body());
+        assert!(builder.has_network_policy());
+        assert!(builder.to_text().contains("app network request POST"));
+        assert!(!builder.to_text().contains("/v1/sync"));
+        assert_eq!(
+            builder.to_safe_text(),
+            "app network request POST: headers 2, body true, network policy true"
+        );
+
+        let request = builder.build_checked().unwrap();
 
         assert_eq!(request.method(), AppNetworkMethod::Post);
         assert_eq!(request.method().as_str(), "POST");
         assert_eq!(request.url(), "https://api.example.com/v1/sync");
         assert_eq!(request.host().unwrap(), "api.example.com");
         assert_eq!(request.headers().len(), 2);
+        assert_eq!(request.header_count(), 2);
         assert_eq!(request.body_size_bytes(), Some(128));
+        assert!(request.has_body());
+        assert!(request.has_network_policy());
         assert!(request.network_policy().is_some());
+    }
+
+    #[test]
+    fn app_network_request_summary_is_agent_readable_and_credential_safe() {
+        let request = AppNetworkRequestBuilder::post(
+            "https://user:secret@api.example.com:8443/v1/sync?token=sensitive#frag",
+        )
+        .header("Authorization", "Bearer sensitive")
+        .header("Cookie", "session=sensitive")
+        .body_size_bytes(128)
+        .build_checked()
+        .unwrap();
+
+        let summary = request.to_text();
+
+        assert!(summary.contains("app network request POST https://api.example.com:8443"));
+        assert!(summary.contains("2 headers"));
+        assert!(summary.contains("body 128 bytes"));
+        assert!(summary.contains("network policy none"));
+        assert!(!summary.contains("user"));
+        assert!(!summary.contains("secret"));
+        assert!(!summary.contains("token"));
+        assert!(!summary.contains("sensitive"));
+        assert!(!summary.contains("Authorization"));
+        assert!(!summary.contains("Cookie"));
+        assert!(!summary.contains("sync"));
+        assert!(!summary.contains("frag"));
+
+        let safe_summary = request.to_safe_text();
+
+        assert_eq!(
+            safe_summary,
+            "app network request POST: headers 2, body true, network policy false"
+        );
+        assert!(!safe_summary.contains("api.example.com"));
+        assert!(!safe_summary.contains("128"));
+        assert!(!safe_summary.contains("Authorization"));
+    }
+
+    #[test]
+    fn app_network_request_builder_summary_is_available_before_build() {
+        let builder = AppNetworkRequestBuilder::put(
+            "https://user:secret@api.example.com/private/upload?token=sensitive#frag",
+        )
+        .header("Authorization", "Bearer sensitive")
+        .body_size_bytes(256);
+
+        let summary = builder.to_text();
+
+        assert!(builder.validate().is_ok());
+        assert_eq!(builder.method(), AppNetworkMethod::Put);
+        assert_eq!(builder.header_count(), 1);
+        assert!(builder.has_body());
+        assert!(!builder.has_network_policy());
+        assert!(summary.contains("app network request PUT https://api.example.com"));
+        assert!(summary.contains("1 headers"));
+        assert!(summary.contains("body 256 bytes"));
+        assert!(summary.contains("network policy none"));
+        assert!(!summary.contains("user"));
+        assert!(!summary.contains("secret"));
+        assert!(!summary.contains("token"));
+        assert!(!summary.contains("sensitive"));
+        assert!(!summary.contains("Authorization"));
+        assert!(!summary.contains("upload"));
+        assert!(!summary.contains("frag"));
+
+        let safe_summary = builder.to_safe_text();
+
+        assert_eq!(
+            safe_summary,
+            "app network request PUT: headers 1, body true, network policy false"
+        );
+        assert!(!safe_summary.contains("api.example.com"));
+        assert!(!safe_summary.contains("256"));
+        assert!(!safe_summary.contains("Authorization"));
     }
 
     #[test]
@@ -2572,6 +4326,25 @@ mod tests {
                 .is_err()
         );
         assert!(
+            AppNetworkRequestBuilder::post("https://example.com/data.json")
+                .body_size_bytes(MAX_NETWORK_BODY_BYTES + 1)
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            AppNetworkRequestBuilder::get(format!(
+                "https://example.com/{}",
+                "a".repeat(MAX_NETWORK_URL_BYTES)
+            ))
+            .build_checked()
+            .is_err()
+        );
+        let mut too_many_headers = AppNetworkRequestBuilder::get("https://example.com/data.json");
+        for index in 0..=MAX_NETWORK_HEADERS {
+            too_many_headers = too_many_headers.header(format!("X-Test-{index}"), "value");
+        }
+        assert!(too_many_headers.build_checked().is_err());
+        assert!(
             AppNetworkRequestBuilder::get("https://blocked.example.com/data.json")
                 .network_policy(
                     NetworkPolicyBuilder::new()
@@ -2591,14 +4364,29 @@ mod tests {
             .build_checked()
             .unwrap();
 
-        let connection = AppRealtimeConnection::websocket("wss://events.example.com/socket")
+        let builder = AppRealtimeConnection::websocket("wss://events.example.com/socket")
             .protocol("kael.v1")
             .header("Authorization", "Bearer token")
             .heartbeat_interval(Duration::from_secs(30))
             .max_message_bytes(65_536)
-            .network_policy(policy)
-            .build_checked()
-            .unwrap();
+            .network_policy(policy);
+
+        assert!(builder.validate().is_ok());
+        assert_eq!(builder.kind(), AppRealtimeConnectionKind::WebSocket);
+        assert_eq!(builder.protocol_count(), 1);
+        assert_eq!(builder.header_count(), 1);
+        assert!(builder.has_heartbeat_interval());
+        assert!(builder.has_max_message_bytes());
+        assert!(!builder.has_reconnect_policy());
+        assert!(builder.has_network_policy());
+        assert!(builder.to_text().contains("app realtime websocket"));
+        assert!(!builder.to_text().contains("/socket"));
+        assert_eq!(
+            builder.to_safe_text(),
+            "app realtime websocket connection: protocols 1, headers 1, heartbeat true, max message true, reconnect false, network policy true"
+        );
+
+        let connection = builder.build_checked().unwrap();
 
         assert_eq!(connection.kind(), AppRealtimeConnectionKind::WebSocket);
         assert_eq!(connection.kind().key(), "websocket");
@@ -2606,18 +4394,231 @@ mod tests {
         assert_eq!(connection.host().unwrap(), "events.example.com");
         assert_eq!(connection.protocols(), &["kael.v1".to_string()]);
         assert_eq!(connection.headers().len(), 1);
+        assert_eq!(connection.header_count(), 1);
+        assert_eq!(connection.protocol_count(), 1);
         assert_eq!(
             connection.heartbeat_interval(),
             Some(Duration::from_secs(30))
         );
+        assert!(connection.has_heartbeat_interval());
         assert_eq!(connection.max_message_bytes(), Some(65_536));
+        assert!(connection.has_max_message_bytes());
+        assert_eq!(connection.reconnect_policy(), None);
+        assert!(!connection.has_reconnect_policy());
         assert_eq!(
             connection.required_capability().unwrap(),
             Capability::Network {
                 hosts: vec!["events.example.com".to_string()]
             }
         );
+        assert!(connection.has_network_policy());
         assert!(connection.network_policy().is_some());
+    }
+
+    #[test]
+    fn app_realtime_connection_summary_is_agent_readable_and_credential_safe() {
+        let connection = AppRealtimeConnection::websocket(
+            "wss://user:secret@events.example.com:9443/socket?token=sensitive#frag",
+        )
+        .protocol("kael.v1")
+        .header("Authorization", "Bearer sensitive")
+        .heartbeat_interval(Duration::from_secs(30))
+        .max_message_bytes(65_536)
+        .build_checked()
+        .unwrap();
+
+        let summary = connection.to_text();
+
+        assert!(
+            summary.contains("app realtime websocket connection to wss://events.example.com:9443")
+        );
+        assert!(summary.contains("1 protocols"));
+        assert!(summary.contains("1 headers"));
+        assert!(summary.contains("heartbeat 30s"));
+        assert!(summary.contains("max message 65536 bytes"));
+        assert!(summary.contains("reconnect none"));
+        assert!(summary.contains("network policy none"));
+        assert!(!summary.contains("user"));
+        assert!(!summary.contains("secret"));
+        assert!(!summary.contains("token"));
+        assert!(!summary.contains("sensitive"));
+        assert!(!summary.contains("Authorization"));
+        assert!(!summary.contains("/socket"));
+        assert!(!summary.contains("frag"));
+
+        let safe_summary = connection.to_safe_text();
+
+        assert_eq!(
+            safe_summary,
+            "app realtime websocket connection: protocols 1, headers 1, heartbeat true, max message true, reconnect false, network policy false"
+        );
+        assert!(!safe_summary.contains("events.example.com"));
+        assert!(!safe_summary.contains("30"));
+        assert!(!safe_summary.contains("65536"));
+        assert!(!safe_summary.contains("Authorization"));
+    }
+
+    #[test]
+    fn app_realtime_connection_builder_summary_is_available_before_build() {
+        let builder = AppRealtimeConnection::websocket(
+            "wss://user:secret@events.example.com/private/socket?token=sensitive#frag",
+        )
+        .protocol("kael.v1")
+        .header("Authorization", "Bearer sensitive")
+        .heartbeat_interval(Duration::from_secs(30))
+        .max_message_bytes(65_536);
+
+        let summary = builder.to_text();
+
+        assert!(builder.validate().is_ok());
+        assert_eq!(builder.kind(), AppRealtimeConnectionKind::WebSocket);
+        assert_eq!(builder.protocol_count(), 1);
+        assert_eq!(builder.header_count(), 1);
+        assert!(builder.has_heartbeat_interval());
+        assert!(builder.has_max_message_bytes());
+        assert!(!builder.has_reconnect_policy());
+        assert!(!builder.has_network_policy());
+        assert!(summary.contains("app realtime websocket connection to wss://events.example.com"));
+        assert!(summary.contains("1 protocols"));
+        assert!(summary.contains("1 headers"));
+        assert!(summary.contains("heartbeat 30s"));
+        assert!(summary.contains("max message 65536 bytes"));
+        assert!(summary.contains("reconnect none"));
+        assert!(summary.contains("network policy none"));
+        assert!(!summary.contains("user"));
+        assert!(!summary.contains("secret"));
+        assert!(!summary.contains("token"));
+        assert!(!summary.contains("sensitive"));
+        assert!(!summary.contains("Authorization"));
+        assert!(!summary.contains("socket?"));
+        assert!(!summary.contains("frag"));
+
+        let safe_summary = builder.to_safe_text();
+
+        assert_eq!(
+            safe_summary,
+            "app realtime websocket connection: protocols 1, headers 1, heartbeat true, max message true, reconnect false, network policy false"
+        );
+        assert!(!safe_summary.contains("events.example.com"));
+        assert!(!safe_summary.contains("30"));
+        assert!(!safe_summary.contains("65536"));
+        assert!(!safe_summary.contains("Authorization"));
+    }
+
+    #[test]
+    fn app_realtime_reconnect_policy_validates_and_summarizes() {
+        let conservative = AppRealtimeReconnectPolicy::conservative();
+        assert!(conservative.validate().is_ok());
+        assert_eq!(conservative.max_attempts(), 5);
+        assert_eq!(conservative.initial_delay(), Duration::from_secs(1));
+        assert_eq!(conservative.max_delay(), Duration::from_secs(30));
+        assert!(conservative.reconnects());
+        assert_eq!(
+            conservative.to_text(),
+            "realtime reconnect policy: enabled true, attempts 5, initial delay 1, max delay 30"
+        );
+        assert_eq!(
+            conservative.to_safe_text(),
+            "realtime reconnect policy: enabled true, attempts set true, initial delay set true, max delay set true"
+        );
+
+        let persistent = AppRealtimeReconnectPolicy::persistent();
+        assert!(persistent.validate().is_ok());
+        assert_eq!(persistent.max_attempts(), 10);
+        assert_eq!(persistent.max_delay(), Duration::from_secs(60));
+        assert_eq!(
+            persistent.delay_for_attempt(1),
+            Some(Duration::from_secs(1))
+        );
+        assert_eq!(
+            persistent.delay_for_attempt(2),
+            Some(Duration::from_secs(2))
+        );
+        assert_eq!(
+            persistent.delay_for_attempt(7),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(persistent.delay_for_attempt(11), None);
+        assert_eq!(persistent.delay_for_attempt(0), None);
+
+        let disabled = AppRealtimeReconnectPolicy::new(0, Duration::ZERO, Duration::ZERO);
+        assert!(disabled.validate().is_ok());
+        assert!(!disabled.reconnects());
+        assert_eq!(disabled.delay_for_attempt(1), None);
+    }
+
+    #[test]
+    fn app_realtime_reconnect_policy_rejects_generated_footguns() {
+        assert!(
+            AppRealtimeReconnectPolicy::new(101, Duration::from_secs(1), Duration::from_secs(30))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            AppRealtimeReconnectPolicy::new(0, Duration::from_secs(1), Duration::from_secs(1))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            AppRealtimeReconnectPolicy::new(1, Duration::from_millis(99), Duration::from_secs(30))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            AppRealtimeReconnectPolicy::new(1, Duration::from_secs(30), Duration::from_secs(1))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            AppRealtimeReconnectPolicy::new(
+                1,
+                Duration::from_secs(1),
+                Duration::from_secs(60 * 60 + 1)
+            )
+            .validate()
+            .is_err()
+        );
+        assert!(
+            AppRealtimeConnection::websocket("wss://events.example.com/socket")
+                .reconnect_policy(AppRealtimeReconnectPolicy::new(
+                    1,
+                    Duration::from_secs(30),
+                    Duration::from_secs(1)
+                ))
+                .build_checked()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn app_realtime_reconnect_policy_summary_is_content_safe() {
+        let connection = AppRealtimeConnection::websocket(
+            "wss://user:secret@events.example.com/socket?token=sensitive",
+        )
+        .header("Authorization", "Bearer sensitive")
+        .reconnect_policy(AppRealtimeReconnectPolicy::new(
+            3,
+            Duration::from_millis(250),
+            Duration::from_secs(5),
+        ))
+        .build_checked()
+        .unwrap();
+
+        assert!(connection.has_reconnect_policy());
+        assert_eq!(
+            connection.reconnect_policy().unwrap().to_text(),
+            "realtime reconnect policy: enabled true, attempts 3, initial delay 0.25, max delay 5"
+        );
+        assert!(connection.to_text().contains("reconnect attempts 3"));
+        assert!(!connection.to_text().contains("secret"));
+        assert!(!connection.to_text().contains("token"));
+        assert!(!connection.to_text().contains("Authorization"));
+
+        let safe = connection.to_safe_text();
+        assert!(safe.contains("reconnect true"));
+        assert!(!safe.contains("events.example.com"));
+        assert!(!safe.contains("0.25"));
+        assert!(!safe.contains("5"));
     }
 
     #[test]
@@ -2635,6 +4636,230 @@ mod tests {
         assert_eq!(connection.kind().key(), "server-sent-events");
         assert_eq!(connection.host().unwrap(), "events.example.com");
         assert!(connection.protocols().is_empty());
+    }
+
+    #[test]
+    fn app_realtime_connection_set_validates_and_summarizes_plan() {
+        let policy = NetworkPolicyBuilder::new()
+            .allow_host("events.example.com")
+            .allow_host("stream.example.com")
+            .build_checked()
+            .unwrap();
+        let set = AppRealtimeConnectionSet::builder()
+            .connection_builder(
+                AppRealtimeConnection::websocket(
+                    "wss://user:secret@events.example.com/private/socket?token=sensitive",
+                )
+                .protocol("kael.v1")
+                .header("Authorization", "Bearer sensitive")
+                .heartbeat_interval(Duration::from_secs(30))
+                .max_message_bytes(65_536)
+                .reconnect_conservative()
+                .network_policy(policy.clone()),
+            )
+            .unwrap()
+            .connection_builder(
+                AppRealtimeConnection::server_sent_events(
+                    "https://stream.example.com/events?cursor=secret",
+                )
+                .header("Accept", "text/event-stream")
+                .reconnect_persistent()
+                .network_policy(policy),
+            )
+            .unwrap();
+
+        assert_eq!(set.connection_count(), 2);
+        assert!(!set.is_empty());
+        assert!(set.validate().is_ok());
+
+        let summary = set.to_text();
+        assert!(summary.contains("app realtime connection set builder"));
+        assert!(summary.contains("connections 2"));
+        assert!(summary.contains("websockets 1"));
+        assert!(summary.contains("server sent events 1"));
+        assert!(summary.contains("protocols 1"));
+        assert!(summary.contains("headers 2"));
+        assert!(summary.contains("heartbeats 1"));
+        assert!(summary.contains("max messages 1"));
+        assert!(summary.contains("reconnect policies 2"));
+        assert!(summary.contains("network policies 2"));
+        assert!(!summary.contains("events.example.com"));
+        assert!(!summary.contains("stream.example.com"));
+        assert!(!summary.contains("secret"));
+        assert!(!summary.contains("token"));
+        assert!(!summary.contains("Authorization"));
+        assert!(!summary.contains("65536"));
+        assert!(!summary.contains("30"));
+
+        let set = set.build_checked().unwrap();
+        assert_eq!(set.connection_count(), 2);
+        assert_eq!(set.websocket_count(), 1);
+        assert_eq!(set.server_sent_events_count(), 1);
+        assert_eq!(set.protocol_count(), 1);
+        assert_eq!(set.header_count(), 2);
+        assert_eq!(set.heartbeat_count(), 1);
+        assert_eq!(set.max_message_count(), 1);
+        assert_eq!(set.reconnect_policy_count(), 2);
+        assert_eq!(set.network_policy_count(), 2);
+        assert_eq!(set.connections().len(), 2);
+
+        let safe_summary = set.to_safe_text();
+        assert_eq!(
+            safe_summary,
+            "app realtime connection set: connections 2, websockets 1, server sent events 1, protocols 1, headers 2, heartbeats 1, max messages 1, reconnect policies 2, network policies 2"
+        );
+        assert!(!safe_summary.contains("events.example.com"));
+        assert!(!safe_summary.contains("stream.example.com"));
+        assert!(!safe_summary.contains("Authorization"));
+        assert!(!safe_summary.contains("65536"));
+    }
+
+    #[test]
+    fn app_realtime_connection_set_rejects_empty_and_duplicates() {
+        assert!(AppRealtimeConnectionSet::builder().build_checked().is_err());
+
+        let connection = AppRealtimeConnection::websocket("wss://events.example.com/socket")
+            .protocol("kael.v1")
+            .build_checked()
+            .unwrap();
+
+        assert!(
+            AppRealtimeConnectionSet::builder()
+                .connection(connection.clone())
+                .connection(connection)
+                .build_checked()
+                .is_err()
+        );
+
+        let connections = (0..=MAX_REALTIME_CONNECTIONS)
+            .map(|index| {
+                AppRealtimeConnection::websocket(format!("wss://events.example.com/socket/{index}"))
+                    .build_checked()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            AppRealtimeConnectionSet::builder()
+                .connections(connections)
+                .build_checked()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn network_realtime_handoff_builder_validates_native_network_surface() {
+        let policy = NetworkPolicyBuilder::new()
+            .allow_host("api.example.com")
+            .allow_host("events.example.com")
+            .build_checked()
+            .unwrap();
+        let request = AppNetworkRequestBuilder::post(
+            "https://user:secret@api.example.com/v1/sync?token=sensitive",
+        )
+        .header("Authorization", "Bearer sensitive")
+        .body_size_bytes(128)
+        .network_policy(policy.clone())
+        .build_checked()
+        .unwrap();
+        let connection = AppRealtimeConnection::websocket(
+            "wss://user:secret@events.example.com/socket?token=sensitive",
+        )
+        .protocol("kael.v1")
+        .header("Authorization", "Bearer sensitive")
+        .reconnect_conservative()
+        .network_policy(policy.clone())
+        .build_checked()
+        .unwrap();
+        let set = AppRealtimeConnectionSet::builder()
+            .connection(connection.clone())
+            .build_checked()
+            .unwrap();
+
+        let handoff = NetworkRealtimeHandoff::builder()
+            .request(request)
+            .realtime_connection(connection)
+            .realtime_connection_set(set)
+            .network_policy(policy)
+            .hosted_network_bridge("checkout")
+            .build_checked()
+            .unwrap();
+
+        assert_eq!(handoff.request_count(), 5);
+        assert!(handoff.has_native_requests());
+        assert!(handoff.has_realtime_transports());
+        assert!(handoff.has_network_policy());
+        assert!(handoff.has_hosted_network_bridge());
+        assert_eq!(
+            handoff.next_action(),
+            NetworkRealtimeNextAction::DispatchNativeRequest
+        );
+
+        let summary = handoff.to_text();
+        assert!(summary.contains("network/realtime handoff"));
+        assert!(summary.contains("hosted-network-bridge"));
+        assert!(!summary.contains("api.example.com"));
+        assert!(!summary.contains("events.example.com"));
+        assert!(!summary.contains("secret"));
+        assert!(!summary.contains("token"));
+        assert!(!summary.contains("Authorization"));
+        assert!(!summary.contains("checkout"));
+    }
+
+    #[test]
+    fn network_realtime_handoff_builder_rejects_unsafe_shapes() {
+        assert!(NetworkRealtimeHandoffBuilder::new().validate().is_err());
+        assert!(
+            NetworkRealtimeHandoffBuilder::new()
+                .hosted_network_bridge("bad surface")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            NetworkRealtimeHandoffBuilder::new()
+                .request_builder(AppNetworkRequestBuilder::get("file:///tmp/data.json"))
+                .is_err()
+        );
+        assert!(
+            NetworkRealtimeHandoffBuilder::new()
+                .realtime_connection_builder(AppRealtimeConnection::websocket(
+                    "https://events.example.com/socket",
+                ))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn network_realtime_handoff_next_action_prioritizes_realtime_policy_and_hosted() {
+        let realtime = NetworkRealtimeHandoffBuilder::new()
+            .realtime_connection_builder(AppRealtimeConnection::websocket(
+                "wss://events.example.com/socket",
+            ))
+            .unwrap()
+            .build_checked()
+            .unwrap();
+        assert_eq!(
+            realtime.next_action(),
+            NetworkRealtimeNextAction::OpenRealtimeTransport
+        );
+
+        let policy = NetworkRealtimeHandoffBuilder::new()
+            .network_policy_builder(NetworkPolicyBuilder::new().allow_host("api.example.com"))
+            .unwrap()
+            .build_checked()
+            .unwrap();
+        assert_eq!(
+            policy.next_action(),
+            NetworkRealtimeNextAction::ApplyNetworkPolicy
+        );
+
+        let hosted = NetworkRealtimeHandoffBuilder::new()
+            .hosted_network_bridge("checkout")
+            .build_checked()
+            .unwrap();
+        assert_eq!(
+            hosted.next_action(),
+            NetworkRealtimeNextAction::UseHostedNetworkBridge
+        );
     }
 
     #[test]
@@ -2766,6 +4991,38 @@ mod tests {
         assert_eq!(schema.negotiate(&schema), Some(1));
     }
 
+    #[test]
+    fn ipc_schema_validation_bounds_negotiation_and_identifiers() {
+        assert!(IpcSchema::new_checked(3, 1, vec!["worker.progress/v1".to_string()]).is_ok());
+        for schema in [
+            IpcSchema::new(0, 0, vec![]),
+            IpcSchema::new(1, 2, vec![]),
+            IpcSchema::new(1, 1, vec!["bad message".to_string()]),
+            IpcSchema::new(1, 1, vec!["ping".to_string(), "ping".to_string()]),
+        ] {
+            assert!(schema.validate().is_err());
+            assert!(!schema.is_compatible(&IpcSchema::new(1, 1, vec![])));
+            assert_eq!(schema.negotiate(&IpcSchema::new(1, 1, vec![])), None);
+            assert!(
+                schema
+                    .common_message_types(&IpcSchema::new(1, 1, vec![]))
+                    .is_empty()
+            );
+        }
+
+        assert!(
+            IpcSchema::new(
+                1,
+                1,
+                (0..=MAX_IPC_MESSAGE_TYPES)
+                    .map(|index| format!("message.{index}"))
+                    .collect(),
+            )
+            .validate()
+            .is_err()
+        );
+    }
+
     // === Additional edge-case tests ===
 
     #[test]
@@ -2805,8 +5062,8 @@ mod tests {
     #[test]
     fn test_access_token_unique_ids() {
         let mut store = AccessTokenStore::new();
-        let t1 = store.issue(PathBuf::from("/a"), 0, None);
-        let t2 = store.issue(PathBuf::from("/a"), 0, None);
+        let t1 = store.issue(PathBuf::from("/a"), 0, None).unwrap();
+        let t2 = store.issue(PathBuf::from("/a"), 0, None).unwrap();
         assert_ne!(t1, t2);
     }
 

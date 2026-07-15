@@ -40,8 +40,8 @@ pub(crate) fn apply_combined_power_state(blockers: &HashMap<u32, EXECUTION_STATE
     let combined = blockers
         .values()
         .fold(ES_CONTINUOUS, |acc, &flags| acc | flags);
-    unsafe {
-        SetThreadExecutionState(combined);
+    if unsafe { SetThreadExecutionState(combined) }.0 == 0 {
+        log::warn!("failed to update Windows thread execution state");
     }
 }
 

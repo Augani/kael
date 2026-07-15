@@ -63,7 +63,7 @@ pub(crate) fn start_network_monitor(
 ) -> Option<NetworkMonitorHandle> {
     // Spawn dbus-monitor to listen for the StateChanged signal on the system bus.
     #[allow(clippy::disallowed_methods)]
-    let child = std::process::Command::new("dbus-monitor")
+    let mut child = std::process::Command::new("dbus-monitor")
         .args([
             "--system",
             "type='signal',interface='org.freedesktop.NetworkManager',member='StateChanged'",
@@ -74,14 +74,13 @@ pub(crate) fn start_network_monitor(
         .spawn()
         .ok()?;
 
-    let pid = child.id();
-    let stdout = child.stdout;
+    let stdout = child.stdout.take();
 
     // Spawn a reader thread that parses dbus-monitor output for state changes.
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop_clone = stop.clone();
 
-    std::thread::Builder::new()
+    let thread = std::thread::Builder::new()
         .name("network-monitor".into())
         .spawn(move || {
             use std::io::{BufRead, BufReader};
@@ -106,26 +105,28 @@ pub(crate) fn start_network_monitor(
                     }
                 }
             }
-        })
-        .ok()?;
+        });
+    if thread.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    }
 
-    Some(NetworkMonitorHandle { pid, stop })
+    Some(NetworkMonitorHandle { child, stop })
 }
 
 /// Handle that keeps the network monitor background process alive.
 /// Dropping it kills the `dbus-monitor` child process and signals the reader thread to stop.
 pub(crate) struct NetworkMonitorHandle {
-    pid: u32,
+    child: std::process::Child,
     stop: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Drop for NetworkMonitorHandle {
     fn drop(&mut self) {
         self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        // Kill the dbus-monitor child process.
-        unsafe {
-            libc::kill(self.pid as i32, libc::SIGTERM);
-        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -137,7 +138,7 @@ fn network_status_from_sysfs() -> NetworkStatus {
             if name == "lo" {
                 continue;
             }
-            if let Ok(state) = std::fs::read_to_string(entry.path().join("operstate")) {
+            if let Some(state) = read_small_file(entry.path().join("operstate")) {
                 if state.trim() == "up" {
                     return NetworkStatus::Online;
                 }
@@ -145,6 +146,18 @@ fn network_status_from_sysfs() -> NetworkStatus {
         }
     }
     NetworkStatus::Offline
+}
+
+fn read_small_file(path: impl AsRef<std::path::Path>) -> Option<String> {
+    use std::io::Read as _;
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    file.by_ref().take(4_097).read_to_end(&mut bytes).ok()?;
+    if bytes.len() > 4_096 {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
 }
 
 #[cfg(test)]

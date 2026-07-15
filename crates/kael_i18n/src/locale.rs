@@ -4,9 +4,10 @@ pub struct LocaleFormatter {
     locale: String,
     decimal_separator: char,
     thousands_separator: char,
-    #[allow(dead_code)]
     date_format: String,
 }
+
+const MAX_DECIMAL_PLACES: usize = 18;
 
 impl LocaleFormatter {
     /// Creates a locale formatter with default (en-US) separators.
@@ -21,28 +22,50 @@ impl LocaleFormatter {
 
     /// Creates a preconfigured formatter for well-known locales.
     ///
-    /// Supports: en-US, de-DE, ja-JP, ar-SA. Other locales fall back to en-US defaults.
+    /// Includes presets for common English, German, French, Spanish, Italian,
+    /// Portuguese, Japanese, Chinese, Korean, and Arabic locales. Other locales
+    /// fall back to en-US defaults.
     pub fn for_locale(locale: &str) -> Self {
-        match locale {
-            "en-US" => Self {
+        let normalized = locale.replace('_', "-").to_ascii_lowercase();
+        let language = language_subtag(&normalized);
+        match normalized.as_str() {
+            "en-us" => Self {
                 locale: locale.to_string(),
                 decimal_separator: '.',
                 thousands_separator: ',',
                 date_format: "MM/dd/yyyy".to_string(),
             },
-            "de-DE" => Self {
+            "en-gb" | "en-au" | "en-nz" => Self {
+                locale: locale.to_string(),
+                decimal_separator: '.',
+                thousands_separator: ',',
+                date_format: "dd/MM/yyyy".to_string(),
+            },
+            _ if language == "de" => Self {
                 locale: locale.to_string(),
                 decimal_separator: ',',
                 thousands_separator: '.',
                 date_format: "dd.MM.yyyy".to_string(),
             },
-            "ja-JP" => Self {
+            _ if language == "fr" => Self {
+                locale: locale.to_string(),
+                decimal_separator: ',',
+                thousands_separator: '\u{202f}',
+                date_format: "dd/MM/yyyy".to_string(),
+            },
+            _ if matches!(language, "es" | "it" | "pt") => Self {
+                locale: locale.to_string(),
+                decimal_separator: ',',
+                thousands_separator: '.',
+                date_format: "dd/MM/yyyy".to_string(),
+            },
+            _ if matches!(language, "ja" | "zh" | "ko") => Self {
                 locale: locale.to_string(),
                 decimal_separator: '.',
                 thousands_separator: ',',
                 date_format: "yyyy/MM/dd".to_string(),
             },
-            "ar-SA" => Self {
+            _ if language == "ar" => Self {
                 locale: locale.to_string(),
                 decimal_separator: '٫',
                 thousands_separator: '٬',
@@ -54,26 +77,33 @@ impl LocaleFormatter {
 
     /// Formats a floating-point number with locale-appropriate separators.
     pub fn format_number(&self, value: f64, decimal_places: usize) -> String {
-        let factor = 10_u64
-            .checked_pow(decimal_places as u32)
-            .unwrap_or(u64::MAX);
-        let scaled = (value.abs() * factor as f64).round() as u64;
-        let negative = value.is_sign_negative() && scaled != 0;
-        let integer_part = if decimal_places == 0 {
-            scaled
-        } else {
-            scaled / factor
-        };
-        let formatted_integer = self.format_integer_inner(integer_part, negative);
+        if value.is_nan() {
+            return "NaN".to_string();
+        }
+        if value.is_infinite() {
+            return if value.is_sign_negative() {
+                "-∞"
+            } else {
+                "∞"
+            }
+            .to_string();
+        }
+
+        let decimal_places = decimal_places.min(MAX_DECIMAL_PLACES);
+        let raw = format!("{:.*}", decimal_places, value.abs());
+        let (integer_part, decimal_part) = raw.split_once('.').unwrap_or((&raw, ""));
+        let rounded_is_zero = raw.bytes().all(|byte| matches!(byte, b'0' | b'.'));
+        let formatted_integer =
+            self.format_integer_digits(integer_part, value.is_sign_negative() && !rounded_is_zero);
 
         if decimal_places == 0 {
             return formatted_integer;
         }
 
-        let decimal_part = scaled % factor;
-        let padded = format!("{:0>width$}", decimal_part, width = decimal_places);
-
-        format!("{}{}{}", formatted_integer, self.decimal_separator, padded)
+        format!(
+            "{}{}{}",
+            formatted_integer, self.decimal_separator, decimal_part
+        )
     }
 
     /// Formats an integer with locale-appropriate thousands separators.
@@ -83,6 +113,10 @@ impl LocaleFormatter {
 
     fn format_integer_inner(&self, abs_value: u64, negative: bool) -> String {
         let digits = abs_value.to_string();
+        self.format_integer_digits(&digits, negative)
+    }
+
+    fn format_integer_digits(&self, digits: &str, negative: bool) -> String {
         let mut result = String::with_capacity(digits.len() + digits.len() / 3 + 1);
 
         if negative {
@@ -101,15 +135,55 @@ impl LocaleFormatter {
 
     /// Returns true if the locale uses right-to-left text direction.
     pub fn is_rtl(&self) -> bool {
-        self.locale.starts_with("ar")
-            || self.locale.starts_with("he")
-            || self.locale.starts_with("fa")
+        let language = language_subtag(&self.locale);
+        ["ar", "dv", "fa", "he", "ps", "ur", "yi"]
+            .iter()
+            .any(|candidate| language.eq_ignore_ascii_case(candidate))
     }
 
     /// Returns the locale identifier.
     pub fn locale(&self) -> &str {
         &self.locale
     }
+
+    /// Returns the locale's date pattern using `yyyy`, `MM`, and `dd` tokens.
+    pub fn date_format(&self) -> &str {
+        &self.date_format
+    }
+
+    /// Formats a validated Gregorian calendar date for this locale.
+    pub fn format_date(&self, year: i32, month: u8, day: u8) -> anyhow::Result<String> {
+        anyhow::ensure!((1..=9999).contains(&year), "year must be in 1..=9999");
+        anyhow::ensure!((1..=12).contains(&month), "month must be in 1..=12");
+        let max_day = days_in_month(year, month);
+        anyhow::ensure!(
+            (1..=max_day).contains(&day),
+            "day must be in 1..={max_day} for {year:04}-{month:02}"
+        );
+        Ok(match self.date_format.as_str() {
+            "dd.MM.yyyy" => format!("{day:02}.{month:02}.{year:04}"),
+            "yyyy/MM/dd" => format!("{year:04}/{month:02}/{day:02}"),
+            "dd/MM/yyyy" => format!("{day:02}/{month:02}/{year:04}"),
+            _ => format!("{month:02}/{day:02}/{year:04}"),
+        })
+    }
+}
+
+fn language_subtag(locale: &str) -> &str {
+    locale.split(['-', '_']).next().unwrap_or_default()
+}
+
+fn days_in_month(year: i32, month: u8) -> u8 {
+    match month {
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 31,
+    }
+}
+
+fn is_leap_year(year: i32) -> bool {
+    year.rem_euclid(4) == 0 && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0)
 }
 
 #[cfg(test)]
@@ -166,6 +240,8 @@ mod tests {
         assert!(!LocaleFormatter::for_locale("en-US").is_rtl());
         assert!(!LocaleFormatter::for_locale("de-DE").is_rtl());
         assert!(!LocaleFormatter::for_locale("ja-JP").is_rtl());
+        assert!(LocaleFormatter::for_locale("ur-PK").is_rtl());
+        assert!(!LocaleFormatter::for_locale("art").is_rtl());
     }
 
     #[test]
@@ -175,9 +251,9 @@ mod tests {
     }
 
     #[test]
-    fn test_unknown_locale_defaults() {
+    fn test_french_locale_uses_native_separators() {
         let fmt = LocaleFormatter::for_locale("fr-FR");
-        assert_eq!(fmt.format_number(1234.56, 2), "1,234.56");
+        assert_eq!(fmt.format_number(1234.56, 2), "1\u{202f}234,56");
     }
 
     #[test]
@@ -234,5 +310,36 @@ mod tests {
         assert_eq!(fmt.format_integer(12), "12");
         assert_eq!(fmt.format_integer(123), "123");
         assert_eq!(fmt.format_integer(999), "999");
+    }
+
+    #[test]
+    fn non_finite_large_and_excess_precision_values_are_bounded() {
+        let fmt = LocaleFormatter::for_locale("en-US");
+        assert_eq!(fmt.format_number(f64::NAN, 2), "NaN");
+        assert_eq!(fmt.format_number(f64::INFINITY, 2), "∞");
+        assert_eq!(fmt.format_number(f64::NEG_INFINITY, 2), "-∞");
+        assert_eq!(fmt.format_number(1.25, usize::MAX).len(), 20);
+        assert!(fmt.format_number(1e30, 0).contains(','));
+    }
+
+    #[test]
+    fn formats_and_validates_locale_dates() {
+        assert_eq!(
+            LocaleFormatter::for_locale("en-US")
+                .format_date(2024, 2, 29)
+                .unwrap(),
+            "02/29/2024"
+        );
+        assert_eq!(
+            LocaleFormatter::for_locale("de_DE")
+                .format_date(2025, 12, 31)
+                .unwrap(),
+            "31.12.2025"
+        );
+        assert!(
+            LocaleFormatter::for_locale("en-US")
+                .format_date(2023, 2, 29)
+                .is_err()
+        );
     }
 }

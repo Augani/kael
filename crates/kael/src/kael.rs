@@ -156,7 +156,10 @@ pub use background_jobs::*;
 pub use benchmark::*;
 pub use clip_path::*;
 pub use color::*;
-pub use command_registry::{CommandDescriptor, CommandPalette, PaletteCommandId};
+pub use command_registry::{
+    CommandDescriptor, CommandIpcHandoff, CommandIpcHandoffBuilder, CommandIpcNextAction,
+    CommandIpcRequest, CommandPalette, PaletteCommandId,
+};
 pub use computed::*;
 pub use crash_reporter::*;
 pub use ctor::ctor;

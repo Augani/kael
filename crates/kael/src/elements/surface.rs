@@ -21,6 +21,21 @@ impl From<CVPixelBuffer> for SurfaceSource {
     }
 }
 
+impl SurfaceSource {
+    /// Stable text key for the source kind.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            #[cfg(target_os = "macos")]
+            Self::Surface(_) => "core_video_pixel_buffer",
+        }
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!("surface_source(kind={})", self.kind())
+    }
+}
+
 /// A surface element.
 pub struct Surface {
     source: SurfaceSource,
@@ -42,6 +57,35 @@ impl Surface {
     pub fn object_fit(mut self, object_fit: ObjectFit) -> Self {
         self.object_fit = object_fit;
         self
+    }
+
+    /// Stable text key for the source kind.
+    pub fn source_kind(&self) -> &'static str {
+        self.source.kind()
+    }
+
+    /// Stable text key for the configured object fit.
+    pub fn object_fit_key(&self) -> &'static str {
+        object_fit_key(&self.object_fit)
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "surface(source={}, object_fit={})",
+            self.source_kind(),
+            self.object_fit_key()
+        )
+    }
+}
+
+fn object_fit_key(object_fit: &ObjectFit) -> &'static str {
+    match object_fit {
+        ObjectFit::Fill => "fill",
+        ObjectFit::Contain => "contain",
+        ObjectFit::Cover => "cover",
+        ObjectFit::ScaleDown => "scale-down",
+        ObjectFit::None => "none",
     }
 }
 

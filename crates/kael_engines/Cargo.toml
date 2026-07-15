@@ -18,3 +18,4 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 anyhow.workspace = true
 regex = "1"
+unicode-bidi = "0.3"

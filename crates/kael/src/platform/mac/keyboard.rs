@@ -1,5 +1,7 @@
 use collections::HashMap;
-use std::ffi::{CStr, c_void};
+use core_foundation::base::{CFRelease, CFTypeRef};
+use core_foundation::string::CFStringRef;
+use std::ffi::c_void;
 
 use objc2_foundation::NSString;
 
@@ -36,8 +38,9 @@ impl PlatformKeyboardMapper for MacKeyboardMapper {
         use_key_equivalents: bool,
     ) -> KeybindingKeystroke {
         if use_key_equivalents && let Some(key_equivalents) = &self.key_equivalents {
-            if keystroke.key.chars().count() == 1
-                && let Some(key) = key_equivalents.get(&keystroke.key.chars().next().unwrap())
+            let mut chars = keystroke.key.chars();
+            if let (Some(character), None) = (chars.next(), chars.next())
+                && let Some(key) = key_equivalents.get(&character)
             {
                 keystroke.key = key.to_string();
             }
@@ -54,24 +57,38 @@ impl MacKeyboardLayout {
     pub(crate) fn new() -> Self {
         unsafe {
             let current_keyboard = TISCopyCurrentKeyboardLayoutInputSource();
+            if current_keyboard.is_null() {
+                log::error!("macOS did not provide a current keyboard layout");
+                return Self::unknown();
+            }
 
-            let id_ptr = TISGetInputSourceProperty(
-                current_keyboard,
-                kTISPropertyInputSourceID as *const c_void,
-            ) as *const NSString;
-            let id_cstr = (*id_ptr).UTF8String();
-            let id = CStr::from_ptr(id_cstr).to_str().unwrap().to_string();
-
-            let name_ptr = TISGetInputSourceProperty(
-                current_keyboard,
-                kTISPropertyLocalizedName as *const c_void,
-            ) as *const NSString;
-            let name_cstr = (*name_ptr).UTF8String();
-            let name = CStr::from_ptr(name_cstr).to_str().unwrap().to_string();
-
+            let id = keyboard_property_string(current_keyboard, kTISPropertyInputSourceID)
+                .unwrap_or_else(|| "unknown".to_string());
+            let name = keyboard_property_string(current_keyboard, kTISPropertyLocalizedName)
+                .unwrap_or_else(|| "Unknown keyboard layout".to_string());
+            CFRelease(current_keyboard as CFTypeRef);
             Self { id, name }
         }
     }
+
+    fn unknown() -> Self {
+        Self {
+            id: "unknown".to_string(),
+            name: "Unknown keyboard layout".to_string(),
+        }
+    }
+}
+
+unsafe fn keyboard_property_string(
+    input_source: *mut c_void,
+    property: CFStringRef,
+) -> Option<String> {
+    let value = unsafe { TISGetInputSourceProperty(input_source, property as *const c_void) }
+        as *const NSString;
+    if value.is_null() {
+        return None;
+    }
+    Some(unsafe { &*value }.to_string())
 }
 
 impl MacKeyboardMapper {

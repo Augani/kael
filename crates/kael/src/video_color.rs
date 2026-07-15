@@ -48,6 +48,14 @@ struct RangeNormalization {
     chroma_scale: f32,
 }
 
+fn normalized_channel(value: f32) -> f32 {
+    if value.is_nan() {
+        0.0
+    } else {
+        value.clamp(0.0, 1.0)
+    }
+}
+
 fn range_normalization(range: VideoColorRange, bit_depth: u8) -> RangeNormalization {
     match range {
         VideoColorRange::Full => RangeNormalization {
@@ -116,7 +124,12 @@ pub fn convert_ycbcr(
 ) -> [f32; 3] {
     let m = ycbcr_to_rgb_matrix(coefficients, range, bit_depth);
     let mut out = [0.0f32; 3];
-    let input = [y, cb, cr, 1.0];
+    let input = [
+        normalized_channel(y),
+        normalized_channel(cb),
+        normalized_channel(cr),
+        1.0,
+    ];
     for (row, out_value) in out.iter_mut().enumerate() {
         let mut acc = 0.0;
         for (col, input_value) in input.iter().enumerate() {
@@ -146,7 +159,7 @@ pub enum TransferFunction {
 impl TransferFunction {
     /// Decode a gamma-encoded value to linear light.
     pub fn to_linear(self, value: f32) -> f32 {
-        let value = value.clamp(0.0, 1.0);
+        let value = normalized_channel(value);
         match self {
             Self::Linear => value,
             Self::Srgb => {
@@ -183,7 +196,7 @@ impl TransferFunction {
 
     /// Encode a linear value with this transfer function.
     pub fn from_linear(self, value: f32) -> f32 {
-        let value = value.clamp(0.0, 1.0);
+        let value = normalized_channel(value);
         match self {
             Self::Linear => value,
             Self::Srgb => {
@@ -240,11 +253,24 @@ pub enum ToneMap {
 impl ToneMap {
     /// Map one linear channel value (clamped to `≥ 0`) into `0..=1`.
     pub fn apply(self, x: f32) -> f32 {
+        if x.is_nan() || x == f32::NEG_INFINITY {
+            return 0.0;
+        }
+        if x == f32::INFINITY {
+            return 1.0;
+        }
         let x = x.max(0.0);
+        if x >= 1.0e10 {
+            return 1.0;
+        }
         match self {
             Self::Reinhard => x / (1.0 + x),
             Self::ReinhardExtended { white_point } => {
-                let white = white_point.max(f32::EPSILON);
+                let white = if white_point.is_finite() {
+                    white_point.max(f32::EPSILON)
+                } else {
+                    1.0
+                };
                 ((x * (1.0 + x / (white * white))) / (1.0 + x)).clamp(0.0, 1.0)
             }
             Self::Hable => {
@@ -479,6 +505,45 @@ mod tests {
         // Negative input is clamped to zero before mapping.
         assert!(close(ToneMap::AcesFilmic.apply(-5.0), 0.0, 1e-6));
     }
+
+    #[test]
+    fn malformed_channels_and_hdr_values_fail_closed() {
+        let converted = convert_ycbcr(
+            VideoMatrixCoefficients::Bt709,
+            VideoColorRange::Full,
+            8,
+            f32::NAN,
+            0.5,
+            f32::INFINITY,
+        );
+        assert!(converted.iter().all(|channel| channel.is_finite()));
+
+        for transfer in [
+            TransferFunction::Linear,
+            TransferFunction::Srgb,
+            TransferFunction::Bt1886,
+            TransferFunction::Pq,
+            TransferFunction::Hlg,
+        ] {
+            assert_eq!(transfer.to_linear(f32::NAN), 0.0);
+            assert!(transfer.from_linear(f32::NAN) <= 1e-6);
+            assert!(transfer.to_linear(f32::INFINITY).is_finite());
+        }
+
+        for tone_map in [
+            ToneMap::Reinhard,
+            ToneMap::ReinhardExtended {
+                white_point: f32::NAN,
+            },
+            ToneMap::Hable,
+            ToneMap::AcesFilmic,
+        ] {
+            assert_eq!(tone_map.apply(f32::NAN), 0.0);
+            assert_eq!(tone_map.apply(f32::NEG_INFINITY), 0.0);
+            assert_eq!(tone_map.apply(f32::INFINITY), 1.0);
+            assert_eq!(tone_map.apply(f32::MAX), 1.0);
+        }
+    }
 }
 
 /// A 3x3 matrix in row-major order (`m[row][col]`).
@@ -534,7 +599,7 @@ fn mat3_inverse(m: Mat3) -> Option<Mat3> {
     let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
         - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
         + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
-    if det.abs() < 1e-12 {
+    if !det.is_finite() || det.abs() < 1e-12 {
         return None;
     }
     let inv = 1.0 / det;
@@ -555,6 +620,14 @@ fn mat3_inverse(m: Mat3) -> Option<Mat3> {
             (m[0][0] * m[1][1] - m[0][1] * m[1][0]) * inv,
         ],
     ])
+}
+
+fn identity_mat3() -> Mat3 {
+    [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+}
+
+fn valid_chromaticity([x, y]: [f32; 2]) -> bool {
+    x.is_finite() && y.is_finite() && x > 0.0 && y > 0.0 && x + y < 1.0
 }
 
 /// The linear-RGB to CIE-XYZ matrix for the given primaries.
@@ -609,8 +682,19 @@ pub fn bradford_adaptation_matrix(source_white: [f32; 2], dest_white: [f32; 2]) 
         [-0.7502, 1.7135, 0.0367],
         [0.0389, -0.0685, 1.0296],
     ];
+    if !valid_chromaticity(source_white) || !valid_chromaticity(dest_white) {
+        return identity_mat3();
+    }
     let source_lms = mat3_vec(BRADFORD, chromaticity_to_xyz(source_white));
     let dest_lms = mat3_vec(BRADFORD, chromaticity_to_xyz(dest_white));
+    if source_lms
+        .iter()
+        .chain(dest_lms.iter())
+        .any(|value| !value.is_finite())
+        || source_lms.iter().any(|value| value.abs() < f32::EPSILON)
+    {
+        return identity_mat3();
+    }
     let scale = [
         [dest_lms[0] / source_lms[0], 0.0, 0.0],
         [0.0, dest_lms[1] / source_lms[1], 0.0],
@@ -624,7 +708,11 @@ pub fn bradford_adaptation_matrix(source_white: [f32; 2], dest_white: [f32; 2]) 
 /// al. cubic approximation of the Planckian locus. Input is clamped to 1667–25000 K.
 /// This converts a color temperature to the white point used for white balance.
 pub fn planckian_locus_xy(kelvin: f32) -> [f32; 2] {
-    let temp = kelvin.clamp(1667.0, 25000.0);
+    let temp = if kelvin.is_finite() {
+        kelvin.clamp(1667.0, 25000.0)
+    } else {
+        6500.0
+    };
     let inv = 1.0 / temp;
     let inv2 = inv * inv;
     let inv3 = inv2 * inv;
@@ -933,7 +1021,28 @@ mod primaries_tests {
             "3200->5600 should change a neutral: {neutral:?}"
         );
     }
+
+    #[test]
+    fn malformed_white_points_and_temperatures_stay_finite() {
+        assert_eq!(
+            bradford_adaptation_matrix([f32::NAN, 0.3], [0.3, 0.3]),
+            identity_mat3()
+        );
+        assert_eq!(
+            bradford_adaptation_matrix([0.3, 0.0], [0.3, 0.3]),
+            identity_mat3()
+        );
+        assert!(planckian_locus_xy(f32::NAN).iter().all(|v| v.is_finite()));
+        assert!(
+            white_balance_matrix(ColorPrimaries::Bt709, f32::NAN, f32::INFINITY)
+                .iter()
+                .flatten()
+                .all(|v| v.is_finite())
+        );
+    }
 }
+
+const MAX_LUT_3D_SIZE: usize = 128;
 
 /// A 3D color lookup table (e.g. a `.cube` LUT), trilinearly interpolated.
 ///
@@ -945,11 +1054,12 @@ pub struct Lut3d {
 }
 
 impl Lut3d {
-    /// An identity LUT of the given per-axis size (clamped to `>= 2`).
+    /// An identity LUT of the given per-axis size (clamped to `2..=128`).
     pub fn identity(size: usize) -> Self {
-        let size = size.max(2);
+        let size = size.clamp(2, MAX_LUT_3D_SIZE);
         let denom = (size - 1) as f32;
-        let mut samples = Vec::with_capacity(size * size * size);
+        let sample_count = size.pow(3);
+        let mut samples = Vec::with_capacity(sample_count);
         for blue in 0..size {
             for green in 0..size {
                 for red in 0..size {
@@ -964,9 +1074,14 @@ impl Lut3d {
         Self { size, samples }
     }
 
-    /// Build from `size^3` samples in `.cube` order, or `None` if the count is wrong.
+    /// Build from `size^3` finite samples in `.cube` order. Returns `None` for a
+    /// size outside `2..=128`, arithmetic overflow, or a mismatched sample count.
     pub fn from_samples(size: usize, samples: Vec<[f32; 3]>) -> Option<Self> {
-        if size < 2 || samples.len() != size * size * size {
+        let sample_count = size.checked_pow(3)?;
+        if !(2..=MAX_LUT_3D_SIZE).contains(&size)
+            || samples.len() != sample_count
+            || samples.iter().flatten().any(|value| !value.is_finite())
+        {
             return None;
         }
         Some(Self { size, samples })
@@ -984,7 +1099,7 @@ impl Lut3d {
     /// Trilinearly sample the LUT for an input color in `0..=1`.
     pub fn sample(&self, rgb: [f32; 3]) -> [f32; 3] {
         let max = (self.size - 1) as f32;
-        let scale = |channel: f32| channel.clamp(0.0, 1.0) * max;
+        let scale = |channel: f32| normalized_channel(channel) * max;
         let (rf, gf, bf) = (scale(rgb[0]), scale(rgb[1]), scale(rgb[2]));
         let (r0, g0, b0) = (
             rf.floor() as usize,
@@ -1048,6 +1163,20 @@ mod lut_tests {
         assert!(Lut3d::from_samples(2, vec![[0.0; 3]; 7]).is_none());
         assert!(Lut3d::from_samples(1, vec![[0.0; 3]]).is_none());
     }
+
+    #[test]
+    fn lut_dimensions_and_samples_are_bounded_and_finite() {
+        assert_eq!(Lut3d::identity(usize::MAX).size(), MAX_LUT_3D_SIZE);
+        assert!(Lut3d::from_samples(usize::MAX, Vec::new()).is_none());
+
+        let mut samples = vec![[0.0; 3]; 8];
+        samples[4][1] = f32::NAN;
+        assert!(Lut3d::from_samples(2, samples).is_none());
+
+        let lut = Lut3d::identity(2);
+        let sampled = lut.sample([f32::NAN, f32::NEG_INFINITY, f32::INFINITY]);
+        assert_eq!(sampled, [0.0, 0.0, 1.0]);
+    }
 }
 
 /// Apply an ASC CDL primary grade to a color: per channel `(in*slope + offset)^power`
@@ -1057,12 +1186,28 @@ mod lut_tests {
 pub fn apply_cdl(rgb: [f32; 3], slope: [f32; 3], offset: [f32; 3], power: [f32; 3]) -> [f32; 3] {
     let mut out = [0.0f32; 3];
     for channel in 0..3 {
-        let value = (rgb[channel] * slope[channel] + offset[channel]).max(0.0);
-        out[channel] = if power[channel] > 0.0 {
-            value.powf(power[channel])
+        let input = if rgb[channel].is_finite() {
+            rgb[channel]
         } else {
-            value
+            0.0
         };
+        let slope = if slope[channel].is_finite() {
+            slope[channel]
+        } else {
+            1.0
+        };
+        let offset = if offset[channel].is_finite() {
+            offset[channel]
+        } else {
+            0.0
+        };
+        let power = if power[channel].is_finite() && power[channel] > 0.0 {
+            power[channel]
+        } else {
+            1.0
+        };
+        let value = (input * slope + offset).max(0.0);
+        out[channel] = value.powf(power);
     }
     out
 }
@@ -1071,6 +1216,12 @@ pub fn apply_cdl(rgb: [f32; 3], slope: [f32; 3], offset: [f32; 3], power: [f32; 
 /// blend each channel toward the Rec.709-weighted luma by `saturation` (`1.0` leaves the
 /// color unchanged, `0.0` is grayscale, `> 1.0` boosts). Luminance-preserving.
 pub fn apply_saturation(rgb: [f32; 3], saturation: f32) -> [f32; 3] {
+    let rgb = rgb.map(|channel| if channel.is_finite() { channel } else { 0.0 });
+    let saturation = if saturation.is_finite() {
+        saturation
+    } else {
+        1.0
+    };
     let luma = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
     [
         luma + saturation * (rgb[0] - luma),
@@ -1201,6 +1352,21 @@ mod grade_tests {
         assert!(
             close(out, [out[0], out[0], out[0]], 1e-6),
             "grayscale: {out:?}"
+        );
+    }
+
+    #[test]
+    fn malformed_grade_values_do_not_poison_output() {
+        let sop = apply_cdl(
+            [f32::NAN, 0.5, f32::INFINITY],
+            [f32::NAN, 1.0, 1.0],
+            [0.0, f32::NAN, 0.0],
+            [1.0, f32::NAN, f32::INFINITY],
+        );
+        assert_eq!(sop, [0.0, 0.5, 0.0]);
+        assert_eq!(
+            apply_saturation([f32::NAN, 0.5, f32::INFINITY], f32::NAN),
+            [0.0, 0.5, 0.0]
         );
     }
 }

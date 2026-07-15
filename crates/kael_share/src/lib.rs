@@ -50,7 +50,49 @@ impl ShareImage {
         self.suggested_name.as_deref()
     }
 
-    #[cfg(any(target_os = "linux", target_os = "windows", test))]
+    /// Returns whether the image has a suggested file name.
+    pub fn has_suggested_name(&self) -> bool {
+        self.suggested_name
+            .as_deref()
+            .is_some_and(|name| !name.is_empty())
+    }
+
+    /// Returns the number of payload bytes.
+    pub fn len_bytes(&self) -> usize {
+        self.bytes.len()
+    }
+
+    /// Returns whether the image payload is empty.
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    /// Returns a coarse payload size class without exposing exact bytes.
+    pub fn byte_size_class(&self) -> &'static str {
+        share_byte_size_class(self.bytes.len())
+    }
+
+    /// Human-readable, content-safe summary for logs and agents.
+    pub fn to_text(&self) -> String {
+        format!(
+            "share image: mime {}, bytes {}, suggested name {}",
+            self.mime_type_class(),
+            self.byte_size_class(),
+            self.has_suggested_name()
+        )
+    }
+
+    fn mime_type_class(&self) -> &'static str {
+        if self.mime_type.starts_with("image/") {
+            "image"
+        } else if self.mime_type.is_empty() {
+            "empty"
+        } else {
+            "other"
+        }
+    }
+
+    #[cfg(any(target_os = "linux", test))]
     fn extension(&self) -> &str {
         match self.mime_type.as_str() {
             "image/png" => "png",
@@ -162,6 +204,45 @@ impl ShareItem {
             && self.subject.as_deref().is_none_or(str::is_empty)
     }
 
+    /// Returns whether this item contains a non-empty text payload.
+    pub fn has_text(&self) -> bool {
+        self.text.as_deref().is_some_and(|text| !text.is_empty())
+    }
+
+    /// Returns whether this item contains a non-empty URL payload.
+    pub fn has_url(&self) -> bool {
+        self.url.as_deref().is_some_and(|url| !url.is_empty())
+    }
+
+    /// Returns whether this item contains an image payload.
+    pub fn has_image(&self) -> bool {
+        self.image.is_some()
+    }
+
+    /// Returns whether this item contains a non-empty subject line.
+    pub fn has_subject(&self) -> bool {
+        self.subject
+            .as_deref()
+            .is_some_and(|subject| !subject.is_empty())
+    }
+
+    /// Number of file attachments on this item.
+    pub fn file_count(&self) -> usize {
+        self.files.len()
+    }
+
+    /// Human-readable, content-safe summary for logs and agents.
+    pub fn to_text(&self) -> String {
+        format!(
+            "share item: text {}, url {}, files {}, image {}, subject {}",
+            self.has_text(),
+            self.has_url(),
+            self.file_count(),
+            self.has_image(),
+            self.has_subject()
+        )
+    }
+
     #[cfg(any(target_os = "linux", target_os = "windows", test))]
     fn body_text(&self) -> Option<String> {
         let mut parts = Vec::new();
@@ -193,6 +274,11 @@ pub enum ShareType {
 }
 
 impl ShareType {
+    /// Stable destination-family key for logs, settings, and agents.
+    pub fn to_text(self) -> &'static str {
+        self.activity_name()
+    }
+
     fn activity_name(self) -> &'static str {
         match self {
             ShareType::Mail => "mail",
@@ -215,6 +301,39 @@ pub enum ShareResult {
     },
     /// No share activity was launched.
     Cancelled,
+}
+
+impl ShareResult {
+    /// Whether the platform backend accepted a share request.
+    pub fn is_completed(&self) -> bool {
+        matches!(self, Self::Completed { .. })
+    }
+
+    /// Whether no share activity was launched.
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled)
+    }
+
+    /// Whether a concrete platform activity name is available.
+    pub fn has_activity_type(&self) -> bool {
+        matches!(
+            self,
+            Self::Completed { activity_type } if !activity_type.is_empty()
+        )
+    }
+
+    /// Human-readable, content-safe result summary for logs and agents.
+    pub fn to_text(&self) -> String {
+        match self {
+            Self::Completed { activity_type } => {
+                format!(
+                    "share result: completed true, activity {}",
+                    !activity_type.is_empty()
+                )
+            }
+            Self::Cancelled => "share result: completed false, activity false".to_string(),
+        }
+    }
 }
 
 /// File-type identifier used when registering as a share target.
@@ -306,6 +425,76 @@ impl ShareSheet {
         &self.excluded_types
     }
 
+    /// Number of configured share items.
+    pub fn item_count(&self) -> usize {
+        self.items.len()
+    }
+
+    /// Number of items containing plain text.
+    pub fn text_item_count(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| item.text.as_deref().is_some_and(|text| !text.is_empty()))
+            .count()
+    }
+
+    /// Number of items containing URLs.
+    pub fn url_item_count(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| item.url.as_deref().is_some_and(|url| !url.is_empty()))
+            .count()
+    }
+
+    /// Number of file attachments across all items.
+    pub fn file_attachment_count(&self) -> usize {
+        self.items
+            .iter()
+            .map(|item| item.files.len())
+            .fold(0, usize::saturating_add)
+    }
+
+    /// Number of in-memory image payloads.
+    pub fn image_count(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| item.image.is_some())
+            .count()
+    }
+
+    /// Number of excluded destination families.
+    pub fn excluded_type_count(&self) -> usize {
+        self.excluded_types.len()
+    }
+
+    /// Whether any item includes a subject line.
+    pub fn has_subject(&self) -> bool {
+        self.items.iter().any(|item| {
+            item.subject
+                .as_deref()
+                .is_some_and(|subject| !subject.is_empty())
+        })
+    }
+
+    /// Human-readable, deterministic summary for export/share logs and agents.
+    pub fn to_text(&self) -> String {
+        format!(
+            "share sheet: {} items, {} text, {} urls, {} files, {} images, {} excluded types, subject {}",
+            self.item_count(),
+            self.text_item_count(),
+            self.url_item_count(),
+            self.file_attachment_count(),
+            self.image_count(),
+            self.excluded_type_count(),
+            self.has_subject()
+        )
+    }
+
+    /// Content-safe summaries for each item in this share sheet.
+    pub fn item_summaries(&self) -> Vec<String> {
+        self.items.iter().map(ShareItem::to_text).collect()
+    }
+
     /// Returns the current platform support summary.
     pub fn platform_support(&self) -> PlatformShareSupport {
         platform::support()
@@ -335,7 +524,7 @@ impl ShareSheet {
         (!parts.is_empty()).then(|| parts.join("\n\n"))
     }
 
-    #[cfg(any(target_os = "linux", target_os = "windows", test))]
+    #[cfg(test)]
     pub(crate) fn all_urls(&self) -> Vec<&str> {
         self.items
             .iter()
@@ -344,7 +533,7 @@ impl ShareSheet {
             .collect()
     }
 
-    #[cfg(any(target_os = "linux", target_os = "windows", test))]
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) fn attachment_paths(&self) -> Result<Vec<PathBuf>> {
         let mut paths = Vec::new();
         for item in &self.items {
@@ -356,7 +545,7 @@ impl ShareSheet {
         Ok(paths)
     }
 
-    #[cfg(any(target_os = "linux", target_os = "windows", test))]
+    #[cfg(any(target_os = "windows", test))]
     pub(crate) fn mailto_uri(&self) -> Option<String> {
         use url::form_urlencoded;
 
@@ -385,35 +574,87 @@ impl ShareSheet {
 
     /// Validate the configured payloads before invoking a platform backend.
     pub fn validate(&self) -> Result<()> {
+        const MAX_ITEMS: usize = 256;
+        const MAX_FILES: usize = 256;
+        const MAX_TEXT_BYTES: usize = 1024 * 1024;
+        const MAX_TOTAL_TEXT_BYTES: usize = 8 * 1024 * 1024;
+        const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
+
         if self.items.is_empty() {
             bail!("share sheet requires at least one item");
+        }
+        if self.items.len() > MAX_ITEMS {
+            bail!("share sheet contains more than {MAX_ITEMS} items");
         }
 
         if self.items.iter().all(ShareItem::is_empty) {
             bail!("share sheet requires at least one non-empty payload");
         }
 
+        let mut total_text_bytes = 0usize;
+        let mut total_files = 0usize;
         for item in &self.items {
-            if let Some(url) = item.url.as_deref().filter(|url| !url.is_empty()) {
-                if !url.contains(':') {
-                    bail!("share URL must include a URI scheme: {url}");
+            for value in [item.text.as_deref(), item.subject.as_deref()]
+                .into_iter()
+                .flatten()
+            {
+                if value.len() > MAX_TEXT_BYTES {
+                    bail!("share text or subject exceeds the {MAX_TEXT_BYTES} byte limit");
                 }
+                total_text_bytes = total_text_bytes
+                    .checked_add(value.len())
+                    .ok_or_else(|| anyhow::anyhow!("share text size overflow"))?;
+            }
+            if let Some(url) = item.url.as_deref().filter(|url| !url.is_empty()) {
+                if url.len() > 8_192 || url.chars().any(char::is_control) {
+                    bail!("share URL is too large or contains control characters");
+                }
+                url::Url::parse(url).map_err(|_| anyhow::anyhow!("share URL is invalid"))?;
+                total_text_bytes = total_text_bytes
+                    .checked_add(url.len())
+                    .ok_or_else(|| anyhow::anyhow!("share text size overflow"))?;
             }
 
             if let Some(image) = item.image.as_ref() {
-                if image.mime_type().is_empty() {
-                    bail!("share image MIME type cannot be empty");
+                if !image.mime_type().starts_with("image/")
+                    || image.mime_type().len() > 127
+                    || image.mime_type().chars().any(char::is_control)
+                {
+                    bail!("share image MIME type must be a valid image type");
                 }
                 if image.bytes().is_empty() {
                     bail!("share image bytes cannot be empty");
                 }
-            }
-
-            for path in &item.files {
-                if !path.exists() {
-                    bail!("share file does not exist: {}", path.display());
+                if image.bytes().len() > MAX_IMAGE_BYTES {
+                    bail!("share image exceeds the {MAX_IMAGE_BYTES} byte limit");
+                }
+                if let Some(name) = image.suggested_name() {
+                    if name.is_empty() || name.len() > 255 || name.chars().any(char::is_control) {
+                        bail!("share image suggested name is invalid");
+                    }
                 }
             }
+
+            total_files = total_files
+                .checked_add(item.files.len())
+                .ok_or_else(|| anyhow::anyhow!("share attachment count overflow"))?;
+            for path in &item.files {
+                let metadata = std::fs::metadata(path).map_err(|_| {
+                    anyhow::anyhow!(
+                        "share file does not exist or cannot be inspected: {}",
+                        path.display()
+                    )
+                })?;
+                if !metadata.is_file() {
+                    bail!("share attachment is not a regular file: {}", path.display());
+                }
+            }
+        }
+        if total_files > MAX_FILES {
+            bail!("share sheet contains more than {MAX_FILES} file attachments");
+        }
+        if total_text_bytes > MAX_TOTAL_TEXT_BYTES {
+            bail!("share sheet text exceeds the {MAX_TOTAL_TEXT_BYTES} byte limit");
         }
 
         Ok(())
@@ -491,6 +732,60 @@ impl ShareSheetBuilder {
         &self.items
     }
 
+    /// Number of configured share items before build-time subject application.
+    pub fn item_count(&self) -> usize {
+        self.items.len()
+    }
+
+    /// Number of items containing plain text.
+    pub fn text_item_count(&self) -> usize {
+        self.items.iter().filter(|item| item.has_text()).count()
+    }
+
+    /// Number of items containing URLs.
+    pub fn url_item_count(&self) -> usize {
+        self.items.iter().filter(|item| item.has_url()).count()
+    }
+
+    /// Number of file attachments across all configured items.
+    pub fn file_attachment_count(&self) -> usize {
+        self.items
+            .iter()
+            .map(ShareItem::file_count)
+            .fold(0, usize::saturating_add)
+    }
+
+    /// Number of configured image payloads.
+    pub fn image_count(&self) -> usize {
+        self.items.iter().filter(|item| item.has_image()).count()
+    }
+
+    /// Number of excluded destination families.
+    pub fn excluded_type_count(&self) -> usize {
+        self.excluded_types.len()
+    }
+
+    /// Whether the builder has a pending subject to apply while building.
+    pub fn has_pending_subject(&self) -> bool {
+        self.pending_subject
+            .as_deref()
+            .is_some_and(|subject| !subject.is_empty())
+    }
+
+    /// Human-readable, content-safe summary before building the share sheet.
+    pub fn to_text(&self) -> String {
+        format!(
+            "share sheet builder: {} items, {} text, {} urls, {} files, {} images, {} excluded types, pending subject {}",
+            self.item_count(),
+            self.text_item_count(),
+            self.url_item_count(),
+            self.file_attachment_count(),
+            self.image_count(),
+            self.excluded_type_count(),
+            self.has_pending_subject()
+        )
+    }
+
     /// Validate and build the share sheet.
     pub fn build_checked(mut self) -> Result<ShareSheet> {
         if let Some(subject) = self.pending_subject.take() {
@@ -510,6 +805,18 @@ impl ShareSheetBuilder {
     }
 }
 
+fn share_byte_size_class(len: usize) -> &'static str {
+    if len == 0 {
+        "empty"
+    } else if len < 1024 {
+        "small"
+    } else if len < 1024 * 1024 {
+        "medium"
+    } else {
+        "large"
+    }
+}
+
 /// Registration handle for share-target callbacks.
 pub struct ShareReceiver {
     _registration: platform::PlatformShareReceiver,
@@ -521,6 +828,18 @@ impl ShareReceiver {
     where
         F: Fn(Vec<ShareItem>) + Send + 'static,
     {
+        if file_types.is_empty() {
+            bail!("share receiver registration requires at least one file type");
+        }
+        if file_types.len() > 256
+            || file_types.iter().any(|file_type| {
+                file_type.as_str().is_empty()
+                    || file_type.as_str().len() > 255
+                    || file_type.as_str().chars().any(char::is_control)
+            })
+        {
+            bail!("share receiver file types are invalid or exceed the limit");
+        }
         let registration = platform::register_receiver(file_types, Box::new(callback))?;
         Ok(Self {
             _registration: registration,
@@ -549,6 +868,12 @@ pub fn cleanup_share_temps(temp_dir: &std::path::Path, max_age: Duration) -> usi
         if !name_str.starts_with("kael-share-") {
             continue;
         }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() || file_type.is_symlink() {
+            continue;
+        }
         let Ok(metadata) = entry.metadata() else {
             continue;
         };
@@ -564,7 +889,7 @@ pub fn cleanup_share_temps(temp_dir: &std::path::Path, max_age: Duration) -> usi
     removed
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows", test))]
+#[cfg(any(target_os = "linux", test))]
 fn materialize_image(image: &ShareImage) -> Result<PathBuf> {
     use anyhow::Context;
     use std::{
@@ -597,17 +922,32 @@ fn materialize_image(image: &ShareImage) -> Result<PathBuf> {
         match fs::create_dir(&dir) {
             Ok(()) => {
                 let path = dir.join(&final_name);
-                let mut file = fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&path)
-                    .with_context(|| {
-                        format!("failed to materialize share image at {}", path.display())
+                let result = (|| {
+                    let mut file = fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&path)
+                        .with_context(|| {
+                            format!("failed to materialize share image at {}", path.display())
+                        })?;
+                    file.write_all(image.bytes()).with_context(|| {
+                        format!("failed to write share image at {}", path.display())
                     })?;
-                file.write_all(image.bytes()).with_context(|| {
-                    format!("failed to write share image at {}", path.display())
-                })?;
-                return Ok(path);
+                    file.flush().with_context(|| {
+                        format!("failed to flush share image at {}", path.display())
+                    })?;
+                    file.sync_all().with_context(|| {
+                        format!("failed to sync share image at {}", path.display())
+                    })?;
+                    Ok::<_, anyhow::Error>(())
+                })();
+                match result {
+                    Ok(()) => return Ok(path),
+                    Err(error) => {
+                        let _ = fs::remove_dir_all(&dir);
+                        return Err(error);
+                    }
+                }
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
@@ -621,7 +961,7 @@ fn materialize_image(image: &ShareImage) -> Result<PathBuf> {
     anyhow::bail!("failed to create a unique share temp directory")
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows", test))]
+#[cfg(any(target_os = "linux", test))]
 fn sanitize_file_name(input: &str) -> String {
     input
         .chars()
@@ -632,6 +972,7 @@ fn sanitize_file_name(input: &str) -> String {
                 '_'
             }
         })
+        .take(200)
         .collect()
 }
 
@@ -674,12 +1015,22 @@ mod tests {
 
     #[test]
     fn share_sheet_builder_builds_checked_payloads() {
-        let sheet = ShareSheet::builder()
+        let builder = ShareSheet::builder()
             .subject("Sprint update")
             .text("All checks passed")
             .url("https://example.com/report")
             .exclude(ShareType::Social)
-            .exclude_many([ShareType::Print])
+            .exclude_many([ShareType::Print]);
+
+        assert_eq!(
+            builder.to_text(),
+            "share sheet builder: 2 items, 1 text, 1 urls, 0 files, 0 images, 2 excluded types, pending subject true"
+        );
+        assert!(!builder.to_text().contains("Sprint update"));
+        assert!(!builder.to_text().contains("All checks passed"));
+        assert!(!builder.to_text().contains("example.com"));
+
+        let sheet = builder
             .build_checked()
             .expect("share sheet should be valid");
 
@@ -687,6 +1038,94 @@ mod tests {
         assert_eq!(sheet.items()[0].subject.as_deref(), Some("Sprint update"));
         assert!(sheet.excluded().contains(&ShareType::Social));
         assert!(sheet.excluded().contains(&ShareType::Print));
+        assert_eq!(sheet.item_count(), 2);
+        assert_eq!(sheet.text_item_count(), 1);
+        assert_eq!(sheet.url_item_count(), 1);
+        assert_eq!(sheet.file_attachment_count(), 0);
+        assert_eq!(sheet.image_count(), 0);
+        assert_eq!(sheet.excluded_type_count(), 2);
+        assert!(sheet.has_subject());
+        assert_eq!(
+            sheet.to_text(),
+            "share sheet: 2 items, 1 text, 1 urls, 0 files, 0 images, 2 excluded types, subject true"
+        );
+        assert_eq!(
+            sheet.item_summaries(),
+            vec![
+                "share item: text true, url false, files 0, image false, subject true",
+                "share item: text false, url true, files 0, image false, subject false",
+            ]
+        );
+        assert!(!sheet.item_summaries().join("; ").contains("Sprint update"));
+        assert!(!sheet.item_summaries().join("; ").contains("example.com"));
+    }
+
+    #[test]
+    fn share_payload_summaries_are_content_safe() {
+        let image =
+            ShareImage::new("image/png", vec![1, 2, 3]).with_suggested_name("private-preview.png");
+        assert_eq!(
+            image.to_text(),
+            "share image: mime image, bytes small, suggested name true"
+        );
+        assert_eq!(image.len_bytes(), 3);
+        assert!(!image.to_text().contains("image/png"));
+        assert!(!image.to_text().contains("private-preview"));
+
+        let item = ShareItem::new()
+            .with_text("Private report body")
+            .with_url("https://example.com/private-report")
+            .with_subject("Private subject")
+            .with_file("/tmp/private-report.pdf")
+            .with_image(image);
+
+        assert_eq!(
+            item.to_text(),
+            "share item: text true, url true, files 1, image true, subject true"
+        );
+        assert!(!item.to_text().contains("Private report"));
+        assert!(!item.to_text().contains("example.com"));
+        assert!(!item.to_text().contains("private-report.pdf"));
+        assert!(!item.to_text().contains("Private subject"));
+    }
+
+    #[test]
+    fn share_support_type_and_result_summaries_are_content_safe() {
+        let support = PlatformShareSupport {
+            mail: true,
+            messages: false,
+            airdrop: false,
+            clipboard: true,
+            social: false,
+            print: true,
+            receiver_registration: false,
+        };
+
+        assert_eq!(support.supported_count(), 3);
+        assert!(!support.is_empty());
+        assert_eq!(
+            support.to_text(),
+            "share support: 3 supported, mail true, messages false, airdrop false, clipboard true, social false, print true, receiver false"
+        );
+        assert_eq!(ShareType::AirDrop.to_text(), "airdrop");
+
+        let completed = ShareResult::Completed {
+            activity_type: "com.apple.UIKit.activity.Mail".into(),
+        };
+        assert!(completed.is_completed());
+        assert!(completed.has_activity_type());
+        assert_eq!(
+            completed.to_text(),
+            "share result: completed true, activity true"
+        );
+        assert!(!completed.to_text().contains("com.apple"));
+
+        let cancelled = ShareResult::Cancelled;
+        assert!(cancelled.is_cancelled());
+        assert_eq!(
+            cancelled.to_text(),
+            "share result: completed false, activity false"
+        );
     }
 
     #[test]
@@ -711,6 +1150,36 @@ mod tests {
                 .build_checked()
                 .is_err()
         );
+        assert!(
+            ShareSheet::builder()
+                .image(ShareImage::new("text/plain", vec![1]))
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            ShareSheet::builder()
+                .url("https://example.com/\nsecret")
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            ShareSheet::new(vec![ShareItem::text("x"); 257])
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn directories_are_not_accepted_as_file_attachments() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(ShareSheet::file(directory.path()).validate().is_err());
+    }
+
+    #[test]
+    fn receiver_inputs_and_materialized_names_are_bounded() {
+        assert!(ShareReceiver::register(&[], |_| {}).is_err());
+        assert!(ShareReceiver::register(&[ShareFileType::new("bad\n")], |_| {}).is_err());
+        assert!(sanitize_file_name(&"a".repeat(1_000)).len() <= 200);
     }
 
     #[test]
@@ -830,6 +1299,22 @@ mod tests {
         let removed = cleanup_share_temps(temp.path(), Duration::from_secs(0));
         assert_eq!(removed, 0);
         assert!(other_dir.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_does_not_follow_matching_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("keep"), b"data").unwrap();
+        let link = root.path().join("kael-share-link");
+        symlink(outside.path(), &link).unwrap();
+
+        assert_eq!(cleanup_share_temps(root.path(), Duration::ZERO), 0);
+        assert!(link.exists());
+        assert!(outside.path().join("keep").exists());
     }
 
     #[test]

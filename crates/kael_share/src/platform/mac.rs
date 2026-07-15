@@ -1,10 +1,12 @@
 use anyhow::{Result, anyhow};
-use cocoa::{
-    appkit::NSApplication,
-    base::{BOOL, YES, id, nil},
-    foundation::{NSAutoreleasePool, NSString},
+use std::ffi::CStr;
+
+use objc2::{
+    msg_send,
+    rc::{Retained, autoreleasepool},
+    runtime::{AnyClass, AnyObject, Bool},
 };
-use objc::{class, msg_send, sel, sel_impl};
+use objc2_foundation::NSString;
 
 use crate::{
     ReceiverCallback, ShareFileType, ShareResult, ShareSheet, ShareType,
@@ -12,20 +14,20 @@ use crate::{
 };
 
 pub(crate) async fn show(sheet: &ShareSheet) -> Result<ShareResult> {
-    unsafe {
-        let _pool = NSAutoreleasePool::new(nil);
-        let _: id = NSApplication::sharedApplication(nil);
+    autoreleasepool(|_| unsafe {
+        let _: *mut AnyObject = msg_send![lookup_class(c"NSApplication"), sharedApplication];
         let items = share_objects(sheet)?;
 
         for (share_type, service_names) in preferred_services(sheet) {
             for service_name in service_names {
-                let service: id = msg_send![class!(NSSharingService), sharingServiceNamed: ns_string(service_name)];
-                if service == nil {
+                let service_name = ns_string(service_name);
+                let service: *mut AnyObject = msg_send![lookup_class(c"NSSharingService"), sharingServiceNamed: &*service_name];
+                if service.is_null() {
                     continue;
                 }
 
-                let can_perform: BOOL = msg_send![service, canPerformWithItems: items];
-                if can_perform == YES {
+                let can_perform: Bool = msg_send![service, canPerformWithItems: items];
+                if can_perform.as_bool() {
                     let _: () = msg_send![service, performWithItems: items];
                     return Ok(ShareResult::Completed {
                         activity_type: share_type.activity_name().to_string(),
@@ -35,10 +37,11 @@ pub(crate) async fn show(sheet: &ShareSheet) -> Result<ShareResult> {
         }
 
         if !sheet.is_excluded(ShareType::Clipboard) {
-            let pasteboard: id = msg_send![class!(NSPasteboard), generalPasteboard];
+            let pasteboard: *mut AnyObject =
+                msg_send![lookup_class(c"NSPasteboard"), generalPasteboard];
             let _: isize = msg_send![pasteboard, clearContents];
-            let wrote: BOOL = msg_send![pasteboard, writeObjects: items];
-            if wrote == YES {
+            let wrote: Bool = msg_send![pasteboard, writeObjects: items];
+            if wrote.as_bool() {
                 return Ok(ShareResult::Completed {
                     activity_type: ShareType::Clipboard.activity_name().to_string(),
                 });
@@ -46,7 +49,7 @@ pub(crate) async fn show(sheet: &ShareSheet) -> Result<ShareResult> {
         }
 
         Ok(ShareResult::Cancelled)
-    }
+    })
 }
 
 pub(crate) fn register_receiver(
@@ -64,41 +67,53 @@ pub(crate) fn support() -> crate::PlatformShareSupport {
         messages: true,
         airdrop: true,
         clipboard: true,
-        social: true,
+        social: false,
         print: true,
         receiver_registration: false,
     }
 }
 
-unsafe fn share_objects(sheet: &ShareSheet) -> Result<id> {
-    let objects: id = msg_send![class!(NSMutableArray), array];
+unsafe fn share_objects(sheet: &ShareSheet) -> Result<*mut AnyObject> {
+    let objects: *mut AnyObject = unsafe { msg_send![lookup_class(c"NSMutableArray"), array] };
 
     for item in sheet.items() {
         if let Some(text) = item.text.as_deref().filter(|text| !text.is_empty()) {
-            let _: () = msg_send![objects, addObject: ns_string(text)];
+            let text = ns_string(text);
+            let _: () = unsafe { msg_send![objects, addObject: &*text] };
         }
 
         if let Some(url) = item.url.as_deref().filter(|url| !url.is_empty()) {
-            let url_object: id = msg_send![class!(NSURL), URLWithString: ns_string(url)];
-            if url_object != nil {
-                let _: () = msg_send![objects, addObject: url_object];
+            let url = ns_string(url);
+            let url_object: *mut AnyObject =
+                unsafe { msg_send![lookup_class(c"NSURL"), URLWithString: &*url] };
+            if !url_object.is_null() {
+                let _: () = unsafe { msg_send![objects, addObject: url_object] };
             }
         }
 
         if let Some(image) = item.image.as_ref() {
-            let data: id = msg_send![class!(NSData), dataWithBytes: image.bytes().as_ptr() length: image.bytes().len()];
-            let image_object: id = msg_send![class!(NSImage), alloc];
-            let image_object: id = msg_send![image_object, initWithData: data];
-            if image_object != nil {
-                let _: () = msg_send![objects, addObject: image_object];
+            let data: *mut AnyObject = unsafe {
+                msg_send![lookup_class(c"NSData"), dataWithBytes: image.bytes().as_ptr(), length: image.bytes().len()]
+            };
+            let image_object: *mut AnyObject =
+                unsafe { msg_send![lookup_class(c"NSImage"), alloc] };
+            let image_object: *mut AnyObject =
+                unsafe { msg_send![image_object, initWithData: data] };
+            if !image_object.is_null() {
+                let _: () = unsafe { msg_send![objects, addObject: image_object] };
+                let _: () = unsafe { msg_send![image_object, release] };
             }
         }
 
         for file in &item.files {
-            let path = file.to_string_lossy();
-            let file_url: id = msg_send![class!(NSURL), fileURLWithPath: ns_string(&path)];
-            if file_url != nil {
-                let _: () = msg_send![objects, addObject: file_url];
+            let path = file.to_str().ok_or_else(|| {
+                anyhow!("share file path is not valid Unicode: {}", file.display())
+            })?;
+            let path = ns_string(path);
+            let file_url: *mut AnyObject =
+                unsafe { msg_send![lookup_class(c"NSURL"), fileURLWithPath: &*path] };
+            if !file_url.is_null() {
+                let _: () = unsafe { msg_send![objects, addObject: file_url] };
             }
         }
     }
@@ -106,8 +121,12 @@ unsafe fn share_objects(sheet: &ShareSheet) -> Result<id> {
     Ok(objects)
 }
 
-fn ns_string(value: &str) -> id {
-    unsafe { NSString::alloc(nil).init_str(value) }
+fn ns_string(value: &str) -> Retained<NSString> {
+    NSString::from_str(value)
+}
+
+fn lookup_class(name: &CStr) -> &'static AnyClass {
+    AnyClass::get(name).unwrap_or_else(|| panic!("missing Objective-C class {name:?}"))
 }
 
 fn preferred_services(sheet: &ShareSheet) -> Vec<(ShareType, &'static [&'static str])> {
@@ -125,16 +144,6 @@ fn preferred_services(sheet: &ShareSheet) -> Vec<(ShareType, &'static [&'static 
         services.push((
             ShareType::AirDrop,
             &["NSSharingServiceNameSendViaAirDrop"][..],
-        ));
-    }
-    if !sheet.is_excluded(ShareType::Social) {
-        services.push((
-            ShareType::Social,
-            &[
-                "NSSharingServiceNamePostOnTwitter",
-                "NSSharingServiceNamePostOnFacebook",
-                "NSSharingServiceNamePostOnLinkedIn",
-            ][..],
         ));
     }
     if !sheet.is_excluded(ShareType::Print) {

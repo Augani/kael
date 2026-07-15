@@ -1,9 +1,13 @@
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{
+    Mutex, MutexGuard,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::{Duration, SystemTime};
 
 /// A content-addressed disk cache organized by namespace.
@@ -14,6 +18,7 @@ pub struct DiskCache {
     root: PathBuf,
     max_bytes: u64,
     index: Mutex<DiskIndex>,
+    operations: Mutex<()>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -36,6 +41,7 @@ impl DiskCache {
             .with_context(|| format!("failed to create cache root: {}", root.display()))?;
         Ok(Self {
             index: Mutex::new(build_index(&root)?),
+            operations: Mutex::new(()),
             root,
             max_bytes,
         })
@@ -53,6 +59,7 @@ impl DiskCache {
         index.max_entries_per_namespace = Some(max_entries_per_namespace);
         Ok(Self {
             index: Mutex::new(index),
+            operations: Mutex::new(()),
             root,
             max_bytes,
         })
@@ -75,7 +82,8 @@ impl DiskCache {
     /// Stores data under the given namespace and key, evicting old entries if
     /// the size budget would be exceeded.
     pub fn put(&self, namespace: &str, key: &str, data: &[u8]) -> Result<()> {
-        let data_len = data.len() as u64;
+        let _operation = self.lock_operations();
+        let data_len = u64::try_from(data.len()).unwrap_or(u64::MAX);
         if data_len > self.max_bytes {
             anyhow::bail!(
                 "data size ({data_len} bytes) exceeds max cache size ({} bytes)",
@@ -88,8 +96,7 @@ impl DiskCache {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create cache dir: {}", parent.display()))?;
         }
-        fs::write(&path, data)
-            .with_context(|| format!("failed to write cache entry: {}", path.display()))?;
+        write_atomically(&path, data)?;
 
         let metadata = fs::metadata(&path)
             .with_context(|| format!("failed to stat cache entry: {}", path.display()))?;
@@ -127,6 +134,7 @@ impl DiskCache {
 
     /// Removes a single cached entry.
     pub fn remove(&self, namespace: &str, key: &str) -> Result<()> {
+        let _operation = self.lock_operations();
         let path = self.entry_path(namespace, key)?;
         match fs::remove_file(&path) {
             Ok(()) => {
@@ -145,6 +153,7 @@ impl DiskCache {
 
     /// Removes all entries within a namespace.
     pub fn clear_namespace(&self, namespace: &str) -> Result<()> {
+        let _operation = self.lock_operations();
         let ns_path = self.namespace_path(namespace)?;
         if ns_path.exists() {
             fs::remove_dir_all(&ns_path)
@@ -176,6 +185,7 @@ impl DiskCache {
 
     /// Evicts all entries older than `max_age`, returning bytes freed.
     pub fn evict_by_age(&self, max_age: Duration) -> Result<u64> {
+        let _operation = self.lock_operations();
         let cutoff = SystemTime::now()
             .checked_sub(max_age)
             .unwrap_or(SystemTime::UNIX_EPOCH);
@@ -196,6 +206,7 @@ impl DiskCache {
     /// Evicts oldest entries until total size is at or below `target_bytes`,
     /// returning bytes freed.
     pub fn evict_by_size(&self, target_bytes: u64) -> Result<u64> {
+        let _operation = self.lock_operations();
         let candidates = {
             let index = self.lock_index();
             eviction_candidates(&index, target_bytes)
@@ -228,12 +239,18 @@ impl DiskCache {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    fn lock_operations(&self) -> MutexGuard<'_, ()> {
+        self.operations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn record_index_entry(&self, path: PathBuf, size: u64, modified: SystemTime) {
         let mut index = self.lock_index();
         if let Some(previous) = index.entries.insert(path, DiskEntry { size, modified }) {
             index.total_bytes = index.total_bytes.saturating_sub(previous.size);
         }
-        index.total_bytes += size;
+        index.total_bytes = index.total_bytes.saturating_add(size);
     }
 
     fn remove_index_entry(&self, path: &Path) {
@@ -257,12 +274,62 @@ impl DiskCache {
 
             let mut index = self.lock_index();
             if let Some(entry) = remove_index_entry_from(&mut index, path) {
-                freed += entry.size;
+                freed = freed.saturating_add(entry.size);
             }
         }
 
         Ok(freed)
     }
+}
+
+fn write_atomically(path: &Path, data: &[u8]) -> Result<()> {
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+    let temp_path = loop {
+        let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+        let candidate = path.with_extension(format!("tmp-{}-{id}", std::process::id()));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(mut file) => {
+                let result = (|| {
+                    file.write_all(data)?;
+                    file.flush()?;
+                    Ok::<_, std::io::Error>(())
+                })();
+                if let Err(error) = result {
+                    let _ = fs::remove_file(&candidate);
+                    return Err(error).with_context(|| {
+                        format!("failed to write cache entry: {}", path.display())
+                    });
+                }
+                break candidate;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to create cache entry: {}", path.display()));
+            }
+        }
+    };
+
+    #[cfg(windows)]
+    if path.exists()
+        && let Err(error) = fs::remove_file(path)
+    {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error)
+            .with_context(|| format!("failed to replace cache entry: {}", path.display()));
+    }
+
+    if let Err(error) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error)
+            .with_context(|| format!("failed to replace cache entry: {}", path.display()));
+    }
+    Ok(())
 }
 
 fn hash_key(key: &str) -> String {
@@ -294,7 +361,7 @@ fn build_index(root: &Path) -> Result<DiskIndex> {
         let metadata = fs::metadata(&entry)?;
         let size = metadata.len();
         let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-        index.total_bytes += size;
+        index.total_bytes = index.total_bytes.saturating_add(size);
         index.entries.insert(entry, DiskEntry { size, modified });
     }
 
@@ -313,6 +380,14 @@ fn walk_files(root: &std::path::Path) -> Result<Vec<PathBuf>> {
         for entry in entries {
             let entry = entry?;
             let ft = entry.file_type()?;
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.contains(".tmp-"))
+            {
+                let _ = fs::remove_file(entry.path());
+                continue;
+            }
             if ft.is_dir() {
                 stack.push(entry.path());
             } else if ft.is_file() {
@@ -548,5 +623,17 @@ mod tests {
         assert_eq!(fs::read(&sibling).unwrap(), b"keep");
 
         fs::remove_file(sibling).ok();
+    }
+
+    #[test]
+    fn stale_temporary_files_are_not_indexed() {
+        let tmp = TempDir::new().unwrap();
+        let namespace = tmp.path().join("ns");
+        fs::create_dir_all(&namespace).unwrap();
+        fs::write(namespace.join("entry.tmp-123-0"), b"partial").unwrap();
+
+        let cache = DiskCache::new(tmp.path().to_path_buf(), 1024).unwrap();
+        assert_eq!(cache.total_size().unwrap(), 0);
+        assert!(fs::read_dir(namespace).unwrap().next().is_none());
     }
 }

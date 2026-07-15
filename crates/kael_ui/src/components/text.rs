@@ -172,12 +172,12 @@ impl TextVariant {
     /// Get the text size for this variant
     pub fn size(&self) -> Pixels {
         match self {
-            Self::H1 => px(24.0),
-            Self::H2 => px(20.0),
-            Self::H3 => px(17.0),
-            Self::H4 => px(14.0),
-            Self::H5 => px(12.0),
-            Self::H6 => px(11.0),
+            Self::H1 => px(32.0),
+            Self::H2 => px(28.0),
+            Self::H3 => px(24.0),
+            Self::H4 => px(20.0),
+            Self::H5 => px(18.0),
+            Self::H6 => px(16.0),
             Self::BodyLarge => px(17.0),
             Self::Body => px(14.0),
             Self::BodySmall => px(13.0),
@@ -210,15 +210,28 @@ impl TextVariant {
         matches!(self, Self::Code | Self::CodeSmall)
     }
 
+    /// Return the semantic heading level represented by this variant.
+    pub fn heading_level(&self) -> Option<usize> {
+        match self {
+            Self::H1 => Some(1),
+            Self::H2 => Some(2),
+            Self::H3 => Some(3),
+            Self::H4 => Some(4),
+            Self::H5 => Some(5),
+            Self::H6 => Some(6),
+            _ => None,
+        }
+    }
+
     /// Get line height multiplier for this variant
     pub fn line_height(&self) -> f32 {
         match self {
-            Self::H1 => 1.3333,
-            Self::H2 => 1.4,
-            Self::H3 => 1.4118,
-            Self::H4 => 1.4286,
-            Self::H5 => 1.6667,
-            Self::H6 => 1.6,
+            Self::H1 => 1.25,
+            Self::H2 => 1.2857,
+            Self::H3 => 1.3333,
+            Self::H4 => 1.4,
+            Self::H5 => 1.4444,
+            Self::H6 => 1.5,
             Self::BodyLarge => 1.4118,
             Self::Body | Self::BodySmall => 1.4286,
             Self::Caption | Self::Label | Self::Code | Self::CodeSmall => 1.4286,
@@ -253,6 +266,8 @@ pub struct Text {
     justify: TextJustify,
     tabular_numbers: bool,
     max_lines: Option<usize>,
+    semantic_heading_level: Option<usize>,
+    accessibility_hidden: bool,
     style: StyleRefinement,
 }
 
@@ -279,6 +294,8 @@ impl Text {
             justify: TextJustify::Start,
             tabular_numbers: false,
             max_lines: None,
+            semantic_heading_level: None,
+            accessibility_hidden: false,
             style: StyleRefinement::default(),
         }
     }
@@ -305,7 +322,10 @@ impl Text {
 
     /// Set custom font size (overrides variant size)
     pub fn size(mut self, size: Pixels) -> Self {
-        self.size = Some(size);
+        let value = f32::from(size);
+        if value.is_finite() && value > 0.0 {
+            self.size = Some(size);
+        }
         self
     }
 
@@ -362,7 +382,9 @@ impl Text {
 
     /// Set custom line height multiplier
     pub fn line_height(mut self, line_height: f32) -> Self {
-        self.line_height = Some(line_height);
+        if line_height.is_finite() && line_height > 0.0 {
+            self.line_height = Some(line_height);
+        }
         self
     }
 
@@ -424,9 +446,7 @@ impl Text {
 
     pub fn text_wrap(mut self, text_wrap: TextWrap) -> Self {
         self.text_wrap = text_wrap;
-        if matches!(text_wrap, TextWrap::Nowrap) {
-            self.wrap = false;
-        }
+        self.wrap = !matches!(text_wrap, TextWrap::Nowrap);
         self
     }
 
@@ -454,10 +474,27 @@ impl Text {
     }
 
     pub fn max_lines(mut self, max_lines: usize) -> Self {
+        let max_lines = max_lines.max(1);
         self.max_lines = Some(max_lines);
         if max_lines == 1 {
             self = self.truncate();
+        } else {
+            self.truncate = false;
+            self.wrap = true;
         }
+        self
+    }
+
+    /// Override the semantic heading level independently of the visual variant.
+    pub fn semantic_heading_level(mut self, level: usize) -> Self {
+        self.semantic_heading_level = Some(level.clamp(1, 6));
+        self
+    }
+
+    /// Keep visual text out of the accessibility tree when a semantic parent
+    /// already provides the same label.
+    pub fn accessibility_hidden(mut self, hidden: bool) -> Self {
+        self.accessibility_hidden = hidden;
         self
     }
 
@@ -482,17 +519,18 @@ impl Text {
             .unwrap_or_else(|| self.variant.line_height())
     }
 
-    fn effective_color(&self, tokens: &ThemeTokens) -> Hsla {
+    fn effective_color(&self, tokens: &ThemeTokens) -> Option<Hsla> {
         if let Some(color) = self.color {
-            return color;
+            return Some(color);
         }
 
         match self.semantic_color.unwrap_or(TextColor::Primary) {
-            TextColor::Primary | TextColor::Inherit => tokens.foreground,
-            TextColor::Secondary => tokens.muted_foreground,
-            TextColor::Disabled => tokens.muted_foreground.opacity(0.55),
-            TextColor::Placeholder => tokens.muted_foreground.opacity(0.72),
-            TextColor::Active => tokens.primary,
+            TextColor::Primary => Some(tokens.foreground),
+            TextColor::Secondary => Some(tokens.muted_foreground),
+            TextColor::Disabled => Some(tokens.muted_foreground.opacity(0.55)),
+            TextColor::Placeholder => Some(tokens.muted_foreground.opacity(0.72)),
+            TextColor::Active => Some(tokens.primary),
+            TextColor::Inherit => None,
         }
     }
 }
@@ -511,6 +549,10 @@ impl RenderOnce for Text {
         let weight = self.effective_weight();
         let line_height = self.effective_line_height();
         let text_color = self.effective_color(tokens);
+        let heading_level = self
+            .semantic_heading_level
+            .or_else(|| self.variant.heading_level())
+            .filter(|_| !self.content.trim().is_empty());
 
         let font_family = if let Some(font) = self.font {
             font
@@ -532,7 +574,7 @@ impl RenderOnce for Text {
             }
             if self.strikethrough {
                 highlight_style.strikethrough = Some(StrikethroughStyle {
-                    color: Some(text_color),
+                    color: text_color,
                     thickness: px(1.0),
                 });
             }
@@ -544,10 +586,18 @@ impl RenderOnce for Text {
             StyledText::new(self.content.clone())
         };
 
+        let styled_text =
+            styled_text.accessibility_hidden(heading_level.is_some() || self.accessibility_hidden);
+        let accessibility = heading_level.map(|level| {
+            AccessibilityAttributes::new(AccessibilityRole::Heading)
+                .label(self.content.to_string())
+                .heading_level(level)
+        });
+
         base.font_family(font_family.clone())
             .text_size(size)
             .font_weight(weight)
-            .text_color(text_color)
+            .when_some(text_color, |this, color| this.text_color(color))
             .line_height(relative(line_height))
             .when(self.display == TextDisplay::Block, |this| this.block())
             .when(self.underline, |this| this.underline())
@@ -572,6 +622,9 @@ impl RenderOnce for Text {
                 this.line_clamp(lines)
             })
             .when(self.truncate, |this| this.overflow_hidden().text_ellipsis())
+            .when_some(accessibility, |this, accessibility| {
+                this.accessibility(accessibility)
+            })
             .child(styled_text)
     }
 }
@@ -660,4 +713,47 @@ pub fn muted_small<S: Into<SharedString>>(content: S) -> Text {
     Text::new(content)
         .variant(TextVariant::BodySmall)
         .color(theme.tokens.muted_foreground)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn inherit_does_not_override_the_parent_text_color() {
+        let tokens = ThemeTokens::astryx_neutral();
+        let inherited = Text::new("Inherited").text_color(TextColor::Inherit);
+        assert_eq!(inherited.effective_color(&tokens), None);
+
+        let primary = Text::new("Primary");
+        assert_eq!(primary.effective_color(&tokens), Some(tokens.foreground));
+    }
+
+    #[::core::prelude::v1::test]
+    fn heading_scale_and_wrapping_options_are_normalized() {
+        assert_eq!(TextVariant::H1.size(), px(32.0));
+        assert_eq!(TextVariant::H6.size(), px(16.0));
+        assert_eq!(TextVariant::H3.heading_level(), Some(3));
+        assert_eq!(TextVariant::Body.heading_level(), None);
+
+        let text = Text::new("Review")
+            .size(px(f32::NAN))
+            .line_height(-1.0)
+            .text_wrap(TextWrap::Nowrap)
+            .text_wrap(TextWrap::Pretty)
+            .max_lines(0);
+        assert_eq!(text.size, None);
+        assert_eq!(text.line_height, None);
+        assert!(!text.wrap);
+        assert!(text.truncate);
+        assert_eq!(text.max_lines, Some(1));
+
+        let multiline = Text::new("Review")
+            .truncate()
+            .max_lines(3)
+            .semantic_heading_level(99);
+        assert!(multiline.wrap);
+        assert!(!multiline.truncate);
+        assert_eq!(multiline.semantic_heading_level, Some(6));
+    }
 }

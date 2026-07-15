@@ -13,8 +13,8 @@ pub(crate) struct PlatformBackend;
 
 pub(crate) const SUPPORT: PlatformNotificationSupport = PlatformNotificationSupport {
     delivery_backend: "notify-rust-winrt",
-    action_backend: "planned-toast-actions",
-    push_backend: "planned-wns",
+    action_backend: "not-implemented",
+    push_backend: "not-implemented",
 };
 
 impl NotificationBackend for PlatformBackend {

@@ -70,6 +70,85 @@ impl ScrollBarRenderState {
     pub fn thumb_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<Pixels> {
         scroll_bar_thumb_bounds(bounds, *self)
     }
+
+    /// Human-readable orientation of the scroll bar.
+    pub fn orientation(&self) -> &'static str {
+        if self.vertical {
+            "vertical"
+        } else {
+            "horizontal"
+        }
+    }
+
+    /// Returns true when content overflows the viewport and can be scrolled.
+    pub fn has_overflow(&self) -> bool {
+        self.max_offset > Pixels::ZERO || self.content_size > self.viewport_size
+    }
+
+    /// Returns true when the scroll position is at the logical start.
+    pub fn is_at_start(&self) -> bool {
+        self.percentage <= f64::EPSILON
+    }
+
+    /// Returns true when the scroll position is at the logical end.
+    pub fn is_at_end(&self) -> bool {
+        (1.0 - self.percentage).abs() <= f64::EPSILON
+    }
+
+    /// Coarse scroll position class for content-safe diagnostics.
+    pub fn position_class(&self) -> &'static str {
+        if !self.has_overflow() {
+            "no_overflow"
+        } else if self.is_at_start() {
+            "start"
+        } else if self.is_at_end() {
+            "end"
+        } else if self.percentage < 0.5 {
+            "near_start"
+        } else if self.percentage > 0.5 {
+            "near_end"
+        } else {
+            "middle"
+        }
+    }
+
+    /// Coarse thumb size class for content-safe diagnostics.
+    pub fn thumb_size_class(&self) -> &'static str {
+        if self.thumb_ratio >= 0.95 {
+            "full"
+        } else if self.thumb_ratio >= 0.5 {
+            "large"
+        } else if self.thumb_ratio >= 0.2 {
+            "medium"
+        } else {
+            "small"
+        }
+    }
+
+    /// Coarse opacity class for content-safe diagnostics.
+    pub fn opacity_class(&self) -> &'static str {
+        if self.opacity <= 0.0 {
+            "hidden"
+        } else if self.opacity >= 1.0 {
+            "visible"
+        } else {
+            "fading"
+        }
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "scroll_bar_render_state(orientation={}, has_overflow={}, position_class={}, thumb_size_class={}, dragging={}, focused={}, opacity_class={})",
+            self.orientation(),
+            self.has_overflow(),
+            self.position_class(),
+            self.thumb_size_class(),
+            self.dragging,
+            self.focused,
+            self.opacity_class()
+        )
+    }
 }
 
 type ScrollBarCustomRenderer =
@@ -378,6 +457,7 @@ impl Element for ScrollBar {
             }
         });
 
+        let accessibility_id = window.next_anonymous_accessibility_id();
         window.register_accessibility_node_at(
             AccessibilityAttributes::new(AccessibilityRole::ScrollBar)
                 .states(if render_state.focused {
@@ -396,7 +476,7 @@ impl Element for ScrollBar {
                     AccessibilityAction::Increment,
                     AccessibilityAction::Decrement,
                 ])
-                .to_node(crate::AccessibilityId::new()),
+                .to_node(accessibility_id),
             bounds,
         );
     }
@@ -834,5 +914,43 @@ mod tests {
         assert!(percentage > 0.0);
         assert!(thumb_ratio > 0.0 && thumb_ratio < 1.0);
         assert!(!focused);
+    }
+
+    #[test]
+    fn scroll_bar_render_state_summary_is_content_safe() {
+        let state = ScrollBarRenderState {
+            vertical: false,
+            logical_offset: px(128.0),
+            max_offset: px(512.0),
+            viewport_size: px(200.0),
+            content_size: px(712.0),
+            percentage: 0.25,
+            thumb_ratio: 0.28,
+            dragging: true,
+            focused: false,
+            opacity: 0.5,
+        };
+
+        assert_eq!(state.orientation(), "horizontal");
+        assert!(state.has_overflow());
+        assert!(!state.is_at_start());
+        assert!(!state.is_at_end());
+        assert_eq!(state.position_class(), "near_start");
+        assert_eq!(state.thumb_size_class(), "medium");
+        assert_eq!(state.opacity_class(), "fading");
+
+        let summary = state.to_text();
+        assert!(summary.contains("orientation=horizontal"));
+        assert!(summary.contains("has_overflow=true"));
+        assert!(summary.contains("position_class=near_start"));
+        assert!(summary.contains("thumb_size_class=medium"));
+        assert!(summary.contains("dragging=true"));
+        assert!(summary.contains("focused=false"));
+        assert!(summary.contains("opacity_class=fading"));
+        assert!(!summary.contains("128"));
+        assert!(!summary.contains("512"));
+        assert!(!summary.contains("712"));
+        assert!(!summary.contains("0.25"));
+        assert!(!summary.contains("0.28"));
     }
 }

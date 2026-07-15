@@ -4,6 +4,38 @@ use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
+fn next_enabled_index(
+    enabled_indices: &[usize],
+    current: Option<usize>,
+    move_up: bool,
+) -> Option<usize> {
+    if enabled_indices.is_empty() {
+        return None;
+    }
+
+    let current_position = current.and_then(|index| {
+        enabled_indices
+            .iter()
+            .position(|candidate| *candidate == index)
+    });
+    let next_position = if move_up {
+        current_position
+            .map(|position| {
+                if position == 0 {
+                    enabled_indices.len() - 1
+                } else {
+                    position - 1
+                }
+            })
+            .unwrap_or(enabled_indices.len() - 1)
+    } else {
+        current_position
+            .map(|position| (position + 1) % enabled_indices.len())
+            .unwrap_or(0)
+    };
+    Some(enabled_indices[next_position])
+}
+
 #[derive(Clone)]
 pub struct DropdownItem {
     id: SharedString,
@@ -95,6 +127,7 @@ impl DropdownItem {
 
 pub struct DropdownState {
     open: bool,
+    highlighted_index: Option<usize>,
     focus_handle: FocusHandle,
     trigger_bounds: Bounds<Pixels>,
 }
@@ -103,6 +136,7 @@ impl DropdownState {
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             open: false,
+            highlighted_index: None,
             focus_handle: cx.focus_handle(),
             trigger_bounds: Bounds::default(),
         }
@@ -114,6 +148,9 @@ impl DropdownState {
 
     pub fn toggle(&mut self, cx: &mut Context<Self>) {
         self.open = !self.open;
+        if !self.open {
+            self.highlighted_index = None;
+        }
         cx.notify();
     }
 
@@ -124,6 +161,7 @@ impl DropdownState {
 
     pub fn close(&mut self, cx: &mut Context<Self>) {
         self.open = false;
+        self.highlighted_index = None;
         cx.notify();
     }
 }
@@ -161,6 +199,7 @@ pub struct Dropdown {
     align: DropdownAlign,
     placement: DropdownPlacement,
     min_width: Option<Pixels>,
+    accessibility_label: SharedString,
     style: StyleRefinement,
 }
 
@@ -173,6 +212,7 @@ impl Dropdown {
             align: DropdownAlign::Start,
             placement: DropdownPlacement::Auto,
             min_width: Some(px(180.0)),
+            accessibility_label: "Open menu".into(),
             style: StyleRefinement::default(),
         }
     }
@@ -196,6 +236,12 @@ impl Dropdown {
         self.min_width = Some(width);
         self
     }
+
+    /// Set the accessible name announced for the menu trigger.
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessibility_label = label.into();
+        self
+    }
 }
 
 impl Styled for Dropdown {
@@ -211,7 +257,11 @@ impl RenderOnce for Dropdown {
         let user_style = self.style;
         let state = self.state.clone();
         let is_open = state.read(cx).open;
+        let highlighted_index = state.read(cx).highlighted_index;
         let trigger_bounds = state.read(cx).trigger_bounds;
+        let entity_id = state.entity_id().as_u64();
+        let focus_handle = state.read(cx).focus_handle.clone();
+        let is_focused = focus_handle.is_focused(window);
         let dark = theme.tokens.background.l < 0.5;
         let overlay_hover = crate::astryx::overlay_hover(dark);
         let align = self.align;
@@ -253,6 +303,87 @@ impl RenderOnce for Dropdown {
         };
         let use_mb = measured && open_up;
         let items = self.items;
+        let keyboard_items = items.clone();
+        let enabled_indices: Vec<usize> = items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| (!item.disabled && !item.is_separator()).then_some(index))
+            .collect();
+        let first_enabled = enabled_indices.first().copied();
+        let mut trigger_state = if is_open {
+            AccessibilityState::EXPANDED
+        } else {
+            AccessibilityState::COLLAPSED
+        };
+        if is_focused {
+            trigger_state |= AccessibilityState::FOCUSED;
+        }
+        let trigger_accessibility = AccessibilityAttributes::new(AccessibilityRole::Button)
+            .label(self.accessibility_label.to_string())
+            .states(trigger_state)
+            .actions(vec![
+                AccessibilityAction::Focus,
+                AccessibilityAction::Click,
+                if is_open {
+                    AccessibilityAction::Collapse
+                } else {
+                    AccessibilityAction::Expand
+                },
+            ]);
+        let key_handler = {
+            let state = state.clone();
+            move |event: &KeyDownEvent, window: &mut Window, cx: &mut App| {
+                let key = event.keystroke.key.as_str();
+                let handled = match key {
+                    "escape" => {
+                        state.update(cx, |s, cx| s.close(cx));
+                        true
+                    }
+                    "space" | "enter" if !state.read(cx).open => {
+                        state.update(cx, |s, cx| {
+                            s.open = true;
+                            s.highlighted_index = first_enabled;
+                            cx.notify();
+                        });
+                        true
+                    }
+                    "up" | "down" => {
+                        if enabled_indices.is_empty() {
+                            true
+                        } else {
+                            state.update(cx, |s, cx| {
+                                if !s.open {
+                                    s.open = true;
+                                }
+                                s.highlighted_index = next_enabled_index(
+                                    &enabled_indices,
+                                    s.highlighted_index,
+                                    key == "up",
+                                );
+                                cx.notify();
+                            });
+                            true
+                        }
+                    }
+                    "space" | "enter" => {
+                        if let Some(index) = state.read(cx).highlighted_index {
+                            if let Some(item) = keyboard_items.get(index) {
+                                if let Some(handler) = item.on_click.as_ref() {
+                                    handler(window, cx);
+                                }
+                            }
+                        }
+                        state.update(cx, |s, cx| s.close(cx));
+                        true
+                    }
+                    _ => false,
+                };
+                if handled {
+                    cx.stop_propagation();
+                    window.prevent_default();
+                }
+            }
+        };
 
         div()
             .relative()
@@ -268,13 +399,23 @@ impl RenderOnce for Dropdown {
             })
             .child(
                 div()
-                    .id("dropdown-trigger")
+                    .id(("dropdown-trigger", entity_id))
                     .relative()
+                    .key_context("Dropdown")
+                    .track_focus(&focus_handle.clone().tab_index(0).tab_stop(true))
+                    .on_key_down(key_handler)
+                    .accessibility(trigger_accessibility)
                     .cursor_pointer()
                     .on_click({
                         let state = state.clone();
-                        move |_, _, cx| {
-                            state.update(cx, |s, cx| s.toggle(cx));
+                        move |_, window, cx| {
+                            window.focus(&focus_handle);
+                            state.update(cx, |s, cx| {
+                                s.toggle(cx);
+                                if s.open {
+                                    s.highlighted_index = first_enabled;
+                                }
+                            });
                         }
                     })
                     .child(self.trigger)
@@ -301,6 +442,11 @@ impl RenderOnce for Dropdown {
                     deferred(
                         anchor.child(
                             div()
+                                .id(("dropdown-menu", entity_id))
+                                .accessibility(
+                                    AccessibilityAttributes::new(AccessibilityRole::Menu)
+                                        .label("Menu"),
+                                )
                                 .occlude()
                                 .when(use_mb, |d| d.mb(GAP))
                                 .when(!use_mb, |d| d.mt(GAP))
@@ -310,9 +456,14 @@ impl RenderOnce for Dropdown {
                                 .shadow(theme.tokens.shadow_md.to_vec())
                                 .p(px(4.0))
                                 .gap(px(2.0))
-                                .children(items.iter().map(|item| {
+                                .max_h(px(360.0))
+                                .overflow_y_scroll()
+                                .children(items.iter().enumerate().map(|(item_index, item)| {
                                     if item.is_separator() {
                                         return div()
+                                            .accessibility(AccessibilityAttributes::new(
+                                                AccessibilityRole::Separator,
+                                            ))
                                             .h(px(1.0))
                                             .my(px(4.0))
                                             .bg(theme.tokens.border)
@@ -336,9 +487,35 @@ impl RenderOnce for Dropdown {
                                     let on_click = item.on_click.clone();
                                     let state_for_click = state.clone();
                                     let disabled = item.disabled;
+                                    let highlighted = highlighted_index == Some(item_index);
+                                    let mut item_state = AccessibilityState::NONE;
+                                    if disabled {
+                                        item_state |= AccessibilityState::DISABLED;
+                                    }
+                                    if highlighted {
+                                        item_state |= AccessibilityState::FOCUSED;
+                                    }
 
                                     div()
-                                        .id(item.id.clone())
+                                        .id(ElementId::Name(
+                                            format!("dropdown-{entity_id}-{}", item.id).into(),
+                                        ))
+                                        .accessibility({
+                                            let mut attributes = AccessibilityAttributes::new(
+                                                AccessibilityRole::MenuItem,
+                                            )
+                                            .label(item.label.to_string())
+                                            .states(item_state);
+                                            if let Some(description) = item.description.as_ref() {
+                                                attributes =
+                                                    attributes.description(description.to_string());
+                                            }
+                                            if !disabled {
+                                                attributes = attributes
+                                                    .actions(vec![AccessibilityAction::Click]);
+                                            }
+                                            attributes
+                                        })
                                         .flex()
                                         .items_center()
                                         .gap(px(8.0))
@@ -349,6 +526,7 @@ impl RenderOnce for Dropdown {
                                         .text_color(text_color)
                                         .font_family(theme.tokens.font_family.clone())
                                         .transition(theme.tokens.transition_fast)
+                                        .when(highlighted, |d| d.bg(hover_bg))
                                         .when(disabled, |d| d.opacity(0.5))
                                         .when(!disabled, |d| {
                                             d.cursor_pointer().hover(move |s| s.bg(hover_bg))
@@ -426,5 +604,26 @@ impl RenderOnce for Dropdown {
                 div.style().refine(&user_style);
                 div
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_enabled_index;
+
+    #[test]
+    fn keyboard_navigation_skips_disabled_and_separator_indices() {
+        let enabled = [1, 3, 6];
+        assert_eq!(next_enabled_index(&enabled, None, false), Some(1));
+        assert_eq!(next_enabled_index(&enabled, Some(1), false), Some(3));
+        assert_eq!(next_enabled_index(&enabled, Some(3), true), Some(1));
+    }
+
+    #[test]
+    fn keyboard_navigation_wraps_and_handles_empty_menus() {
+        let enabled = [2, 5];
+        assert_eq!(next_enabled_index(&enabled, Some(5), false), Some(2));
+        assert_eq!(next_enabled_index(&enabled, Some(2), true), Some(5));
+        assert_eq!(next_enabled_index(&[], None, false), None);
     }
 }

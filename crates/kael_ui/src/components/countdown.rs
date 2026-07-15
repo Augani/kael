@@ -143,7 +143,7 @@ impl TimeUnits {
             hours,
             minutes,
             seconds,
-            total_seconds: total_secs as i64,
+            total_seconds: total_secs.min(i64::MAX as u64) as i64,
         }
     }
 
@@ -164,6 +164,8 @@ pub struct CountdownState {
     count_up: bool,
     running: bool,
     completed: bool,
+    tick_generation: usize,
+    completion_generation: usize,
 }
 
 impl CountdownState {
@@ -174,6 +176,8 @@ impl CountdownState {
             count_up: false,
             running: false,
             completed: false,
+            tick_generation: 0,
+            completion_generation: 0,
         }
     }
 
@@ -182,12 +186,13 @@ impl CountdownState {
         self.count_up = false;
         self.running = true;
         self.completed = false;
-        self.schedule_tick(cx);
+        self.restart_ticks(cx);
         cx.notify();
     }
 
     pub fn set_duration(&mut self, duration: Duration, cx: &mut Context<Self>) {
-        let target = SystemTime::now() + duration;
+        let now = SystemTime::now();
+        let target = now.checked_add(duration).unwrap_or(now);
         self.set_target(target, cx);
     }
 
@@ -197,7 +202,7 @@ impl CountdownState {
         self.count_up = true;
         self.running = true;
         self.completed = false;
-        self.schedule_tick(cx);
+        self.restart_ticks(cx);
         cx.notify();
     }
 
@@ -206,14 +211,17 @@ impl CountdownState {
     }
 
     pub fn stop(&mut self, cx: &mut Context<Self>) {
-        self.running = false;
-        cx.notify();
+        if self.running {
+            self.running = false;
+            self.tick_generation = self.tick_generation.wrapping_add(1);
+            cx.notify();
+        }
     }
 
     pub fn resume(&mut self, cx: &mut Context<Self>) {
-        if self.target_time.is_some() || self.start_time.is_some() {
+        if !self.running && (self.target_time.is_some() || self.start_time.is_some()) {
             self.running = true;
-            self.schedule_tick(cx);
+            self.restart_ticks(cx);
             cx.notify();
         }
     }
@@ -223,6 +231,7 @@ impl CountdownState {
         self.start_time = None;
         self.running = false;
         self.completed = false;
+        self.tick_generation = self.tick_generation.wrapping_add(1);
         cx.notify();
     }
 
@@ -232,6 +241,14 @@ impl CountdownState {
 
     pub fn is_completed(&self) -> bool {
         self.completed
+    }
+
+    pub fn is_count_up(&self) -> bool {
+        self.count_up
+    }
+
+    pub fn completion_generation(&self) -> usize {
+        self.completion_generation
     }
 
     pub fn time_units(&self) -> TimeUnits {
@@ -252,27 +269,34 @@ impl CountdownState {
         TimeUnits::zero()
     }
 
-    fn schedule_tick(&self, cx: &mut Context<Self>) {
+    fn restart_ticks(&mut self, cx: &mut Context<Self>) {
+        self.tick_generation = self.tick_generation.wrapping_add(1);
+        self.schedule_tick(self.tick_generation, cx);
+    }
+
+    fn schedule_tick(&self, generation: usize, cx: &mut Context<Self>) {
         if !self.running {
             return;
         }
 
-        cx.spawn(async |this, cx| {
+        cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(1)).await;
 
             _ = this.update(cx, |state, cx| {
-                if state.running {
+                if state.running && state.tick_generation == generation {
                     if !state.count_up {
                         if let Some(target) = state.target_time {
                             if SystemTime::now() >= target {
                                 state.completed = true;
                                 state.running = false;
+                                state.completion_generation =
+                                    state.completion_generation.wrapping_add(1);
                             }
                         }
                     }
 
                     if state.running {
-                        state.schedule_tick(cx);
+                        state.schedule_tick(generation, cx);
                     }
 
                     cx.notify();
@@ -423,14 +447,32 @@ impl Styled for Countdown {
 impl RenderOnce for Countdown {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = use_theme();
-        let state = self.state.read(cx);
-        let units = state.time_units();
-        let completed = state.is_completed();
+        let (units, count_up, completed, completion_generation) = {
+            let state = self.state.read(cx);
+            (
+                state.time_units(),
+                state.is_count_up(),
+                state.is_completed(),
+                state.completion_generation(),
+            )
+        };
         let user_style = self.style.clone();
 
         if completed {
             if let Some(ref handler) = self.on_complete {
-                handler(window, cx);
+                let callback_state = window.use_keyed_state(
+                    ElementId::NamedChild(Box::new(self.id.clone()), "completion-callback".into()),
+                    cx,
+                    |_, _| 0_usize,
+                );
+                let last_generation = *callback_state.read(cx);
+                if completion_generation != 0 && completion_generation != last_generation {
+                    callback_state.update(cx, |last_generation, _| {
+                        *last_generation = completion_generation;
+                    });
+                    let handler = handler.clone();
+                    window.defer(cx, move |window, cx| handler(window, cx));
+                }
             }
         }
 
@@ -481,6 +523,17 @@ impl RenderOnce for Countdown {
 
         div()
             .id(self.id)
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group)
+                    .label(if count_up {
+                        "Elapsed time"
+                    } else {
+                        "Countdown"
+                    })
+                    .value(AccessibilityValue::Text(format_countdown_accessibility(
+                        &units, count_up,
+                    ))),
+            )
             .flex()
             .items_center()
             .justify_center()
@@ -491,5 +544,40 @@ impl RenderOnce for Countdown {
                 d
             })
             .children(elements)
+    }
+}
+
+fn format_countdown_accessibility(units: &TimeUnits, count_up: bool) -> String {
+    format!(
+        "{} days, {} hours, {} minutes, {} seconds {}",
+        units.days,
+        units.hours,
+        units.minutes,
+        units.seconds,
+        if count_up { "elapsed" } else { "remaining" }
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{format_countdown_accessibility, TimeUnits};
+    use std::time::Duration;
+
+    #[test]
+    fn duration_is_split_into_bounded_units() {
+        let units = TimeUnits::from_duration(Duration::from_secs(2 * 86_400 + 3_661));
+        assert_eq!(
+            (units.days, units.hours, units.minutes, units.seconds),
+            (2, 1, 1, 1)
+        );
+        assert_eq!(units.total_seconds, 176_461);
+    }
+
+    #[test]
+    fn extreme_duration_does_not_wrap_total_seconds() {
+        let units = TimeUnits::from_duration(Duration::from_secs(u64::MAX));
+        assert_eq!(units.total_seconds, i64::MAX);
+        assert!(format_countdown_accessibility(&units, false).contains("seconds remaining"));
+        assert!(format_countdown_accessibility(&units, true).contains("seconds elapsed"));
     }
 }

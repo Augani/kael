@@ -62,19 +62,10 @@ impl FixedRenderProps {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ContextLayerOptions {
     pub light_dismiss: bool,
     pub is_open: bool,
-}
-
-impl Default for ContextLayerOptions {
-    fn default() -> Self {
-        Self {
-            light_dismiss: false,
-            is_open: false,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]

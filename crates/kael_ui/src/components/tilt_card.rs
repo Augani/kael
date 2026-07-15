@@ -48,7 +48,9 @@ impl TiltCard {
     }
 
     pub fn intensity(mut self, intensity: f32) -> Self {
-        self.intensity = intensity.clamp(0.0, 3.0);
+        if intensity.is_finite() {
+            self.intensity = intensity.clamp(0.0, 3.0);
+        }
         self
     }
 
@@ -83,10 +85,15 @@ impl RenderOnce for TiltCard {
             .unwrap_or_else(|| hsla(0.0, 0.0, 0.0, 0.2));
         let intensity = self.intensity;
 
-        let (shadow_offset_x, shadow_offset_y, highlight_opacity) =
-            if let Some(mouse) = state.mouse_position {
-                let norm_x: f32 = mouse.x / px(1.0);
-                let norm_y: f32 = mouse.y / px(1.0);
+        let motion_enabled = !cx.reduce_motion();
+        let (shadow_offset_x, shadow_offset_y, highlight_opacity) = if motion_enabled {
+            if let (Some(mouse), Some(bounds)) = (state.mouse_position, state.bounds) {
+                let half_width = (f32::from(bounds.size.width) * 0.5).max(1.0);
+                let half_height = (f32::from(bounds.size.height) * 0.5).max(1.0);
+                let norm_x = ((f32::from(mouse.x - bounds.origin.x) - half_width) / half_width)
+                    .clamp(-1.0, 1.0);
+                let norm_y = ((f32::from(mouse.y - bounds.origin.y) - half_height) / half_height)
+                    .clamp(-1.0, 1.0);
 
                 let offset_x = -norm_x * 8.0 * intensity;
                 let offset_y = -norm_y * 8.0 * intensity;
@@ -95,7 +102,10 @@ impl RenderOnce for TiltCard {
                 (offset_x, offset_y, opacity)
             } else {
                 (0.0_f32, 4.0_f32, 1.0_f32)
-            };
+            }
+        } else {
+            (0.0_f32, 4.0_f32, 1.0_f32)
+        };
 
         let shadow = BoxShadow {
             color: hsla(
@@ -112,17 +122,33 @@ impl RenderOnce for TiltCard {
 
         let state_move = self.state.clone();
         let state_hover = self.state.clone();
+        let state_bounds = self.state.clone();
 
         div()
             .id(self.id)
+            .relative()
             .overflow_hidden()
             .rounded(px(8.0))
             .bg(card)
             .border_1()
             .border_color(border)
             .shadow(smallvec![shadow])
+            .child(
+                canvas_with_prepaint(
+                    move |bounds, _, cx| {
+                        state_bounds.update(cx, |state, _| state.bounds = Some(bounds));
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0()
+                .size_full(),
+            )
             .children(self.children)
             .on_mouse_move(move |event: &MouseMoveEvent, _window, cx| {
+                if !motion_enabled {
+                    return;
+                }
                 state_move.update(cx, |s, cx| {
                     s.mouse_position = Some(event.position);
                     cx.notify();
@@ -141,5 +167,20 @@ impl RenderOnce for TiltCard {
                 el.style().refine(&user_style);
                 el
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn invalid_intensity_keeps_the_default() {
+        let mut cx = TestAppContext::single();
+        let state = cx.new(TiltCardState::new);
+        assert_eq!(
+            TiltCard::new("tilt", state).intensity(f32::NAN).intensity,
+            1.0
+        );
     }
 }

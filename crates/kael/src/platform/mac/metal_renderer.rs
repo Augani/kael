@@ -50,6 +50,7 @@ const RENDER_TARGET_PIXEL_FORMAT: MTLPixelFormat = MTLPixelFormat::BGRA8Unorm;
 pub type Context = Arc<Mutex<InstanceBufferPool>>;
 pub type Renderer = MetalRenderer;
 
+#[allow(dead_code)]
 pub unsafe fn new_renderer(
     context: self::Context,
     _native_window: *mut c_void,
@@ -58,6 +59,16 @@ pub unsafe fn new_renderer(
     _transparent: bool,
 ) -> Renderer {
     MetalRenderer::new(context)
+}
+
+pub unsafe fn try_new_renderer(
+    context: self::Context,
+    _native_window: *mut c_void,
+    _native_view: *mut c_void,
+    _bounds: crate::Size<f32>,
+    _transparent: bool,
+) -> Result<Renderer> {
+    MetalRenderer::try_new(context)
 }
 
 pub(crate) struct InstanceBufferPool {
@@ -173,16 +184,20 @@ pub struct PathRasterizationVertex {
 }
 
 impl MetalRenderer {
+    #[allow(dead_code)]
     pub fn new(instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>) -> Self {
+        Self::try_new(instance_buffer_pool).expect("failed to initialize Metal renderer")
+    }
+
+    pub fn try_new(instance_buffer_pool: Arc<Mutex<InstanceBufferPool>>) -> Result<Self> {
         // Prefer low‐power integrated GPUs on Intel Mac. On Apple
         // Silicon, there is only ever one GPU, so this is equivalent to
         // `metal::Device::system_default()`.
         let mut devices = metal::Device::all();
         devices.sort_by_key(|device| (device.is_removable(), device.is_low_power()));
-        let Some(device) = devices.pop() else {
-            log::error!("unable to access a compatible graphics device");
-            std::process::exit(1);
-        };
+        let device = devices
+            .pop()
+            .ok_or_else(|| anyhow::anyhow!("unable to access a compatible graphics device"))?;
 
         let layer = metal::MetalLayer::new();
         layer.set_device(&device);
@@ -193,7 +208,7 @@ impl MetalRenderer {
             let cg_color_space = core_graphics::color_space::CGColorSpace::create_with_name(
                 core_graphics::color_space::kCGColorSpaceSRGB,
             )
-            .expect("failed to create sRGB color space");
+            .ok_or_else(|| anyhow::anyhow!("failed to create sRGB color space"))?;
             // CALayer autoresizing mask bits: kCALayerWidthSizable=2, kCALayerHeightSizable=16
             const CA_AUTORESIZING_MASK: u32 = 2 | 16;
             let layer_obj = (&*layer as *const _) as *mut AnyObject;
@@ -206,11 +221,11 @@ impl MetalRenderer {
         #[cfg(feature = "runtime_shaders")]
         let library = device
             .new_library_with_source(&SHADERS_SOURCE_FILE, &metal::CompileOptions::new())
-            .expect("error building metal library");
+            .map_err(|error| anyhow::anyhow!("building Metal shader library: {error}"))?;
         #[cfg(not(feature = "runtime_shaders"))]
         let library = device
             .new_library_with_data(SHADERS_METALLIB)
-            .expect("error building metal library");
+            .map_err(|error| anyhow::anyhow!("loading Metal shader library: {error}"))?;
 
         fn to_float2_bits(point: PointF) -> u64 {
             let mut output = point.y.to_bits() as u64;
@@ -359,30 +374,32 @@ impl MetalRenderer {
 
         let command_queue = device.new_command_queue();
         let sprite_atlas = Arc::new(MetalAtlas::new(device.clone()));
-        let core_video_texture_cache =
-            CVMetalTextureCache::new(None, device.clone(), None).unwrap();
+        let core_video_texture_cache = CVMetalTextureCache::new(None, device.clone(), None)
+            .map_err(|status| {
+                anyhow::anyhow!("creating CoreVideo Metal texture cache failed with {status}")
+            })?;
 
-        Self {
+        Ok(Self {
             device,
             layer,
             presents_with_transaction: false,
             command_queue,
-            paths_rasterization_pipeline_state,
-            path_sprites_pipeline_state,
-            shadows_pipeline_state,
-            quads_pipeline_state,
-            quads_multiply_pipeline_state,
-            quads_screen_pipeline_state,
+            paths_rasterization_pipeline_state: paths_rasterization_pipeline_state?,
+            path_sprites_pipeline_state: path_sprites_pipeline_state?,
+            shadows_pipeline_state: shadows_pipeline_state?,
+            quads_pipeline_state: quads_pipeline_state?,
+            quads_multiply_pipeline_state: quads_multiply_pipeline_state?,
+            quads_screen_pipeline_state: quads_screen_pipeline_state?,
             quads_blend_fetch_pipeline_state,
-            quads_pipeline_state_rgba16f,
-            shadows_pipeline_state_rgba16f,
-            underlines_pipeline_state_rgba16f,
-            blur_horizontal_pipeline_state,
-            blur_composite_pipeline_state,
-            underlines_pipeline_state,
-            monochrome_sprites_pipeline_state,
-            polychrome_sprites_pipeline_state,
-            surfaces_pipeline_state,
+            quads_pipeline_state_rgba16f: quads_pipeline_state_rgba16f?,
+            shadows_pipeline_state_rgba16f: shadows_pipeline_state_rgba16f?,
+            underlines_pipeline_state_rgba16f: underlines_pipeline_state_rgba16f?,
+            blur_horizontal_pipeline_state: blur_horizontal_pipeline_state?,
+            blur_composite_pipeline_state: blur_composite_pipeline_state?,
+            underlines_pipeline_state: underlines_pipeline_state?,
+            monochrome_sprites_pipeline_state: monochrome_sprites_pipeline_state?,
+            polychrome_sprites_pipeline_state: polychrome_sprites_pipeline_state?,
+            surfaces_pipeline_state: surfaces_pipeline_state?,
             unit_vertices,
             instance_buffer_pool,
             sprite_atlas,
@@ -398,7 +415,7 @@ impl MetalRenderer {
             path_sample_count: PATH_SAMPLE_COUNT,
             counters: RendererCounters::default(),
             last_present_instant: None,
-        }
+        })
     }
 
     pub fn layer(&self) -> &metal::MetalLayerRef {
@@ -429,11 +446,33 @@ impl MetalRenderer {
     }
 
     pub fn update_drawable_size(&mut self, new_size: Size<DevicePixels>) {
+        let safe_size = size(
+            DevicePixels(
+                new_size
+                    .width
+                    .0
+                    .clamp(0, crate::MAX_ATLAS_TEXTURE_DIMENSION),
+            ),
+            DevicePixels(
+                new_size
+                    .height
+                    .0
+                    .clamp(0, crate::MAX_ATLAS_TEXTURE_DIMENSION),
+            ),
+        );
+        if safe_size != new_size {
+            log::warn!(
+                "clamping unsafe Metal drawable size {:?} to {:?}",
+                new_size,
+                safe_size
+            );
+        }
+        let new_size = safe_size;
         if self.drawable_size == new_size {
             return;
         }
 
-        self.counters.resize_events += 1;
+        self.counters.resize_events = self.counters.resize_events.saturating_add(1);
         self.drawable_size = new_size;
         let drawable_size = NSSize {
             width: new_size.width.0 as f64,
@@ -478,7 +517,7 @@ impl MetalRenderer {
                     .max(device_pixels_size.height.0),
             ),
         );
-        self.counters.capacity_growths += 1;
+        self.counters.capacity_growths = self.counters.capacity_growths.saturating_add(1);
         self.update_path_intermediate_textures(self.drawable_capacity);
         self.update_cached_surface_texture(self.drawable_capacity);
         log::trace!(
@@ -500,7 +539,8 @@ impl MetalRenderer {
             return;
         }
 
-        self.counters.path_texture_allocations += 1;
+        self.counters.path_texture_allocations =
+            self.counters.path_texture_allocations.saturating_add(1);
 
         let texture_descriptor = metal::TextureDescriptor::new();
         texture_descriptor.set_width(size.width.0 as u64);
@@ -526,7 +566,10 @@ impl MetalRenderer {
             return;
         }
 
-        self.counters.cached_surface_texture_allocations += 1;
+        self.counters.cached_surface_texture_allocations = self
+            .counters
+            .cached_surface_texture_allocations
+            .saturating_add(1);
 
         let texture_descriptor = metal::TextureDescriptor::new();
         texture_descriptor.set_width(size.width.0 as u64);
@@ -550,7 +593,8 @@ impl MetalRenderer {
             return true;
         }
 
-        self.counters.blur_texture_allocations += 1;
+        self.counters.blur_texture_allocations =
+            self.counters.blur_texture_allocations.saturating_add(1);
 
         let texture_descriptor = metal::TextureDescriptor::new();
         texture_descriptor.set_width(size.width.0 as u64);
@@ -576,8 +620,8 @@ impl MetalRenderer {
     }
 
     pub fn draw(&mut self, scene: &Scene) {
-        self.counters.draw_calls += 1;
-        self.counters.frames_requested += 1;
+        self.counters.draw_calls = self.counters.draw_calls.saturating_add(1);
+        self.counters.frames_requested = self.counters.frames_requested.saturating_add(1);
         let layer = self.layer.clone();
         let viewport_size = layer.drawable_size();
         let viewport_size: Size<DevicePixels> = size(
@@ -588,7 +632,8 @@ impl MetalRenderer {
         let drawable = if let Some(drawable) = layer.next_drawable() {
             drawable
         } else {
-            self.counters.next_drawable_failures += 1;
+            self.counters.next_drawable_failures =
+                self.counters.next_drawable_failures.saturating_add(1);
             log::error!(
                 "failed to retrieve next drawable, drawable size: {:?}",
                 viewport_size
@@ -605,7 +650,10 @@ impl MetalRenderer {
             .max_next_drawable_wait_micros
             .max(next_drawable_wait_micros);
 
-        self.ensure_buffer_size(scene);
+        if let Err(error) = self.ensure_buffer_size(scene) {
+            log::error!("scene exceeds safe Metal instance-buffer limits: {error:#}");
+            return;
+        }
 
         loop {
             let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
@@ -634,7 +682,8 @@ impl MetalRenderer {
                         command_buffer.commit();
                     }
 
-                    self.counters.frames_presented += 1;
+                    self.counters.frames_presented =
+                        self.counters.frames_presented.saturating_add(1);
                     let present_instant = Instant::now();
                     if let Some(last_present_instant) = self.last_present_instant {
                         let interval =
@@ -643,7 +692,8 @@ impl MetalRenderer {
                         self.counters.max_frame_interval_micros =
                             self.counters.max_frame_interval_micros.max(interval_micros);
                         if interval > Duration::from_micros(16_667) {
-                            self.counters.missed_display_intervals += 1;
+                            self.counters.missed_display_intervals =
+                                self.counters.missed_display_intervals.saturating_add(1);
                         }
                     }
                     self.last_present_instant = Some(present_instant);
@@ -653,7 +703,8 @@ impl MetalRenderer {
                         as u64;
 
                     if next_drawable_wait_micros > 2_000 {
-                        self.counters.drawable_stall_count += 1;
+                        self.counters.drawable_stall_count =
+                            self.counters.drawable_stall_count.saturating_add(1);
                     }
 
                     // End of frame: shed least-recently-used atlas tiles to the budget (if
@@ -679,7 +730,11 @@ impl MetalRenderer {
                         log::error!("instance buffer size grew too large: {}", buffer_size);
                         break;
                     }
-                    instance_buffer_pool.reset(buffer_size * 2);
+                    let next_size = buffer_size
+                        .checked_mul(2)
+                        .unwrap_or(256 * 1024 * 1024)
+                        .min(256 * 1024 * 1024);
+                    instance_buffer_pool.reset(next_size);
                     log::info!(
                         "increased instance buffer size to {}",
                         instance_buffer_pool.buffer_size
@@ -711,6 +766,11 @@ impl MetalRenderer {
         if width == 0 || height == 0 {
             anyhow::bail!("offscreen render requires a non-zero viewport");
         }
+        anyhow::ensure!(
+            width <= crate::MAX_ATLAS_TEXTURE_DIMENSION as u64
+                && height <= crate::MAX_ATLAS_TEXTURE_DIMENSION as u64,
+            "offscreen viewport exceeds safe Metal texture dimensions"
+        );
 
         let descriptor = metal::TextureDescriptor::new();
         descriptor.set_width(width);
@@ -721,7 +781,7 @@ impl MetalRenderer {
         let target = self.device.new_texture(&descriptor);
         let target_ref: &metal::TextureRef = &target;
 
-        self.ensure_buffer_size(scene);
+        self.ensure_buffer_size(scene)?;
         let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
 
         let command_queue = self.command_queue.clone();
@@ -770,8 +830,7 @@ impl MetalRenderer {
             length: instance_offset as u64,
         });
 
-        let bytes_per_row = align_up_256(width * 4);
-        let buffer_len = bytes_per_row * height;
+        let (bytes_per_row, buffer_len, packed_len) = checked_readback_layout(width, height, 4)?;
         let staging = self
             .device
             .new_buffer(buffer_len, MTLResourceOptions::StorageModeShared);
@@ -804,11 +863,12 @@ impl MetalRenderer {
             anyhow::bail!("scene exceeded instance buffer capacity during offscreen render");
         }
 
-        let row_bytes = (width * 4) as usize;
+        let row_bytes = usize::try_from(width * 4)?;
         let src_stride = bytes_per_row as usize;
-        let mut bgra = vec![0u8; row_bytes * height as usize];
+        let mut bgra = vec![0u8; packed_len];
         unsafe {
             let contents = staging.contents() as *const u8;
+            anyhow::ensure!(!contents.is_null(), "Metal readback buffer is not mapped");
             let src = std::slice::from_raw_parts(contents, buffer_len as usize);
             for y in 0..height as usize {
                 let src_start = y * src_stride;
@@ -834,7 +894,7 @@ impl MetalRenderer {
         load_action: metal::MTLLoadAction,
         scissor: Option<metal::MTLScissorRect>,
     ) -> Result<()> {
-        self.ensure_buffer_size(scene);
+        self.ensure_buffer_size(scene)?;
         let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
 
         let command_queue = self.command_queue.clone();
@@ -921,6 +981,11 @@ impl MetalRenderer {
         if width == 0 || height == 0 {
             anyhow::bail!("offscreen render requires a non-zero viewport");
         }
+        anyhow::ensure!(
+            width <= crate::MAX_ATLAS_TEXTURE_DIMENSION as u64
+                && height <= crate::MAX_ATLAS_TEXTURE_DIMENSION as u64,
+            "offscreen viewport exceeds safe Metal texture dimensions"
+        );
 
         let descriptor = metal::TextureDescriptor::new();
         descriptor.set_width(width);
@@ -959,8 +1024,7 @@ impl MetalRenderer {
             Some(scissor),
         )?;
 
-        let bytes_per_row = align_up_256(width * 4);
-        let buffer_len = bytes_per_row * height;
+        let (bytes_per_row, buffer_len, packed_len) = checked_readback_layout(width, height, 4)?;
         let staging = self
             .device
             .new_buffer(buffer_len, MTLResourceOptions::StorageModeShared);
@@ -987,11 +1051,12 @@ impl MetalRenderer {
         command_buffer.commit();
         command_buffer.wait_until_completed();
 
-        let row_bytes = (width * 4) as usize;
+        let row_bytes = usize::try_from(width * 4)?;
         let src_stride = bytes_per_row as usize;
-        let mut bgra = vec![0u8; row_bytes * height as usize];
+        let mut bgra = vec![0u8; packed_len];
         unsafe {
             let contents = staging.contents() as *const u8;
+            anyhow::ensure!(!contents.is_null(), "Metal readback buffer is not mapped");
             let src = std::slice::from_raw_parts(contents, buffer_len as usize);
             for y in 0..height as usize {
                 let src_start = y * src_stride;
@@ -1020,9 +1085,14 @@ impl MetalRenderer {
         if instances.is_empty() {
             return true;
         }
-        align_offset(instance_offset);
+        if !align_offset(instance_offset) {
+            return false;
+        }
         let bytes_len = mem::size_of_val(instances);
-        if *instance_offset + bytes_len > instance_buffer.size {
+        let Some(next_offset) = (*instance_offset).checked_add(bytes_len) else {
+            return false;
+        };
+        if next_offset > instance_buffer.size {
             return false;
         }
         encoder.set_render_pipeline_state(pipeline);
@@ -1052,7 +1122,7 @@ impl MetalRenderer {
             6,
             instances.len() as u64,
         );
-        *instance_offset += bytes_len;
+        *instance_offset = next_offset;
         true
     }
 
@@ -1066,6 +1136,11 @@ impl MetalRenderer {
         if width == 0 || height == 0 {
             anyhow::bail!("offscreen render requires a non-zero viewport");
         }
+        anyhow::ensure!(
+            width <= crate::MAX_ATLAS_TEXTURE_DIMENSION as u64
+                && height <= crate::MAX_ATLAS_TEXTURE_DIMENSION as u64,
+            "offscreen viewport exceeds safe Metal texture dimensions"
+        );
 
         let descriptor = metal::TextureDescriptor::new();
         descriptor.set_width(width);
@@ -1075,7 +1150,7 @@ impl MetalRenderer {
             .set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
         let target = self.device.new_texture(&descriptor);
 
-        self.ensure_buffer_size(scene);
+        self.ensure_buffer_size(scene)?;
         let mut instance_buffer = self.instance_buffer_pool.lock().acquire(&self.device);
         let command_queue = self.command_queue.clone();
         let command_buffer = command_queue.new_command_buffer();
@@ -1134,8 +1209,17 @@ impl MetalRenderer {
             length: instance_offset as u64,
         });
 
-        let bytes_per_row = align_up_256(width * 8);
-        let buffer_len = bytes_per_row * height;
+        let (bytes_per_row, buffer_len, _) = checked_readback_layout(width, height, 8)?;
+        let decoded_len = width
+            .checked_mul(height)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .and_then(|values| usize::try_from(values).ok())
+            .filter(|values| {
+                values
+                    .checked_mul(mem::size_of::<f32>())
+                    .is_some_and(|bytes| bytes <= MAX_METAL_READBACK_BYTES)
+            })
+            .ok_or_else(|| anyhow::anyhow!("decoded Metal readback exceeds its memory budget"))?;
         let staging = self
             .device
             .new_buffer(buffer_len, MTLResourceOptions::StorageModeShared);
@@ -1167,9 +1251,10 @@ impl MetalRenderer {
         }
 
         let row_stride = bytes_per_row as usize;
-        let mut rgba = vec![0.0f32; (width * 4 * height) as usize];
+        let mut rgba = vec![0.0f32; decoded_len];
         unsafe {
             let contents = staging.contents() as *const u8;
+            anyhow::ensure!(!contents.is_null(), "Metal readback buffer is not mapped");
             let src = std::slice::from_raw_parts(contents, buffer_len as usize);
             for y in 0..height as usize {
                 let row = y * row_stride;
@@ -1199,6 +1284,18 @@ impl MetalRenderer {
         if data.is_empty() {
             return Ok(());
         }
+        anyhow::ensure!(
+            source.len() <= 4 * 1024 * 1024,
+            "Metal compute source exceeds 4 MiB"
+        );
+        anyhow::ensure!(
+            !entry.is_empty() && entry.len() <= 256,
+            "Metal compute entry name is invalid"
+        );
+        anyhow::ensure!(
+            mem::size_of_val(data) <= MAX_METAL_READBACK_BYTES,
+            "Metal compute buffer exceeds its memory budget"
+        );
 
         let library = self
             .device
@@ -1248,6 +1345,7 @@ impl MetalRenderer {
 
         unsafe {
             let contents = buffer.contents() as *const f32;
+            anyhow::ensure!(!contents.is_null(), "Metal compute buffer is not mapped");
             let slice = std::slice::from_raw_parts(contents, data.len());
             data.copy_from_slice(slice);
         }
@@ -1264,6 +1362,12 @@ impl MetalRenderer {
         if count == 0 {
             return Ok(());
         }
+        anyhow::ensure!(
+            pixels.len() <= MAX_METAL_READBACK_BYTES
+                && mem::size_of_val(mask) <= MAX_METAL_READBACK_BYTES,
+            "Metal clip-mask buffers exceed their memory budget"
+        );
+        anyhow::ensure!(count <= u32::MAX as usize, "Metal clip-mask is too large");
 
         const KERNEL: &str = concat!(
             "#include <metal_stdlib>\n",
@@ -1340,39 +1444,80 @@ impl MetalRenderer {
 
         unsafe {
             let contents = pixel_buffer.contents() as *const u8;
+            anyhow::ensure!(!contents.is_null(), "Metal clip-mask buffer is not mapped");
             let slice = std::slice::from_raw_parts(contents, pixel_bytes as usize);
             pixels[..pixel_bytes as usize].copy_from_slice(slice);
         }
         Ok(())
     }
 
-    fn ensure_buffer_size(&mut self, scene: &Scene) {
+    fn ensure_buffer_size(&mut self, scene: &Scene) -> Result<()> {
         const ALIGN: usize = 256;
-        let align_up = |size: usize| size.div_ceil(ALIGN) * ALIGN;
+        const MAX_INSTANCE_BUFFER_BYTES: usize = 256 * 1024 * 1024;
+        let align_up = |size: usize| {
+            size.checked_add(ALIGN - 1)
+                .map(|size| size / ALIGN * ALIGN)
+                .ok_or_else(|| anyhow::anyhow!("instance-buffer alignment overflow"))
+        };
 
-        let total_path_vertices: usize = scene.paths.iter().map(|p| p.vertices.len()).sum();
+        let total_path_vertices = scene.paths.iter().try_fold(0usize, |total, path| {
+            total
+                .checked_add(path.vertices.len())
+                .ok_or_else(|| anyhow::anyhow!("path vertex count overflow"))
+        })?;
 
-        let estimated_bytes = align_up(mem::size_of::<Shadow>() * scene.shadows.len())
-            + align_up(mem::size_of::<Quad>() * scene.quads.len())
-            + align_up(mem::size_of::<PathRasterizationVertex>() * total_path_vertices)
-            + align_up(mem::size_of::<PathSprite>() * scene.paths.len())
-            + align_up(mem::size_of::<Underline>() * scene.underlines.len())
-            + align_up(mem::size_of::<MonochromeSprite>() * scene.monochrome_sprites.len())
-            + align_up(mem::size_of::<PolychromeSprite>() * scene.polychrome_sprites.len())
-            + align_up(mem::size_of::<SurfaceBounds>()) * scene.surfaces.len();
+        let counts = [
+            (mem::size_of::<Shadow>(), scene.shadows.len()),
+            (mem::size_of::<Quad>(), scene.quads.len()),
+            (
+                mem::size_of::<PathRasterizationVertex>(),
+                total_path_vertices,
+            ),
+            (mem::size_of::<PathSprite>(), scene.paths.len()),
+            (mem::size_of::<Underline>(), scene.underlines.len()),
+            (
+                mem::size_of::<MonochromeSprite>(),
+                scene.monochrome_sprites.len(),
+            ),
+            (
+                mem::size_of::<PolychromeSprite>(),
+                scene.polychrome_sprites.len(),
+            ),
+            (mem::size_of::<SurfaceBounds>(), scene.surfaces.len()),
+        ];
+        let estimated_bytes = counts
+            .into_iter()
+            .try_fold(0usize, |total, (stride, count)| {
+                let bytes = stride
+                    .checked_mul(count)
+                    .ok_or_else(|| anyhow::anyhow!("instance-buffer size overflow"))?;
+                total
+                    .checked_add(align_up(bytes)?)
+                    .ok_or_else(|| anyhow::anyhow!("instance-buffer size overflow"))
+            })?;
 
-        let required = estimated_bytes + estimated_bytes / 5;
+        let required = estimated_bytes
+            .checked_add(estimated_bytes / 5)
+            .ok_or_else(|| anyhow::anyhow!("instance-buffer headroom overflow"))?;
+        anyhow::ensure!(
+            required <= MAX_INSTANCE_BUFFER_BYTES,
+            "scene requires {required} instance bytes; maximum is {MAX_INSTANCE_BUFFER_BYTES}"
+        );
 
         let mut pool = self.instance_buffer_pool.lock();
         if pool.buffer_size < required {
             let mut new_size = pool.buffer_size;
             while new_size < required {
-                new_size *= 2;
+                new_size = new_size
+                    .checked_mul(2)
+                    .unwrap_or(MAX_INSTANCE_BUFFER_BYTES)
+                    .min(MAX_INSTANCE_BUFFER_BYTES);
             }
-            new_size = new_size.min(256 * 1024 * 1024);
             pool.reset(new_size);
-            self.counters.instance_buffer_growths += 1;
+            self.counters.instance_buffer_growths =
+                self.counters.instance_buffer_growths.saturating_add(1);
         }
+        Ok(())
     }
 
     fn draw_primitives(
@@ -1726,7 +1871,11 @@ impl MetalRenderer {
                 return false;
             }
 
-            let atlas_texture = self.sprite_atlas.metal_texture(snapshot.target.texture_id);
+            let Some(atlas_texture) = self.sprite_atlas.metal_texture(snapshot.target.texture_id)
+            else {
+                log::warn!("skipping cached-surface copy from a stale Metal atlas texture");
+                return false;
+            };
             let blit_encoder = command_buffer.new_blit_command_encoder();
             blit_encoder.copy_from_texture(
                 cached_surface_texture.as_ref(),
@@ -1773,10 +1922,10 @@ impl MetalRenderer {
         };
 
         let render_pass_descriptor = metal::RenderPassDescriptor::new();
-        let color_attachment = render_pass_descriptor
-            .color_attachments()
-            .object_at(0)
-            .unwrap();
+        let Some(color_attachment) = render_pass_descriptor.color_attachments().object_at(0) else {
+            log::error!("Metal render pass has no color attachment");
+            return false;
+        };
         color_attachment.set_load_action(metal::MTLLoadAction::Clear);
         color_attachment.set_clear_color(metal::MTLClearColor::new(0., 0., 0., 0.));
 
@@ -1792,7 +1941,10 @@ impl MetalRenderer {
         let command_encoder = command_buffer.new_render_command_encoder(render_pass_descriptor);
         command_encoder.set_render_pipeline_state(&self.paths_rasterization_pipeline_state);
 
-        align_offset(instance_offset);
+        if !align_offset(instance_offset) {
+            command_encoder.end_encoding();
+            return false;
+        }
         let mut vertices = Vec::new();
         for path in paths {
             vertices.extend(path.vertices.iter().map(|v| PathRasterizationVertex {
@@ -1803,7 +1955,10 @@ impl MetalRenderer {
             }));
         }
         let vertices_bytes_len = mem::size_of_val(vertices.as_slice());
-        let next_offset = *instance_offset + vertices_bytes_len;
+        let Some(next_offset) = (*instance_offset).checked_add(vertices_bytes_len) else {
+            command_encoder.end_encoding();
+            return false;
+        };
         if next_offset > instance_buffer.size {
             command_encoder.end_encoding();
             return false;
@@ -1854,7 +2009,9 @@ impl MetalRenderer {
         if shadows.is_empty() {
             return true;
         }
-        align_offset(instance_offset);
+        if !align_offset(instance_offset) {
+            return false;
+        }
 
         command_encoder.set_render_pipeline_state(&self.shadows_pipeline_state);
         command_encoder.set_vertex_buffer(
@@ -1880,13 +2037,14 @@ impl MetalRenderer {
         );
 
         let shadow_bytes_len = mem::size_of_val(shadows);
-        let buffer_contents =
-            unsafe { (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset) };
-
-        let next_offset = *instance_offset + shadow_bytes_len;
+        let Some(next_offset) = (*instance_offset).checked_add(shadow_bytes_len) else {
+            return false;
+        };
         if next_offset > instance_buffer.size {
             return false;
         }
+        let buffer_contents =
+            unsafe { (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset) };
 
         unsafe {
             ptr::copy_nonoverlapping(
@@ -1917,7 +2075,9 @@ impl MetalRenderer {
         if quads.is_empty() {
             return true;
         }
-        align_offset(instance_offset);
+        if !align_offset(instance_offset) {
+            return false;
+        }
 
         command_encoder.set_vertex_buffer(
             QuadInputIndex::Vertices as u64,
@@ -1931,13 +2091,14 @@ impl MetalRenderer {
         );
 
         let quad_bytes_len = mem::size_of_val(quads);
-        let buffer_contents =
-            unsafe { (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset) };
-
-        let next_offset = *instance_offset + quad_bytes_len;
+        let Some(next_offset) = (*instance_offset).checked_add(quad_bytes_len) else {
+            return false;
+        };
         if next_offset > instance_buffer.size {
             return false;
         }
+        let buffer_contents =
+            unsafe { (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset) };
 
         unsafe {
             ptr::copy_nonoverlapping(quads.as_ptr() as *const u8, buffer_contents, quad_bytes_len);
@@ -2064,9 +2225,13 @@ impl MetalRenderer {
             sprites = vec![PathSprite { bounds }];
         }
 
-        align_offset(instance_offset);
+        if !align_offset(instance_offset) {
+            return false;
+        }
         let sprite_bytes_len = mem::size_of_val(sprites.as_slice());
-        let next_offset = *instance_offset + sprite_bytes_len;
+        let Some(next_offset) = (*instance_offset).checked_add(sprite_bytes_len) else {
+            return false;
+        };
         if next_offset > instance_buffer.size {
             return false;
         }
@@ -2109,7 +2274,9 @@ impl MetalRenderer {
         if underlines.is_empty() {
             return true;
         }
-        align_offset(instance_offset);
+        if !align_offset(instance_offset) {
+            return false;
+        }
 
         command_encoder.set_render_pipeline_state(&self.underlines_pipeline_state);
         command_encoder.set_vertex_buffer(
@@ -2135,13 +2302,14 @@ impl MetalRenderer {
         );
 
         let underline_bytes_len = mem::size_of_val(underlines);
-        let buffer_contents =
-            unsafe { (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset) };
-
-        let next_offset = *instance_offset + underline_bytes_len;
+        let Some(next_offset) = (*instance_offset).checked_add(underline_bytes_len) else {
+            return false;
+        };
         if next_offset > instance_buffer.size {
             return false;
         }
+        let buffer_contents =
+            unsafe { (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset) };
 
         unsafe {
             ptr::copy_nonoverlapping(
@@ -2173,18 +2341,24 @@ impl MetalRenderer {
         if sprites.is_empty() {
             return true;
         }
-        align_offset(instance_offset);
-
-        let sprite_bytes_len = mem::size_of_val(sprites);
-        let buffer_contents =
-            unsafe { (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset) };
-
-        let next_offset = *instance_offset + sprite_bytes_len;
-        if next_offset > instance_buffer.size {
+        if !align_offset(instance_offset) {
             return false;
         }
 
-        let texture = self.sprite_atlas.metal_texture(texture_id);
+        let sprite_bytes_len = mem::size_of_val(sprites);
+        let Some(next_offset) = (*instance_offset).checked_add(sprite_bytes_len) else {
+            return false;
+        };
+        if next_offset > instance_buffer.size {
+            return false;
+        }
+        let buffer_contents =
+            unsafe { (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset) };
+
+        let Some(texture) = self.sprite_atlas.metal_texture(texture_id) else {
+            log::warn!("skipping monochrome sprites with a stale Metal atlas texture");
+            return false;
+        };
         let texture_size = size(
             DevicePixels(texture.width() as i32),
             DevicePixels(texture.height() as i32),
@@ -2247,9 +2421,14 @@ impl MetalRenderer {
         if sprites.is_empty() {
             return true;
         }
-        align_offset(instance_offset);
+        if !align_offset(instance_offset) {
+            return false;
+        }
 
-        let texture = self.sprite_atlas.metal_texture(texture_id);
+        let Some(texture) = self.sprite_atlas.metal_texture(texture_id) else {
+            log::warn!("skipping polychrome sprites with a stale Metal atlas texture");
+            return false;
+        };
         let texture_size = size(
             DevicePixels(texture.width() as i32),
             DevicePixels(texture.height() as i32),
@@ -2283,13 +2462,14 @@ impl MetalRenderer {
         command_encoder.set_fragment_texture(SpriteInputIndex::AtlasTexture as u64, Some(&texture));
 
         let sprite_bytes_len = mem::size_of_val(sprites);
-        let buffer_contents =
-            unsafe { (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset) };
-
-        let next_offset = *instance_offset + sprite_bytes_len;
+        let Some(next_offset) = (*instance_offset).checked_add(sprite_bytes_len) else {
+            return false;
+        };
         if next_offset > instance_buffer.size {
             return false;
         }
+        let buffer_contents =
+            unsafe { (instance_buffer.metal_buffer.contents() as *mut u8).add(*instance_offset) };
 
         unsafe {
             ptr::copy_nonoverlapping(
@@ -2335,36 +2515,58 @@ impl MetalRenderer {
                 DevicePixels::from(surface.image_buffer.get_height() as i32),
             );
 
-            assert_eq!(
-                surface.image_buffer.get_pixel_format(),
-                kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-            );
+            if surface.image_buffer.get_pixel_format()
+                != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+            {
+                log::warn!("skipping Metal surface with unsupported pixel format");
+                continue;
+            }
 
-            let y_texture = self
-                .core_video_texture_cache
-                .create_texture_from_image(
-                    surface.image_buffer.as_concrete_TypeRef(),
-                    None,
-                    MTLPixelFormat::R8Unorm,
-                    surface.image_buffer.get_width_of_plane(0),
-                    surface.image_buffer.get_height_of_plane(0),
-                    0,
-                )
-                .unwrap();
-            let cb_cr_texture = self
-                .core_video_texture_cache
-                .create_texture_from_image(
-                    surface.image_buffer.as_concrete_TypeRef(),
-                    None,
-                    MTLPixelFormat::RG8Unorm,
-                    surface.image_buffer.get_width_of_plane(1),
-                    surface.image_buffer.get_height_of_plane(1),
-                    1,
-                )
-                .unwrap();
+            let Ok(y_texture) = self.core_video_texture_cache.create_texture_from_image(
+                surface.image_buffer.as_concrete_TypeRef(),
+                None,
+                MTLPixelFormat::R8Unorm,
+                surface.image_buffer.get_width_of_plane(0),
+                surface.image_buffer.get_height_of_plane(0),
+                0,
+            ) else {
+                log::warn!("failed to create Metal Y-plane texture");
+                continue;
+            };
+            let Ok(cb_cr_texture) = self.core_video_texture_cache.create_texture_from_image(
+                surface.image_buffer.as_concrete_TypeRef(),
+                None,
+                MTLPixelFormat::RG8Unorm,
+                surface.image_buffer.get_width_of_plane(1),
+                surface.image_buffer.get_height_of_plane(1),
+                1,
+            ) else {
+                log::warn!("failed to create Metal chroma-plane texture");
+                continue;
+            };
+            let y_texture_ptr =
+                unsafe { CVMetalTextureGetTexture(y_texture.as_concrete_TypeRef()) };
+            if y_texture_ptr.is_null() {
+                log::warn!("CoreVideo Y-plane texture has no Metal texture");
+                continue;
+            }
+            let cb_cr_texture_ptr =
+                unsafe { CVMetalTextureGetTexture(cb_cr_texture.as_concrete_TypeRef()) };
+            if cb_cr_texture_ptr.is_null() {
+                log::warn!("CoreVideo chroma-plane texture has no Metal texture");
+                continue;
+            }
+            let y_texture_ref = unsafe { metal::TextureRef::from_ptr(y_texture_ptr as *mut _) };
+            let cb_cr_texture_ref =
+                unsafe { metal::TextureRef::from_ptr(cb_cr_texture_ptr as *mut _) };
 
-            align_offset(instance_offset);
-            let next_offset = *instance_offset + mem::size_of::<Surface>();
+            if !align_offset(instance_offset) {
+                return false;
+            }
+            let Some(next_offset) = (*instance_offset).checked_add(mem::size_of::<Surface>())
+            else {
+                return false;
+            };
             if next_offset > instance_buffer.size {
                 return false;
             }
@@ -2379,15 +2581,12 @@ impl MetalRenderer {
                 mem::size_of_val(&texture_size) as u64,
                 &texture_size as *const Size<DevicePixels> as *const _,
             );
-            // let y_texture = y_texture.get_texture().unwrap().
-            command_encoder.set_fragment_texture(SurfaceInputIndex::YTexture as u64, unsafe {
-                let texture = CVMetalTextureGetTexture(y_texture.as_concrete_TypeRef());
-                Some(metal::TextureRef::from_ptr(texture as *mut _))
-            });
-            command_encoder.set_fragment_texture(SurfaceInputIndex::CbCrTexture as u64, unsafe {
-                let texture = CVMetalTextureGetTexture(cb_cr_texture.as_concrete_TypeRef());
-                Some(metal::TextureRef::from_ptr(texture as *mut _))
-            });
+            command_encoder
+                .set_fragment_texture(SurfaceInputIndex::YTexture as u64, Some(y_texture_ref));
+            command_encoder.set_fragment_texture(
+                SurfaceInputIndex::CbCrTexture as u64,
+                Some(cb_cr_texture_ref),
+            );
 
             let ycbcr_matrix = surface_ycbcr_matrix(&surface.image_buffer);
             command_encoder.set_fragment_bytes(
@@ -2469,8 +2668,33 @@ pub(crate) struct OffscreenReadback {
     pub bgra: Vec<u8>,
 }
 
-fn align_up_256(value: u64) -> u64 {
-    (value + 255) & !255
+const MAX_METAL_READBACK_BYTES: usize = 256 * 1024 * 1024;
+
+fn checked_readback_layout(
+    width: u64,
+    height: u64,
+    bytes_per_pixel: u64,
+) -> Result<(u64, u64, usize)> {
+    let packed_row = width
+        .checked_mul(bytes_per_pixel)
+        .ok_or_else(|| anyhow::anyhow!("Metal readback row size overflowed"))?;
+    let bytes_per_row = packed_row
+        .checked_add(255)
+        .map(|value| value & !255)
+        .ok_or_else(|| anyhow::anyhow!("Metal readback alignment overflowed"))?;
+    let buffer_len = bytes_per_row
+        .checked_mul(height)
+        .ok_or_else(|| anyhow::anyhow!("Metal readback buffer size overflowed"))?;
+    let packed_len = packed_row
+        .checked_mul(height)
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value <= MAX_METAL_READBACK_BYTES)
+        .ok_or_else(|| anyhow::anyhow!("Metal readback exceeds its memory budget"))?;
+    anyhow::ensure!(
+        buffer_len <= MAX_METAL_READBACK_BYTES as u64,
+        "aligned Metal readback exceeds its memory budget"
+    );
+    Ok((bytes_per_row, buffer_len, packed_len))
 }
 
 /// Pixels read back from an off-screen `RGBA16Float` render, decoded to `f32`,
@@ -2556,19 +2780,26 @@ fn build_pipeline_state(
     vertex_fn_name: &str,
     fragment_fn_name: &str,
     pixel_format: metal::MTLPixelFormat,
-) -> metal::RenderPipelineState {
+) -> Result<metal::RenderPipelineState> {
     let vertex_fn = library
         .get_function(vertex_fn_name, None)
-        .expect("error locating vertex function");
+        .map_err(|error| {
+            anyhow::anyhow!("locating Metal vertex function {vertex_fn_name}: {error}")
+        })?;
     let fragment_fn = library
         .get_function(fragment_fn_name, None)
-        .expect("error locating fragment function");
+        .map_err(|error| {
+            anyhow::anyhow!("locating Metal fragment function {fragment_fn_name}: {error}")
+        })?;
 
     let descriptor = metal::RenderPipelineDescriptor::new();
     descriptor.set_label(label);
     descriptor.set_vertex_function(Some(vertex_fn.as_ref()));
     descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
-    let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
+    let color_attachment = descriptor
+        .color_attachments()
+        .object_at(0)
+        .ok_or_else(|| anyhow::anyhow!("Metal pipeline {label} has no color attachment"))?;
     color_attachment.set_pixel_format(pixel_format);
     color_attachment.set_blending_enabled(true);
     color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
@@ -2580,7 +2811,7 @@ fn build_pipeline_state(
 
     device
         .new_render_pipeline_state(&descriptor)
-        .expect("could not create render pipeline state")
+        .map_err(|error| anyhow::anyhow!("creating Metal render pipeline {label}: {error}"))
 }
 
 /// Build a quad pipeline whose color attachment uses custom RGB blend factors, so
@@ -2593,19 +2824,22 @@ fn build_quad_blend_pipeline_state(
     pixel_format: metal::MTLPixelFormat,
     source_rgb: metal::MTLBlendFactor,
     destination_rgb: metal::MTLBlendFactor,
-) -> metal::RenderPipelineState {
+) -> Result<metal::RenderPipelineState> {
     let vertex_fn = library
         .get_function("quad_vertex", None)
-        .expect("error locating quad_vertex");
+        .map_err(|error| anyhow::anyhow!("locating Metal quad_vertex: {error}"))?;
     let fragment_fn = library
         .get_function("quad_fragment", None)
-        .expect("error locating quad_fragment");
+        .map_err(|error| anyhow::anyhow!("locating Metal quad_fragment: {error}"))?;
 
     let descriptor = metal::RenderPipelineDescriptor::new();
     descriptor.set_label(label);
     descriptor.set_vertex_function(Some(vertex_fn.as_ref()));
     descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
-    let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
+    let color_attachment = descriptor
+        .color_attachments()
+        .object_at(0)
+        .ok_or_else(|| anyhow::anyhow!("Metal pipeline {label} has no color attachment"))?;
     color_attachment.set_pixel_format(pixel_format);
     color_attachment.set_blending_enabled(true);
     color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
@@ -2617,7 +2851,7 @@ fn build_quad_blend_pipeline_state(
 
     device
         .new_render_pipeline_state(&descriptor)
-        .expect("could not create render pipeline state")
+        .map_err(|error| anyhow::anyhow!("creating Metal render pipeline {label}: {error}"))
 }
 
 /// Build the destination-reading blend pipeline (`quad_fragment_blend`, which reads the
@@ -2636,7 +2870,7 @@ fn build_quad_blend_fetch_pipeline_state(
     descriptor.set_label("quads_blend_fetch");
     descriptor.set_vertex_function(Some(vertex_fn.as_ref()));
     descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
-    let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
+    let color_attachment = descriptor.color_attachments().object_at(0)?;
     color_attachment.set_pixel_format(pixel_format);
     color_attachment.set_blending_enabled(false);
 
@@ -2650,19 +2884,26 @@ fn build_path_sprite_pipeline_state(
     vertex_fn_name: &str,
     fragment_fn_name: &str,
     pixel_format: metal::MTLPixelFormat,
-) -> metal::RenderPipelineState {
+) -> Result<metal::RenderPipelineState> {
     let vertex_fn = library
         .get_function(vertex_fn_name, None)
-        .expect("error locating vertex function");
+        .map_err(|error| {
+            anyhow::anyhow!("locating Metal vertex function {vertex_fn_name}: {error}")
+        })?;
     let fragment_fn = library
         .get_function(fragment_fn_name, None)
-        .expect("error locating fragment function");
+        .map_err(|error| {
+            anyhow::anyhow!("locating Metal fragment function {fragment_fn_name}: {error}")
+        })?;
 
     let descriptor = metal::RenderPipelineDescriptor::new();
     descriptor.set_label(label);
     descriptor.set_vertex_function(Some(vertex_fn.as_ref()));
     descriptor.set_fragment_function(Some(fragment_fn.as_ref()));
-    let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
+    let color_attachment = descriptor
+        .color_attachments()
+        .object_at(0)
+        .ok_or_else(|| anyhow::anyhow!("Metal pipeline {label} has no color attachment"))?;
     color_attachment.set_pixel_format(pixel_format);
     color_attachment.set_blending_enabled(true);
     color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
@@ -2674,7 +2915,7 @@ fn build_path_sprite_pipeline_state(
 
     device
         .new_render_pipeline_state(&descriptor)
-        .expect("could not create render pipeline state")
+        .map_err(|error| anyhow::anyhow!("creating Metal render pipeline {label}: {error}"))
 }
 
 fn build_path_rasterization_pipeline_state(
@@ -2685,13 +2926,17 @@ fn build_path_rasterization_pipeline_state(
     fragment_fn_name: &str,
     pixel_format: metal::MTLPixelFormat,
     path_sample_count: u32,
-) -> metal::RenderPipelineState {
+) -> Result<metal::RenderPipelineState> {
     let vertex_fn = library
         .get_function(vertex_fn_name, None)
-        .expect("error locating vertex function");
+        .map_err(|error| {
+            anyhow::anyhow!("locating Metal vertex function {vertex_fn_name}: {error}")
+        })?;
     let fragment_fn = library
         .get_function(fragment_fn_name, None)
-        .expect("error locating fragment function");
+        .map_err(|error| {
+            anyhow::anyhow!("locating Metal fragment function {fragment_fn_name}: {error}")
+        })?;
 
     let descriptor = metal::RenderPipelineDescriptor::new();
     descriptor.set_label(label);
@@ -2701,7 +2946,10 @@ fn build_path_rasterization_pipeline_state(
         descriptor.set_raster_sample_count(path_sample_count as _);
         descriptor.set_alpha_to_coverage_enabled(false);
     }
-    let color_attachment = descriptor.color_attachments().object_at(0).unwrap();
+    let color_attachment = descriptor
+        .color_attachments()
+        .object_at(0)
+        .ok_or_else(|| anyhow::anyhow!("Metal pipeline {label} has no color attachment"))?;
     color_attachment.set_pixel_format(pixel_format);
     color_attachment.set_blending_enabled(true);
     color_attachment.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
@@ -2713,12 +2961,16 @@ fn build_path_rasterization_pipeline_state(
 
     device
         .new_render_pipeline_state(&descriptor)
-        .expect("could not create render pipeline state")
+        .map_err(|error| anyhow::anyhow!("creating Metal render pipeline {label}: {error}"))
 }
 
 // Align to multiples of 256 make Metal happy.
-fn align_offset(offset: &mut usize) {
-    *offset = (*offset).div_ceil(256) * 256;
+fn align_offset(offset: &mut usize) -> bool {
+    let Some(aligned) = (*offset).checked_add(255).map(|offset| offset / 256 * 256) else {
+        return false;
+    };
+    *offset = aligned;
+    true
 }
 
 #[repr(C)]
@@ -2837,9 +3089,35 @@ mod offscreen_tests {
             eprintln!("skipping offscreen test: no Metal device available");
             return None;
         }
-        Some(MetalRenderer::new(Arc::new(Mutex::new(
-            InstanceBufferPool::default(),
-        ))))
+        MetalRenderer::try_new(Arc::new(Mutex::new(InstanceBufferPool::default())))
+            .map_err(|error| eprintln!("skipping offscreen test: {error:#}"))
+            .ok()
+    }
+
+    #[test]
+    fn instance_offsets_align_without_overflow() {
+        let mut offset = 0;
+        assert!(align_offset(&mut offset));
+        assert_eq!(offset, 0);
+
+        let mut offset = 257;
+        assert!(align_offset(&mut offset));
+        assert_eq!(offset, 512);
+
+        let mut offset = usize::MAX;
+        assert!(!align_offset(&mut offset));
+        assert_eq!(offset, usize::MAX);
+    }
+
+    #[test]
+    fn readback_layout_is_aligned_bounded_and_checked() {
+        let (stride, buffer, packed) = checked_readback_layout(65, 2, 4).unwrap();
+        assert_eq!(stride, 512);
+        assert_eq!(buffer, 1_024);
+        assert_eq!(packed, 520);
+
+        assert!(checked_readback_layout(u64::MAX, 2, 4).is_err());
+        assert!(checked_readback_layout(16_384, 16_384, 4).is_err());
     }
 
     fn full_viewport_quad(side: f32, color: Hsla) -> Quad {

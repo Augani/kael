@@ -1,11 +1,14 @@
 //! Tree navigation component with hierarchical data support.
 
+use crate::components::button::ButtonVariant;
 use crate::components::icon::Icon;
+use crate::components::icon_button::IconButton;
 use crate::components::icon_source::IconSource;
 use crate::theme::Theme;
 use kael::{prelude::*, *};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+use std::panic::Location;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -112,12 +115,29 @@ fn find_matches(text: &str, filter: &str) -> (bool, Vec<(usize, usize)>) {
     }
 
     let mut match_ranges = Vec::new();
-    let mut start = 0;
+    let mut start_byte = 0;
+    let filter_char_count = filter.chars().count();
 
-    while let Some(pos) = text[start..].find(filter) {
-        let absolute_pos = start + pos;
-        match_ranges.push((absolute_pos, absolute_pos + filter.len()));
-        start = absolute_pos + 1;
+    while let Some(pos) = text[start_byte..].find(filter) {
+        let absolute_byte = start_byte + pos;
+        let start_char = text[..absolute_byte].chars().count();
+        let end_char = start_char + filter_char_count;
+        let overlaps_previous = match_ranges
+            .last()
+            .is_some_and(|(_, previous_end)| start_char <= *previous_end);
+        if overlaps_previous {
+            if let Some((_, previous_end)) = match_ranges.last_mut() {
+                *previous_end = (*previous_end).max(end_char);
+            }
+        } else {
+            match_ranges.push((start_char, end_char));
+        }
+        let advance = text[absolute_byte..]
+            .chars()
+            .next()
+            .map(char::len_utf8)
+            .unwrap_or(1);
+        start_byte = absolute_byte + advance;
     }
 
     if !match_ranges.is_empty() {
@@ -239,6 +259,7 @@ impl TreeListDensity {
 
 #[derive(IntoElement)]
 pub struct TreeList<T: Clone + PartialEq + Eq + Hash + 'static> {
+    id: ElementId,
     nodes: Vec<TreeNode<T>>,
     header: Option<AnyElement>,
     density: TreeListDensity,
@@ -261,8 +282,19 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> Default for TreeList<T> {
 }
 
 impl<T: Clone + PartialEq + Eq + Hash + 'static> TreeList<T> {
+    #[track_caller]
     pub fn new() -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "tree-list-{}-{}-{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             nodes: Vec::new(),
             header: None,
             density: TreeListDensity::Balanced,
@@ -276,6 +308,12 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> TreeList<T> {
             on_right_click: None,
             style: StyleRefinement::default(),
         }
+    }
+
+    /// Set a stable id when multiple tree lists are rendered from the same callsite.
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
     }
 
     pub fn nodes(mut self, nodes: Vec<TreeNode<T>>) -> Self {
@@ -412,8 +450,8 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> Styled for TreeList<T> {
 }
 
 impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = Theme::of(cx);
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx).clone();
 
         let expanded_set: HashSet<T> = self.expanded_ids.iter().cloned().collect();
 
@@ -455,6 +493,32 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
         );
 
         let flat_nodes_rc = Rc::new(flat_nodes);
+        let tree_id = self.id.clone();
+        let row_focus_handles: Rc<Vec<FocusHandle>> = Rc::new(
+            (0..total_items)
+                .map(|index| {
+                    let row_id = ElementId::NamedChild(
+                        Box::new(tree_id.clone()),
+                        format!("row-{index}").into(),
+                    );
+                    window
+                        .use_keyed_state(row_id, cx, |_, cx| cx.focus_handle())
+                        .read(cx)
+                        .clone()
+                })
+                .collect(),
+        );
+        let parent_indices: Rc<Vec<Option<usize>>> = Rc::new(
+            flat_nodes_rc
+                .iter()
+                .enumerate()
+                .map(|(index, node)| {
+                    (0..index)
+                        .rev()
+                        .find(|candidate| flat_nodes_rc[*candidate].level < node.level)
+                })
+                .collect(),
+        );
         let match_ranges_rc = Rc::new(match_ranges_map);
         let selected_id = self.selected_id.clone();
         let expanded_ids_rc = Rc::new(expanded_set);
@@ -466,6 +530,10 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
         let header = self.header;
 
         div()
+            .id(tree_id.clone())
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Tree).label("Tree navigation"),
+            )
             .flex()
             .flex_col()
             .w_full()
@@ -480,156 +548,284 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> RenderOnce for TreeList<T> {
             .child(
                 div()
                     .w_full()
-                    .children(flat_nodes_rc.iter().map(|flat_node| {
-                        let is_selected = selected_id.as_ref() == Some(&flat_node.node_id);
-                        let is_expanded = expanded_ids_rc.contains(&flat_node.node_id);
-                        let has_children =
-                            !flat_node.node.children.is_empty() || flat_node.node.has_lazy_children;
-                        let indent = px((flat_node.level as f32) * indent_step);
-
-                        div()
-                            .w_full()
-                            .h(row_height)
-                            .flex()
-                            .items_center()
-                            .px(px(8.0))
-                            .pl(indent + px(8.0))
-                            .rounded(theme.tokens.radius_sm)
-                            .transition(theme.tokens.transition_fast)
-                            .cursor(if flat_node.node.disabled {
-                                CursorStyle::Arrow
-                            } else {
-                                CursorStyle::PointingHand
-                            })
-                            .bg(if is_selected {
-                                theme.tokens.accent
-                            } else {
-                                kael::transparent_black()
-                            })
-                            .text_color(if is_selected {
-                                theme.tokens.foreground
-                            } else if flat_node.node.disabled {
-                                theme.tokens.muted_foreground
-                            } else {
-                                theme.tokens.foreground
-                            })
-                            .when(!flat_node.node.disabled && !is_selected, |div| {
-                                div.hover(move |mut style| {
-                                    style.background = Some(overlay_hover.into());
-                                    style
-                                })
-                            })
-                            .when(!flat_node.node.disabled, {
-                                let on_select = on_select.clone();
-                                let on_toggle = on_toggle.clone();
-                                let node_id = flat_node.node_id.clone();
-
-                                move |this| {
-                                    this.on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                        if let Some(on_select) = on_select.clone() {
-                                            on_select(&node_id, window, cx);
-                                        }
-
-                                        if has_children {
-                                            if let Some(on_toggle) = on_toggle.clone() {
-                                                on_toggle(&node_id, !is_expanded, window, cx);
-                                            }
-                                        }
-                                    })
+                    .children(
+                        flat_nodes_rc
+                            .iter()
+                            .enumerate()
+                            .map(|(row_index, flat_node)| {
+                                let is_selected = selected_id.as_ref() == Some(&flat_node.node_id);
+                                let is_expanded = expanded_ids_rc.contains(&flat_node.node_id);
+                                let has_children = !flat_node.node.children.is_empty()
+                                    || flat_node.node.has_lazy_children;
+                                let indent = px((flat_node.level as f32) * indent_step);
+                                let focus_handle = row_focus_handles[row_index].clone();
+                                let focus_on_mouse = focus_handle.clone();
+                                let is_focused = focus_handle.is_focused(window);
+                                let mut accessibility_state = AccessibilityState::NONE;
+                                if is_selected {
+                                    accessibility_state |= AccessibilityState::SELECTED;
                                 }
-                            })
-                            .when(!flat_node.node.disabled, {
-                                let on_right_click = on_right_click.clone();
-                                let node_id = flat_node.node_id.clone();
-
-                                move |this| {
-                                    this.on_mouse_down(
-                                        MouseButton::Right,
-                                        move |event, window, cx| {
-                                            if let Some(on_right_click) = on_right_click.clone() {
-                                                on_right_click(&node_id, event, window, cx);
-                                            }
-                                        },
-                                    )
+                                if is_focused {
+                                    accessibility_state |= AccessibilityState::FOCUSED;
                                 }
-                            })
-                            .child(
+                                if flat_node.node.disabled {
+                                    accessibility_state |= AccessibilityState::DISABLED;
+                                }
+                                if has_children {
+                                    accessibility_state |= if is_expanded {
+                                        AccessibilityState::EXPANDED
+                                    } else {
+                                        AccessibilityState::COLLAPSED
+                                    };
+                                }
+                                let mut accessibility =
+                                    AccessibilityAttributes::new(AccessibilityRole::TreeItem)
+                                        .label(flat_node.node.label.to_string())
+                                        .states(accessibility_state);
+                                if !flat_node.node.disabled {
+                                    let mut actions = vec![
+                                        AccessibilityAction::Focus,
+                                        AccessibilityAction::Click,
+                                    ];
+                                    if has_children {
+                                        actions.push(if is_expanded {
+                                            AccessibilityAction::Collapse
+                                        } else {
+                                            AccessibilityAction::Expand
+                                        });
+                                    }
+                                    accessibility = accessibility.actions(actions);
+                                }
+
                                 div()
+                                    .id(ElementId::NamedChild(
+                                        Box::new(tree_id.clone()),
+                                        format!("item-{row_index}").into(),
+                                    ))
+                                    .accessibility(accessibility)
+                                    .when(!flat_node.node.disabled, |this| {
+                                        this.track_focus(&focus_handle.tab_index(0).tab_stop(true))
+                                    })
+                                    .w_full()
+                                    .h(row_height)
                                     .flex()
                                     .items_center()
-                                    .gap(px(8.0))
-                                    .children(flat_node.node.icon.as_ref().map(|icon| {
-                                        Icon::new(icon.clone()).size(px(16.0)).color(
-                                            if flat_node.node.disabled {
-                                                theme.tokens.muted_foreground
-                                            } else {
-                                                flat_node
-                                                    .node
-                                                    .icon_color
-                                                    .unwrap_or(theme.tokens.muted_foreground)
-                                            },
-                                        )
-                                    }))
+                                    .px(px(8.0))
+                                    .pl(indent + px(8.0))
+                                    .rounded(theme.tokens.radius_sm)
+                                    .transition(theme.tokens.transition_fast)
+                                    .cursor(if flat_node.node.disabled {
+                                        CursorStyle::Arrow
+                                    } else {
+                                        CursorStyle::PointingHand
+                                    })
+                                    .bg(if is_selected {
+                                        theme.tokens.accent
+                                    } else {
+                                        kael::transparent_black()
+                                    })
+                                    .text_color(if is_selected {
+                                        theme.tokens.foreground
+                                    } else if flat_node.node.disabled {
+                                        theme.tokens.muted_foreground
+                                    } else {
+                                        theme.tokens.foreground
+                                    })
+                                    .when(!flat_node.node.disabled && !is_selected, |div| {
+                                        div.hover(move |mut style| {
+                                            style.background = Some(overlay_hover.into());
+                                            style
+                                        })
+                                    })
+                                    .when(!flat_node.node.disabled, {
+                                        let on_select = on_select.clone();
+                                        let node_id = flat_node.node_id.clone();
+
+                                        move |this| {
+                                            this.on_mouse_down(
+                                                MouseButton::Left,
+                                                move |_, window, cx| {
+                                                    window.focus(&focus_on_mouse);
+                                                    if let Some(on_select) = on_select.clone() {
+                                                        on_select(&node_id, window, cx);
+                                                    }
+                                                },
+                                            )
+                                        }
+                                    })
+                                    .when(!flat_node.node.disabled, {
+                                        let node_id = flat_node.node_id.clone();
+                                        let on_select = on_select.clone();
+                                        let on_toggle = on_toggle.clone();
+                                        let focus_handles = row_focus_handles.clone();
+                                        let parent_indices = parent_indices.clone();
+                                        move |this| {
+                                            this.on_key_down(move |event, window, cx| {
+                                                if event.keystroke.modifiers.modified() {
+                                                    return;
+                                                }
+                                                let handled = match event.keystroke.key.as_str() {
+                                                    "up" if row_index > 0 => {
+                                                        window.focus(&focus_handles[row_index - 1]);
+                                                        true
+                                                    }
+                                                    "down"
+                                                        if row_index + 1 < focus_handles.len() =>
+                                                    {
+                                                        window.focus(&focus_handles[row_index + 1]);
+                                                        true
+                                                    }
+                                                    "home" if !focus_handles.is_empty() => {
+                                                        window.focus(&focus_handles[0]);
+                                                        true
+                                                    }
+                                                    "end" if !focus_handles.is_empty() => {
+                                                        window.focus(
+                                                            &focus_handles[focus_handles.len() - 1],
+                                                        );
+                                                        true
+                                                    }
+                                                    "right" if has_children && !is_expanded => {
+                                                        if let Some(handler) = on_toggle.as_ref() {
+                                                            handler(&node_id, true, window, cx);
+                                                        }
+                                                        true
+                                                    }
+                                                    "left" if has_children && is_expanded => {
+                                                        if let Some(handler) = on_toggle.as_ref() {
+                                                            handler(&node_id, false, window, cx);
+                                                        }
+                                                        true
+                                                    }
+                                                    "left" => {
+                                                        if let Some(parent) =
+                                                            parent_indices[row_index]
+                                                        {
+                                                            window.focus(&focus_handles[parent]);
+                                                            true
+                                                        } else {
+                                                            false
+                                                        }
+                                                    }
+                                                    "enter" | "space" => {
+                                                        if let Some(handler) = on_select.as_ref() {
+                                                            handler(&node_id, window, cx);
+                                                        }
+                                                        true
+                                                    }
+                                                    _ => false,
+                                                };
+                                                if handled {
+                                                    cx.stop_propagation();
+                                                    window.prevent_default();
+                                                }
+                                            })
+                                        }
+                                    })
+                                    .when(!flat_node.node.disabled, {
+                                        let on_right_click = on_right_click.clone();
+                                        let node_id = flat_node.node_id.clone();
+
+                                        move |this| {
+                                            this.on_mouse_down(
+                                                MouseButton::Right,
+                                                move |event, window, cx| {
+                                                    if let Some(on_right_click) =
+                                                        on_right_click.clone()
+                                                    {
+                                                        on_right_click(&node_id, event, window, cx);
+                                                    }
+                                                },
+                                            )
+                                        }
+                                    })
                                     .child(
                                         div()
-                                            .flex_1()
-                                            .min_w(px(0.0))
-                                            .overflow_hidden()
-                                            .text_ellipsis()
-                                            .whitespace_nowrap()
-                                            .text_size(text_size)
-                                            .line_height(px(20.0))
-                                            .font_family(theme.tokens.font_family.clone())
-                                            .font_weight(if is_selected {
-                                                FontWeight::MEDIUM
-                                            } else {
-                                                FontWeight::NORMAL
-                                            })
-                                            .child({
-                                                let ranges = match_ranges_rc
-                                                    .get(&flat_node.node_id)
-                                                    .map(|r| r.as_slice())
-                                                    .unwrap_or(&[]);
-
-                                                if !ranges.is_empty() && highlight_matches {
-                                                    Self::render_highlighted_text(
-                                                        &flat_node.node.label,
-                                                        ranges,
-                                                        theme,
-                                                        is_selected,
-                                                        highlight_matches,
-                                                    )
-                                                    .into_any_element()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(8.0))
+                                            .child(if has_children {
+                                                let node_id = flat_node.node_id.clone();
+                                                let on_toggle = on_toggle.clone();
+                                                IconButton::new(if is_expanded {
+                                                    "chevron-down"
                                                 } else {
-                                                    div()
-                                                        .child(flat_node.node.label.clone())
-                                                        .into_any_element()
-                                                }
-                                            }),
-                                    )
-                                    .children(if has_children {
-                                        Some(
-                                            div()
-                                                .w(px(16.0))
-                                                .h(px(16.0))
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .child(
-                                                    Icon::new(if is_expanded {
-                                                        "arrow-down"
+                                                    "chevron-right"
+                                                })
+                                                .id(ElementId::NamedChild(
+                                                    Box::new(tree_id.clone()),
+                                                    format!("toggle-{row_index}").into(),
+                                                ))
+                                                .label(if is_expanded {
+                                                    format!("Collapse {}", flat_node.node.label)
+                                                } else {
+                                                    format!("Expand {}", flat_node.node.label)
+                                                })
+                                                .variant(ButtonVariant::Ghost)
+                                                .size(px(24.0))
+                                                .icon_size(px(12.0))
+                                                .tab_stop(false)
+                                                .disabled(flat_node.node.disabled)
+                                                .on_click(move |_, window, cx| {
+                                                    if let Some(handler) = on_toggle.as_ref() {
+                                                        handler(&node_id, !is_expanded, window, cx);
+                                                    }
+                                                })
+                                                .into_any_element()
+                                            } else {
+                                                div().w(px(24.0)).h(px(24.0)).into_any_element()
+                                            })
+                                            .children(flat_node.node.icon.as_ref().map(|icon| {
+                                                Icon::new(icon.clone()).size(px(16.0)).color(
+                                                    if flat_node.node.disabled {
+                                                        theme.tokens.muted_foreground
                                                     } else {
-                                                        "arrow-right"
+                                                        flat_node.node.icon_color.unwrap_or(
+                                                            theme.tokens.muted_foreground,
+                                                        )
+                                                    },
+                                                )
+                                            }))
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w(px(0.0))
+                                                    .overflow_hidden()
+                                                    .text_ellipsis()
+                                                    .whitespace_nowrap()
+                                                    .text_size(text_size)
+                                                    .line_height(px(20.0))
+                                                    .font_family(theme.tokens.font_family.clone())
+                                                    .font_weight(if is_selected {
+                                                        FontWeight::MEDIUM
+                                                    } else {
+                                                        FontWeight::NORMAL
                                                     })
-                                                    .size(px(12.0))
-                                                    .color(theme.tokens.muted_foreground),
-                                                ),
-                                        )
-                                    } else {
-                                        None
-                                    }),
-                            )
-                    })),
+                                                    .child({
+                                                        let ranges = match_ranges_rc
+                                                            .get(&flat_node.node_id)
+                                                            .map(|r| r.as_slice())
+                                                            .unwrap_or(&[]);
+
+                                                        if !ranges.is_empty() && highlight_matches {
+                                                            Self::render_highlighted_text(
+                                                                &flat_node.node.label,
+                                                                ranges,
+                                                                &theme,
+                                                                is_selected,
+                                                                highlight_matches,
+                                                            )
+                                                            .into_any_element()
+                                                        } else {
+                                                            div()
+                                                                .child(flat_node.node.label.clone())
+                                                                .into_any_element()
+                                                        }
+                                                    }),
+                                            ),
+                                    )
+                            }),
+                    ),
             )
     }
 }
@@ -834,5 +1030,27 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for List<T> {
                     .iter()
                     .map(|item| self.render_item(item, theme).into_any_element()),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_matches;
+
+    #[test]
+    fn substring_match_ranges_use_character_offsets() {
+        assert_eq!(find_matches("éclair", "cl"), (true, vec![(1, 3)]));
+        assert_eq!(find_matches("東京駅", "京"), (true, vec![(1, 2)]));
+    }
+
+    #[test]
+    fn overlapping_substring_matches_are_merged() {
+        assert_eq!(find_matches("aaaa", "aa"), (true, vec![(0, 4)]));
+    }
+
+    #[test]
+    fn fuzzy_matches_keep_character_offsets() {
+        assert_eq!(find_matches("résumé", "ré"), (true, vec![(0, 2)]));
+        assert_eq!(find_matches("résumé", "rs"), (true, vec![(0, 3)]));
     }
 }

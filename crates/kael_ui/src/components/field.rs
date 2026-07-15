@@ -104,11 +104,7 @@ impl RenderOnce for FieldLabel {
                     .text_size(px(14.0))
                     .line_height(px(20.0))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(if self.disabled {
-                        theme.tokens.muted_foreground
-                    } else {
-                        theme.tokens.muted_foreground
-                    })
+                    .text_color(theme.tokens.muted_foreground)
                     .when_some(self.icon, |this, icon| {
                         this.child(
                             Icon::new(icon)

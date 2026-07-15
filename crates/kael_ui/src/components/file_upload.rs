@@ -1,12 +1,17 @@
 use crate::astryx;
+use crate::components::button::ButtonVariant;
 use crate::components::field::{Field, FieldStatusType};
 use crate::components::field_status::FieldStatusVariant;
 use crate::components::icon::Icon;
+use crate::components::icon_button::IconButton;
 use crate::components::spinner::{Spinner, SpinnerSize, SpinnerVariant};
 use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::path::PathBuf;
 use std::rc::Rc;
+
+type FilesChangedHandler = Rc<dyn Fn(&[SelectedFile], &mut Window, &mut App)>;
+type FileErrorHandler = Rc<dyn Fn(&FileUploadError, &mut Window, &mut App)>;
 
 #[derive(Clone, Debug)]
 pub struct SelectedFile {
@@ -239,7 +244,7 @@ impl FileTypeFilter {
 
 #[derive(IntoElement)]
 pub struct FileUpload {
-    _id: ElementId,
+    id: ElementId,
     base: Stateful<Div>,
     state: Entity<FileUploadState>,
     label: Option<SharedString>,
@@ -260,8 +265,8 @@ pub struct FileUpload {
     show_previews: bool,
     placeholder_text: Option<SharedString>,
     placeholder_icon: Option<SharedString>,
-    on_files_changed: Option<Rc<dyn Fn(&[SelectedFile], &mut Window, &mut App)>>,
-    on_error: Option<Rc<dyn Fn(&FileUploadError, &mut Window, &mut App)>>,
+    on_files_changed: Option<FilesChangedHandler>,
+    on_error: Option<FileErrorHandler>,
     style: StyleRefinement,
 }
 
@@ -269,7 +274,7 @@ impl FileUpload {
     pub fn new(id: impl Into<ElementId>, state: Entity<FileUploadState>) -> Self {
         let id = id.into();
         Self {
-            _id: id.clone(),
+            id: id.clone(),
             base: div().id(id),
             state,
             label: None,
@@ -449,29 +454,6 @@ impl FileUpload {
         self.on_error = Some(Rc::new(handler));
         self
     }
-
-    fn _validate_file(&self, path: &PathBuf) -> Result<(), String> {
-        if let Some(ref filter) = self.file_types {
-            if !filter.matches(path) {
-                let allowed = if filter.extensions.is_empty() {
-                    "all files".to_string()
-                } else {
-                    filter.extensions.join(", ")
-                };
-                return Err(format!("File type not allowed. Accepted: {}", allowed));
-            }
-        }
-
-        if let Some(max_size) = self.max_file_size {
-            let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-            if file_size > max_size {
-                let max_mb = max_size as f64 / (1024.0 * 1024.0);
-                return Err(format!("File exceeds maximum size of {:.1} MB", max_mb));
-            }
-        }
-
-        Ok(())
-    }
 }
 
 impl Styled for FileUpload {
@@ -480,8 +462,179 @@ impl Styled for FileUpload {
     }
 }
 
+fn validate_upload_path(
+    path: PathBuf,
+    max_file_size: Option<u64>,
+    file_types: Option<&FileTypeFilter>,
+) -> Result<SelectedFile, FileUploadError> {
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Unknown file".to_string());
+
+    if let Some(filter) = file_types {
+        if !filter.matches(&path) {
+            let accepted = if filter.extensions.is_empty() {
+                "all files".to_string()
+            } else {
+                filter.extensions.join(", ")
+            };
+            return Err(FileUploadError {
+                file_name,
+                message: format!("File type not allowed. Accepted: {accepted}"),
+            });
+        }
+    }
+
+    let metadata = std::fs::metadata(&path).map_err(|_| FileUploadError {
+        file_name: file_name.clone(),
+        message: "This file could not be read".to_string(),
+    })?;
+    if !metadata.is_file() {
+        return Err(FileUploadError {
+            file_name,
+            message: "Folders are not supported".to_string(),
+        });
+    }
+    if let Some(max_size) = max_file_size {
+        if metadata.len() > max_size {
+            return Err(FileUploadError {
+                file_name,
+                message: format!(
+                    "File exceeds maximum size of {:.1} MB",
+                    max_size as f64 / (1024.0 * 1024.0)
+                ),
+            });
+        }
+    }
+
+    Ok(SelectedFile::new(path))
+}
+
+fn accept_upload_paths(
+    paths: Vec<PathBuf>,
+    state: Entity<FileUploadState>,
+    multiple: bool,
+    max_file_size: Option<u64>,
+    file_types: Option<&FileTypeFilter>,
+    on_files_changed: Option<&FilesChangedHandler>,
+    on_error: Option<&FileErrorHandler>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let mut accepted = Vec::new();
+    let mut errors = Vec::new();
+    for path in paths {
+        match validate_upload_path(path, max_file_size, file_types) {
+            Ok(file) => accepted.push(file),
+            Err(error) => errors.push(error),
+        }
+    }
+
+    let (files, changed) = state.update(cx, |state, cx| {
+        state.clear_errors();
+        state.errors.extend(errors.iter().cloned());
+        state.set_dragging(false);
+
+        let previous_paths = state
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<Vec<_>>();
+        if multiple {
+            for file in accepted {
+                if !state.files.iter().any(|current| current.path == file.path) {
+                    state.add_file(file);
+                }
+            }
+        } else if let Some(file) = accepted.into_iter().next() {
+            state.files.clear();
+            state.add_file(file);
+        }
+
+        let changed = previous_paths
+            != state
+                .files
+                .iter()
+                .map(|file| file.path.clone())
+                .collect::<Vec<_>>();
+        cx.notify();
+        (state.files.clone(), changed)
+    });
+
+    for error in &errors {
+        if let Some(handler) = on_error {
+            handler(error, window, cx);
+        }
+    }
+    if changed {
+        if let Some(handler) = on_files_changed {
+            handler(&files, window, cx);
+        }
+    }
+}
+
+fn prompt_for_upload_files(
+    window: &mut Window,
+    cx: &mut App,
+    state: Entity<FileUploadState>,
+    disabled: bool,
+    multiple: bool,
+    max_file_size: Option<u64>,
+    file_types: Option<FileTypeFilter>,
+    on_files_changed: Option<FilesChangedHandler>,
+    on_error: Option<FileErrorHandler>,
+) {
+    if disabled {
+        return;
+    }
+
+    let filters = file_types
+        .as_ref()
+        .filter(|filter| !filter.extensions.is_empty())
+        .map(|filter| FileDialogFilter::new(filter.label.clone(), filter.extensions.clone()))
+        .into_iter()
+        .collect();
+    let receiver = cx.prompt_for_paths(PathPromptOptions {
+        files: true,
+        directories: false,
+        multiple,
+        prompt: Some("Select files".into()),
+        filters,
+    });
+
+    window
+        .spawn(cx, async move |cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+
+            _ = cx.update(|window, cx| {
+                accept_upload_paths(
+                    paths,
+                    state,
+                    multiple,
+                    max_file_size,
+                    file_types.as_ref(),
+                    on_files_changed.as_ref(),
+                    on_error.as_ref(),
+                    window,
+                    cx,
+                );
+            });
+        })
+        .detach();
+}
+
 impl RenderOnce for FileUpload {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let upload_id = self.id.clone();
+        let focus_handle = window
+            .use_keyed_state(upload_id.clone(), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone();
+        let focus_on_mouse = focus_handle.clone();
+        let is_focused = focus_handle.is_focused(window);
         let theme = Theme::of(cx);
         let state = self.state.read(cx);
         let is_dragging = state.is_dragging;
@@ -530,13 +683,26 @@ impl RenderOnce for FileUpload {
         let max_file_size = self.max_file_size;
         let file_types = self.file_types.clone();
         let on_files_changed = self.on_files_changed.clone();
-        let _on_error = self.on_error.clone();
+        let on_error = self.on_error.clone();
 
         let show_file_list = self.show_file_list;
         let show_previews = self.show_previews;
         let size = self.size.clone();
         let hover_ring = crate::astryx::input_hover_ring(theme.tokens.primary);
         let focus_ring = crate::astryx::focus_ring(theme.tokens.primary);
+        let state_for_click = state_entity.clone();
+        let types_for_click = file_types.clone();
+        let changed_for_click = on_files_changed.clone();
+        let error_for_click = on_error.clone();
+        let state_for_key = state_entity.clone();
+        let types_for_key = file_types.clone();
+        let changed_for_key = on_files_changed.clone();
+        let error_for_key = on_error.clone();
+        let state_for_drop = state_entity.clone();
+        let types_for_drop = file_types.clone();
+        let changed_for_drop = on_files_changed.clone();
+        let error_for_drop = on_error.clone();
+        let state_for_error_clear = state_entity.clone();
 
         let control = self
             .base
@@ -550,7 +716,41 @@ impl RenderOnce for FileUpload {
             })
             .child(
                 div()
-                    .id("drop-zone")
+                    .id(ElementId::NamedChild(
+                        Box::new(upload_id.clone()),
+                        "drop-zone".into(),
+                    ))
+                    .accessibility(
+                        AccessibilityAttributes::new(AccessibilityRole::Button)
+                            .label(placeholder_text.to_string())
+                            .disabled(disabled)
+                            .focused(is_focused)
+                            .actions(if disabled {
+                                Vec::new()
+                            } else {
+                                vec![AccessibilityAction::Focus, AccessibilityAction::Click]
+                            }),
+                    )
+                    .when(!disabled, |this| {
+                        this.track_focus(&focus_handle.tab_index(0).tab_stop(true))
+                            .can_drop(|value, _, _| {
+                                ExternalDropData::from_drag_value(value)
+                                    .is_some_and(|data| data.has_paths())
+                            })
+                            .on_external_drop(move |data, window, cx| {
+                                accept_upload_paths(
+                                    data.paths().to_vec(),
+                                    state_for_drop.clone(),
+                                    multiple,
+                                    max_file_size,
+                                    types_for_drop.as_ref(),
+                                    changed_for_drop.as_ref(),
+                                    error_for_drop.as_ref(),
+                                    window,
+                                    cx,
+                                );
+                            })
+                    })
                     .flex()
                     .flex_col()
                     .items_center()
@@ -576,6 +776,9 @@ impl RenderOnce for FileUpload {
                     .bg(bg_color)
                     .transition(theme.tokens.transition_fast)
                     .when(is_dragging && !disabled, |this| {
+                        this.shadow(smallvec::smallvec![focus_ring.clone()])
+                    })
+                    .when(is_focused && !disabled, |this| {
                         this.shadow(smallvec::smallvec![focus_ring])
                     })
                     .when(!disabled, |this| {
@@ -685,96 +888,48 @@ impl RenderOnce for FileUpload {
                                 }),
                         )
                     })
-                    .on_click({
-                        let state_entity = state_entity.clone();
-                        let file_types = file_types.clone();
-                        move |_, window, cx| {
-                            if disabled {
-                                return;
-                            }
-
-                            let receiver = cx.prompt_for_paths(PathPromptOptions {
-                                files: true,
-                                directories: false,
+                    .on_mouse_down(MouseButton::Left, move |_, window, _| {
+                        if !disabled {
+                            window.focus(&focus_on_mouse);
+                        }
+                    })
+                    .on_click(move |_, window, cx| {
+                        prompt_for_upload_files(
+                            window,
+                            cx,
+                            state_for_click.clone(),
+                            disabled,
+                            multiple,
+                            max_file_size,
+                            types_for_click.clone(),
+                            changed_for_click.clone(),
+                            error_for_click.clone(),
+                        );
+                    })
+                    .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                        if !disabled && matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            prompt_for_upload_files(
+                                window,
+                                cx,
+                                state_for_key.clone(),
+                                disabled,
                                 multiple,
-                                prompt: Some("Select files".into()),
-                            });
-
-                            let state_entity = state_entity.clone();
-                            let file_types = file_types.clone();
-
-                            window
-                                .spawn(cx, async move |cx| {
-                                    if let Ok(Ok(Some(paths))) = receiver.await {
-                                        for path in paths {
-                                            let file_name = path
-                                                .file_name()
-                                                .map(|n| n.to_string_lossy().to_string())
-                                                .unwrap_or_default();
-
-                                            if let Some(ref filter) = file_types {
-                                                if !filter.matches(&path) {
-                                                    let error = FileUploadError {
-                                                        file_name: file_name.clone(),
-                                                        message: format!(
-                                                            "File type not allowed. Accepted: {}",
-                                                            filter.extensions.join(", ")
-                                                        ),
-                                                    };
-                                                    let state_entity = state_entity.clone();
-                                                    cx.update(|_, cx| {
-                                                        state_entity.update(cx, |state, _| {
-                                                            state.add_error(error);
-                                                        });
-                                                    })
-                                                    .ok();
-                                                    continue;
-                                                }
-                                            }
-
-                                            if let Some(max_size) = max_file_size {
-                                                let file_size = std::fs::metadata(&path)
-                                                    .map(|m| m.len())
-                                                    .unwrap_or(0);
-                                                if file_size > max_size {
-                                                    let max_mb =
-                                                        max_size as f64 / (1024.0 * 1024.0);
-                                                    let error = FileUploadError {
-                                                        file_name: file_name.clone(),
-                                                        message: format!(
-                                                            "File exceeds maximum size of {:.1} MB",
-                                                            max_mb
-                                                        ),
-                                                    };
-                                                    let state_entity = state_entity.clone();
-                                                    cx.update(|_, cx| {
-                                                        state_entity.update(cx, |state, _| {
-                                                            state.add_error(error);
-                                                        });
-                                                    })
-                                                    .ok();
-                                                    continue;
-                                                }
-                                            }
-
-                                            let selected_file = SelectedFile::new(path);
-                                            let state_entity = state_entity.clone();
-                                            cx.update(|_, cx| {
-                                                state_entity.update(cx, |state, _| {
-                                                    state.add_file(selected_file);
-                                                });
-                                            })
-                                            .ok();
-                                        }
-                                    }
-                                })
-                                .detach();
+                                max_file_size,
+                                types_for_key.clone(),
+                                changed_for_key.clone(),
+                                error_for_key.clone(),
+                            );
+                            cx.stop_propagation();
                         }
                     }),
             )
             .when(!errors.is_empty(), |this| {
                 this.child(
                     div()
+                        .accessibility(
+                            AccessibilityAttributes::new(AccessibilityRole::Alert)
+                                .label(format!("{} file upload errors", errors.len())),
+                        )
                         .flex()
                         .flex_col()
                         .gap(px(8.0))
@@ -813,7 +968,24 @@ impl RenderOnce for FileUpload {
                                                 .child(error.message.clone()),
                                         ),
                                 )
-                        })),
+                        }))
+                        .child(
+                            IconButton::new("x")
+                                .id(ElementId::NamedChild(
+                                    Box::new(upload_id.clone()),
+                                    "clear-errors".into(),
+                                ))
+                                .label("Dismiss file upload errors")
+                                .variant(ButtonVariant::Ghost)
+                                .size(px(24.0))
+                                .icon_size(px(14.0))
+                                .on_click(move |_, _, cx| {
+                                    state_for_error_clear.update(cx, |state, cx| {
+                                        state.clear_errors();
+                                        cx.notify();
+                                    });
+                                }),
+                        ),
                 )
             })
             .when(
@@ -832,7 +1004,10 @@ impl RenderOnce for FileUpload {
                             let file_path = file.path.clone();
 
                             div()
-                                .id(("file-item", index))
+                                .id(ElementId::NamedChild(
+                                    Box::new(upload_id.clone()),
+                                    format!("file-{}", index).into(),
+                                ))
                                 .flex()
                                 .items_center()
                                 .gap(px(8.0))
@@ -904,27 +1079,20 @@ impl RenderOnce for FileUpload {
                                 )
                                 .when(!disabled, |this| {
                                     this.child(
-                                        div()
-                                            .id(("remove-btn", index))
-                                            .w(px(20.0))
-                                            .h(px(20.0))
+                                        IconButton::new("x")
+                                            .id(ElementId::NamedChild(
+                                                Box::new(upload_id.clone()),
+                                                format!("remove-{}", index).into(),
+                                            ))
+                                            .label(format!("Remove {}", file.name))
+                                            .variant(ButtonVariant::Ghost)
+                                            .size(px(20.0))
+                                            .icon_size(px(14.0))
                                             .rounded_full()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .cursor(CursorStyle::PointingHand)
-                                            .transition(theme.tokens.transition_fast)
-                                            .hover(|style| {
-                                                style.bg(theme.tokens.destructive.opacity(0.1))
-                                            })
-                                            .child(
-                                                Icon::new("x")
-                                                    .size(px(14.0))
-                                                    .color(theme.tokens.muted_foreground),
-                                            )
                                             .on_click(move |_, window, cx| {
-                                                state_entity.update(cx, |state, _| {
+                                                state_entity.update(cx, |state, cx| {
                                                     state.remove_file(index);
+                                                    cx.notify();
                                                 });
                                                 if let Some(ref handler) = on_files_changed {
                                                     let files = state_entity.read(cx).files.clone();
@@ -959,5 +1127,54 @@ impl RenderOnce for FileUpload {
             }
             None => control.into_any_element(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_upload_path, FileTypeFilter};
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temporary_path(extension: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("kael-file-upload-{unique}.{extension}"))
+    }
+
+    #[test]
+    fn validates_type_size_and_metadata() {
+        let path = temporary_path("txt");
+        std::fs::write(&path, b"hello").unwrap();
+
+        let selected = validate_upload_path(
+            path.clone(),
+            Some(5),
+            Some(&FileTypeFilter::new(vec!["TXT"], "Text")),
+        )
+        .unwrap();
+        assert_eq!(selected.size, 5);
+
+        let type_error =
+            validate_upload_path(path.clone(), None, Some(&FileTypeFilter::images())).unwrap_err();
+        assert!(type_error.message.contains("File type not allowed"));
+
+        let size_error = validate_upload_path(path.clone(), Some(4), None).unwrap_err();
+        assert!(size_error.message.contains("maximum size"));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn rejects_unreadable_paths_and_folders() {
+        let missing = temporary_path("txt");
+        assert!(validate_upload_path(missing, None, None).is_err());
+        assert_eq!(
+            validate_upload_path(std::env::temp_dir(), None, None)
+                .unwrap_err()
+                .message,
+            "Folders are not supported"
+        );
     }
 }

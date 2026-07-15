@@ -3,7 +3,7 @@
 
 use heck::ToSnakeCase as _;
 use proc_macro::TokenStream;
-use proc_macro2::{Span, TokenStream as TokenStream2};
+use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{
     Attribute, Expr, FnArg, Ident, Item, ItemTrait, Lit, Meta, Path, ReturnType, TraitItem, Type,
@@ -41,13 +41,11 @@ fn generate_reflected_trait(trait_item: ItemTrait) -> TokenStream {
     let trait_name = &trait_item.ident;
     let vis = &trait_item.vis;
 
-    // Determine if we're being called from within the kael crate
-    let call_site = Span::call_site();
-    let inspector_reflection_path = if is_called_from_kael_crate(call_site) {
-        quote! { crate::inspector_reflection }
-    } else {
-        quote! { ::kael::inspector_reflection }
+    let kael = match crate::kael_crate_path() {
+        Ok(path) => path,
+        Err(error) => return error.into_compile_error().into(),
     };
+    let inspector_reflection_path = quote! { #kael::inspector_reflection };
 
     // Collect method information for methods of form fn name(self) -> Self or fn name(mut self) -> Self
     let mut method_infos = Vec::new();
@@ -184,12 +182,6 @@ fn extract_cfg_attributes(attrs: &[Attribute]) -> Vec<Attribute> {
         .filter(|attr| attr.path().is_ident("cfg"))
         .cloned()
         .collect()
-}
-
-fn is_called_from_kael_crate(_span: Span) -> bool {
-    // Check if we're being called from within the kael crate by examining the call site
-    // This is a heuristic approach - we check if the current crate name is "kael"
-    std::env::var("CARGO_PKG_NAME").is_ok_and(|name| name == "kael")
 }
 
 struct MacroExpander;

@@ -52,7 +52,8 @@ impl DataSeries {
         self.points
             .iter()
             .map(|p| p.y)
-            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .filter(|value| value.is_finite())
+            .min_by(f64::total_cmp)
     }
 
     /// Maximum y-value in the series, or `None` if empty.
@@ -60,27 +61,57 @@ impl DataSeries {
         self.points
             .iter()
             .map(|p| p.y)
-            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .filter(|value| value.is_finite())
+            .max_by(f64::total_cmp)
     }
 
     /// Mean of all y-values, or `None` if empty.
     pub fn mean(&self) -> Option<f64> {
-        if self.points.is_empty() {
+        let mut count = 0u64;
+        let mut mean = 0.0f64;
+        for value in self
+            .points
+            .iter()
+            .map(|point| point.y)
+            .filter(|y| y.is_finite())
+        {
+            count = count.saturating_add(1);
+            let count_f64 = count as f64;
+            mean = mean * ((count_f64 - 1.0) / count_f64) + value / count_f64;
+        }
+        if count == 0 {
             return None;
         }
-        let total: f64 = self.points.iter().map(|p| p.y).sum();
-        Some(total / self.points.len() as f64)
+        Some(mean)
     }
 
     /// Sum of all y-values.
     pub fn sum(&self) -> f64 {
-        self.points.iter().map(|p| p.y).sum()
+        self.points
+            .iter()
+            .map(|p| p.y)
+            .filter(|value| value.is_finite())
+            .fold(0.0, |sum, value| {
+                let next = sum + value;
+                if next.is_finite() {
+                    next
+                } else if next.is_sign_negative() {
+                    f64::MIN
+                } else {
+                    f64::MAX
+                }
+            })
     }
 
     /// Sort points by x-value in ascending order.
     pub fn sort_by_x(&mut self) {
         self.points
-            .sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+            .sort_by(|a, b| match (a.x.is_finite(), b.x.is_finite()) {
+                (true, true) => a.x.total_cmp(&b.x),
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                (false, false) => a.x.total_cmp(&b.x),
+            });
     }
 
     /// Number of data points in the series.
@@ -204,8 +235,7 @@ impl QueryScheduler {
         filters: Vec<DataFilter>,
         group_by: Option<GroupBy>,
     ) -> String {
-        let id = format!("job-{}", self.next_id);
-        self.next_id += 1;
+        let id = self.allocate_id();
         self.jobs.push(QueryJob {
             id: id.clone(),
             query,
@@ -216,6 +246,20 @@ impl QueryScheduler {
             completed_at: None,
         });
         id
+    }
+
+    fn allocate_id(&mut self) -> String {
+        let start = self.next_id;
+        let mut candidate = start;
+        loop {
+            let id = format!("job-{candidate}");
+            if self.jobs.iter().all(|job| job.id != id) {
+                self.next_id = candidate.wrapping_add(1);
+                return id;
+            }
+            candidate = candidate.wrapping_add(1);
+            assert!(candidate != start, "query job id space exhausted");
+        }
     }
 
     /// Cancel a queued or running job. Returns an error if the job is not found or already terminal.
@@ -232,6 +276,50 @@ impl QueryScheduler {
             }
             _ => anyhow::bail!("job '{id}' is already in terminal state"),
         }
+    }
+
+    /// Move a queued job into the running state.
+    pub fn start(&mut self, id: &str) -> anyhow::Result<()> {
+        let job = self.job_mut(id)?;
+        if job.status != QueryStatus::Queued {
+            anyhow::bail!("job '{id}' is not queued");
+        }
+        job.status = QueryStatus::Running;
+        Ok(())
+    }
+
+    /// Mark a running job completed at `completed_at` epoch milliseconds.
+    pub fn complete(&mut self, id: &str, completed_at: u64) -> anyhow::Result<()> {
+        let job = self.job_mut(id)?;
+        if job.status != QueryStatus::Running {
+            anyhow::bail!("job '{id}' is not running");
+        }
+        job.status = QueryStatus::Completed;
+        job.completed_at = Some(completed_at);
+        Ok(())
+    }
+
+    /// Mark a queued or running job failed at `completed_at` epoch milliseconds.
+    pub fn fail(
+        &mut self,
+        id: &str,
+        message: impl Into<String>,
+        completed_at: u64,
+    ) -> anyhow::Result<()> {
+        let job = self.job_mut(id)?;
+        if !matches!(job.status, QueryStatus::Queued | QueryStatus::Running) {
+            anyhow::bail!("job '{id}' is already in terminal state");
+        }
+        job.status = QueryStatus::Failed(message.into());
+        job.completed_at = Some(completed_at);
+        Ok(())
+    }
+
+    fn job_mut(&mut self, id: &str) -> anyhow::Result<&mut QueryJob> {
+        self.jobs
+            .iter_mut()
+            .find(|job| job.id == id)
+            .ok_or_else(|| anyhow::anyhow!("job '{id}' not found"))
     }
 
     /// Get a reference to a job by id.
@@ -275,8 +363,22 @@ impl CsvImporter {
 
     /// Parse a header row and store the column names.
     pub fn parse_header(&mut self, line: &str) -> Vec<String> {
-        self.headers = line.split(',').map(|s| s.trim().to_string()).collect();
+        self.headers = self.try_parse_header(line).unwrap_or_default();
         self.headers.clone()
+    }
+
+    /// Parse and validate a CSV header, including quoted fields.
+    pub fn try_parse_header(&mut self, line: &str) -> anyhow::Result<Vec<String>> {
+        let headers = parse_csv_line(line)?;
+        if headers.is_empty() || headers.iter().any(String::is_empty) {
+            anyhow::bail!("CSV headers must be non-empty");
+        }
+        let mut unique = std::collections::HashSet::new();
+        if headers.iter().any(|header| !unique.insert(header.as_str())) {
+            anyhow::bail!("CSV headers must be unique");
+        }
+        self.headers = headers.clone();
+        Ok(headers)
     }
 
     /// Parse a data row into key-value pairs using the stored headers.
@@ -285,7 +387,7 @@ impl CsvImporter {
         if self.headers.is_empty() {
             anyhow::bail!("headers must be parsed before rows");
         }
-        let values: Vec<&str> = line.split(',').collect();
+        let values = parse_csv_line(line)?;
         if values.len() != self.headers.len() {
             anyhow::bail!(
                 "column count mismatch: expected {}, got {}",
@@ -297,7 +399,7 @@ impl CsvImporter {
             .headers
             .iter()
             .zip(values.iter())
-            .map(|(h, v)| (h.clone(), v.trim().to_string()))
+            .map(|(h, v)| (h.clone(), v.clone()))
             .collect())
     }
 
@@ -306,8 +408,34 @@ impl CsvImporter {
         if self.headers.is_empty() {
             return false;
         }
-        line.split(',').count() == self.headers.len()
+        parse_csv_line(line).is_ok_and(|values| values.len() == self.headers.len())
     }
+}
+
+fn parse_csv_line(line: &str) -> anyhow::Result<Vec<String>> {
+    let mut values = Vec::new();
+    let mut value = String::new();
+    let mut chars = line.chars().peekable();
+    let mut quoted = false;
+    while let Some(character) = chars.next() {
+        match character {
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                chars.next();
+                value.push('"');
+            }
+            '"' => quoted = !quoted,
+            ',' if !quoted => {
+                values.push(value.trim().to_string());
+                value.clear();
+            }
+            _ => value.push(character),
+        }
+    }
+    if quoted {
+        anyhow::bail!("unterminated quoted CSV field");
+    }
+    values.push(value.trim().to_string());
+    Ok(values)
 }
 
 #[cfg(test)]
@@ -395,6 +523,22 @@ mod tests {
     }
 
     #[test]
+    fn data_series_stats_ignore_non_finite_values_and_sort_them_last() {
+        let mut series = sample_series();
+        series.points.push(DataPoint {
+            x: f64::NAN,
+            y: f64::NAN,
+            label: None,
+        });
+        assert_eq!(series.min(), Some(10.0));
+        assert_eq!(series.max(), Some(30.0));
+        assert_eq!(series.mean(), Some(20.0));
+        assert_eq!(series.sum(), 60.0);
+        series.sort_by_x();
+        assert!(series.points.last().unwrap().x.is_nan());
+    }
+
+    #[test]
     fn query_scheduler_submit_and_get() {
         let mut sched = QueryScheduler::new();
         let id = sched.submit("SELECT *".into(), vec![], None);
@@ -428,6 +572,25 @@ mod tests {
     }
 
     #[test]
+    fn query_scheduler_runs_jobs_to_terminal_states_and_wraps_ids() {
+        let mut scheduler = QueryScheduler::new();
+        scheduler.next_id = u64::MAX;
+        let max = scheduler.submit("max".into(), vec![], None);
+        let zero = scheduler.submit("zero".into(), vec![], None);
+        assert_eq!(max, format!("job-{}", u64::MAX));
+        assert_eq!(zero, "job-0");
+        scheduler.start(&max).unwrap();
+        scheduler.complete(&max, 123).unwrap();
+        assert_eq!(scheduler.get(&max).unwrap().completed_at, Some(123));
+        assert_eq!(scheduler.completed_jobs().len(), 1);
+        scheduler.fail(&zero, "bad query", 124).unwrap();
+        assert!(matches!(
+            scheduler.get(&zero).unwrap().status,
+            QueryStatus::Failed(_)
+        ));
+    }
+
+    #[test]
     fn csv_importer_parse_header_and_row() {
         let mut csv = CsvImporter::new();
         let headers = csv.parse_header("name, age, city");
@@ -436,6 +599,20 @@ mod tests {
         assert_eq!(row.len(), 3);
         assert_eq!(row[0], ("name".into(), "Alice".into()));
         assert_eq!(row[1], ("age".into(), "30".into()));
+    }
+
+    #[test]
+    fn csv_importer_handles_quotes_and_rejects_malformed_headers() {
+        let mut csv = CsvImporter::new();
+        assert_eq!(
+            csv.try_parse_header("name,notes").unwrap(),
+            vec!["name", "notes"]
+        );
+        let row = csv.parse_row("Alice,\"hello, \"\"world\"\"\"").unwrap();
+        assert_eq!(row[1].1, "hello, \"world\"");
+        assert!(!csv.validate_row("Alice,\"unterminated"));
+        assert!(csv.try_parse_header("name,name").is_err());
+        assert!(csv.try_parse_header("name,").is_err());
     }
 
     #[test]

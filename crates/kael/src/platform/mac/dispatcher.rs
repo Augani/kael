@@ -97,6 +97,12 @@ impl PlatformDispatcher for MacDispatcher {
 }
 
 extern "C" fn trampoline(runnable: *mut c_void) {
-    let task = unsafe { Runnable::<()>::from_raw(NonNull::new_unchecked(runnable as *mut ())) };
-    task.run();
+    let Some(runnable) = NonNull::new(runnable as *mut ()) else {
+        log::error!("received a null runnable in the macOS dispatch trampoline");
+        return;
+    };
+    let task = unsafe { Runnable::<()>::from_raw(runnable) };
+    crate::platform::catch_platform_callback("macOS", "dispatched task", (), || {
+        task.run();
+    });
 }

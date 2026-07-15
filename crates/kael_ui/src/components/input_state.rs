@@ -149,6 +149,7 @@ pub struct InputState {
     pub content: SharedString,
     pub placeholder: SharedString,
     pub disabled: bool,
+    pub read_only: bool,
     pub masked: bool,
     selected_range: Range<usize>,
     selection_reversed: bool,
@@ -177,6 +178,11 @@ pub struct InputState {
     pub shake_triggered: bool,
     pub(crate) shake_count: u32,
     cursor_position_override: Option<usize>,
+    pub(crate) on_change_callback: Option<Rc<dyn Fn(SharedString, &mut App)>>,
+    pub(crate) on_enter_callback: Option<Rc<dyn Fn(SharedString, &mut App)>>,
+    pub(crate) on_focus_callback: Option<Rc<dyn Fn(SharedString, &mut App)>>,
+    pub(crate) on_blur_callback: Option<Rc<dyn Fn(SharedString, &mut App)>>,
+    pub(crate) on_validate_callback: Option<Rc<dyn Fn(Result<(), ValidationError>, &mut App)>>,
 }
 
 impl EventEmitter<InputEvent> for InputState {}
@@ -188,6 +194,7 @@ impl InputState {
             content: "".into(),
             placeholder: "Type here...".into(),
             disabled: false,
+            read_only: false,
             masked: false,
             selected_range: 0..0,
             selection_reversed: false,
@@ -215,7 +222,49 @@ impl InputState {
             shake_triggered: false,
             shake_count: 0,
             cursor_position_override: None,
+            on_change_callback: None,
+            on_enter_callback: None,
+            on_focus_callback: None,
+            on_blur_callback: None,
+            on_validate_callback: None,
         }
+    }
+
+    fn emit_input_event(&self, event: InputEvent, cx: &mut Context<Self>) {
+        match &event {
+            InputEvent::Change => {
+                if let Some(callback) = self.on_change_callback.clone() {
+                    let value = self.content.clone();
+                    cx.defer(move |cx| callback(value, cx));
+                }
+            }
+            InputEvent::Enter => {
+                if let Some(callback) = self.on_enter_callback.clone() {
+                    let value = self.content.clone();
+                    cx.defer(move |cx| callback(value, cx));
+                }
+            }
+            InputEvent::Focus => {
+                if let Some(callback) = self.on_focus_callback.clone() {
+                    let value = self.content.clone();
+                    cx.defer(move |cx| callback(value, cx));
+                }
+            }
+            InputEvent::Blur => {
+                if let Some(callback) = self.on_blur_callback.clone() {
+                    let value = self.content.clone();
+                    cx.defer(move |cx| callback(value, cx));
+                }
+            }
+            InputEvent::Validate(result) => {
+                if let Some(callback) = self.on_validate_callback.clone() {
+                    let result = result.clone();
+                    cx.defer(move |cx| callback(result, cx));
+                }
+            }
+            InputEvent::Tab | InputEvent::ShiftTab => {}
+        }
+        cx.emit(event);
     }
 
     /// Set the input type
@@ -301,24 +350,54 @@ impl InputState {
         &self.content
     }
 
+    /// Clear the input without requiring a window handle.
+    pub fn clear(&mut self, cx: &mut Context<Self>) {
+        if self.content.is_empty() {
+            return;
+        }
+        self.content = "".into();
+        self.selected_range = 0..0;
+        self.selection_reversed = false;
+        self.marked_range = None;
+        self.validation_error = None;
+        self.emit_input_event(InputEvent::Change, cx);
+        cx.notify();
+    }
+
     /// Set the text content with validation
     pub fn set_value(
         &mut self,
         value: impl Into<SharedString>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let value = value.into();
         let filtered_value = self.filter_input(&value);
-        self.replace_text_in_range(None, &filtered_value, window, cx);
-        let len = filtered_value.len();
+        let mut formatted_value = if self.input_mask != InputMask::None {
+            self.apply_mask(&filtered_value)
+        } else {
+            filtered_value
+        };
+        if let Some(max_length) = self.validation_rules.max_length {
+            formatted_value = formatted_value.chars().take(max_length).collect();
+        }
+        let len = formatted_value.len();
+        if self.content.as_ref() == formatted_value {
+            self.selected_range = len..len;
+            return;
+        }
+
+        self.content = formatted_value.into();
         self.selected_range = len..len;
+        self.selection_reversed = false;
+        self.marked_range = None;
 
         if self.validate_on_change {
             self.validate(cx).ok();
         }
 
-        cx.emit(InputEvent::Change);
+        self.emit_input_event(InputEvent::Change, cx);
+        cx.notify();
     }
 
     /// Validate the current input value
@@ -331,7 +410,7 @@ impl InputState {
                 field_name: self.aria_label.clone(),
             };
             self.validation_error = Some(error.clone());
-            cx.emit(InputEvent::Validate(Err(error.clone())));
+            self.emit_input_event(InputEvent::Validate(Err(error.clone())), cx);
             cx.notify();
             return Err(error);
         }
@@ -339,7 +418,7 @@ impl InputState {
         if !self.validation_rules.required && value.trim().is_empty() {
             self.validation_error = None;
             self.success_message = None;
-            cx.emit(InputEvent::Validate(Ok(())));
+            self.emit_input_event(InputEvent::Validate(Ok(())), cx);
             cx.notify();
             return Ok(());
         }
@@ -357,32 +436,32 @@ impl InputState {
 
         if let Err(error) = type_result {
             self.validation_error = Some(error.clone());
-            cx.emit(InputEvent::Validate(Err(error.clone())));
+            self.emit_input_event(InputEvent::Validate(Err(error.clone())), cx);
             cx.notify();
             return Err(error);
         }
 
         if let Some(min_length) = self.validation_rules.min_length {
-            if value.len() < min_length {
+            if value.chars().count() < min_length {
                 let error = ValidationError {
                     message: format!("Must be at least {} characters", min_length).into(),
                     field_name: self.aria_label.clone(),
                 };
                 self.validation_error = Some(error.clone());
-                cx.emit(InputEvent::Validate(Err(error.clone())));
+                self.emit_input_event(InputEvent::Validate(Err(error.clone())), cx);
                 cx.notify();
                 return Err(error);
             }
         }
 
         if let Some(max_length) = self.validation_rules.max_length {
-            if value.len() > max_length {
+            if value.chars().count() > max_length {
                 let error = ValidationError {
                     message: format!("Must be no more than {} characters", max_length).into(),
                     field_name: self.aria_label.clone(),
                 };
                 self.validation_error = Some(error.clone());
-                cx.emit(InputEvent::Validate(Err(error.clone())));
+                self.emit_input_event(InputEvent::Validate(Err(error.clone())), cx);
                 cx.notify();
                 return Err(error);
             }
@@ -391,7 +470,7 @@ impl InputState {
         if let Some(ref validator) = self.validation_rules.custom_validator {
             if let Err(error) = validator(value) {
                 self.validation_error = Some(error.clone());
-                cx.emit(InputEvent::Validate(Err(error.clone())));
+                self.emit_input_event(InputEvent::Validate(Err(error.clone())), cx);
                 cx.notify();
                 return Err(error);
             }
@@ -399,7 +478,7 @@ impl InputState {
 
         self.validation_error = None;
         self.success_message = Some("Valid input".into());
-        cx.emit(InputEvent::Validate(Ok(())));
+        self.emit_input_event(InputEvent::Validate(Ok(())), cx);
         cx.notify();
         Ok(())
     }
@@ -694,6 +773,9 @@ impl InputState {
     }
 
     pub fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled || self.read_only {
+            return;
+        }
         if self.selected_range.is_empty() {
             self.select_to(self.previous_boundary(self.cursor_offset()), cx)
         }
@@ -701,6 +783,9 @@ impl InputState {
     }
 
     pub fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled || self.read_only {
+            return;
+        }
         if self.selected_range.is_empty() {
             self.select_to(self.next_boundary(self.cursor_offset()), cx)
         }
@@ -709,12 +794,12 @@ impl InputState {
 
     pub fn tab(&mut self, _: &Tab, window: &mut Window, cx: &mut Context<Self>) {
         window.focus_next();
-        cx.emit(InputEvent::Tab);
+        self.emit_input_event(InputEvent::Tab, cx);
     }
 
     pub fn shift_tab(&mut self, _: &ShiftTab, window: &mut Window, cx: &mut Context<Self>) {
         window.focus_prev();
-        cx.emit(InputEvent::ShiftTab);
+        self.emit_input_event(InputEvent::ShiftTab, cx);
     }
 
     fn on_mouse_down(
@@ -723,6 +808,9 @@ impl InputState {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.disabled {
+            return;
+        }
         self.is_selecting = true;
 
         let now = std::time::Instant::now();
@@ -768,6 +856,9 @@ impl InputState {
     }
 
     pub fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled || self.read_only {
+            return;
+        }
         if let Some(text) = cx
             .read_from_clipboard()
             .ok()
@@ -788,6 +879,9 @@ impl InputState {
     }
 
     pub fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        if self.disabled || self.read_only {
+            return;
+        }
         if !self.selected_range.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
@@ -797,12 +891,12 @@ impl InputState {
     }
 
     pub fn enter(&mut self, _: &Enter, _: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(InputEvent::Enter);
+        self.emit_input_event(InputEvent::Enter, cx);
     }
 
     pub fn escape(&mut self, _: &Escape, _window: &mut Window, cx: &mut Context<Self>) {
         self.selected_range = self.content.len()..self.content.len();
-        cx.emit(InputEvent::Blur);
+        self.emit_input_event(InputEvent::Blur, cx);
         cx.notify();
     }
 
@@ -815,7 +909,7 @@ impl InputState {
             self.selected_range = len..len;
         }
 
-        cx.emit(InputEvent::Focus);
+        self.emit_input_event(InputEvent::Focus, cx);
         cx.notify();
     }
 
@@ -832,7 +926,7 @@ impl InputState {
             self.validate(cx).ok();
         }
 
-        cx.emit(InputEvent::Blur);
+        self.emit_input_event(InputEvent::Blur, cx);
         cx.notify();
     }
 
@@ -996,6 +1090,9 @@ impl EntityInputHandler for InputState {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.disabled || self.read_only {
+            return;
+        }
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
@@ -1010,10 +1107,12 @@ impl EntityInputHandler for InputState {
         };
 
         if let Some(max_length) = self.validation_rules.max_length {
-            let new_length = self.content.len() - (range.end - range.start) + formatted_text.len();
+            let current_length = self.content.chars().count();
+            let replaced_length = self.content[range.clone()].chars().count();
+            let inserted_length = formatted_text.chars().count();
+            let new_length = current_length - replaced_length + inserted_length;
             if new_length > max_length {
-                let allowed_length =
-                    max_length.saturating_sub(self.content.len() - (range.end - range.start));
+                let allowed_length = max_length.saturating_sub(current_length - replaced_length);
                 let truncated: String = formatted_text.chars().take(allowed_length).collect();
 
                 self.content = (self.content[0..range.start].to_owned()
@@ -1044,7 +1143,7 @@ impl EntityInputHandler for InputState {
             self.validate(cx).ok();
         }
 
-        cx.emit(InputEvent::Change);
+        self.emit_input_event(InputEvent::Change, cx);
         cx.notify();
     }
 
@@ -1056,6 +1155,9 @@ impl EntityInputHandler for InputState {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.disabled || self.read_only {
+            return;
+        }
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
@@ -1258,13 +1360,15 @@ impl kael::Element for InputTextElement {
         let (selection, cursor) = if selected_range.is_empty() {
             (
                 None,
-                Some(fill(
-                    Bounds::new(
-                        point(bounds.left() + cursor_pos, bounds.top()),
-                        size(px(2.), bounds.bottom() - bounds.top()),
-                    ),
-                    rgb(0x0066ff),
-                )),
+                (!input.disabled && !input.read_only).then(|| {
+                    fill(
+                        Bounds::new(
+                            point(bounds.left() + cursor_pos, bounds.top()),
+                            size(px(2.), bounds.bottom() - bounds.top()),
+                        ),
+                        rgb(0x0066ff),
+                    )
+                }),
             )
         } else {
             (
@@ -1303,11 +1407,13 @@ impl kael::Element for InputTextElement {
     ) {
         let focus_handle = self.input.read(cx).focus_handle.clone();
 
-        window.handle_input(
-            &focus_handle,
-            ElementInputHandler::new(bounds, self.input.clone()),
-            cx,
-        );
+        if !self.input.read(cx).disabled {
+            window.handle_input(
+                &focus_handle,
+                ElementInputHandler::new(bounds, self.input.clone()),
+                cx,
+            );
+        }
 
         if let Some(selection) = prepaint.selection.take() {
             window.paint_quad(selection)

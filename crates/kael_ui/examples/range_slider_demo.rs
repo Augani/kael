@@ -224,7 +224,7 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_, cx| cx.new(|cx| RangeSliderDemo::new(cx)),
+            |_, cx| cx.new(RangeSliderDemo::new),
         )
         .unwrap();
 

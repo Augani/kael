@@ -3,6 +3,8 @@
 use kael::{prelude::FluentBuilder as _, *};
 use std::time::Duration;
 
+const MAX_PARTICLES: usize = 10_000;
+
 #[derive(Clone)]
 pub struct Particle {
     pub position: Point<f32>,
@@ -62,6 +64,7 @@ impl ParticleEmitterState {
     }
 
     pub fn with_config(config: ParticleEmitterConfig, _cx: &mut Context<Self>) -> Self {
+        let config = sanitized_config(config);
         let cap = config.max_particles;
         Self {
             particles: Vec::with_capacity(cap),
@@ -72,17 +75,20 @@ impl ParticleEmitterState {
     }
 
     pub fn set_config(&mut self, config: ParticleEmitterConfig, cx: &mut Context<Self>) {
-        self.config = config;
+        self.config = sanitized_config(config);
+        self.particles.truncate(self.config.max_particles);
         cx.notify();
     }
 
     pub fn set_origin(&mut self, origin: Point<f32>, cx: &mut Context<Self>) {
-        self.config.origin = origin;
+        if origin.x.is_finite() && origin.y.is_finite() {
+            self.config.origin = origin;
+        }
         cx.notify();
     }
 
     pub fn start(&mut self, cx: &mut Context<Self>) {
-        if self.running {
+        if self.running || cx.reduce_motion() {
             return;
         }
         self.running = true;
@@ -137,6 +143,9 @@ impl ParticleEmitterState {
     }
 
     pub fn update(&mut self, dt: f32) {
+        if !dt.is_finite() || dt <= 0.0 {
+            return;
+        }
         let gravity = self.config.gravity;
         let color_start = self.config.color_start;
         let color_end = self.config.color_end;
@@ -169,7 +178,10 @@ impl ParticleEmitterState {
                 .await;
 
             _ = this.update(cx, |state, cx| {
-                if !state.running {
+                if !state.running || cx.reduce_motion() {
+                    state.running = false;
+                    state.particles.clear();
+                    cx.notify();
                     return;
                 }
 
@@ -216,23 +228,38 @@ impl ParticleEmitter {
     }
 
     pub fn spawn_rate(self, rate: f32, cx: &mut App) -> Self {
-        self.state.update(cx, |s, _| s.config.spawn_rate = rate);
+        self.state.update(cx, |s, _| {
+            let mut config = s.config.clone();
+            config.spawn_rate = rate;
+            s.config = sanitized_config(config);
+        });
         self
     }
 
     pub fn lifetime(self, lifetime: Duration, cx: &mut App) -> Self {
-        self.state.update(cx, |s, _| s.config.lifetime = lifetime);
+        self.state.update(cx, |s, _| {
+            let mut config = s.config.clone();
+            config.lifetime = lifetime;
+            s.config = sanitized_config(config);
+        });
         self
     }
 
     pub fn velocity_range(self, range: (f32, f32), cx: &mut App) -> Self {
-        self.state
-            .update(cx, |s, _| s.config.velocity_range = range);
+        self.state.update(cx, |s, _| {
+            let mut config = s.config.clone();
+            config.velocity_range = range;
+            s.config = sanitized_config(config);
+        });
         self
     }
 
     pub fn size_range(self, range: (f32, f32), cx: &mut App) -> Self {
-        self.state.update(cx, |s, _| s.config.size_range = range);
+        self.state.update(cx, |s, _| {
+            let mut config = s.config.clone();
+            config.size_range = range;
+            s.config = sanitized_config(config);
+        });
         self
     }
 
@@ -247,22 +274,37 @@ impl ParticleEmitter {
     }
 
     pub fn gravity(self, gravity: f32, cx: &mut App) -> Self {
-        self.state.update(cx, |s, _| s.config.gravity = gravity);
+        self.state.update(cx, |s, _| {
+            let mut config = s.config.clone();
+            config.gravity = gravity;
+            s.config = sanitized_config(config);
+        });
         self
     }
 
     pub fn spread_angle(self, angle: f32, cx: &mut App) -> Self {
-        self.state.update(cx, |s, _| s.config.spread_angle = angle);
+        self.state.update(cx, |s, _| {
+            let mut config = s.config.clone();
+            config.spread_angle = angle;
+            s.config = sanitized_config(config);
+        });
         self
     }
 
     pub fn max_particles(self, max: usize, cx: &mut App) -> Self {
-        self.state.update(cx, |s, _| s.config.max_particles = max);
+        self.state.update(cx, |s, _| {
+            s.config.max_particles = max.min(MAX_PARTICLES);
+            s.particles.truncate(s.config.max_particles);
+        });
         self
     }
 
     pub fn origin(self, origin: Point<f32>, cx: &mut App) -> Self {
-        self.state.update(cx, |s, _| s.config.origin = origin);
+        self.state.update(cx, |s, _| {
+            if origin.x.is_finite() && origin.y.is_finite() {
+                s.config.origin = origin;
+            }
+        });
         self
     }
 }
@@ -354,4 +396,91 @@ fn pseudo_random_f32(seed: u32) -> f32 {
     x = x.wrapping_mul(0x45D9F3B);
     x ^= x >> 16;
     (x & 0xFFFF) as f32 / 65535.0
+}
+
+fn sanitized_config(mut config: ParticleEmitterConfig) -> ParticleEmitterConfig {
+    let defaults = ParticleEmitterConfig::default();
+
+    if !config.spawn_rate.is_finite() || config.spawn_rate < 0.0 {
+        config.spawn_rate = defaults.spawn_rate;
+    }
+    if config.lifetime.is_zero() {
+        config.lifetime = defaults.lifetime;
+    }
+    config.velocity_range = sanitized_range(config.velocity_range, defaults.velocity_range, false);
+    config.size_range = sanitized_range(config.size_range, defaults.size_range, true);
+    if !config.gravity.is_finite() {
+        config.gravity = defaults.gravity;
+    }
+    if !config.spread_angle.is_finite() || config.spread_angle < 0.0 {
+        config.spread_angle = defaults.spread_angle;
+    }
+    if !config.origin.x.is_finite() || !config.origin.y.is_finite() {
+        config.origin = defaults.origin;
+    }
+    config.max_particles = config.max_particles.min(MAX_PARTICLES);
+
+    config
+}
+
+fn sanitized_range(range: (f32, f32), fallback: (f32, f32), positive: bool) -> (f32, f32) {
+    let (mut start, mut end) = range;
+    if !start.is_finite() || !end.is_finite() || (positive && (start <= 0.0 || end <= 0.0)) {
+        return fallback;
+    }
+    if start > end {
+        std::mem::swap(&mut start, &mut end);
+    }
+    (start, end)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn configuration_is_sanitized_before_simulation() {
+        let mut cx = TestAppContext::single();
+        let state = cx.new(|cx| {
+            ParticleEmitterState::with_config(
+                ParticleEmitterConfig {
+                    spawn_rate: f32::NAN,
+                    lifetime: Duration::ZERO,
+                    velocity_range: (200.0, 50.0),
+                    size_range: (-2.0, 4.0),
+                    gravity: f32::INFINITY,
+                    spread_angle: -1.0,
+                    origin: Point {
+                        x: f32::NAN,
+                        y: 0.0,
+                    },
+                    ..ParticleEmitterConfig::default()
+                },
+                cx,
+            )
+        });
+
+        cx.update(|cx| {
+            let state = state.read(cx);
+            assert_eq!(state.config.spawn_rate, 10.0);
+            assert_eq!(state.config.lifetime, Duration::from_millis(1500));
+            assert_eq!(state.config.velocity_range, (50.0, 200.0));
+            assert_eq!(state.config.size_range, (2.0, 6.0));
+            assert_eq!(state.config.gravity, 80.0);
+            assert_eq!(state.config.spread_angle, std::f32::consts::PI);
+            assert_eq!(state.config.origin, Point { x: 0.0, y: 0.0 });
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn reduced_motion_does_not_start_the_emitter() {
+        let mut cx = TestAppContext::single();
+        cx.set_reduce_motion(true);
+        let state = cx.new(ParticleEmitterState::new);
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| state.start(cx));
+            assert!(!state.read(cx).is_running());
+        });
+    }
 }

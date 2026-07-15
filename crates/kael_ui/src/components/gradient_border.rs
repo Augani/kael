@@ -32,17 +32,27 @@ impl GradientBorder {
     }
 
     pub fn width(mut self, width: Pixels) -> Self {
-        self.border_width = width;
+        let width = width / px(1.0);
+        self.border_width = px(if width.is_finite() {
+            width.max(0.0)
+        } else {
+            2.0
+        });
         self
     }
 
     pub fn angle(mut self, angle: f32) -> Self {
-        self.angle = angle;
+        self.angle = if angle.is_finite() { angle } else { 135.0 };
         self
     }
 
     pub fn rounded(mut self, radius: Pixels) -> Self {
-        self.corner_radius = Some(radius);
+        let radius = radius / px(1.0);
+        self.corner_radius = Some(px(if radius.is_finite() {
+            radius.max(0.0)
+        } else {
+            0.0
+        }));
         self
     }
 }
@@ -73,7 +83,7 @@ impl RenderOnce for GradientBorder {
                 self.inner
                     .flex_grow()
                     .bg(theme.tokens.card)
-                    .rounded(radius - border_w),
+                    .rounded((radius - border_w).max(px(0.0))),
             )
     }
 }
@@ -95,5 +105,22 @@ impl StatefulInteractiveElement for GradientBorder {}
 impl ParentElement for GradientBorder {
     fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
         self.inner.extend(elements)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GradientBorder;
+    use kael::px;
+
+    #[test]
+    fn invalid_geometry_uses_safe_values() {
+        let border = GradientBorder::new()
+            .width(px(f32::NAN))
+            .angle(f32::INFINITY)
+            .rounded(px(-8.0));
+        assert_eq!(border.border_width, px(2.0));
+        assert_eq!(border.angle, 135.0);
+        assert_eq!(border.corner_radius, Some(px(0.0)));
     }
 }

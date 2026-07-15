@@ -58,24 +58,35 @@ impl ProjectIndex {
 
     /// Search for entries containing the given symbol name.
     pub fn search_by_symbol(&self, symbol: &str) -> Vec<&IndexEntry> {
-        self.entries
+        let mut results: Vec<_> = self
+            .entries
             .values()
             .filter(|e| e.symbols.iter().any(|s| s.contains(symbol)))
-            .collect()
+            .collect();
+        results.sort_by(|a, b| a.path.cmp(&b.path));
+        results
     }
 
     /// Search for entries whose path contains the given substring.
     pub fn search_by_path(&self, pattern: &str) -> Vec<&IndexEntry> {
-        self.entries
+        let mut results: Vec<_> = self
+            .entries
             .values()
             .filter(|e| e.path.contains(pattern))
-            .collect()
+            .collect();
+        results.sort_by(|a, b| a.path.cmp(&b.path));
+        results
     }
 
     /// Return aggregate statistics about the index.
     pub fn stats(&self) -> IndexStats {
-        let symbol_count = self.entries.values().map(|e| e.symbols.len()).sum();
-        let total_bytes = self.entries.values().map(|e| e.size_bytes).sum();
+        let symbol_count = self.entries.values().fold(0usize, |total, entry| {
+            total.saturating_add(entry.symbols.len())
+        });
+        let total_bytes = self
+            .entries
+            .values()
+            .fold(0u64, |total, entry| total.saturating_add(entry.size_bytes));
         IndexStats {
             file_count: self.entries.len(),
             symbol_count,
@@ -131,6 +142,9 @@ impl LspManager {
 
     /// Mark a language server as running with the given PID.
     pub fn start(&mut self, language_id: &str, pid: u32) -> anyhow::Result<()> {
+        if pid == 0 {
+            anyhow::bail!("language server PID must be non-zero");
+        }
         let proc = self
             .processes
             .get_mut(language_id)
@@ -158,7 +172,9 @@ impl LspManager {
 
     /// List all registered language servers.
     pub fn list(&self) -> Vec<&LspProcess> {
-        self.processes.values().collect()
+        let mut processes: Vec<_> = self.processes.values().collect();
+        processes.sort_by(|a, b| a.language_id.cmp(&b.language_id));
+        processes
     }
 
     /// Count currently running servers.
@@ -217,11 +233,20 @@ impl SearchIndex {
 
     /// Search the index with the given query.
     pub fn search(&self, query: &SearchQuery) -> Vec<&SearchEntry> {
-        let regex = if query.regex {
-            let pattern = if query.whole_word {
-                format!(r"\b(?:{})\b", query.pattern)
-            } else {
+        const MAX_PATTERN_BYTES: usize = 64 * 1024;
+        if query.pattern.is_empty() || query.pattern.len() > MAX_PATTERN_BYTES {
+            return Vec::new();
+        }
+        let regex = if query.regex || query.whole_word {
+            let source = if query.regex {
                 query.pattern.clone()
+            } else {
+                regex::escape(&query.pattern)
+            };
+            let pattern = if query.whole_word {
+                format!(r"\b(?:{source})\b")
+            } else {
+                source
             };
             match RegexBuilder::new(&pattern)
                 .case_insensitive(!query.case_sensitive)
@@ -235,7 +260,8 @@ impl SearchIndex {
             None
         };
 
-        self.entries
+        let mut results: Vec<_> = self
+            .entries
             .iter()
             .filter(|entry| {
                 if let Some(ref includes) = query.include_paths
@@ -253,19 +279,18 @@ impl SearchIndex {
                     return regex.is_match(&entry.content);
                 }
 
-                let (haystack, needle) = if query.case_sensitive {
-                    (entry.content.clone(), query.pattern.clone())
+                if query.case_sensitive {
+                    entry.content.contains(&query.pattern)
                 } else {
-                    (entry.content.to_lowercase(), query.pattern.to_lowercase())
-                };
-
-                if query.whole_word {
-                    haystack.split_whitespace().any(|w| w == needle)
-                } else {
-                    haystack.contains(&needle)
+                    entry
+                        .content
+                        .to_lowercase()
+                        .contains(&query.pattern.to_lowercase())
                 }
             })
-            .collect()
+            .collect();
+        results.sort_by(|a, b| a.path.cmp(&b.path).then(a.line.cmp(&b.line)));
+        results
     }
 
     /// Search the index and return at most `max_results` entries.
@@ -377,6 +402,14 @@ mod tests {
     fn lsp_manager_start_unknown() {
         let mut mgr = LspManager::new();
         assert!(mgr.start("go", 1).is_err());
+        mgr.register(LspProcess {
+            language_id: "rust".into(),
+            command: "rust-analyzer".into(),
+            args: vec![],
+            status: LspStatus::Stopped,
+            pid: None,
+        });
+        assert!(mgr.start("rust", 0).is_err());
     }
 
     #[test]
@@ -453,6 +486,12 @@ mod tests {
             exclude_paths: None,
         };
         assert_eq!(idx.search(&query).len(), 1);
+        idx.add(SearchEntry {
+            path: "b.rs".into(),
+            line: 1,
+            content: "format, formatter".into(),
+        });
+        assert_eq!(idx.search(&query).len(), 2);
     }
 
     #[test]
@@ -535,5 +574,35 @@ mod tests {
         };
         let results = idx.search_with_limit(&query, 3);
         assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn searches_are_deterministic_and_reject_empty_or_huge_patterns() {
+        let mut index = SearchIndex::new();
+        for path in ["z.rs", "a.rs"] {
+            index.add(SearchEntry {
+                path: path.into(),
+                line: 1,
+                content: "needle".into(),
+            });
+        }
+        let mut query = SearchQuery {
+            pattern: "needle".into(),
+            case_sensitive: true,
+            whole_word: false,
+            regex: false,
+            include_paths: None,
+            exclude_paths: None,
+        };
+        let paths: Vec<_> = index
+            .search(&query)
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect();
+        assert_eq!(paths, ["a.rs", "z.rs"]);
+        query.pattern.clear();
+        assert!(index.search(&query).is_empty());
+        query.pattern = "x".repeat(64 * 1024 + 1);
+        assert!(index.search(&query).is_empty());
     }
 }

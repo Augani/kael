@@ -420,7 +420,9 @@ fn configure_webview_builder<'a>(
         let payload =
             serde_json::from_str(&body).unwrap_or_else(|_| serde_json::Value::String(body));
         let mut async_window = ipc_async_window.clone();
-        let _ = async_window.update(|window, cx| handler(payload, window, cx));
+        super::catch_platform_callback("webview message", (), || {
+            let _ = async_window.update(|window, cx| handler(payload, window, cx));
+        });
     });
 
     let navigation_handler = desired.navigation_handler.clone();
@@ -547,9 +549,15 @@ fn dispatch_drag_drop_event(
         _ => WebViewDragDropEvent::Leave,
     };
     let mut async_window = async_window.clone();
-    async_window
-        .update(|window, cx| handler(event, window, cx))
-        .unwrap_or(WebViewDragDropPolicy::BlockBrowserDefault)
+    super::catch_platform_callback(
+        "webview drag-and-drop",
+        WebViewDragDropPolicy::BlockBrowserDefault,
+        || {
+            async_window
+                .update(|window, cx| handler(event, window, cx))
+                .unwrap_or(WebViewDragDropPolicy::BlockBrowserDefault)
+        },
+    )
 }
 
 fn dispatch_page_load(
@@ -563,7 +571,9 @@ fn dispatch_page_load(
         PageLoadEvent::Finished => WebViewPageLoadEvent::Finished,
     };
     let mut async_window = async_window.clone();
-    let _ = async_window.update(|window, cx| handler(event, url.into(), window, cx));
+    super::catch_platform_callback("webview page load", (), || {
+        let _ = async_window.update(|window, cx| handler(event, url.into(), window, cx));
+    });
 }
 
 fn dispatch_document_title_changed(
@@ -572,7 +582,9 @@ fn dispatch_document_title_changed(
     async_window: AsyncWindowContext,
 ) {
     let mut async_window = async_window.clone();
-    let _ = async_window.update(|window, cx| handler(title.into(), window, cx));
+    super::catch_platform_callback("webview title change", (), || {
+        let _ = async_window.update(|window, cx| handler(title.into(), window, cx));
+    });
 }
 
 fn resolve_download_started(
@@ -591,10 +603,15 @@ fn resolve_download_started(
         Some(path.clone())
     };
     let mut async_window = async_window.clone();
-    match async_window
-        .update(|window, cx| handler(url.into(), suggested_path, window, cx))
-        .unwrap_or(WebViewDownloadPolicy::Deny)
-    {
+    match super::catch_platform_callback(
+        "webview download started",
+        WebViewDownloadPolicy::Deny,
+        || {
+            async_window
+                .update(|window, cx| handler(url.into(), suggested_path, window, cx))
+                .unwrap_or(WebViewDownloadPolicy::Deny)
+        },
+    ) {
         WebViewDownloadPolicy::Allow => true,
         WebViewDownloadPolicy::Deny => false,
         WebViewDownloadPolicy::SaveTo(destination) => {
@@ -625,7 +642,9 @@ fn dispatch_download_completed(
         success,
     };
     let mut async_window = async_window.clone();
-    let _ = async_window.update(|window, cx| handler(event, window, cx));
+    super::catch_platform_callback("webview download completed", (), || {
+        let _ = async_window.update(|window, cx| handler(event, window, cx));
+    });
 }
 
 fn resolve_new_window_policy(
@@ -636,9 +655,15 @@ fn resolve_new_window_policy(
 ) -> WebViewNewWindowPolicy {
     if let Some(handler) = new_window_handler {
         let mut async_window = async_window.clone();
-        return async_window
-            .update(|window, cx| handler(url.to_string().into(), window, cx))
-            .unwrap_or(WebViewNewWindowPolicy::Deny);
+        return super::catch_platform_callback(
+            "webview new-window policy",
+            WebViewNewWindowPolicy::Deny,
+            || {
+                async_window
+                    .update(|window, cx| handler(url.to_string().into(), window, cx))
+                    .unwrap_or(WebViewNewWindowPolicy::Deny)
+            },
+        );
     }
 
     if handle_navigation_request(url, navigation_handler, async_window) {
@@ -656,10 +681,11 @@ fn handle_navigation_request(
     let url = url.to_string();
     let allow = if let Some(handler) = navigation_handler {
         let mut async_window = async_window.clone();
-        async_window
-            .update(|window, cx| handler(url.clone().into(), window, cx))
-            .unwrap_or(NavigationPolicy::Deny)
-            == NavigationPolicy::Allow
+        super::catch_platform_callback("webview navigation policy", NavigationPolicy::Deny, || {
+            async_window
+                .update(|window, cx| handler(url.clone().into(), window, cx))
+                .unwrap_or(NavigationPolicy::Deny)
+        }) == NavigationPolicy::Allow
     } else {
         true
     };

@@ -4,9 +4,9 @@ use crate::{
     ClipboardItem, DrawPhase, Drawable, Element, Empty, EventEmitter, ForegroundExecutor, Global,
     InputEvent, Keystroke, MediaKeyEvent, Modifiers, ModifiersChangedEvent, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, NetworkStatus, PathPromptOptions, Pixels,
-    Platform, Point, PowerMode, PowerSaveBlockerKind, Render, Result, Size, SystemPowerEvent, Task,
-    TestDispatcher, TestPlatform, TestScreenCaptureSource, TestWindow, TextSystem, VisualContext,
-    Window, WindowBounds, WindowHandle, WindowOptions,
+    Platform, Point, PowerMode, PowerSaveBlockerKind, Render, Result, Size, SystemPowerEvent,
+    SystemPowerSource, Task, TestDispatcher, TestPlatform, TestScreenCaptureSource, TestWindow,
+    TextSystem, VisualContext, Window, WindowBounds, WindowHandle, WindowOptions,
 };
 use anyhow::{anyhow, bail};
 use futures::{Stream, StreamExt, channel::oneshot};
@@ -164,6 +164,16 @@ impl TestAppContext {
     /// Sets the simulated "reduce motion" accessibility preference for tests.
     pub fn set_reduce_motion(&self, reduce_motion: bool) {
         self.test_platform.set_reduce_motion(reduce_motion);
+    }
+
+    /// Sets the simulated external-power/battery source for tests.
+    pub fn set_system_power_source(&self, source: SystemPowerSource) {
+        self.test_platform.set_system_power_source(source);
+    }
+
+    /// Sets the simulated battery percentage for tests.
+    pub fn set_battery_percentage(&self, percentage: Option<u8>) {
+        self.test_platform.set_battery_percentage(percentage);
     }
 
     /// returns a new `TestAppContext` re-using the same executors to interleave tasks.
@@ -366,6 +376,11 @@ impl TestAppContext {
     /// Returns URL schemes registered through the test platform.
     pub fn registered_url_schemes(&self) -> Vec<String> {
         self.test_platform.registered_url_schemes()
+    }
+
+    /// Paths requested for platform trash/recycle by this test.
+    pub fn trashed_paths(&self) -> Vec<std::path::PathBuf> {
+        self.test_platform.trashed_paths()
     }
 
     /// Return the current test platform tray menu.
@@ -1108,7 +1123,7 @@ mod tests {
     use super::TestAppContext;
     use crate::{
         Capability, Empty, MessageDialogBuilder, OpenDialogBuilder, PathPromptOptions, PathScope,
-        PowerMode, SharedString, SystemPowerEvent,
+        PowerMode, SaveDialogBuilder, SharedString, SystemPowerEvent,
     };
     use std::path::PathBuf;
     use std::{cell::Cell, rc::Rc};
@@ -1217,6 +1232,71 @@ mod tests {
     }
 
     #[test]
+    fn open_dialog_checked_previews_without_prompting() {
+        let mut cx = TestAppContext::single();
+        cx.update(|app| {
+            app.permission_broker.grant(
+                app.current_process_id,
+                Capability::FilesystemRead {
+                    scope: PathScope::UserSelected,
+                },
+            );
+        });
+
+        let plan = cx
+            .read(|app| {
+                app.open_dialog_checked(
+                    OpenDialogBuilder::files()
+                        .image_files()
+                        .filter("Markdown", ["md", "markdown"])
+                        .prompt("Open assets"),
+                )
+            })
+            .unwrap();
+
+        assert!(plan.allows_files());
+        assert!(!plan.allows_directories());
+        assert!(plan.allows_multiple());
+        assert_eq!(
+            plan.prompt().map(|prompt| prompt.as_ref()),
+            Some("Open assets")
+        );
+        assert_eq!(plan.filter_count(), 2);
+        assert_eq!(plan.filter_names(), vec!["Images", "Markdown"]);
+        assert!(!cx.did_prompt_for_paths());
+    }
+
+    #[test]
+    fn save_dialog_checked_previews_without_prompting() {
+        let mut cx = TestAppContext::single();
+        let directory = std::env::temp_dir();
+        cx.update(|app| {
+            app.permission_broker.grant(
+                app.current_process_id,
+                Capability::FilesystemWrite {
+                    scope: PathScope::UserSelected,
+                },
+            );
+        });
+
+        let plan = cx
+            .read(|app| {
+                app.save_dialog_checked(
+                    SaveDialogBuilder::new(&directory)
+                        .suggested_name("report")
+                        .pdf(),
+                )
+            })
+            .unwrap();
+
+        assert_eq!(plan.directory(), directory.as_path());
+        assert_eq!(plan.suggested_name(), Some("report.pdf"));
+        assert_eq!(plan.default_extension(), Some("pdf"));
+        assert!(plan.appended_default_extension());
+        assert!(!cx.did_prompt_for_new_path());
+    }
+
+    #[test]
     fn show_message_dialog_uses_builder_options() {
         let cx = TestAppContext::single();
         let rx = cx
@@ -1241,6 +1321,35 @@ mod tests {
 
         let selected = cx.background_executor.block(rx).unwrap();
         assert_eq!(selected, 1);
+        assert!(!cx.has_pending_prompt());
+    }
+
+    #[test]
+    fn message_dialog_checked_previews_without_showing_prompt() {
+        let cx = TestAppContext::single();
+        let plan = cx
+            .read(|app| {
+                app.message_dialog_checked(
+                    MessageDialogBuilder::save_discard_cancel(
+                        "Save changes?",
+                        "This document has unsaved changes.",
+                    )
+                    .detail("Unsaved changes will be lost."),
+                )
+            })
+            .unwrap();
+
+        assert_eq!(plan.button_count(), 3);
+        assert_eq!(plan.button_index("Don't Save"), Some(1));
+        assert_eq!(
+            plan.default_button_label().map(|label| label.as_ref()),
+            Some("Save")
+        );
+        assert_eq!(
+            plan.cancel_button_label().map(|label| label.as_ref()),
+            Some("Cancel")
+        );
+        assert!(plan.has_cancel_button());
         assert!(!cx.has_pending_prompt());
     }
 }

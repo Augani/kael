@@ -1269,25 +1269,9 @@ checksum = "f6140449f97a6e97f9511815c5632d84c8aacf8ac271ad77c559218161a1373c"
 dependencies = [
  "bitflags 1.3.2",
  "block",
- "cocoa-foundation 0.1.2",
+ "cocoa-foundation",
  "core-foundation 0.9.4",
  "core-graphics 0.23.2",
- "foreign-types",
- "libc",
- "objc",
-]
-
-[[package]]
-name = "cocoa"
-version = "0.26.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f79398230a6e2c08f5c9760610eb6924b52aa9e7950a619602baba59dcbbdbb2"
-dependencies = [
- "bitflags 2.11.1",
- "block",
- "cocoa-foundation 0.2.1",
- "core-foundation 0.10.1",
- "core-graphics 0.24.0",
  "foreign-types",
  "libc",
  "objc",
@@ -1304,19 +1288,6 @@ dependencies = [
  "core-foundation 0.9.4",
  "core-graphics-types 0.1.3",
  "libc",
- "objc",
-]
-
-[[package]]
-name = "cocoa-foundation"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81411967c50ee9a1fc11365f8c585f863a22a9697c89239c452292c40ba79b0d"
-dependencies = [
- "bitflags 2.11.1",
- "block",
- "core-foundation 0.10.1",
- "core-graphics-types 0.2.0",
  "objc",
 ]
 
@@ -3929,6 +3900,7 @@ version = "0.3.0"
 dependencies = [
  "heck 0.5.0",
  "kael",
+ "proc-macro-crate 3.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -3981,6 +3953,7 @@ dependencies = [
 name = "kael_derive_refineable"
 version = "0.3.0"
 dependencies = [
+ "proc-macro-crate 3.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -4023,6 +3996,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "unicode-bidi",
 ]
 
 [[package]]
@@ -4129,6 +4103,7 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
+ "sha2",
  "smol",
  "tempfile",
 ]
@@ -4160,7 +4135,9 @@ dependencies = [
  "rand 0.8.6",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
+ "url",
 ]
 
 [[package]]
@@ -4179,6 +4156,7 @@ dependencies = [
  "secret-service",
  "security-framework",
  "windows 0.62.2",
+ "zeroize",
 ]
 
 [[package]]
@@ -4194,10 +4172,10 @@ name = "kael_share"
 version = "0.3.0"
 dependencies = [
  "anyhow",
- "block",
- "cocoa 0.26.0",
  "futures",
- "objc",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+ "smol",
  "tempfile",
  "url",
  "windows 0.62.2",
@@ -4243,6 +4221,7 @@ dependencies = [
  "ropey",
  "smallvec",
  "smol",
+ "svgtypes",
  "tree-sitter",
  "tree-sitter-bash",
  "tree-sitter-c",
@@ -4313,6 +4292,7 @@ name = "kael_util_macros"
 version = "0.3.0"
 dependencies = [
  "kael_perf",
+ "proc-macro2",
  "quote",
  "syn 2.0.117",
 ]
@@ -6530,7 +6510,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76e8caa82e31bb98fee12fa8f051c94a6aa36b07cddb03f0d4fc558988360ff1"
 dependencies = [
- "cocoa 0.25.0",
+ "cocoa",
  "core-graphics 0.23.2",
  "objc",
  "raw-window-handle",
@@ -10624,7 +10604,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6b338d705ae33a43ca00287c11129303a7a0aa57b101b72a1c08c863f698ac8"
 dependencies = [
  "anyhow",
- "cocoa 0.25.0",
+ "cocoa",
  "core-graphics-helmer-fork",
  "log",
  "objc",

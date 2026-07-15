@@ -89,7 +89,11 @@ where
     H: Fn(CrashReport) + Send + Sync + 'static,
 {
     std::panic::set_hook(Box::new(move |info| {
-        handler(report_from_hook(info, now(), &version));
+        // A panic hook must never panic itself: doing so while the runtime is already
+        // unwinding aborts the process before any fallback crash handling can run.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            handler(report_from_hook(info, now(), &version));
+        }));
     }));
 }
 

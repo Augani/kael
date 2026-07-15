@@ -12,7 +12,7 @@ islands for workflows where web compatibility is the product requirement.
 
 ## How it compares
 
-| | **Kael** | **Electron** | **Tauri** | **egui** | **Iced** |
+| | **Kael** | **browser-runtime stack** | **Tauri** | **egui** | **Iced** |
 |---|---|---|---|---|---|
 | Architecture | Native GPU retained-mode | Chromium + Node webview | OS webview + Rust core | Immediate-mode GPU | Native retained-mode (Elm-style) |
 | Render path | Metal / DX11 / Vulkan | Blink compositor | System WebView2/WKWebView/WebKitGTK | wgpu/glow | wgpu/tiny-skia |
@@ -23,7 +23,7 @@ islands for workflows where web compatibility is the product requirement.
 | Memory at idle | Low (no browser) | High (full Chromium) | Low–moderate (shares OS webview) | Low | Low |
 | Bundled runtime | None | Ships Chromium + Node | None (uses OS webview) | None | None |
 | Accessibility | Native per platform (see below) | Chromium a11y (mature) | OS webview a11y (mature) | Limited / partial | AccessKit-based |
-| Packaging / updater | Built in (see below) | Mature (electron-builder, Squirrel) | Built in (bundler + updater) | Bring your own | Bring your own |
+| Packaging / updater | Built in (see below) | Mature (browser-runtime-builder, Squirrel) | Built in (bundler + updater) | Bring your own | Bring your own |
 | Web deployment | No | No (desktop) | No (desktop) | Yes (wasm) | Yes (wasm) |
 | Maturity / ecosystem | Pre-1.0, small | Very mature, huge | Mature, large | Mature, focused | Mature, focused |
 
@@ -36,7 +36,7 @@ runtime.
 
 Kael draws native widgets itself on the GPU. The primary UI path has no HTML,
 CSS, DOM, or JavaScript bridge — layout is flexbox/grid via Taffy, and the app
-UI can live in one Rust crate. Compared to Electron you drop the bundled browser
+UI can live in one Rust crate. Compared to browser-runtime stack you drop the bundled browser
 (smaller binaries, lower idle memory, no IPC hop between a JS UI and a native
 core). Compared to Tauri you do not have to build the whole app in the user's
 system webview. The tradeoff is real: browser features such as mature media
@@ -95,13 +95,13 @@ Be aware of the gaps before committing:
   roadmap work.
 - **Pre-1.0 API** — expect breaking changes between minor versions.
 - **Smaller ecosystem** — fewer third-party widgets, examples, and answers than
-  Electron or Tauri. You will occasionally be the first to hit something.
+  browser-runtime stack or Tauri. You will occasionally be the first to hit something.
 
 ## When to pick Kael
 
 Reach for Kael when you want native GPU performance and a single Rust codebase
 for a desktop app — IDEs, editors, dashboards, design and media tools — and you
-are comfortable on a pre-1.0 framework. Reach for Electron or Tauri when you
+are comfortable on a pre-1.0 framework. Reach for browser-runtime stack or Tauri when you
 need the full web platform as your default UI runtime, a large ecosystem, or one
 codebase for web and desktop; reach for egui when an immediate-mode tool UI is
 enough; reach for Iced when you want a mature, native, Elm-style Rust toolkit.

@@ -128,6 +128,50 @@ adjustments. The [`custom_theme_demo`](https://github.com/Augani/kael/blob/main/
 | `layout`     | VStack, HStack, Grid, ScrollContainer, responsive breakpoint helpers        |
 | `animations` | Easing presets, springs, transitions, animated presence/state, shimmer, confetti, and other motion effects |
 
+For native desktop code editors, markdown editors, log viewers, SQL consoles,
+and prompt builders, prefer the native `Editor` before embedding Monaco,
+CodeMirror, or a WebView textarea. `Position::to_text()`,
+`Selection::to_text()`, `FoldRange::to_text()`,
+`EditorDiagnostic::to_text()`, `EditorState::to_text()`, and
+`Editor::to_text()` expose language, line/content byte counts, cursor and
+selection geometry, modified/file-path presence, undo/redo depth, syntax and
+highlight readiness, search counts/options, fold state, readonly mode,
+diagnostic counts, and visual override coverage without logging document text,
+file paths, selected text, search terms, diagnostic messages, or style callback
+internals.
+
+For native desktop dashboards, admin tools, file managers, and data-heavy
+workspaces, prefer native `Table`, `DataTable`, and `DataGrid` components before
+reaching for browser tables. `ColumnDef::to_text()`,
+`DataTableState::to_text()`, `DataTable::to_text()`, `RowAction::to_text()`,
+`GridColumnDef::to_text()`, `DataGridState::to_text()`, and
+`DataGrid::to_text()` expose column/row counts, virtual backing, cached rows,
+sort and selection state, editable columns, active edit buffers, search
+presence, edit/row-action handlers, and load-more/fetch-page wiring without
+logging headers, row values, ids, labels, queries, edit text, dimensions, or
+callback internals.
+
+For native desktop media players, timelines, podcast tools, video review
+surfaces, and lightweight editors, prefer native `VideoPlayer`, `AudioPlayer`,
+and `Waveform` before embedding a browser player. `VideoPlayer::to_text()`,
+`VideoPlayerState::to_text()`, `VideoCaptionStyle::to_text()`,
+`AudioPlayer::to_text()`, `AudioPlayerState::to_text()`, and
+`Waveform::to_text()` expose source kind, route, player size,
+controls/captions/poster/source/title presence, progress and volume buckets,
+handler counts, and waveform sample shape without logging media URLs, file
+paths, titles, caption text, exact seek times, volume or rate values, waveform
+amplitudes, or colors.
+
+For native desktop dialogs, sheets, custom menus, context menus, command
+palettes, and omniboxes, prefer the native `Dialog`, `Sheet`, `BottomSheet`,
+`Menu`, `ContextMenu`, `MenuBar`, and `CommandPalette` stacks instead of hosted
+browser overlays. Their `to_text()` helpers expose size/purpose/dismissal
+policy, header/content/footer presence, item/result counts, nesting, disabled
+state, shortcut coverage, query presence/length, selection state, and handler
+coverage without logging ids, labels, titles, descriptions, categories,
+shortcut strings, user queries, coordinates, dimensions, child contents, or
+callback internals.
+
 ## Icons
 
 Components render [Lucide](https://lucide.dev/) icons by name, resolved against a configurable base path. The 1,600+ SVGs ship in the repository under `crates/kael_ui/assets/icons`. Point the resolver at your app's asset directory at startup:

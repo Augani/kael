@@ -1,5 +1,6 @@
 use anyhow::{Context as _, Result, bail};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 /// Crates.io version requirement written into scaffolded projects.
@@ -66,17 +67,32 @@ pub fn run(options: &ScaffoldOptions) -> Result<ScaffoldOutcome> {
         .clone()
         .unwrap_or_else(|| default_app_id(&crate_name));
 
-    if options.target_dir.exists() {
-        let is_empty = fs::read_dir(&options.target_dir)
-            .map(|mut entries| entries.next().is_none())
-            .unwrap_or(false);
-        if !is_empty {
-            bail!(
-                "target directory already exists and is not empty: {}",
-                options.target_dir.display()
-            );
+    let target_existed = match fs::symlink_metadata(&options.target_dir) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                bail!(
+                    "target path already exists and is not a directory: {}",
+                    options.target_dir.display()
+                );
+            }
+            let is_empty = fs::read_dir(&options.target_dir)
+                .with_context(|| format!("reading {}", options.target_dir.display()))?
+                .next()
+                .is_none();
+            if !is_empty {
+                bail!(
+                    "target directory already exists and is not empty: {}",
+                    options.target_dir.display()
+                );
+            }
+            true
         }
-    }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("inspecting {}", options.target_dir.display()));
+        }
+    };
 
     let main_src = template_main_src(options.template);
 
@@ -85,13 +101,53 @@ pub fn run(options: &ScaffoldOptions) -> Result<ScaffoldOutcome> {
     let readme = render_readme(&app_name, &crate_name);
     let main_rs = main_src.replace(options.template.source_window_title(), &app_name);
 
-    fs::create_dir_all(options.target_dir.join("src"))
-        .with_context(|| format!("creating {}/src", options.target_dir.display()))?;
+    if !target_existed {
+        fs::create_dir(&options.target_dir)
+            .with_context(|| format!("creating {}", options.target_dir.display()))?;
+    }
+    let src_dir = options.target_dir.join("src");
+    let files = [
+        (options.target_dir.join("Cargo.toml"), cargo_toml.as_str()),
+        (src_dir.join("main.rs"), main_rs.as_str()),
+        (
+            options.target_dir.join("kael.dist.toml"),
+            dist_toml.as_str(),
+        ),
+        (options.target_dir.join("README.md"), readme.as_str()),
+    ];
 
-    write_file(&options.target_dir.join("Cargo.toml"), &cargo_toml)?;
-    write_file(&options.target_dir.join("src/main.rs"), &main_rs)?;
-    write_file(&options.target_dir.join("kael.dist.toml"), &dist_toml)?;
-    write_file(&options.target_dir.join("README.md"), &readme)?;
+    let mut created_src = false;
+    let mut created_files = 0;
+    let result = (|| -> Result<()> {
+        fs::create_dir(&src_dir).with_context(|| format!("creating {}", src_dir.display()))?;
+        created_src = true;
+        for (path, contents) in &files {
+            write_new_file(path, contents)?;
+            created_files += 1;
+        }
+        #[cfg(unix)]
+        {
+            fs::File::open(&src_dir)
+                .and_then(|directory| directory.sync_all())
+                .with_context(|| format!("syncing {}", src_dir.display()))?;
+            fs::File::open(&options.target_dir)
+                .and_then(|directory| directory.sync_all())
+                .with_context(|| format!("syncing {}", options.target_dir.display()))?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        for (path, _) in files[..created_files].iter().rev() {
+            let _ = fs::remove_file(path);
+        }
+        if created_src {
+            let _ = fs::remove_dir(&src_dir);
+        }
+        if !target_existed {
+            let _ = fs::remove_dir(&options.target_dir);
+        }
+        return Err(error);
+    }
 
     Ok(ScaffoldOutcome {
         target_dir: options.target_dir.clone(),
@@ -101,14 +157,30 @@ pub fn run(options: &ScaffoldOptions) -> Result<ScaffoldOutcome> {
     })
 }
 
-fn write_file(path: &Path, contents: &str) -> Result<()> {
-    fs::write(path, contents).with_context(|| format!("writing {}", path.display()))
+fn write_new_file(path: &Path, contents: &str) -> Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o644);
+    }
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("creating {}", path.display()))?;
+    file.write_all(contents.as_bytes())
+        .with_context(|| format!("writing {}", path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("syncing {}", path.display()))
 }
 
 fn sanitize_crate_name(name: &str) -> Result<String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         bail!("project name must not be empty");
+    }
+    if trimmed.chars().count() > 64 {
+        bail!("project name must be at most 64 characters");
     }
     let sanitized: String = trimmed
         .chars()
@@ -383,12 +455,63 @@ mod tests {
         assert!(run(&options).is_err());
     }
 
-    /// Scaffolds with `--local-dev` and runs a real `cargo check --offline`
-    /// against the in-tree crates. Ignored by default because the nested build
-    /// is slow; run with `cargo test -p xtask -- --ignored`.
+    #[cfg(unix)]
+    #[test]
+    fn scaffold_refuses_symlink_target() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = TempDir::new().unwrap();
+        let destination = tmp.path().join("destination");
+        let target = tmp.path().join("linked");
+        fs::create_dir(&destination).unwrap();
+        symlink(&destination, &target).unwrap();
+        let options = ScaffoldOptions {
+            name: "demo".to_string(),
+            template: Template::Dashboard,
+            target_dir: target,
+            app_id: None,
+            local_dev: false,
+        };
+        assert!(run(&options).is_err());
+        assert!(fs::read_dir(destination).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn concurrent_scaffolds_do_not_delete_the_winner() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("raced");
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let target = target.clone();
+                std::thread::spawn(move || {
+                    run(&ScaffoldOptions {
+                        name: "raced".to_string(),
+                        template: Template::Dashboard,
+                        target_dir: target,
+                        app_id: Some("com.kael.raced".to_string()),
+                        local_dev: false,
+                    })
+                })
+            })
+            .collect();
+        let successes = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .filter(Result::is_ok)
+            .count();
+        assert_eq!(successes, 1);
+        assert!(target.join("Cargo.toml").is_file());
+        assert!(target.join("src/main.rs").is_file());
+        assert!(target.join("kael.dist.toml").is_file());
+        assert!(target.join("README.md").is_file());
+    }
+
+    /// Scaffolds with `--local-dev` and runs a real `cargo check` against the
+    /// in-tree crates. Ignored by default because the nested build is slow and
+    /// may need to populate Cargo's dependency cache.
     #[test]
     #[ignore = "runs a full nested cargo check; slow"]
-    fn scaffold_local_dev_cargo_check_offline() {
+    fn scaffold_local_dev_cargo_check() {
         let tmp = TempDir::new().unwrap();
         let target = tmp.path().join("checked-app");
         let options = ScaffoldOptions {
@@ -402,7 +525,7 @@ mod tests {
 
         let status = std::process::Command::new(env!("CARGO"))
             .current_dir(&target)
-            .args(["check", "--features", "kael/runtime_shaders", "--offline"])
+            .args(["check", "--features", "kael/runtime_shaders"])
             .status()
             .expect("spawning cargo check");
         assert!(status.success(), "scaffolded app failed cargo check");

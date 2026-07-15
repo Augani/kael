@@ -126,8 +126,7 @@ impl AudioSession {
         let state = self.inner.clone();
         let listener_id = {
             let mut state = state.lock();
-            let listener_id = state.next_listener_id;
-            state.next_listener_id += 1;
+            let listener_id = allocate_listener_id(&mut state);
             state
                 .route_listeners
                 .insert(listener_id, Arc::new(callback));
@@ -147,8 +146,7 @@ impl AudioSession {
         let state = self.inner.clone();
         let listener_id = {
             let mut state = state.lock();
-            let listener_id = state.next_listener_id;
-            state.next_listener_id += 1;
+            let listener_id = allocate_listener_id(&mut state);
             state
                 .interruption_listeners
                 .insert(listener_id, Arc::new(callback));
@@ -161,8 +159,59 @@ impl AudioSession {
     }
 }
 
+fn allocate_listener_id(state: &mut AudioSessionState) -> usize {
+    let start = state.next_listener_id;
+    let mut candidate = start;
+    loop {
+        if !state.route_listeners.contains_key(&candidate)
+            && !state.interruption_listeners.contains_key(&candidate)
+        {
+            state.next_listener_id = candidate.wrapping_add(1);
+            return candidate;
+        }
+        candidate = candidate.wrapping_add(1);
+        assert!(
+            candidate != start,
+            "audio session listener id space exhausted"
+        );
+    }
+}
+
 impl Default for AudioSession {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn listener_ids_wrap_without_replacing_callbacks() {
+        let session = AudioSession::new();
+        session.inner.lock().next_listener_id = usize::MAX;
+        let max = session.on_route_change(|_| {});
+        let zero = session.on_interruption(|_| {});
+        let state = session.inner.lock();
+        assert!(state.route_listeners.contains_key(&usize::MAX));
+        assert!(state.interruption_listeners.contains_key(&0));
+        drop(state);
+        drop((max, zero));
+    }
+
+    #[test]
+    fn listeners_are_notified_outside_the_state_lock() {
+        let session = AudioSession::new();
+        let callback_session = session.clone();
+        let _subscription = session.on_route_change(move |_| {
+            callback_session.set_category(AudioCategory::Ambient);
+        });
+        session.update_route(AudioRoute::Named("headphones".into()));
+        assert_eq!(
+            session.current_route(),
+            AudioRoute::Named("headphones".into())
+        );
+        assert_eq!(session.inner.lock().category, AudioCategory::Ambient);
     }
 }

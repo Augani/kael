@@ -46,8 +46,15 @@ impl PresenceTracker {
         }
     }
 
-    /// Update or insert presence for a user.
-    pub fn update(&mut self, presence: Presence) {
+    /// Update or insert presence for a user. Non-finite cursor coordinates are
+    /// discarded so they cannot contaminate layout or rendering calculations.
+    pub fn update(&mut self, mut presence: Presence) {
+        if presence
+            .cursor_position
+            .is_some_and(|(x, y)| !x.is_finite() || !y.is_finite())
+        {
+            presence.cursor_position = None;
+        }
         self.peers.insert(presence.user_id.clone(), presence);
     }
 
@@ -56,17 +63,22 @@ impl PresenceTracker {
         self.peers.remove(user_id);
     }
 
-    /// Return all peers with `Active` status.
+    /// Return all peers with `Active` status, ordered by user id.
     pub fn active_peers(&self) -> Vec<&Presence> {
-        self.peers
+        let mut peers: Vec<_> = self
+            .peers
             .values()
             .filter(|p| p.status == PresenceStatus::Active)
-            .collect()
+            .collect();
+        peers.sort_unstable_by(|left, right| left.user_id.cmp(&right.user_id));
+        peers
     }
 
-    /// Return all tracked peers.
+    /// Return all tracked peers, ordered by user id.
     pub fn all_peers(&self) -> Vec<&Presence> {
-        self.peers.values().collect()
+        let mut peers: Vec<_> = self.peers.values().collect();
+        peers.sort_unstable_by(|left, right| left.user_id.cmp(&right.user_id));
+        peers
     }
 
     /// Look up a specific peer by user id.
@@ -231,5 +243,22 @@ mod tests {
         assert_ne!(PresenceStatus::Idle, PresenceStatus::Away);
         assert_ne!(PresenceStatus::Away, PresenceStatus::Offline);
         assert_eq!(PresenceStatus::Active, PresenceStatus::Active);
+    }
+
+    #[test]
+    fn peer_lists_are_stable_and_non_finite_cursors_are_discarded() {
+        let mut tracker = PresenceTracker::new(5000);
+        tracker.update(make_presence("zoe", PresenceStatus::Active, 1000));
+        let mut invalid = make_presence("alice", PresenceStatus::Active, 1000);
+        invalid.cursor_position = Some((f64::NAN, 20.0));
+        tracker.update(invalid);
+
+        let ids: Vec<_> = tracker
+            .all_peers()
+            .into_iter()
+            .map(|peer| peer.user_id.as_str())
+            .collect();
+        assert_eq!(ids, ["alice", "zoe"]);
+        assert!(tracker.peer("alice").unwrap().cursor_position.is_none());
     }
 }

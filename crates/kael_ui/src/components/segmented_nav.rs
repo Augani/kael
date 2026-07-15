@@ -237,8 +237,27 @@ impl Styled for SegmentedNav {
     }
 }
 
+fn adjacent_enabled_segment(
+    items: &[SegmentedNavItem],
+    current: usize,
+    direction: isize,
+) -> Option<usize> {
+    if items.is_empty() {
+        return None;
+    }
+
+    for offset in 1..=items.len() {
+        let index = (current as isize + direction * offset as isize)
+            .rem_euclid(items.len() as isize) as usize;
+        if !items[index].disabled {
+            return Some(index);
+        }
+    }
+    None
+}
+
 impl RenderOnce for SegmentedNav {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let user_style = self.style;
         let state = self.state.read(cx);
         let active_id = state.active.clone();
@@ -247,15 +266,41 @@ impl RenderOnce for SegmentedNav {
             state.items = self.items.clone();
         });
 
+        let nav_id = self.id.clone();
+        let item_focus_handles: Vec<FocusHandle> = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                let id = ElementId::NamedChild(
+                    Box::new(nav_id.clone()),
+                    format!("item-{}", index).into(),
+                );
+                window
+                    .use_keyed_state(id, cx, |_, cx| cx.focus_handle())
+                    .read(cx)
+                    .clone()
+            })
+            .collect();
+
         let tokens = &Theme::of(cx).tokens;
         let card = tokens.card;
         let foreground = tokens.foreground;
         let muted_foreground = tokens.muted_foreground;
         let layout = self.layout;
         let disabled = self.disabled;
+        let group_label = self
+            .label
+            .clone()
+            .unwrap_or_else(|| "Segmented navigation".into());
 
         div()
-            .id(self.id)
+            .id(nav_id.clone())
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group)
+                    .label(group_label.to_string())
+                    .disabled(disabled),
+            )
             .flex()
             .items_center()
             .gap(px(2.0))
@@ -271,9 +316,33 @@ impl RenderOnce for SegmentedNav {
                 let on_change = self.on_change.clone();
                 let state = self.state.clone();
                 let click_id = item_id.clone();
+                let item_element_id =
+                    ElementId::NamedChild(Box::new(nav_id.clone()), format!("item-{}", idx).into());
+                let focus_handle = item_focus_handles[idx].clone();
+                let focus_on_mouse = focus_handle.clone();
+                let is_focused = focus_handle.is_focused(window);
+                let items_for_key = self.items.clone();
+                let handles_for_key = item_focus_handles.clone();
+                let state_for_key = self.state.clone();
+                let on_change_for_key = self.on_change.clone();
 
                 div()
-                    .id(ElementId::Name(format!("seg-item-{}", idx).into()))
+                    .id(item_element_id)
+                    .accessibility(
+                        AccessibilityAttributes::new(AccessibilityRole::Tab)
+                            .label(item.label.to_string())
+                            .selected(is_active)
+                            .disabled(item_disabled)
+                            .focused(is_focused)
+                            .actions(if item_disabled {
+                                Vec::new()
+                            } else {
+                                vec![AccessibilityAction::Focus, AccessibilityAction::Click]
+                            }),
+                    )
+                    .when(!item_disabled, |this| {
+                        this.track_focus(&focus_handle.tab_index(0).tab_stop(true))
+                    })
                     .when(layout == SegmentedControlLayout::Fill, |this| this.flex_1())
                     .flex()
                     .items_center()
@@ -312,6 +381,7 @@ impl RenderOnce for SegmentedNav {
                         this.cursor_pointer().on_mouse_down(
                             MouseButton::Left,
                             move |_, window, cx| {
+                                window.focus(&focus_on_mouse);
                                 state.update(cx, |state, cx| {
                                     state.set_active(click_id.clone(), cx);
                                 });
@@ -320,6 +390,31 @@ impl RenderOnce for SegmentedNav {
                                 }
                             },
                         )
+                    })
+                    .when(!item_disabled, |this| {
+                        this.on_key_down(move |event: &KeyDownEvent, window, cx| {
+                            let target = match event.keystroke.key.as_str() {
+                                "enter" | "space" => Some(idx),
+                                "left" | "up" => adjacent_enabled_segment(&items_for_key, idx, -1),
+                                "right" | "down" => {
+                                    adjacent_enabled_segment(&items_for_key, idx, 1)
+                                }
+                                "home" => items_for_key.iter().position(|item| !item.disabled),
+                                "end" => items_for_key.iter().rposition(|item| !item.disabled),
+                                _ => None,
+                            };
+                            if let Some(target) = target {
+                                let target_id = items_for_key[target].id.clone();
+                                state_for_key.update(cx, |state, cx| {
+                                    state.set_active(target_id.clone(), cx);
+                                });
+                                window.focus(&handles_for_key[target]);
+                                if let Some(handler) = on_change_for_key.as_ref() {
+                                    handler(target_id, window, cx);
+                                }
+                                cx.stop_propagation();
+                            }
+                        })
                     })
                     .when(item_disabled, |this| this.cursor(CursorStyle::Arrow))
                     .when_some(item.icon.clone(), |this, icon| {
@@ -348,5 +443,29 @@ impl RenderOnce for SegmentedNav {
                 el.style().refine(&user_style);
                 el
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(id: &str, disabled: bool) -> SegmentedNavItem {
+        SegmentedNavItem {
+            id: id.to_string().into(),
+            label: id.to_string().into(),
+            icon: None,
+            label_hidden: false,
+            disabled,
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn keyboard_navigation_wraps_and_skips_disabled_segments() {
+        let items = vec![item("one", false), item("two", true), item("three", false)];
+
+        assert_eq!(adjacent_enabled_segment(&items, 0, 1), Some(2));
+        assert_eq!(adjacent_enabled_segment(&items, 2, 1), Some(0));
+        assert_eq!(adjacent_enabled_segment(&items, 0, -1), Some(2));
     }
 }

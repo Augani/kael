@@ -4,9 +4,10 @@ use super::scrollbar::{Scrollbar, ScrollbarAxis, ScrollbarState};
 use kael::{
     div, relative, AnyElement, App, Bounds, Div, Element, ElementId, GlobalElementId,
     InspectorElementId, InteractiveElement, Interactivity, IntoElement, LayoutId, ParentElement,
-    Pixels, Position, ScrollHandle, SharedString, Stateful, StatefulInteractiveElement, Style,
-    StyleRefinement, Styled, Window,
+    Pixels, Position, ScrollHandle, SharedString, Size, Stateful, StatefulInteractiveElement,
+    Style, StyleRefinement, Styled, Window,
 };
+use std::panic::Location;
 
 /// A scroll view with visible scrollbars
 pub struct Scrollable<E> {
@@ -15,36 +16,65 @@ pub struct Scrollable<E> {
     axis: ScrollbarAxis,
     always_show_scrollbars: bool,
     external_scroll_handle: Option<ScrollHandle>,
-    _element: Stateful<Div>,
+    scroll_size: Option<Size<Pixels>>,
+    base: Stateful<Div>,
 }
 
 impl<E> Scrollable<E>
 where
     E: Element,
 {
+    #[track_caller]
     pub(crate) fn new(axis: ScrollbarAxis, element: E) -> Self {
-        let id = ElementId::Name(SharedString::from(format!("scrollable-{:?}", element.id())));
+        let id = if let Some(element_id) = element.id() {
+            ElementId::Name(SharedString::from(format!(
+                "scrollable-{axis:?}-{element_id:?}"
+            )))
+        } else {
+            let location = Location::caller();
+            ElementId::Name(SharedString::from(format!(
+                "scrollable-{axis:?}-{}:{}:{}",
+                location.file(),
+                location.line(),
+                location.column()
+            )))
+        };
 
         Self {
             element: Some(element),
-            _element: div().id("fake"),
+            base: div().id("scrollable-base"),
             id,
             axis,
             always_show_scrollbars: false,
             external_scroll_handle: None,
+            scroll_size: None,
         }
     }
 
+    #[track_caller]
     pub fn vertical(element: E) -> Self {
         Self::new(ScrollbarAxis::Vertical, element)
     }
 
+    #[track_caller]
     pub fn horizontal(element: E) -> Self {
         Self::new(ScrollbarAxis::Horizontal, element)
     }
 
+    #[track_caller]
     pub fn both(element: E) -> Self {
         Self::new(ScrollbarAxis::Both, element)
+    }
+
+    /// Assign a stable identity to this scroll view.
+    ///
+    /// This is required when multiple scroll views are created from anonymous
+    /// elements at the same level. Without distinct IDs, their retained scroll
+    /// state can alias and cause one viewport to inherit another viewport's
+    /// offset or scrollbar state.
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
     }
 
     pub fn always_show_scrollbars(mut self) -> Self {
@@ -54,6 +84,21 @@ where
 
     pub fn with_scroll_handle(mut self, handle: ScrollHandle) -> Self {
         self.external_scroll_handle = Some(handle);
+        self
+    }
+
+    /// Supplies the complete content size when it is known ahead of layout.
+    ///
+    /// This is useful for virtualized or independently measured content and
+    /// guarantees correct thumb geometry on the first rendered frame.
+    pub fn scroll_size(mut self, size: Size<Pixels>) -> Self {
+        if f32::from(size.width).is_finite()
+            && f32::from(size.height).is_finite()
+            && size.width >= kael::px(0.0)
+            && size.height >= kael::px(0.0)
+        {
+            self.scroll_size = Some(size);
+        }
         self
     }
 
@@ -108,7 +153,7 @@ where
         if let Some(element) = &mut self.element {
             element.style()
         } else {
-            self._element.style()
+            self.base.style()
         }
     }
 }
@@ -121,7 +166,7 @@ where
         if let Some(element) = &mut self.element {
             element.interactivity()
         } else {
-            self._element.interactivity()
+            self.base.interactivity()
         }
     }
 }
@@ -175,6 +220,7 @@ where
         let scroll_id = self.id.clone();
         let content = self.element.take().map(|c| c.into_any_element());
         let always_show = self.always_show_scrollbars;
+        let scroll_size = self.scroll_size;
 
         self.with_element_state(
             id.unwrap(),
@@ -191,6 +237,9 @@ where
                 let mut scrollbar = Scrollbar::new(axis, &element_state.state, scroll_handle);
                 if always_show {
                     scrollbar = scrollbar.always_visible();
+                }
+                if let Some(scroll_size) = scroll_size {
+                    scrollbar = scrollbar.scroll_size(scroll_size);
                 }
 
                 let mut element = div()
@@ -252,6 +301,7 @@ where
     }
 }
 
+#[track_caller]
 pub fn scrollable_vertical<E>(element: E) -> Scrollable<E>
 where
     E: Element,
@@ -259,6 +309,7 @@ where
     Scrollable::vertical(element)
 }
 
+#[track_caller]
 pub fn scrollable_horizontal<E>(element: E) -> Scrollable<E>
 where
     E: Element,
@@ -266,9 +317,43 @@ where
     Scrollable::horizontal(element)
 }
 
+#[track_caller]
 pub fn scrollable_both<E>(element: E) -> Scrollable<E>
 where
     E: Element,
 {
     Scrollable::both(element)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Scrollable;
+    use kael::{div, px, size, Element, ElementId};
+
+    #[test]
+    fn explicit_ids_keep_sibling_scroll_views_distinct() {
+        let hours = Scrollable::vertical(div()).id("hours");
+        let minutes = Scrollable::vertical(div()).id("minutes");
+
+        assert_eq!(Element::id(&hours), Some(ElementId::from("hours")));
+        assert_eq!(Element::id(&minutes), Some(ElementId::from("minutes")));
+        assert_ne!(Element::id(&hours), Element::id(&minutes));
+    }
+
+    #[test]
+    fn anonymous_scroll_views_get_stable_callsite_ids() {
+        let first = Scrollable::vertical(div());
+        let second = Scrollable::vertical(div());
+
+        assert_ne!(Element::id(&first), Element::id(&second));
+    }
+
+    #[test]
+    fn invalid_explicit_scroll_sizes_are_ignored() {
+        let view = Scrollable::both(div()).scroll_size(size(px(f32::NAN), px(100.0)));
+        assert_eq!(view.scroll_size, None);
+
+        let view = view.scroll_size(size(px(800.0), px(500.0)));
+        assert_eq!(view.scroll_size, Some(size(px(800.0), px(500.0))));
+    }
 }

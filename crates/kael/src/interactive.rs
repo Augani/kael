@@ -583,6 +583,15 @@ impl ExternalPaths {
         self.0.is_empty()
     }
 
+    /// Content-safe summary that avoids logging local paths or filenames.
+    pub fn to_text(&self) -> String {
+        format!(
+            "external paths: {} paths, empty {}",
+            self.len(),
+            self.is_empty()
+        )
+    }
+
     /// Return an owned vector of paths.
     pub fn to_vec(&self) -> Vec<PathBuf> {
         self.0.to_vec()
@@ -752,6 +761,38 @@ impl ExternalDropData {
         !self.urls.is_empty()
     }
 
+    /// Number of URLs carried by the drop.
+    pub fn url_count(&self) -> usize {
+        self.urls.len()
+    }
+
+    /// Number of file paths carried by the drop.
+    pub fn path_count(&self) -> usize {
+        self.paths.len()
+    }
+
+    /// Length of the plain text payload in UTF-8 bytes, or zero when absent.
+    pub fn text_len_bytes(&self) -> usize {
+        self.text_value().map(str::len).unwrap_or(0)
+    }
+
+    /// Whether the payload carries no paths, text, or URLs.
+    pub fn is_empty(&self) -> bool {
+        !self.has_paths() && !self.has_text() && !self.has_urls()
+    }
+
+    /// Content-safe summary that avoids logging paths, text, URLs, and filenames.
+    pub fn to_text(&self) -> String {
+        format!(
+            "external drop data: paths {}, text {}, text-bytes {}, urls {}, empty {}",
+            self.path_count(),
+            self.has_text(),
+            self.text_len_bytes(),
+            self.url_count(),
+            self.is_empty()
+        )
+    }
+
     /// Return accepted file paths when every dropped file path is accepted by the filter.
     pub fn accepted_paths_by(&self, filter: &FileDropFilter) -> Option<Vec<PathBuf>> {
         self.paths.accepted_by(filter)
@@ -858,6 +899,31 @@ impl FileDropFilter {
         self.max_files
     }
 
+    /// Number of allowed extensions configured on this filter.
+    pub fn extension_count(&self) -> usize {
+        self.allowed_extensions.len()
+    }
+
+    /// Whether this filter restricts accepted extensions.
+    pub fn has_extension_filter(&self) -> bool {
+        !self.allowed_extensions.is_empty()
+    }
+
+    /// Whether this filter limits the number of accepted files.
+    pub fn has_max_files(&self) -> bool {
+        self.max_files.is_some()
+    }
+
+    /// Content-safe summary that avoids logging extension labels.
+    pub fn to_text(&self) -> String {
+        format!(
+            "file drop filter: extensions {}, extension-filter {}, max-files {}",
+            self.extension_count(),
+            self.has_extension_filter(),
+            self.has_max_files()
+        )
+    }
+
     /// Validate the filter configuration.
     pub fn validate(&self) -> anyhow::Result<()> {
         if let Some(max_files) = self.max_files {
@@ -935,6 +1001,32 @@ impl FileDropMatch {
     /// Return true when no path was accepted.
     pub fn is_empty_accept(&self) -> bool {
         self.accepted.is_empty()
+    }
+
+    /// Number of accepted paths.
+    pub fn accepted_count(&self) -> usize {
+        self.accepted.len()
+    }
+
+    /// Number of rejected paths.
+    pub fn rejected_count(&self) -> usize {
+        self.rejected.len()
+    }
+
+    /// Whether any path was rejected.
+    pub fn has_rejections(&self) -> bool {
+        !self.rejected.is_empty()
+    }
+
+    /// Content-safe summary that avoids logging local paths or filenames.
+    pub fn to_text(&self) -> String {
+        format!(
+            "file drop match: accepted {}, rejected {}, clean {}, empty-accept {}",
+            self.accepted_count(),
+            self.rejected_count(),
+            self.is_clean_accept(),
+            self.is_empty_accept()
+        )
     }
 
     /// Consume this match into accepted paths only when the drop was clean.
@@ -1171,6 +1263,23 @@ mod test {
                 PathBuf::from("/tmp/readme.txt")
             ]
         );
+        assert_eq!(filter.extension_count(), 2);
+        assert!(filter.has_extension_filter());
+        assert!(filter.has_max_files());
+        assert_eq!(
+            filter.to_text(),
+            "file drop filter: extensions 2, extension-filter true, max-files true"
+        );
+        assert!(!filter.to_text().contains("mp4"));
+        assert_eq!(matched.accepted_count(), 2);
+        assert_eq!(matched.rejected_count(), 2);
+        assert!(matched.has_rejections());
+        assert_eq!(
+            matched.to_text(),
+            "file drop match: accepted 2, rejected 2, clean false, empty-accept false"
+        );
+        assert!(!matched.to_text().contains("/tmp"));
+        assert!(!matched.to_text().contains("readme"));
         assert!(!matched.is_clean_accept());
         assert!(!matched.is_empty_accept());
     }
@@ -1181,7 +1290,17 @@ mod test {
         let paths = ExternalPaths::from_paths([PathBuf::from("/tmp/archive.unknown")]);
         let matched = filter.evaluate(&paths);
 
+        assert_eq!(paths.to_text(), "external paths: 1 paths, empty false");
+        assert!(!paths.to_text().contains("archive"));
+        assert_eq!(
+            filter.to_text(),
+            "file drop filter: extensions 0, extension-filter false, max-files false"
+        );
         assert!(matched.is_clean_accept());
+        assert_eq!(
+            matched.to_text(),
+            "file drop match: accepted 1, rejected 0, clean true, empty-accept false"
+        );
         assert_eq!(
             matched.into_accepted(),
             vec![PathBuf::from("/tmp/archive.unknown")]
@@ -1212,6 +1331,13 @@ mod test {
 
     #[test]
     fn external_drop_data_models_files_text_and_urls() {
+        let empty = ExternalDropData::new();
+        assert!(empty.is_empty());
+        assert_eq!(
+            empty.to_text(),
+            "external drop data: paths 0, text false, text-bytes 0, urls 0, empty true"
+        );
+
         let filter = FileDropFilter::images().max_files(1);
         let data = ExternalDropData::from_paths([PathBuf::from("/tmp/poster.png")])
             .with_text("Poster")
@@ -1220,6 +1346,17 @@ mod test {
         assert!(data.has_paths());
         assert!(data.has_text());
         assert!(data.has_urls());
+        assert_eq!(data.path_count(), 1);
+        assert_eq!(data.text_len_bytes(), 6);
+        assert_eq!(data.url_count(), 1);
+        assert!(!data.is_empty());
+        assert_eq!(
+            data.to_text(),
+            "external drop data: paths 1, text true, text-bytes 6, urls 1, empty false"
+        );
+        assert!(!data.to_text().contains("/tmp"));
+        assert!(!data.to_text().contains("Poster"));
+        assert!(!data.to_text().contains("example.com"));
         assert_eq!(data.text_value(), Some("Poster"));
         assert_eq!(data.urls(), &["https://example.com/poster.png".to_string()]);
         assert_eq!(

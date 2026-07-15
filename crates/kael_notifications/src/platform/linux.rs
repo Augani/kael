@@ -14,7 +14,7 @@ pub(crate) struct PlatformBackend;
 pub(crate) const SUPPORT: PlatformNotificationSupport = PlatformNotificationSupport {
     delivery_backend: "notify-rust-dbus",
     action_backend: "notify-rust-wait-for-action",
-    push_backend: "custom-server-planned",
+    push_backend: "not-implemented",
 };
 
 impl NotificationBackend for PlatformBackend {

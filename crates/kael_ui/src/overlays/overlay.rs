@@ -175,7 +175,9 @@ impl RenderOnce for Overlay {
                 this.child(
                     div()
                         .occlude()
-                        .on_mouse_down(MouseButton::Left, |_, _, _| {})
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                            cx.stop_propagation();
+                        })
                         .child(content),
                 )
             })

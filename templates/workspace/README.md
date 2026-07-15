@@ -1,16 +1,22 @@
 # Workspace Template
 
-An editor/workspace template with sidebar, inspector, and terminal panels.
+An editor/workspace template with a file explorer, syntax-aware editor, toolbar, and status bar.
 
 ## Structure
 
-- `SidebarPanel` docked to the left for file explorer
-- `InspectorPanel` docked to the right for properties
-- `BottomPanel` docked to the bottom for terminal
-- Main content area for editor tabs
+- Keyboard-accessible file explorer with in-memory sample files
+- Syntax-aware editor that updates when a file is selected
+- Working Undo and Redo controls; unavailable demo actions are clearly disabled
+- Status bar that tracks the selected file's language
 
 ## Running
 
 ```bash
 cargo run
+```
+
+If the full Xcode Metal toolchain is unavailable on macOS:
+
+```bash
+cargo run --features kael/runtime_shaders
 ```

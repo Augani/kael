@@ -1,13 +1,16 @@
 //! DateRangeInput component - ASTRYX-named range date input facade.
 
 use crate::components::{
-    calendar::{DateRange, DateValue},
+    calendar::{CalendarLocale, DateRange, DateValue},
     date_picker::{DateFormat, DatePicker, DatePickerState, DateSelectionMode},
-    field::{Field, FieldStatusType},
-    field_status::FieldStatusVariant,
+    field::FieldStatusType,
     input::InputSize,
 };
 use kael::{prelude::FluentBuilder as _, *};
+use std::rc::Rc;
+
+type RangeSelectHandler = Rc<dyn Fn(&DateRange, &mut Window, &mut App)>;
+type ClearHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 
 #[derive(IntoElement)]
 pub struct DateRangeInput {
@@ -17,12 +20,21 @@ pub struct DateRangeInput {
     description: Option<SharedString>,
     placeholder: SharedString,
     disabled: bool,
+    read_only: bool,
     optional: bool,
     required: bool,
     clearable: bool,
     size: InputSize,
     format: DateFormat,
+    min_date: Option<DateValue>,
+    max_date: Option<DateValue>,
+    disabled_dates: Vec<DateValue>,
+    disable_weekends: bool,
+    locale: CalendarLocale,
+    show_today_button: bool,
     status: Option<(FieldStatusType, SharedString)>,
+    on_select: Option<RangeSelectHandler>,
+    on_clear: Option<ClearHandler>,
     style: StyleRefinement,
 }
 
@@ -35,12 +47,21 @@ impl DateRangeInput {
             description: None,
             placeholder: "Select date range".into(),
             disabled: false,
+            read_only: false,
             optional: false,
             required: false,
             clearable: true,
             size: InputSize::default(),
             format: DateFormat::LongDate,
+            min_date: None,
+            max_date: None,
+            disabled_dates: Vec::new(),
+            disable_weekends: false,
+            locale: CalendarLocale::default(),
+            show_today_button: true,
             status: None,
+            on_select: None,
+            on_clear: None,
             style: StyleRefinement::default(),
         }
     }
@@ -58,6 +79,16 @@ impl DateRangeInput {
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
+    }
+
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isReadOnly(self, read_only: bool) -> Self {
+        self.read_only(read_only)
     }
 
     #[allow(non_snake_case)]
@@ -115,8 +146,51 @@ impl DateRangeInput {
         self
     }
 
+    pub fn min(mut self, date: DateValue) -> Self {
+        self.min_date = Some(date);
+        self
+    }
+
+    pub fn max(mut self, date: DateValue) -> Self {
+        self.max_date = Some(date);
+        self
+    }
+
+    pub fn disabled_dates(mut self, dates: Vec<DateValue>) -> Self {
+        self.disabled_dates = dates;
+        self
+    }
+
+    pub fn weekends_disabled(mut self, disabled: bool) -> Self {
+        self.disable_weekends = disabled;
+        self
+    }
+
+    pub fn locale(mut self, locale: CalendarLocale) -> Self {
+        self.locale = locale;
+        self
+    }
+
+    pub fn show_today_button(mut self, show: bool) -> Self {
+        self.show_today_button = show;
+        self
+    }
+
     pub fn status(mut self, status: FieldStatusType, message: impl Into<SharedString>) -> Self {
         self.status = Some((status, message.into()));
+        self
+    }
+
+    pub fn on_select(
+        mut self,
+        handler: impl Fn(&DateRange, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_select = Some(Rc::new(handler));
+        self
+    }
+
+    pub fn on_clear(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.on_clear = Some(Rc::new(handler));
         self
     }
 }
@@ -133,32 +207,47 @@ impl RenderOnce for DateRangeInput {
             state.set_selection_mode(DateSelectionMode::Range, cx);
         });
 
-        let mut field = Field::new(
-            self.label,
-            DatePicker::new(self.state)
-                .placeholder(self.placeholder)
-                .format(self.format)
-                .size(self.size)
-                .disabled(self.disabled)
-                .clearable(self.clearable),
-        )
-        .disabled(self.disabled)
-        .optional(self.optional)
-        .required(self.required)
-        .hidden_label(self.hidden_label)
-        .status_variant(FieldStatusVariant::Detached);
+        let mut picker = DatePicker::new(self.state)
+            .label(self.label)
+            .is_label_hidden(self.hidden_label)
+            .placeholder(self.placeholder)
+            .format(self.format)
+            .size(self.size)
+            .disabled(self.disabled)
+            .read_only(self.read_only)
+            .clearable(self.clearable)
+            .optional(self.optional)
+            .required(self.required)
+            .disabled_dates(self.disabled_dates)
+            .weekends_disabled(self.disable_weekends)
+            .locale(self.locale)
+            .show_today_button(self.show_today_button);
 
         if let Some(description) = self.description {
-            field = field.description(description);
+            picker = picker.description(description);
+        }
+        if let Some(min) = self.min_date {
+            picker = picker.min(min);
+        }
+        if let Some(max) = self.max_date {
+            picker = picker.max(max);
         }
         if let Some((tone, message)) = self.status {
-            field = field.status(tone, message);
+            picker = picker.status(tone, message);
+        }
+        if let Some(on_select) = self.on_select {
+            picker = picker.on_range_select(move |range, window, cx| {
+                on_select(range, window, cx);
+            });
+        }
+        if let Some(on_clear) = self.on_clear {
+            picker = picker.on_clear(move |window, cx| on_clear(window, cx));
         }
 
-        field.map(|this| {
-            let mut field = this;
-            field.style().refine(&self.style);
-            field
+        picker.map(|this| {
+            let mut picker = this;
+            picker.style().refine(&self.style);
+            picker
         })
     }
 }

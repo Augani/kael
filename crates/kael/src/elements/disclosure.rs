@@ -18,6 +18,29 @@ pub struct DisclosureRenderState {
     pub focused: bool,
 }
 
+impl DisclosureRenderState {
+    /// Returns true when the trigger has a visible label.
+    pub fn has_label(&self) -> bool {
+        self.label.is_some()
+    }
+
+    /// Length of the configured label in bytes, without exposing label text.
+    pub fn label_len_bytes(&self) -> usize {
+        self.label.as_ref().map_or(0, |label| label.len())
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "disclosure_render_state(open={}, has_label={}, label_len_bytes={}, focused={})",
+            self.open,
+            self.has_label(),
+            self.label_len_bytes(),
+            self.focused
+        )
+    }
+}
+
 type DisclosureRenderer = Rc<dyn Fn(DisclosureRenderState, &Window, &App) -> AnyElement>;
 
 /// Construct a controlled disclosure primitive.
@@ -332,5 +355,25 @@ mod tests {
                 .debug_bounds("disclosure-custom-Advanced-open-focused")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn disclosure_render_state_summary_is_content_safe() {
+        let state = DisclosureRenderState {
+            open: true,
+            label: Some(SharedString::from("Secret Advanced Options")),
+            focused: false,
+        };
+
+        assert!(state.has_label());
+        assert_eq!(state.label_len_bytes(), "Secret Advanced Options".len());
+
+        let summary = state.to_text();
+        assert!(summary.contains("open=true"));
+        assert!(summary.contains("has_label=true"));
+        assert!(summary.contains("label_len_bytes=23"));
+        assert!(summary.contains("focused=false"));
+        assert!(!summary.contains("Secret"));
+        assert!(!summary.contains("Advanced"));
     }
 }

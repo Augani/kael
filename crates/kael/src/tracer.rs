@@ -13,7 +13,10 @@ use std::{
 };
 
 static NEXT_THREAD_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_EXPORT_ID: AtomicU64 = AtomicU64::new(1);
 static GLOBAL_TRACER: OnceLock<Mutex<Option<Tracer>>> = OnceLock::new();
+const MAX_TRACE_EVENTS: usize = 100_000;
+const MAX_TRACE_NAME_BYTES: usize = 512;
 
 thread_local! {
     static TRACE_THREAD_ID: Cell<u64> = const { Cell::new(0) };
@@ -102,8 +105,8 @@ impl Tracer {
         Self {
             inner: Arc::new(Mutex::new(TracerInner {
                 enabled: false,
-                events: VecDeque::with_capacity(max_events.min(10000)),
-                max_events,
+                events: VecDeque::new(),
+                max_events: max_events.min(MAX_TRACE_EVENTS),
                 process_id: std::process::id() as u64,
                 started_at: Instant::now(),
             })),
@@ -158,11 +161,12 @@ impl Tracer {
             return;
         }
 
-        let timestamp_us = inner.started_at.elapsed().as_micros() as u64;
+        let timestamp_us =
+            u64::try_from(inner.started_at.elapsed().as_micros()).unwrap_or(u64::MAX);
 
         let event = TraceEvent {
-            name: name.into(),
-            category: category.into(),
+            name: bounded_trace_text(name.into()),
+            category: bounded_trace_text(category.into()),
             phase,
             timestamp_us,
             process_id: inner.process_id,
@@ -245,10 +249,36 @@ impl Tracer {
     pub fn write_to_file(&self, path: impl Into<PathBuf>) -> Result<()> {
         let json = self.export_to_chrome_json()?;
         let path = path.into();
-        let mut file = fs::File::create(&path)
-            .with_context(|| format!("failed to create trace file: {}", path.display()))?;
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create trace directory: {}", parent.display())
+            })?;
+        }
+        let sequence = NEXT_EXPORT_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .map_err(|_| anyhow::anyhow!("trace export identifier space exhausted"))?;
+        let temp = path.with_extension(format!("tmp.{}.{}", std::process::id(), sequence));
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .with_context(|| format!("failed to create trace file: {}", temp.display()))?;
         file.write_all(json.as_bytes())
-            .with_context(|| format!("failed to write trace file: {}", path.display()))?;
+            .with_context(|| format!("failed to write trace file: {}", temp.display()))?;
+        file.sync_all()
+            .with_context(|| format!("failed to sync trace file: {}", temp.display()))?;
+        fs::rename(&temp, &path).with_context(|| {
+            format!(
+                "failed to finalize trace file from {} to {}",
+                temp.display(),
+                path.display()
+            )
+        })?;
         Ok(())
     }
 }
@@ -289,10 +319,25 @@ fn current_thread_id() -> u64 {
 }
 
 fn push_event(inner: &mut TracerInner, event: TraceEvent) {
+    if inner.max_events == 0 {
+        return;
+    }
     if inner.events.len() >= inner.max_events {
         inner.events.pop_front();
     }
     inner.events.push_back(event);
+}
+
+fn bounded_trace_text(mut value: String) -> String {
+    if value.len() <= MAX_TRACE_NAME_BYTES {
+        return value;
+    }
+    let mut boundary = MAX_TRACE_NAME_BYTES;
+    while !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    value.truncate(boundary);
+    value
 }
 
 #[cfg(test)]
@@ -341,6 +386,14 @@ mod tests {
         let json = tracer.export_to_chrome_json().unwrap();
         let events: Vec<TraceEvent> = serde_json::from_str(&json).unwrap();
         assert_eq!(events.len(), 5);
+    }
+
+    #[test]
+    fn zero_capacity_tracer_retains_nothing() {
+        let tracer = Tracer::new(0);
+        tracer.enable();
+        tracer.record("event", "test", TracePhase::Instant);
+        assert!(tracer.events().is_empty());
     }
 
     #[test]

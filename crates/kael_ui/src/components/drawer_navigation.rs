@@ -7,6 +7,8 @@ use std::time::Duration;
 use crate::animations::{durations, easings};
 use crate::theme::Theme;
 
+actions!(drawer_navigation, [DrawerNavigationClose]);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum DrawerSide {
     #[default]
@@ -42,7 +44,7 @@ impl DrawerState {
     }
 
     pub fn open(&mut self, cx: &mut Context<Self>) {
-        if !self.is_open {
+        if !self.is_open || self.is_dismissing {
             self.is_open = true;
             self.is_dismissing = false;
             self.is_animating = true;
@@ -52,20 +54,26 @@ impl DrawerState {
     }
 
     pub fn close(&mut self, cx: &mut Context<Self>) {
+        self.close_with_duration(durations::NORMAL, cx);
+    }
+
+    pub fn close_with_duration(&mut self, duration: Duration, cx: &mut Context<Self>) {
         if self.is_open && !self.is_dismissing {
             self.is_dismissing = true;
+            self.is_animating = true;
             self.animation_version = self.animation_version.wrapping_add(1);
+            let animation_version = self.animation_version;
             cx.notify();
 
             cx.spawn(async move |this, cx| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(250))
-                    .await;
+                cx.background_executor().timer(duration).await;
                 _ = this.update(cx, |state, cx| {
-                    state.is_open = false;
-                    state.is_dismissing = false;
-                    state.is_animating = false;
-                    cx.notify();
+                    if state.is_dismissing && state.animation_version == animation_version {
+                        state.is_open = false;
+                        state.is_dismissing = false;
+                        state.is_animating = false;
+                        cx.notify();
+                    }
                 });
             })
             .detach();
@@ -115,7 +123,11 @@ impl DrawerNavigation {
     }
 
     pub fn width(mut self, width: impl Into<Pixels>) -> Self {
-        self.drawer_width = width.into();
+        let width = width.into();
+        let value = f32::from(width);
+        if value.is_finite() && value > 0.0 {
+            self.drawer_width = width;
+        }
         self
     }
 
@@ -151,7 +163,12 @@ impl ParentElement for DrawerNavigation {
 }
 
 impl RenderOnce for DrawerNavigation {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let drawer_id = self.id.clone();
+        let focus_handle = window
+            .use_keyed_state(drawer_id.clone(), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone();
         let theme = Theme::of(cx);
         let user_style = self.style;
         let state = self.state.read(cx);
@@ -167,22 +184,44 @@ impl RenderOnce for DrawerNavigation {
         }
 
         let state_for_backdrop = self.state.clone();
+        let state_for_escape = self.state.clone();
         let on_close = self.on_close.clone();
+        let on_close_escape = self.on_close.clone();
+        if !focus_handle.contains_focused(window, cx) {
+            window.focus(&focus_handle);
+        }
 
         deferred(
             div()
-                .id(self.id)
+                .id(drawer_id.clone())
+                .accessibility(
+                    AccessibilityAttributes::new(AccessibilityRole::Dialog)
+                        .label("Navigation drawer"),
+                )
+                .key_context("DrawerNavigation")
+                .track_focus(&focus_handle)
                 .absolute()
                 .inset_0()
+                .on_action(move |_: &DrawerNavigationClose, window, cx| {
+                    state_for_escape
+                        .update(cx, |state, cx| state.close_with_duration(duration, cx));
+                    if let Some(handler) = on_close_escape.as_ref() {
+                        handler(window, cx);
+                    }
+                })
                 .when(self.show_backdrop, |this| {
                     this.child(
                         div()
-                            .id("drawer-backdrop")
+                            .id(ElementId::NamedChild(
+                                Box::new(drawer_id.clone()),
+                                "backdrop".into(),
+                            ))
                             .absolute()
                             .inset_0()
                             .bg(hsla(0.0, 0.0, 0.0, 0.5))
                             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                state_for_backdrop.update(cx, |s, cx| s.close(cx));
+                                state_for_backdrop
+                                    .update(cx, |s, cx| s.close_with_duration(duration, cx));
                                 if let Some(handler) = on_close.as_ref() {
                                     handler(window, cx);
                                 }
@@ -204,7 +243,7 @@ impl RenderOnce for DrawerNavigation {
                 })
                 .child(
                     div()
-                        .id("drawer-panel")
+                        .id(ElementId::NamedChild(Box::new(drawer_id), "panel".into()))
                         .occlude()
                         .absolute()
                         .top_0()
@@ -239,7 +278,9 @@ impl RenderOnce for DrawerNavigation {
                             el.style().refine(&user_style);
                             el
                         })
-                        .on_mouse_down(MouseButton::Left, |_, _, _| {})
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                            cx.stop_propagation();
+                        })
                         .with_animation(
                             ElementId::Name(format!("drawer-slide-{}", animation_version).into()),
                             Animation::new(duration).with_easing(easings::ease_out_cubic),
@@ -262,5 +303,50 @@ impl RenderOnce for DrawerNavigation {
         )
         .with_priority(1)
         .into_any_element()
+    }
+}
+
+pub fn init_drawer_navigation(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new(
+        "escape",
+        DrawerNavigationClose,
+        Some("DrawerNavigation"),
+    )]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn invalid_widths_keep_the_safe_default() {
+        let mut cx = TestAppContext::single();
+        let state = cx.new(|_| DrawerState::new());
+
+        for width in [f32::NAN, f32::INFINITY, 0.0, -20.0] {
+            assert_eq!(
+                DrawerNavigation::new("drawer", state.clone())
+                    .width(px(width))
+                    .drawer_width,
+                px(280.0)
+            );
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn reopening_interrupts_an_in_progress_dismissal() {
+        let mut cx = TestAppContext::single();
+        let state = cx.new(|_| DrawerState::new());
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.open(cx);
+                state.close_with_duration(Duration::from_secs(60), cx);
+                assert!(state.is_dismissing);
+                state.open(cx);
+                assert!(state.is_open);
+                assert!(!state.is_dismissing);
+            });
+        });
     }
 }

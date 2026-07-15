@@ -74,6 +74,7 @@ impl RenderOnce for Center {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         div()
             .flex()
+            .when(!self.inline, |this| this.w_full())
             .when(
                 self.axis == CenterAxis::Both || self.axis == CenterAxis::Vertical,
                 |this| this.items_center(),

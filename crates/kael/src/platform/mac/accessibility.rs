@@ -31,6 +31,7 @@ pub fn role_to_ns_accessibility(role: AccessibilityRole) -> &'static str {
         AccessibilityRole::Button => "NSAccessibilityButtonRole",
         AccessibilityRole::TextInput => "NSAccessibilityTextFieldRole",
         AccessibilityRole::StaticText => "NSAccessibilityStaticTextRole",
+        AccessibilityRole::Heading => "NSAccessibilityHeadingRole",
         AccessibilityRole::Group => "NSAccessibilityGroupRole",
         AccessibilityRole::List => "NSAccessibilityListRole",
         AccessibilityRole::ListItem => "NSAccessibilityStaticTextRole",
@@ -139,6 +140,7 @@ pub struct MacAccessibilityProvider {
     adapter: Option<SubclassingAdapter>,
     latest: SharedUpdate,
     pending_actions: PendingActions,
+    previous_tree: Option<crate::AccessibilityTree>,
 }
 
 impl MacAccessibilityProvider {
@@ -164,6 +166,7 @@ impl MacAccessibilityProvider {
             adapter: Some(adapter),
             latest,
             pending_actions,
+            previous_tree: None,
         }
     }
 
@@ -175,6 +178,7 @@ impl MacAccessibilityProvider {
             adapter: None,
             latest: Arc::new(Mutex::new(None)),
             pending_actions: Arc::new(Mutex::new(Vec::new())),
+            previous_tree: None,
         }
     }
 
@@ -185,11 +189,13 @@ impl MacAccessibilityProvider {
 
     /// Feed the latest accessibility tree to the AccessKit adapter.
     pub fn update_tree(&mut self, tree: &crate::AccessibilityTree) {
-        let update = tree.to_accesskit_tree_update(
+        let update = tree.to_accesskit_tree_update_after(
+            self.previous_tree.as_ref(),
             Some(self.app_name.as_str()),
             Some(TOOLKIT_NAME),
             Some(TOOLKIT_VERSION),
         );
+        self.previous_tree = Some(tree.clone());
         if let Ok(mut guard) = self.latest.lock() {
             *guard = Some(update.clone());
         }

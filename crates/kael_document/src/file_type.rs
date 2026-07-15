@@ -22,11 +22,40 @@ pub fn file_type_index_for_path(path: &Path, file_types: &[FileType]) -> Option<
         file_type
             .extensions
             .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(&extension))
+            .map(|candidate| candidate.trim_start_matches('.'))
+            .any(|candidate| !candidate.is_empty() && candidate.eq_ignore_ascii_case(&extension))
     })
 }
 
 /// Returns the default file type index when any file types are configured.
 pub fn default_file_type_index(file_types: &[FileType]) -> Option<usize> {
     (!file_types.is_empty()).then_some(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TYPES: &[FileType] = &[FileType {
+        name: "Text",
+        extensions: &["txt", ".md", ""],
+        uti: None,
+        mime: Some("text/plain"),
+    }];
+
+    #[test]
+    fn extension_matching_is_case_insensitive_and_accepts_leading_dots() {
+        assert_eq!(
+            file_type_index_for_path(Path::new("README.MD"), TYPES),
+            Some(0)
+        );
+        assert_eq!(
+            file_type_index_for_path(Path::new("notes.TXT"), TYPES),
+            Some(0)
+        );
+        assert_eq!(
+            file_type_index_for_path(Path::new("trailing."), TYPES),
+            None
+        );
+    }
 }

@@ -19,6 +19,9 @@ pub fn biometric_status() -> BiometricStatus {
     };
     unsafe {
         let context: *mut AnyObject = msg_send![class, new];
+        if context.is_null() {
+            return BiometricStatus::Unavailable;
+        }
         let mut error: *mut AnyObject = std::ptr::null_mut();
         let can_evaluate: Bool = msg_send![
             context,
@@ -36,17 +39,33 @@ pub fn biometric_status() -> BiometricStatus {
 
 pub fn authenticate_biometric(reason: &str, callback: Box<dyn FnOnce(bool) + Send>) {
     let Some(class) = la_context_class() else {
-        callback(false);
+        crate::platform::catch_platform_callback("macOS", "biometric authentication", (), || {
+            callback(false)
+        });
         return;
     };
     unsafe {
         let context: *mut AnyObject = msg_send![class, new];
+        if context.is_null() {
+            crate::platform::catch_platform_callback(
+                "macOS",
+                "biometric authentication",
+                (),
+                || callback(false),
+            );
+            return;
+        }
         let reason_ns = NSString::from_str(reason);
 
         let callback = std::sync::Mutex::new(Some(callback));
         let block = RcBlock::new(move |success: Bool, _error: *mut AnyObject| {
             if let Some(cb) = callback.lock().ok().and_then(|mut g| g.take()) {
-                cb(success.as_bool());
+                crate::platform::catch_platform_callback(
+                    "macOS",
+                    "biometric authentication",
+                    (),
+                    || cb(success.as_bool()),
+                );
             }
         });
 

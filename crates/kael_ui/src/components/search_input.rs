@@ -3,6 +3,7 @@
 use crate::{
     astryx,
     components::{
+        button::{Button, ButtonSize, ButtonVariant},
         icon::Icon,
         icon_source::IconSource,
         input_state::{InputEvent, InputState},
@@ -214,6 +215,16 @@ impl SearchInput {
         self
     }
 
+    pub fn disabled(self, disabled: bool, cx: &mut Context<Self>) -> Self {
+        self.state.update(cx, |state, cx| {
+            state.input.update(cx, |input, cx| {
+                input.disabled = disabled;
+                cx.notify();
+            });
+        });
+        self
+    }
+
     pub fn state(&self) -> &Entity<SearchInputState> {
         &self.state
     }
@@ -238,6 +249,34 @@ impl Render for SearchInput {
         let is_focused = input_focus_handle.is_focused(window);
         let focus_handle = input_focus_handle.clone();
         let hover_ring = astryx::input_hover_ring(theme.tokens.input);
+        let entity_id = self.state.entity_id().as_u64();
+        let mut accessibility_state = AccessibilityState::NONE;
+        if input_disabled {
+            accessibility_state |= AccessibilityState::DISABLED;
+        }
+        if is_focused {
+            accessibility_state |= AccessibilityState::FOCUSED;
+        }
+        let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::TextInput)
+            .label(
+                input_state
+                    .aria_label
+                    .clone()
+                    .unwrap_or_else(|| "Search".into())
+                    .to_string(),
+            )
+            .placeholder(input_state.placeholder.to_string())
+            .states(accessibility_state);
+        if has_query {
+            accessibility =
+                accessibility.value(AccessibilityValue::Text(input_state.content().to_string()));
+        }
+        if !input_disabled {
+            accessibility = accessibility.actions(vec![
+                AccessibilityAction::Focus,
+                AccessibilityAction::SetValue,
+            ]);
+        }
 
         div()
             .flex()
@@ -246,9 +285,12 @@ impl Render for SearchInput {
             // Main search input row
             .child(
                 div()
-                    .id("search-input")
+                    .id(("search-input", entity_id))
                     .key_context("SearchInput")
-                    .track_focus(&focus_handle.tab_index(0).tab_stop(true))
+                    .accessibility(accessibility)
+                    .when(!input_disabled, |this| {
+                        this.track_focus(&focus_handle.tab_index(0).tab_stop(true))
+                    })
                     .when(!input_disabled, {
                         let input = input.clone();
                         move |this| {
@@ -329,100 +371,60 @@ impl Render for SearchInput {
                                 .text_size(px(12.0))
                                 .line_height(px(16.0))
                                 .text_color(theme.tokens.muted_foreground)
-                                .child(format!("{} results", count)),
+                                .child(if count == 1 {
+                                    "1 result".to_owned()
+                                } else {
+                                    format!("{count} results")
+                                }),
                         )
                     })
                     .child(
-                        div()
-                            .h(px(20.0))
-                            .px(px(6.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(theme.tokens.radius_sm)
-                            .cursor(CursorStyle::PointingHand)
-                            .when(state.case_sensitive, |div| div.bg(theme.tokens.accent))
-                            .when(!state.case_sensitive, |div| {
-                                div.hover(|style| style.bg(theme.tokens.muted))
-                            })
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _event, _window, cx| {
-                                    this.state.update(cx, |state, cx| {
+                        Button::new(("search-case-sensitive", entity_id), "Aa")
+                            .size(ButtonSize::Sm)
+                            .variant(ButtonVariant::Ghost)
+                            .selected(state.case_sensitive)
+                            .disabled(input_disabled)
+                            .tooltip("Match case")
+                            .on_click({
+                                let state = self.state.clone();
+                                move |_, _, cx| {
+                                    state.update(cx, |state, cx| {
                                         state.toggle_case_sensitive(cx);
                                     });
-                                }),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.0))
-                                    .line_height(px(16.0))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(if state.case_sensitive {
-                                        theme.tokens.accent_foreground
-                                    } else {
-                                        theme.tokens.muted_foreground
-                                    })
-                                    .child("Aa"),
-                            ),
+                                }
+                            }),
                     )
                     .child(
-                        div()
-                            .h(px(20.0))
-                            .px(px(6.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(theme.tokens.radius_sm)
-                            .cursor(CursorStyle::PointingHand)
-                            .when(state.use_regex, |div| div.bg(theme.tokens.accent))
-                            .when(!state.use_regex, |div| {
-                                div.hover(|style| style.bg(theme.tokens.muted))
-                            })
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _event, _window, cx| {
-                                    this.state.update(cx, |state, cx| {
+                        Button::new(("search-regex", entity_id), ".*")
+                            .size(ButtonSize::Sm)
+                            .variant(ButtonVariant::Ghost)
+                            .selected(state.use_regex)
+                            .disabled(input_disabled)
+                            .tooltip("Use regular expression")
+                            .on_click({
+                                let state = self.state.clone();
+                                move |_, _, cx| {
+                                    state.update(cx, |state, cx| {
                                         state.toggle_use_regex(cx);
                                     });
-                                }),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.0))
-                                    .line_height(px(16.0))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(if state.use_regex {
-                                        theme.tokens.accent_foreground
-                                    } else {
-                                        theme.tokens.muted_foreground
-                                    })
-                                    .child(".*"),
-                            ),
+                                }
+                            }),
                     )
-                    .when(has_query, |parent_div| {
+                    .when(has_query && !input_disabled, |parent_div| {
                         parent_div.child(
-                            div()
-                                .size(px(20.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(theme.tokens.radius_sm)
-                                .cursor(CursorStyle::PointingHand)
-                                .hover(|style| style.bg(theme.tokens.muted))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _event, window, cx| {
-                                        this.state.update(cx, |state, cx| {
+                            Button::new(("search-clear", entity_id), "Clear search")
+                                .size(ButtonSize::Icon)
+                                .variant(ButtonVariant::Ghost)
+                                .icon("x")
+                                .tooltip("Clear search")
+                                .on_click({
+                                    let state = self.state.clone();
+                                    move |_, window, cx| {
+                                        state.update(cx, |state, cx| {
                                             state.clear(window, cx);
                                         });
-                                    }),
-                                )
-                                .child(
-                                    Icon::new(IconSource::Named("x".into()))
-                                        .size(px(14.0))
-                                        .color(theme.tokens.muted_foreground),
-                                ),
+                                    }
+                                }),
                         )
                     }),
             )
@@ -435,42 +437,26 @@ impl Render for SearchInput {
                         .flex_wrap()
                         .children(state.filters.iter().enumerate().map(|(idx, filter)| {
                             let filter = filter.clone();
-                            div()
-                                .px(px(8.0))
-                                .py(px(4.0))
-                                .rounded(theme.tokens.radius_sm)
-                                .border_1()
-                                .border_color(if filter.active {
-                                    theme.tokens.accent
-                                } else {
-                                    theme.tokens.border
-                                })
-                                .bg(if filter.active {
-                                    theme.tokens.accent.opacity(0.1)
-                                } else {
-                                    theme.tokens.background
-                                })
-                                .cursor(CursorStyle::PointingHand)
-                                .hover(|style| style.bg(theme.tokens.muted))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _event, _window, cx| {
-                                        this.state.update(cx, |state, cx| {
-                                            state.toggle_filter(idx, cx);
-                                        });
-                                    }),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(12.0))
-                                        .text_color(if filter.active {
-                                            theme.tokens.accent
-                                        } else {
-                                            theme.tokens.foreground
-                                        })
-                                        .child(filter.label.clone()),
-                                )
-                                .into_any_element()
+                            Button::new(
+                                ElementId::NamedInteger(
+                                    format!("search-filter-{entity_id}").into(),
+                                    idx as u64,
+                                ),
+                                filter.label,
+                            )
+                            .size(ButtonSize::Sm)
+                            .variant(ButtonVariant::Outline)
+                            .selected(filter.active)
+                            .disabled(input_disabled)
+                            .on_click({
+                                let state = self.state.clone();
+                                move |_, _, cx| {
+                                    state.update(cx, |state, cx| {
+                                        state.toggle_filter(idx, cx);
+                                    });
+                                }
+                            })
+                            .into_any_element()
                         })),
                 )
             })

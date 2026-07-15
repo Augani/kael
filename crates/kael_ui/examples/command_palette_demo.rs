@@ -480,7 +480,7 @@ fn main() {
                     }),
                     ..Default::default()
                 },
-                |_window, cx| cx.new(|cx| CommandPaletteDemo::new(cx)),
+                |_window, cx| cx.new(CommandPaletteDemo::new),
             )
             .unwrap();
         });

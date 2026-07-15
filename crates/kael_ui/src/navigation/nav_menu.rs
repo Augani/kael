@@ -24,7 +24,8 @@ impl NavMenu {
     }
 
     pub fn label(mut self, label: impl Into<SharedString>) -> Self {
-        self.label = Some(label.into());
+        let label = label.into();
+        self.label = (!label.trim().is_empty()).then_some(label);
         self
     }
 
@@ -52,6 +53,13 @@ impl RenderOnce for NavMenu {
         let user_style = self.style;
 
         div()
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group).label(
+                    self.label
+                        .as_ref()
+                        .map_or("Navigation menu", SharedString::as_ref),
+                ),
+            )
             .flex()
             .flex_col()
             .gap(px(4.0))
@@ -64,7 +72,7 @@ impl RenderOnce for NavMenu {
                         .line_height(px(14.0))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.tokens.muted_foreground)
-                        .child(label),
+                        .child(StyledText::new(label).accessibility_hidden(true)),
                 )
             })
             .children(self.children)
@@ -73,5 +81,15 @@ impl RenderOnce for NavMenu {
                 div.style().refine(&user_style);
                 div
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn empty_group_labels_fall_back_to_the_default() {
+        assert!(NavMenu::new().label(" ").label.is_none());
     }
 }

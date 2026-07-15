@@ -7,7 +7,7 @@ use std::{
     str::FromStr,
 };
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize, de::Error};
 
 /// A [semantic version](https://semver.org/) number.
@@ -52,24 +52,42 @@ impl FromStr for SemanticVersion {
 
     fn from_str(s: &str) -> Result<Self> {
         let mut components = s.trim().split('.');
-        let major = components
-            .next()
-            .context("missing major version number")?
-            .parse()?;
-        let minor = components
-            .next()
-            .context("missing minor version number")?
-            .parse()?;
-        let patch = components
-            .next()
-            .context("missing patch version number")?
-            .parse()?;
+        let major = parse_component(
+            components.next().context("missing major version number")?,
+            "major",
+        )?;
+        let minor = parse_component(
+            components.next().context("missing minor version number")?,
+            "minor",
+        )?;
+        let patch = parse_component(
+            components.next().context("missing patch version number")?,
+            "patch",
+        )?;
+        if components.next().is_some() {
+            bail!("unexpected version component after patch number");
+        }
         Ok(Self {
             major,
             minor,
             patch,
         })
     }
+}
+
+fn parse_component(component: &str, name: &str) -> Result<usize> {
+    if component.is_empty() {
+        bail!("missing {name} version number");
+    }
+    if !component.bytes().all(|byte| byte.is_ascii_digit()) {
+        bail!("{name} version number must contain only ASCII digits");
+    }
+    if component.len() > 1 && component.starts_with('0') {
+        bail!("{name} version number must not contain a leading zero");
+    }
+    component
+        .parse()
+        .with_context(|| format!("{name} version number is too large"))
 }
 
 impl Display for SemanticVersion {
@@ -95,5 +113,45 @@ impl<'de> Deserialize<'de> for SemanticVersion {
         let string = String::deserialize(deserializer)?;
         Self::from_str(&string)
             .map_err(|_| Error::custom(format!("Invalid version string \"{string}\"")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SemanticVersion;
+
+    #[test]
+    fn stable_core_version_round_trips() {
+        let version = " 12.34.56 ".parse::<SemanticVersion>().unwrap();
+        assert_eq!(version, SemanticVersion::new(12, 34, 56));
+        assert_eq!(version.to_string(), "12.34.56");
+    }
+
+    #[test]
+    fn parser_rejects_non_core_and_ambiguous_versions() {
+        for invalid in [
+            "",
+            "1",
+            "1.2",
+            "1.2.3.4",
+            "1.2.3-beta.1",
+            "1.2.3+build",
+            "01.2.3",
+            "1.02.3",
+            "1.2.03",
+            "1.-2.3",
+            "1.２.3",
+        ] {
+            assert!(
+                invalid.parse::<SemanticVersion>().is_err(),
+                "accepted invalid version {invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parser_reports_component_overflow() {
+        let too_large = format!("{}.0.0", "9".repeat(usize::BITS as usize));
+        assert!(too_large.parse::<SemanticVersion>().is_err());
     }
 }

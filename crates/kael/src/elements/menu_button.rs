@@ -1,3 +1,4 @@
+use crate::prelude::FluentBuilder as _;
 use crate::{
     AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState,
     AnyElement, App, AppContext, Bounds, Context, DismissEvent, Element, ElementId, Entity,
@@ -21,6 +22,29 @@ pub struct MenuButtonTriggerRenderState {
     pub focused: bool,
 }
 
+impl MenuButtonTriggerRenderState {
+    /// Returns true when the trigger has a configured label.
+    pub fn has_label(&self) -> bool {
+        self.label.is_some()
+    }
+
+    /// Length of the configured trigger label in bytes, without exposing label text.
+    pub fn label_len_bytes(&self) -> usize {
+        self.label.as_ref().map_or(0, |label| label.len())
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "menu_button_trigger_render_state(open={}, focused={}, has_label={}, label_len_bytes={})",
+            self.open,
+            self.focused,
+            self.has_label(),
+            self.label_len_bytes()
+        )
+    }
+}
+
 type MenuButtonTriggerRenderer =
     Rc<dyn Fn(MenuButtonTriggerRenderState, &Window, &App) -> AnyElement>;
 
@@ -37,6 +61,27 @@ pub struct MenuButtonItemRenderState<T> {
     pub highlighted: bool,
     /// Whether this item is disabled.
     pub disabled: bool,
+    /// Whether this row is a non-interactive visual separator.
+    pub separator: bool,
+}
+
+impl<T> MenuButtonItemRenderState<T> {
+    /// Length of the menu item label in bytes, without exposing label text.
+    pub fn label_len_bytes(&self) -> usize {
+        self.label.len()
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "menu_button_item_render_state(index={}, highlighted={}, disabled={}, separator={}, label_len_bytes={})",
+            self.index,
+            self.highlighted,
+            self.disabled,
+            self.separator,
+            self.label_len_bytes()
+        )
+    }
 }
 
 type MenuButtonItemRenderer<T> =
@@ -62,6 +107,8 @@ pub struct MenuButtonItem<T> {
     pub label: SharedString,
     /// Whether the item is disabled.
     pub disabled: bool,
+    /// Whether the row is a non-interactive visual separator.
+    pub separator: bool,
 }
 
 impl<T> MenuButtonItem<T> {
@@ -71,12 +118,20 @@ impl<T> MenuButtonItem<T> {
             value,
             label: label.into(),
             disabled: false,
+            separator: false,
         }
     }
 
     /// Disable this popup menu item.
     pub fn disabled(mut self) -> Self {
         self.disabled = true;
+        self
+    }
+
+    /// Render this item as a non-interactive separator.
+    pub fn separator(mut self) -> Self {
+        self.disabled = true;
+        self.separator = true;
         self
     }
 }
@@ -190,6 +245,11 @@ where
         #[cfg(any(test, feature = "test-support"))]
         let trigger_selector_id = selector_id.clone();
         let key_selector_id = selector_id;
+        let has_custom_trigger = self.custom_trigger_renderer.is_some();
+        let accessible_label = snapshot
+            .label
+            .clone()
+            .unwrap_or_else(|| SharedString::from("Menu"));
 
         let mut accessibility_state = if snapshot.is_open {
             AccessibilityState::EXPANDED
@@ -205,24 +265,10 @@ where
             .track_focus(&focus_handle)
             .focusable()
             .tab_stop(true)
-            .min_w(px(160.0))
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_3()
-            .px(px(12.0))
-            .py(px(8.0))
-            .rounded(px(8.0))
-            .border_1()
-            .border_color(if snapshot.is_open {
-                crate::rgb(0x1d4ed8)
-            } else {
-                crate::rgb(0x94a3b8)
-            })
-            .bg(crate::rgb(0xffffff))
             .cursor_pointer()
             .accessibility(
                 AccessibilityAttributes::new(AccessibilityRole::Button)
+                    .label(accessible_label.to_string())
                     .states(accessibility_state)
                     .actions(vec![
                         AccessibilityAction::Focus,
@@ -230,8 +276,27 @@ where
                         AccessibilityAction::ShowMenu,
                     ]),
             )
-            .focus_visible(|style: crate::StyleRefinement| style.bg(crate::rgba(0x1d4ed810)))
-            .hover(|style| style.bg(crate::rgb(0xf8fafc)))
+            .when(!has_custom_trigger, |this| {
+                this.min_w(px(160.0))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .px(px(12.0))
+                    .py(px(8.0))
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(if snapshot.is_open {
+                        crate::rgb(0x1d4ed8)
+                    } else {
+                        crate::rgb(0x94a3b8)
+                    })
+                    .bg(crate::rgb(0xffffff))
+                    .focus_visible(|style: crate::StyleRefinement| {
+                        style.bg(crate::rgba(0x1d4ed810))
+                    })
+                    .hover(|style| style.bg(crate::rgb(0xf8fafc)))
+            })
             .on_click(move |event, window, cx| {
                 if !event.standard_click() {
                     return;
@@ -619,7 +684,7 @@ where
         let Some(item) = self.items.get(index).cloned() else {
             return;
         };
-        if item.disabled {
+        if item.disabled || item.separator {
             return;
         }
 
@@ -634,7 +699,7 @@ where
         self.items
             .iter()
             .enumerate()
-            .filter_map(|(index, item)| (!item.disabled).then_some(index))
+            .filter_map(|(index, item)| (!item.disabled && !item.separator).then_some(index))
             .collect()
     }
 
@@ -788,7 +853,9 @@ where
                     format!("{}-item", self.selector_id),
                     index,
                 ))
-                .accessibility(
+                .accessibility(if item.separator {
+                    AccessibilityAttributes::new(AccessibilityRole::Separator)
+                } else {
                     AccessibilityAttributes::new(AccessibilityRole::MenuItem)
                         .label(item.label.to_string())
                         .states(if item.disabled {
@@ -800,10 +867,10 @@ where
                             Vec::new()
                         } else {
                             vec![AccessibilityAction::Click]
-                        }),
-                );
+                        })
+                });
 
-            if !item.disabled {
+            if !item.disabled && !item.separator {
                 row = row.cursor_pointer().on_click(move |event, window, cx| {
                     if !event.standard_click() {
                         return;
@@ -823,12 +890,18 @@ where
                         index,
                         highlighted: is_highlighted,
                         disabled: item.disabled,
+                        separator: item.separator,
                     },
                     window,
                     cx,
                 )
             } else {
-                default_menu_button_item(item.label.clone(), is_highlighted, item.disabled)
+                default_menu_button_item(
+                    item.label.clone(),
+                    is_highlighted,
+                    item.disabled,
+                    item.separator,
+                )
             };
             row = row.child(row_content);
 
@@ -862,7 +935,20 @@ fn default_menu_button_trigger(label: Option<SharedString>, open: bool) -> AnyEl
         .into_any_element()
 }
 
-fn default_menu_button_item(label: SharedString, highlighted: bool, disabled: bool) -> AnyElement {
+fn default_menu_button_item(
+    label: SharedString,
+    highlighted: bool,
+    disabled: bool,
+    separator: bool,
+) -> AnyElement {
+    if separator {
+        return div()
+            .h(px(1.0))
+            .my_1()
+            .bg(crate::rgb(0xe2e8f0))
+            .into_any_element();
+    }
+
     div()
         .flex()
         .items_center()
@@ -1026,6 +1112,13 @@ mod tests {
         assert_eq!(next_enabled_index(&enabled, Some(2), 1), Some(4));
         assert_eq!(next_enabled_index(&enabled, Some(4), 1), Some(0));
         assert_eq!(next_enabled_index(&enabled, Some(0), -1), Some(4));
+    }
+
+    #[test]
+    fn separator_items_are_disabled_and_identifiable() {
+        let item = MenuButtonItem::new("separator", "").separator();
+        assert!(item.disabled);
+        assert!(item.separator);
     }
 
     #[crate::test]
@@ -1192,5 +1285,46 @@ mod tests {
                 .debug_bounds("menu-item-0-highlighted-enabled")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn menu_button_render_state_summary_is_content_safe() {
+        let trigger = MenuButtonTriggerRenderState {
+            open: true,
+            label: Some(SharedString::from("Secret Actions")),
+            focused: false,
+        };
+
+        assert!(trigger.has_label());
+        assert_eq!(trigger.label_len_bytes(), "Secret Actions".len());
+
+        let trigger_summary = trigger.to_text();
+        assert!(trigger_summary.contains("open=true"));
+        assert!(trigger_summary.contains("focused=false"));
+        assert!(trigger_summary.contains("has_label=true"));
+        assert!(trigger_summary.contains("label_len_bytes=14"));
+        assert!(!trigger_summary.contains("Secret"));
+        assert!(!trigger_summary.contains("Actions"));
+
+        let item = MenuButtonItemRenderState {
+            value: "secret-action",
+            label: SharedString::from("Private Delete"),
+            index: 2,
+            highlighted: true,
+            disabled: false,
+            separator: false,
+        };
+
+        assert_eq!(item.label_len_bytes(), "Private Delete".len());
+
+        let item_summary = item.to_text();
+        assert!(item_summary.contains("index=2"));
+        assert!(item_summary.contains("highlighted=true"));
+        assert!(item_summary.contains("disabled=false"));
+        assert!(item_summary.contains("separator=false"));
+        assert!(item_summary.contains("label_len_bytes=14"));
+        assert!(!item_summary.contains("secret-action"));
+        assert!(!item_summary.contains("Private"));
+        assert!(!item_summary.contains("Delete"));
     }
 }

@@ -3,7 +3,7 @@ use proc_macro2::Ident;
 use quote::{format_ident, quote};
 use std::mem;
 use syn::{
-    self, Expr, ExprLit, FnArg, ItemFn, Lit, Meta, MetaList, PathSegment, Token, Type,
+    self, Expr, ExprLit, FnArg, ItemFn, Lit, Meta, MetaList, Token, Type,
     parse::{Parse, ParseStream},
     parse_quote,
     punctuated::Punctuated,
@@ -23,6 +23,11 @@ impl Parse for Args {
         let mut max_retries = 0;
         let mut max_iterations = 1;
         let mut on_failure_fn_name = quote!(None);
+        let mut retries_set = false;
+        let mut iterations_set = false;
+        let mut on_failure_set = false;
+        let mut seed_set = false;
+        let mut seeds_set = false;
 
         let metas = Punctuated::<Meta, Token![,]>::parse_terminated(input)?;
 
@@ -43,12 +48,15 @@ impl Parse for Args {
 
             match (&meta, ident.as_str()) {
                 (Meta::NameValue(meta), "retries") => {
+                    reject_duplicate(&mut retries_set, meta, "retries")?;
                     max_retries = parse_usize_from_expr(&meta.value)?
                 }
                 (Meta::NameValue(meta), "iterations") => {
+                    reject_duplicate(&mut iterations_set, meta, "iterations")?;
                     max_iterations = parse_usize_from_expr(&meta.value)?
                 }
                 (Meta::NameValue(meta), "on_failure") => {
+                    reject_duplicate(&mut on_failure_set, meta, "on_failure")?;
                     let Expr::Lit(ExprLit {
                         lit: Lit::Str(name),
                         ..
@@ -59,21 +67,19 @@ impl Parse for Args {
                             "on_failure argument must be a string",
                         ));
                     };
-                    let segments = name
-                        .value()
-                        .split("::")
-                        .map(|part| PathSegment::from(Ident::new(part, name.span())))
-                        .collect();
-                    let path = syn::Path {
-                        leading_colon: None,
-                        segments,
-                    };
+                    let path = syn::parse_str::<syn::Path>(&name.value()).map_err(|error| {
+                        syn::Error::new(name.span(), format!("invalid on_failure path: {error}"))
+                    })?;
                     on_failure_fn_name = quote!(Some(#path));
                 }
                 (Meta::NameValue(meta), "seed") => {
-                    seeds = vec![parse_usize_from_expr(&meta.value)? as u64]
+                    reject_duplicate(&mut seed_set, meta, "seed")?;
+                    seeds.push(parse_u64_from_expr(&meta.value)?);
                 }
-                (Meta::List(list), "seeds") => seeds = parse_u64_array(list)?,
+                (Meta::List(list), "seeds") => {
+                    reject_duplicate(&mut seeds_set, list, "seeds")?;
+                    seeds.extend(parse_u64_array(list)?);
+                }
                 (Meta::Path(_), _) => {
                     return Err(syn::Error::new(meta.span(), "invalid path argument"));
                 }
@@ -92,6 +98,18 @@ impl Parse for Args {
     }
 }
 
+fn reject_duplicate(already_set: &mut bool, meta: &impl Spanned, name: &str) -> syn::Result<()> {
+    if *already_set {
+        Err(syn::Error::new(
+            meta.span(),
+            format!("'{name}' specified multiple times"),
+        ))
+    } else {
+        *already_set = true;
+        Ok(())
+    }
+}
+
 pub fn test(args: TokenStream, function: TokenStream) -> TokenStream {
     let args = syn::parse_macro_input!(args as Args);
     let mut inner_fn = match syn::parse::<ItemFn>(function) {
@@ -102,6 +120,10 @@ pub fn test(args: TokenStream, function: TokenStream) -> TokenStream {
     let inner_fn_attributes = mem::take(&mut inner_fn.attrs);
     let inner_fn_name = format_ident!("__{}", inner_fn.sig.ident);
     let outer_fn_name = mem::replace(&mut inner_fn.sig.ident, inner_fn_name.clone());
+    let kael = match crate::kael_crate_path() {
+        Ok(path) => path,
+        Err(error) => return error.into_compile_error().into(),
+    };
 
     let result = generate_test_function(
         args,
@@ -109,6 +131,7 @@ pub fn test(args: TokenStream, function: TokenStream) -> TokenStream {
         inner_fn_attributes,
         inner_fn_name,
         outer_fn_name,
+        &kael,
     );
     match result {
         Ok(tokens) => tokens,
@@ -122,6 +145,7 @@ fn generate_test_function(
     inner_fn_attributes: Vec<syn::Attribute>,
     inner_fn_name: Ident,
     outer_fn_name: Ident,
+    kael: &syn::Path,
 ) -> Result<TokenStream, TokenStream> {
     let seeds = &args.seeds;
     let max_retries = args.max_retries;
@@ -145,7 +169,7 @@ fn generate_test_function(
                             continue;
                         }
                         Some("BackgroundExecutor") => {
-                            inner_fn_args.extend(quote!(kael::BackgroundExecutor::new(
+                            inner_fn_args.extend(quote!(#kael::BackgroundExecutor::new(
                                 std::sync::Arc::new(dispatcher.clone()),
                             ),));
                             continue;
@@ -161,7 +185,7 @@ fn generate_test_function(
                     {
                         let cx_varname = format_ident!("cx_{}", ix);
                         cx_vars.extend(quote!(
-                            let mut #cx_varname = kael::TestAppContext::build(
+                            let mut #cx_varname = #kael::TestAppContext::build(
                                 dispatcher.clone(),
                                 Some(stringify!(#outer_fn_name)),
                             );
@@ -186,12 +210,12 @@ fn generate_test_function(
             fn #outer_fn_name() {
                 #inner_fn
 
-                kael::run_test(
+                #kael::run_test(
                     #num_iterations,
                     &[#seeds],
                     #max_retries,
                     &mut |dispatcher, _seed| {
-                        let executor = kael::BackgroundExecutor::new(std::sync::Arc::new(dispatcher.clone()));
+                        let executor = #kael::BackgroundExecutor::new(std::sync::Arc::new(dispatcher.clone()));
                         #cx_vars
                         executor.block_test(#inner_fn_name(#inner_fn_args));
                         #cx_teardowns
@@ -224,7 +248,7 @@ fn generate_test_function(
                             let cx_varname = format_ident!("cx_{}", ix);
                             let cx_varname_lock = format_ident!("cx_{}_lock", ix);
                             cx_vars.extend(quote!(
-                                let mut #cx_varname = kael::TestAppContext::build(
+                                let mut #cx_varname = #kael::TestAppContext::build(
                                    dispatcher.clone(),
                                    Some(stringify!(#outer_fn_name))
                                 );
@@ -242,7 +266,7 @@ fn generate_test_function(
                         Some("TestAppContext") => {
                             let cx_varname = format_ident!("cx_{}", ix);
                             cx_vars.extend(quote!(
-                                let mut #cx_varname = kael::TestAppContext::build(
+                                let mut #cx_varname = #kael::TestAppContext::build(
                                     dispatcher.clone(),
                                     Some(stringify!(#outer_fn_name))
                                 );
@@ -269,7 +293,7 @@ fn generate_test_function(
             fn #outer_fn_name() {
                 #inner_fn
 
-                kael::run_test(
+                #kael::run_test(
                     #num_iterations,
                     &[#seeds],
                     #max_retries,
@@ -299,6 +323,17 @@ fn parse_usize_from_expr(expr: &Expr) -> Result<usize, syn::Error> {
         .map_err(|_| syn::Error::new(int.span(), "failed to parse integer"))
 }
 
+fn parse_u64_from_expr(expr: &Expr) -> Result<u64, syn::Error> {
+    let Expr::Lit(ExprLit {
+        lit: Lit::Int(int), ..
+    }) = expr
+    else {
+        return Err(syn::Error::new(expr.span(), "expected an integer"));
+    };
+    int.base10_parse()
+        .map_err(|_| syn::Error::new(int.span(), "failed to parse u64 integer"))
+}
+
 fn parse_u64_array(meta_list: &MetaList) -> Result<Vec<u64>, syn::Error> {
     let mut result = Vec::new();
     let tokens = &meta_list.tokens;
@@ -309,8 +344,7 @@ fn parse_u64_array(meta_list: &MetaList) -> Result<Vec<u64>, syn::Error> {
                 lit: Lit::Int(int), ..
             }) = expr
             {
-                let value: usize = int.base10_parse()?;
-                result.push(value as u64);
+                result.push(int.base10_parse::<u64>()?);
             } else {
                 return Err(syn::Error::new(expr.span(), "expected an integer"));
             }
@@ -327,4 +361,31 @@ fn error_with_message(message: &str, spanned: impl Spanned) -> TokenStream {
 
 fn error_to_stream(err: syn::Error) -> TokenStream {
     TokenStream::from(err.into_compile_error())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Args;
+
+    #[test]
+    fn invalid_failure_paths_return_diagnostics_instead_of_panicking() {
+        for tokens in [
+            quote::quote!(on_failure = ""),
+            quote::quote!(on_failure = "bad-name"),
+        ] {
+            assert!(syn::parse2::<Args>(tokens).is_err());
+        }
+    }
+
+    #[test]
+    fn duplicate_scalar_arguments_are_rejected() {
+        assert!(syn::parse2::<Args>(quote::quote!(iterations = 1, iterations = 2)).is_err());
+        assert!(syn::parse2::<Args>(quote::quote!(seed = 1, seed = 2)).is_err());
+    }
+
+    #[test]
+    fn seeds_accept_the_full_u64_range() {
+        let args = syn::parse2::<Args>(quote::quote!(seed = 18446744073709551615)).unwrap();
+        assert_eq!(args.seeds, vec![u64::MAX]);
+    }
 }

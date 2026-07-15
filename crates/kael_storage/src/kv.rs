@@ -5,8 +5,11 @@ use std::{
     fs::File,
     io::Write,
     path::{Path, PathBuf},
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
 };
 
 use parking_lot::Mutex;
@@ -18,11 +21,18 @@ use crate::{Error, Result, Subscription, platform};
 
 type Observer = Arc<dyn Fn(Option<Value>) + Send + Sync + 'static>;
 
+const MAX_JSON_STORE_BYTES: u64 = 64 * 1024 * 1024;
+
 struct KvState {
     values: BTreeMap<String, Value>,
     observers: HashMap<String, BTreeMap<usize, Observer>>,
     next_observer_id: usize,
-    generation: u64,
+}
+
+impl KvState {
+    fn allocate_observer_id(&mut self) -> usize {
+        allocate_observer_id(&mut self.next_observer_id, &self.observers)
+    }
 }
 
 /// Common behavior for typed key-value stores.
@@ -66,6 +76,12 @@ struct SqliteObserverState {
     next_observer_id: usize,
 }
 
+impl SqliteObserverState {
+    fn allocate_observer_id(&mut self) -> usize {
+        allocate_observer_id(&mut self.next_observer_id, &self.observers)
+    }
+}
+
 /// A SQLite-backed key-value store.
 #[derive(Clone)]
 pub struct SqliteKvStore {
@@ -96,7 +112,10 @@ impl JsonKvStore {
     pub fn open_at(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
 
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
             std::fs::create_dir_all(parent)
                 .map_err(|source| Error::io(parent.to_path_buf(), source))?;
         }
@@ -109,7 +128,6 @@ impl JsonKvStore {
                 values,
                 observers: HashMap::new(),
                 next_observer_id: 0,
-                generation: 0,
             })),
         })
     }
@@ -140,7 +158,10 @@ impl SqliteKvStore {
     pub fn open_at(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
 
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
             std::fs::create_dir_all(parent)
                 .map_err(|source| Error::io(parent.to_path_buf(), source))?;
         }
@@ -222,9 +243,18 @@ impl KvStore for JsonKvStore {
                 return Ok(());
             }
 
-            state.values.insert(key.to_string(), serialized.clone());
-            state.generation += 1;
-            persist_values(&self.path, &state.values)?;
+            let previous = state.values.insert(key.to_string(), serialized.clone());
+            if let Err(error) = persist_values(&self.path, &state.values) {
+                match previous {
+                    Some(previous) => {
+                        state.values.insert(key.to_string(), previous);
+                    }
+                    None => {
+                        state.values.remove(key);
+                    }
+                }
+                return Err(error);
+            }
 
             state
                 .observers
@@ -245,9 +275,13 @@ impl KvStore for JsonKvStore {
                 return Ok(false);
             }
 
-            state.values.remove(key);
-            state.generation += 1;
-            persist_values(&self.path, &state.values)?;
+            let Some(previous) = state.values.remove(key) else {
+                return Ok(false);
+            };
+            if let Err(error) = persist_values(&self.path, &state.values) {
+                state.values.insert(key.to_string(), previous);
+                return Err(error);
+            }
 
             state
                 .observers
@@ -281,8 +315,7 @@ impl KvStore for JsonKvStore {
         let observer_id;
         let current_value = {
             let mut state = self.state.lock();
-            observer_id = state.next_observer_id;
-            state.next_observer_id += 1;
+            observer_id = state.allocate_observer_id();
             state
                 .observers
                 .entry(key.clone())
@@ -399,8 +432,7 @@ impl KvStore for SqliteKvStore {
             let connection = self.connection.lock();
             let current_value = load_value_from_connection(&connection, &key).ok().flatten();
             let mut state = self.observers.lock();
-            let observer_id = state.next_observer_id;
-            state.next_observer_id += 1;
+            let observer_id = state.allocate_observer_id();
             state
                 .observers
                 .entry(key.clone())
@@ -461,44 +493,85 @@ fn observers_for_key(
         .unwrap_or_default()
 }
 
+fn allocate_observer_id(
+    next_observer_id: &mut usize,
+    observers: &HashMap<String, BTreeMap<usize, Observer>>,
+) -> usize {
+    loop {
+        let candidate = *next_observer_id;
+        *next_observer_id = next_observer_id.checked_add(1).unwrap_or(0);
+        if observers
+            .values()
+            .all(|observers| !observers.contains_key(&candidate))
+        {
+            return candidate;
+        }
+    }
+}
+
 fn load_values(path: &Path) -> Result<BTreeMap<String, Value>> {
     if !path.exists() {
         return Ok(BTreeMap::new());
     }
 
+    let metadata =
+        std::fs::metadata(path).map_err(|source| Error::io(path.to_path_buf(), source))?;
+    ensure_json_store_size(metadata.len())?;
     let contents = std::fs::read(path).map_err(|source| Error::io(path.to_path_buf(), source))?;
+    ensure_json_store_size(contents.len().try_into().unwrap_or(u64::MAX))?;
     Ok(serde_json::from_slice(&contents)?)
 }
 
+fn ensure_json_store_size(actual: u64) -> Result<()> {
+    if actual > MAX_JSON_STORE_BYTES {
+        Err(Error::JsonStoreTooLarge {
+            actual,
+            limit: MAX_JSON_STORE_BYTES,
+        })
+    } else {
+        Ok(())
+    }
+}
+
 fn persist_values(path: &Path, values: &BTreeMap<String, Value>) -> Result<()> {
-    if let Some(parent) = path.parent() {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         std::fs::create_dir_all(parent)
             .map_err(|source| Error::io(parent.to_path_buf(), source))?;
     }
 
     let temp_path = temporary_path(path);
     let contents = serde_json::to_vec(values)?;
-    let mut file =
-        File::create(&temp_path).map_err(|source| Error::io(temp_path.clone(), source))?;
-    file.write_all(&contents)
-        .map_err(|source| Error::io(temp_path.clone(), source))?;
-    file.flush()
-        .map_err(|source| Error::io(temp_path.clone(), source))?;
-    file.sync_all()
-        .map_err(|source| Error::io(temp_path.clone(), source))?;
-    std::fs::rename(&temp_path, path).map_err(|source| Error::io(path.to_path_buf(), source))?;
-    Ok(())
+    ensure_json_store_size(contents.len().try_into().unwrap_or(u64::MAX))?;
+    let result = (|| {
+        let mut file =
+            File::create(&temp_path).map_err(|source| Error::io(temp_path.clone(), source))?;
+        file.write_all(&contents)
+            .map_err(|source| Error::io(temp_path.clone(), source))?;
+        file.flush()
+            .map_err(|source| Error::io(temp_path.clone(), source))?;
+        file.sync_all()
+            .map_err(|source| Error::io(temp_path.clone(), source))?;
+        std::fs::rename(&temp_path, path)
+            .map_err(|source| Error::io(path.to_path_buf(), source))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    result
 }
 
 fn temporary_path(path: &Path) -> PathBuf {
+    static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
+
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("preferences.json");
-    let unique_suffix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
+    let unique_suffix = NEXT_TEMP_FILE_ID.fetch_add(1, Ordering::Relaxed);
 
     path.with_file_name(format!(
         "{file_name}.{}.{}.tmp",
@@ -517,7 +590,10 @@ mod tests {
     use serde::{Deserialize, Serialize};
     use tempfile::tempdir;
 
-    use super::{JsonKvStore, KvStore, SqliteKvStore, persist_values};
+    use super::{
+        JsonKvStore, KvStore, MAX_JSON_STORE_BYTES, SqliteKvStore, ensure_json_store_size,
+        persist_values,
+    };
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct Preferences {
@@ -667,5 +743,32 @@ mod tests {
                 recent_ids: vec![1, 2, 3],
             })
         );
+    }
+
+    #[test]
+    fn json_store_rolls_memory_back_when_persistence_fails() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("preferences.json");
+        let store = JsonKvStore::open_at(&path).unwrap();
+
+        std::fs::create_dir(&path).unwrap();
+        assert!(store.set("theme", &"dark").is_err());
+        assert_eq!(store.get::<String>("theme").unwrap(), None);
+
+        std::fs::remove_dir(&path).unwrap();
+        store.set("theme", &"dark").unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(store.remove("theme").is_err());
+        assert_eq!(
+            store.get::<String>("theme").unwrap().as_deref(),
+            Some("dark")
+        );
+    }
+
+    #[test]
+    fn json_store_size_limit_is_checked_without_allocation() {
+        ensure_json_store_size(MAX_JSON_STORE_BYTES).unwrap();
+        assert!(ensure_json_store_size(MAX_JSON_STORE_BYTES + 1).is_err());
     }
 }

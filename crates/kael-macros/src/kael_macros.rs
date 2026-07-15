@@ -11,7 +11,9 @@ mod test;
 mod derive_inspector_reflection;
 
 use proc_macro::TokenStream;
-use syn::{DeriveInput, Ident};
+use proc_macro_crate::{FoundCrate, crate_name};
+use quote::format_ident;
+use syn::{DeriveInput, Ident, parse_quote};
 
 /// `Action` derive macro - see the trait documentation for details.
 #[proc_macro_derive(Action, attributes(action))]
@@ -154,6 +156,8 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
 /// test harness (`cargo test` or `cargo-nextest`).
 ///
 /// ```
+/// # extern crate kael_renamed as kael;
+/// # use kael::TestAppContext;
 /// #[kael::test]
 /// async fn test_foo(mut cx: &TestAppContext) { }
 /// ```
@@ -210,14 +214,48 @@ pub fn derive_inspector_reflection(_args: TokenStream, input: TokenStream) -> To
     derive_inspector_reflection::derive_inspector_reflection(_args, input)
 }
 
-pub(crate) fn get_simple_attribute_field(ast: &DeriveInput, name: &'static str) -> Option<Ident> {
-    match &ast.data {
-        syn::Data::Struct(data_struct) => data_struct
-            .fields
-            .iter()
-            .find(|field| field.attrs.iter().any(|attr| attr.path().is_ident(name)))
-            .map(|field| field.ident.clone().unwrap()),
-        syn::Data::Enum(_) => None,
-        syn::Data::Union(_) => None,
+pub(crate) fn get_simple_attribute_field(
+    ast: &DeriveInput,
+    name: &'static str,
+) -> syn::Result<Option<Ident>> {
+    let syn::Data::Struct(data_struct) = &ast.data else {
+        return Ok(None);
+    };
+    let mut matching = data_struct
+        .fields
+        .iter()
+        .filter(|field| field.attrs.iter().any(|attr| attr.path().is_ident(name)));
+    let Some(field) = matching.next() else {
+        return Ok(None);
+    };
+    if let Some(duplicate) = matching.next() {
+        return Err(syn::Error::new_spanned(
+            duplicate,
+            format!("only one field may be marked #[{name}]"),
+        ));
+    }
+    field.ident.clone().map(Some).ok_or_else(|| {
+        syn::Error::new_spanned(
+            field,
+            format!("#[{name}] must be placed on a named struct field"),
+        )
+    })
+}
+
+pub(crate) fn kael_crate_path() -> syn::Result<syn::Path> {
+    match crate_name("kael").map_err(|error| {
+        syn::Error::new(
+            proc_macro2::Span::call_site(),
+            format!("could not locate the kael dependency: {error}"),
+        )
+    })? {
+        // Examples and integration targets belong to the `kael` package, so
+        // `proc_macro_crate` reports `Itself` even though their `crate` root is
+        // not the library. The library exposes this alias for its own derives.
+        FoundCrate::Itself => Ok(parse_quote!(::kael)),
+        FoundCrate::Name(name) => {
+            let ident = format_ident!("{}", name.replace('-', "_"));
+            Ok(parse_quote!(::#ident))
+        }
     }
 }

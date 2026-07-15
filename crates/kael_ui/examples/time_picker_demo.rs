@@ -19,7 +19,7 @@ impl TimePickerDemo {
             state.set_format(TimeFormat::Hour12, cx);
             state
         });
-        let time_24h = cx.new(|cx| TimePickerState::new(cx));
+        let time_24h = cx.new(TimePickerState::new);
         let time_with_seconds = cx.new(|cx| {
             let mut state = TimePickerState::new(cx);
             state.set_show_seconds(true, cx);
@@ -166,15 +166,16 @@ impl Render for TimePickerDemo {
     }
 }
 
-fn main() {
-    Application::new().run(|cx: &mut App| {
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    Application::try_new()?.run(|cx: &mut App| {
         kael_ui::init(cx);
         install_theme(cx, Theme::dark());
 
         let bounds = Bounds::centered(None, size(px(500.0), px(500.0)), cx);
-        cx.open_window(
+        if let Err(error) = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_min_size: Some(size(px(420.0), px(460.0))),
                 titlebar: Some(TitlebarOptions {
                     title: Some("Time Picker Demo".into()),
                     appears_transparent: false,
@@ -182,10 +183,14 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_, cx| cx.new(|cx| TimePickerDemo::new(cx)),
-        )
-        .unwrap();
+            |_, cx| cx.new(TimePickerDemo::new),
+        ) {
+            eprintln!("failed to open the time picker demo window: {error}");
+            cx.quit();
+            return;
+        }
 
         cx.activate(true);
     });
+    Ok(())
 }

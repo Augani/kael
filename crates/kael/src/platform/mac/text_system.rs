@@ -289,6 +289,11 @@ impl MacTextSystemState {
                 }
             }
 
+            let Some(postscript_name) = font.postscript_name() else {
+                log::error!("font '{}' has no PostScript name", font.full_name());
+                continue;
+            };
+
             // We've seen a number of panics in production caused by calling font.properties()
             // which unwraps a downcast to CFNumber. This is an attempt to avoid the panic,
             // and to try and identify the incalcitrant font.
@@ -311,16 +316,12 @@ impl MacTextSystemState {
                         .downcast::<CFNumber>()
                         .is_some())
             } {
-                log::error!(
-                    "Failed to read traits for font {:?}",
-                    font.postscript_name().unwrap()
-                );
+                log::error!("Failed to read traits for font {postscript_name:?}");
                 continue;
             }
 
             let font_id = FontId(self.fonts.len());
             font_ids.push(font_id);
-            let postscript_name = font.postscript_name().unwrap();
             self.font_ids_by_postscript_name
                 .insert(postscript_name.clone(), font_id);
             self.postscript_names_by_font_id
@@ -331,11 +332,15 @@ impl MacTextSystemState {
     }
 
     fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>> {
-        Ok(self.fonts[font_id.0].advance(glyph_id.0)?.into())
+        let font = self
+            .fonts
+            .get(font_id.0)
+            .ok_or_else(|| anyhow!("unknown macOS font id {}", font_id.0))?;
+        Ok(font.advance(glyph_id.0)?.into())
     }
 
     fn glyph_for_char(&self, font_id: FontId, ch: char) -> Option<GlyphId> {
-        self.fonts[font_id.0].glyph_for_char(ch).map(GlyphId)
+        self.fonts.get(font_id.0)?.glyph_for_char(ch).map(GlyphId)
     }
 
     fn id_for_native_font(&mut self, requested_font: CTFont) -> FontId {
@@ -403,7 +408,14 @@ impl MacTextSystemState {
     }
 
     fn raster_bounds(&self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
-        let font = &self.fonts[params.font_id.0];
+        anyhow::ensure!(
+            params.scale_factor.is_finite() && params.scale_factor > 0.0,
+            "glyph scale factor must be finite and positive"
+        );
+        let font = self
+            .fonts
+            .get(params.font_id.0)
+            .ok_or_else(|| anyhow!("unknown macOS font id {}", params.font_id.0))?;
         let scale = Transform2F::from_scale(params.scale_factor);
         Ok(font
             .raster_bounds(
@@ -421,23 +433,50 @@ impl MacTextSystemState {
         params: &RenderGlyphParams,
         glyph_bounds: Bounds<DevicePixels>,
     ) -> Result<(Size<DevicePixels>, Vec<u8>)> {
-        if glyph_bounds.size.width.0 == 0 || glyph_bounds.size.height.0 == 0 {
+        if glyph_bounds.size.width.0 <= 0 || glyph_bounds.size.height.0 <= 0 {
             anyhow::bail!("glyph bounds are empty");
         } else {
             // Add an extra pixel when the subpixel variant isn't zero to make room for anti-aliasing.
-            let mut bitmap_size = glyph_bounds.size;
-            if params.subpixel_variant.x > 0 {
-                bitmap_size.width += DevicePixels(1);
-            }
-            if params.subpixel_variant.y > 0 {
-                bitmap_size.height += DevicePixels(1);
-            }
-            let bitmap_size = bitmap_size;
+            let width = glyph_bounds
+                .size
+                .width
+                .0
+                .checked_add(i32::from(params.subpixel_variant.x > 0))
+                .ok_or_else(|| anyhow!("glyph width overflowed"))?;
+            let height = glyph_bounds
+                .size
+                .height
+                .0
+                .checked_add(i32::from(params.subpixel_variant.y > 0))
+                .ok_or_else(|| anyhow!("glyph height overflowed"))?;
+            anyhow::ensure!(
+                width <= crate::MAX_ATLAS_TEXTURE_DIMENSION as i32
+                    && height <= crate::MAX_ATLAS_TEXTURE_DIMENSION as i32,
+                "glyph bitmap exceeds safe texture dimensions"
+            );
+            let bitmap_size = size(DevicePixels(width), DevicePixels(height));
+            let bytes_per_pixel =
+                if params.is_emoji || params.raster_mode == GlyphRasterMode::Subpixel {
+                    4usize
+                } else {
+                    1usize
+                };
+            let byte_len = width
+                .try_into()
+                .ok()
+                .and_then(|width: usize| width.checked_mul(height as usize))
+                .and_then(|pixels| pixels.checked_mul(bytes_per_pixel))
+                .filter(|bytes| *bytes <= 64 * 1024 * 1024)
+                .ok_or_else(|| anyhow!("glyph bitmap exceeds its memory budget"))?;
+            let font = self
+                .fonts
+                .get(params.font_id.0)
+                .ok_or_else(|| anyhow!("unknown macOS font id {}", params.font_id.0))?;
 
             let mut bytes;
             let cx;
             if params.is_emoji {
-                bytes = vec![0; bitmap_size.width.0 as usize * 4 * bitmap_size.height.0 as usize];
+                bytes = vec![0; byte_len];
                 cx = CGContext::create_bitmap_context(
                     Some(bytes.as_mut_ptr() as *mut _),
                     bitmap_size.width.0 as usize,
@@ -448,7 +487,7 @@ impl MacTextSystemState {
                     kCGImageAlphaPremultipliedLast,
                 );
             } else if params.raster_mode == GlyphRasterMode::Subpixel {
-                bytes = vec![0; bitmap_size.width.0 as usize * 4 * bitmap_size.height.0 as usize];
+                bytes = vec![0; byte_len];
                 cx = CGContext::create_bitmap_context(
                     Some(bytes.as_mut_ptr() as *mut _),
                     bitmap_size.width.0 as usize,
@@ -459,7 +498,7 @@ impl MacTextSystemState {
                     kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little,
                 );
             } else {
-                bytes = vec![0; bitmap_size.width.0 as usize * bitmap_size.height.0 as usize];
+                bytes = vec![0; byte_len];
                 cx = CGContext::create_bitmap_context(
                     Some(bytes.as_mut_ptr() as *mut _),
                     bitmap_size.width.0 as usize,
@@ -504,8 +543,7 @@ impl MacTextSystemState {
             cx.set_should_subpixel_position_fonts(true);
             cx.set_allows_font_subpixel_quantization(false);
             cx.set_should_subpixel_quantize_fonts(false);
-            self.fonts[params.font_id.0]
-                .native_font()
+            font.native_font()
                 .clone_with_font_size(f32::from(params.font_size) as CGFloat)
                 .draw_glyphs(
                     &[params.glyph_id.0 as CGGlyph],
@@ -573,16 +611,41 @@ impl MacTextSystemState {
             let mut ix_converter = StringIndexConverter::new(&text);
             let mut last_font_run = None;
             for run in font_runs {
-                let text = &text[ix_converter.utf8_ix..][..run.len];
+                let Some(run_end) = ix_converter
+                    .utf8_ix
+                    .checked_add(run.len)
+                    .filter(|end| *end <= text.len() && text.is_char_boundary(*end))
+                else {
+                    log::error!("ignoring malformed macOS font run");
+                    break;
+                };
+                let Some(font) = self.fonts.get(run.font_id.0) else {
+                    log::error!("ignoring unknown macOS font id {}", run.font_id.0);
+                    break;
+                };
+                let run_text = &text[ix_converter.utf8_ix..run_end];
                 // if the fonts are the same, we need to disconnect the text with a ZWNJ
                 // to prevent core text from forming ligatures between them
                 let needs_zwnj = last_font_run.replace(run.font_id) == Some(run.font_id);
 
                 let n_zwnjs = self.zwnjs_scratch_space.len();
-                let utf16_start = ix_converter.utf16_ix + n_zwnjs * ZWNJ_SIZE_16;
-                ix_converter.advance_to_utf8_ix(ix_converter.utf8_ix + run.len);
+                let Some(utf16_start) = n_zwnjs
+                    .checked_mul(ZWNJ_SIZE_16)
+                    .and_then(|zwnjs| ix_converter.utf16_ix.checked_add(zwnjs))
+                else {
+                    log::error!("macOS text layout UTF-16 position overflowed");
+                    break;
+                };
+                ix_converter.advance_to_utf8_ix(run_end);
 
-                string.replace_str(&CFString::new(text), CFRange::init(utf16_start as isize, 0));
+                let Ok(utf16_start_native) = isize::try_from(utf16_start) else {
+                    log::error!("macOS text layout exceeds CoreText range limits");
+                    break;
+                };
+                string.replace_str(
+                    &CFString::new(run_text),
+                    CFRange::init(utf16_start_native, 0),
+                );
                 if needs_zwnj {
                     let zwnjs_pos = string.char_len();
                     self.zwnjs_scratch_space.push((n_zwnjs, zwnjs_pos as usize));
@@ -592,10 +655,16 @@ impl MacTextSystemState {
                     );
                 }
                 let utf16_end = string.char_len() as usize;
+                let Some(utf16_len) = utf16_end.checked_sub(utf16_start) else {
+                    log::error!("CoreText returned an invalid attributed-string range");
+                    break;
+                };
+                let Ok(utf16_len_native) = isize::try_from(utf16_len) else {
+                    log::error!("macOS text run exceeds CoreText range limits");
+                    break;
+                };
 
-                let cf_range =
-                    CFRange::init(utf16_start as isize, (utf16_end - utf16_start) as isize);
-                let font = &self.fonts[run.font_id.0];
+                let cf_range = CFRange::init(utf16_start_native, utf16_len_native);
 
                 let font_metrics = font.metrics();
                 let font_scale = font_size.0 / font_metrics.units_per_em as f32;
@@ -617,12 +686,14 @@ impl MacTextSystemState {
         let mut runs = <Vec<ShapedRun>>::with_capacity(glyph_runs.len() as usize);
         let mut ix_converter = StringIndexConverter::new(text);
         for run in glyph_runs.into_iter() {
-            let attributes = run.attributes().unwrap();
-            let font = unsafe {
-                attributes
-                    .get(kCTFontAttributeName)
-                    .downcast::<CTFont>()
-                    .unwrap()
+            let Some(attributes) = run.attributes() else {
+                log::error!("CoreText glyph run has no attributes");
+                continue;
+            };
+            let Some(font) = (unsafe { attributes.get(kCTFontAttributeName).downcast::<CTFont>() })
+            else {
+                log::error!("CoreText glyph run has no font attribute");
+                continue;
             };
             let font_id = self.id_for_native_font(font);
 
@@ -633,7 +704,8 @@ impl MacTextSystemState {
                         font_id,
                         glyphs: Vec::with_capacity(run.glyph_count().try_into().unwrap_or(0)),
                     });
-                    &mut runs.last_mut().unwrap().glyphs
+                    let index = runs.len() - 1;
+                    &mut runs[index].glyphs
                 }
             };
             for ((&glyph_id, position), &glyph_utf16_ix) in run
@@ -642,7 +714,10 @@ impl MacTextSystemState {
                 .zip(run.positions().iter())
                 .zip(run.string_indices().iter())
             {
-                let mut glyph_utf16_ix = usize::try_from(glyph_utf16_ix).unwrap();
+                let Ok(mut glyph_utf16_ix) = usize::try_from(glyph_utf16_ix) else {
+                    log::error!("CoreText returned a negative string index");
+                    continue;
+                };
                 let r = self
                     .zwnjs_scratch_space
                     .binary_search_by(|&(_, it)| it.cmp(&glyph_utf16_ix));
@@ -650,7 +725,16 @@ impl MacTextSystemState {
                     // this glyph is a ZWNJ, skip it
                     Ok(_) => continue,
                     // adjust the index to account for the ZWNJs we've inserted
-                    Err(idx) => glyph_utf16_ix -= idx * ZWNJ_SIZE_16,
+                    Err(idx) => {
+                        let Some(adjustment) = idx.checked_mul(ZWNJ_SIZE_16) else {
+                            continue;
+                        };
+                        let Some(adjusted) = glyph_utf16_ix.checked_sub(adjustment) else {
+                            log::error!("CoreText glyph index precedes inserted separators");
+                            continue;
+                        };
+                        glyph_utf16_ix = adjusted;
+                    }
                 }
                 if ix_converter.utf16_ix > glyph_utf16_ix {
                     // We cannot reuse current index converter, as it can only seek forward. Restart the search.
@@ -838,7 +922,7 @@ impl From<FontStyle> for FontkitStyle {
 // This is the same version as `core_text` has without `expect` calls.
 mod lenient_font_attributes {
     use core_foundation::{
-        base::{CFRetain, CFType, TCFType},
+        base::{CFType, TCFType},
         string::{CFString, CFStringRef},
     };
     use core_text::font_descriptor::{
@@ -860,17 +944,7 @@ mod lenient_font_attributes {
             }
 
             let value = CFType::wrap_under_create_rule(value);
-            assert!(value.instance_of::<CFString>());
-            let s = wrap_under_get_rule(value.as_CFTypeRef() as CFStringRef);
-            Some(s.to_string())
-        }
-    }
-
-    unsafe fn wrap_under_get_rule(reference: CFStringRef) -> CFString {
-        unsafe {
-            assert!(!reference.is_null(), "Attempted to create a NULL object.");
-            let reference = CFRetain(reference as *const ::std::os::raw::c_void) as CFStringRef;
-            TCFType::wrap_under_create_rule(reference)
+            Some(value.downcast_into::<CFString>()?.to_string())
         }
     }
 }

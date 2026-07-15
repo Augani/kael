@@ -1,7 +1,7 @@
 use std::{
     backtrace::Backtrace,
     fs,
-    io::Write,
+    io::{Read as _, Write as _},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -16,6 +16,11 @@ use crate::{CrashReport, OsInfo};
 type PanicHook = dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static;
 
 static NEXT_REPORT_ID: AtomicU64 = AtomicU64::new(1);
+const MAX_REPORT_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_PANIC_MESSAGE_BYTES: usize = 1024 * 1024;
+const MAX_BACKTRACE_BYTES: usize = 6 * 1024 * 1024;
+const MAX_PENDING_REPORTS_PER_BATCH: usize = 256;
+const MAX_CRASH_ENDPOINT_BYTES: usize = 16 * 1024;
 
 /// A crash reporter that captures Rust panics, persists them to disk, and
 /// attempts to submit them on the next launch.
@@ -62,6 +67,8 @@ impl CrashReporter {
                 reports_dir.display()
             )
         })?;
+        validate_real_reports_dir(&reports_dir)?;
+        restrict_reports_dir_permissions(&reports_dir)?;
 
         Ok(Self {
             reports_dir,
@@ -92,14 +99,19 @@ impl CrashReporter {
     /// `CrashReport` JSON file to the reports directory, and then chains
     /// to any previously-installed hook.
     pub fn install_hook(&mut self) {
+        if self.previous_hook.is_some() {
+            return;
+        }
         let reports_dir = self.reports_dir.clone();
         let previous: Arc<PanicHook> = std::panic::take_hook().into();
         self.previous_hook = Some(previous.clone());
 
         std::panic::set_hook(Box::new(move |info| {
-            let report = capture_crash_report(info);
-            let _ = write_crash_report(&reports_dir, &report);
-            previous(info);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let report = capture_crash_report(info);
+                let _ = write_crash_report(&reports_dir, &report);
+            }));
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| previous(info)));
         }));
     }
 
@@ -128,8 +140,13 @@ impl CrashReporter {
         })? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            if entry.file_type()?.is_file()
+                && path.extension().and_then(|e| e.to_str()) == Some("json")
+            {
                 reports.push(path);
+                if reports.len() == MAX_PENDING_REPORTS_PER_BATCH {
+                    break;
+                }
             }
         }
 
@@ -147,23 +164,33 @@ impl CrashReporter {
             .endpoint
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("no crash report endpoint configured"))?;
+        validate_crash_endpoint(endpoint)?;
         let client = self
             .http_client
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("no HTTP client configured for crash reporter"))?;
 
         for path in self.pending_reports()? {
-            let json = fs::read_to_string(&path)
-                .with_context(|| format!("failed to read crash report: {}", path.display()))?;
+            let json = read_crash_report(&path)?;
 
             let response = client
                 .post_json(endpoint, json.into())
                 .await
                 .with_context(|| format!("failed to submit crash report: {}", path.display()))?;
 
-            if response.status().is_success() {
-                let _ = fs::remove_file(&path);
+            if !response.status().is_success() {
+                anyhow::bail!(
+                    "crash report submission returned HTTP {} for {}",
+                    response.status(),
+                    path.display()
+                );
             }
+            fs::remove_file(&path).with_context(|| {
+                format!(
+                    "failed to remove submitted crash report: {}",
+                    path.display()
+                )
+            })?;
         }
 
         Ok(())
@@ -285,8 +312,9 @@ pub fn capture_crash_report(info: &std::panic::PanicHookInfo<'_>) -> CrashReport
         .cloned()
         .or_else(|| info.payload().downcast_ref::<&str>().map(|s| s.to_string()))
         .unwrap_or_else(|| "unknown panic".to_string());
+    let message = truncate_crash_text(message, MAX_PANIC_MESSAGE_BYTES);
 
-    let backtrace = format!("{}", Backtrace::capture());
+    let backtrace = truncate_crash_text(format!("{}", Backtrace::capture()), MAX_BACKTRACE_BYTES);
 
     CrashReport {
         message,
@@ -298,34 +326,70 @@ pub fn capture_crash_report(info: &std::panic::PanicHookInfo<'_>) -> CrashReport
 
 /// Write a crash report JSON file to the given directory.
 pub fn write_crash_report(dir: &Path, report: &CrashReport) -> Result<PathBuf> {
+    fs::create_dir_all(dir).with_context(|| {
+        format!(
+            "failed to create crash reports directory: {}",
+            dir.display()
+        )
+    })?;
+    validate_real_reports_dir(dir)?;
+    restrict_reports_dir_permissions(dir)?;
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    let sequence = NEXT_REPORT_ID.fetch_add(1, Ordering::Relaxed);
+    let sequence = NEXT_REPORT_ID
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(1)
+        })
+        .map_err(|_| anyhow::anyhow!("crash report identifier space exhausted"))?;
 
     let filename = format!("crash_report_{timestamp}_{sequence}.json");
     let path = dir.join(&filename);
     let temp_path = path.with_extension("json.tmp");
 
     let json = serde_json::to_string_pretty(report).context("failed to serialize crash report")?;
-    let mut file = fs::File::create(&temp_path).with_context(|| {
+    anyhow::ensure!(
+        json.len() as u64 <= MAX_REPORT_BYTES,
+        "serialized crash report exceeds {MAX_REPORT_BYTES} byte limit"
+    );
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temp_path).with_context(|| {
         format!(
             "failed to create temporary crash report file: {}",
             temp_path.display()
         )
     })?;
-    file.write_all(json.as_bytes())
-        .with_context(|| format!("failed to write crash report file: {}", temp_path.display()))?;
-    file.flush()
-        .with_context(|| format!("failed to flush crash report file: {}", temp_path.display()))?;
-    fs::rename(&temp_path, &path).with_context(|| {
+    let write_result = file
+        .write_all(json.as_bytes())
+        .with_context(|| format!("failed to write crash report file: {}", temp_path.display()))
+        .and_then(|()| {
+            file.sync_all().with_context(|| {
+                format!("failed to sync crash report file: {}", temp_path.display())
+            })
+        });
+    if let Err(error) = write_result {
+        drop(file);
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
+    drop(file);
+    if let Err(error) = fs::rename(&temp_path, &path).with_context(|| {
         format!(
             "failed to finalize crash report file from {} to {}",
             temp_path.display(),
             path.display()
         )
-    })?;
+    }) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
 
     Ok(path)
 }
@@ -351,8 +415,12 @@ fn validate_crash_app_id(app_id: &str) -> Result<()> {
         "crash reporter app id cannot be longer than 128 bytes: {app_id:?}"
     );
     anyhow::ensure!(
-        !app_id.contains('/') && !app_id.contains('\\'),
-        "crash reporter app id cannot contain path separators: {app_id:?}"
+        app_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+            && app_id != "."
+            && app_id != "..",
+        "crash reporter app id contains invalid path characters: {app_id:?}"
     );
     anyhow::ensure!(
         !app_id.chars().any(char::is_control),
@@ -389,18 +457,124 @@ fn validate_crash_endpoint(endpoint: &str) -> Result<()> {
         "crash report endpoint cannot have leading or trailing whitespace"
     );
     anyhow::ensure!(
+        endpoint.len() <= MAX_CRASH_ENDPOINT_BYTES,
+        "crash report endpoint exceeds {MAX_CRASH_ENDPOINT_BYTES} bytes"
+    );
+    anyhow::ensure!(
         !endpoint.chars().any(char::is_control),
         "crash report endpoint cannot contain control characters"
     );
     let parsed = http_client::Url::parse(endpoint).context("crash report endpoint is invalid")?;
     anyhow::ensure!(
-        matches!(parsed.scheme(), "http" | "https"),
-        "crash report endpoint must use http or https"
+        parsed.scheme() == "https",
+        "crash report endpoint must use https"
     );
     anyhow::ensure!(
         parsed.host_str().is_some(),
         "crash report endpoint must include a host"
     );
+    anyhow::ensure!(
+        parsed.username().is_empty() && parsed.password().is_none(),
+        "crash report endpoint cannot contain credentials"
+    );
+    anyhow::ensure!(
+        parsed.fragment().is_none(),
+        "crash report endpoint cannot contain a fragment"
+    );
+    Ok(())
+}
+
+fn truncate_crash_text(mut text: String, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut boundary = max_bytes;
+    while !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    text.truncate(boundary);
+    text
+}
+
+fn read_crash_report(path: &Path) -> Result<String> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect crash report: {}", path.display()))?;
+    anyhow::ensure!(
+        metadata.file_type().is_file(),
+        "crash report must be a regular file: {}",
+        path.display()
+    );
+    anyhow::ensure!(
+        metadata.len() <= MAX_REPORT_BYTES,
+        "crash report exceeds {MAX_REPORT_BYTES} byte limit: {}",
+        path.display()
+    );
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("failed to open crash report: {}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("failed to inspect open crash report: {}", path.display()))?;
+    anyhow::ensure!(
+        metadata.is_file(),
+        "crash report must be a regular file: {}",
+        path.display()
+    );
+    anyhow::ensure!(
+        metadata.len() <= MAX_REPORT_BYTES,
+        "crash report exceeds {MAX_REPORT_BYTES} byte limit: {}",
+        path.display()
+    );
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    std::io::Read::by_ref(&mut file)
+        .take(MAX_REPORT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("failed to read crash report: {}", path.display()))?;
+    anyhow::ensure!(
+        bytes.len() as u64 <= MAX_REPORT_BYTES,
+        "crash report exceeds {MAX_REPORT_BYTES} byte limit: {}",
+        path.display()
+    );
+    String::from_utf8(bytes).context("crash report is not valid UTF-8")
+}
+
+fn validate_real_reports_dir(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path).with_context(|| {
+        format!(
+            "failed to inspect crash reports directory: {}",
+            path.display()
+        )
+    })?;
+    anyhow::ensure!(
+        metadata.file_type().is_dir(),
+        "crash reports path must be a real directory: {}",
+        path.display()
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+fn restrict_reports_dir_permissions(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).with_context(|| {
+        format!(
+            "failed to secure crash reports directory: {}",
+            path.display()
+        )
+    })
+}
+
+#[cfg(not(unix))]
+fn restrict_reports_dir_permissions(_path: &Path) -> Result<()> {
     Ok(())
 }
 
@@ -466,6 +640,52 @@ mod tests {
     }
 
     #[test]
+    fn pending_reports_are_bounded_per_submission_batch() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "kael_crash_batch_{}_{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir(&temp_dir).unwrap();
+        for index in 0..(MAX_PENDING_REPORTS_PER_BATCH + 10) {
+            fs::write(
+                temp_dir.join(format!("crash_report_{index:04}.json")),
+                b"{}",
+            )
+            .unwrap();
+        }
+        let reporter = CrashReporter::with_reports_dir(temp_dir.clone()).unwrap();
+
+        let pending = reporter.pending_reports().unwrap();
+        assert_eq!(pending.len(), MAX_PENDING_REPORTS_PER_BATCH);
+        fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn crash_reporter_rejects_path_like_app_ids() {
+        assert!(CrashReporter::new("../escape").is_err());
+        assert!(CrashReporter::new("nested/app").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pending_reports_ignore_symlinks() {
+        use std::os::unix::fs::symlink;
+        let temp_dir = std::env::temp_dir().join(format!(
+            "kael_crash_symlink_{}_{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir(&temp_dir).unwrap();
+        let target = temp_dir.join("target.json");
+        fs::write(&target, b"{}").unwrap();
+        symlink(&target, temp_dir.join("linked.json")).unwrap();
+        let reporter = CrashReporter::with_reports_dir(temp_dir.clone()).unwrap();
+        assert_eq!(reporter.pending_reports().unwrap(), vec![target]);
+        fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
     fn test_install_hook_preserves_previous_hook_for_uninstall() {
         let temp_dir = std::env::temp_dir().join(format!("gpui_crash_hook_{}", std::process::id()));
         let _ = fs::remove_dir_all(&temp_dir);
@@ -504,6 +724,56 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir);
 
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn crash_text_truncation_preserves_utf8_boundaries() {
+        let text = "🙂".repeat(10);
+        let truncated = truncate_crash_text(text, 9);
+        assert_eq!(truncated, "🙂🙂");
+        assert!(truncated.len() <= 9);
+    }
+
+    #[test]
+    fn crash_report_reads_reject_invalid_utf8() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "kael_crash_utf8_{}_{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir(&temp_dir).unwrap();
+        let path = temp_dir.join("crash_report_invalid.json");
+        fs::write(&path, [0xff, 0xfe]).unwrap();
+
+        let error = read_crash_report(&path).unwrap_err();
+        assert!(error.to_string().contains("not valid UTF-8"));
+        fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn crash_report_files_and_directory_are_private() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "kael_crash_permissions_{}_{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir(&temp_dir).unwrap();
+        let report = CrashReport {
+            message: "private panic".to_string(),
+            backtrace: "private trace".to_string(),
+            os_info: collect_os_info(),
+            app_version: None,
+        };
+        let path = write_crash_report(&temp_dir, &report).unwrap();
+
+        let directory_mode = fs::metadata(&temp_dir).unwrap().permissions().mode() & 0o777;
+        let file_mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(directory_mode, 0o700);
+        assert_eq!(file_mode, 0o600);
+        fs::remove_dir_all(temp_dir).unwrap();
     }
 
     #[test]
@@ -546,6 +816,24 @@ mod tests {
         assert!(
             CrashReporterBuilder::new("app")
                 .endpoint("file:///tmp/crashes")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            CrashReporterBuilder::new("app")
+                .endpoint("http://crashes.example.test")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            CrashReporterBuilder::new("app")
+                .endpoint("https://user:secret@crashes.example.test/reports")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            CrashReporterBuilder::new("app")
+                .endpoint("https://crashes.example.test/reports#private")
                 .validate()
                 .is_err()
         );

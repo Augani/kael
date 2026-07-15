@@ -1,4 +1,7 @@
-use crate::theme::use_theme;
+use crate::{
+    charts::{data_summary, finite_or_zero, paint_radial_segments},
+    theme::use_theme,
+};
 use kael::{prelude::FluentBuilder as _, *};
 
 const CHART_COLORS: [u32; 8] = crate::astryx::CHART_PALETTE;
@@ -22,7 +25,7 @@ impl PieChartSegment {
     pub fn new(label: impl Into<SharedString>, value: f64) -> Self {
         Self {
             label: label.into(),
-            value: value.max(0.0),
+            value: finite_or_zero(value).max(0.0),
             color: None,
         }
     }
@@ -76,6 +79,8 @@ pub struct PieChart {
     center_label: Option<SharedString>,
     size: PieChartSize,
     donut_thickness: f32,
+    start_angle_degrees: f32,
+    segment_gap_degrees: f32,
     style: StyleRefinement,
 }
 
@@ -89,6 +94,8 @@ impl PieChart {
             center_label: None,
             size: PieChartSize::Md,
             donut_thickness: 0.35,
+            start_angle_degrees: -90.0,
+            segment_gap_degrees: 0.0,
             style: StyleRefinement::default(),
         }
     }
@@ -127,7 +134,27 @@ impl PieChart {
     }
 
     pub fn donut_thickness(mut self, thickness: f32) -> Self {
-        self.donut_thickness = thickness.clamp(0.1, 0.9);
+        self.donut_thickness = if thickness.is_finite() {
+            thickness.clamp(0.1, 0.9)
+        } else {
+            0.4
+        };
+        self
+    }
+
+    /// Rotates the first segment; `-90` starts at twelve o'clock.
+    pub fn start_angle_degrees(mut self, angle: f32) -> Self {
+        self.start_angle_degrees = if angle.is_finite() { angle } else { -90.0 };
+        self
+    }
+
+    /// Adds angular spacing between segments, clamped to a restrained 0–12 degrees.
+    pub fn segment_gap_degrees(mut self, gap: f32) -> Self {
+        self.segment_gap_degrees = if gap.is_finite() {
+            gap.clamp(0.0, 12.0)
+        } else {
+            0.0
+        };
         self
     }
 
@@ -149,8 +176,22 @@ impl RenderOnce for PieChart {
         let show_legend = self.label_position == PieChartLabelPosition::Legend;
         let show_percentages = self.show_percentages;
         let user_style = self.style;
+        let description = data_summary(
+            if self.variant == PieChartVariant::Donut {
+                "Donut chart"
+            } else {
+                "Pie chart"
+            },
+            self.segments
+                .iter()
+                .map(|segment| (segment.label.as_ref(), segment.value)),
+        );
 
-        let total: f64 = self.segments.iter().map(|s| s.value).sum();
+        let total: f64 = self
+            .segments
+            .iter()
+            .map(|segment| finite_or_zero(segment.value).max(0.0))
+            .sum();
 
         let chart = if total == 0.0 || self.segments.is_empty() {
             render_empty_chart(chart_size)
@@ -162,6 +203,8 @@ impl RenderOnce for PieChart {
                 self.variant,
                 self.donut_thickness,
                 self.center_label.clone(),
+                self.start_angle_degrees,
+                self.segment_gap_degrees,
             )
         };
 
@@ -172,7 +215,17 @@ impl RenderOnce for PieChart {
         };
 
         div()
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Image)
+                    .label(if self.variant == PieChartVariant::Donut {
+                        "Donut chart"
+                    } else {
+                        "Pie chart"
+                    })
+                    .description(description),
+            )
             .flex()
+            .flex_wrap()
             .gap(px(24.0))
             .items_center()
             .child(chart)
@@ -192,6 +245,8 @@ fn render_pie_chart(
     variant: PieChartVariant,
     donut_thickness: f32,
     center_label: Option<SharedString>,
+    start_angle_degrees: f32,
+    segment_gap_degrees: f32,
 ) -> Div {
     let theme = use_theme();
     let size_f32 = pixels_to_f32(chart_size);
@@ -204,16 +259,22 @@ fn render_pie_chart(
     };
 
     let mut segment_data: Vec<(f32, f32, Hsla)> = Vec::new();
-    let mut current_angle: f32 = -std::f32::consts::FRAC_PI_2;
+    let mut current_angle = start_angle_degrees.to_radians();
+    let gap = segment_gap_degrees.to_radians();
 
     for (idx, segment) in segments.iter().enumerate() {
-        if segment.value <= 0.0 {
+        if !segment.value.is_finite() || segment.value <= 0.0 {
             continue;
         }
         let fraction = (segment.value / total) as f32;
         let sweep_angle = fraction * std::f32::consts::TAU;
         let color = segment.color.unwrap_or_else(|| default_color(idx));
-        segment_data.push((current_angle, sweep_angle, color));
+        let visible_gap = gap.min(sweep_angle * 0.5);
+        segment_data.push((
+            current_angle + visible_gap * 0.5,
+            (sweep_angle - visible_gap).max(0.0),
+            color,
+        ));
         current_angle += sweep_angle;
     }
 
@@ -227,38 +288,21 @@ fn render_pie_chart(
         );
     }
 
-    let ring_width = outer_radius - inner_radius;
-    let ring_count = ((ring_width / 3.0).max(1.0) as usize).min(20);
-
     let mut container = div()
         .size(chart_size)
         .rounded(px(9999.0))
         .relative()
-        .overflow_hidden();
-
-    for ring_idx in 0..ring_count {
-        let ring_radius = inner_radius + (ring_idx as f32 + 0.5) * (ring_width / ring_count as f32);
-        let circumference = std::f32::consts::TAU * ring_radius;
-        let dots_in_ring = (circumference / 4.0).max(16.0) as usize;
-
-        for i in 0..dots_in_ring {
-            let angle = -std::f32::consts::FRAC_PI_2
-                + (i as f32 / dots_in_ring as f32) * std::f32::consts::TAU;
-            let color = get_color_at_angle(angle, &segment_data);
-            let x = center + ring_radius * angle.cos() - 2.0;
-            let y = center + ring_radius * angle.sin() - 2.0;
-
-            container = container.child(
-                div()
-                    .absolute()
-                    .size(px(5.0))
-                    .rounded(px(9999.0))
-                    .bg(color)
-                    .left(px(x))
-                    .top(px(y)),
-            );
-        }
-    }
+        .overflow_hidden()
+        .child(
+            canvas_with_prepaint(
+                move |_bounds, _window, _cx| segment_data,
+                move |bounds, segments, window, _cx| {
+                    paint_radial_segments(bounds, &segments, window);
+                },
+            )
+            .absolute()
+            .inset_0(),
+        );
 
     if variant == PieChartVariant::Donut {
         let inner_size = inner_radius * 2.0 - 4.0;
@@ -288,26 +332,6 @@ fn render_pie_chart(
     }
 
     container
-}
-
-fn get_color_at_angle(angle: f32, segment_data: &[(f32, f32, Hsla)]) -> Hsla {
-    let normalized_angle = if angle < -std::f32::consts::FRAC_PI_2 {
-        angle + std::f32::consts::TAU
-    } else {
-        angle
-    };
-
-    for &(start_angle, sweep_angle, color) in segment_data {
-        let end_angle = start_angle + sweep_angle;
-        if normalized_angle >= start_angle && normalized_angle < end_angle {
-            return color;
-        }
-    }
-
-    segment_data
-        .last()
-        .map(|&(_, _, c)| c)
-        .unwrap_or(hsla(0.0, 0.0, 0.5, 1.0))
 }
 
 fn render_single_segment(
@@ -383,7 +407,7 @@ fn render_legend(segments: &[PieChartSegment], total: f64, show_percentages: boo
         .flex_col()
         .gap(px(8.0))
         .children(segments.iter().enumerate().filter_map(|(idx, segment)| {
-            if segment.value <= 0.0 {
+            if !segment.value.is_finite() || segment.value <= 0.0 {
                 return None;
             }
 

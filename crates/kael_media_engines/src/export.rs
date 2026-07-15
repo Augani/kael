@@ -98,11 +98,22 @@ pub fn decode_ppm(bytes: &[u8]) -> Option<Image> {
     if maxval != 255 {
         return None;
     }
-    // Exactly one whitespace byte separates the max value from the binary data.
+    // Exactly one whitespace sequence separates the max value from the binary data.
+    let separator = *bytes.get(pos)?;
+    if !separator.is_ascii_whitespace() {
+        return None;
+    }
     pos += 1;
+    if separator == b'\r' && bytes.get(pos) == Some(&b'\n') {
+        pos += 1;
+    }
     let pixel_count = (width as usize).checked_mul(height as usize)?;
-    let data = bytes.get(pos..pos.checked_add(pixel_count * 3)?)?;
-    let mut image = Image::new(width, height);
+    if pixel_count == 0 {
+        return None;
+    }
+    let data_len = pixel_count.checked_mul(3)?;
+    let data = bytes.get(pos..pos.checked_add(data_len)?)?;
+    let mut image = Image::try_new(width, height).ok()?;
     image.pixels = data
         .chunks_exact(3)
         .map(|rgb| {
@@ -121,14 +132,26 @@ pub fn decode_ppm(bytes: &[u8]) -> Option<Image> {
 /// audio export target, the [`mix_range`](crate::audio_mix::mix_range) counterpart to
 /// [`encode_ppm`]. Float samples are clamped to `-1.0..=1.0` and quantized to `i16`.
 pub fn encode_wav_pcm16(samples: &[f32], sample_rate: u32, channels: u16) -> Vec<u8> {
-    let bits_per_sample: u16 = 16;
-    let block_align = channels * (bits_per_sample / 8);
-    let byte_rate = sample_rate * block_align as u32;
-    let data_size = (samples.len() * 2) as u32;
+    try_encode_wav_pcm16(samples, sample_rate, channels).unwrap_or_default()
+}
 
-    let mut bytes = Vec::with_capacity(44 + data_size as usize);
+/// Checked form of [`encode_wav_pcm16`]. Returns `None` when the stream parameters or
+/// RIFF chunk sizes cannot be represented by the PCM-16 WAV format.
+pub fn try_encode_wav_pcm16(samples: &[f32], sample_rate: u32, channels: u16) -> Option<Vec<u8>> {
+    if sample_rate == 0 || channels == 0 || !samples.len().is_multiple_of(usize::from(channels)) {
+        return None;
+    }
+    let bits_per_sample: u16 = 16;
+    let block_align = channels.checked_mul(bits_per_sample / 8)?;
+    let byte_rate = sample_rate.checked_mul(u32::from(block_align))?;
+    let data_size = samples.len().checked_mul(2)?.try_into().ok()?;
+    let riff_size = 36u32.checked_add(data_size)?;
+
+    let capacity = 44usize.checked_add(data_size as usize)?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(capacity).ok()?;
     bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&(36 + data_size).to_le_bytes());
+    bytes.extend_from_slice(&riff_size.to_le_bytes());
     bytes.extend_from_slice(b"WAVE");
     bytes.extend_from_slice(b"fmt ");
     bytes.extend_from_slice(&16u32.to_le_bytes());
@@ -141,10 +164,11 @@ pub fn encode_wav_pcm16(samples: &[f32], sample_rate: u32, channels: u16) -> Vec
     bytes.extend_from_slice(b"data");
     bytes.extend_from_slice(&data_size.to_le_bytes());
     for &sample in samples {
-        let quantized = (sample.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+        let finite = if sample.is_finite() { sample } else { 0.0 };
+        let quantized = (finite.clamp(-1.0, 1.0) * 32767.0).round() as i16;
         bytes.extend_from_slice(&quantized.to_le_bytes());
     }
-    bytes
+    Some(bytes)
 }
 
 /// Decode a 16-bit PCM WAV file into `(samples, sample_rate, channels)` — the decode
@@ -155,10 +179,15 @@ pub fn decode_wav_pcm16(bytes: &[u8]) -> Option<(Vec<f32>, u32, u16)> {
     if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         return None;
     }
-    let mut offset = 12;
-    let mut format: Option<(u16, u32)> = None;
+    let riff_size = u32::from_le_bytes(bytes[4..8].try_into().ok()?) as usize;
+    let riff_end = 8usize.checked_add(riff_size)?;
+    if riff_end > bytes.len() || riff_end < 12 {
+        return None;
+    }
+    let mut offset: usize = 12;
+    let mut format: Option<(u16, u32, u16)> = None;
     let mut samples: Option<Vec<f32>> = None;
-    while offset + 8 <= bytes.len() {
+    while offset.checked_add(8)? <= riff_end {
         let id = &bytes[offset..offset + 4];
         let size = u32::from_le_bytes([
             bytes[offset + 4],
@@ -168,7 +197,7 @@ pub fn decode_wav_pcm16(bytes: &[u8]) -> Option<(Vec<f32>, u32, u16)> {
         ]) as usize;
         let body_start = offset + 8;
         let body_end = body_start.checked_add(size)?;
-        if body_end > bytes.len() {
+        if body_end > riff_end {
             return None;
         }
         let body = &bytes[body_start..body_end];
@@ -179,12 +208,24 @@ pub fn decode_wav_pcm16(bytes: &[u8]) -> Option<(Vec<f32>, u32, u16)> {
             let audio_format = u16::from_le_bytes([body[0], body[1]]);
             let channels = u16::from_le_bytes([body[2], body[3]]);
             let sample_rate = u32::from_le_bytes([body[4], body[5], body[6], body[7]]);
+            let byte_rate = u32::from_le_bytes([body[8], body[9], body[10], body[11]]);
+            let block_align = u16::from_le_bytes([body[12], body[13]]);
             let bits = u16::from_le_bytes([body[14], body[15]]);
-            if audio_format != 1 || bits != 16 {
+            let expected_align = channels.checked_mul(2)?;
+            if audio_format != 1
+                || bits != 16
+                || channels == 0
+                || sample_rate == 0
+                || block_align != expected_align
+                || byte_rate != sample_rate.checked_mul(u32::from(block_align))?
+            {
                 return None;
             }
-            format = Some((channels, sample_rate));
+            format = Some((channels, sample_rate, block_align));
         } else if id == b"data" {
+            if !body.len().is_multiple_of(2) {
+                return None;
+            }
             samples = Some(
                 body.chunks_exact(2)
                     .map(|pair| i16::from_le_bytes([pair[0], pair[1]]) as f32 / 32767.0)
@@ -192,10 +233,14 @@ pub fn decode_wav_pcm16(bytes: &[u8]) -> Option<(Vec<f32>, u32, u16)> {
             );
         }
         // RIFF chunks are word-aligned: skip a pad byte after an odd-sized chunk.
-        offset = body_end + (size & 1);
+        offset = body_end.checked_add(size & 1)?;
     }
-    let (channels, sample_rate) = format?;
-    Some((samples?, sample_rate, channels))
+    let (channels, sample_rate, block_align) = format?;
+    let samples = samples?;
+    if samples.len().checked_mul(2)? % usize::from(block_align) != 0 {
+        return None;
+    }
+    Some((samples, sample_rate, channels))
 }
 
 /// A fully exported timeline segment: one PPM video frame per timeline frame plus a single
@@ -365,6 +410,8 @@ mod tests {
         // Malformed input is rejected.
         assert!(decode_ppm(b"P3 plain ppm").is_none());
         assert!(decode_ppm(&encode_ppm(&image)[..5]).is_none());
+        assert!(decode_ppm(b"P6\n0 1\n255\n").is_none());
+        assert!(decode_ppm(b"P6\n1 1\n255X\0\0\0").is_none());
     }
 
     #[test]
@@ -423,7 +470,7 @@ mod tests {
 
     #[test]
     fn wav_pcm16_round_trips_through_encode_decode() {
-        let samples = vec![0.0, 0.5, -0.5, 1.0, -1.0];
+        let samples = vec![0.0, 0.5, -0.5, 1.0, -1.0, 0.25];
         let wav = encode_wav_pcm16(&samples, 44_100, 2);
         let (decoded, sample_rate, channels) = decode_wav_pcm16(&wav).unwrap();
         assert_eq!(sample_rate, 44_100);
@@ -438,6 +485,21 @@ mod tests {
         // Malformed input is rejected.
         assert!(decode_wav_pcm16(b"not a wav file at all").is_none());
         assert!(decode_wav_pcm16(&wav[..10]).is_none());
+    }
+
+    #[test]
+    fn wav_rejects_invalid_stream_parameters_and_headers() {
+        assert!(try_encode_wav_pcm16(&[0.0], 0, 1).is_none());
+        assert!(try_encode_wav_pcm16(&[0.0], 48_000, 0).is_none());
+        assert!(try_encode_wav_pcm16(&[0.0], 48_000, 2).is_none());
+
+        let mut wav = encode_wav_pcm16(&[0.0, 0.0], 48_000, 2);
+        wav[22..24].copy_from_slice(&0u16.to_le_bytes());
+        assert!(decode_wav_pcm16(&wav).is_none());
+
+        let mut truncated_riff = encode_wav_pcm16(&[0.0], 48_000, 1);
+        truncated_riff[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(decode_wav_pcm16(&truncated_riff).is_none());
     }
 
     #[test]

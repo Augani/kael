@@ -28,6 +28,44 @@ pub struct PlatformShareSupport {
     pub receiver_registration: bool,
 }
 
+impl PlatformShareSupport {
+    /// Number of destination families supported by the current backend.
+    pub fn supported_count(&self) -> usize {
+        [
+            self.mail,
+            self.messages,
+            self.airdrop,
+            self.clipboard,
+            self.social,
+            self.print,
+            self.receiver_registration,
+        ]
+        .into_iter()
+        .filter(|supported| *supported)
+        .count()
+    }
+
+    /// Whether no share destination family is currently available.
+    pub fn is_empty(&self) -> bool {
+        self.supported_count() == 0
+    }
+
+    /// Human-readable, content-safe support summary for logs and agents.
+    pub fn to_text(&self) -> String {
+        format!(
+            "share support: {} supported, mail {}, messages {}, airdrop {}, clipboard {}, social {}, print {}, receiver {}",
+            self.supported_count(),
+            self.mail,
+            self.messages,
+            self.airdrop,
+            self.clipboard,
+            self.social,
+            self.print,
+            self.receiver_registration
+        )
+    }
+}
+
 pub(crate) struct PlatformShareReceiver;
 
 #[cfg(target_os = "linux")]

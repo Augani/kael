@@ -4,6 +4,7 @@ use crate::components::icon::Icon;
 use crate::components::icon_source::IconSource;
 use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
+use std::panic::Location;
 use std::sync::Arc;
 
 pub struct BreadcrumbItem<T> {
@@ -68,6 +69,7 @@ impl<T> BreadcrumbItem<T> {
 
 #[derive(IntoElement)]
 pub struct Breadcrumbs<T: Clone + 'static> {
+    id: ElementId,
     items: Vec<BreadcrumbItem<T>>,
     variant: BreadcrumbsVariant,
     separator: SharedString,
@@ -77,8 +79,19 @@ pub struct Breadcrumbs<T: Clone + 'static> {
 }
 
 impl<T: Clone + 'static> Breadcrumbs<T> {
+    #[track_caller]
     pub fn new(_cx: &mut App) -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "breadcrumbs:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             items: Vec::new(),
             variant: BreadcrumbsVariant::default(),
             separator: "/".into(),
@@ -140,12 +153,14 @@ impl<T: Clone + 'static> RenderOnce for Breadcrumbs<T> {
             BreadcrumbsVariant::Supporting => px(12.0),
         };
         let separator = self.separator.clone();
+        let root_id = self.id;
+        let root_id_key = root_id.to_string();
 
         if self.items.is_empty() {
-            return div();
+            return div().into_any_element();
         }
 
-        let mut elements: Vec<kael::Div> = Vec::new();
+        let mut elements: Vec<AnyElement> = Vec::new();
         let on_click = self.on_click.clone();
 
         for (index, item) in self.items.iter().enumerate() {
@@ -154,17 +169,21 @@ impl<T: Clone + 'static> RenderOnce for Breadcrumbs<T> {
 
             if index > 0 {
                 let separator = div()
+                    .accessibility(AccessibilityAttributes::new(AccessibilityRole::Separator))
                     .flex()
                     .items_center()
                     .py(px(4.0))
                     .text_size(text_size)
                     .line_height(line_height)
                     .text_color(theme.tokens.muted_foreground)
-                    .child(separator.clone());
-                elements.push(separator);
+                    .child(StyledText::new(separator.clone()).accessibility_hidden(true));
+                elements.push(separator.into_any_element());
             }
 
             let mut breadcrumb_element = div()
+                .id(ElementId::Name(
+                    format!("{root_id_key}-item-{index}").into(),
+                ))
                 .flex()
                 .items_center()
                 .gap(px(4.0))
@@ -190,36 +209,70 @@ impl<T: Clone + 'static> RenderOnce for Breadcrumbs<T> {
             let is_current = item.is_current || is_last;
             if is_current {
                 breadcrumb_element = breadcrumb_element
+                    .accessibility(
+                        AccessibilityAttributes::new(AccessibilityRole::StaticText)
+                            .label(item.label.to_string()),
+                    )
                     .text_color(match self.variant {
                         BreadcrumbsVariant::Default => theme.tokens.foreground,
                         BreadcrumbsVariant::Supporting => theme.tokens.muted_foreground,
                     })
                     .font_weight(FontWeight::NORMAL)
-                    .child(item.label.clone());
+                    .child(StyledText::new(item.label.clone()).accessibility_hidden(true));
             } else {
                 let item_id_clone = item_id.clone();
                 let on_click_clone = on_click.clone();
+                let href = item.href.clone();
+                let actionable = href.is_some() || on_click_clone.is_some();
+                let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::Link)
+                    .label(item.label.to_string());
+                if actionable {
+                    accessibility = accessibility
+                        .actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]);
+                }
 
                 breadcrumb_element = breadcrumb_element
+                    .accessibility(accessibility)
                     .text_color(theme.tokens.muted_foreground)
-                    .cursor(CursorStyle::PointingHand)
                     .transition(theme.tokens.transition_fast)
-                    .hover(|style| style.underline())
-                    .on_mouse_down(MouseButton::Left, {
-                        let on_click_clone = on_click_clone.clone();
-                        let item_id_clone = item_id_clone.clone();
-                        move |_, window, cx| {
-                            if let Some(on_click) = on_click_clone.clone() {
+                    .when(actionable, |this| {
+                        this.focusable()
+                            .tab_index(index as isize)
+                            .tab_stop(true)
+                            .cursor(CursorStyle::PointingHand)
+                            .hover(|style| style.underline())
+                            .focus_visible(|style| style.underline())
+                    })
+                    .when(actionable, |this| {
+                        let activate = Arc::new(move |window: &mut Window, cx: &mut App| {
+                            if let Some(href) = href.as_ref() {
+                                let _ = cx.open_url(href.as_ref());
+                            }
+                            if let Some(on_click) = on_click_clone.as_ref() {
                                 on_click(&item_id_clone, window, cx);
                             }
-                        }
+                        });
+                        let activate_from_key = activate.clone();
+                        this.on_click(move |_, window, cx| activate(window, cx))
+                            .on_key_down(move |event, window, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    activate_from_key(window, cx);
+                                    cx.stop_propagation();
+                                    window.prevent_default();
+                                }
+                            })
                     })
-                    .child(item.label.clone());
+                    .child(StyledText::new(item.label.clone()).accessibility_hidden(true));
             }
 
-            elements.push(breadcrumb_element);
+            elements.push(breadcrumb_element.into_any_element());
         }
         div()
+            .id(root_id)
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group)
+                    .label(self.label.to_string()),
+            )
             .flex()
             .items_center()
             .flex_wrap()
@@ -228,7 +281,7 @@ impl<T: Clone + 'static> RenderOnce for Breadcrumbs<T> {
             .map(|this| {
                 let mut div = this;
                 div.style().refine(&user_style);
-                div
+                div.into_any_element()
             })
     }
 }

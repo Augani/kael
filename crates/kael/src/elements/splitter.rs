@@ -174,6 +174,55 @@ pub struct SplitterRenderState {
     pub focused: bool,
 }
 
+impl SplitterRenderState {
+    /// Returns true when the splitter is at the normalized minimum.
+    pub fn is_at_min(&self) -> bool {
+        self.percentage <= f64::EPSILON
+    }
+
+    /// Returns true when the splitter is at the normalized maximum.
+    pub fn is_at_max(&self) -> bool {
+        (1.0 - self.percentage).abs() <= f64::EPSILON
+    }
+
+    /// Human-readable orientation of the visible splitter rule.
+    pub fn orientation(&self) -> &'static str {
+        if self.vertical {
+            "vertical"
+        } else {
+            "horizontal"
+        }
+    }
+
+    /// Coarse splitter position class for content-safe diagnostics.
+    pub fn position_class(&self) -> &'static str {
+        if self.is_at_min() {
+            "min"
+        } else if self.is_at_max() {
+            "max"
+        } else if self.percentage < 0.5 {
+            "lower"
+        } else if self.percentage > 0.5 {
+            "upper"
+        } else {
+            "middle"
+        }
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "splitter_render_state(orientation={}, position_class={}, at_min={}, at_max={}, dragging={}, focused={})",
+            self.orientation(),
+            self.position_class(),
+            self.is_at_min(),
+            self.is_at_max(),
+            self.dragging,
+            self.focused
+        )
+    }
+}
+
 type SplitterCustomRenderer =
     Rc<dyn Fn(SplitterRenderState, Bounds<Pixels>, &mut Window, &mut App)>;
 
@@ -545,6 +594,7 @@ impl Element for Splitter {
             }
         });
 
+        let accessibility_id = window.next_anonymous_accessibility_id();
         window.register_accessibility_node_at(
             AccessibilityAttributes::new(AccessibilityRole::Separator)
                 .states(if is_focused {
@@ -563,7 +613,7 @@ impl Element for Splitter {
                     AccessibilityAction::Increment,
                     AccessibilityAction::Decrement,
                 ])
-                .to_node(crate::AccessibilityId::new()),
+                .to_node(accessibility_id),
             bounds,
         );
     }
@@ -830,5 +880,34 @@ mod tests {
         assert_eq!(value, 64.0);
         assert!(vertical);
         assert!(focused);
+    }
+
+    #[test]
+    fn splitter_render_state_summary_is_content_safe() {
+        let state = SplitterRenderState {
+            value: px(128.0),
+            min: px(0.0),
+            max: px(512.0),
+            vertical: false,
+            percentage: 0.25,
+            dragging: true,
+            focused: false,
+        };
+
+        assert_eq!(state.orientation(), "horizontal");
+        assert_eq!(state.position_class(), "lower");
+        assert!(!state.is_at_min());
+        assert!(!state.is_at_max());
+
+        let summary = state.to_text();
+        assert!(summary.contains("orientation=horizontal"));
+        assert!(summary.contains("position_class=lower"));
+        assert!(summary.contains("at_min=false"));
+        assert!(summary.contains("at_max=false"));
+        assert!(summary.contains("dragging=true"));
+        assert!(summary.contains("focused=false"));
+        assert!(!summary.contains("128"));
+        assert!(!summary.contains("512"));
+        assert!(!summary.contains("0.25"));
     }
 }

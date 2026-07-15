@@ -31,7 +31,8 @@ use objc2::runtime::{AnyClass, AnyObject, AnyProtocol, Bool, ClassBuilder, Sel};
 use objc2::{msg_send, sel};
 use objc2_app_kit::*;
 use objc2_foundation::{
-    NSInteger, NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSRect, NSSize, NSUInteger,
+    NSInteger, NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSRect, NSSize, NSString,
+    NSUInteger,
 };
 use parking_lot::Mutex;
 use raw_window_handle as rwh;
@@ -68,6 +69,10 @@ type Method2<A, B, R> = extern "C" fn(id, Sel, A, B) -> R;
 type Method3<A, B, C, R> = extern "C" fn(id, Sel, A, B, C) -> R;
 type Method4<A, B, C, D, R> = extern "C" fn(id, Sel, A, B, C, D) -> R;
 
+fn catch_platform_callback<T>(name: &'static str, fallback: T, callback: impl FnOnce() -> T) -> T {
+    crate::platform::catch_platform_callback("macOS", name, fallback, callback)
+}
+
 const YES: Bool = Bool::YES;
 const NO: Bool = Bool::NO;
 #[allow(non_upper_case_globals)]
@@ -75,6 +80,7 @@ const nil: id = ptr::null_mut();
 const NS_KEY_VALUE_OBSERVING_OPTION_NEW: NSUInteger = 1;
 const WK_MEDIA_PLAYBACK_TYPE_NONE: NSUInteger = 0;
 const WK_MEDIA_PLAYBACK_TYPE_ALL: NSUInteger = NSUInteger::MAX;
+const NS_ALERT_FIRST_BUTTON_RETURN: NSInteger = 1_000;
 
 static mut WINDOW_CLASS: *const Class = ptr::null();
 static mut PANEL_CLASS: *const Class = ptr::null();
@@ -89,6 +95,7 @@ unsafe fn lookup_class(name: &CStr) -> &'static AnyClass {
 }
 
 unsafe fn ivar_ptr<T: objc2::encode::Encode>(object: id, name: &str) -> *mut T {
+    assert!(!object.is_null(), "cannot access `{name}` on a null object");
     let name = CString::new(name).expect("ivar names cannot contain nul bytes");
     let object = unsafe { &*object };
     let ivar = object
@@ -1615,7 +1622,17 @@ fn ns_optional_shared_string(value: id) -> Option<SharedString> {
     }
 }
 
+fn alert_response_index(response: NSInteger, button_order: &[usize]) -> Option<usize> {
+    let ordinal = response.checked_sub(NS_ALERT_FIRST_BUTTON_RETURN)?;
+    let ordinal = usize::try_from(ordinal).ok()?;
+    button_order.get(ordinal).copied()
+}
+
 unsafe fn call_navigation_decision_handler(decision_handler: id, policy: NSInteger) {
+    if decision_handler.is_null() {
+        log::error!("WebKit provided no navigation decision handler");
+        return;
+    }
     unsafe {
         let decision_handler = &*(decision_handler as *const Block<dyn Fn(NSInteger)>);
         decision_handler.call((policy,));
@@ -1623,6 +1640,10 @@ unsafe fn call_navigation_decision_handler(decision_handler: id, policy: NSInteg
 }
 
 unsafe fn call_download_destination_handler(decision_handler: id, destination: id) {
+    if decision_handler.is_null() {
+        log::error!("WebKit provided no download destination handler");
+        return;
+    }
     unsafe {
         let decision_handler = &*(decision_handler as *const Block<dyn Fn(id)>);
         decision_handler.call((destination,));
@@ -1639,10 +1660,15 @@ fn resolve_mac_download_started(
     };
 
     let mut async_window = state.async_window.clone();
-    match async_window
-        .update(|window, cx| handler(url, Some(suggested_path.clone()), window, cx))
-        .unwrap_or(WebViewDownloadPolicy::Deny)
-    {
+    match catch_platform_callback(
+        "webview download started",
+        WebViewDownloadPolicy::Deny,
+        || {
+            async_window
+                .update(|window, cx| handler(url, Some(suggested_path.clone()), window, cx))
+                .unwrap_or(WebViewDownloadPolicy::Deny)
+        },
+    ) {
         WebViewDownloadPolicy::Allow => Some(suggested_path),
         WebViewDownloadPolicy::Deny => None,
         WebViewDownloadPolicy::SaveTo(destination) => {
@@ -1673,7 +1699,9 @@ fn dispatch_mac_download_completed(
         success,
     };
     let mut async_window = state.async_window.clone();
-    let _ = async_window.update(|window, cx| handler(event, window, cx));
+    catch_platform_callback("webview download completed", (), || {
+        let _ = async_window.update(|window, cx| handler(event, window, cx));
+    });
 }
 
 fn register_mac_download(delegate: id, download: id, url: SharedString) {
@@ -1723,11 +1751,15 @@ fn dispatch_mac_webview_drag_drop(
     };
 
     let mut async_window = state.async_window.clone();
-    Some(
-        async_window
-            .update(|window, cx| handler(event, window, cx))
-            .unwrap_or(WebViewDragDropPolicy::BlockBrowserDefault),
-    )
+    Some(catch_platform_callback(
+        "webview drag-and-drop",
+        WebViewDragDropPolicy::BlockBrowserDefault,
+        || {
+            async_window
+                .update(|window, cx| handler(event, window, cx))
+                .unwrap_or(WebViewDragDropPolicy::BlockBrowserDefault)
+        },
+    ))
 }
 
 fn webview_drag_paths(dragging_info: id) -> Vec<PathBuf> {
@@ -1756,6 +1788,9 @@ fn webview_drag_position(webview: id, dragging_info: id) -> (i32, i32) {
 }
 
 fn mac_webview_zoom_key(event: id) -> Option<MacWebViewZoomKey> {
+    if event.is_null() {
+        return None;
+    }
     let event = unsafe { &*(event as *const NSEvent) };
     let modifiers = event.modifierFlags();
     if !modifiers.contains(NSEventModifierFlags::Command)
@@ -1766,13 +1801,9 @@ fn mac_webview_zoom_key(event: id) -> Option<MacWebViewZoomKey> {
     }
 
     let chars = event.charactersIgnoringModifiers()?;
-    let chars_str = chars.UTF8String();
-    if chars_str.is_null() {
-        return None;
-    }
-    let chars = unsafe { CStr::from_ptr(chars_str) }.to_str().ok()?;
+    let chars = chars.to_string();
 
-    match chars {
+    match chars.as_str() {
         "=" | "+" => Some(MacWebViewZoomKey::In),
         "-" => Some(MacWebViewZoomKey::Out),
         "0" => Some(MacWebViewZoomKey::Reset),
@@ -1806,6 +1837,9 @@ fn apply_mac_webview_zoom_key(webview: id, key: MacWebViewZoomKey) {
 }
 
 fn apply_mac_webview_magnification(webview: id, event: id) {
+    if webview.is_null() || event.is_null() {
+        return;
+    }
     let event = unsafe { &*(event as *const NSEvent) };
     let delta = event.magnification();
     if !delta.is_finite() || delta.abs() <= f64::EPSILON {
@@ -3047,7 +3081,7 @@ impl MacWindow {
         }: WindowParams,
         executor: ForegroundExecutor,
         renderer_context: renderer::Context,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         unsafe {
             let allows_automatic_window_tabbing = tabbing_identifier.is_some();
             if allows_automatic_window_tabbing {
@@ -3125,7 +3159,10 @@ impl MacWindow {
                 defer: NO,
                 screen: target_screen
             ];
-            assert!(!native_window.is_null());
+            anyhow::ensure!(
+                !native_window.is_null(),
+                "AppKit failed to create a native window"
+            );
             register_dragged_types(native_window);
             let () = msg_send![
                 native_window,
@@ -3135,23 +3172,24 @@ impl MacWindow {
             let content_view = native_window.contentView();
             let native_view: id = msg_send![VIEW_CLASS, alloc];
             let native_view = native_view.initWithFrame_(content_view.bounds());
-            assert!(!native_view.is_null());
+            let native_view_ptr = NonNull::new(native_view)
+                .ok_or_else(|| anyhow::anyhow!("AppKit failed to create a native view"))?;
 
             let mut window = Self(Arc::new(Mutex::new(MacWindowState {
                 handle,
                 executor,
                 native_window,
-                native_view: NonNull::new_unchecked(native_view),
+                native_view: native_view_ptr,
                 blurred_view: None,
                 display_link: None,
                 frame_polling_active: false,
-                renderer: renderer::new_renderer(
+                renderer: renderer::try_new_renderer(
                     renderer_context,
                     native_window as *mut _,
                     native_view as *mut _,
                     bounds.size.map(|pixels| pixels.0),
                     false,
-                ),
+                )?,
                 request_frame_callback: None,
                 event_callback: None,
                 activate_callback: None,
@@ -3349,7 +3387,7 @@ impl MacWindow {
             let _: () = msg_send![native_window, setFrameTopLeftPoint: window_rect.origin];
             window.0.lock().move_traffic_light();
 
-            window
+            Ok(window)
         }
     }
 
@@ -3403,13 +3441,13 @@ impl MacWindow {
             };
 
             let value_str = if !value.is_null() {
-                let value_ptr: *const i8 = msg_send![value, UTF8String];
-                CStr::from_ptr(value_ptr).to_string_lossy()
+                let value = &*(value as *const NSString);
+                value.to_string()
             } else {
-                "".into()
+                String::new()
             };
 
-            match value_str.as_ref() {
+            match value_str.as_str() {
                 "manual" => Some(UserTabbingPreference::Never),
                 "always" => Some(UserTabbingPreference::Always),
                 _ => Some(UserTabbingPreference::InFullScreen),
@@ -3657,6 +3695,7 @@ impl PlatformWindow for MacWindow {
                 let _: () = msg_send![alert, setInformativeText: ns_string(detail)];
             }
 
+            let mut button_order = Vec::with_capacity(answers.len());
             for (ix, answer) in answers
                 .iter()
                 .enumerate()
@@ -3664,6 +3703,7 @@ impl PlatformWindow for MacWindow {
             {
                 let button: id = msg_send![alert, addButtonWithTitle: ns_string(answer.label())];
                 let _: () = msg_send![button, setTag: ix as NSInteger];
+                button_order.push(ix);
 
                 if answer.is_cancel() {
                     // Bind Escape Key to Cancel Button
@@ -3676,13 +3716,23 @@ impl PlatformWindow for MacWindow {
             if let Some((ix, answer)) = latest_non_cancel_label {
                 let button: id = msg_send![alert, addButtonWithTitle: ns_string(answer.label())];
                 let _: () = msg_send![button, setTag: ix as NSInteger];
+                button_order.push(ix);
             }
+
+            let fallback_answer = answers
+                .iter()
+                .position(PromptButton::is_cancel)
+                .unwrap_or(0);
 
             let (done_tx, done_rx) = oneshot::channel();
             let done_tx = Cell::new(Some(done_tx));
             let block = RcBlock::new(move |answer: NSInteger| {
                 if let Some(done_tx) = done_tx.take() {
-                    let _ = done_tx.send(answer.try_into().unwrap());
+                    let answer = alert_response_index(answer, &button_order).unwrap_or_else(|| {
+                        log::error!("macOS returned invalid alert response {answer}");
+                        fallback_answer
+                    });
+                    let _ = done_tx.send(answer);
                 }
             });
             let native_window = self.0.lock().native_window;
@@ -3802,6 +3852,24 @@ impl PlatformWindow for MacWindow {
         }
     }
 
+    fn set_opacity(&self, opacity: f32) {
+        unsafe {
+            let window = self.0.lock().native_window;
+            let _: () = msg_send![window, setAlphaValue: opacity as f64];
+        }
+    }
+
+    fn set_always_on_top(&self, always_on_top: bool) {
+        let level = if always_on_top {
+            NSPopUpWindowLevel
+        } else {
+            NSNormalWindowLevel
+        };
+        unsafe {
+            self.0.lock().native_window.setLevel_(level);
+        }
+    }
+
     fn set_frame_polling(&self, active: bool) {
         let mut this = self.0.as_ref().lock();
         let was_active = this.frame_polling_active;
@@ -3835,6 +3903,13 @@ impl PlatformWindow for MacWindow {
                 }
             })
             .detach();
+    }
+
+    fn close(&self) {
+        let window = self.0.lock().native_window;
+        unsafe {
+            let _: () = msg_send![window, performClose: nil];
+        }
     }
 
     fn minimize(&self) {
@@ -4264,8 +4339,10 @@ extern "C" fn webview_did_receive_script_message(this: id, _: Sel, _: id, messag
     };
 
     let mut async_window = state.async_window.clone();
-    let _ = async_window.update(|window, cx| {
-        handler(payload, window, cx);
+    catch_platform_callback("webview message", (), || {
+        let _ = async_window.update(|window, cx| {
+            handler(payload, window, cx);
+        });
     });
 }
 
@@ -4576,8 +4653,10 @@ fn emit_webview_page_load(delegate: id, webview: id, event: WebViewPageLoadEvent
 
     let url = mac_webview_url(webview);
     let mut async_window = state.async_window.clone();
-    let _ = async_window.update(|window, cx| {
-        handler(event, url, window, cx);
+    catch_platform_callback("webview page load", (), || {
+        let _ = async_window.update(|window, cx| {
+            handler(event, url, window, cx);
+        });
     });
 }
 
@@ -4591,8 +4670,10 @@ fn emit_webview_document_title_changed(delegate: id, webview: id) {
 
     let title = mac_webview_title(webview);
     let mut async_window = state.async_window.clone();
-    let _ = async_window.update(|window, cx| {
-        handler(title, window, cx);
+    catch_platform_callback("webview title change", (), || {
+        let _ = async_window.update(|window, cx| {
+            handler(title, window, cx);
+        });
     });
 }
 
@@ -4602,17 +4683,28 @@ fn resolve_mac_new_window_policy(
 ) -> WebViewNewWindowPolicy {
     if let Some(handler) = state.new_window_handler.clone() {
         let mut async_window = state.async_window.clone();
-        return async_window
-            .update(|window, cx| handler(url.to_string().into(), window, cx))
-            .unwrap_or(WebViewNewWindowPolicy::Deny);
+        return catch_platform_callback(
+            "webview new-window policy",
+            WebViewNewWindowPolicy::Deny,
+            || {
+                async_window
+                    .update(|window, cx| handler(url.to_string().into(), window, cx))
+                    .unwrap_or(WebViewNewWindowPolicy::Deny)
+            },
+        );
     }
 
     if let Some(handler) = state.navigation_handler.clone() {
         let mut async_window = state.async_window.clone();
-        return if async_window
-            .update(|window, cx| handler(url.to_string().into(), window, cx))
-            .unwrap_or(NavigationPolicy::Deny)
-            == NavigationPolicy::Allow
+        return if catch_platform_callback(
+            "webview navigation policy",
+            NavigationPolicy::Deny,
+            || {
+                async_window
+                    .update(|window, cx| handler(url.to_string().into(), window, cx))
+                    .unwrap_or(NavigationPolicy::Deny)
+            },
+        ) == NavigationPolicy::Allow
         {
             WebViewNewWindowPolicy::NavigateCurrent
         } else {
@@ -4645,9 +4737,11 @@ extern "C" fn webview_decide_policy_for_navigation_action(
     let default_policy = NavigationPolicy::Allow;
     let policy = if let Some(handler) = state.navigation_handler.clone() {
         let mut async_window = state.async_window.clone();
-        async_window
-            .update(|window, cx| handler(url_string.clone(), window, cx))
-            .unwrap_or(default_policy)
+        catch_platform_callback("webview navigation policy", NavigationPolicy::Deny, || {
+            async_window
+                .update(|window, cx| handler(url_string.clone(), window, cx))
+                .unwrap_or(default_policy)
+        })
     } else {
         default_policy
     };
@@ -4750,7 +4844,7 @@ extern "C" fn handle_key_event(this: id, native_event: id, key_equivalent: bool)
     let run_callback = |event: PlatformInput| -> BOOL {
         let mut callback = window_state.as_ref().lock().event_callback.take();
         let handled: BOOL = if let Some(callback) = callback.as_mut() {
-            Bool::new(!callback(event).propagate)
+            catch_platform_callback("input event", NO, || Bool::new(!callback(event).propagate))
         } else {
             NO
         };
@@ -4993,7 +5087,9 @@ extern "C" fn handle_view_event(this: id, _: Sel, native_event: id) {
 
         if let Some(mut callback) = lock.event_callback.take() {
             drop(lock);
-            callback(event);
+            catch_platform_callback("input event", (), || {
+                callback(event);
+            });
             window_state.lock().event_callback = Some(callback);
         }
     }
@@ -5065,7 +5161,7 @@ extern "C" fn window_did_move(this: id, _: Sel, _: id) {
     let mut lock = window_state.as_ref().lock();
     if let Some(mut callback) = lock.moved_callback.take() {
         drop(lock);
-        callback();
+        catch_platform_callback("window moved", (), &mut callback);
         window_state.lock().moved_callback = Some(callback);
     }
 }
@@ -5118,7 +5214,7 @@ extern "C" fn window_did_change_key_status(this: id, selector: Sel, _: id) {
                 lock.renderer.set_presents_with_transaction(true);
                 lock.stop_display_link();
                 drop(lock);
-                callback(Default::default());
+                catch_platform_callback("frame request", (), || callback(Default::default()));
 
                 let mut lock = window_state.lock();
                 lock.request_frame_callback = Some(callback);
@@ -5140,7 +5236,7 @@ extern "C" fn window_did_change_key_status(this: id, selector: Sel, _: id) {
 
             if let Some(mut callback) = lock.activate_callback.take() {
                 drop(lock);
-                callback(is_active);
+                catch_platform_callback("window activation", (), || callback(is_active));
                 window_state.lock().activate_callback = Some(callback);
             };
         })
@@ -5152,7 +5248,7 @@ extern "C" fn window_should_close(this: id, _: Sel, _: id) -> BOOL {
     let mut lock = window_state.as_ref().lock();
     if let Some(mut callback) = lock.should_close_callback.take() {
         drop(lock);
-        let should_close = callback();
+        let should_close = catch_platform_callback("window should-close", false, &mut callback);
         window_state.lock().should_close_callback = Some(callback);
         Bool::new(should_close)
     } else {
@@ -5169,7 +5265,7 @@ extern "C" fn close_window(this: id, _: Sel) {
         };
 
         if let Some(callback) = close_callback {
-            callback();
+            catch_platform_callback("window close", (), callback);
         }
 
         let _: () = msg_send![super(this, lookup_class(c"NSWindow")), close];
@@ -5203,7 +5299,7 @@ extern "C" fn view_did_change_backing_properties(this: id, _: Sel) {
         let content_size = lock.content_size();
         let scale_factor = lock.scale_factor();
         drop(lock);
-        callback(content_size, scale_factor);
+        catch_platform_callback("window resize", (), || callback(content_size, scale_factor));
         window_state.as_ref().lock().resize_callback = Some(callback);
     };
 }
@@ -5234,7 +5330,7 @@ extern "C" fn set_frame_size(this: id, _: Sel, size: NSSize) {
         let content_size = lock.content_size();
         let scale_factor = lock.scale_factor();
         drop(lock);
-        callback(content_size, scale_factor);
+        catch_platform_callback("window resize", (), || callback(content_size, scale_factor));
         window_state.lock().resize_callback = Some(callback);
     };
 }
@@ -5247,7 +5343,7 @@ extern "C" fn display_layer(this: id, _: Sel, _: id) {
         lock.renderer.set_presents_with_transaction(true);
         lock.stop_display_link();
         drop(lock);
-        callback(Default::default());
+        catch_platform_callback("frame request", (), || callback(Default::default()));
 
         let mut lock = window_state.lock();
         lock.request_frame_callback = Some(callback);
@@ -5264,7 +5360,7 @@ unsafe extern "C" fn step(view: *mut c_void) {
 
     if let Some(mut callback) = lock.request_frame_callback.take() {
         drop(lock);
-        callback(Default::default());
+        catch_platform_callback("frame request", (), || callback(Default::default()));
         window_state.lock().request_frame_callback = Some(callback);
     }
 }
@@ -5416,11 +5512,13 @@ extern "C" fn do_command_by_selector(this: id, _: Sel, _: Sel) {
     drop(lock);
 
     if let Some((keystroke, mut callback)) = keystroke.zip(event_callback.as_mut()) {
-        let handled = (callback)(PlatformInput::KeyDown(KeyDownEvent {
-            keystroke,
-            is_held: false,
-        }));
-        state.as_ref().lock().do_command_handled = Some(!handled.propagate);
+        let handled = catch_platform_callback("command key", None, || {
+            Some((callback)(PlatformInput::KeyDown(KeyDownEvent {
+                keystroke,
+                is_held: false,
+            })))
+        });
+        state.as_ref().lock().do_command_handled = handled.map(|handled| !handled.propagate);
     }
 
     state.as_ref().lock().event_callback = event_callback;
@@ -5432,7 +5530,7 @@ extern "C" fn view_did_change_effective_appearance(this: id, _: Sel) {
         let mut lock = state.as_ref().lock();
         if let Some(mut callback) = lock.appearance_changed_callback.take() {
             drop(lock);
-            callback();
+            catch_platform_callback("appearance changed", (), &mut callback);
             state.lock().appearance_changed_callback = Some(callback);
         }
     }
@@ -5602,7 +5700,9 @@ async fn synthetic_drag(
             if lock.synthetic_drag_counter == drag_id {
                 if let Some(mut callback) = lock.event_callback.take() {
                     drop(lock);
-                    callback(PlatformInput::MouseMove(event.clone()));
+                    catch_platform_callback("synthetic drag", (), || {
+                        callback(PlatformInput::MouseMove(event.clone()));
+                    });
                     window_state.lock().event_callback = Some(callback);
                 }
             } else {
@@ -5615,7 +5715,9 @@ async fn synthetic_drag(
 fn send_new_event(window_state_lock: &Mutex<MacWindowState>, e: PlatformInput) -> bool {
     let window_state = window_state_lock.lock().event_callback.take();
     if let Some(mut callback) = window_state {
-        callback(e);
+        catch_platform_callback("input event", (), || {
+            callback(e);
+        });
         window_state_lock.lock().event_callback = Some(callback);
         true
     } else {
@@ -5804,7 +5906,7 @@ extern "C" fn move_tab_to_new_window(this: id, _: Sel, _: id) {
         let mut lock = window_state.as_ref().lock();
         if let Some(mut callback) = lock.move_tab_to_new_window_callback.take() {
             drop(lock);
-            callback();
+            catch_platform_callback("move tab to new window", (), &mut callback);
             window_state.lock().move_tab_to_new_window_callback = Some(callback);
         }
     }
@@ -5818,7 +5920,7 @@ extern "C" fn merge_all_windows(this: id, _: Sel, _: id) {
         let mut lock = window_state.as_ref().lock();
         if let Some(mut callback) = lock.merge_all_windows_callback.take() {
             drop(lock);
-            callback();
+            catch_platform_callback("merge windows", (), &mut callback);
             window_state.lock().merge_all_windows_callback = Some(callback);
         }
     }
@@ -5829,7 +5931,7 @@ extern "C" fn select_next_tab(this: id, _sel: Sel, _id: id) {
     let mut lock = window_state.as_ref().lock();
     if let Some(mut callback) = lock.select_next_tab_callback.take() {
         drop(lock);
-        callback();
+        catch_platform_callback("select next tab", (), &mut callback);
         window_state.lock().select_next_tab_callback = Some(callback);
     }
 }
@@ -5839,7 +5941,7 @@ extern "C" fn select_previous_tab(this: id, _sel: Sel, _id: id) {
     let mut lock = window_state.as_ref().lock();
     if let Some(mut callback) = lock.select_previous_tab_callback.take() {
         drop(lock);
-        callback();
+        catch_platform_callback("select previous tab", (), &mut callback);
         window_state.lock().select_previous_tab_callback = Some(callback);
     }
 }
@@ -5854,7 +5956,7 @@ extern "C" fn toggle_tab_bar(this: id, _sel: Sel, _id: id) {
 
         if let Some(mut callback) = lock.toggle_tab_bar_callback.take() {
             drop(lock);
-            callback();
+            catch_platform_callback("toggle tab bar", (), &mut callback);
             window_state.lock().toggle_tab_bar_callback = Some(callback);
         }
     }
@@ -5863,6 +5965,25 @@ extern "C" fn toggle_tab_bar(this: id, _sel: Sel, _id: id) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn platform_callback_panics_are_contained_with_the_requested_fallback() {
+        let value = catch_platform_callback("test", 41, || panic!("callback failure"));
+        assert_eq!(value, 41);
+
+        let value = catch_platform_callback("test", 0, || 42);
+        assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn native_alert_responses_map_back_to_original_answer_indices() {
+        let button_order = [0, 2, 1];
+        assert_eq!(alert_response_index(1_000, &button_order), Some(0));
+        assert_eq!(alert_response_index(1_001, &button_order), Some(2));
+        assert_eq!(alert_response_index(1_002, &button_order), Some(1));
+        assert_eq!(alert_response_index(999, &button_order), None);
+        assert_eq!(alert_response_index(1_003, &button_order), None);
+    }
 
     #[test]
     fn webview_clipboard_script_exposes_text_clipboard_bridge() {

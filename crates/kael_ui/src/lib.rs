@@ -111,9 +111,19 @@ pub fn init(cx: &mut kael::App) {
     components::otp_input::init(cx);
     components::select::init_select(cx);
     components::combobox::init_combobox(cx);
+    components::date_picker::init(cx);
+    components::drawer_navigation::init_drawer_navigation(cx);
     components::editor::init(cx);
+    components::image_viewer::init_image_viewer(cx);
+    components::inline_edit::init(cx);
+    components::mention_input::init_mention_input(cx);
+    components::text_field::init(cx);
+    components::video_player::init_video_player(cx);
     navigation::sidebar::init_sidebar(cx);
+    navigation::tabs::init_tabs(cx);
     overlays::popover::init(cx);
+    overlays::dialog::init_dialog(cx);
     overlays::sheet::init_sheet(cx);
     overlays::alert_dialog::init_alert_dialog(cx);
+    overlays::command_palette::init_command_palette(cx);
 }

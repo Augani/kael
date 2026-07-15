@@ -263,11 +263,22 @@ impl RenderOnce for Toggle {
             .clone();
 
         let is_focused = focus_handle.is_focused(window);
+        let focus_on_mouse = focus_handle.clone();
         let is_busy = self.loading;
         let is_interactive = !self.disabled && !is_busy;
+        let accessibility_label = self
+            .label
+            .clone()
+            .unwrap_or_else(|| "Switch".into())
+            .to_string();
 
         let row = self
             .base
+            .accessibility(
+                AccessibilityAttributes::switch(accessibility_label, checked)
+                    .disabled(!is_interactive)
+                    .focused(is_focused),
+            )
             .when(is_interactive, |this| {
                 this.track_focus(&focus_handle.tab_index(0).tab_stop(true))
             })
@@ -395,6 +406,11 @@ impl RenderOnce for Toggle {
                             cx.stop_propagation();
                         }
                     })
+                })
+            })
+            .when(is_interactive, |this| {
+                this.on_mouse_down(MouseButton::Left, move |_, window, _| {
+                    window.focus(&focus_on_mouse);
                 })
             });
 

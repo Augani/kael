@@ -1,9 +1,36 @@
 use crate::HttpClient;
 use anyhow::{Context as _, Result, anyhow, bail};
-use futures::AsyncReadExt;
 use serde::Deserialize;
 use std::sync::Arc;
 use url::Url;
+
+const MAX_GITHUB_API_BODY_BYTES: usize = 8 * 1024 * 1024;
+
+fn repo_segments(repo_name_with_owner: &str) -> Result<(&str, &str)> {
+    let mut segments = repo_name_with_owner.split('/');
+    let owner = segments.next().unwrap_or_default();
+    let repo = segments.next().unwrap_or_default();
+    if owner.is_empty()
+        || repo.is_empty()
+        || segments.next().is_some()
+        || matches!(owner, "." | "..")
+        || matches!(repo, "." | "..")
+    {
+        bail!("repository must be exactly 'owner/name'");
+    }
+    Ok((owner, repo))
+}
+
+fn github_api_url(repo_name_with_owner: &str, trailing: &[&str]) -> Result<Url> {
+    let (owner, repo) = repo_segments(repo_name_with_owner)?;
+    let mut url = Url::parse("https://api.github.com/repos/")?;
+    url.path_segments_mut()
+        .map_err(|()| anyhow!("cannot modify GitHub API URL"))?
+        .push(owner)
+        .push(repo)
+        .extend(trailing.iter().copied());
+    Ok(url)
+}
 
 pub struct GitHubLspBinaryVersion {
     pub name: String,
@@ -34,28 +61,22 @@ pub async fn latest_github_release(
     pre_release: bool,
     http: Arc<dyn HttpClient>,
 ) -> anyhow::Result<GithubRelease> {
+    let url = github_api_url(repo_name_with_owner, &["releases"])?;
     let mut response = http
-        .get(
-            format!("https://api.github.com/repos/{repo_name_with_owner}/releases").as_str(),
-            Default::default(),
-            true,
-        )
+        .get(url.as_str(), Default::default(), true)
         .await
         .context("error fetching latest release")?;
 
-    let mut body = Vec::new();
-    response
+    let status = response.status();
+    let body = response
         .body_mut()
-        .read_to_end(&mut body)
+        .read_to_end_limited(MAX_GITHUB_API_BODY_BYTES)
         .await
         .context("error reading latest release")?;
 
-    if response.status().is_client_error() {
+    if !status.is_success() {
         let text = String::from_utf8_lossy(body.as_slice());
-        bail!(
-            "status error {}, response: {text:?}",
-            response.status().as_u16()
-        );
+        bail!("status error {}, response: {text:?}", status.as_u16());
     }
 
     let releases = match serde_json::from_slice::<Vec<GithubRelease>>(body.as_slice()) {
@@ -75,7 +96,7 @@ pub async fn latest_github_release(
         .into_iter()
         .filter(|release| !require_assets || !release.assets.is_empty())
         .find(|release| release.pre_release == pre_release)
-        .context("finding a prerelease")?;
+        .with_context(|| format!("finding a release with prerelease={pre_release}"))?;
     release.assets.iter_mut().for_each(|asset| {
         if let Some(digest) = &mut asset.digest
             && let Some(stripped) = digest.strip_prefix("sha256:")
@@ -91,24 +112,23 @@ pub async fn get_release_by_tag_name(
     tag: &str,
     http: Arc<dyn HttpClient>,
 ) -> anyhow::Result<GithubRelease> {
+    if tag.is_empty() {
+        bail!("release tag must not be empty");
+    }
+    let url = github_api_url(repo_name_with_owner, &["releases", "tags", tag])?;
     let mut response = http
-        .get(
-            &format!("https://api.github.com/repos/{repo_name_with_owner}/releases/tags/{tag}"),
-            Default::default(),
-            true,
-        )
+        .get(url.as_str(), Default::default(), true)
         .await
         .context("error fetching latest release")?;
 
-    let mut body = Vec::new();
     let status = response.status();
-    response
+    let body = response
         .body_mut()
-        .read_to_end(&mut body)
+        .read_to_end_limited(MAX_GITHUB_API_BODY_BYTES)
         .await
         .context("error reading latest release")?;
 
-    if status.is_client_error() {
+    if !status.is_success() {
         let text = String::from_utf8_lossy(body.as_slice());
         bail!(
             "status error {}, response: {text:?}",
@@ -136,9 +156,11 @@ pub enum AssetKind {
 }
 
 pub fn build_asset_url(repo_name_with_owner: &str, tag: &str, kind: AssetKind) -> Result<String> {
-    let mut url = Url::parse(&format!(
-        "https://github.com/{repo_name_with_owner}/archive/refs/tags",
-    ))?;
+    let (owner, repo) = repo_segments(repo_name_with_owner)?;
+    if tag.is_empty() {
+        bail!("release tag must not be empty");
+    }
+    let mut url = Url::parse("https://github.com/")?;
     // We're pushing this here, because tags may contain `/` and other characters
     // that need to be escaped.
     let asset_filename = format!(
@@ -151,6 +173,11 @@ pub fn build_asset_url(repo_name_with_owner: &str, tag: &str, kind: AssetKind) -
     );
     url.path_segments_mut()
         .map_err(|()| anyhow!("cannot modify url path segments"))?
+        .push(owner)
+        .push(repo)
+        .push("archive")
+        .push("refs")
+        .push("tags")
         .push(&asset_filename);
     Ok(url.to_string())
 }
@@ -175,5 +202,9 @@ mod tests {
             zip,
             "https://github.com/microsoft/vscode-eslint/archive/refs/tags/release%2F2.3.5.zip"
         );
+
+        assert!(build_asset_url("owner/repo/extra", tag, AssetKind::Zip).is_err());
+        assert!(build_asset_url("owner", tag, AssetKind::Zip).is_err());
+        assert!(build_asset_url("owner/repo", "", AssetKind::Zip).is_err());
     }
 }
