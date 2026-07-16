@@ -31,7 +31,10 @@ pub(crate) fn rubber_band_scroll_enabled(event: &ScrollWheelEvent) -> bool {
 
 /// Returns whether both values are non-zero and point in the same direction.
 pub fn pixels_have_same_sign(left: Pixels, right: Pixels) -> bool {
-    (left > Pixels::ZERO && right > Pixels::ZERO) || (left < Pixels::ZERO && right < Pixels::ZERO)
+    left.0.is_finite()
+        && right.0.is_finite()
+        && ((left > Pixels::ZERO && right > Pixels::ZERO)
+            || (left < Pixels::ZERO && right < Pixels::ZERO))
 }
 
 /// Consumes scroll `delta` against an existing `overscroll` before it reaches
@@ -42,11 +45,21 @@ pub fn pixels_have_same_sign(left: Pixels, right: Pixels) -> bool {
 /// returned value is the remaining delta (if any) that should be applied to the
 /// content offset once the overscroll has been neutralized.
 pub fn consume_scroll_elasticity(overscroll: &mut Pixels, delta: Pixels) -> Pixels {
+    if !overscroll.0.is_finite() {
+        *overscroll = Pixels::ZERO;
+    }
+    if !delta.0.is_finite() {
+        return Pixels::ZERO;
+    }
     if overscroll.is_zero() || pixels_have_same_sign(*overscroll, delta) {
         return delta;
     }
 
     let next_overscroll = *overscroll + delta;
+    if !next_overscroll.0.is_finite() {
+        *overscroll = Pixels::ZERO;
+        return Pixels::ZERO;
+    }
     if next_overscroll.is_zero() || pixels_have_same_sign(*overscroll, next_overscroll) {
         *overscroll = next_overscroll;
         Pixels::ZERO
@@ -66,6 +79,8 @@ pub fn consume_scroll_elasticity(overscroll: &mut Pixels, delta: Pixels) -> Pixe
 pub fn add_scroll_elasticity(overscroll: Pixels, delta: Pixels) -> Pixels {
     const RUBBER_BAND_LIMIT: f32 = 128.0;
 
+    let overscroll = finite_pixels_or_zero(overscroll);
+    let delta = finite_pixels_or_zero(delta);
     let progress = (overscroll.abs().0 / RUBBER_BAND_LIMIT).clamp(0.0, 1.0);
     let damping = (0.62 - progress * 0.4).clamp(0.22, 0.62);
     let limit = px(RUBBER_BAND_LIMIT);
@@ -86,6 +101,11 @@ pub fn advance_scroll_elasticity(
     const DECAY_RATE: f32 = 12.0;
     const STOP_EPSILON: f32 = 0.25;
 
+    if !overscroll.0.is_finite() {
+        *overscroll = Pixels::ZERO;
+        *last_advance = None;
+        return false;
+    }
     if overscroll.is_zero() {
         *last_advance = None;
         return false;
@@ -93,7 +113,7 @@ pub fn advance_scroll_elasticity(
 
     let now = std::time::Instant::now();
     let dt = last_advance
-        .map(|prev| now.duration_since(prev).as_secs_f32().min(0.05))
+        .map(|prev| now.saturating_duration_since(prev).as_secs_f32().min(0.05))
         .unwrap_or(1.0 / 60.0);
     *last_advance = Some(now);
 
@@ -122,9 +142,14 @@ pub fn apply_scroll_delta_axis(
     delta: Pixels,
     rubber_band_enabled: bool,
 ) {
-    if delta.is_zero() {
-        return;
-    }
+    *offset = finite_pixels_or_zero(*offset);
+    *overscroll = finite_pixels_or_zero(*overscroll);
+    let delta = finite_pixels_or_zero(delta);
+    let max_offset = if max_offset.0.is_finite() && max_offset >= Pixels::ZERO {
+        max_offset
+    } else {
+        Pixels::ZERO
+    };
 
     if !rubber_band_enabled || max_offset.is_zero() {
         *overscroll = Pixels::ZERO;
@@ -132,13 +157,80 @@ pub fn apply_scroll_delta_axis(
         return;
     }
 
+    if delta.is_zero() {
+        *offset = (*offset).clamp(-max_offset, px(0.));
+        return;
+    }
+
     let remaining_delta = consume_scroll_elasticity(overscroll, delta);
     let candidate_offset = *offset + remaining_delta;
-    let clamped_offset = candidate_offset.clamp(-max_offset, px(0.));
-    let boundary_delta = candidate_offset - clamped_offset;
+    let (clamped_offset, boundary_delta) = if candidate_offset.0.is_finite() {
+        let clamped_offset = candidate_offset.clamp(-max_offset, px(0.));
+        (clamped_offset, candidate_offset - clamped_offset)
+    } else if remaining_delta < Pixels::ZERO {
+        (-max_offset, remaining_delta)
+    } else {
+        (Pixels::ZERO, remaining_delta)
+    };
 
     *offset = clamped_offset;
     if !boundary_delta.is_zero() {
         *overscroll = add_scroll_elasticity(*overscroll, boundary_delta);
+    }
+}
+
+fn finite_pixels_or_zero(value: Pixels) -> Pixels {
+    if value.0.is_finite() {
+        value
+    } else {
+        Pixels::ZERO
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn invalid_scroll_values_fail_closed_without_panicking() {
+        assert!(!pixels_have_same_sign(px(f32::NAN), px(1.0)));
+        assert_eq!(add_scroll_elasticity(px(f32::NAN), px(10.0)), px(6.2));
+
+        let mut overscroll = px(f32::NAN);
+        assert_eq!(
+            consume_scroll_elasticity(&mut overscroll, px(f32::NAN)),
+            Pixels::ZERO
+        );
+        assert_eq!(overscroll, Pixels::ZERO);
+
+        let mut offset = px(f32::NAN);
+        let mut overscroll = px(f32::INFINITY);
+        apply_scroll_delta_axis(&mut offset, &mut overscroll, px(-100.0), px(f32::NAN), true);
+        assert_eq!(offset, Pixels::ZERO);
+        assert_eq!(overscroll, Pixels::ZERO);
+    }
+
+    #[test]
+    fn snap_back_handles_invalid_state_and_future_timestamps() {
+        let mut overscroll = px(f32::NAN);
+        let mut last = Some(Instant::now());
+        assert!(!advance_scroll_elasticity(&mut overscroll, &mut last));
+        assert_eq!(overscroll, Pixels::ZERO);
+        assert!(last.is_none());
+
+        let mut overscroll = px(20.0);
+        let mut last = Some(Instant::now() + Duration::from_secs(1));
+        assert!(advance_scroll_elasticity(&mut overscroll, &mut last));
+        assert!(overscroll.0.is_finite());
+        assert!(overscroll > Pixels::ZERO);
+    }
+
+    #[test]
+    fn zero_delta_still_restores_offset_invariant() {
+        let mut offset = px(-200.0);
+        let mut overscroll = Pixels::ZERO;
+        apply_scroll_delta_axis(&mut offset, &mut overscroll, px(100.0), Pixels::ZERO, true);
+        assert_eq!(offset, px(-100.0));
     }
 }

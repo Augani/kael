@@ -7,8 +7,10 @@
 //! Supports Sparkle appcast XML and a simpler JSON feed format for update
 //! discovery.
 
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use std::{fs::OpenOptions, io::Write as _};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use base64::Engine as _;
@@ -21,6 +23,13 @@ use sha2::{Digest as _, Sha256};
 use kael_release::update::{UpdateChannel, UpdateManifest, UpdatePolicy, verify_manifest};
 use semantic_version::SemanticVersion;
 
+use crate::NetworkPolicy;
+
+const MAX_UPDATE_FEED_BYTES: usize = 4 * 1024 * 1024;
+const MAX_UPDATE_PACKAGE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const MAX_RELEASE_NOTES_BYTES: usize = 1024 * 1024;
+const MAX_UPDATE_URL_BYTES: usize = 16 * 1024;
+
 /// Configuration for the auto-updater.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutoUpdaterConfig {
@@ -31,6 +40,100 @@ pub struct AutoUpdaterConfig {
     pub check_interval: Duration,
     /// Whether to include pre-release versions.
     pub allow_prerelease: bool,
+}
+
+impl AutoUpdaterConfig {
+    /// Validate update feed configuration before creating an updater.
+    pub fn validate(&self) -> Result<()> {
+        validate_update_feed_url(&self.feed_url)?;
+        anyhow::ensure!(
+            self.check_interval > Duration::ZERO,
+            "update check interval must be greater than zero"
+        );
+        Ok(())
+    }
+}
+
+/// Builder for auto-updater configuration.
+#[derive(Debug, Clone)]
+pub struct AutoUpdaterConfigBuilder {
+    feed_url: String,
+    check_interval: Duration,
+    allow_prerelease: bool,
+}
+
+impl AutoUpdaterConfigBuilder {
+    /// Create an updater config builder with a feed URL.
+    pub fn new(feed_url: impl Into<String>) -> Self {
+        Self {
+            feed_url: feed_url.into(),
+            check_interval: Duration::from_secs(86_400),
+            allow_prerelease: false,
+        }
+    }
+
+    /// Set how often the host app should check for updates.
+    pub fn check_interval(mut self, interval: Duration) -> Self {
+        self.check_interval = interval;
+        self
+    }
+
+    /// Include pre-release versions in update checks.
+    pub fn allow_prerelease(mut self, allow: bool) -> Self {
+        self.allow_prerelease = allow;
+        self
+    }
+
+    /// Restrict update checks to stable releases.
+    pub fn stable_only(mut self) -> Self {
+        self.allow_prerelease = false;
+        self
+    }
+
+    /// Return the configured feed URL.
+    pub fn feed_url(&self) -> &str {
+        &self.feed_url
+    }
+
+    /// Return the configured check interval.
+    pub fn configured_check_interval(&self) -> Duration {
+        self.check_interval
+    }
+
+    /// Return whether pre-release updates are allowed.
+    pub fn allows_prerelease(&self) -> bool {
+        self.allow_prerelease
+    }
+
+    /// Validate the configured update settings.
+    pub fn validate(&self) -> Result<()> {
+        self.as_config().validate()
+    }
+
+    /// Build a validated updater config.
+    pub fn build_checked(self) -> Result<AutoUpdaterConfig> {
+        let config = self.as_config();
+        config.validate()?;
+        Ok(config)
+    }
+
+    fn as_config(&self) -> AutoUpdaterConfig {
+        AutoUpdaterConfig {
+            feed_url: self.feed_url.clone(),
+            check_interval: self.check_interval,
+            allow_prerelease: self.allow_prerelease,
+        }
+    }
+}
+
+impl From<AutoUpdaterConfig> for AutoUpdaterConfigBuilder {
+    fn from(config: AutoUpdaterConfig) -> Self {
+        Self {
+            feed_url: config.feed_url,
+            check_interval: config.check_interval,
+            allow_prerelease: config.allow_prerelease,
+        }
+    }
 }
 
 /// Information about an available update.
@@ -52,6 +155,115 @@ pub struct UpdateInfo {
     pub size_bytes: Option<u64>,
 }
 
+impl UpdateInfo {
+    /// Validate update metadata before offering or downloading it.
+    pub fn validate(&self) -> Result<()> {
+        validate_update_url(&self.download_url, "update download URL")?;
+        validate_optional_sha256(self.sha256.as_deref())?;
+        validate_optional_size(self.size_bytes)?;
+        validate_optional_signature(self.signature.as_deref())?;
+        anyhow::ensure!(
+            self.release_notes
+                .as_ref()
+                .is_none_or(|notes| notes.len() <= MAX_RELEASE_NOTES_BYTES),
+            "update release notes exceed {MAX_RELEASE_NOTES_BYTES} bytes"
+        );
+        Ok(())
+    }
+
+    /// Validate metadata required for signed update verification.
+    pub fn validate_signed_metadata(&self) -> Result<()> {
+        self.validate()?;
+        anyhow::ensure!(
+            self.signature.is_some(),
+            "signed update metadata requires a signature"
+        );
+        anyhow::ensure!(
+            self.sha256.is_some(),
+            "signed update metadata requires a sha256 hash"
+        );
+        anyhow::ensure!(
+            self.size_bytes.is_some(),
+            "signed update metadata requires a package size"
+        );
+        Ok(())
+    }
+}
+
+/// Builder for update metadata entries.
+#[derive(Debug, Clone)]
+pub struct UpdateInfoBuilder {
+    version: SemanticVersion,
+    release_notes: Option<String>,
+    download_url: String,
+    signature: Option<String>,
+    sha256: Option<String>,
+    size_bytes: Option<u64>,
+}
+
+impl UpdateInfoBuilder {
+    /// Create update metadata for a version and package URL.
+    pub fn new(version: SemanticVersion, download_url: impl Into<String>) -> Self {
+        Self {
+            version,
+            release_notes: None,
+            download_url: download_url.into(),
+            signature: None,
+            sha256: None,
+            size_bytes: None,
+        }
+    }
+
+    /// Set optional release notes.
+    pub fn release_notes(mut self, notes: impl Into<String>) -> Self {
+        self.release_notes = Some(notes.into());
+        self
+    }
+
+    /// Set the base64-encoded ed25519 signature.
+    pub fn signature(mut self, signature: impl Into<String>) -> Self {
+        self.signature = Some(signature.into());
+        self
+    }
+
+    /// Set the expected lowercase SHA-256 hex digest.
+    pub fn sha256(mut self, sha256: impl Into<String>) -> Self {
+        self.sha256 = Some(sha256.into());
+        self
+    }
+
+    /// Set the expected package size in bytes.
+    pub fn size_bytes(mut self, size_bytes: u64) -> Self {
+        self.size_bytes = Some(size_bytes);
+        self
+    }
+
+    /// Build update metadata without requiring signed-package fields.
+    pub fn build_checked(self) -> Result<UpdateInfo> {
+        let update = self.as_update_info();
+        update.validate()?;
+        Ok(update)
+    }
+
+    /// Build update metadata and require fields needed for signed verification.
+    pub fn build_signed_checked(self) -> Result<UpdateInfo> {
+        let update = self.as_update_info();
+        update.validate_signed_metadata()?;
+        Ok(update)
+    }
+
+    fn as_update_info(&self) -> UpdateInfo {
+        UpdateInfo {
+            version: self.version,
+            release_notes: self.release_notes.clone(),
+            download_url: self.download_url.clone(),
+            signature: self.signature.clone(),
+            sha256: self.sha256.clone(),
+            size_bytes: self.size_bytes,
+        }
+    }
+}
+
 /// Progress information during an update download.
 #[derive(Debug, Clone, Copy)]
 pub struct DownloadProgress {
@@ -66,7 +278,1219 @@ impl DownloadProgress {
     /// if the total size is unknown.
     pub fn fraction(&self) -> Option<f64> {
         self.total_bytes
-            .map(|total| self.bytes_downloaded as f64 / total as f64)
+            .filter(|total| *total > 0)
+            .map(|total| (self.bytes_downloaded as f64 / total as f64).min(1.0))
+    }
+}
+
+/// A checked descriptor for an app-owned download.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadRequest {
+    /// URL to download.
+    pub url: String,
+    /// Destination path to write.
+    pub destination: PathBuf,
+    /// Optional expected SHA-256 (lowercase hex) of the downloaded bytes.
+    #[serde(default)]
+    pub sha256: Option<String>,
+    /// Optional expected size of the downloaded bytes.
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+    /// Whether parent directories may be created by the download worker.
+    pub create_parent_dirs: bool,
+    /// Optional outbound network policy to check before starting the download.
+    #[serde(default)]
+    pub network_policy: Option<NetworkPolicy>,
+}
+
+impl DownloadRequest {
+    /// Create a checked download request builder.
+    pub fn builder(
+        url: impl Into<String>,
+        destination: impl Into<PathBuf>,
+    ) -> DownloadRequestBuilder {
+        DownloadRequestBuilder::new(url, destination)
+    }
+
+    /// Validate URL, destination, expected metadata, and network policy.
+    pub fn validate(&self) -> Result<()> {
+        validate_update_url(&self.url, "download URL")?;
+        validate_download_destination(&self.destination)?;
+        validate_optional_sha256(self.sha256.as_deref())?;
+        validate_optional_size(self.size_bytes)?;
+        if let Some(policy) = &self.network_policy {
+            policy.validate()?;
+            anyhow::ensure!(
+                policy.check_url(&self.url)?,
+                "download URL is denied by network policy"
+            );
+        }
+        if !self.create_parent_dirs {
+            let parent = self.destination.parent().ok_or_else(|| {
+                anyhow::anyhow!("download destination must have a parent directory")
+            })?;
+            anyhow::ensure!(
+                parent.exists(),
+                "download destination parent directory must exist: {}",
+                parent.display()
+            );
+        }
+        Ok(())
+    }
+
+    /// Whether this request includes expected SHA-256 integrity metadata.
+    pub fn has_sha256(&self) -> bool {
+        self.sha256.is_some()
+    }
+
+    /// Whether this request includes an expected download size.
+    pub fn has_size(&self) -> bool {
+        self.size_bytes.is_some()
+    }
+
+    /// Whether a network policy will be checked before the download starts.
+    pub fn has_network_policy(&self) -> bool {
+        self.network_policy.is_some()
+    }
+
+    /// Returns a compact, credential-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        let url = download_url_summary(&self.url);
+        let size = self
+            .size_bytes
+            .map(|bytes| format!("{bytes} bytes"))
+            .unwrap_or_else(|| "unknown".to_string());
+
+        format!(
+            "download request from {url} to {}, sha256 {}, size {size}, create parent dirs {}, network policy {}",
+            self.destination.display(),
+            if self.has_sha256() { "present" } else { "none" },
+            self.create_parent_dirs,
+            if self.has_network_policy() {
+                "present"
+            } else {
+                "none"
+            }
+        )
+    }
+
+    /// Returns a host/path/size-safe summary for privacy-sensitive agent traces.
+    pub fn to_safe_text(&self) -> String {
+        format!(
+            "download request: url true, destination true, sha256 {}, size {}, create parent dirs {}, network policy {}",
+            self.has_sha256(),
+            self.has_size(),
+            self.create_parent_dirs,
+            self.has_network_policy()
+        )
+    }
+}
+
+/// Builder for checked app-owned downloads.
+#[derive(Debug, Clone)]
+pub struct DownloadRequestBuilder {
+    url: String,
+    destination: PathBuf,
+    sha256: Option<String>,
+    size_bytes: Option<u64>,
+    create_parent_dirs: bool,
+    network_policy: Option<NetworkPolicy>,
+}
+
+impl DownloadRequestBuilder {
+    /// Create a builder from a URL and destination path.
+    pub fn new(url: impl Into<String>, destination: impl Into<PathBuf>) -> Self {
+        Self {
+            url: url.into(),
+            destination: destination.into(),
+            sha256: None,
+            size_bytes: None,
+            create_parent_dirs: false,
+            network_policy: None,
+        }
+    }
+
+    /// Set the expected lowercase SHA-256 hex digest.
+    pub fn sha256(mut self, sha256: impl Into<String>) -> Self {
+        self.sha256 = Some(sha256.into());
+        self
+    }
+
+    /// Set the expected size in bytes.
+    pub fn size_bytes(mut self, size_bytes: u64) -> Self {
+        self.size_bytes = Some(size_bytes);
+        self
+    }
+
+    /// Allow the download worker to create missing parent directories.
+    pub fn create_parent_dirs(mut self) -> Self {
+        self.create_parent_dirs = true;
+        self
+    }
+
+    /// Require the destination parent directory to already exist.
+    pub fn require_existing_parent(mut self) -> Self {
+        self.create_parent_dirs = false;
+        self
+    }
+
+    /// Attach an outbound network policy.
+    pub fn network_policy(mut self, policy: NetworkPolicy) -> Self {
+        self.network_policy = Some(policy);
+        self
+    }
+
+    /// Whether this builder includes expected SHA-256 integrity metadata.
+    pub fn has_sha256(&self) -> bool {
+        self.sha256.is_some()
+    }
+
+    /// Whether this builder includes an expected download size.
+    pub fn has_size(&self) -> bool {
+        self.size_bytes.is_some()
+    }
+
+    /// Whether this builder will allow creating missing parent directories.
+    pub fn creates_parent_dirs(&self) -> bool {
+        self.create_parent_dirs
+    }
+
+    /// Whether a network policy will be checked before the download starts.
+    pub fn has_network_policy(&self) -> bool {
+        self.network_policy.is_some()
+    }
+
+    /// Validate the planned request without consuming the builder.
+    pub fn validate(&self) -> Result<()> {
+        self.as_request().validate()
+    }
+
+    /// Returns a compact, credential-safe summary for logs and agent traces.
+    pub fn to_text(&self) -> String {
+        self.as_request().to_text()
+    }
+
+    /// Returns a host/path/size-safe summary for privacy-sensitive agent traces.
+    pub fn to_safe_text(&self) -> String {
+        self.as_request().to_safe_text()
+    }
+
+    /// Validate and build the request.
+    pub fn build_checked(self) -> Result<DownloadRequest> {
+        let request = self.as_request();
+        request.validate()?;
+        Ok(request)
+    }
+
+    fn as_request(&self) -> DownloadRequest {
+        DownloadRequest {
+            url: self.url.clone(),
+            destination: self.destination.clone(),
+            sha256: self.sha256.clone(),
+            size_bytes: self.size_bytes,
+            create_parent_dirs: self.create_parent_dirs,
+            network_policy: self.network_policy.clone(),
+        }
+    }
+}
+
+/// Next app-builder action for a checked download destination plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadDestinationNextAction {
+    /// Ask the user/app for a concrete destination path before queueing.
+    PromptForDestination,
+    /// Review overwrite behavior before queueing this destination.
+    ReviewOverwritePolicy,
+    /// Build a native `DownloadRequest` and queue it through the download handoff.
+    BuildRequest,
+}
+
+impl DownloadDestinationNextAction {
+    /// Stable label for logs, UI state, and generated agents.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::PromptForDestination => "prompt-for-destination",
+            Self::ReviewOverwritePolicy => "review-overwrite-policy",
+            Self::BuildRequest => "build-request",
+        }
+    }
+}
+
+/// Checked destination-selection plan for app-owned downloads.
+#[derive(Debug, Clone)]
+pub struct DownloadDestinationPlan {
+    url: String,
+    suggested_file_name: Option<String>,
+    destination: Option<PathBuf>,
+    sha256: Option<String>,
+    size_bytes: Option<u64>,
+    network_policy: Option<NetworkPolicy>,
+    create_parent_dirs: bool,
+    existing_file_policy: DownloadExistingFilePolicy,
+    next_action: DownloadDestinationNextAction,
+}
+
+impl DownloadDestinationPlan {
+    /// Source URL for the planned app-owned download.
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// Suggested filename for Save As UI, when provided.
+    pub fn suggested_file_name(&self) -> Option<&str> {
+        self.suggested_file_name.as_deref()
+    }
+
+    /// Concrete destination path when already selected.
+    pub fn destination(&self) -> Option<&Path> {
+        self.destination.as_deref()
+    }
+
+    /// Recommended next action.
+    pub fn next_action(&self) -> DownloadDestinationNextAction {
+        self.next_action
+    }
+
+    /// Whether the plan already has a concrete destination path.
+    pub fn has_destination(&self) -> bool {
+        self.destination.is_some()
+    }
+
+    /// Whether a Save As prompt is still required.
+    pub fn needs_destination_prompt(&self) -> bool {
+        self.next_action == DownloadDestinationNextAction::PromptForDestination
+    }
+
+    /// Whether overwrite behavior should be reviewed before queueing.
+    pub fn needs_overwrite_review(&self) -> bool {
+        self.next_action == DownloadDestinationNextAction::ReviewOverwritePolicy
+    }
+
+    /// Whether the destination can be converted into a native download request.
+    pub fn can_build_request(&self) -> bool {
+        self.next_action == DownloadDestinationNextAction::BuildRequest
+    }
+
+    /// Whether the eventual request may create missing parent directories.
+    pub fn creates_parent_dirs(&self) -> bool {
+        self.create_parent_dirs
+    }
+
+    /// Existing-file policy selected for this destination.
+    pub fn existing_file_policy(&self) -> DownloadExistingFilePolicy {
+        self.existing_file_policy
+    }
+
+    /// Whether integrity metadata is complete enough for strict handoff queues.
+    pub fn has_integrity_metadata(&self) -> bool {
+        self.sha256.is_some() && self.size_bytes.is_some()
+    }
+
+    /// Whether a network policy will be attached to the request.
+    pub fn has_network_policy(&self) -> bool {
+        self.network_policy.is_some()
+    }
+
+    /// Build a native download request builder when a concrete destination exists.
+    pub fn request_builder(&self) -> Result<DownloadRequestBuilder> {
+        let destination = self.destination.clone().ok_or_else(|| {
+            anyhow!("download destination plan requires a destination before building request")
+        })?;
+        let mut request = DownloadRequest::builder(self.url.clone(), destination);
+        if let Some(sha256) = &self.sha256 {
+            request = request.sha256(sha256.clone());
+        }
+        if let Some(size_bytes) = self.size_bytes {
+            request = request.size_bytes(size_bytes);
+        }
+        if let Some(policy) = &self.network_policy {
+            request = request.network_policy(policy.clone());
+        }
+        if self.create_parent_dirs {
+            request = request.create_parent_dirs();
+        }
+        Ok(request)
+    }
+
+    /// Validate and build a native download request.
+    pub fn build_request_checked(&self) -> Result<DownloadRequest> {
+        self.request_builder()?.build_checked()
+    }
+
+    /// Host/path/size-safe summary for builder and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "download destination plan: destination {}, suggested name {}, sha256 {}, size {}, network policy {}, create parent dirs {}, existing policy {}, next action {}",
+            self.has_destination(),
+            self.suggested_file_name.is_some(),
+            self.sha256.is_some(),
+            self.size_bytes.is_some(),
+            self.has_network_policy(),
+            self.create_parent_dirs,
+            self.existing_file_policy.to_text(),
+            self.next_action().to_text()
+        )
+    }
+}
+
+/// Builder for Save As / destination-selection download flows.
+#[derive(Debug, Clone)]
+pub struct DownloadDestinationPlanBuilder {
+    url: String,
+    suggested_file_name: Option<String>,
+    download_dir: Option<PathBuf>,
+    destination: Option<PathBuf>,
+    sha256: Option<String>,
+    size_bytes: Option<u64>,
+    network_policy: Option<NetworkPolicy>,
+    create_parent_dirs: bool,
+    existing_file_policy: DownloadExistingFilePolicy,
+}
+
+impl DownloadDestinationPlanBuilder {
+    /// Create a destination plan for a download URL.
+    pub fn new(url: impl Into<String>) -> Self {
+        Self {
+            url: url.into(),
+            suggested_file_name: None,
+            download_dir: None,
+            destination: None,
+            sha256: None,
+            size_bytes: None,
+            network_policy: None,
+            create_parent_dirs: false,
+            existing_file_policy: DownloadExistingFilePolicy::FailIfExists,
+        }
+    }
+
+    /// Set a suggested filename for Save As UI or download-directory joins.
+    pub fn suggested_file_name(mut self, file_name: impl Into<String>) -> Self {
+        self.suggested_file_name = Some(file_name.into());
+        self
+    }
+
+    /// Set a download directory. Requires a suggested filename to build a request.
+    pub fn download_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.download_dir = Some(dir.into());
+        self.destination = None;
+        self
+    }
+
+    /// Set an explicit destination path selected by the app or user.
+    pub fn destination(mut self, destination: impl Into<PathBuf>) -> Self {
+        self.destination = Some(destination.into());
+        self
+    }
+
+    /// Attach expected SHA-256 metadata.
+    pub fn sha256(mut self, sha256: impl Into<String>) -> Self {
+        self.sha256 = Some(sha256.into());
+        self
+    }
+
+    /// Attach expected byte size metadata.
+    pub fn size_bytes(mut self, size_bytes: u64) -> Self {
+        self.size_bytes = Some(size_bytes);
+        self
+    }
+
+    /// Attach outbound network policy.
+    pub fn network_policy(mut self, policy: NetworkPolicy) -> Self {
+        self.network_policy = Some(policy);
+        self
+    }
+
+    /// Allow the worker to create destination parent directories.
+    pub fn create_parent_dirs(mut self) -> Self {
+        self.create_parent_dirs = true;
+        self
+    }
+
+    /// Require destination parent directories to already exist.
+    pub fn require_existing_parent(mut self) -> Self {
+        self.create_parent_dirs = false;
+        self
+    }
+
+    /// Fail if the destination already exists.
+    pub fn fail_if_exists(mut self) -> Self {
+        self.existing_file_policy = DownloadExistingFilePolicy::FailIfExists;
+        self
+    }
+
+    /// Allow replacing an existing destination after explicit review.
+    pub fn overwrite_existing(mut self) -> Self {
+        self.existing_file_policy = DownloadExistingFilePolicy::Overwrite;
+        self
+    }
+
+    /// Whether a concrete destination was supplied.
+    pub fn has_destination(&self) -> bool {
+        self.destination.is_some()
+            || (self.download_dir.is_some() && self.suggested_file_name.is_some())
+    }
+
+    /// Validate URL, filename, destination shape, and optional metadata.
+    pub fn validate(&self) -> Result<()> {
+        validate_update_url(&self.url, "download URL")?;
+        if let Some(file_name) = &self.suggested_file_name {
+            validate_download_file_name(file_name)?;
+        }
+        if let Some(dir) = &self.download_dir {
+            validate_download_directory(dir)?;
+        }
+        if let Some(destination) = &self.destination {
+            validate_download_destination(destination)?;
+        }
+        validate_optional_sha256(self.sha256.as_deref())?;
+        validate_optional_size(self.size_bytes)?;
+        if let Some(policy) = &self.network_policy {
+            policy.validate()?;
+            anyhow::ensure!(
+                policy.check_url(&self.url)?,
+                "download URL is denied by network policy"
+            );
+        }
+        Ok(())
+    }
+
+    /// Build the checked destination plan.
+    pub fn build_checked(self) -> Result<DownloadDestinationPlan> {
+        self.validate()?;
+        let destination = self.resolve_destination()?;
+        if let Some(destination) = &destination {
+            let mut request = DownloadRequest::builder(self.url.clone(), destination.clone());
+            if let Some(sha256) = &self.sha256 {
+                request = request.sha256(sha256.clone());
+            }
+            if let Some(size_bytes) = self.size_bytes {
+                request = request.size_bytes(size_bytes);
+            }
+            if let Some(policy) = &self.network_policy {
+                request = request.network_policy(policy.clone());
+            }
+            if self.create_parent_dirs {
+                request = request.create_parent_dirs();
+            }
+            request.validate()?;
+        }
+
+        let next_action = if destination.is_none() {
+            DownloadDestinationNextAction::PromptForDestination
+        } else if destination.as_ref().is_some_and(|path| path.exists()) {
+            DownloadDestinationNextAction::ReviewOverwritePolicy
+        } else {
+            DownloadDestinationNextAction::BuildRequest
+        };
+
+        Ok(DownloadDestinationPlan {
+            url: self.url,
+            suggested_file_name: self.suggested_file_name,
+            destination,
+            sha256: self.sha256,
+            size_bytes: self.size_bytes,
+            network_policy: self.network_policy,
+            create_parent_dirs: self.create_parent_dirs,
+            existing_file_policy: self.existing_file_policy,
+            next_action,
+        })
+    }
+
+    /// Host/path/size-safe summary before destination selection completes.
+    pub fn to_text(&self) -> String {
+        format!(
+            "download destination plan builder: destination {}, download dir {}, suggested name {}, sha256 {}, size {}, network policy {}, create parent dirs {}, existing policy {}",
+            self.destination.is_some(),
+            self.download_dir.is_some(),
+            self.suggested_file_name.is_some(),
+            self.sha256.is_some(),
+            self.size_bytes.is_some(),
+            self.network_policy.is_some(),
+            self.create_parent_dirs,
+            self.existing_file_policy.to_text()
+        )
+    }
+
+    fn resolve_destination(&self) -> Result<Option<PathBuf>> {
+        if let Some(destination) = &self.destination {
+            return Ok(Some(destination.clone()));
+        }
+        match (&self.download_dir, &self.suggested_file_name) {
+            (Some(dir), Some(file_name)) => Ok(Some(dir.join(file_name))),
+            _ => Ok(None),
+        }
+    }
+}
+
+/// A checked group of app-owned downloads that can be queued together.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadBatch {
+    requests: Vec<DownloadRequest>,
+}
+
+impl DownloadBatch {
+    /// Create a download batch builder.
+    pub fn builder() -> DownloadBatchBuilder {
+        DownloadBatchBuilder::new()
+    }
+
+    /// Checked requests in queue order.
+    pub fn requests(&self) -> &[DownloadRequest] {
+        &self.requests
+    }
+
+    /// Consume the batch and return its requests.
+    pub fn into_requests(self) -> Vec<DownloadRequest> {
+        self.requests
+    }
+
+    /// Number of downloads in the batch.
+    pub fn request_count(&self) -> usize {
+        self.requests.len()
+    }
+
+    /// Number of downloads with integrity metadata.
+    pub fn sha256_count(&self) -> usize {
+        self.requests
+            .iter()
+            .filter(|request| request.has_sha256())
+            .count()
+    }
+
+    /// Number of downloads with expected sizes.
+    pub fn size_count(&self) -> usize {
+        self.requests
+            .iter()
+            .filter(|request| request.has_size())
+            .count()
+    }
+
+    /// Number of downloads that may create parent directories.
+    pub fn create_parent_dirs_count(&self) -> usize {
+        self.requests
+            .iter()
+            .filter(|request| request.create_parent_dirs)
+            .count()
+    }
+
+    /// Number of downloads checked against an outbound network policy.
+    pub fn network_policy_count(&self) -> usize {
+        self.requests
+            .iter()
+            .filter(|request| request.has_network_policy())
+            .count()
+    }
+
+    /// Whether the batch contains no downloads.
+    pub fn is_empty(&self) -> bool {
+        self.requests.is_empty()
+    }
+
+    /// Validate every request in the batch.
+    pub fn validate(&self) -> Result<()> {
+        validate_download_batch(&self.requests)
+    }
+
+    /// Content-safe summary for download queues.
+    pub fn to_text(&self) -> String {
+        download_batch_summary("download batch", &self.requests)
+    }
+
+    /// Host/path/size-safe summary for privacy-sensitive agent traces.
+    pub fn to_safe_text(&self) -> String {
+        format!(
+            "download batch: requests {}, sha256 {}, sizes {}, create parent dirs {}, network policies {}",
+            self.request_count(),
+            self.sha256_count(),
+            self.size_count(),
+            self.create_parent_dirs_count(),
+            self.network_policy_count()
+        )
+    }
+}
+
+/// Builder for checked app-owned download batches.
+#[derive(Debug, Clone, Default)]
+pub struct DownloadBatchBuilder {
+    requests: Vec<DownloadRequest>,
+}
+
+impl DownloadBatchBuilder {
+    /// Create an empty batch builder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a prebuilt checked request.
+    pub fn request(mut self, request: DownloadRequest) -> Self {
+        self.requests.push(request);
+        self
+    }
+
+    /// Add a request builder after checking it.
+    pub fn request_builder(mut self, request: DownloadRequestBuilder) -> Result<Self> {
+        self.requests.push(request.build_checked()?);
+        Ok(self)
+    }
+
+    /// Add multiple prebuilt checked requests.
+    pub fn requests(mut self, requests: impl IntoIterator<Item = DownloadRequest>) -> Self {
+        self.requests.extend(requests);
+        self
+    }
+
+    /// Add a URL/destination pair with default request options.
+    pub fn url(mut self, url: impl Into<String>, destination: impl Into<PathBuf>) -> Result<Self> {
+        self.requests
+            .push(DownloadRequest::builder(url, destination).build_checked()?);
+        Ok(self)
+    }
+
+    /// Number of configured downloads.
+    pub fn request_count(&self) -> usize {
+        self.requests.len()
+    }
+
+    /// Whether this builder has no configured downloads.
+    pub fn is_empty(&self) -> bool {
+        self.requests.is_empty()
+    }
+
+    /// Validate the batch without consuming the builder.
+    pub fn validate(&self) -> Result<()> {
+        validate_download_batch(&self.requests)
+    }
+
+    /// Content-safe summary before build.
+    pub fn to_text(&self) -> String {
+        download_batch_summary("download batch builder", &self.requests)
+    }
+
+    /// Host/path/size-safe summary for privacy-sensitive agent traces.
+    pub fn to_safe_text(&self) -> String {
+        DownloadBatch {
+            requests: self.requests.clone(),
+        }
+        .to_safe_text()
+    }
+
+    /// Validate and build the batch.
+    pub fn build_checked(self) -> Result<DownloadBatch> {
+        validate_download_batch(&self.requests)?;
+        Ok(DownloadBatch {
+            requests: self.requests,
+        })
+    }
+}
+
+/// Policy for destinations that already exist before an app-owned download starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum DownloadExistingFilePolicy {
+    /// Fail before starting so generated downloads do not overwrite user files by accident.
+    #[default]
+    FailIfExists,
+    /// Allow the worker to replace an existing destination after validation.
+    Overwrite,
+}
+
+impl DownloadExistingFilePolicy {
+    /// Stable summary text for logs and agent traces.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::FailIfExists => "fail if exists",
+            Self::Overwrite => "overwrite",
+        }
+    }
+
+    /// Whether the policy allows replacing an existing destination.
+    pub fn overwrites_existing(self) -> bool {
+        matches!(self, Self::Overwrite)
+    }
+}
+
+/// Checked execution policy for a native app-owned download queue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadExecutionPlan {
+    batch: DownloadBatch,
+    max_parallel: usize,
+    retry_attempts: u8,
+    temporary_file_extension: Option<String>,
+    existing_file_policy: DownloadExistingFilePolicy,
+}
+
+impl DownloadExecutionPlan {
+    /// Create a builder for a checked native download execution plan.
+    pub fn builder(batch: DownloadBatch) -> DownloadExecutionPlanBuilder {
+        DownloadExecutionPlanBuilder::new(batch)
+    }
+
+    /// Create a builder for a single checked request.
+    pub fn from_request(request: DownloadRequest) -> DownloadExecutionPlanBuilder {
+        DownloadExecutionPlanBuilder::from_request(request)
+    }
+
+    /// Checked queue of downloads.
+    pub fn batch(&self) -> &DownloadBatch {
+        &self.batch
+    }
+
+    /// Number of downloads in the queue.
+    pub fn request_count(&self) -> usize {
+        self.batch.request_count()
+    }
+
+    /// Maximum number of downloads a worker should run at once.
+    pub fn max_parallel(&self) -> usize {
+        self.max_parallel
+    }
+
+    /// Number of retry attempts a worker may make after the first failed attempt.
+    pub fn retry_attempts(&self) -> u8 {
+        self.retry_attempts
+    }
+
+    /// Whether workers should write to a temporary filename before finalizing.
+    pub fn uses_temporary_files(&self) -> bool {
+        self.temporary_file_extension.is_some()
+    }
+
+    /// Temporary filename extension, without a leading dot, when configured.
+    pub fn temporary_file_extension(&self) -> Option<&str> {
+        self.temporary_file_extension.as_deref()
+    }
+
+    /// Existing-file policy for destination paths.
+    pub fn existing_file_policy(&self) -> DownloadExistingFilePolicy {
+        self.existing_file_policy
+    }
+
+    /// Whether the plan allows replacing existing destinations.
+    pub fn overwrites_existing(&self) -> bool {
+        self.existing_file_policy.overwrites_existing()
+    }
+
+    /// Validate the queue and execution policy.
+    pub fn validate(&self) -> Result<()> {
+        validate_download_execution_plan(
+            &self.batch,
+            self.max_parallel,
+            self.retry_attempts,
+            self.temporary_file_extension.as_deref(),
+            self.existing_file_policy,
+        )
+    }
+
+    /// Content-safe summary for native download queues.
+    pub fn to_text(&self) -> String {
+        format!(
+            "download execution plan: requests {}, max parallel {}, retries {}, temp files {}, existing policy {}, sha256 {}, sizes {}, network policies {}",
+            self.request_count(),
+            self.max_parallel,
+            self.retry_attempts,
+            self.uses_temporary_files(),
+            self.existing_file_policy.to_text(),
+            self.batch.sha256_count(),
+            self.batch.size_count(),
+            self.batch.network_policy_count()
+        )
+    }
+
+    /// Host/path/size-safe summary for privacy-sensitive agent traces.
+    pub fn to_safe_text(&self) -> String {
+        self.to_text()
+    }
+
+    /// Wrap this checked execution plan in a builder/agent handoff.
+    pub fn handoff(&self) -> DownloadHandoff {
+        DownloadHandoff::from_execution_plan(self.clone())
+    }
+}
+
+/// Recommended next action for an app-owned download handoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DownloadHandoffNextAction {
+    /// Review or replace overwrite policy before queueing downloads.
+    ReviewOverwritePolicy,
+    /// Add outbound host policy before worker/plugin/agent execution.
+    AddNetworkPolicy,
+    /// Add expected hash or size metadata before claiming verified downloads.
+    AddIntegrityMetadata,
+    /// Queue the checked native download execution plan.
+    QueueDownloads,
+}
+
+impl DownloadHandoffNextAction {
+    /// Stable action label for logs, setup UI, and agents.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::ReviewOverwritePolicy => "review-overwrite-policy",
+            Self::AddNetworkPolicy => "add-network-policy",
+            Self::AddIntegrityMetadata => "add-integrity-metadata",
+            Self::QueueDownloads => "queue-downloads",
+        }
+    }
+}
+
+/// One-object handoff for native app-owned downloads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DownloadHandoff {
+    execution_plan: DownloadExecutionPlan,
+    next_action: DownloadHandoffNextAction,
+}
+
+impl DownloadHandoff {
+    /// Build a handoff from an already checked execution plan.
+    pub fn from_execution_plan(execution_plan: DownloadExecutionPlan) -> Self {
+        let next_action = download_handoff_next_action(&execution_plan);
+        Self {
+            execution_plan,
+            next_action,
+        }
+    }
+
+    /// Checked execution plan for the native download worker.
+    pub fn execution_plan(&self) -> &DownloadExecutionPlan {
+        &self.execution_plan
+    }
+
+    /// Recommended first action before queueing downloads.
+    pub fn next_action(&self) -> DownloadHandoffNextAction {
+        self.next_action
+    }
+
+    /// Number of downloads in the handoff.
+    pub fn request_count(&self) -> usize {
+        self.execution_plan.request_count()
+    }
+
+    /// Whether every download has a network policy.
+    pub fn has_complete_network_policy(&self) -> bool {
+        self.execution_plan.batch.network_policy_count() == self.request_count()
+    }
+
+    /// Whether every download has expected SHA-256 and size metadata.
+    pub fn has_complete_integrity_metadata(&self) -> bool {
+        self.execution_plan.batch.sha256_count() == self.request_count()
+            && self.execution_plan.batch.size_count() == self.request_count()
+    }
+
+    /// Whether overwrite policy should be reviewed before execution.
+    pub fn needs_overwrite_review(&self) -> bool {
+        self.execution_plan.overwrites_existing()
+    }
+
+    /// Whether the handoff is ready to queue with full policy and integrity metadata.
+    pub fn is_queue_ready(&self) -> bool {
+        self.next_action == DownloadHandoffNextAction::QueueDownloads
+    }
+
+    /// Host/path/size-safe summary for generated download handoffs.
+    pub fn to_text(&self) -> String {
+        format!(
+            "download handoff: requests {}, max parallel {}, retries {}, temp files {}, overwrite {}, network policies {}/{}, integrity {}/{}, next action {}",
+            self.request_count(),
+            self.execution_plan.max_parallel(),
+            self.execution_plan.retry_attempts(),
+            self.execution_plan.uses_temporary_files(),
+            self.execution_plan.overwrites_existing(),
+            self.execution_plan.batch.network_policy_count(),
+            self.request_count(),
+            self.execution_plan
+                .batch
+                .sha256_count()
+                .min(self.execution_plan.batch.size_count()),
+            self.request_count(),
+            self.next_action().to_text()
+        )
+    }
+}
+
+/// Builder for native app-owned download handoffs.
+#[derive(Debug, Clone, Default)]
+pub struct DownloadHandoffBuilder {
+    batch: DownloadBatchBuilder,
+    max_parallel: Option<usize>,
+    retry_attempts: Option<u8>,
+    temporary_file_extension: Option<Option<String>>,
+    existing_file_policy: Option<DownloadExistingFilePolicy>,
+}
+
+impl DownloadHandoffBuilder {
+    /// Create an empty download handoff builder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a prebuilt checked request.
+    pub fn request(mut self, request: DownloadRequest) -> Self {
+        self.batch = self.batch.request(request);
+        self
+    }
+
+    /// Add a request builder after checking it.
+    pub fn request_builder(mut self, request: DownloadRequestBuilder) -> Result<Self> {
+        self.batch = self.batch.request_builder(request)?;
+        Ok(self)
+    }
+
+    /// Add a URL/destination pair with default request options.
+    pub fn url(mut self, url: impl Into<String>, destination: impl Into<PathBuf>) -> Result<Self> {
+        self.batch = self.batch.url(url, destination)?;
+        Ok(self)
+    }
+
+    /// Run downloads one at a time.
+    pub fn serial(mut self) -> Self {
+        self.max_parallel = Some(1);
+        self
+    }
+
+    /// Set maximum parallel downloads.
+    pub fn max_parallel(mut self, max_parallel: usize) -> Self {
+        self.max_parallel = Some(max_parallel);
+        self
+    }
+
+    /// Set retry attempts.
+    pub fn retry_attempts(mut self, retry_attempts: u8) -> Self {
+        self.retry_attempts = Some(retry_attempts);
+        self
+    }
+
+    /// Disable retries.
+    pub fn no_retries(mut self) -> Self {
+        self.retry_attempts = Some(0);
+        self
+    }
+
+    /// Write to `destination.<extension>` before finalizing.
+    pub fn temporary_file_extension(mut self, extension: impl Into<String>) -> Self {
+        self.temporary_file_extension = Some(Some(extension.into()));
+        self
+    }
+
+    /// Write directly to the final destination path.
+    pub fn without_temporary_files(mut self) -> Self {
+        self.temporary_file_extension = Some(None);
+        self
+    }
+
+    /// Fail if destinations already exist.
+    pub fn fail_if_exists(mut self) -> Self {
+        self.existing_file_policy = Some(DownloadExistingFilePolicy::FailIfExists);
+        self
+    }
+
+    /// Allow replacing existing destinations.
+    pub fn overwrite_existing(mut self) -> Self {
+        self.existing_file_policy = Some(DownloadExistingFilePolicy::Overwrite);
+        self
+    }
+
+    /// Number of configured downloads.
+    pub fn request_count(&self) -> usize {
+        self.batch.request_count()
+    }
+
+    /// Validate without consuming the builder.
+    pub fn validate(&self) -> Result<()> {
+        self.as_execution_plan_builder()?.validate()
+    }
+
+    /// Build the checked handoff.
+    pub fn build_checked(self) -> Result<DownloadHandoff> {
+        let plan = self.as_execution_plan_builder()?.build_checked()?;
+        Ok(plan.handoff())
+    }
+
+    /// Host/path/size-safe summary for generated download handoffs.
+    pub fn to_text(&self) -> String {
+        match self.as_execution_plan_builder() {
+            Ok(builder) => DownloadHandoff::from_execution_plan(builder.as_plan()).to_text(),
+            Err(_) => format!(
+                "download handoff builder: requests {}, invalid true",
+                self.request_count()
+            ),
+        }
+    }
+
+    fn as_execution_plan_builder(&self) -> Result<DownloadExecutionPlanBuilder> {
+        let batch = self.batch.clone().build_checked()?;
+        let mut builder = DownloadExecutionPlan::builder(batch);
+        if let Some(max_parallel) = self.max_parallel {
+            builder = builder.max_parallel(max_parallel);
+        }
+        if let Some(retry_attempts) = self.retry_attempts {
+            builder = builder.retry_attempts(retry_attempts);
+        }
+        if let Some(extension) = &self.temporary_file_extension {
+            builder = match extension {
+                Some(extension) => builder.temporary_file_extension(extension.clone()),
+                None => builder.without_temporary_files(),
+            };
+        }
+        if let Some(policy) = self.existing_file_policy {
+            builder = match policy {
+                DownloadExistingFilePolicy::FailIfExists => builder.fail_if_exists(),
+                DownloadExistingFilePolicy::Overwrite => builder.overwrite_existing(),
+            };
+        }
+        Ok(builder)
+    }
+}
+
+fn download_handoff_next_action(plan: &DownloadExecutionPlan) -> DownloadHandoffNextAction {
+    if plan.overwrites_existing() {
+        DownloadHandoffNextAction::ReviewOverwritePolicy
+    } else if plan.batch.network_policy_count() < plan.request_count() {
+        DownloadHandoffNextAction::AddNetworkPolicy
+    } else if plan.batch.sha256_count() < plan.request_count()
+        || plan.batch.size_count() < plan.request_count()
+    {
+        DownloadHandoffNextAction::AddIntegrityMetadata
+    } else {
+        DownloadHandoffNextAction::QueueDownloads
+    }
+}
+
+/// Builder for native app-owned download queue execution policy.
+#[derive(Debug, Clone)]
+pub struct DownloadExecutionPlanBuilder {
+    batch: DownloadBatch,
+    max_parallel: usize,
+    retry_attempts: u8,
+    temporary_file_extension: Option<String>,
+    existing_file_policy: DownloadExistingFilePolicy,
+}
+
+impl DownloadExecutionPlanBuilder {
+    /// Create a plan builder for an existing checked batch.
+    pub fn new(batch: DownloadBatch) -> Self {
+        Self {
+            batch,
+            max_parallel: 2,
+            retry_attempts: 2,
+            temporary_file_extension: Some("download".to_string()),
+            existing_file_policy: DownloadExistingFilePolicy::FailIfExists,
+        }
+    }
+
+    /// Create a plan builder for one checked request.
+    pub fn from_request(request: DownloadRequest) -> Self {
+        Self::new(DownloadBatch {
+            requests: vec![request],
+        })
+    }
+
+    /// Run downloads one at a time.
+    pub fn serial(mut self) -> Self {
+        self.max_parallel = 1;
+        self
+    }
+
+    /// Set the maximum number of downloads a worker should run at once.
+    pub fn max_parallel(mut self, max_parallel: usize) -> Self {
+        self.max_parallel = max_parallel;
+        self
+    }
+
+    /// Set retry attempts after the initial attempt.
+    pub fn retry_attempts(mut self, retry_attempts: u8) -> Self {
+        self.retry_attempts = retry_attempts;
+        self
+    }
+
+    /// Disable retries.
+    pub fn no_retries(mut self) -> Self {
+        self.retry_attempts = 0;
+        self
+    }
+
+    /// Write to `destination.<extension>` before finalizing the destination.
+    pub fn temporary_file_extension(mut self, extension: impl Into<String>) -> Self {
+        self.temporary_file_extension = Some(extension.into());
+        self
+    }
+
+    /// Write directly to the final destination path.
+    pub fn without_temporary_files(mut self) -> Self {
+        self.temporary_file_extension = None;
+        self
+    }
+
+    /// Fail if any destination already exists before the worker starts.
+    pub fn fail_if_exists(mut self) -> Self {
+        self.existing_file_policy = DownloadExistingFilePolicy::FailIfExists;
+        self
+    }
+
+    /// Allow the worker to replace existing destinations.
+    pub fn overwrite_existing(mut self) -> Self {
+        self.existing_file_policy = DownloadExistingFilePolicy::Overwrite;
+        self
+    }
+
+    /// Number of downloads in the queue.
+    pub fn request_count(&self) -> usize {
+        self.batch.request_count()
+    }
+
+    /// Maximum number of downloads a worker should run at once.
+    pub fn max_parallel_count(&self) -> usize {
+        self.max_parallel
+    }
+
+    /// Number of retry attempts configured.
+    pub fn retry_attempt_count(&self) -> u8 {
+        self.retry_attempts
+    }
+
+    /// Whether workers should write to temporary filenames before finalizing.
+    pub fn uses_temporary_files(&self) -> bool {
+        self.temporary_file_extension.is_some()
+    }
+
+    /// Existing-file policy for destination paths.
+    pub fn existing_file_policy(&self) -> DownloadExistingFilePolicy {
+        self.existing_file_policy
+    }
+
+    /// Validate the queue and execution policy without consuming the builder.
+    pub fn validate(&self) -> Result<()> {
+        validate_download_execution_plan(
+            &self.batch,
+            self.max_parallel,
+            self.retry_attempts,
+            self.temporary_file_extension.as_deref(),
+            self.existing_file_policy,
+        )
+    }
+
+    /// Content-safe summary before build.
+    pub fn to_text(&self) -> String {
+        self.as_plan().to_text()
+    }
+
+    /// Host/path/size-safe summary for privacy-sensitive agent traces.
+    pub fn to_safe_text(&self) -> String {
+        self.as_plan().to_safe_text()
+    }
+
+    /// Validate and build the execution plan.
+    pub fn build_checked(self) -> Result<DownloadExecutionPlan> {
+        let plan = self.as_plan();
+        plan.validate()?;
+        Ok(plan)
+    }
+
+    fn as_plan(&self) -> DownloadExecutionPlan {
+        DownloadExecutionPlan {
+            batch: self.batch.clone(),
+            max_parallel: self.max_parallel,
+            retry_attempts: self.retry_attempts,
+            temporary_file_extension: self.temporary_file_extension.clone(),
+            existing_file_policy: self.existing_file_policy,
+        }
     }
 }
 
@@ -138,6 +1562,19 @@ impl AutoUpdater {
             require_signature: true,
             policy: None,
         }
+    }
+
+    /// Create a new auto-updater after validating its configuration.
+    pub fn new_checked(
+        config: impl Into<AutoUpdaterConfigBuilder>,
+        current_version: SemanticVersion,
+        http_client: Arc<dyn http_client::HttpClient>,
+    ) -> Result<Self> {
+        Ok(Self::new(
+            config.into().build_checked()?,
+            current_version,
+            http_client,
+        ))
     }
 
     /// Set the platform-specific installer backend.
@@ -225,47 +1662,76 @@ impl AutoUpdater {
     /// otherwise.
     pub async fn check_for_updates(&mut self) -> Result<Option<UpdateInfo>> {
         self.status = UpdateStatus::Checking;
+        let result: Result<Option<UpdateInfo>> = async {
+            self.config.validate()?;
+            let mut response = self
+                .http_client
+                .get(&self.config.feed_url, Default::default(), false)
+                .await
+                .context("failed to fetch update feed")?;
 
-        let mut response = self
-            .http_client
-            .get(&self.config.feed_url, Default::default(), false)
-            .await
-            .context("failed to fetch update feed")?;
+            let status = response.status();
+            anyhow::ensure!(
+                status.is_success(),
+                "update feed returned HTTP {}",
+                status.as_u16()
+            );
 
-        let status = response.status();
-        if !status.is_success() {
-            let msg = format!("update feed returned HTTP {}", status.as_u16());
-            self.status = UpdateStatus::Error(msg.clone());
-            bail!("{}", msg);
+            let mut body = Vec::new();
+            let mut chunk = [0u8; 64 * 1024];
+            loop {
+                let read = response
+                    .body_mut()
+                    .read(&mut chunk)
+                    .await
+                    .context("failed to read update feed body")?;
+                if read == 0 {
+                    break;
+                }
+                anyhow::ensure!(
+                    body.len().saturating_add(read) <= MAX_UPDATE_FEED_BYTES,
+                    "update feed exceeds {MAX_UPDATE_FEED_BYTES} byte limit"
+                );
+                body.extend_from_slice(&chunk[..read]);
+            }
+
+            let body = std::str::from_utf8(&body).context("update feed is not valid UTF-8")?;
+            let updates = parse_update_feed(body)?;
+            for update in &updates {
+                let validation = if self.require_signature {
+                    update.validate_signed_metadata()
+                } else {
+                    update.validate()
+                };
+                validation.context("update feed contains invalid metadata")?;
+            }
+
+            Ok(updates
+                .into_iter()
+                // SemanticVersion currently does not preserve pre-release metadata,
+                // so feed filtering is limited to version ordering for now.
+                .filter(|update| update.version > self.current_version)
+                .max_by_key(|update| update.version))
         }
+        .await;
 
-        let mut body = Vec::new();
-        response
-            .body_mut()
-            .read_to_end(&mut body)
-            .await
-            .context("failed to read update feed body")?;
-
-        let body_str = String::from_utf8_lossy(&body);
-
-        let updates = parse_update_feed(&body_str)?;
-
-        let latest = updates
-            .into_iter()
-            // SemanticVersion currently does not preserve pre-release metadata,
-            // so feed filtering is limited to version ordering for now.
-            .filter(|u| u.version > self.current_version)
-            .max_by_key(|u| u.version);
-
-        if let Some(ref update) = latest {
-            self.status = UpdateStatus::UpdateAvailable(update.version);
-            self.latest_update = Some(update.clone());
-        } else {
-            self.status = UpdateStatus::Idle;
-            self.latest_update = None;
+        match result {
+            Ok(Some(update)) => {
+                self.status = UpdateStatus::UpdateAvailable(update.version);
+                self.latest_update = Some(update.clone());
+                Ok(Some(update))
+            }
+            Ok(None) => {
+                self.status = UpdateStatus::Idle;
+                self.latest_update = None;
+                Ok(None)
+            }
+            Err(error) => {
+                self.status = UpdateStatus::Error(error.to_string());
+                self.latest_update = None;
+                Err(error)
+            }
         }
-
-        Ok(latest)
     }
 
     /// Download the latest available update in the background.
@@ -282,13 +1748,31 @@ impl AutoUpdater {
             .ok_or_else(|| anyhow!("no update available to download"))?
             .clone();
 
-        self.status = UpdateStatus::Downloading;
+        let metadata_result = if self.require_signature {
+            update.validate_signed_metadata()
+        } else {
+            update.validate()
+        };
+        if let Err(error) = metadata_result {
+            self.status = UpdateStatus::Error(error.to_string());
+            return Err(error).context("update metadata is invalid");
+        }
 
-        let mut response = self
+        self.status = UpdateStatus::Downloading;
+        self.downloaded_path = None;
+
+        let mut response = match self
             .http_client
             .get(&update.download_url, Default::default(), false)
             .await
-            .context("failed to start update download")?;
+            .context("failed to start update download")
+        {
+            Ok(response) => response,
+            Err(error) => {
+                self.status = UpdateStatus::Error(error.to_string());
+                return Err(error);
+            }
+        };
 
         let status = response.status();
         if !status.is_success() {
@@ -303,41 +1787,101 @@ impl AutoUpdater {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok());
 
-        let mut bytes: Vec<u8> = match total_bytes {
-            Some(total) => Vec::with_capacity(total.min(64 * 1024 * 1024) as usize),
-            None => Vec::new(),
-        };
-        let body = response.body_mut();
-        let mut chunk = [0u8; 64 * 1024];
-        loop {
-            let read = body
-                .read(&mut chunk)
-                .await
-                .context("failed to read update package")?;
-            if read == 0 {
-                break;
+        if let Some(total) = total_bytes {
+            if total > MAX_UPDATE_PACKAGE_BYTES {
+                let error = anyhow!("update package exceeds {MAX_UPDATE_PACKAGE_BYTES} byte limit");
+                self.status = UpdateStatus::Error(error.to_string());
+                return Err(error);
             }
-            bytes.extend_from_slice(&chunk[..read]);
-            on_progress(DownloadProgress {
-                bytes_downloaded: bytes.len() as u64,
-                total_bytes,
-            });
-        }
-
-        if let Err(err) = self.verify_package(&update, &bytes) {
-            self.downloaded_path = None;
-            self.status = UpdateStatus::Error(err.to_string());
-            return Err(err).context("update package failed verification; refusing to install");
+            if let Some(expected) = update.size_bytes {
+                if total != expected {
+                    let error = anyhow!("update content length does not match signed size");
+                    self.status = UpdateStatus::Error(error.to_string());
+                    return Err(error);
+                }
+            }
         }
 
         let staging_dir =
             std::env::temp_dir().join(format!("kael_update_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&staging_dir)
-            .context("failed to create update staging directory")?;
+        if let Err(error) =
+            std::fs::create_dir(&staging_dir).context("failed to create update staging directory")
+        {
+            self.status = UpdateStatus::Error(error.to_string());
+            return Err(error);
+        }
         restrict_dir_permissions(&staging_dir);
 
         let download_path = staging_dir.join(sanitize_package_filename(&update.download_url));
-        std::fs::write(&download_path, &bytes).context("failed to write update package to disk")?;
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&download_path)
+            .context("failed to create staged update package")
+        {
+            Ok(file) => file,
+            Err(error) => {
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                self.status = UpdateStatus::Error(error.to_string());
+                return Err(error);
+            }
+        };
+
+        let download_result: Result<(u64, String)> = async {
+            let body = response.body_mut();
+            let mut chunk = [0u8; 64 * 1024];
+            let mut downloaded = 0u64;
+            let mut hasher = Sha256::new();
+            loop {
+                let read = body
+                    .read(&mut chunk)
+                    .await
+                    .context("failed to read update package")?;
+                if read == 0 {
+                    break;
+                }
+                downloaded = downloaded
+                    .checked_add(read as u64)
+                    .ok_or_else(|| anyhow!("update download size overflow"))?;
+                anyhow::ensure!(
+                    downloaded <= MAX_UPDATE_PACKAGE_BYTES,
+                    "update package exceeds {MAX_UPDATE_PACKAGE_BYTES} byte limit"
+                );
+                if let Some(expected) = update.size_bytes {
+                    anyhow::ensure!(downloaded <= expected, "update exceeds signed package size");
+                }
+                file.write_all(&chunk[..read])
+                    .context("failed to write staged update package")?;
+                hasher.update(&chunk[..read]);
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    on_progress(DownloadProgress {
+                        bytes_downloaded: downloaded,
+                        total_bytes,
+                    });
+                }))
+                .map_err(|_| anyhow!("update progress callback panicked"))?;
+            }
+            file.sync_all()
+                .context("failed to sync staged update package")?;
+            Ok((downloaded, hex::encode(hasher.finalize())))
+        }
+        .await;
+
+        let (downloaded_size, actual_sha256) = match download_result {
+            Ok(result) => result,
+            Err(error) => {
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                self.status = UpdateStatus::Error(error.to_string());
+                return Err(error);
+            }
+        };
+
+        if let Err(err) = self.verify_package_digest(&update, downloaded_size, &actual_sha256) {
+            let _ = std::fs::remove_dir_all(&staging_dir);
+            self.downloaded_path = None;
+            self.status = UpdateStatus::Error(err.to_string());
+            return Err(err).context("update package failed verification; refusing to install");
+        }
 
         self.downloaded_path = Some(download_path.clone());
         self.status = UpdateStatus::ReadyToInstall;
@@ -345,7 +1889,17 @@ impl AutoUpdater {
         Ok(download_path)
     }
 
+    #[cfg(test)]
     fn verify_package(&self, update: &UpdateInfo, bytes: &[u8]) -> Result<()> {
+        self.verify_package_digest(update, bytes.len() as u64, &sha256_hex(bytes))
+    }
+
+    fn verify_package_digest(
+        &self,
+        update: &UpdateInfo,
+        downloaded_size: u64,
+        actual_sha256: &str,
+    ) -> Result<()> {
         match self.verifying_key.as_ref() {
             Some(key) => {
                 let signature_b64 = update.signature.as_deref().ok_or_else(|| {
@@ -393,16 +1947,17 @@ impl AutoUpdater {
         match update.sha256.as_deref() {
             Some(expected) => {
                 if let Some(expected_size) = update.size_bytes {
-                    if bytes.len() as u64 != expected_size {
+                    if downloaded_size != expected_size {
                         bail!(
                             "update size mismatch: expected {expected_size} bytes, downloaded {}",
-                            bytes.len()
+                            downloaded_size
                         );
                     }
                 }
-                let actual = sha256_hex(bytes);
-                if actual.len() != expected.len() || !actual.eq_ignore_ascii_case(expected) {
-                    bail!("update hash mismatch: expected {expected}, downloaded {actual}");
+                if actual_sha256.len() != expected.len()
+                    || !actual_sha256.eq_ignore_ascii_case(expected)
+                {
+                    bail!("update hash mismatch: expected {expected}, downloaded {actual_sha256}");
                 }
             }
             None => {
@@ -431,10 +1986,60 @@ impl AutoUpdater {
             .as_ref()
             .ok_or_else(|| anyhow!("no update has been downloaded"))?;
 
+        let update = self
+            .latest_update
+            .as_ref()
+            .ok_or_else(|| anyhow!("downloaded update metadata is unavailable"))?;
+        self.verify_downloaded_file(update, path)?;
+
         installer.install_and_restart(path)
+    }
+
+    fn verify_downloaded_file(&self, update: &UpdateInfo, path: &Path) -> Result<()> {
+        let metadata = std::fs::symlink_metadata(path)
+            .with_context(|| format!("failed to inspect downloaded update: {}", path.display()))?;
+        anyhow::ensure!(
+            metadata.file_type().is_file(),
+            "downloaded update must be a regular file"
+        );
+        anyhow::ensure!(
+            metadata.len() <= MAX_UPDATE_PACKAGE_BYTES,
+            "downloaded update exceeds package limit"
+        );
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        let mut file = options
+            .open(path)
+            .with_context(|| format!("failed to open downloaded update: {}", path.display()))?;
+        let mut hasher = Sha256::new();
+        let mut size = 0u64;
+        let mut chunk = [0u8; 64 * 1024];
+        loop {
+            let read = std::io::Read::read(&mut file, &mut chunk)
+                .context("failed to re-read downloaded update")?;
+            if read == 0 {
+                break;
+            }
+            size = size
+                .checked_add(read as u64)
+                .ok_or_else(|| anyhow!("downloaded update size overflow"))?;
+            anyhow::ensure!(
+                size <= MAX_UPDATE_PACKAGE_BYTES,
+                "downloaded update exceeds package limit"
+            );
+            hasher.update(&chunk[..read]);
+        }
+        self.verify_package_digest(update, size, &hex::encode(hasher.finalize()))
+            .context("downloaded update changed after verification")
     }
 }
 
+#[cfg(test)]
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
@@ -452,6 +2057,268 @@ fn channel_from_str(channel: &str) -> UpdateChannel {
     } else {
         UpdateChannel::Custom(trimmed.to_string())
     }
+}
+
+fn validate_update_feed_url(feed_url: &str) -> Result<()> {
+    validate_update_url(feed_url, "update feed URL")
+}
+
+fn validate_update_url(url: &str, label: &str) -> Result<()> {
+    anyhow::ensure!(!url.trim().is_empty(), "{} cannot be empty", label);
+    anyhow::ensure!(
+        url.len() <= MAX_UPDATE_URL_BYTES,
+        "{} exceeds {MAX_UPDATE_URL_BYTES} bytes",
+        label
+    );
+    anyhow::ensure!(
+        url == url.trim(),
+        "{} cannot have leading or trailing whitespace",
+        label
+    );
+
+    let parsed = http_client::Url::parse(url).with_context(|| format!("{label} is invalid"))?;
+    anyhow::ensure!(parsed.scheme() == "https", "{} must use https", label);
+    anyhow::ensure!(parsed.host_str().is_some(), "{} must include a host", label);
+    if label.starts_with("update") {
+        anyhow::ensure!(
+            parsed.username().is_empty() && parsed.password().is_none(),
+            "{} cannot contain URL credentials",
+            label
+        );
+        anyhow::ensure!(
+            parsed.fragment().is_none(),
+            "{} cannot contain a fragment",
+            label
+        );
+    }
+    Ok(())
+}
+
+fn download_url_summary(url: &str) -> String {
+    let Ok(parsed) = http_client::Url::parse(url) else {
+        return "invalid url".to_string();
+    };
+
+    let host = parsed.host_str().unwrap_or("unknown-host");
+    let port = parsed
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+
+    format!("{}://{}{}", parsed.scheme(), host, port)
+}
+
+fn validate_optional_sha256(sha256: Option<&str>) -> Result<()> {
+    let Some(sha256) = sha256 else {
+        return Ok(());
+    };
+
+    anyhow::ensure!(
+        sha256.len() == 64 && sha256.chars().all(|ch| ch.is_ascii_hexdigit()),
+        "update sha256 must be a 64-character hex digest"
+    );
+    Ok(())
+}
+
+fn validate_optional_size(size_bytes: Option<u64>) -> Result<()> {
+    if let Some(size_bytes) = size_bytes {
+        anyhow::ensure!(
+            size_bytes > 0 && size_bytes <= MAX_UPDATE_PACKAGE_BYTES,
+            "update package size must be between 1 and {MAX_UPDATE_PACKAGE_BYTES} bytes"
+        );
+    }
+    Ok(())
+}
+
+fn validate_download_file_name(file_name: &str) -> Result<()> {
+    anyhow::ensure!(
+        !file_name.trim().is_empty(),
+        "download suggested filename cannot be empty"
+    );
+    anyhow::ensure!(
+        file_name == file_name.trim(),
+        "download suggested filename cannot have leading or trailing whitespace"
+    );
+    anyhow::ensure!(
+        !file_name.chars().any(|ch| ch == '\0' || ch.is_control()),
+        "download suggested filename cannot contain control characters"
+    );
+    anyhow::ensure!(
+        file_name != "." && file_name != "..",
+        "download suggested filename cannot be a dot path"
+    );
+    let path = Path::new(file_name);
+    let mut components = path.components();
+    anyhow::ensure!(
+        matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none(),
+        "download suggested filename cannot contain path separators"
+    );
+    Ok(())
+}
+
+fn validate_download_directory(directory: &Path) -> Result<()> {
+    let directory_text = directory.to_string_lossy();
+    anyhow::ensure!(
+        !directory_text.trim().is_empty(),
+        "download directory cannot be empty"
+    );
+    anyhow::ensure!(
+        directory.is_absolute(),
+        "download directory must be absolute: {}",
+        directory.display()
+    );
+    anyhow::ensure!(
+        !directory_text.chars().any(|ch| ch == '\0'),
+        "download directory cannot contain NUL characters"
+    );
+    Ok(())
+}
+
+fn validate_download_destination(destination: &std::path::Path) -> Result<()> {
+    let destination_text = destination.to_string_lossy();
+    anyhow::ensure!(
+        !destination_text.trim().is_empty(),
+        "download destination cannot be empty"
+    );
+    anyhow::ensure!(
+        destination.is_absolute(),
+        "download destination must be absolute: {}",
+        destination.display()
+    );
+    anyhow::ensure!(
+        !destination_text.chars().any(|ch| ch == '\0'),
+        "download destination cannot contain NUL characters"
+    );
+    anyhow::ensure!(
+        !destination.is_dir(),
+        "download destination cannot be an existing directory: {}",
+        destination.display()
+    );
+    Ok(())
+}
+
+fn validate_download_batch(requests: &[DownloadRequest]) -> Result<()> {
+    anyhow::ensure!(
+        !requests.is_empty(),
+        "download batch must contain at least one request"
+    );
+
+    let mut destinations = std::collections::HashSet::new();
+    for request in requests {
+        request.validate()?;
+        anyhow::ensure!(
+            destinations.insert(request.destination.clone()),
+            "download batch destination is duplicated: {}",
+            request.destination.display()
+        );
+    }
+
+    Ok(())
+}
+
+fn validate_download_execution_plan(
+    batch: &DownloadBatch,
+    max_parallel: usize,
+    retry_attempts: u8,
+    temporary_file_extension: Option<&str>,
+    existing_file_policy: DownloadExistingFilePolicy,
+) -> Result<()> {
+    batch.validate()?;
+    anyhow::ensure!(
+        max_parallel > 0,
+        "download execution plan must allow at least one parallel download"
+    );
+    anyhow::ensure!(
+        max_parallel <= 16,
+        "download execution plan cannot run more than 16 downloads in parallel"
+    );
+    anyhow::ensure!(
+        retry_attempts <= 10,
+        "download execution plan cannot retry more than 10 times"
+    );
+    if let Some(extension) = temporary_file_extension {
+        validate_temporary_file_extension(extension)?;
+    }
+    if !existing_file_policy.overwrites_existing() {
+        for request in batch.requests() {
+            anyhow::ensure!(
+                !request.destination.exists(),
+                "download destination already exists: {}",
+                request.destination.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_temporary_file_extension(extension: &str) -> Result<()> {
+    anyhow::ensure!(
+        !extension.trim().is_empty(),
+        "download temporary extension cannot be empty"
+    );
+    anyhow::ensure!(
+        extension == extension.trim(),
+        "download temporary extension cannot have surrounding whitespace"
+    );
+    anyhow::ensure!(
+        !extension.starts_with('.'),
+        "download temporary extension should not start with a dot"
+    );
+    anyhow::ensure!(
+        !extension
+            .chars()
+            .any(|ch| ch == '/' || ch == '\\' || ch == '\0'),
+        "download temporary extension cannot contain path separators or NUL characters"
+    );
+    Ok(())
+}
+
+fn download_batch_summary(label: &str, requests: &[DownloadRequest]) -> String {
+    let sha256_count = requests
+        .iter()
+        .filter(|request| request.has_sha256())
+        .count();
+    let size_count = requests.iter().filter(|request| request.has_size()).count();
+    let create_parent_dirs_count = requests
+        .iter()
+        .filter(|request| request.create_parent_dirs)
+        .count();
+    let network_policy_count = requests
+        .iter()
+        .filter(|request| request.has_network_policy())
+        .count();
+
+    format!(
+        "{label}: requests {}, sha256 {}, sizes {}, create parent dirs {}, network policies {}",
+        requests.len(),
+        sha256_count,
+        size_count,
+        create_parent_dirs_count,
+        network_policy_count
+    )
+}
+
+fn validate_optional_signature(signature: Option<&str>) -> Result<()> {
+    let Some(signature) = signature else {
+        return Ok(());
+    };
+
+    anyhow::ensure!(
+        !signature.trim().is_empty(),
+        "update signature cannot be empty"
+    );
+    anyhow::ensure!(
+        signature == signature.trim(),
+        "update signature cannot have leading or trailing whitespace"
+    );
+    let signature_bytes = BASE64
+        .decode(signature)
+        .context("update signature is not valid base64")?;
+    anyhow::ensure!(
+        signature_bytes.len() == 64,
+        "update signature must decode to 64 bytes"
+    );
+    Ok(())
 }
 
 fn sanitize_package_filename(download_url: &str) -> String {
@@ -753,11 +2620,9 @@ impl PlatformInstaller for MacInstaller {
 
         match ext {
             "zip" => {
-                let temp_dir = std::env::temp_dir().join("gpui_update_extract");
-                if temp_dir.exists() {
-                    std::fs::remove_dir_all(&temp_dir)?;
-                }
-                std::fs::create_dir_all(&temp_dir)?;
+                let temp_dir = std::env::temp_dir()
+                    .join(format!("kael_update_extract_{}", uuid::Uuid::new_v4()));
+                std::fs::create_dir(&temp_dir)?;
 
                 let status = std::process::Command::new("ditto")
                     .args([
@@ -776,15 +2641,9 @@ impl PlatformInstaller for MacInstaller {
                 replace_app_bundle(&new_app, &app_bundle)?;
             }
             "dmg" => {
-                let mount_point = std::env::temp_dir().join("gpui_update_dmg");
-                if mount_point.exists() {
-                    // Try to detach any previous mount
-                    let _ = std::process::Command::new("hdiutil")
-                        .args(["detach", &mount_point.to_string_lossy(), "-quiet"])
-                        .status();
-                    let _ = std::fs::remove_dir_all(&mount_point);
-                }
-                std::fs::create_dir_all(&mount_point)?;
+                let mount_point =
+                    std::env::temp_dir().join(format!("kael_update_dmg_{}", uuid::Uuid::new_v4()));
+                std::fs::create_dir(&mount_point)?;
 
                 let status = std::process::Command::new("hdiutil")
                     .args([
@@ -847,14 +2706,21 @@ fn resolve_running_app_bundle() -> Result<std::path::PathBuf> {
 /// Find the first `.app` bundle inside a directory.
 #[cfg(target_os = "macos")]
 fn find_app_bundle_in(dir: &std::path::Path) -> Result<std::path::PathBuf> {
+    let mut bundles = Vec::new();
     for entry in std::fs::read_dir(dir).context("failed to read extraction directory")? {
         let entry = entry?;
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("app") {
-            return Ok(path);
+        if entry.file_type()?.is_dir() && path.extension().and_then(|e| e.to_str()) == Some("app") {
+            bundles.push(path);
         }
     }
-    bail!("no .app bundle found in {}", dir.display())
+    anyhow::ensure!(
+        bundles.len() == 1,
+        "expected exactly one .app bundle in {}, found {}",
+        dir.display(),
+        bundles.len()
+    );
+    Ok(bundles.remove(0))
 }
 
 /// Validate the code signature of `new_app`, then atomically swap it over
@@ -877,10 +2743,8 @@ fn replace_app_bundle(new_app: &std::path::Path, existing_app: &std::path::Path)
         .and_then(|name| name.to_str())
         .unwrap_or("Kael.app");
 
-    let staged = parent.join(format!(".{file_name}.staged"));
-    if staged.exists() {
-        std::fs::remove_dir_all(&staged)?;
-    }
+    let token = uuid::Uuid::new_v4();
+    let staged = parent.join(format!(".{file_name}.{token}.staged"));
 
     let status = std::process::Command::new("cp")
         .args(["-R", &new_app.to_string_lossy(), &staged.to_string_lossy()])
@@ -894,7 +2758,7 @@ fn replace_app_bundle(new_app: &std::path::Path, existing_app: &std::path::Path)
     let plan = SwapPlan {
         live: existing_app.to_path_buf(),
         staged,
-        backup: existing_app.with_extension("app.backup"),
+        backup: parent.join(format!(".{file_name}.{token}.backup")),
     };
 
     atomic_swap_with_rollback(&FsInstaller, &plan)
@@ -1038,35 +2902,41 @@ impl PlatformInstaller for LinuxInstaller {
 
         match format {
             LinuxPackageFormat::AppImage => {
-                let exe =
-                    std::env::current_exe().context("failed to get current executable path")?;
+                use kael_release::apply::{FsInstaller, SwapPlan, atomic_swap_with_rollback};
+                use std::os::unix::fs::PermissionsExt as _;
 
-                // Replace the running AppImage with the new one
-                let backup = exe.with_extension("bak");
-                if backup.exists() {
-                    std::fs::remove_file(&backup)?;
-                }
-                std::fs::rename(&exe, &backup)
-                    .context("failed to move current AppImage to backup")?;
+                let exe = match std::env::var_os("APPIMAGE") {
+                    Some(path) => PathBuf::from(path),
+                    None => {
+                        std::env::current_exe().context("failed to get current executable path")?
+                    }
+                };
+                anyhow::ensure!(exe.is_absolute(), "AppImage path must be absolute");
+                anyhow::ensure!(
+                    std::fs::symlink_metadata(&exe)?.file_type().is_file(),
+                    "AppImage path must be a regular file"
+                );
+                let parent = exe
+                    .parent()
+                    .ok_or_else(|| anyhow!("AppImage path has no parent directory"))?;
+                let token = uuid::Uuid::new_v4();
+                let staged = parent.join(format!(".kael-appimage-{token}.staged"));
+                let backup = parent.join(format!(".kael-appimage-{token}.backup"));
+                std::fs::copy(package_path, &staged)
+                    .context("failed to stage new AppImage on the install volume")?;
+                let mut permissions = std::fs::metadata(&staged)?.permissions();
+                permissions.set_mode(permissions.mode() | 0o700);
+                std::fs::set_permissions(&staged, permissions)?;
 
-                if let Err(e) = std::fs::copy(package_path, &exe) {
-                    // Attempt to restore backup
-                    let _ = std::fs::rename(&backup, &exe);
-                    return Err(e).context("failed to copy new AppImage into place");
-                }
-
-                // Make executable
-                let status = std::process::Command::new("chmod")
-                    .args(["+x", &exe.to_string_lossy()])
-                    .status()
-                    .context("failed to chmod new AppImage")?;
-
-                if !status.success() {
-                    let _ = std::fs::rename(&backup, &exe);
-                    bail!("chmod failed with status {}", status);
-                }
-
-                let _ = std::fs::remove_file(&backup);
+                atomic_swap_with_rollback(
+                    &FsInstaller,
+                    &SwapPlan {
+                        live: exe.clone(),
+                        staged,
+                        backup,
+                    },
+                )
+                .context("failed to atomically replace AppImage")?;
 
                 // Restart
                 let _ = std::process::Command::new(&exe)
@@ -1076,8 +2946,9 @@ impl PlatformInstaller for LinuxInstaller {
                 std::process::exit(0);
             }
             LinuxPackageFormat::Flatpak => {
-                let app_id =
-                    std::env::var("FLATPAK_ID").unwrap_or_else(|_| "current-app".to_string());
+                let app_id = std::env::var("FLATPAK_ID")
+                    .context("FLATPAK_ID is required for Flatpak updates")?;
+                validate_package_manager_id(&app_id, "Flatpak app id")?;
 
                 let status = std::process::Command::new("flatpak")
                     .args(["update", "-y", &app_id])
@@ -1098,7 +2969,8 @@ impl PlatformInstaller for LinuxInstaller {
             }
             LinuxPackageFormat::Snap => {
                 let snap_name =
-                    std::env::var("SNAP_NAME").unwrap_or_else(|_| "current-app".to_string());
+                    std::env::var("SNAP_NAME").context("SNAP_NAME is required for Snap updates")?;
+                validate_package_manager_id(&snap_name, "Snap package name")?;
 
                 let status = std::process::Command::new("snap")
                     .args(["refresh", &snap_name])
@@ -1119,6 +2991,23 @@ impl PlatformInstaller for LinuxInstaller {
             }
         }
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn validate_package_manager_id(value: &str, label: &str) -> Result<()> {
+    anyhow::ensure!(
+        !value.is_empty()
+            && value.len() <= 255
+            && value
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            && value
+                .bytes()
+                .all(|byte| { byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_') }),
+        "{label} is invalid"
+    );
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1425,6 +3314,721 @@ mod tests {
             total_bytes: None,
         };
         assert_eq!(unknown.fraction(), None);
+
+        let empty = DownloadProgress {
+            bytes_downloaded: 0,
+            total_bytes: Some(0),
+        };
+        assert_eq!(empty.fraction(), None);
+
+        let overrun = DownloadProgress {
+            bytes_downloaded: 150,
+            total_bytes: Some(100),
+        };
+        assert_eq!(overrun.fraction(), Some(1.0));
+    }
+
+    #[test]
+    fn download_request_builder_validates_common_downloads() {
+        let destination = std::env::temp_dir().join("kael-download-request.bin");
+        let builder =
+            DownloadRequest::builder("https://example.com/files/report.pdf", &destination)
+                .sha256("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .size_bytes(1024)
+                .network_policy(
+                    crate::NetworkPolicyBuilder::new()
+                        .allow_host("example.com")
+                        .build_checked()
+                        .unwrap(),
+                );
+
+        assert!(builder.validate().is_ok());
+        assert!(builder.has_sha256());
+        assert!(builder.has_size());
+        assert!(!builder.creates_parent_dirs());
+        assert!(builder.has_network_policy());
+        assert!(builder.to_text().contains("sha256 present"));
+        assert!(!builder.to_text().contains("report.pdf"));
+        assert_eq!(
+            builder.to_safe_text(),
+            "download request: url true, destination true, sha256 true, size true, create parent dirs false, network policy true"
+        );
+
+        let request = builder.build_checked().unwrap();
+
+        assert_eq!(request.destination, destination);
+        assert_eq!(request.size_bytes, Some(1024));
+        assert!(request.has_sha256());
+        assert!(request.has_size());
+        assert!(request.has_network_policy());
+    }
+
+    #[test]
+    fn download_request_summary_is_agent_readable_and_credential_safe() {
+        let destination = std::env::temp_dir().join("kael-download-request.bin");
+        let request = DownloadRequest::builder(
+            "https://user:secret@example.com:8443/files/report.pdf?token=sensitive#frag",
+            &destination,
+        )
+        .sha256("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        .size_bytes(1024)
+        .create_parent_dirs()
+        .build_checked()
+        .unwrap();
+
+        let summary = request.to_text();
+
+        assert!(summary.contains("download request from https://example.com:8443"));
+        assert!(summary.contains(&destination.display().to_string()));
+        assert!(summary.contains("sha256 present"));
+        assert!(summary.contains("size 1024 bytes"));
+        assert!(summary.contains("create parent dirs true"));
+        assert!(summary.contains("network policy none"));
+        assert!(!summary.contains("user"));
+        assert!(!summary.contains("secret"));
+        assert!(!summary.contains("token"));
+        assert!(!summary.contains("report.pdf"));
+        assert!(!summary.contains("frag"));
+
+        let safe_summary = request.to_safe_text();
+
+        assert_eq!(
+            safe_summary,
+            "download request: url true, destination true, sha256 true, size true, create parent dirs true, network policy false"
+        );
+        assert!(!safe_summary.contains("example.com"));
+        assert!(!safe_summary.contains(&destination.display().to_string()));
+        assert!(!safe_summary.contains("1024"));
+    }
+
+    #[test]
+    fn download_request_builder_summary_is_available_before_build() {
+        let destination = std::env::temp_dir()
+            .join("kael-download-builder-summary")
+            .join("model.bin");
+        let builder = DownloadRequest::builder(
+            "https://token:secret@cdn.example.com/private/model.bin?signature=sensitive",
+            &destination,
+        )
+        .size_bytes(4096)
+        .create_parent_dirs();
+
+        let summary = builder.to_text();
+
+        assert!(builder.validate().is_ok());
+        assert!(!builder.has_sha256());
+        assert!(builder.has_size());
+        assert!(builder.creates_parent_dirs());
+        assert!(!builder.has_network_policy());
+        assert!(summary.contains("download request from https://cdn.example.com"));
+        assert!(summary.contains("sha256 none"));
+        assert!(summary.contains("size 4096 bytes"));
+        assert!(summary.contains("create parent dirs true"));
+        assert!(!summary.contains("token"));
+        assert!(!summary.contains("secret"));
+        assert!(!summary.contains("signature"));
+        assert!(!summary.contains("model.bin?"));
+
+        let safe_summary = builder.to_safe_text();
+
+        assert_eq!(
+            safe_summary,
+            "download request: url true, destination true, sha256 false, size true, create parent dirs true, network policy false"
+        );
+        assert!(!safe_summary.contains("cdn.example.com"));
+        assert!(!safe_summary.contains("model.bin"));
+        assert!(!safe_summary.contains("4096"));
+    }
+
+    #[test]
+    fn download_batch_builder_validates_and_summarizes_queue() {
+        let first_destination = std::env::temp_dir()
+            .join("kael-download-batch")
+            .join("model-a.bin");
+        let second_destination = std::env::temp_dir()
+            .join("kael-download-batch")
+            .join("model-b.bin");
+        let batch = DownloadBatch::builder()
+            .request_builder(
+                DownloadRequest::builder(
+                    "https://user:secret@cdn.example.com/private/model-a.bin?token=sensitive",
+                    &first_destination,
+                )
+                .sha256("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .size_bytes(4096)
+                .create_parent_dirs(),
+            )
+            .unwrap()
+            .request_builder(
+                DownloadRequest::builder(
+                    "https://assets.example.com/offline/model-b.bin",
+                    &second_destination,
+                )
+                .size_bytes(8192)
+                .create_parent_dirs(),
+            )
+            .unwrap();
+
+        assert_eq!(batch.request_count(), 2);
+        assert!(!batch.is_empty());
+        assert!(batch.validate().is_ok());
+
+        let summary = batch.to_text();
+        assert!(summary.contains("download batch builder"));
+        assert!(summary.contains("requests 2"));
+        assert!(summary.contains("sha256 1"));
+        assert!(summary.contains("sizes 2"));
+        assert!(summary.contains("create parent dirs 2"));
+        assert!(!summary.contains("cdn.example.com"));
+        assert!(!summary.contains("assets.example.com"));
+        assert!(!summary.contains("secret"));
+        assert!(!summary.contains("token"));
+        assert!(!summary.contains("model-a.bin"));
+        assert!(!summary.contains("4096"));
+
+        let batch = batch.build_checked().unwrap();
+        assert_eq!(batch.request_count(), 2);
+        assert_eq!(batch.sha256_count(), 1);
+        assert_eq!(batch.size_count(), 2);
+        assert_eq!(batch.create_parent_dirs_count(), 2);
+        assert_eq!(batch.network_policy_count(), 0);
+        assert_eq!(batch.requests().len(), 2);
+
+        let safe_summary = batch.to_safe_text();
+        assert_eq!(
+            safe_summary,
+            "download batch: requests 2, sha256 1, sizes 2, create parent dirs 2, network policies 0"
+        );
+        assert!(!safe_summary.contains("cdn.example.com"));
+        assert!(!safe_summary.contains("model-a.bin"));
+        assert!(!safe_summary.contains("4096"));
+    }
+
+    #[test]
+    fn download_batch_builder_rejects_empty_and_duplicate_destinations() {
+        assert!(DownloadBatch::builder().build_checked().is_err());
+
+        let destination = std::env::temp_dir()
+            .join("kael-download-batch-duplicate")
+            .join("model.bin");
+        let request_a = DownloadRequest::builder("https://example.com/a.bin", &destination)
+            .create_parent_dirs()
+            .build_checked()
+            .unwrap();
+        let request_b = DownloadRequest::builder("https://example.com/b.bin", &destination)
+            .create_parent_dirs()
+            .build_checked()
+            .unwrap();
+
+        assert!(
+            DownloadBatch::builder()
+                .request(request_a)
+                .request(request_b)
+                .build_checked()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn download_destination_plan_prompts_or_builds_native_request() {
+        let prompt = DownloadDestinationPlanBuilder::new(
+            "https://cdn.example.com/private/report.pdf?token=sensitive",
+        )
+        .suggested_file_name("report.pdf")
+        .build_checked()
+        .unwrap();
+
+        assert_eq!(
+            prompt.next_action(),
+            DownloadDestinationNextAction::PromptForDestination
+        );
+        assert!(prompt.needs_destination_prompt());
+        assert!(!prompt.has_destination());
+        assert_eq!(prompt.suggested_file_name(), Some("report.pdf"));
+        assert!(prompt.request_builder().is_err());
+        assert_eq!(
+            prompt.to_text(),
+            "download destination plan: destination false, suggested name true, sha256 false, size false, network policy false, create parent dirs false, existing policy fail if exists, next action prompt-for-destination"
+        );
+        assert!(!prompt.to_text().contains("cdn.example.com"));
+        assert!(!prompt.to_text().contains("report.pdf"));
+
+        let dir =
+            std::env::temp_dir().join(format!("kael-download-destination-{}", std::process::id()));
+        let policy = crate::NetworkPolicyBuilder::new()
+            .allow_host("cdn.example.com")
+            .build_checked()
+            .unwrap();
+        let plan = DownloadDestinationPlanBuilder::new("https://cdn.example.com/assets/model.bin")
+            .download_dir(&dir)
+            .suggested_file_name("model.bin")
+            .network_policy(policy)
+            .sha256("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .size_bytes(4096)
+            .create_parent_dirs()
+            .build_checked()
+            .unwrap();
+
+        assert_eq!(
+            plan.next_action(),
+            DownloadDestinationNextAction::BuildRequest
+        );
+        assert!(plan.can_build_request());
+        assert_eq!(plan.destination(), Some(dir.join("model.bin").as_path()));
+        assert!(plan.has_integrity_metadata());
+        assert!(plan.has_network_policy());
+        assert!(plan.creates_parent_dirs());
+
+        let request = plan.build_request_checked().unwrap();
+        assert_eq!(request.destination, dir.join("model.bin"));
+        assert!(request.has_sha256());
+        assert_eq!(request.size_bytes, Some(4096));
+        assert!(request.create_parent_dirs);
+    }
+
+    #[test]
+    fn download_destination_plan_reviews_existing_destinations() {
+        let root = std::env::temp_dir().join(format!(
+            "kael-download-destination-existing-{}",
+            std::process::id()
+        ));
+        let destination = root.join("artifact.bin");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&destination, b"existing").unwrap();
+
+        let plan = DownloadDestinationPlanBuilder::new("https://example.com/artifact.bin")
+            .destination(&destination)
+            .overwrite_existing()
+            .build_checked()
+            .unwrap();
+
+        assert_eq!(
+            plan.next_action(),
+            DownloadDestinationNextAction::ReviewOverwritePolicy
+        );
+        assert!(plan.needs_overwrite_review());
+        assert_eq!(
+            plan.existing_file_policy(),
+            DownloadExistingFilePolicy::Overwrite
+        );
+        assert!(!plan.to_text().contains("artifact.bin"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn download_destination_plan_rejects_invalid_generated_shapes() {
+        let dir = std::env::temp_dir();
+
+        assert!(
+            DownloadDestinationPlanBuilder::new("file:///tmp/model.bin")
+                .suggested_file_name("model.bin")
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadDestinationPlanBuilder::new("https://example.com/model.bin")
+                .suggested_file_name("../model.bin")
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadDestinationPlanBuilder::new("https://example.com/model.bin")
+                .suggested_file_name(" model.bin")
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadDestinationPlanBuilder::new("https://example.com/model.bin")
+                .download_dir("relative")
+                .suggested_file_name("model.bin")
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadDestinationPlanBuilder::new("https://example.com/model.bin")
+                .destination(&dir)
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadDestinationPlanBuilder::new("https://example.com/model.bin")
+                .download_dir(dir.join("kael-missing-download-parent"))
+                .suggested_file_name("model.bin")
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadDestinationPlanBuilder::new("https://example.com/model.bin")
+                .download_dir(dir.join("kael-missing-download-parent"))
+                .suggested_file_name("model.bin")
+                .create_parent_dirs()
+                .build_checked()
+                .is_ok()
+        );
+        assert!(
+            DownloadDestinationPlanBuilder::new("https://example.com/model.bin")
+                .size_bytes(0)
+                .build_checked()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn download_execution_plan_validates_queue_policy() {
+        let first_destination = std::env::temp_dir()
+            .join(format!("kael-download-plan-{}-a", std::process::id()))
+            .join("model-a.bin");
+        let second_destination = std::env::temp_dir()
+            .join(format!("kael-download-plan-{}-b", std::process::id()))
+            .join("model-b.bin");
+        let batch = DownloadBatch::builder()
+            .request_builder(
+                DownloadRequest::builder("https://cdn.example.com/model-a.bin", first_destination)
+                    .sha256("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                    .size_bytes(4096)
+                    .create_parent_dirs(),
+            )
+            .unwrap()
+            .request_builder(
+                DownloadRequest::builder("https://cdn.example.com/model-b.bin", second_destination)
+                    .size_bytes(8192)
+                    .create_parent_dirs(),
+            )
+            .unwrap()
+            .build_checked()
+            .unwrap();
+
+        let builder = DownloadExecutionPlan::builder(batch)
+            .max_parallel(2)
+            .retry_attempts(3)
+            .temporary_file_extension("partial");
+
+        assert!(builder.validate().is_ok());
+        assert_eq!(builder.request_count(), 2);
+        assert_eq!(builder.max_parallel_count(), 2);
+        assert_eq!(builder.retry_attempt_count(), 3);
+        assert!(builder.uses_temporary_files());
+        assert_eq!(
+            builder.existing_file_policy(),
+            DownloadExistingFilePolicy::FailIfExists
+        );
+        assert_eq!(
+            builder.to_text(),
+            "download execution plan: requests 2, max parallel 2, retries 3, temp files true, existing policy fail if exists, sha256 1, sizes 2, network policies 0"
+        );
+
+        let plan = builder.build_checked().unwrap();
+        assert_eq!(plan.request_count(), 2);
+        assert_eq!(plan.max_parallel(), 2);
+        assert_eq!(plan.retry_attempts(), 3);
+        assert_eq!(plan.temporary_file_extension(), Some("partial"));
+        assert!(!plan.overwrites_existing());
+        assert_eq!(
+            plan.batch().to_safe_text(),
+            "download batch: requests 2, sha256 1, sizes 2, create parent dirs 2, network policies 0"
+        );
+    }
+
+    #[test]
+    fn download_execution_plan_rejects_generated_footguns() {
+        let destination = std::env::temp_dir()
+            .join(format!(
+                "kael-download-plan-existing-{}",
+                std::process::id()
+            ))
+            .join("artifact.bin");
+        let request = DownloadRequest::builder("https://example.com/artifact.bin", &destination)
+            .create_parent_dirs()
+            .build_checked()
+            .unwrap();
+        let batch = DownloadBatch::builder()
+            .request(request)
+            .build_checked()
+            .unwrap();
+
+        assert!(
+            DownloadExecutionPlan::builder(batch.clone())
+                .max_parallel(0)
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadExecutionPlan::builder(batch.clone())
+                .max_parallel(17)
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadExecutionPlan::builder(batch.clone())
+                .retry_attempts(11)
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadExecutionPlan::builder(batch.clone())
+                .temporary_file_extension(".partial")
+                .build_checked()
+                .is_err()
+        );
+
+        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        std::fs::write(&destination, b"existing").unwrap();
+        assert!(
+            DownloadExecutionPlan::builder(batch.clone())
+                .build_checked()
+                .is_err()
+        );
+
+        let plan = DownloadExecutionPlan::builder(batch)
+            .overwrite_existing()
+            .without_temporary_files()
+            .no_retries()
+            .serial()
+            .build_checked()
+            .unwrap();
+        assert!(plan.overwrites_existing());
+        assert!(!plan.uses_temporary_files());
+        assert_eq!(plan.retry_attempts(), 0);
+        assert_eq!(plan.max_parallel(), 1);
+
+        let _ = std::fs::remove_file(destination);
+    }
+
+    #[test]
+    fn download_execution_plan_summary_is_content_safe() {
+        let destination = std::env::temp_dir()
+            .join(format!("kael-download-plan-safe-{}", std::process::id()))
+            .join("private-model.bin");
+        let request = DownloadRequest::builder(
+            "https://user:secret@private.example.com/model.bin?token=sensitive",
+            &destination,
+        )
+        .sha256("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        .size_bytes(1024)
+        .create_parent_dirs()
+        .build_checked()
+        .unwrap();
+        let plan = DownloadExecutionPlan::from_request(request)
+            .max_parallel(1)
+            .retry_attempts(1)
+            .build_checked()
+            .unwrap();
+
+        assert_eq!(DownloadExistingFilePolicy::Overwrite.to_text(), "overwrite");
+        assert!(plan.to_text().contains("requests 1"));
+        assert!(plan.to_text().contains("max parallel 1"));
+        assert!(plan.to_text().contains("sha256 1"));
+        assert!(!plan.to_text().contains("private.example.com"));
+        assert!(!plan.to_text().contains("private-model.bin"));
+        assert!(!plan.to_text().contains("secret"));
+        assert!(!plan.to_text().contains("token"));
+        assert!(!plan.to_text().contains("1024"));
+    }
+
+    #[test]
+    fn download_handoff_reports_policy_and_integrity_next_actions() {
+        let destination = std::env::temp_dir()
+            .join(format!("kael-download-handoff-{}", std::process::id()))
+            .join("model.bin");
+
+        let missing_policy = DownloadHandoffBuilder::new()
+            .request_builder(
+                DownloadRequest::builder(
+                    "https://user:secret@cdn.example.com/private/model.bin?token=sensitive",
+                    &destination,
+                )
+                .sha256("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .size_bytes(1024)
+                .create_parent_dirs(),
+            )
+            .unwrap()
+            .serial()
+            .retry_attempts(1)
+            .build_checked()
+            .unwrap();
+
+        assert_eq!(
+            missing_policy.next_action(),
+            DownloadHandoffNextAction::AddNetworkPolicy
+        );
+        assert_eq!(missing_policy.request_count(), 1);
+        assert!(!missing_policy.has_complete_network_policy());
+        assert!(missing_policy.has_complete_integrity_metadata());
+        assert!(!missing_policy.is_queue_ready());
+        assert!(!missing_policy.needs_overwrite_review());
+        assert_eq!(
+            missing_policy.to_text(),
+            "download handoff: requests 1, max parallel 1, retries 1, temp files true, overwrite false, network policies 0/1, integrity 1/1, next action add-network-policy"
+        );
+        assert!(!missing_policy.to_text().contains("cdn.example.com"));
+        assert!(!missing_policy.to_text().contains("model.bin"));
+        assert!(!missing_policy.to_text().contains("secret"));
+
+        let policy = crate::NetworkPolicyBuilder::new()
+            .allow_host("cdn.example.com")
+            .build_checked()
+            .unwrap();
+        let missing_integrity = DownloadHandoffBuilder::new()
+            .request_builder(
+                DownloadRequest::builder("https://cdn.example.com/private/model.bin", &destination)
+                    .network_policy(policy.clone())
+                    .create_parent_dirs(),
+            )
+            .unwrap()
+            .build_checked()
+            .unwrap();
+
+        assert_eq!(
+            missing_integrity.next_action(),
+            DownloadHandoffNextAction::AddIntegrityMetadata
+        );
+        assert!(missing_integrity.has_complete_network_policy());
+        assert!(!missing_integrity.has_complete_integrity_metadata());
+
+        let queue_ready = DownloadHandoffBuilder::new()
+            .request_builder(
+                DownloadRequest::builder("https://cdn.example.com/private/model.bin", &destination)
+                    .network_policy(policy)
+                    .sha256("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+                    .size_bytes(2048)
+                    .create_parent_dirs(),
+            )
+            .unwrap()
+            .max_parallel(1)
+            .no_retries()
+            .without_temporary_files()
+            .build_checked()
+            .unwrap();
+
+        assert_eq!(
+            queue_ready.next_action(),
+            DownloadHandoffNextAction::QueueDownloads
+        );
+        assert!(queue_ready.is_queue_ready());
+        assert!(!queue_ready.execution_plan().uses_temporary_files());
+        assert_eq!(queue_ready.execution_plan().retry_attempts(), 0);
+        assert_eq!(
+            DownloadHandoffNextAction::QueueDownloads.to_text(),
+            "queue-downloads"
+        );
+        assert_eq!(
+            queue_ready.execution_plan().handoff().next_action(),
+            DownloadHandoffNextAction::QueueDownloads
+        );
+    }
+
+    #[test]
+    fn download_handoff_reviews_overwrite_policy_first() {
+        let destination = std::env::temp_dir()
+            .join(format!(
+                "kael-download-handoff-overwrite-{}",
+                std::process::id()
+            ))
+            .join("artifact.bin");
+        let request = DownloadRequest::builder("https://example.com/artifact.bin", &destination)
+            .network_policy(
+                crate::NetworkPolicyBuilder::new()
+                    .allow_host("example.com")
+                    .build_checked()
+                    .unwrap(),
+            )
+            .sha256("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+            .size_bytes(16)
+            .create_parent_dirs()
+            .build_checked()
+            .unwrap();
+
+        let handoff = DownloadHandoffBuilder::new()
+            .request(request)
+            .overwrite_existing()
+            .build_checked()
+            .unwrap();
+
+        assert_eq!(
+            handoff.next_action(),
+            DownloadHandoffNextAction::ReviewOverwritePolicy
+        );
+        assert!(handoff.needs_overwrite_review());
+        assert!(!handoff.is_queue_ready());
+        assert!(handoff.has_complete_network_policy());
+        assert!(handoff.has_complete_integrity_metadata());
+        assert!(DownloadHandoffBuilder::new().validate().is_err());
+        assert_eq!(
+            DownloadHandoffBuilder::new().to_text(),
+            "download handoff builder: requests 0, invalid true"
+        );
+    }
+
+    #[test]
+    fn download_request_builder_rejects_generated_footguns() {
+        let destination = std::env::temp_dir().join("kael-download-request.bin");
+        assert!(
+            DownloadRequest::builder("file:///tmp/data.bin", &destination)
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadRequest::builder(" https://example.com/data.bin", &destination)
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadRequest::builder("https://example.com/data.bin", "relative.bin")
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadRequest::builder("https://example.com/data.bin", std::env::temp_dir())
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadRequest::builder("https://example.com/data.bin", &destination)
+                .sha256("bad")
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadRequest::builder("https://example.com/data.bin", &destination)
+                .size_bytes(0)
+                .build_checked()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn download_request_builder_checks_policy_and_parent_dirs() {
+        let missing_parent = std::env::temp_dir()
+            .join(format!(
+                "kael-missing-download-parent-{}",
+                std::process::id()
+            ))
+            .join("file.bin");
+
+        assert!(
+            DownloadRequest::builder("https://example.com/data.bin", &missing_parent)
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            DownloadRequest::builder("https://example.com/data.bin", &missing_parent)
+                .create_parent_dirs()
+                .build_checked()
+                .is_ok()
+        );
+        assert!(
+            DownloadRequest::builder("https://blocked.example.com/data.bin", missing_parent)
+                .network_policy(
+                    crate::NetworkPolicyBuilder::new()
+                        .allow_host("example.com")
+                        .build_checked()
+                        .unwrap(),
+                )
+                .create_parent_dirs()
+                .build_checked()
+                .is_err()
+        );
     }
 
     #[test]
@@ -1441,6 +4045,94 @@ mod tests {
         assert_eq!(deserialized.feed_url, config.feed_url);
         assert_eq!(deserialized.check_interval, config.check_interval);
         assert_eq!(deserialized.allow_prerelease, config.allow_prerelease);
+    }
+
+    #[test]
+    fn test_auto_updater_config_builder_validates_feed_and_interval() {
+        let config = AutoUpdaterConfigBuilder::new("https://example.com/feed.json")
+            .check_interval(Duration::from_secs(60))
+            .allow_prerelease(true)
+            .build_checked()
+            .unwrap();
+
+        assert_eq!(config.feed_url, "https://example.com/feed.json");
+        assert_eq!(config.check_interval, Duration::from_secs(60));
+        assert!(config.allow_prerelease);
+
+        let default_config = AutoUpdaterConfigBuilder::new("https://example.com/feed.json");
+        assert_eq!(default_config.feed_url(), "https://example.com/feed.json");
+        assert_eq!(
+            default_config.configured_check_interval(),
+            Duration::from_secs(86_400)
+        );
+        assert!(!default_config.allows_prerelease());
+
+        assert!(
+            AutoUpdaterConfigBuilder::new(" https://example.com/feed.json")
+                .validate()
+                .is_err()
+        );
+        assert!(AutoUpdaterConfigBuilder::new("").validate().is_err());
+        assert!(
+            AutoUpdaterConfigBuilder::new(format!(
+                "https://example.com/{}",
+                "a".repeat(MAX_UPDATE_URL_BYTES)
+            ))
+            .validate()
+            .is_err()
+        );
+        assert!(
+            AutoUpdaterConfigBuilder::new("file:///tmp/feed.json")
+                .validate()
+                .is_err()
+        );
+        assert!(
+            AutoUpdaterConfigBuilder::new("https://example.com/feed.json")
+                .check_interval(Duration::ZERO)
+                .validate()
+                .is_err()
+        );
+
+        let raw = AutoUpdaterConfig {
+            feed_url: "https://example.com/feed.json".to_string(),
+            check_interval: Duration::from_secs(1),
+            allow_prerelease: false,
+        };
+        assert!(raw.validate().is_ok());
+        assert!(
+            AutoUpdaterConfig {
+                feed_url: "not a url".to_string(),
+                check_interval: Duration::from_secs(1),
+                allow_prerelease: false,
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_auto_updater_new_checked_validates_config() {
+        let client = http_client::FakeHttpClient::with_200_response();
+        let updater = AutoUpdater::new_checked(
+            AutoUpdaterConfigBuilder::new("https://example.com/feed.json"),
+            SemanticVersion::new(1, 0, 0),
+            client.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            updater.config().feed_url,
+            "https://example.com/feed.json".to_string()
+        );
+        assert!(
+            AutoUpdater::new_checked(
+                AutoUpdaterConfigBuilder::new("https://example.com/feed.json")
+                    .check_interval(Duration::ZERO),
+                SemanticVersion::new(1, 0, 0),
+                client,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1466,6 +4158,69 @@ mod tests {
     }
 
     #[test]
+    fn test_update_info_builder_validates_metadata() {
+        let signature = BASE64.encode([7u8; 64]);
+        let update = UpdateInfoBuilder::new(
+            SemanticVersion::new(2, 5, 1),
+            "https://example.com/v2.5.1.zip",
+        )
+        .release_notes("Fixed a bug")
+        .signature(signature.clone())
+        .sha256("a".repeat(64))
+        .size_bytes(4096)
+        .build_signed_checked()
+        .unwrap();
+
+        assert_eq!(update.version, SemanticVersion::new(2, 5, 1));
+        assert_eq!(update.release_notes.as_deref(), Some("Fixed a bug"));
+        assert_eq!(update.signature.as_deref(), Some(signature.as_str()));
+        assert!(update.validate_signed_metadata().is_ok());
+
+        assert!(
+            UpdateInfoBuilder::new(SemanticVersion::new(2, 5, 1), "file:///tmp/update.zip")
+                .build_checked()
+                .is_err()
+        );
+        assert!(
+            UpdateInfoBuilder::new(
+                SemanticVersion::new(2, 5, 1),
+                "https://example.com/update.zip",
+            )
+            .sha256("not-a-sha")
+            .build_checked()
+            .is_err()
+        );
+        assert!(
+            UpdateInfoBuilder::new(
+                SemanticVersion::new(2, 5, 1),
+                "https://example.com/update.zip",
+            )
+            .size_bytes(0)
+            .build_checked()
+            .is_err()
+        );
+        assert!(
+            UpdateInfoBuilder::new(
+                SemanticVersion::new(2, 5, 1),
+                "https://example.com/update.zip",
+            )
+            .signature("not-base64")
+            .build_checked()
+            .is_err()
+        );
+        assert!(
+            UpdateInfoBuilder::new(
+                SemanticVersion::new(2, 5, 1),
+                "https://example.com/update.zip",
+            )
+            .sha256("a".repeat(64))
+            .size_bytes(4096)
+            .build_signed_checked()
+            .is_err()
+        );
+    }
+
+    #[test]
     fn test_auto_updater_initial_state() {
         let config = AutoUpdaterConfig {
             feed_url: "https://example.com/feed".to_string(),
@@ -1476,6 +4231,68 @@ mod tests {
         let updater = AutoUpdater::new(config, SemanticVersion::new(1, 0, 0), client);
 
         assert_eq!(*updater.status(), UpdateStatus::Idle);
+        assert!(updater.latest_update().is_none());
+    }
+
+    #[test]
+    fn update_feed_size_limit_sets_error_and_discards_stale_offer() {
+        use http_client::{AsyncBody, FakeHttpClient, Response};
+
+        let client = FakeHttpClient::create(|_request| async {
+            Ok(Response::builder()
+                .status(200)
+                .body(AsyncBody::from(vec![b' '; MAX_UPDATE_FEED_BYTES + 1]))
+                .unwrap())
+        });
+        let config = AutoUpdaterConfig {
+            feed_url: "https://example.com/feed".to_string(),
+            check_interval: Duration::from_secs(3600),
+            allow_prerelease: false,
+        };
+        let mut updater = AutoUpdater::new(config, SemanticVersion::new(1, 0, 0), client);
+        updater.latest_update = Some(UpdateInfo {
+            version: SemanticVersion::new(1, 1, 0),
+            release_notes: None,
+            download_url: "https://example.com/stale.zip".to_string(),
+            signature: None,
+            sha256: None,
+            size_bytes: None,
+        });
+
+        let error = smol::block_on(updater.check_for_updates()).unwrap_err();
+        assert!(error.to_string().contains("feed exceeds"));
+        assert!(matches!(updater.status(), UpdateStatus::Error(_)));
+        assert!(updater.latest_update().is_none());
+    }
+
+    #[test]
+    fn update_feed_rejects_invalid_utf8_and_discards_stale_offer() {
+        use http_client::{AsyncBody, FakeHttpClient, Response};
+
+        let client = FakeHttpClient::create(|_request| async {
+            Ok(Response::builder()
+                .status(200)
+                .body(AsyncBody::from(vec![0xff, 0xfe]))
+                .unwrap())
+        });
+        let config = AutoUpdaterConfig {
+            feed_url: "https://example.com/feed".to_string(),
+            check_interval: Duration::from_secs(3600),
+            allow_prerelease: false,
+        };
+        let mut updater = AutoUpdater::new(config, SemanticVersion::new(1, 0, 0), client);
+        updater.latest_update = Some(UpdateInfo {
+            version: SemanticVersion::new(1, 1, 0),
+            release_notes: None,
+            download_url: "https://example.com/stale.zip".to_string(),
+            signature: None,
+            sha256: None,
+            size_bytes: None,
+        });
+
+        let error = smol::block_on(updater.check_for_updates()).unwrap_err();
+        assert!(error.to_string().contains("valid UTF-8"));
+        assert!(matches!(updater.status(), UpdateStatus::Error(_)));
         assert!(updater.latest_update().is_none());
     }
 
@@ -1690,6 +4507,64 @@ mod tests {
         assert_ne!(*updater.status(), UpdateStatus::ReadyToInstall);
         assert!(updater.downloaded_path.is_none());
         assert!(updater.install_and_restart().is_err());
+    }
+
+    #[test]
+    fn test_download_update_rejects_oversized_content_length_before_body_read() {
+        use http_client::{AsyncBody, FakeHttpClient, Response};
+
+        let genuine = b"small signed update".to_vec();
+        let (key, update) = signed_update_fixture(&genuine, UpdateChannel::Stable);
+        let client = FakeHttpClient::create(move |_request| async move {
+            Ok(Response::builder()
+                .status(200)
+                .header("content-length", (MAX_UPDATE_PACKAGE_BYTES + 1).to_string())
+                .body(AsyncBody::from(Vec::<u8>::new()))
+                .unwrap())
+        });
+        let config = AutoUpdaterConfig {
+            feed_url: "https://example.com/feed".to_string(),
+            check_interval: Duration::from_secs(3600),
+            allow_prerelease: false,
+        };
+        let mut updater = AutoUpdater::new(config, SemanticVersion::new(1, 0, 0), client);
+        updater.set_public_key(key.as_bytes()).unwrap();
+        updater.latest_update = Some(update);
+
+        let error = smol::block_on(updater.download_update(|_| {})).unwrap_err();
+        assert!(error.to_string().contains("package exceeds"));
+        assert!(matches!(updater.status(), UpdateStatus::Error(_)));
+        assert!(updater.downloaded_path.is_none());
+    }
+
+    #[test]
+    fn test_download_start_failure_sets_error_and_discards_stale_package() {
+        use http_client::FakeHttpClient;
+
+        let genuine = b"small signed update".to_vec();
+        let (key, update) = signed_update_fixture(&genuine, UpdateChannel::Stable);
+        let client =
+            FakeHttpClient::create(
+                move |_request| async move { Err(anyhow!("network unavailable")) },
+            );
+        let config = AutoUpdaterConfig {
+            feed_url: "https://example.com/feed".to_string(),
+            check_interval: Duration::from_secs(3600),
+            allow_prerelease: false,
+        };
+        let mut updater = AutoUpdater::new(config, SemanticVersion::new(1, 0, 0), client);
+        updater.set_public_key(key.as_bytes()).unwrap();
+        updater.latest_update = Some(update);
+        updater.downloaded_path = Some(std::env::temp_dir().join("stale-update.zip"));
+
+        let error = smol::block_on(updater.download_update(|_| {})).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("failed to start update download")
+        );
+        assert!(matches!(updater.status(), UpdateStatus::Error(_)));
+        assert!(updater.downloaded_path.is_none());
     }
 
     #[test]

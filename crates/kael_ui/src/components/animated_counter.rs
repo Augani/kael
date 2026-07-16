@@ -14,6 +14,7 @@ pub struct AnimatedCounterState {
 
 impl AnimatedCounterState {
     pub fn new(initial: f64) -> Self {
+        let initial = finite_counter_value(initial);
         Self {
             display_value: initial,
             target_value: initial,
@@ -28,6 +29,7 @@ impl AnimatedCounterState {
     }
 
     pub fn set_value(&mut self, value: f64, cx: &mut Context<Self>) {
+        let value = finite_counter_value(value);
         if (self.target_value - value).abs() < f64::EPSILON {
             return;
         }
@@ -35,10 +37,11 @@ impl AnimatedCounterState {
         let from = self.display_value;
         let target = value;
         self.target_value = value;
-        self.version += 1;
+        self.version = self.version.wrapping_add(1);
         let version = self.version;
 
-        let frame_count = (self.duration.as_millis() as u32 / 16).clamp(1, 30);
+        let duration_millis = self.duration.as_millis().min(u32::MAX as u128) as u32;
+        let frame_count = (duration_millis / 16).clamp(1, 30);
         let frame_dur = self.duration / frame_count;
 
         cx.spawn(async move |this, cx| {
@@ -76,8 +79,17 @@ impl AnimatedCounterState {
     }
 }
 
+fn finite_counter_value(value: f64) -> f64 {
+    if value.is_finite() {
+        value
+    } else {
+        0.0
+    }
+}
+
 #[derive(IntoElement)]
 pub struct AnimatedCounter {
+    id: ElementId,
     base: Div,
     state: Entity<AnimatedCounterState>,
     decimal_places: usize,
@@ -86,8 +98,9 @@ pub struct AnimatedCounter {
 }
 
 impl AnimatedCounter {
-    pub fn new(_id: impl Into<ElementId>, state: Entity<AnimatedCounterState>) -> Self {
+    pub fn new(id: impl Into<ElementId>, state: Entity<AnimatedCounterState>) -> Self {
         Self {
+            id: id.into(),
             base: div(),
             state,
             decimal_places: 0,
@@ -127,6 +140,7 @@ impl RenderOnce for AnimatedCounter {
         let formatted = format!("{}{}{}", self.prefix, number_str, self.suffix);
 
         self.base
+            .id(self.id)
             .text_color(theme.tokens.foreground)
             .font_family(mono_font_family())
             .child(formatted)
@@ -150,5 +164,16 @@ impl StatefulInteractiveElement for AnimatedCounter {}
 impl ParentElement for AnimatedCounter {
     fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
         self.base.extend(elements)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AnimatedCounterState;
+
+    #[test]
+    fn non_finite_initial_values_fall_back_to_zero() {
+        assert_eq!(AnimatedCounterState::new(f64::NAN).display_value(), 0.0);
+        assert_eq!(AnimatedCounterState::new(f64::INFINITY).target_value(), 0.0);
     }
 }

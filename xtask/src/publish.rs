@@ -1,6 +1,6 @@
 use anyhow::{Context as _, Result};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 pub struct PublishOptions {
     pub dry_run: bool,
@@ -10,7 +10,12 @@ pub struct PublishOptions {
 pub fn run(artifacts: &[&Path], options: &PublishOptions) -> Result<()> {
     let tag = options.tag.as_deref().unwrap_or("latest");
 
-    let gh_available = Command::new("gh").arg("--version").output().is_ok();
+    let gh_available = Command::new("gh")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
 
     for artifact in artifacts {
         if options.dry_run {

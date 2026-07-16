@@ -6,6 +6,20 @@
 
 use kael_render_graph::reference::Image;
 
+const MAX_SCOPE_CELLS: usize = 4 * 1024 * 1024;
+
+fn zeroed_scope_cells(length: usize) -> Vec<u32> {
+    if length > MAX_SCOPE_CELLS {
+        return Vec::new();
+    }
+    let mut cells = Vec::new();
+    if cells.try_reserve_exact(length).is_err() {
+        return Vec::new();
+    }
+    cells.resize(length, 0);
+    cells
+}
+
 /// 256-bin histograms of an image's red, green, blue, and luma channels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Histogram {
@@ -32,11 +46,11 @@ pub fn histogram(image: &Image) -> Histogram {
         luma: [0; 256],
     };
     for pixel in &image.pixels {
-        histogram.red[bin(pixel[0])] += 1;
-        histogram.green[bin(pixel[1])] += 1;
-        histogram.blue[bin(pixel[2])] += 1;
+        histogram.red[bin(pixel[0])] = histogram.red[bin(pixel[0])].saturating_add(1);
+        histogram.green[bin(pixel[1])] = histogram.green[bin(pixel[1])].saturating_add(1);
+        histogram.blue[bin(pixel[2])] = histogram.blue[bin(pixel[2])].saturating_add(1);
         let luma = 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2];
-        histogram.luma[bin(luma)] += 1;
+        histogram.luma[bin(luma)] = histogram.luma[bin(luma)].saturating_add(1);
     }
     histogram
 }
@@ -113,19 +127,36 @@ pub struct Waveform {
 impl Waveform {
     /// The count of pixels in `column` at luma `level`.
     pub fn at(&self, column: u32, level: u8) -> u32 {
-        self.levels[column as usize * 256 + level as usize]
+        usize::try_from(column)
+            .ok()
+            .and_then(|column| column.checked_mul(256))
+            .and_then(|base| base.checked_add(usize::from(level)))
+            .and_then(|index| self.levels.get(index))
+            .copied()
+            .unwrap_or(0)
     }
 }
 
 /// Compute the [`Waveform`] of `image` (Rec.709 luma per column).
 pub fn waveform(image: &Image) -> Waveform {
-    let mut levels = vec![0u32; image.width as usize * 256];
+    let length = usize::try_from(image.width)
+        .ok()
+        .and_then(|width| width.checked_mul(256))
+        .unwrap_or(usize::MAX);
+    let mut levels = zeroed_scope_cells(length);
+    if levels.is_empty() && image.width != 0 {
+        return Waveform {
+            width: image.width,
+            levels,
+        };
+    }
     for y in 0..image.height {
         for x in 0..image.width {
             let pixel = image.pixel(x, y);
             let luma = 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2];
             let level = (luma.clamp(0.0, 1.0) * 255.0).round() as usize;
-            levels[x as usize * 256 + level] += 1;
+            let count = &mut levels[x as usize * 256 + level];
+            *count = count.saturating_add(1);
         }
     }
     Waveform {
@@ -158,24 +189,42 @@ impl Parade {
             1 => &self.green,
             _ => &self.blue,
         };
-        plane[column as usize * 256 + level as usize]
+        usize::try_from(column)
+            .ok()
+            .and_then(|column| column.checked_mul(256))
+            .and_then(|base| base.checked_add(usize::from(level)))
+            .and_then(|index| plane.get(index))
+            .copied()
+            .unwrap_or(0)
     }
 }
 
 /// Compute the [`Parade`] of `image` — a per-RGB-channel horizontal distribution.
 pub fn parade(image: &Image) -> Parade {
-    let width = image.width as usize;
-    let mut red = vec![0u32; width * 256];
-    let mut green = vec![0u32; width * 256];
-    let mut blue = vec![0u32; width * 256];
+    let width = usize::try_from(image.width).unwrap_or(usize::MAX);
+    let length = width.saturating_mul(256);
+    let mut red = zeroed_scope_cells(length);
+    let mut green = zeroed_scope_cells(length);
+    let mut blue = zeroed_scope_cells(length);
+    if (red.is_empty() || green.is_empty() || blue.is_empty()) && image.width != 0 {
+        return Parade {
+            width: image.width,
+            red,
+            green,
+            blue,
+        };
+    }
     let level = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as usize;
     for y in 0..image.height {
         for x in 0..image.width {
             let pixel = image.pixel(x, y);
             let column = x as usize * 256;
-            red[column + level(pixel[0])] += 1;
-            green[column + level(pixel[1])] += 1;
-            blue[column + level(pixel[2])] += 1;
+            let red_count = &mut red[column + level(pixel[0])];
+            *red_count = red_count.saturating_add(1);
+            let green_count = &mut green[column + level(pixel[1])];
+            *green_count = green_count.saturating_add(1);
+            let blue_count = &mut blue[column + level(pixel[2])];
+            *blue_count = blue_count.saturating_add(1);
         }
     }
     Parade {
@@ -199,16 +248,32 @@ pub struct Vectorscope {
 impl Vectorscope {
     /// The count in the cell at `(cb_cell, cr_cell)`.
     pub fn at(&self, cb_cell: u32, cr_cell: u32) -> u32 {
-        self.cells[(cr_cell * self.size + cb_cell) as usize]
+        if cb_cell >= self.size || cr_cell >= self.size {
+            return 0;
+        }
+        cr_cell
+            .checked_mul(self.size)
+            .and_then(|row| row.checked_add(cb_cell))
+            .and_then(|index| usize::try_from(index).ok())
+            .and_then(|index| self.cells.get(index))
+            .copied()
+            .unwrap_or(0)
     }
 }
 
 /// Compute the [`Vectorscope`] of `image` on a `size`×`size` chroma grid using BT.709
-/// Cb/Cr. `size` is clamped to at least 2.
+/// Cb/Cr. `size` is clamped to `2..=2048` to bound analysis memory.
 pub fn vectorscope(image: &Image, size: u32) -> Vectorscope {
-    let size = size.max(2);
+    let size = size.clamp(2, 2048);
     let axis = (size - 1) as f32;
-    let mut cells = vec![0u32; (size * size) as usize];
+    let cell_count = usize::try_from(size)
+        .ok()
+        .and_then(|size| size.checked_mul(size))
+        .unwrap_or(usize::MAX);
+    let mut cells = zeroed_scope_cells(cell_count);
+    if cells.is_empty() {
+        return Vectorscope { size, cells };
+    }
     const KR: f32 = 0.2126;
     const KB: f32 = 0.0722;
     for pixel in &image.pixels {
@@ -219,7 +284,8 @@ pub fn vectorscope(image: &Image, size: u32) -> Vectorscope {
         let cr = (0.5 * (r - luma) / (1.0 - KR) + 0.5).clamp(0.0, 1.0);
         let cb_cell = (cb * axis).round() as u32;
         let cr_cell = (cr * axis).round() as u32;
-        cells[(cr_cell * size + cb_cell) as usize] += 1;
+        let count = &mut cells[(cr_cell * size + cb_cell) as usize];
+        *count = count.saturating_add(1);
     }
     Vectorscope { size, cells }
 }
@@ -371,5 +437,25 @@ mod tests {
             "red should be high Cr: cr_cell={}",
             populated / 16
         );
+    }
+
+    #[test]
+    fn scope_accessors_return_zero_outside_the_grid() {
+        let image = Image::filled(1, 1, [0.5, 0.5, 0.5, 1.0]);
+        let waveform = waveform(&image);
+        let parade = parade(&image);
+        let vectorscope = vectorscope(&image, 16);
+
+        assert_eq!(waveform.at(u32::MAX, 0), 0);
+        assert_eq!(parade.at(0, u32::MAX, 0), 0);
+        assert_eq!(vectorscope.at(16, 0), 0);
+        assert_eq!(vectorscope.at(0, 16), 0);
+    }
+
+    #[test]
+    fn vectorscope_bounds_requested_grid_size() {
+        let scope = vectorscope(&Image::new(0, 0), u32::MAX);
+        assert_eq!(scope.size, 2048);
+        assert_eq!(scope.cells.len(), 2048 * 2048);
     }
 }

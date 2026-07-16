@@ -72,6 +72,9 @@ fn av_capture_device_class() -> Option<&'static AnyClass> {
 }
 
 fn authorization_status(media_type: *mut AnyObject) -> PermissionStatus {
+    if media_type.is_null() {
+        return PermissionStatus::Denied;
+    }
     let Some(class) = av_capture_device_class() else {
         return PermissionStatus::Denied;
     };
@@ -85,18 +88,27 @@ fn authorization_status(media_type: *mut AnyObject) -> PermissionStatus {
 }
 
 fn request_media_permission(media_type: *mut AnyObject, callback: Box<dyn FnOnce(bool)>) {
+    if media_type.is_null() {
+        crate::platform::catch_platform_callback("macOS", "media permission", (), || {
+            callback(false)
+        });
+        return;
+    }
     let Some(class) = av_capture_device_class() else {
+        crate::platform::catch_platform_callback("macOS", "media permission", (), || {
+            callback(false)
+        });
         return;
     };
 
-    let callback_ptr = Arc::new(AtomicPtr::new(
-        Box::into_raw(Box::new(callback)) as *mut c_void
-    ));
+    let callback_ptr = Arc::new(PendingPermissionCallback {
+        ptr: AtomicPtr::new(Box::into_raw(Box::new(callback)) as *mut c_void),
+    });
 
     let block = RcBlock::new({
         let callback_ptr = Arc::clone(&callback_ptr);
         move |granted: Bool| {
-            let callback = callback_ptr.swap(ptr::null_mut(), Ordering::AcqRel);
+            let callback = callback_ptr.take();
             if callback.is_null() {
                 return;
             }
@@ -130,10 +142,69 @@ struct PermissionRequestContext {
     granted: bool,
 }
 
+struct PendingPermissionCallback {
+    ptr: AtomicPtr<c_void>,
+}
+
+impl PendingPermissionCallback {
+    fn take(&self) -> *mut c_void {
+        self.ptr.swap(ptr::null_mut(), Ordering::AcqRel)
+    }
+}
+
+impl Drop for PendingPermissionCallback {
+    fn drop(&mut self) {
+        let callback = self.take();
+        if !callback.is_null() {
+            unsafe {
+                drop(Box::from_raw(callback as *mut Box<dyn FnOnce(bool)>));
+            }
+        }
+    }
+}
+
 extern "C" fn invoke_permission_callback(context: *mut c_void) {
+    if context.is_null() {
+        log::error!("received a null macOS permission callback context");
+        return;
+    }
     unsafe {
         let context = Box::from_raw(context as *mut PermissionRequestContext);
+        if context.callback.is_null() {
+            log::error!("received a null macOS permission callback");
+            return;
+        }
         let callback = Box::from_raw(context.callback as *mut Box<dyn FnOnce(bool)>);
-        callback(context.granted);
+        crate::platform::catch_platform_callback("macOS", "media permission", (), || {
+            callback(context.granted)
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    #[test]
+    fn abandoned_permission_request_reclaims_callback() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let flag = DropFlag(Arc::clone(&dropped));
+        let callback: Box<dyn FnOnce(bool)> = Box::new(move |_| drop(flag));
+        let pending = PendingPermissionCallback {
+            ptr: AtomicPtr::new(Box::into_raw(Box::new(callback)) as *mut c_void),
+        };
+
+        drop(pending);
+
+        assert!(dropped.load(Ordering::Acquire));
     }
 }

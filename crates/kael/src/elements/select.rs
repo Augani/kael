@@ -30,6 +30,54 @@ pub struct SelectRenderState {
     pub focused: bool,
 }
 
+impl SelectRenderState {
+    /// Length of the trigger display text in bytes.
+    pub fn display_text_len_bytes(&self) -> usize {
+        self.display_text.len()
+    }
+
+    /// Length of the selected label in bytes, if present.
+    pub fn selected_label_len_bytes(&self) -> Option<usize> {
+        self.selected_label.as_ref().map(|label| label.len())
+    }
+
+    /// Length of the placeholder in bytes, if present.
+    pub fn placeholder_len_bytes(&self) -> Option<usize> {
+        self.placeholder
+            .as_ref()
+            .map(|placeholder| placeholder.len())
+    }
+
+    /// Whether a selected option label is present.
+    pub fn has_selected_label(&self) -> bool {
+        self.selected_label.is_some()
+    }
+
+    /// Whether placeholder text is configured.
+    pub fn has_placeholder(&self) -> bool {
+        self.placeholder.is_some()
+    }
+
+    /// Content-safe summary for custom trigger renderers.
+    pub fn to_text(&self) -> String {
+        format!(
+            "select render state: open {}, focused {}, placeholder {}, showing-placeholder {}, selected-label {}, display-bytes {}, selected-label-bytes {}, placeholder-bytes {}",
+            self.open,
+            self.focused,
+            self.has_placeholder(),
+            self.showing_placeholder,
+            self.has_selected_label(),
+            self.display_text_len_bytes(),
+            self.selected_label_len_bytes()
+                .map(|len| len.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            self.placeholder_len_bytes()
+                .map(|len| len.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        )
+    }
+}
+
 type SelectCustomRenderer = Rc<dyn Fn(SelectRenderState, &Window, &App) -> AnyElement>;
 
 #[non_exhaustive]
@@ -45,6 +93,24 @@ pub struct SelectOptionRenderState<T> {
     pub selected: bool,
     /// Whether this option is currently highlighted for keyboard navigation.
     pub highlighted: bool,
+}
+
+impl<T> SelectOptionRenderState<T> {
+    /// Length of the option label in bytes.
+    pub fn label_len_bytes(&self) -> usize {
+        self.label.len()
+    }
+
+    /// Content-safe summary for custom option renderers.
+    pub fn to_text(&self) -> String {
+        format!(
+            "select option render state: index {}, selected {}, highlighted {}, label-bytes {}",
+            self.index,
+            self.selected,
+            self.highlighted,
+            self.label_len_bytes()
+        )
+    }
 }
 
 type SelectOptionCustomRenderer<T> =
@@ -67,6 +133,47 @@ pub struct SelectPopupRenderState {
     pub filtered_len: usize,
 }
 
+impl SelectPopupRenderState {
+    /// Length of the search query in bytes.
+    pub fn search_query_len_bytes(&self) -> usize {
+        self.search_query.len()
+    }
+
+    /// Whether there is an active search query.
+    pub fn has_search_query(&self) -> bool {
+        !self.search_query.is_empty()
+    }
+
+    /// Whether an option is highlighted for keyboard navigation.
+    pub fn has_highlighted_index(&self) -> bool {
+        self.highlighted_index.is_some()
+    }
+
+    /// Whether an option is currently selected.
+    pub fn has_selected_index(&self) -> bool {
+        self.selected_index.is_some()
+    }
+
+    /// Whether filtering produced no visible options.
+    pub fn is_empty(&self) -> bool {
+        self.filtered_len == 0
+    }
+
+    /// Content-safe summary for custom popup renderers.
+    pub fn to_text(&self) -> String {
+        format!(
+            "select popup render state: searchable {}, query {}, query-bytes {}, highlighted {}, selected {}, filtered {}, empty {}",
+            self.searchable,
+            self.has_search_query(),
+            self.search_query_len_bytes(),
+            self.has_highlighted_index(),
+            self.has_selected_index(),
+            self.filtered_len,
+            self.is_empty()
+        )
+    }
+}
+
 type SelectPopupCustomRenderer =
     Rc<dyn Fn(SelectPopupRenderState, Vec<AnyElement>, &Window, &App) -> AnyElement>;
 
@@ -77,6 +184,28 @@ pub struct SelectSearchRenderState {
     pub query: SharedString,
     /// Whether the search field currently owns keyboard focus.
     pub focused: bool,
+}
+
+impl SelectSearchRenderState {
+    /// Length of the search query in bytes.
+    pub fn query_len_bytes(&self) -> usize {
+        self.query.len()
+    }
+
+    /// Whether there is an active search query.
+    pub fn has_query(&self) -> bool {
+        !self.query.is_empty()
+    }
+
+    /// Content-safe summary for custom search renderers.
+    pub fn to_text(&self) -> String {
+        format!(
+            "select search render state: focused {}, query {}, query-bytes {}",
+            self.focused,
+            self.has_query(),
+            self.query_len_bytes()
+        )
+    }
 }
 
 type SelectSearchCustomRenderer =
@@ -1437,6 +1566,80 @@ mod tests {
         assert_eq!(next_highlighted_index(&filtered, Some(7), 1), Some(1));
         assert_eq!(next_highlighted_index(&filtered, Some(1), -1), Some(7));
         assert_eq!(next_highlighted_index(&filtered, None, 1), Some(4));
+    }
+
+    #[test]
+    fn render_state_summaries_are_content_safe() {
+        let trigger = SelectRenderState {
+            open: true,
+            display_text: "Private Workspace".into(),
+            selected_label: Some("Private Workspace".into()),
+            placeholder: Some("Choose workspace".into()),
+            showing_placeholder: false,
+            focused: true,
+        };
+
+        assert_eq!(trigger.display_text_len_bytes(), 17);
+        assert_eq!(trigger.selected_label_len_bytes(), Some(17));
+        assert_eq!(trigger.placeholder_len_bytes(), Some(16));
+        assert!(trigger.has_selected_label());
+        assert!(trigger.has_placeholder());
+        assert_eq!(
+            trigger.to_text(),
+            "select render state: open true, focused true, placeholder true, showing-placeholder false, selected-label true, display-bytes 17, selected-label-bytes 17, placeholder-bytes 16"
+        );
+        assert!(!trigger.to_text().contains("Private"));
+        assert!(!trigger.to_text().contains("Choose"));
+
+        let option = SelectOptionRenderState {
+            value: "secret-project",
+            label: SharedString::from("Secret Project"),
+            index: 3,
+            selected: true,
+            highlighted: false,
+        };
+
+        assert_eq!(option.label_len_bytes(), 14);
+        assert_eq!(
+            option.to_text(),
+            "select option render state: index 3, selected true, highlighted false, label-bytes 14"
+        );
+        assert!(!option.to_text().contains("Secret"));
+        assert!(!option.to_text().contains("secret-project"));
+
+        let popup = SelectPopupRenderState {
+            width: px(240.0),
+            searchable: true,
+            search_query: "private".into(),
+            highlighted_index: Some(1),
+            selected_index: Some(3),
+            filtered_len: 2,
+        };
+
+        assert_eq!(popup.search_query_len_bytes(), 7);
+        assert!(popup.has_search_query());
+        assert!(popup.has_highlighted_index());
+        assert!(popup.has_selected_index());
+        assert!(!popup.is_empty());
+        assert_eq!(
+            popup.to_text(),
+            "select popup render state: searchable true, query true, query-bytes 7, highlighted true, selected true, filtered 2, empty false"
+        );
+        assert!(!popup.to_text().contains("private"));
+        assert!(!popup.to_text().contains("240"));
+
+        let search = SelectSearchRenderState {
+            query: "private".into(),
+            focused: false,
+        };
+
+        assert_eq!(search.query_len_bytes(), 7);
+        assert!(search.has_query());
+        assert_eq!(
+            search.to_text(),
+            "select search render state: focused false, query true, query-bytes 7"
+        );
+        assert!(!search.to_text().contains("private"));
     }
 
     #[crate::test]

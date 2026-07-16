@@ -2,19 +2,16 @@ use std::rc::Rc;
 
 use ::util::ResultExt;
 use anyhow::Context as _;
-use windows::{
-    Win32::{
-        Foundation::*,
-        Graphics::Gdi::*,
-        System::SystemServices::*,
-        UI::{
-            Controls::*,
-            HiDpi::*,
-            Input::{Ime::*, KeyboardAndMouse::*},
-            WindowsAndMessaging::*,
-        },
+use windows::Win32::{
+    Foundation::*,
+    Graphics::Gdi::*,
+    System::SystemServices::*,
+    UI::{
+        Controls::*,
+        HiDpi::*,
+        Input::{Ime::*, KeyboardAndMouse::*},
+        WindowsAndMessaging::*,
     },
-    core::PCWSTR,
 };
 
 use crate::*;
@@ -35,6 +32,23 @@ pub(crate) const WM_WTSSESSION_CHANGE: u32 = 0x02B1;
 
 const SIZE_MOVE_LOOP_TIMER_ID: usize = 1;
 const AUTO_HIDE_TASKBAR_THICKNESS_PX: i32 = 1;
+const MAX_IME_COMPOSITION_BYTES: i32 = 16 * 1024 * 1024;
+const MAX_SYSTEM_PARAMETER_UNITS: usize = 4_096;
+
+unsafe fn bounded_utf16_string(value: *const u16, max_units: usize) -> Option<String> {
+    if value.is_null() {
+        return None;
+    }
+    let mut len = 0usize;
+    while len < max_units {
+        if unsafe { *value.add(len) } == 0 {
+            let units = unsafe { std::slice::from_raw_parts(value, len) };
+            return Some(String::from_utf16_lossy(units));
+        }
+        len += 1;
+    }
+    None
+}
 
 impl WindowsWindowInner {
     pub(crate) fn handle_msg(
@@ -148,7 +162,9 @@ impl WindowsWindowInner {
             // monitor is invalid, we do nothing.
             if !monitor.is_invalid() && lock.display.handle != monitor {
                 // we will get the same monitor if we only have one
-                lock.display = WindowsDisplay::new_with_handle(monitor);
+                if let Some(display) = WindowsDisplay::new_with_handle(monitor) {
+                    lock.display = display;
+                }
             }
         }
         if let Some(mut callback) = lock.callbacks.moved.take() {
@@ -160,6 +176,9 @@ impl WindowsWindowInner {
     }
 
     fn handle_get_min_max_info_msg(&self, lparam: LPARAM) -> Option<isize> {
+        if lparam.0 == 0 {
+            return None;
+        }
         let lock = self.state.borrow();
         let min_size = lock.min_size?;
         let scale_factor = lock.scale_factor;
@@ -249,7 +268,9 @@ impl WindowsWindowInner {
     fn handle_timer_msg(&self, handle: HWND, wparam: WPARAM) -> Option<isize> {
         if wparam.0 == SIZE_MOVE_LOOP_TIMER_ID {
             for runnable in self.main_receiver.drain() {
-                runnable.run();
+                super::catch_platform_callback("foreground task", (), || {
+                    runnable.run();
+                });
             }
             self.handle_paint_msg(handle)
         } else {
@@ -790,6 +811,9 @@ impl WindowsWindowInner {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> Option<isize> {
+        if lparam.0 == 0 {
+            return None;
+        }
         let new_dpi = wparam.loword() as f32;
         let mut lock = self.state.borrow_mut();
         let is_maximized = lock.is_maximized();
@@ -860,7 +884,10 @@ impl WindowsWindowInner {
             log::error!("No monitor detected!");
             return None;
         }
-        let new_display = WindowsDisplay::new_with_handle(new_monitor);
+        let Some(new_display) = WindowsDisplay::new_with_handle(new_monitor) else {
+            log::error!("failed to inspect the replacement monitor");
+            return None;
+        };
         self.state.borrow_mut().display = new_display;
         Some(0)
     }
@@ -1185,9 +1212,8 @@ impl WindowsWindowInner {
     fn handle_system_theme_changed(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
         // lParam is a pointer to a string that indicates the area containing the system parameter
         // that was changed.
-        let parameter = PCWSTR::from_raw(lparam.0 as _);
-        if unsafe { !parameter.is_null() && !parameter.is_empty() }
-            && let Some(parameter_string) = unsafe { parameter.to_string() }.log_err()
+        if let Some(parameter_string) =
+            unsafe { bounded_utf16_string(lparam.0 as *const u16, MAX_SYSTEM_PARAMETER_UNITS) }
         {
             log::info!("System settings changed: {}", parameter_string);
             if parameter_string.as_str() == "ImmersiveColorSet" {
@@ -1229,6 +1255,9 @@ impl WindowsWindowInner {
     }
 
     fn handle_device_lost(&self, lparam: LPARAM) -> Option<isize> {
+        if lparam.0 == 0 {
+            return None;
+        }
         let mut lock = self.state.borrow_mut();
         let devices = lparam.0 as *const DirectXDevices;
         let devices = unsafe { &*devices };
@@ -1475,28 +1504,34 @@ fn parse_normal_key(
 fn parse_ime_composition_string(ctx: HIMC, comp_type: IME_COMPOSITION_STRING) -> Option<String> {
     unsafe {
         let string_len = ImmGetCompositionStringW(ctx, comp_type, None, 0);
-        if string_len >= 0 {
-            let mut buffer = vec![0u8; string_len as usize + 2];
-            ImmGetCompositionStringW(
-                ctx,
-                comp_type,
-                Some(buffer.as_mut_ptr() as _),
-                string_len as _,
-            );
-            let wstring = std::slice::from_raw_parts::<u16>(
-                buffer.as_mut_ptr().cast::<u16>(),
-                string_len as usize / 2,
-            );
-            Some(String::from_utf16_lossy(wstring))
-        } else {
-            None
+        if string_len < 0
+            || string_len > MAX_IME_COMPOSITION_BYTES
+            || string_len % std::mem::size_of::<u16>() as i32 != 0
+        {
+            return None;
         }
+
+        let unit_count = string_len as usize / std::mem::size_of::<u16>();
+        let mut buffer = vec![0u16; unit_count.saturating_add(1)];
+        let copied = ImmGetCompositionStringW(
+            ctx,
+            comp_type,
+            Some(buffer.as_mut_ptr().cast()),
+            string_len as u32,
+        );
+        if copied < 0 || copied > string_len || copied % std::mem::size_of::<u16>() as i32 != 0 {
+            return None;
+        }
+        Some(String::from_utf16_lossy(
+            &buffer[..copied as usize / std::mem::size_of::<u16>()],
+        ))
     }
 }
 
 #[inline]
 fn retrieve_composition_cursor_position(ctx: HIMC) -> usize {
-    unsafe { ImmGetCompositionStringW(ctx, GCS_CURSORPOS, None, 0) as usize }
+    usize::try_from(unsafe { ImmGetCompositionStringW(ctx, GCS_CURSORPOS, None, 0) })
+        .unwrap_or_default()
 }
 
 #[inline]

@@ -1,8 +1,15 @@
-// Feature: platform-parity-electron-features, Property 1: URL callback preserves URL string
+// Feature: platform-parity-browser-runtime-features, Property 1: URL callback preserves URL string
 
 use proptest::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
+
+#[test]
+fn platform_callback_guard_returns_requested_fallback_after_panic() {
+    let value =
+        super::super::catch_platform_callback("test", "callback", 17, || panic!("callback panic"));
+    assert_eq!(value, 17);
+}
 
 /// Generates a valid URL string matching a registered custom scheme.
 ///
@@ -76,7 +83,7 @@ proptest! {
     }
 }
 
-// Feature: platform-parity-electron-features, Property 3: Global hotkey event dispatch
+// Feature: platform-parity-browser-runtime-features, Property 3: Global hotkey event dispatch
 
 /// Generates a valid hotkey ID.
 ///
@@ -188,7 +195,7 @@ proptest! {
     }
 }
 
-// Feature: platform-parity-electron-features, Property 4: Media key event dispatch
+// Feature: platform-parity-browser-runtime-features, Property 4: Media key event dispatch
 
 use crate::MediaKeyEvent;
 

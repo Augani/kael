@@ -22,7 +22,7 @@ doctest = false
 version = "0.7.1"
 
 [dependencies.log]
-version = "0.4.16"
+workspace = true
 features = [
     "kv_unstable_serde",
     "serde",
@@ -35,23 +35,5 @@ version = "1.8"
 [dev-dependencies.rand]
 version = "0.9"
 
-[lints.clippy]
-dbg_macro = "deny"
-declare_interior_mutable_const = "deny"
-disallowed_methods = "deny"
-large_enum_variant = "allow"
-let_underscore_future = "allow"
-nonminimal_bool = "allow"
-redundant_clone = "deny"
-single_range_in_vec_init = "allow"
-todo = "deny"
-too_many_arguments = "allow"
-type_complexity = "allow"
-
-[lints.clippy.style]
-level = "allow"
-priority = -1
-
-[lints.rust.unexpected_cfgs]
-level = "allow"
-priority = 0
+[lints]
+workspace = true

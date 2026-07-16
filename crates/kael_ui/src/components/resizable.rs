@@ -7,8 +7,8 @@ use kael::{prelude::FluentBuilder as _, *};
 use crate::{theme::use_theme, util::AxisExt};
 
 const PANEL_MIN_SIZE: Pixels = px(100.0);
-const HANDLE_PADDING: Pixels = px(4.0);
-const HANDLE_SIZE: Pixels = px(1.0);
+const HANDLE_PADDING: Pixels = px(5.0);
+const HANDLE_SIZE: Pixels = px(2.0);
 
 pub fn h_resizable(id: impl Into<ElementId>, state: Entity<ResizableState>) -> ResizablePanelGroup {
     ResizablePanelGroup::new(id, state).axis(Axis::Horizontal)
@@ -20,6 +20,74 @@ pub fn v_resizable(id: impl Into<ElementId>, state: Entity<ResizableState>) -> R
 
 pub fn resizable_panel() -> ResizablePanel {
     ResizablePanel::new()
+}
+
+#[derive(IntoElement)]
+pub struct ResizeHandle {
+    axis: Axis,
+    active: bool,
+    style: StyleRefinement,
+}
+
+impl ResizeHandle {
+    pub fn new(axis: Axis) -> Self {
+        Self {
+            axis,
+            active: false,
+            style: StyleRefinement::default(),
+        }
+    }
+
+    pub fn active(mut self, active: bool) -> Self {
+        self.active = active;
+        self
+    }
+}
+
+impl Styled for ResizeHandle {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for ResizeHandle {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let theme = use_theme();
+        let user_style = self.style;
+        let color = if self.active {
+            theme.tokens.primary
+        } else {
+            theme.tokens.border
+        };
+
+        div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .when(self.axis.is_horizontal(), |this| {
+                this.cursor_col_resize().h_full().w(px(12.0))
+            })
+            .when(self.axis.is_vertical(), |this| {
+                this.cursor_row_resize().w_full().h(px(12.0))
+            })
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Separator).label("Resize panels"),
+            )
+            .child(
+                div()
+                    .bg(color)
+                    .rounded(px(9999.0))
+                    .when(self.axis.is_horizontal(), |this| {
+                        this.h_full().w(HANDLE_SIZE)
+                    })
+                    .when(self.axis.is_vertical(), |this| this.w_full().h(HANDLE_SIZE)),
+            )
+            .map(|this| {
+                let mut div = this;
+                div.style().refine(&user_style);
+                div
+            })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -91,7 +159,7 @@ impl ResizableState {
         cx.notify();
     }
 
-    pub fn sizes(&self) -> &Vec<Pixels> {
+    pub fn sizes(&self) -> &[Pixels] {
         &self.sizes
     }
 
@@ -112,6 +180,15 @@ impl ResizableState {
             self.panels
                 .extend(vec![ResizablePanelState::default(); diff]);
             self.sizes.extend(vec![PANEL_MIN_SIZE; diff]);
+        } else if panels_count < self.panels.len() {
+            self.panels.truncate(panels_count);
+            self.sizes.truncate(panels_count);
+            if self
+                .resizing_panel_ix
+                .is_some_and(|index| index >= panels_count.saturating_sub(1))
+            {
+                self.resizing_panel_ix = None;
+            }
         }
     }
 
@@ -120,7 +197,7 @@ impl ResizableState {
         index: usize,
         bounds: Bounds<Pixels>,
         size_range: Range<Pixels>,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) {
         if index >= self.panels.len() {
             return;
@@ -131,8 +208,6 @@ impl ResizableState {
         self.panels[index].size = Some(size);
         self.panels[index].bounds = bounds;
         self.panels[index].size_range = size_range;
-
-        cx.notify();
     }
 
     fn done_resizing(&mut self, cx: &mut Context<Self>) {
@@ -164,9 +239,7 @@ impl ResizableState {
     }
 
     fn resize_panel(&mut self, index: usize, size: Pixels, _: &mut Window, cx: &mut Context<Self>) {
-        let old_sizes = self.sizes.clone();
-
-        if index >= old_sizes.len() - 1 {
+        if self.sizes.len() < 2 || index >= self.sizes.len() - 1 {
             return;
         }
 
@@ -174,6 +247,7 @@ impl ResizableState {
         let container_size = self.bounds.size.along(self.axis);
 
         self.sync_real_panel_sizes(cx);
+        let old_sizes = self.sizes.clone();
 
         let move_changed = size - old_sizes[index];
         if move_changed == px(0.0) {
@@ -306,6 +380,7 @@ impl EventEmitter<ResizablePanelEvent> for ResizablePanelGroup {}
 impl RenderOnce for ResizablePanelGroup {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let state = self.state.clone();
+        let group_key: SharedString = format!("{}", self.id).into();
 
         let panels_count = self.children.len();
         self.state.update(cx, |state, _| {
@@ -313,7 +388,7 @@ impl RenderOnce for ResizablePanelGroup {
         });
 
         let container = div()
-            .id(self.id)
+            .id(self.id.clone())
             .flex()
             .size_full()
             .when(self.axis.is_horizontal(), |this| this.flex_row())
@@ -328,6 +403,7 @@ impl RenderOnce for ResizablePanelGroup {
                         panel.index = index;
                         panel.axis = self.axis;
                         panel.state = Some(self.state.clone());
+                        panel.group_key = group_key.clone();
                         panel
                     }),
             )
@@ -356,6 +432,7 @@ pub struct ResizablePanel {
     axis: Axis,
     index: usize,
     state: Option<Entity<ResizableState>>,
+    group_key: SharedString,
     initial_size: Option<Pixels>,
     size_range: Range<Pixels>,
     children: Vec<AnyElement>,
@@ -369,6 +446,7 @@ impl ResizablePanel {
             index: 0,
             initial_size: None,
             state: None,
+            group_key: "resizable-group".into(),
             size_range: (PANEL_MIN_SIZE..Pixels::MAX),
             axis: Axis::Horizontal,
             children: vec![],
@@ -416,8 +494,12 @@ impl Styled for ResizablePanel {
 
 impl RenderOnce for ResizablePanel {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let panel_id = ElementId::NamedInteger(
+            format!("resizable-panel-{}", self.group_key).into(),
+            self.index as u64,
+        );
         if !self.visible {
-            return div().id(("resizable-panel", self.index)).into_any_element();
+            return div().id(panel_id).into_any_element();
         }
 
         let state = self
@@ -431,12 +513,7 @@ impl RenderOnce for ResizablePanel {
         let has_custom_size =
             self.initial_size.is_some() || panel_state.as_ref().and_then(|p| p.size).is_some();
 
-        let mut panel_div = div()
-            .id(("resizable-panel", self.index))
-            .flex()
-            .flex_grow()
-            .size_full()
-            .relative();
+        let mut panel_div = div().id(panel_id).flex().flex_grow().size_full().relative();
 
         panel_div = panel_div.when(self.axis.is_vertical(), |this| {
             this.min_h(size_range.start).max_h(size_range.end)
@@ -477,17 +554,36 @@ impl RenderOnce for ResizablePanel {
             .when(self.index > 0, |this| {
                 let handle_index = self.index - 1;
                 let state = state.clone();
+                let drag_state = state.clone();
 
-                this.child(ResizeHandle::new(
-                    ("resizable-handle", handle_index),
+                this.child(ResizePanelHandle::new(
+                    ElementId::NamedInteger(
+                        format!("resizable-handle-{}", self.group_key).into(),
+                        handle_index as u64,
+                    ),
                     self.axis,
                     DragPanel,
                     move |drag_panel, _, _, cx| {
                         cx.stop_propagation();
-                        state.update(cx, |state, _| {
+                        drag_state.update(cx, |state, cx| {
                             state.resizing_panel_ix = Some(handle_index);
+                            cx.notify();
                         });
                         cx.new(|_| (*drag_panel).clone())
+                    },
+                    move |delta, window, cx| {
+                        state.update(cx, |state, cx| {
+                            state.sync_real_panel_sizes(cx);
+                            let current = state
+                                .sizes
+                                .get(handle_index)
+                                .copied()
+                                .unwrap_or(PANEL_MIN_SIZE);
+                            state.resizing_panel_ix = Some(handle_index);
+                            state.resize_panel(handle_index, current + delta, window, cx);
+                            state.done_resizing(cx);
+                            cx.notify();
+                        });
                     },
                 ))
             })
@@ -520,25 +616,28 @@ impl Render for DragPanel {
     }
 }
 
-struct ResizeHandle<T: 'static, E: 'static + Render> {
+struct ResizePanelHandle<T: 'static, E: 'static + Render> {
     id: ElementId,
     axis: Axis,
     drag_value: Rc<T>,
     on_drag: Rc<dyn Fn(Rc<T>, &Point<Pixels>, &mut Window, &mut App) -> Entity<E>>,
+    on_adjust: Rc<dyn Fn(Pixels, &mut Window, &mut App)>,
 }
 
-impl<T: 'static, E: 'static + Render> ResizeHandle<T, E> {
+impl<T: 'static, E: 'static + Render> ResizePanelHandle<T, E> {
     fn new(
         id: impl Into<ElementId>,
         axis: Axis,
         value: T,
         f: impl Fn(Rc<T>, &Point<Pixels>, &mut Window, &mut App) -> Entity<E> + 'static,
+        on_adjust: impl Fn(Pixels, &mut Window, &mut App) + 'static,
     ) -> Self {
         Self {
             id: id.into(),
             axis,
             drag_value: Rc::new(value),
             on_drag: Rc::new(f),
+            on_adjust: Rc::new(on_adjust),
         }
     }
 }
@@ -558,15 +657,15 @@ impl ResizeHandleState {
     }
 }
 
-impl<T: 'static, E: 'static + Render> IntoElement for ResizeHandle<T, E> {
-    type Element = ResizeHandle<T, E>;
+impl<T: 'static, E: 'static + Render> IntoElement for ResizePanelHandle<T, E> {
+    type Element = ResizePanelHandle<T, E>;
 
     fn into_element(self) -> Self::Element {
         self
     }
 }
 
-impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
+impl<T: 'static, E: 'static + Render> Element for ResizePanelHandle<T, E> {
     type RequestLayoutState = AnyElement;
     type PrepaintState = ();
 
@@ -588,12 +687,16 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
         let neg_offset = -HANDLE_PADDING;
         let axis = self.axis;
         let theme = use_theme();
+        let focus_handle = window
+            .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone();
 
         window.with_element_state(id.unwrap(), |state, window| {
             let state = state.unwrap_or_else(ResizeHandleState::default);
 
             let bg_color = if state.is_active() {
-                theme.tokens.accent
+                theme.tokens.primary
             } else {
                 theme.tokens.border
             };
@@ -603,6 +706,16 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
                 .occlude()
                 .absolute()
                 .flex_shrink_0()
+                .accessibility(
+                    AccessibilityAttributes::new(AccessibilityRole::Separator)
+                        .label("Resize adjacent panels")
+                        .actions(vec![
+                            AccessibilityAction::Focus,
+                            AccessibilityAction::Increment,
+                            AccessibilityAction::Decrement,
+                        ]),
+                )
+                .track_focus(&focus_handle.tab_index(0).tab_stop(true))
                 .group("handle");
 
             let on_drag = self.on_drag.clone();
@@ -610,6 +723,30 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
             handle_element = handle_element
                 .on_drag(drag_value.clone(), move |_, position, window, cx| {
                     (on_drag)(drag_value.clone(), &position, window, cx)
+                });
+
+            let increment = self.on_adjust.clone();
+            let decrement = self.on_adjust.clone();
+            let keyboard_adjust = self.on_adjust.clone();
+            handle_element = handle_element
+                .on_accessibility_action(AccessibilityAction::Increment, move |_, window, cx| {
+                    increment(px(16.0), window, cx)
+                })
+                .on_accessibility_action(AccessibilityAction::Decrement, move |_, window, cx| {
+                    decrement(px(-16.0), window, cx)
+                })
+                .on_key_down(move |event, window, cx| {
+                    if event.keystroke.modifiers.modified() {
+                        return;
+                    }
+                    let delta = match (axis, event.keystroke.key.as_str()) {
+                        (Axis::Horizontal, "left") | (Axis::Vertical, "up") => px(-16.0),
+                        (Axis::Horizontal, "right") | (Axis::Vertical, "down") => px(16.0),
+                        _ => return,
+                    };
+                    keyboard_adjust(delta, window, cx);
+                    window.prevent_default();
+                    cx.stop_propagation();
                 });
 
             handle_element = match axis {
@@ -632,7 +769,8 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
             handle_element = handle_element.child(
                 div()
                     .bg(bg_color)
-                    .group_hover("handle", |this| this.bg(theme.tokens.accent))
+                    .rounded_full()
+                    .group_hover("handle", |this| this.bg(theme.tokens.primary))
                     .when(axis.is_horizontal(), |this| this.h_full().w(HANDLE_SIZE))
                     .when(axis.is_vertical(), |this| this.w_full().h(HANDLE_SIZE)),
             );
@@ -750,19 +888,17 @@ impl Element for ResizePanelGroupElement {
         _: &mut Self::RequestLayoutState,
         _: &mut Self::PrepaintState,
         window: &mut Window,
-        cx: &mut App,
+        _cx: &mut App,
     ) {
         window.on_mouse_event({
             let state = self.state.clone();
             let axis = self.axis;
-            let current_ix = state.read(cx).resizing_panel_ix;
-
             move |event: &MouseMoveEvent, phase, window, cx| {
                 if !phase.bubble() {
                     return;
                 }
 
-                let Some(panel_index) = current_ix else {
+                let Some(panel_index) = state.read(cx).resizing_panel_ix else {
                     return;
                 };
 
@@ -783,10 +919,8 @@ impl Element for ResizePanelGroupElement {
 
         window.on_mouse_event({
             let state = self.state.clone();
-            let current_ix = state.read(cx).resizing_panel_ix;
-
             move |_: &MouseUpEvent, phase, _, cx| {
-                if current_ix.is_none() {
+                if state.read(cx).resizing_panel_ix.is_none() {
                     return;
                 }
 

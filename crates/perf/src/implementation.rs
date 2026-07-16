@@ -72,7 +72,7 @@ impl std::fmt::Display for Importance {
 }
 
 /// Why or when did this test fail?
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FailKind {
     /// Failed while triaging it to determine the iteration count.
     Triage,
@@ -139,7 +139,7 @@ impl Timings {
     )]
     #[must_use]
     pub fn iters_per_sec(&self, total_iters: NonZero<usize>) -> f64 {
-        (1000. / self.mean.as_millis() as f64) * total_iters.get() as f64
+        total_iters.get() as f64 / self.mean.as_secs_f64()
     }
 }
 
@@ -207,17 +207,14 @@ impl Output {
     pub fn sort(&mut self) {
         self.tests.sort_unstable_by(|a, b| match (a, b) {
             // Tests where we got no metadata go at the end.
-            ((_, Some(_), _), (_, None, _)) => std::cmp::Ordering::Greater,
-            ((_, None, _), (_, Some(_), _)) => std::cmp::Ordering::Less,
+            ((_, Some(_), _), (_, None, _)) => std::cmp::Ordering::Less,
+            ((_, None, _), (_, Some(_), _)) => std::cmp::Ordering::Greater,
             // Then sort by importance, then weight.
-            ((_, Some(a_mdata), _), (_, Some(b_mdata), _)) => {
-                let c = a_mdata.importance.cmp(&b_mdata.importance);
-                if matches!(c, std::cmp::Ordering::Equal) {
-                    a_mdata.weight.cmp(&b_mdata.weight)
-                } else {
-                    c
-                }
-            }
+            ((a_name, Some(a_mdata), _), (b_name, Some(b_mdata), _)) => b_mdata
+                .importance
+                .cmp(&a_mdata.importance)
+                .then_with(|| b_mdata.weight.cmp(&a_mdata.weight))
+                .then_with(|| a_name.cmp(b_name)),
             // Lastly by name.
             ((a_name, ..), (b_name, ..)) => a_name.cmp(b_name),
         });
@@ -274,7 +271,7 @@ impl Output {
                         continue;
                     };
                     let shift =
-                        (o_timings.iters_per_sec(o_iters) / s_timings.iters_per_sec(s_iters)) - 1.;
+                        (s_timings.iters_per_sec(s_iters) / o_timings.iters_per_sec(o_iters)) - 1.;
                     if shift > max {
                         max = shift;
                     }
@@ -305,13 +302,14 @@ impl Output {
         let mut categories = HashMap::<Importance, HashMap<String, _>>::default();
         for entry in self.tests {
             if let Some(mdata) = entry.1
+                && let Some(iterations) = mdata.iterations
                 && let Ok(timings) = entry.2
             {
                 if let Some(handle) = categories.get_mut(&mdata.importance) {
-                    handle.insert(entry.0, (timings, mdata.iterations.unwrap(), mdata.weight));
+                    handle.insert(entry.0, (timings, iterations, mdata.weight));
                 } else {
                     let mut new = HashMap::default();
-                    new.insert(entry.0, (timings, mdata.iterations.unwrap(), mdata.weight));
+                    new.insert(entry.0, (timings, iterations, mdata.weight));
                     categories.insert(mdata.importance, new);
                 }
             }
@@ -342,12 +340,23 @@ impl std::fmt::Display for Output {
                 Some(metadata) => match timings {
                     // Happy path.
                     Ok(timings) => {
+                        let Some(iterations) = metadata.iterations else {
+                            writeln!(
+                                f,
+                                "| ({}) {} | N/A | N/A | N/A | N/A | {} ({}) |",
+                                FailKind::BadMetadata,
+                                name,
+                                metadata.importance,
+                                metadata.weight,
+                            )?;
+                            continue;
+                        };
                         // If the test succeeded, then metadata.iterations is Some(_).
                         writeln!(
                             f,
                             "| {} | {:.2} | {} | {:.2} | {} | {} ({}) |",
                             name,
-                            timings.iters_per_sec(metadata.iterations.unwrap()),
+                            timings.iters_per_sec(iterations),
                             {
                                 // Very small mean runtimes will give inaccurate
                                 // results. Should probably also penalise weight.
@@ -359,7 +368,7 @@ impl std::fmt::Display for Output {
                                 }
                             },
                             timings.stddev.as_secs_f64() * 1000.,
-                            metadata.iterations.unwrap(),
+                            iterations,
                             metadata.importance,
                             metadata.weight,
                         )?;
@@ -412,12 +421,13 @@ impl std::fmt::Display for PerfReport {
         if self.deltas.is_empty() {
             return write!(f, "(no matching tests)");
         }
-        let sorted = self.deltas.iter().collect::<Vec<_>>();
+        let mut sorted = self.deltas.iter().collect::<Vec<_>>();
+        sorted.sort_unstable_by(|(a, _), (b, _)| b.cmp(a));
         writeln!(f, "| Category | Max | Mean | Min |")?;
         // We don't want to print too many newlines at the end, so handle newlines
         // a little jankily like this.
         write!(f, "|:---|---:|---:|---:|")?;
-        for (cat, delta) in sorted.into_iter().rev() {
+        for (cat, delta) in sorted {
             const SIGN_POS: &str = "↑";
             const SIGN_NEG: &str = "↓";
             const SIGN_NEUTRAL: &str = "±";
@@ -443,5 +453,82 @@ impl std::fmt::Display for PerfReport {
             )?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn metadata(importance: Importance, weight: u8) -> TestMdata {
+        TestMdata {
+            version: consts::MDATA_VER,
+            iterations: None,
+            importance,
+            weight,
+        }
+    }
+
+    #[test]
+    fn sub_millisecond_throughput_stays_finite_and_precise() {
+        let timings = Timings {
+            mean: Duration::from_micros(500),
+            stddev: Duration::ZERO,
+        };
+
+        assert!((timings.iters_per_sec(NonZero::new(4).unwrap()) - 8_000.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn output_orders_important_results_before_failures_without_metadata() {
+        let mut output = Output::blank();
+        let timings = Timings {
+            mean: Duration::from_millis(1),
+            stddev: Duration::ZERO,
+        };
+        output.failure("unknown", None, None, FailKind::BadMetadata);
+        output.success(
+            "average",
+            metadata(Importance::Average, 50),
+            NonZero::new(1).unwrap(),
+            timings.clone(),
+        );
+        output.success(
+            "critical",
+            metadata(Importance::Critical, 50),
+            NonZero::new(1).unwrap(),
+            timings,
+        );
+
+        let report = output.to_string();
+        assert!(report.find("critical").unwrap() < report.find("average").unwrap());
+        assert!(report.find("average").unwrap() < report.find("unknown").unwrap());
+    }
+
+    #[test]
+    fn faster_new_runs_are_reported_as_improvements() {
+        let mut current = Output::blank();
+        current.success(
+            "render",
+            metadata(Importance::Critical, 50),
+            NonZero::new(1).unwrap(),
+            Timings {
+                mean: Duration::from_millis(5),
+                stddev: Duration::ZERO,
+            },
+        );
+        let mut baseline = Output::blank();
+        baseline.success(
+            "render",
+            metadata(Importance::Critical, 50),
+            NonZero::new(1).unwrap(),
+            Timings {
+                mean: Duration::from_millis(10),
+                stddev: Duration::ZERO,
+            },
+        );
+
+        let report = current.compare_perf(baseline).to_string();
+        assert!(report.contains("↑ 100.0%"), "{report}");
     }
 }

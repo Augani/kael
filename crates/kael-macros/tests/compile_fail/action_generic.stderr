@@ -1,0 +1,5 @@
+error: Action cannot be derived for generic types because actions are registered globally
+ --> tests/compile_fail/action_generic.rs:4:21
+  |
+4 | struct GenericAction<T>(T);
+  |                     ^^^

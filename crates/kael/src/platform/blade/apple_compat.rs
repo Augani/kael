@@ -16,6 +16,7 @@ impl Default for Context {
 
 pub type Renderer = BladeRenderer;
 
+#[allow(dead_code)]
 pub unsafe fn new_renderer(
     context: Context,
     _native_window: *mut c_void,
@@ -23,6 +24,21 @@ pub unsafe fn new_renderer(
     bounds: crate::Size<f32>,
     transparent: bool,
 ) -> Renderer {
+    unsafe { try_new_renderer(context, _native_window, native_view, bounds, transparent) }
+        .expect("failed to initialize Blade renderer")
+}
+
+pub unsafe fn try_new_renderer(
+    context: Context,
+    _native_window: *mut c_void,
+    native_view: *mut c_void,
+    bounds: crate::Size<f32>,
+    transparent: bool,
+) -> anyhow::Result<Renderer> {
+    anyhow::ensure!(
+        !native_view.is_null(),
+        "Blade requires a non-null native view"
+    );
     use raw_window_handle as rwh;
     struct RawWindow {
         view: *mut c_void,
@@ -56,5 +72,5 @@ pub unsafe fn new_renderer(
             transparent,
         },
     )
-    .unwrap()
+    .map_err(|error| anyhow::anyhow!("initializing Blade renderer: {error:?}"))
 }

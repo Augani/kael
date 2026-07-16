@@ -140,9 +140,9 @@ impl Render for TabsStyledDemo {
                             "Tabs with custom background color, border, and rounded corners",
                             Tabs::<usize>::new()
                                 .tabs(vec![
-                                    TabItem::new(0, "Overview"),
-                                    TabItem::new(1, "Features"),
-                                    TabItem::new(2, "Documentation"),
+                                    TabItem::new(0usize, "Overview"),
+                                    TabItem::new(1usize, "Features"),
+                                    TabItem::new(2usize, "Documentation"),
                                 ])
                                 .panels(vec![
                                     TabPanel::new(|| div().child("Overview content")),
@@ -163,9 +163,9 @@ impl Render for TabsStyledDemo {
                             "Enhanced depth with shadow effects and custom padding",
                             Tabs::<usize>::new()
                                 .tabs(vec![
-                                    TabItem::new(0, "Dashboard"),
-                                    TabItem::new(1, "Analytics"),
-                                    TabItem::new(2, "Settings"),
+                                    TabItem::new(0usize, "Dashboard"),
+                                    TabItem::new(1usize, "Analytics"),
+                                    TabItem::new(2usize, "Settings"),
                                 ])
                                 .panels(vec![
                                     TabPanel::new(|| div().child("Dashboard content")),
@@ -191,9 +191,9 @@ impl Render for TabsStyledDemo {
                             "Fixed width and height with overflow handling",
                             Tabs::<usize>::new()
                                 .tabs(vec![
-                                    TabItem::new(0, "Projects"),
-                                    TabItem::new(1, "Tasks"),
-                                    TabItem::new(2, "Team"),
+                                    TabItem::new(0usize, "Projects"),
+                                    TabItem::new(1usize, "Tasks"),
+                                    TabItem::new(2usize, "Team"),
                                 ])
                                 .panels(vec![
                                     TabPanel::new(|| div().child("Projects content with long text that might overflow")),
@@ -213,11 +213,11 @@ impl Render for TabsStyledDemo {
                             "Modern border styling with transparency",
                             Tabs::<usize>::new()
                                 .tabs(vec![
-                                    TabItem::new(0, "Home")
+                                    TabItem::new(0usize, "Home")
                                         .icon("home"),
-                                    TabItem::new(1, "Profile")
+                                    TabItem::new(1usize, "Profile")
                                         .icon("user"),
-                                    TabItem::new(2, "Messages")
+                                    TabItem::new(2usize, "Messages")
                                         .icon("mail")
                                         .badge("3"),
                                 ])
@@ -240,10 +240,10 @@ impl Render for TabsStyledDemo {
                             "Subtle styling with minimal borders",
                             Tabs::<usize>::new()
                                 .tabs(vec![
-                                    TabItem::new(0, "Inbox"),
-                                    TabItem::new(1, "Sent"),
-                                    TabItem::new(2, "Drafts"),
-                                    TabItem::new(3, "Trash"),
+                                    TabItem::new(0usize, "Inbox"),
+                                    TabItem::new(1usize, "Sent"),
+                                    TabItem::new(2usize, "Drafts"),
+                                    TabItem::new(3usize, "Trash"),
                                 ])
                                 .panels(vec![
                                     TabPanel::new(|| div().child("Inbox content")),
@@ -264,9 +264,9 @@ impl Render for TabsStyledDemo {
                             "Space-efficient design with tight spacing",
                             Tabs::<usize>::new()
                                 .tabs(vec![
-                                    TabItem::new(0, "Tab 1"),
-                                    TabItem::new(1, "Tab 2"),
-                                    TabItem::new(2, "Tab 3"),
+                                    TabItem::new(0usize, "Tab 1"),
+                                    TabItem::new(1usize, "Tab 2"),
+                                    TabItem::new(2usize, "Tab 3"),
                                 ])
                                 .panels(vec![
                                     TabPanel::new(|| div().child("Content 1")),
@@ -286,11 +286,11 @@ impl Render for TabsStyledDemo {
                             "Card-like appearance with prominent borders",
                             Tabs::<usize>::new()
                                 .tabs(vec![
-                                    TabItem::new(0, "Account")
+                                    TabItem::new(0usize, "Account")
                                         .icon("user"),
-                                    TabItem::new(1, "Security")
+                                    TabItem::new(1usize, "Security")
                                         .icon("shield"),
-                                    TabItem::new(2, "Billing")
+                                    TabItem::new(2usize, "Billing")
                                         .icon("credit-card"),
                                 ])
                                 .panels(vec![
@@ -319,9 +319,9 @@ impl Render for TabsStyledDemo {
                             "Using accent colors for emphasis",
                             Tabs::<usize>::new()
                                 .tabs(vec![
-                                    TabItem::new(0, "Code"),
-                                    TabItem::new(1, "Preview"),
-                                    TabItem::new(2, "Console"),
+                                    TabItem::new(0usize, "Code"),
+                                    TabItem::new(1usize, "Preview"),
+                                    TabItem::new(2usize, "Console"),
                                 ])
                                 .panels(vec![
                                     TabPanel::new(|| div().child("Code editor panel")),

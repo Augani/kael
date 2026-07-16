@@ -1,6 +1,7 @@
 use kael::{
-    App, Application, Bounds, Context, NavigationPolicy, SharedString, Window, WindowBounds,
-    WindowOptions, black, div, prelude::*, px, rgb, size, text_input, webview, white,
+    App, Application, Bounds, Context, NavigationPolicy, SharedString, WebViewOptions, Window,
+    WindowBounds, WindowOptions, black, div, prelude::*, px, rgb, size, text_input,
+    webview_controller, webview_with_options, white,
 };
 
 const WEBVIEW_ID: &str = "demo-webview";
@@ -105,6 +106,7 @@ impl Render for WebViewDemo {
         let address_bar = self.address_bar.clone();
         let status = self.status.clone();
         let last_message = self.last_message.clone();
+        let webview_controller = webview_controller(WEBVIEW_ID);
 
         div()
             .size_full()
@@ -141,8 +143,9 @@ impl Render for WebViewDemo {
                                         })
                                         .on_submit({
                                             let entity = entity.clone();
+                                            let webview_controller = webview_controller.clone();
                                             move |text, window, cx| {
-                                                let _ = window.navigate_webview(WEBVIEW_ID, text.clone());
+                                                let _ = webview_controller.navigate(window, text.clone());
                                                 entity.update(cx, |this, cx| {
                                                     this.address_bar = text;
                                                     this.status = "Navigated from the address bar".into();
@@ -154,9 +157,10 @@ impl Render for WebViewDemo {
                             )
                             .child(button("Load Demo", {
                                 let entity = entity.clone();
+                                let webview_controller = webview_controller.clone();
                                 move |window, cx| {
                                     let url = WebViewDemo::demo_url();
-                                    let _ = window.navigate_webview(WEBVIEW_ID, url.clone());
+                                    let _ = webview_controller.navigate(window, url.clone());
                                     entity.update(cx, |this, cx| {
                                         this.address_bar = url;
                                         this.status = "Loaded the local demo page".into();
@@ -164,29 +168,43 @@ impl Render for WebViewDemo {
                                     });
                                 }
                             }))
-                            .child(button("Back", |window, _| {
-                                let _ = window.go_back_webview(WEBVIEW_ID);
+                            .child(button("Back", {
+                                let webview_controller = webview_controller.clone();
+                                move |window, _| {
+                                    let _ = webview_controller.go_back(window);
+                                }
                             }))
-                            .child(button("Forward", |window, _| {
-                                let _ = window.go_forward_webview(WEBVIEW_ID);
+                            .child(button("Forward", {
+                                let webview_controller = webview_controller.clone();
+                                move |window, _| {
+                                    let _ = webview_controller.go_forward(window);
+                                }
                             }))
-                            .child(button("Reload", |window, _| {
-                                let _ = window.reload_webview(WEBVIEW_ID);
+                            .child(button("Reload", {
+                                let webview_controller = webview_controller.clone();
+                                move |window, _| {
+                                    let _ = webview_controller.reload(window);
+                                }
                             }))
-                            .child(button("Post Message", |window, _| {
-                                let _ = window.post_webview_message(
-                                    WEBVIEW_ID,
-                                    serde_json::json!({
-                                        "kind": "host-message",
-                                        "detail": "Hello from GPUI"
-                                    }),
-                                );
+                            .child(button("Post Message", {
+                                let webview_controller = webview_controller.clone();
+                                move |window, _| {
+                                    let _ = webview_controller.post_message(
+                                        window,
+                                        serde_json::json!({
+                                            "kind": "host-message",
+                                            "detail": "Hello from GPUI"
+                                        }),
+                                    );
+                                }
                             }))
-                            .child(button("Eval JS", |window, _| {
-                                let _ = window.evaluate_webview_javascript(
-                                    WEBVIEW_ID,
-                                    "document.body.style.filter = document.body.style.filter ? '' : 'hue-rotate(24deg) saturate(1.15)';",
-                                );
+                            .child(button("Eval JS", {
+                                move |window, _| {
+                                    let _ = webview_controller.evaluate_javascript(
+                                        window,
+                                        "document.body.style.filter = document.body.style.filter ? '' : 'hue-rotate(24deg) saturate(1.15)';",
+                                    );
+                                }
                             })),
                     )
                     .child(div().text_sm().child(format!("Status: {}", status)))
@@ -197,37 +215,39 @@ impl Render for WebViewDemo {
                     .flex_1()
                     .p_3()
                     .child(
-                        webview(WEBVIEW_ID, address_bar)
-                            .storage_key("gpui.webview.demo")
-                            .user_agent("GPUI-WebView-Demo/1.0")
-                            .inject_css("body { overscroll-behavior: none; }")
-                            .on_message({
-                                let entity = entity.clone();
-                                move |message, _, cx| {
-                                    entity.update(cx, |this, cx| {
-                                        this.last_message = message.to_string().into();
-                                        this.status = "Received a JS bridge message".into();
-                                        cx.notify();
-                                    });
-                                }
-                            })
-                            .on_navigate({
-                                let entity = entity.clone();
-                                move |url, _, cx| {
-                                    entity.update(cx, |this, cx| {
-                                        this.status = format!("Navigation requested: {}", url).into();
-                                        cx.notify();
-                                    });
-                                    if url.starts_with("http://")
-                                        || url.starts_with("https://")
-                                        || url.starts_with("data:")
-                                    {
-                                        NavigationPolicy::Allow
-                                    } else {
-                                        NavigationPolicy::Deny
+                        webview_with_options(
+                            WEBVIEW_ID,
+                            address_bar,
+                            WebViewOptions::auth_flow("gpui.webview.demo")
+                                .user_agent("GPUI-WebView-Demo/1.0")
+                                .on_message({
+                                    let entity = entity.clone();
+                                    move |message, _, cx| {
+                                        entity.update(cx, |this, cx| {
+                                            this.last_message = message.to_string().into();
+                                            this.status = "Received a JS bridge message".into();
+                                            cx.notify();
+                                        });
                                     }
-                                }
-                            })
+                                })
+                                .on_navigate({
+                                    move |url, _, cx| {
+                                        entity.update(cx, |this, cx| {
+                                            this.status =
+                                                format!("Navigation requested: {}", url).into();
+                                            cx.notify();
+                                        });
+                                        if url.starts_with("http://")
+                                            || url.starts_with("https://")
+                                            || url.starts_with("data:")
+                                        {
+                                            NavigationPolicy::Allow
+                                        } else {
+                                            NavigationPolicy::Deny
+                                        }
+                                    }
+                                }),
+                        )
                             .rounded_lg()
                             .border_1()
                             .border_color(black())

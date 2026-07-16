@@ -4,7 +4,7 @@
 //! on screen at time T". Parsing is tolerant — malformed blocks are skipped rather than
 //! failing the whole file — and `to_srt` round-trips cleanly.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// One subtitle caption: a text span shown over a half-open time range, in milliseconds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,9 +18,27 @@ pub struct SubtitleCue {
 }
 
 /// A time-ordered set of subtitle cues.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct SubtitleTrack {
     cues: Vec<SubtitleCue>,
+}
+
+impl<'de> Deserialize<'de> for SubtitleTrack {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawTrack {
+            #[serde(default)]
+            cues: Vec<SubtitleCue>,
+        }
+
+        let mut cues = RawTrack::deserialize(deserializer)?.cues;
+        cues.retain(|cue| cue.start_ms < cue.end_ms && !cue.text.is_empty());
+        cues.sort_by_key(|cue| (cue.start_ms, cue.end_ms));
+        Ok(Self { cues })
+    }
 }
 
 impl SubtitleTrack {
@@ -86,8 +104,15 @@ impl SubtitleTrack {
     /// re-sync the track. Cues are re-sorted afterwards.
     pub fn shift(&mut self, delta_ms: i64) {
         for cue in &mut self.cues {
-            cue.start_ms = (cue.start_ms as i64 + delta_ms).max(0) as u64;
-            cue.end_ms = (cue.end_ms as i64 + delta_ms).max(0) as u64;
+            if delta_ms >= 0 {
+                let delta = delta_ms as u64;
+                cue.start_ms = cue.start_ms.saturating_add(delta);
+                cue.end_ms = cue.end_ms.saturating_add(delta);
+            } else {
+                let delta = delta_ms.unsigned_abs();
+                cue.start_ms = cue.start_ms.saturating_sub(delta);
+                cue.end_ms = cue.end_ms.saturating_sub(delta);
+            }
         }
         self.cues.sort_by_key(|cue| (cue.start_ms, cue.end_ms));
     }
@@ -117,11 +142,13 @@ pub fn parse_srt(input: &str) -> Vec<SubtitleCue> {
         if text.is_empty() {
             continue;
         }
-        cues.push(SubtitleCue {
-            start_ms,
-            end_ms,
-            text,
-        });
+        if start_ms < end_ms {
+            cues.push(SubtitleCue {
+                start_ms,
+                end_ms,
+                text,
+            });
+        }
     }
     cues
 }
@@ -140,9 +167,9 @@ pub fn parse_webvtt(input: &str) -> Vec<SubtitleCue> {
             continue;
         };
         if first.starts_with("WEBVTT")
-            || first.starts_with("NOTE")
-            || first.starts_with("STYLE")
-            || first.starts_with("REGION")
+            || block_directive(first, "NOTE")
+            || block_directive(first, "STYLE")
+            || block_directive(first, "REGION")
         {
             continue;
         }
@@ -163,13 +190,22 @@ pub fn parse_webvtt(input: &str) -> Vec<SubtitleCue> {
         if text.is_empty() {
             continue;
         }
-        cues.push(SubtitleCue {
-            start_ms,
-            end_ms,
-            text,
-        });
+        if start_ms < end_ms {
+            cues.push(SubtitleCue {
+                start_ms,
+                end_ms,
+                text,
+            });
+        }
     }
     cues
+}
+
+fn block_directive(line: &str, directive: &str) -> bool {
+    line == directive
+        || line
+            .strip_prefix(directive)
+            .is_some_and(|rest| rest.starts_with(' ') || rest.starts_with('\t'))
 }
 
 fn parse_timestamp(text: &str) -> Option<u64> {
@@ -192,7 +228,11 @@ fn parse_timestamp(text: &str) -> Option<u64> {
     if minutes >= 60 || seconds >= 60 {
         return None;
     }
-    Some(hours * 3_600_000 + minutes * 60_000 + seconds * 1_000 + milliseconds)
+    hours
+        .checked_mul(3_600_000)?
+        .checked_add(minutes.checked_mul(60_000)?)?
+        .checked_add(seconds.checked_mul(1_000)?)?
+        .checked_add(milliseconds)
 }
 
 fn format_timestamp(ms: u64) -> String {
@@ -257,6 +297,7 @@ mod tests {
         assert!(parse_timestamp("00:00:00,1000").is_none());
         assert!(parse_timestamp("not a time").is_none());
         assert_eq!(parse_timestamp("01:02:03,004"), Some(3_723_004));
+        assert!(parse_timestamp("999999999999999999:00:00,000").is_none());
     }
 
     #[test]
@@ -326,5 +367,47 @@ mod tests {
         track.shift(-100_000);
         assert_eq!(track.cues()[0].start_ms, 0);
         assert_eq!(track.cues()[0].end_ms, 0);
+    }
+
+    #[test]
+    fn shift_handles_the_full_u64_and_i64_domains() {
+        let mut track = SubtitleTrack {
+            cues: vec![SubtitleCue {
+                start_ms: u64::MAX - 1,
+                end_ms: u64::MAX,
+                text: "late".into(),
+            }],
+        };
+        track.shift(i64::MAX);
+        assert_eq!(track.cues[0].start_ms, u64::MAX);
+        assert_eq!(track.cues[0].end_ms, u64::MAX);
+        track.shift(i64::MIN);
+        assert_eq!(track.cues[0].start_ms, u64::MAX - (1u64 << 63));
+    }
+
+    #[test]
+    fn parsers_reject_empty_or_reversed_ranges() {
+        assert!(parse_srt("1\n00:00:02,000 --> 00:00:01,000\nbad\n").is_empty());
+        assert!(parse_webvtt("WEBVTT\n\n00:02.000 --> 00:01.000\nbad\n").is_empty());
+    }
+
+    #[test]
+    fn deserialization_restores_invariants() {
+        let json = r#"{"cues":[
+            {"start_ms":10,"end_ms":20,"text":"later"},
+            {"start_ms":0,"end_ms":5,"text":"first"},
+            {"start_ms":8,"end_ms":8,"text":"empty range"},
+            {"start_ms":6,"end_ms":7,"text":""}
+        ]}"#;
+        let track: SubtitleTrack = serde_json::from_str(json).unwrap();
+        assert_eq!(track.cues.len(), 2);
+        assert_eq!(track.cues[0].text, "first");
+        assert_eq!(track.cues[1].text, "later");
+    }
+
+    #[test]
+    fn cue_identifiers_that_begin_with_directive_names_are_not_dropped() {
+        let input = "WEBVTT\n\nNOTEBOOK\n00:00.000 --> 00:01.000\nkept\n";
+        assert_eq!(SubtitleTrack::from_webvtt(input).cues[0].text, "kept");
     }
 }

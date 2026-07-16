@@ -731,8 +731,13 @@ fn display_key(key: &str, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         #[cfg(target_os = "macos")]
         "platform" => '⌘',
 
-        key if key.len() == 1 => key.chars().next().unwrap().to_ascii_uppercase(),
-        key => return f.write_str(key),
+        key => {
+            let mut chars = key.chars();
+            match (chars.next(), chars.next()) {
+                (Some(character), None) => character.to_ascii_uppercase(),
+                _ => return f.write_str(key),
+            }
+        }
     };
     f.write_char(key)
 }

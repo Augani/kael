@@ -1,6 +1,22 @@
-use crate::theme::use_theme;
+use crate::{astryx, theme::use_theme};
 use kael::{prelude::*, *};
 use std::rc::Rc;
+
+const DEFAULT_SLIDER_STEP: f32 = 1.0;
+
+pub(crate) fn valid_slider_step(step: f32) -> Option<f32> {
+    (step.is_finite() && step > 0.0).then_some(step)
+}
+
+pub(crate) fn snap_slider_value(value: f32, min: f32, max: f32, step: f32) -> f32 {
+    if !value.is_finite() || !min.is_finite() || !max.is_finite() || min > max {
+        return min;
+    }
+    let step = valid_slider_step(step).unwrap_or(DEFAULT_SLIDER_STEP);
+    let clamped = value.clamp(min, max);
+    let steps = ((clamped - min) / step).round();
+    (min + steps * step).clamp(min, max)
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SliderSize {
@@ -18,26 +34,22 @@ pub enum SliderAxis {
 impl SliderSize {
     pub fn track_height(&self) -> Pixels {
         match self {
-            SliderSize::Sm => px(2.0),
-            SliderSize::Md => px(4.0),
-            SliderSize::Lg => px(6.0),
+            Self::Sm => px(3.0),
+            Self::Md => px(4.0),
+            Self::Lg => px(6.0),
         }
     }
 
     pub fn thumb_width(&self) -> Pixels {
         match self {
-            SliderSize::Sm => px(16.0),
-            SliderSize::Md => px(20.0),
-            SliderSize::Lg => px(24.0),
+            Self::Sm => px(20.0),
+            Self::Md => px(24.0),
+            Self::Lg => px(28.0),
         }
     }
 
     pub fn thumb_height(&self) -> Pixels {
-        match self {
-            SliderSize::Sm => px(12.0),
-            SliderSize::Md => px(16.0),
-            SliderSize::Lg => px(20.0),
-        }
+        self.thumb_width()
     }
 }
 
@@ -69,9 +81,18 @@ impl SliderState {
     }
 
     pub fn set_min(&mut self, min: f32, cx: &mut Context<Self>) {
+        if !min.is_finite() {
+            return;
+        }
+        let previous = (self.min, self.max, self.value);
         self.min = min;
+        if self.max < min {
+            self.max = min;
+        }
         self.value = self.value.clamp(self.min, self.max);
-        cx.notify();
+        if previous != (self.min, self.max, self.value) {
+            cx.notify();
+        }
     }
 
     pub fn max(&self) -> f32 {
@@ -79,9 +100,18 @@ impl SliderState {
     }
 
     pub fn set_max(&mut self, max: f32, cx: &mut Context<Self>) {
+        if !max.is_finite() {
+            return;
+        }
+        let previous = (self.min, self.max, self.value);
         self.max = max;
+        if self.min > max {
+            self.min = max;
+        }
         self.value = self.value.clamp(self.min, self.max);
-        cx.notify();
+        if previous != (self.min, self.max, self.value) {
+            cx.notify();
+        }
     }
 
     pub fn value(&self) -> f32 {
@@ -89,8 +119,10 @@ impl SliderState {
     }
 
     pub fn set_value(&mut self, value: f32, cx: &mut Context<Self>) {
-        let clamped = value.clamp(self.min, self.max);
-        let stepped = ((clamped / self.step).round() * self.step).clamp(self.min, self.max);
+        if !value.is_finite() {
+            return;
+        }
+        let stepped = snap_slider_value(value, self.min, self.max, self.step);
 
         if (self.value - stepped).abs() > f32::EPSILON {
             self.value = stepped;
@@ -103,8 +135,18 @@ impl SliderState {
     }
 
     pub fn set_step(&mut self, step: f32, cx: &mut Context<Self>) {
-        self.step = step;
-        cx.notify();
+        if let Some(step) = valid_slider_step(step) {
+            self.step = step;
+            self.set_value(self.value, cx);
+        }
+    }
+
+    fn increment(&mut self, cx: &mut Context<Self>) {
+        self.set_value(self.value + self.step, cx);
+    }
+
+    fn decrement(&mut self, cx: &mut Context<Self>) {
+        self.set_value(self.value - self.step, cx);
     }
 
     fn percentage(&self) -> f32 {
@@ -160,6 +202,7 @@ pub struct Slider {
     axis: SliderAxis,
     disabled: bool,
     show_value: bool,
+    accessibility_label: SharedString,
     on_change: Option<Rc<dyn Fn(f32, &mut Window, &mut App) + 'static>>,
     style: StyleRefinement,
 }
@@ -172,6 +215,7 @@ impl Slider {
             axis: SliderAxis::Horizontal,
             disabled: false,
             show_value: false,
+            accessibility_label: "Value".into(),
             on_change: None,
             style: StyleRefinement::default(),
         }
@@ -199,6 +243,11 @@ impl Slider {
 
     pub fn show_value(mut self, show: bool) -> Self {
         self.show_value = show;
+        self
+    }
+
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessibility_label = label.into();
         self
     }
 
@@ -231,6 +280,8 @@ impl Slider {
         thumb_bg: Hsla,
         focus_ring: BoxShadow,
         user_style: StyleRefinement,
+        accessibility: AccessibilityAttributes,
+        entity_id: u64,
     ) -> Div {
         div()
             .flex()
@@ -244,6 +295,7 @@ impl Slider {
             })
             .child(
                 div()
+                    .id(("slider-horizontal", entity_id))
                     .relative()
                     .flex_1()
                     .h(thumb_height)
@@ -251,6 +303,36 @@ impl Slider {
                     .items_center()
                     .when(!self.disabled, |this| {
                         this.track_focus(&focus_handle.tab_index(0).tab_stop(true))
+                    })
+                    .accessibility(accessibility)
+                    .when(!self.disabled, {
+                        let state = self.state.clone();
+                        let on_change = self.on_change.clone();
+                        move |this| {
+                            this.on_key_down(move |event: &KeyDownEvent, window, cx| {
+                                let key = event.keystroke.key.as_str();
+                                let handled = matches!(
+                                    key,
+                                    "left" | "down" | "right" | "up" | "home" | "end"
+                                );
+                                if handled {
+                                    state.update(cx, |state, cx| {
+                                        match key {
+                                            "left" | "down" => state.decrement(cx),
+                                            "right" | "up" => state.increment(cx),
+                                            "home" => state.set_value(state.min, cx),
+                                            "end" => state.set_value(state.max, cx),
+                                            _ => {}
+                                        }
+                                        if let Some(handler) = on_change.as_ref() {
+                                            handler(state.value, window, cx);
+                                        }
+                                    });
+                                    cx.stop_propagation();
+                                    window.prevent_default();
+                                }
+                            })
+                        }
                     })
                     .when(is_focused && !self.disabled, |this| {
                         this.shadow(smallvec::smallvec![focus_ring])
@@ -302,8 +384,6 @@ impl Slider {
                             .h(thumb_height)
                             .rounded(thumb_height / 2.0)
                             .bg(thumb_bg)
-                            .border_2()
-                            .border_color(theme.tokens.background)
                             .when(!self.disabled, |this| {
                                 this.shadow(theme.tokens.shadow_sm.to_vec())
                                     .cursor(CursorStyle::PointingHand)
@@ -401,6 +481,8 @@ impl Slider {
         thumb_bg: Hsla,
         focus_ring: BoxShadow,
         user_style: StyleRefinement,
+        accessibility: AccessibilityAttributes,
+        entity_id: u64,
     ) -> Div {
         div()
             .flex()
@@ -415,6 +497,7 @@ impl Slider {
             })
             .child(
                 div()
+                    .id(("slider-vertical", entity_id))
                     .relative()
                     .flex_1()
                     .w(thumb_width)
@@ -423,6 +506,36 @@ impl Slider {
                     .justify_center()
                     .when(!self.disabled, |this| {
                         this.track_focus(&focus_handle.tab_index(0).tab_stop(true))
+                    })
+                    .accessibility(accessibility)
+                    .when(!self.disabled, {
+                        let state = self.state.clone();
+                        let on_change = self.on_change.clone();
+                        move |this| {
+                            this.on_key_down(move |event: &KeyDownEvent, window, cx| {
+                                let key = event.keystroke.key.as_str();
+                                let handled = matches!(
+                                    key,
+                                    "left" | "down" | "right" | "up" | "home" | "end"
+                                );
+                                if handled {
+                                    state.update(cx, |state, cx| {
+                                        match key {
+                                            "left" | "down" => state.decrement(cx),
+                                            "right" | "up" => state.increment(cx),
+                                            "home" => state.set_value(state.min, cx),
+                                            "end" => state.set_value(state.max, cx),
+                                            _ => {}
+                                        }
+                                        if let Some(handler) = on_change.as_ref() {
+                                            handler(state.value, window, cx);
+                                        }
+                                    });
+                                    cx.stop_propagation();
+                                    window.prevent_default();
+                                }
+                            })
+                        }
                     })
                     .when(is_focused && !self.disabled, |this| {
                         this.shadow(smallvec::smallvec![focus_ring])
@@ -474,8 +587,6 @@ impl Slider {
                             .h(thumb_height)
                             .rounded(thumb_width / 2.0)
                             .bg(thumb_bg)
-                            .border_2()
-                            .border_color(theme.tokens.background)
                             .when(!self.disabled, |this| {
                                 this.shadow(theme.tokens.shadow_sm.to_vec())
                                     .cursor(CursorStyle::PointingHand)
@@ -566,6 +677,34 @@ impl RenderOnce for Slider {
         let is_focused = focus_handle.is_focused(window);
         let percentage = state.percentage();
         let value = state.value;
+        let min = state.min;
+        let max = state.max;
+        let step = state.step;
+        let entity_id = self.state.entity_id().as_u64();
+        let mut accessibility_state = AccessibilityState::NONE;
+        if self.disabled {
+            accessibility_state |= AccessibilityState::DISABLED;
+        }
+        if is_focused {
+            accessibility_state |= AccessibilityState::FOCUSED;
+        }
+        let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::Slider)
+            .label(self.accessibility_label.to_string())
+            .value(AccessibilityValue::Range {
+                current: value as f64,
+                min: min as f64,
+                max: max as f64,
+                step: Some(step as f64),
+            })
+            .states(accessibility_state);
+        if !self.disabled {
+            accessibility = accessibility.actions(vec![
+                AccessibilityAction::Focus,
+                AccessibilityAction::Increment,
+                AccessibilityAction::Decrement,
+                AccessibilityAction::SetValue,
+            ]);
+        }
 
         let track_height = self.size.track_height();
         let thumb_width = self.size.thumb_width();
@@ -585,7 +724,7 @@ impl RenderOnce for Slider {
             )
         };
 
-        let focus_ring = theme.tokens.focus_ring_light();
+        let focus_ring = astryx::focus_ring_outer(theme.tokens.primary);
         let user_style = self.style.clone();
 
         match self.axis {
@@ -604,6 +743,8 @@ impl RenderOnce for Slider {
                 thumb_bg,
                 focus_ring,
                 user_style,
+                accessibility,
+                entity_id,
             ),
             SliderAxis::Vertical => self.render_vertical(
                 window,
@@ -620,7 +761,37 @@ impl RenderOnce for Slider {
                 thumb_bg,
                 focus_ring,
                 user_style,
+                accessibility,
+                entity_id,
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{snap_slider_value, valid_slider_step};
+
+    #[test]
+    fn snapping_is_anchored_to_the_configured_minimum() {
+        assert_eq!(snap_slider_value(11.0, 10.0, 20.0, 3.0), 10.0);
+        assert_eq!(snap_slider_value(12.0, 10.0, 20.0, 3.0), 13.0);
+        assert_eq!(snap_slider_value(19.9, 10.0, 20.0, 3.0), 19.0);
+    }
+
+    #[test]
+    fn invalid_steps_are_rejected_and_values_are_clamped() {
+        assert_eq!(valid_slider_step(0.0), None);
+        assert_eq!(valid_slider_step(f32::NAN), None);
+        assert_eq!(snap_slider_value(-5.0, 0.0, 10.0, 2.0), 0.0);
+        assert_eq!(snap_slider_value(99.0, 0.0, 10.0, 2.0), 10.0);
+    }
+
+    #[test]
+    fn size_variants_have_distinct_visual_and_target_scales() {
+        use super::SliderSize;
+        assert!(SliderSize::Sm.thumb_width() < SliderSize::Md.thumb_width());
+        assert!(SliderSize::Md.thumb_width() < SliderSize::Lg.thumb_width());
+        assert!(SliderSize::Sm.track_height() < SliderSize::Lg.track_height());
     }
 }

@@ -221,6 +221,10 @@ pub struct Style {
     pub align_content: Option<AlignContent>,
     /// How should contained within this item be aligned in the main/inline axis
     pub justify_content: Option<JustifyContent>,
+    /// How grid items are aligned in the inline (row) axis within their grid area
+    pub justify_items: Option<AlignItems>,
+    /// How this grid item aligns itself in the inline (row) axis. Falls back to the parent's `justify_items`
+    pub justify_self: Option<AlignSelf>,
     /// How large should the gaps between items in a flex container be?
     #[refineable]
     pub gap: Size<DefiniteLength>,
@@ -310,6 +314,17 @@ pub struct Style {
 
     /// The grid location of this element
     pub grid_location: Option<GridLocation>,
+
+    /// Explicit column track sizes (CSS `grid-template-columns`).
+    /// Takes precedence over `grid_cols` when non-empty.
+    pub grid_template_columns: Vec<GridTrack>,
+
+    /// Explicit row track sizes (CSS `grid-template-rows`).
+    /// Takes precedence over `grid_rows` when non-empty.
+    pub grid_template_rows: Vec<GridTrack>,
+
+    /// How the grid auto-placement algorithm flows items (CSS `grid-auto-flow`).
+    pub grid_auto_flow: Option<GridAutoFlow>,
 
     /// Whether to draw a red debugging outline around this element
     #[cfg(debug_assertions)]
@@ -942,6 +957,8 @@ impl Default for Style {
             align_self: None,
             align_content: None,
             justify_content: None,
+            justify_items: None,
+            justify_self: None,
             // Flexbox
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::NoWrap,
@@ -970,6 +987,9 @@ impl Default for Style {
             grid_rows: None,
             grid_cols: None,
             grid_location: None,
+            grid_template_columns: Vec::new(),
+            grid_template_rows: Vec::new(),
+            grid_auto_flow: None,
 
             #[cfg(debug_assertions)]
             debug: false,
@@ -1323,6 +1343,120 @@ pub enum FlexWrap {
 ///
 /// Items are always aligned relative to the cross axis, and justified relative to the main axis.
 ///
+/// A single track size for `grid-template-columns` / `grid-template-rows`.
+///
+/// Mirrors CSS grid track sizing: fixed lengths, `fr` units, `auto`,
+/// content-based sizing, `minmax()`, and `repeat()`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub enum GridTrack {
+    /// `auto` — the track is sized to fit its content and available space.
+    Auto,
+    /// `min-content`.
+    MinContent,
+    /// `max-content`.
+    MaxContent,
+    /// A flexible track measured in `fr` units (a share of the leftover space).
+    Fr(f32),
+    /// A fixed length in pixels or rems.
+    Fixed(AbsoluteLength),
+    /// A fraction of the container along the track's axis (CSS percentage), `0.0..=1.0`.
+    Fraction(f32),
+    /// `minmax(min, max)`.
+    MinMax(GridTrackMin, GridTrackMax),
+    /// `repeat(count, tracks)`.
+    Repeat(u16, Vec<GridTrack>),
+}
+
+impl GridTrack {
+    /// A fixed track sized in pixels.
+    pub fn px(value: impl Into<Pixels>) -> Self {
+        GridTrack::Fixed(AbsoluteLength::Pixels(value.into()))
+    }
+
+    /// A fixed track sized in rems.
+    pub fn rem(value: f32) -> Self {
+        GridTrack::Fixed(AbsoluteLength::Rems(rems(value)))
+    }
+
+    /// A flexible track measured in `fr` units.
+    pub fn fr(value: f32) -> Self {
+        GridTrack::Fr(value)
+    }
+
+    /// An `auto`-sized track.
+    pub fn auto() -> Self {
+        GridTrack::Auto
+    }
+
+    /// A track clamped between a minimum and maximum size (`minmax(min, max)`).
+    pub fn minmax(min: GridTrackMin, max: GridTrackMax) -> Self {
+        GridTrack::MinMax(min, max)
+    }
+
+    /// Repeat a group of tracks `count` times (`repeat(count, tracks)`).
+    pub fn repeat(count: u16, tracks: impl Into<Vec<GridTrack>>) -> Self {
+        GridTrack::Repeat(count, tracks.into())
+    }
+}
+
+/// The lower bound of a `minmax()` grid track. `fr` units are not valid as a minimum.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub enum GridTrackMin {
+    /// `auto`.
+    Auto,
+    /// `min-content`.
+    MinContent,
+    /// `max-content`.
+    MaxContent,
+    /// A fixed length in pixels or rems.
+    Fixed(AbsoluteLength),
+    /// A fraction of the container along the track's axis.
+    Fraction(f32),
+}
+
+/// The upper bound of a `minmax()` grid track.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub enum GridTrackMax {
+    /// `auto`.
+    Auto,
+    /// `min-content`.
+    MinContent,
+    /// `max-content`.
+    MaxContent,
+    /// A flexible track measured in `fr` units.
+    Fr(f32),
+    /// A fixed length in pixels or rems.
+    Fixed(AbsoluteLength),
+    /// A fraction of the container along the track's axis.
+    Fraction(f32),
+}
+
+/// Controls how the grid auto-placement algorithm flows items into the grid
+/// (CSS `grid-auto-flow`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+pub enum GridAutoFlow {
+    /// Items fill each row in turn, adding new rows as needed.
+    #[default]
+    Row,
+    /// Items fill each column in turn, adding new columns as needed.
+    Column,
+    /// `Row` combined with the dense packing algorithm.
+    RowDense,
+    /// `Column` combined with the dense packing algorithm.
+    ColumnDense,
+}
+
+impl From<GridAutoFlow> for taffy::style::GridAutoFlow {
+    fn from(value: GridAutoFlow) -> Self {
+        match value {
+            GridAutoFlow::Row => Self::Row,
+            GridAutoFlow::Column => Self::Column,
+            GridAutoFlow::RowDense => Self::RowDense,
+            GridAutoFlow::ColumnDense => Self::ColumnDense,
+        }
+    }
+}
+
 /// The default behavior is [`FlexDirection::Row`].
 ///
 /// [Specification](https://www.w3.org/TR/css-flexbox-1/#flex-direction-property)

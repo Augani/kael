@@ -448,7 +448,7 @@ fn main() {
                     }),
                     ..Default::default()
                 },
-                |_window, cx| cx.new(|cx| StatusBarDemo::new(cx)),
+                |_window, cx| cx.new(StatusBarDemo::new),
             )
             .unwrap();
         });

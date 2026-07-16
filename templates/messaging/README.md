@@ -1,15 +1,22 @@
 # Messaging App Template
 
-A basic messaging app template with a sidebar for contacts and a bottom status panel.
+A polished messaging app template with a conversation sidebar, accessible chat thread, and working message composer.
 
 ## Structure
 
-- `SidebarPanel` docked to the left
-- `BottomPanel` docked to the bottom
-- Main content area for messages
+- Searchable conversation list with keyboard-selectable rows
+- Conversation header and labeled call controls
+- Scrollable message history
+- Composer that appends sent messages and clears after sending
 
 ## Running
 
 ```bash
 cargo run
+```
+
+If the full Xcode Metal toolchain is unavailable on macOS, compile shaders at runtime:
+
+```bash
+cargo run --features kael/runtime_shaders
 ```

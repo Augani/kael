@@ -2,6 +2,8 @@
 
 [Introduction](index.md)
 [Choosing Kael](why-kael.md)
+[Native Capability Bridge](native-capability-bridge.md)
+[Benchmarking Evidence](benchmarking.md)
 
 # Guides
 

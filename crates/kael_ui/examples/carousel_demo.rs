@@ -56,7 +56,7 @@ fn main() {
                     })),
                     ..Default::default()
                 },
-                |_, cx| cx.new(|cx| CarouselDemo::new(cx)),
+                |_, cx| cx.new(CarouselDemo::new),
             )
             .unwrap();
         });
@@ -72,11 +72,11 @@ struct CarouselDemo {
 
 impl CarouselDemo {
     fn new(cx: &mut Context<Self>) -> Self {
-        let carousel1 = cx.new(|cx| CarouselState::new(cx));
-        let carousel2 = cx.new(|cx| CarouselState::new(cx));
-        let carousel3 = cx.new(|cx| CarouselState::new(cx));
-        let carousel4 = cx.new(|cx| CarouselState::new(cx));
-        let carousel5 = cx.new(|cx| CarouselState::new(cx));
+        let carousel1 = cx.new(CarouselState::new);
+        let carousel2 = cx.new(CarouselState::new);
+        let carousel3 = cx.new(CarouselState::new);
+        let carousel4 = cx.new(CarouselState::new);
+        let carousel5 = cx.new(CarouselState::new);
 
         Self {
             carousel1,

@@ -7,6 +7,7 @@ pub(crate) struct TestDisplay {
     uuid: uuid::Uuid,
     bounds: Bounds<Pixels>,
     refresh_rate: Option<f32>,
+    scale_factor: f32,
 }
 
 impl TestDisplay {
@@ -16,6 +17,7 @@ impl TestDisplay {
             uuid: uuid::Uuid::new_v4(),
             bounds: Bounds::from_corners(Point::default(), Point::new(px(1920.), px(1080.))),
             refresh_rate: Some(60.0),
+            scale_factor: 2.0,
         }
     }
 }
@@ -35,5 +37,9 @@ impl PlatformDisplay for TestDisplay {
 
     fn refresh_rate(&self) -> Option<f32> {
         self.refresh_rate
+    }
+
+    fn scale_factor(&self) -> f32 {
+        self.scale_factor
     }
 }

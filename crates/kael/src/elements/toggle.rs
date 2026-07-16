@@ -94,6 +94,30 @@ pub struct ToggleRenderState {
     pub disabled: bool,
 }
 
+impl ToggleRenderState {
+    /// Returns true when the toggle has a visible label.
+    pub fn has_label(&self) -> bool {
+        self.label.is_some()
+    }
+
+    /// Length of the configured label in bytes, without exposing label text.
+    pub fn label_len_bytes(&self) -> usize {
+        self.label.as_ref().map_or(0, |label| label.len())
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "toggle_render_state(on={}, has_label={}, label_len_bytes={}, focused={}, disabled={})",
+            self.on,
+            self.has_label(),
+            self.label_len_bytes(),
+            self.focused,
+            self.disabled
+        )
+    }
+}
+
 type ToggleCustomRenderer = Rc<dyn Fn(ToggleRenderState, &Window, &App) -> AnyElement>;
 
 /// Construct a controlled toggle switch form control.
@@ -456,5 +480,27 @@ mod tests {
                 .debug_bounds("toggle-custom-on-focused-with-label")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn toggle_render_state_summary_is_content_safe() {
+        let state = ToggleRenderState {
+            on: true,
+            label: Some(SharedString::from("Enable Secret Sync")),
+            focused: false,
+            disabled: true,
+        };
+
+        assert!(state.has_label());
+        assert_eq!(state.label_len_bytes(), "Enable Secret Sync".len());
+
+        let summary = state.to_text();
+        assert!(summary.contains("on=true"));
+        assert!(summary.contains("has_label=true"));
+        assert!(summary.contains("label_len_bytes=18"));
+        assert!(summary.contains("focused=false"));
+        assert!(summary.contains("disabled=true"));
+        assert!(!summary.contains("Enable"));
+        assert!(!summary.contains("Secret"));
     }
 }

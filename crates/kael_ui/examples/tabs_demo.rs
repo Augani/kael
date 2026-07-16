@@ -132,7 +132,7 @@ impl Render for TabsDemo {
                                         .child({
                                             let selected_tab = self.selected_underline_tab;
                                             let app_entity = cx.entity().downgrade();
-                                            Tabs::new()
+                                            Tabs::<String>::new()
                                                 .variant(TabVariant::Underline)
                                                 .tabs(vec![
                                                     TabItem::new("home", "Home")
@@ -224,7 +224,7 @@ impl Render for TabsDemo {
                                         .child({
                                             let selected_tab = self.selected_enclosed_tab;
                                             let app_entity = cx.entity().downgrade();
-                                            Tabs::new()
+                                            Tabs::<String>::new()
                                                 .variant(TabVariant::Enclosed)
                                                 .tabs(vec![
                                                     TabItem::new("profile", "Profile")
@@ -345,7 +345,7 @@ impl Render for TabsDemo {
                                         .child({
                                             let selected_tab = self.selected_pills_tab;
                                             let app_entity = cx.entity().downgrade();
-                                            Tabs::new()
+                                            Tabs::<String>::new()
                                                 .variant(TabVariant::Pills)
                                                 .tabs(vec![
                                                     TabItem::new("dashboard", "Dashboard")
@@ -491,14 +491,22 @@ impl Render for TabsDemo {
                                                 .iter()
                                                 .enumerate()
                                                 .map(|(index, label)| {
-                                                    BreadcrumbItem {
-                                                        id: index.to_string(),
-                                                        label: label.clone().into(),
-                                                        icon: if index == 0 {
-                                                            Some(IconSource::Named("globe".to_string()))
-                                                        } else {
-                                                            None
-                                                        },
+                                                    let item = BreadcrumbItem::new(
+                                                        index.to_string(),
+                                                        label.clone(),
+                                                    )
+                                                    .is_current(
+                                                        index
+                                                            == self.breadcrumb_path.len()
+                                                                .saturating_sub(1),
+                                                    );
+
+                                                    if index == 0 {
+                                                        item.icon(IconSource::Named(
+                                                            "globe".to_string(),
+                                                        ))
+                                                    } else {
+                                                        item
                                                     }
                                                 })
                                                 .collect();

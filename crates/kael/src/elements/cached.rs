@@ -136,6 +136,25 @@ pub struct Cached {
 }
 
 impl Cached {
+    /// Returns true when the cached wrapper still owns a child element.
+    pub fn has_child(&self) -> bool {
+        self.child.is_some()
+    }
+
+    /// Returns true when the caller supplied a stable explicit cache id.
+    pub fn has_explicit_id(&self) -> bool {
+        self.element_id.is_some()
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "cached(has_child={}, explicit_id={})",
+            self.has_child(),
+            self.has_explicit_id()
+        )
+    }
+
     /// Overrides the cache key used to preserve this cached subtree across frames.
     pub fn id(mut self, id: impl Into<ElementId>) -> Self {
         self.element_id = Some(id.into());
@@ -218,6 +237,19 @@ mod tests {
         IntoElement, LayoutId, ParentElement, Render, Style, Styled, TestAppContext, VisualContext,
         Window, div,
     };
+
+    #[test]
+    fn cached_summary_is_content_safe() {
+        let subtree = cached(div().child("private dashboard metric")).id("private-cache-key");
+
+        assert!(subtree.has_child());
+        assert!(subtree.has_explicit_id());
+
+        let summary = subtree.to_text();
+        assert_eq!(summary, "cached(has_child=true, explicit_id=true)");
+        assert!(!summary.contains("private dashboard metric"));
+        assert!(!summary.contains("private-cache-key"));
+    }
     use crate::{px, size};
     use std::{cell::Cell, rc::Rc};
 

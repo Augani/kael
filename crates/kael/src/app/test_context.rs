@@ -1,16 +1,19 @@
 use crate::{
-    Action, AnyView, AnyWindowHandle, App, AppCell, AppContext, AsyncApp, AvailableSpace,
-    BackgroundExecutor, BorrowAppContext, Bounds, Capslock, ClipboardItem, DrawPhase, Drawable,
-    Element, Empty, EventEmitter, ForegroundExecutor, Global, InputEvent, Keystroke, Modifiers,
-    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    PathPromptOptions, Pixels, Platform, Point, PowerMode, Render, Result, Size, SystemPowerEvent,
-    Task, TestDispatcher, TestPlatform, TestScreenCaptureSource, TestWindow, TextSystem,
-    VisualContext, Window, WindowBounds, WindowHandle, WindowOptions,
+    Action, AnyView, AnyWindowHandle, App, AppCell, AppContext, AsyncApp, AttentionType,
+    AvailableSpace, BackgroundExecutor, BiometricStatus, BorrowAppContext, Bounds, Capslock,
+    ClipboardItem, DrawPhase, Drawable, Element, Empty, EventEmitter, ForegroundExecutor, Global,
+    InputEvent, Keystroke, MediaKeyEvent, Modifiers, ModifiersChangedEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, NetworkStatus, PathPromptOptions, Pixels,
+    Platform, Point, PowerMode, PowerSaveBlockerKind, Render, Result, Size, SystemPowerEvent,
+    SystemPowerSource, Task, TestDispatcher, TestPlatform, TestScreenCaptureSource, TestWindow,
+    TextSystem, VisualContext, Window, WindowBounds, WindowHandle, WindowOptions,
 };
 use anyhow::{anyhow, bail};
 use futures::{Stream, StreamExt, channel::oneshot};
 use rand::{SeedableRng, rngs::StdRng};
-use std::{cell::RefCell, future::Future, ops::Deref, rc::Rc, sync::Arc, time::Duration};
+use std::{
+    cell::RefCell, future::Future, ops::Deref, path::PathBuf, rc::Rc, sync::Arc, time::Duration,
+};
 
 /// A TestAppContext is provided to tests created with `#[kael::test]`, it provides
 /// an implementation of `Context` with additional methods that are useful in tests.
@@ -158,6 +161,21 @@ impl TestAppContext {
         self.test_platform.did_prompt_for_new_path()
     }
 
+    /// Sets the simulated "reduce motion" accessibility preference for tests.
+    pub fn set_reduce_motion(&self, reduce_motion: bool) {
+        self.test_platform.set_reduce_motion(reduce_motion);
+    }
+
+    /// Sets the simulated external-power/battery source for tests.
+    pub fn set_system_power_source(&self, source: SystemPowerSource) {
+        self.test_platform.set_system_power_source(source);
+    }
+
+    /// Sets the simulated battery percentage for tests.
+    pub fn set_battery_percentage(&self, percentage: Option<u8>) {
+        self.test_platform.set_battery_percentage(percentage);
+    }
+
     /// returns a new `TestAppContext` re-using the same executors to interleave tasks.
     pub fn new_app(&self) -> TestAppContext {
         Self::build(self.dispatcher.clone(), self.fn_name)
@@ -291,10 +309,20 @@ impl TestAppContext {
         self.test_platform.write_to_clipboard(item)
     }
 
+    /// Simulates writing plain text to the platform clipboard.
+    pub fn write_clipboard_text(&self, text: impl Into<String>) {
+        self.write_to_clipboard(ClipboardItem::new_string(text.into()));
+    }
+
     /// Simulates reading from the platform clipboard.
     /// This will return the most recent value from `write_to_clipboard`.
     pub fn read_from_clipboard(&self) -> Option<ClipboardItem> {
         self.test_platform.read_from_clipboard()
+    }
+
+    /// Simulates reading plain text from the platform clipboard.
+    pub fn read_clipboard_text(&self) -> Option<String> {
+        self.read_from_clipboard().and_then(|item| item.text())
     }
 
     /// Simulates choosing a File in the platform's "Open" dialog.
@@ -343,6 +371,87 @@ impl TestAppContext {
     pub fn simulate_open_urls(&self, urls: &[&str]) {
         self.test_platform
             .simulate_open_urls(urls.iter().map(|url| (*url).to_string()).collect());
+    }
+
+    /// Returns URL schemes registered through the test platform.
+    pub fn registered_url_schemes(&self) -> Vec<String> {
+        self.test_platform.registered_url_schemes()
+    }
+
+    /// Paths requested for platform trash/recycle by this test.
+    pub fn trashed_paths(&self) -> Vec<std::path::PathBuf> {
+        self.test_platform.trashed_paths()
+    }
+
+    /// Return the current test platform tray menu.
+    pub fn tray_menu(&self) -> Vec<crate::TrayMenuItem> {
+        self.test_platform.tray_menu()
+    }
+
+    /// Return the current test platform tray tooltip.
+    pub fn tray_tooltip(&self) -> String {
+        self.test_platform.tray_tooltip()
+    }
+
+    /// Return whether the test platform tray is in panel mode.
+    pub fn tray_panel_mode(&self) -> bool {
+        self.test_platform.tray_panel_mode()
+    }
+
+    /// Return whether the test platform is keeping the app alive without windows.
+    pub fn keep_alive_without_windows(&self) -> bool {
+        self.test_platform.keep_alive_without_windows()
+    }
+
+    /// Returns document paths added to the OS recent-documents list through the
+    /// test platform.
+    pub fn recent_documents(&self) -> Vec<PathBuf> {
+        self.test_platform.recent_documents()
+    }
+
+    /// Returns active power-save blockers started through the test platform.
+    pub fn power_save_blockers(&self) -> Vec<(u32, PowerSaveBlockerKind)> {
+        self.test_platform.power_save_blockers()
+    }
+
+    /// Returns the current test-platform user-attention request.
+    pub fn user_attention(&self) -> Option<AttentionType> {
+        self.test_platform.user_attention()
+    }
+
+    /// Returns how often user attention was cancelled through the test platform.
+    pub fn user_attention_cancel_count(&self) -> usize {
+        self.test_platform.user_attention_cancel_count()
+    }
+
+    /// Returns the current test-platform network status.
+    pub fn network_status(&self) -> NetworkStatus {
+        self.test_platform.network_status()
+    }
+
+    /// Simulates a network status change from the platform.
+    pub fn simulate_network_status_change(&self, status: NetworkStatus) {
+        self.test_platform.simulate_network_status_change(status);
+    }
+
+    /// Sets the biometric availability reported by the test platform.
+    pub fn set_biometric_status(&self, status: BiometricStatus) {
+        self.test_platform.set_biometric_status(status);
+    }
+
+    /// Sets the next biometric authentication result reported by the test platform.
+    pub fn set_biometric_auth_success(&self, success: bool) {
+        self.test_platform.set_biometric_auth_success(success);
+    }
+
+    /// Returns biometric prompt reasons sent to the test platform.
+    pub fn biometric_auth_reasons(&self) -> Vec<String> {
+        self.test_platform.biometric_auth_reasons()
+    }
+
+    /// Simulates the platform delivering a hardware media-key event.
+    pub fn simulate_media_key_event(&self, event: MediaKeyEvent) {
+        self.test_platform.simulate_media_key_event(event);
     }
 
     /// Simulates the user resizing the window to the new size.
@@ -1013,7 +1122,8 @@ impl AppContext for VisualTestContext {
 mod tests {
     use super::TestAppContext;
     use crate::{
-        Capability, Empty, PathPromptOptions, PathScope, PowerMode, SharedString, SystemPowerEvent,
+        Capability, Empty, MessageDialogBuilder, OpenDialogBuilder, PathPromptOptions, PathScope,
+        PowerMode, SaveDialogBuilder, SharedString, SystemPowerEvent,
     };
     use std::path::PathBuf;
     use std::{cell::Cell, rc::Rc};
@@ -1068,6 +1178,7 @@ mod tests {
                 directories: false,
                 multiple: true,
                 prompt: Some(SharedString::from("Choose files")),
+                filters: vec![],
             })
         });
 
@@ -1082,6 +1193,164 @@ mod tests {
         let selected = cx.background_executor.block(rx).unwrap().unwrap().unwrap();
         assert_eq!(selected, vec![expected]);
         assert!(!cx.did_prompt_for_paths());
+    }
+
+    #[test]
+    fn show_open_dialog_uses_builder_options() {
+        let mut cx = TestAppContext::single();
+        let expected = PathBuf::from("/selected/project");
+        cx.update(|app| {
+            app.permission_broker.grant(
+                app.current_process_id,
+                Capability::FilesystemRead {
+                    scope: PathScope::UserSelected,
+                },
+            );
+        });
+        let rx = cx.read(|app| {
+            app.show_open_dialog(
+                OpenDialogBuilder::directory()
+                    .multiple(true)
+                    .prompt("Choose project"),
+            )
+        });
+
+        assert!(cx.did_prompt_for_paths());
+        cx.simulate_path_selection(|options| {
+            assert!(!options.files);
+            assert!(options.directories);
+            assert!(options.multiple);
+            assert_eq!(
+                options.prompt.as_ref().map(|prompt| prompt.as_ref()),
+                Some("Choose project")
+            );
+            Some(vec![expected.clone()])
+        });
+
+        let selected = cx.background_executor.block(rx).unwrap().unwrap().unwrap();
+        assert_eq!(selected, vec![expected]);
+    }
+
+    #[test]
+    fn open_dialog_checked_previews_without_prompting() {
+        let mut cx = TestAppContext::single();
+        cx.update(|app| {
+            app.permission_broker.grant(
+                app.current_process_id,
+                Capability::FilesystemRead {
+                    scope: PathScope::UserSelected,
+                },
+            );
+        });
+
+        let plan = cx
+            .read(|app| {
+                app.open_dialog_checked(
+                    OpenDialogBuilder::files()
+                        .image_files()
+                        .filter("Markdown", ["md", "markdown"])
+                        .prompt("Open assets"),
+                )
+            })
+            .unwrap();
+
+        assert!(plan.allows_files());
+        assert!(!plan.allows_directories());
+        assert!(plan.allows_multiple());
+        assert_eq!(
+            plan.prompt().map(|prompt| prompt.as_ref()),
+            Some("Open assets")
+        );
+        assert_eq!(plan.filter_count(), 2);
+        assert_eq!(plan.filter_names(), vec!["Images", "Markdown"]);
+        assert!(!cx.did_prompt_for_paths());
+    }
+
+    #[test]
+    fn save_dialog_checked_previews_without_prompting() {
+        let mut cx = TestAppContext::single();
+        let directory = std::env::temp_dir();
+        cx.update(|app| {
+            app.permission_broker.grant(
+                app.current_process_id,
+                Capability::FilesystemWrite {
+                    scope: PathScope::UserSelected,
+                },
+            );
+        });
+
+        let plan = cx
+            .read(|app| {
+                app.save_dialog_checked(
+                    SaveDialogBuilder::new(&directory)
+                        .suggested_name("report")
+                        .pdf(),
+                )
+            })
+            .unwrap();
+
+        assert_eq!(plan.directory(), directory.as_path());
+        assert_eq!(plan.suggested_name(), Some("report.pdf"));
+        assert_eq!(plan.default_extension(), Some("pdf"));
+        assert!(plan.appended_default_extension());
+        assert!(!cx.did_prompt_for_new_path());
+    }
+
+    #[test]
+    fn show_message_dialog_uses_builder_options() {
+        let cx = TestAppContext::single();
+        let rx = cx
+            .read(|app| {
+                app.show_message_dialog(
+                    MessageDialogBuilder::confirm("Delete draft?", "This cannot be undone")
+                        .detail("The draft will be removed from this device."),
+                )
+            })
+            .unwrap();
+
+        assert!(cx.has_pending_prompt());
+        assert_eq!(
+            cx.pending_prompt(),
+            Some((
+                "Delete draft?".to_string(),
+                "The draft will be removed from this device.".to_string()
+            ))
+        );
+
+        cx.simulate_prompt_answer("OK");
+
+        let selected = cx.background_executor.block(rx).unwrap();
+        assert_eq!(selected, 1);
+        assert!(!cx.has_pending_prompt());
+    }
+
+    #[test]
+    fn message_dialog_checked_previews_without_showing_prompt() {
+        let cx = TestAppContext::single();
+        let plan = cx
+            .read(|app| {
+                app.message_dialog_checked(
+                    MessageDialogBuilder::save_discard_cancel(
+                        "Save changes?",
+                        "This document has unsaved changes.",
+                    )
+                    .detail("Unsaved changes will be lost."),
+                )
+            })
+            .unwrap();
+
+        assert_eq!(plan.button_count(), 3);
+        assert_eq!(plan.button_index("Don't Save"), Some(1));
+        assert_eq!(
+            plan.default_button_label().map(|label| label.as_ref()),
+            Some("Save")
+        );
+        assert_eq!(
+            plan.cancel_button_label().map(|label| label.as_ref()),
+            Some("Cancel")
+        );
+        assert!(plan.has_cancel_button());
+        assert!(!cx.has_pending_prompt());
     }
 }
 

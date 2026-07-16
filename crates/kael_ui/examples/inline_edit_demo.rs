@@ -21,7 +21,7 @@ struct InlineEditDemo {
 impl InlineEditDemo {
     fn new(cx: &mut Context<Self>) -> Self {
         let basic_edit = cx.new(|cx| InlineEditState::with_value(cx, "Click to edit this text"));
-        let with_placeholder = cx.new(|cx| InlineEditState::new(cx));
+        let with_placeholder = cx.new(InlineEditState::new);
         let double_click_edit =
             cx.new(|cx| InlineEditState::with_value(cx, "Double-click to edit"));
         let disabled_edit = cx.new(|cx| InlineEditState::with_value(cx, "Cannot edit this"));
@@ -367,7 +367,7 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_, cx| cx.new(|cx| InlineEditDemo::new(cx)),
+            |_, cx| cx.new(InlineEditDemo::new),
         )
         .unwrap();
 

@@ -26,6 +26,9 @@ pub(crate) fn get_focused_window_info() -> Option<FocusedWindowInfo> {
 
         let mut process_id: u32 = 0;
         GetWindowThreadProcessId(hwnd, Some(&mut process_id));
+        if process_id == 0 {
+            return None;
+        }
 
         let app_name = get_process_name(process_id).unwrap_or_default();
 
@@ -51,6 +54,10 @@ fn get_process_name(pid: u32) -> Option<String> {
         );
         let _ = CloseHandle(handle);
         result.ok()?;
+
+        if size as usize > buf.len() {
+            return None;
+        }
 
         let full_path = String::from_utf16_lossy(&buf[..size as usize]);
         let file_name = full_path

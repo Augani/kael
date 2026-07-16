@@ -20,6 +20,36 @@ pub struct ProgressRenderState {
     pub indeterminate: bool,
 }
 
+impl ProgressRenderState {
+    /// Returns true when progress has a determinate percentage.
+    pub fn is_determinate(&self) -> bool {
+        self.percentage.is_some() && !self.indeterminate
+    }
+
+    /// Coarse completion class for content-safe diagnostics.
+    pub fn completion_class(&self) -> &'static str {
+        if self.indeterminate {
+            "indeterminate"
+        } else {
+            match self.percentage.unwrap_or(0.0) {
+                percentage if percentage <= 0.0 => "empty",
+                percentage if percentage >= 1.0 => "complete",
+                _ => "partial",
+            }
+        }
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "progress_render_state(indeterminate={}, determinate={}, completion_class={})",
+            self.indeterminate,
+            self.is_determinate(),
+            self.completion_class()
+        )
+    }
+}
+
 type ProgressCustomRenderer =
     Rc<dyn Fn(ProgressRenderState, Bounds<Pixels>, &mut Window, &mut App)>;
 
@@ -172,7 +202,8 @@ impl Element for Progress {
             accessibility.value(accessibility_value.expect("determinate progress has range value"))
         };
 
-        window.register_accessibility_node(accessibility.to_node(crate::AccessibilityId::new()));
+        let accessibility_id = window.next_anonymous_accessibility_id();
+        window.register_accessibility_node_at(accessibility.to_node(accessibility_id), bounds);
     }
 }
 
@@ -307,5 +338,21 @@ mod tests {
             assert!(progress.states.contains(AccessibilityState::BUSY));
             assert_eq!(progress.value, None);
         });
+    }
+
+    #[test]
+    fn progress_render_state_summary_is_content_safe() {
+        let state = progress("task", 0.42).max(2.5).render_state();
+
+        assert!(state.is_determinate());
+        assert_eq!(state.completion_class(), "partial");
+
+        let summary = state.to_text();
+        assert!(summary.contains("indeterminate=false"));
+        assert!(summary.contains("determinate=true"));
+        assert!(summary.contains("completion_class=partial"));
+        assert!(!summary.contains("0.42"));
+        assert!(!summary.contains("2.5"));
+        assert!(!summary.contains("0.168"));
     }
 }

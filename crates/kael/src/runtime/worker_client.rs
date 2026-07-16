@@ -52,6 +52,7 @@ impl WorkerClient {
         let msg = bootstrap
             .recv_message()
             .context("failed to receive bootstrap handshake")?;
+        let summary = msg.to_text();
         match msg {
             IpcMessage::Request {
                 id: 1,
@@ -61,7 +62,15 @@ impl WorkerClient {
                         capabilities,
                     },
             } => {
-                let _ = version;
+                let handshake = BootstrapMessage::Handshake {
+                    version,
+                    capabilities: capabilities.clone(),
+                };
+                handshake.validate()?;
+                anyhow::ensure!(
+                    version == 1,
+                    "unsupported worker bootstrap protocol version"
+                );
                 bootstrap.send_response(
                     1,
                     Ok(BootstrapMessage::HandshakeAck {
@@ -70,7 +79,7 @@ impl WorkerClient {
                     }),
                 )?;
             }
-            _ => return Err(anyhow!("unexpected bootstrap message: {:?}", msg)),
+            _ => return Err(anyhow!("unexpected bootstrap message: {summary}")),
         }
 
         let worker_transport =
@@ -93,7 +102,10 @@ impl WorkerClient {
     {
         loop {
             let msg = {
-                let mut transport = self.transport.lock().unwrap();
+                let mut transport = self
+                    .transport
+                    .lock()
+                    .map_err(|_| anyhow!("worker transport lock is poisoned"))?;
                 transport.recv_message()
             };
 
@@ -108,14 +120,20 @@ impl WorkerClient {
 
                     let result = handler(body, progress_fn);
 
-                    let mut transport = self.transport.lock().unwrap();
+                    let mut transport = self
+                        .transport
+                        .lock()
+                        .map_err(|_| anyhow!("worker transport lock is poisoned"))?;
                     match result {
                         Ok(resp) => transport.send_response(id, Ok(resp))?,
                         Err(e) => transport.send_response(id, Err(e))?,
                     }
                 }
                 Ok(IpcMessage::Cancel { id }) => {
-                    let mut transport = self.transport.lock().unwrap();
+                    let mut transport = self
+                        .transport
+                        .lock()
+                        .map_err(|_| anyhow!("worker transport lock is poisoned"))?;
                     transport.send_response(id, Err(WorkerError::Cancelled))?;
                 }
                 Ok(_) => {}
@@ -128,7 +146,10 @@ impl WorkerClient {
 
     /// Send a progress update for the given request id.
     pub fn send_progress(&self, id: u64, progress: WorkerProgress) -> Result<()> {
-        let mut transport = self.transport.lock().unwrap();
+        let mut transport = self
+            .transport
+            .lock()
+            .map_err(|_| anyhow!("worker transport lock is poisoned"))?;
         transport.send_progress(id, progress)?;
         Ok(())
     }
@@ -139,7 +160,10 @@ impl WorkerClient {
         id: u64,
         response: Result<WorkerResponse, WorkerError>,
     ) -> Result<()> {
-        let mut transport = self.transport.lock().unwrap();
+        let mut transport = self
+            .transport
+            .lock()
+            .map_err(|_| anyhow!("worker transport lock is poisoned"))?;
         transport.send_response(id, response)?;
         Ok(())
     }

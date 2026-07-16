@@ -9,6 +9,8 @@
 
 use anyhow::{Result, bail};
 
+const MAX_GOLDEN_BUFFER_BYTES: usize = 256 * 1024 * 1024;
+
 /// How much a rendered frame may differ from its golden reference and still pass.
 ///
 /// A pixel "fails" when its largest absolute per-channel difference exceeds
@@ -25,6 +27,16 @@ pub struct Tolerance {
 }
 
 impl Tolerance {
+    /// Creates a tolerance after validating its failing-pixel fraction.
+    pub fn new_checked(per_channel: u8, max_failing_fraction: f64) -> Result<Self> {
+        let tolerance = Self {
+            per_channel,
+            max_failing_fraction,
+        };
+        tolerance.validate()?;
+        Ok(tolerance)
+    }
+
     /// Demand an exact, byte-identical match (used for CPU reference oracles).
     pub const fn exact() -> Self {
         Self {
@@ -40,6 +52,15 @@ impl Tolerance {
             per_channel: 2,
             max_failing_fraction: 0.01,
         }
+    }
+
+    fn validate(&self) -> Result<()> {
+        if !self.max_failing_fraction.is_finite()
+            || !(0.0..=1.0).contains(&self.max_failing_fraction)
+        {
+            bail!("golden tolerance fraction must be finite and between zero and one");
+        }
+        Ok(())
     }
 }
 
@@ -71,7 +92,9 @@ impl DiffReport {
 
     /// Whether the rendered frame is within tolerance of the golden reference.
     pub fn passes(&self, tolerance: &Tolerance) -> bool {
-        self.failing_fraction() <= tolerance.max_failing_fraction
+        tolerance.validate().is_ok()
+            && self.failing_pixels <= self.total_pixels
+            && self.failing_fraction() <= tolerance.max_failing_fraction
     }
 }
 
@@ -90,10 +113,8 @@ pub fn compare(
     height: u32,
     tolerance: &Tolerance,
 ) -> Result<DiffReport> {
-    if width == 0 || height == 0 {
-        bail!("golden comparison requires non-zero dimensions");
-    }
-    let expected_len = width as usize * height as usize * 4;
+    tolerance.validate()?;
+    let expected_len = checked_rgba_len(width, height)?;
     if actual.len() != expected_len {
         bail!(
             "actual buffer is {} bytes, expected {} ({}x{}x4)",
@@ -152,11 +173,36 @@ pub fn compare(
 /// `channels` is written verbatim for every pixel, so the caller chooses the byte
 /// order (e.g. `[b, g, r, a]` to match a BGRA readback).
 pub fn solid_reference(width: u32, height: u32, channels: [u8; 4]) -> Vec<u8> {
-    let mut buffer = Vec::with_capacity(width as usize * height as usize * 4);
+    solid_reference_checked(width, height, channels).unwrap_or_default()
+}
+
+/// Builds a bounded solid-color reference or reports invalid dimensions.
+pub fn solid_reference_checked(width: u32, height: u32, channels: [u8; 4]) -> Result<Vec<u8>> {
+    let byte_len = checked_rgba_len(width, height)?;
+    let mut buffer = Vec::with_capacity(byte_len);
     for _ in 0..(width as u64 * height as u64) {
         buffer.extend_from_slice(&channels);
     }
-    buffer
+    Ok(buffer)
+}
+
+fn checked_rgba_len(width: u32, height: u32) -> Result<usize> {
+    if width == 0 || height == 0 {
+        bail!("golden image requires non-zero dimensions");
+    }
+    let byte_len = usize::try_from(width)
+        .ok()
+        .and_then(|width| {
+            usize::try_from(height)
+                .ok()
+                .and_then(|height| width.checked_mul(height))
+        })
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| anyhow::anyhow!("golden image dimensions overflow addressable memory"))?;
+    if byte_len > MAX_GOLDEN_BUFFER_BYTES {
+        bail!("golden image cannot exceed {MAX_GOLDEN_BUFFER_BYTES} bytes");
+    }
+    Ok(byte_len)
 }
 
 #[cfg(test)]
@@ -242,5 +288,32 @@ mod tests {
         let short = vec![0u8; 8];
         assert!(compare(&short, &reference, 4, 4, &Tolerance::exact()).is_err());
         assert!(compare(&reference, &reference, 0, 4, &Tolerance::exact()).is_err());
+    }
+
+    #[test]
+    fn invalid_tolerances_and_oversized_images_fail_closed() {
+        for fraction in [f64::NAN, f64::INFINITY, -0.1, 1.1] {
+            assert!(Tolerance::new_checked(2, fraction).is_err());
+            let invalid = Tolerance {
+                per_channel: 2,
+                max_failing_fraction: fraction,
+            };
+            assert!(
+                !DiffReport {
+                    width: 1,
+                    height: 1,
+                    total_pixels: 1,
+                    failing_pixels: 0,
+                    max_channel_diff: 0,
+                    mean_channel_diff: 0.0,
+                }
+                .passes(&invalid)
+            );
+            assert!(compare(&[0; 4], &[0; 4], 1, 1, &invalid).is_err());
+        }
+
+        assert!(solid_reference_checked(0, 1, [0; 4]).is_err());
+        assert!(solid_reference_checked(u32::MAX, u32::MAX, [0; 4]).is_err());
+        assert!(solid_reference(u32::MAX, u32::MAX, [0; 4]).is_empty());
     }
 }

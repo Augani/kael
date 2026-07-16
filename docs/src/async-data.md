@@ -31,6 +31,33 @@ future runs, which is why every `update` through it returns a `Result`. Dropping
 a `Task` cancels it; call `.detach()` to let it run to completion, or store it
 in your struct so navigating away cancels in-flight work.
 
+## Background Jobs
+
+Use `JobScheduler` when work needs durable status, progress, retry metadata,
+dependencies, cancellation, or a worker-pool handoff:
+
+```rust
+use kael::background_jobs::{JobDescriptor, JobPriority, JobScheduler, RetryPolicy};
+
+let scheduler = JobScheduler::new().with_max_concurrent(2);
+let descriptor = JobDescriptor::new("export/video")
+    .with_priority(JobPriority::High)
+    .with_retry_policy(RetryPolicy {
+        max_retries: 2,
+        delay_ms: 500,
+        backoff_multiplier: 2.0,
+    });
+
+let job_id = scheduler.schedule_with_descriptor_checked(export_job, descriptor)?;
+```
+
+Prefer `schedule_checked(...)` or `schedule_with_descriptor_checked(...)` for
+generated background work. Checked scheduling rejects empty, padded,
+control-character, overly long, or non-portable job IDs, descriptor/job ID
+mismatches, self-dependencies, duplicate or invalid dependency IDs, and invalid
+retry policies before the queue state is mutated. Raw `schedule(...)` and
+`schedule_with_descriptor(...)` remain available when an app owns validation.
+
 ## Loadable: the four states of remote data
 
 `kael_ui::query::Loadable<T>` models the lifecycle every fetched value goes

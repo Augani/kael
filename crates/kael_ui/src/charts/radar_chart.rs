@@ -1,9 +1,7 @@
-use crate::theme::Theme;
+use crate::{charts::finite_or_zero, theme::Theme};
 use kael::{prelude::FluentBuilder as _, *};
 
-const CHART_COLORS: [u32; 8] = [
-    0x3b82f6, 0x22c55e, 0xf59e0b, 0xef4444, 0x8b5cf6, 0x06b6d4, 0xf97316, 0xec4899,
-];
+const CHART_COLORS: [u32; 8] = crate::astryx::CHART_PALETTE;
 
 fn default_color(index: usize) -> Hsla {
     rgb(CHART_COLORS[index % CHART_COLORS.len()]).into()
@@ -20,7 +18,10 @@ impl RadarDataset {
     pub fn new(label: impl Into<SharedString>, values: Vec<f64>) -> Self {
         Self {
             label: label.into(),
-            values,
+            values: values
+                .into_iter()
+                .map(|value| finite_or_zero(value).clamp(0.0, 1.0))
+                .collect(),
             color: None,
         }
     }
@@ -46,7 +47,7 @@ impl RadarChartSize {
             RadarChartSize::Sm => px(200.0),
             RadarChartSize::Md => px(300.0),
             RadarChartSize::Lg => px(400.0),
-            RadarChartSize::Custom(s) => px(s as f32),
+            RadarChartSize::Custom(s) => px(s.max(120) as f32),
         }
     }
 }
@@ -58,7 +59,6 @@ struct PaintData {
     grid_levels: usize,
     fill_opacity: f32,
     grid_color: Hsla,
-    _text_color: Hsla,
     label_padding: f32,
 }
 
@@ -130,7 +130,11 @@ impl RadarChart {
     }
 
     pub fn fill_opacity(mut self, opacity: f32) -> Self {
-        self.fill_opacity = opacity.clamp(0.0, 1.0);
+        self.fill_opacity = if opacity.is_finite() {
+            opacity.clamp(0.0, 1.0)
+        } else {
+            0.2
+        };
         self
     }
 }
@@ -156,9 +160,20 @@ impl RenderOnce for RadarChart {
         let label_padding: f32 = 30.0;
 
         let n_axes = self.axes.len();
+        let description = format!(
+            "Radar chart comparing {} datasets across {n_axes} axes",
+            self.datasets.len()
+        );
 
         if n_axes < 3 {
             return div()
+                .accessibility(
+                    AccessibilityAttributes::new(AccessibilityRole::Image)
+                        .label("Radar chart")
+                        .description(format!(
+                            "Radar chart unavailable. Need at least 3 axes; received {n_axes}"
+                        )),
+                )
                 .size(chart_size)
                 .flex()
                 .items_center()
@@ -184,13 +199,17 @@ impl RenderOnce for RadarChart {
             grid_levels: self.grid_levels,
             fill_opacity: self.fill_opacity,
             grid_color: theme.tokens.border,
-            _text_color: text_color,
             label_padding,
         };
 
         let axis_labels = self.axes.clone();
 
         div()
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Image)
+                    .label("Radar chart")
+                    .description(description),
+            )
             .flex()
             .flex_col()
             .items_center()
@@ -269,12 +288,10 @@ impl RenderOnce for RadarChart {
 
                                     let pts: Vec<Point<Pixels>> = (0..n)
                                         .map(|i| {
-                                            let val = ds
-                                                .values
-                                                .get(i)
-                                                .copied()
-                                                .unwrap_or(0.0)
-                                                .clamp(0.0, 1.0);
+                                            let val = finite_or_zero(
+                                                ds.values.get(i).copied().unwrap_or(0.0),
+                                            )
+                                            .clamp(0.0, 1.0);
                                             let angle = angle_for_axis(i, n);
                                             let radius = max_radius * val as f32;
                                             point(
@@ -317,20 +334,37 @@ impl RenderOnce for RadarChart {
                                 }
                             },
                         )
-                        .size_full(),
+                        .absolute()
+                        .inset_0(),
                     )
+                    .when(datasets_for_legend.is_empty(), |this| {
+                        this.child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_sm()
+                                .text_color(text_color)
+                                .child("No data"),
+                        )
+                    })
                     .children(axis_labels.iter().enumerate().map(|(i, label)| {
                         let angle = angle_for_axis(i, n_axes);
-                        let label_dist = 0.5 + label_padding / (chart_size / px(1.0));
+                        let chart_size_f = (chart_size / px(1.0)).max(1.0);
+                        let label_dist = (0.5 - (label_padding - 8.0) / chart_size_f).max(0.1);
                         let left_frac = 0.5 + label_dist * angle.cos();
                         let top_frac = 0.5 + label_dist * angle.sin();
                         div()
                             .absolute()
                             .left(relative(left_frac))
                             .top(relative(top_frac))
-                            .ml(px(-20.0))
+                            .w(px(84.0))
+                            .ml(px(-42.0))
                             .mt(px(-8.0))
                             .text_size(px(11.0))
+                            .text_center()
                             .text_color(text_color)
                             .child(label.clone())
                     })),
@@ -360,5 +394,22 @@ impl RenderOnce for RadarChart {
                 )
             })
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn custom_size_has_a_visible_minimum() {
+        assert_eq!(f32::from(RadarChartSize::Custom(0).to_pixels()), 120.0);
+        assert_eq!(f32::from(RadarChartSize::Custom(240).to_pixels()), 240.0);
+    }
+
+    #[::core::prelude::v1::test]
+    fn dataset_sanitizes_values() {
+        let dataset = RadarDataset::new("Quality", vec![-1.0, 0.5, 2.0, f64::NAN]);
+        assert_eq!(dataset.values, vec![0.0, 0.5, 1.0, 0.0]);
     }
 }

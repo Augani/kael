@@ -1,4 +1,8 @@
-use crate::theme::Theme;
+use crate::{
+    astryx,
+    components::{button::ButtonVariant, icon_button::IconButton},
+    theme::Theme,
+};
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
@@ -183,6 +187,7 @@ impl Render for HotkeyInputState {
 #[derive(IntoElement)]
 pub struct HotkeyInput {
     state: Entity<HotkeyInputState>,
+    label: SharedString,
     placeholder: SharedString,
     disabled: bool,
     on_change: Option<Rc<dyn Fn(Option<&HotkeyValue>, &mut Window, &mut App)>>,
@@ -193,11 +198,17 @@ impl HotkeyInput {
     pub fn new(state: Entity<HotkeyInputState>) -> Self {
         Self {
             state,
+            label: "Keyboard shortcut".into(),
             placeholder: "Click to record".into(),
             disabled: false,
             on_change: None,
             style: StyleRefinement::default(),
         }
+    }
+
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = label.into();
+        self
     }
 
     pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
@@ -246,30 +257,24 @@ impl RenderOnce for HotkeyInput {
 
         let has_value = hotkey.is_some();
         let show_clear = has_value && !self.disabled && !recording;
+        let disabled = self.disabled;
 
         let state_for_click = self.state.clone();
         let state_for_keydown = self.state.clone();
         let state_for_clear = self.state.clone();
+        let root_id: ElementId = ("hotkey-input", self.state.entity_id()).into();
 
         let on_change_for_keydown = self.on_change.clone();
         let on_change_for_clear = self.on_change.clone();
 
-        let border_color = if recording {
+        let border_color = if recording || is_focused {
             theme.tokens.primary
-        } else if is_focused {
-            theme.tokens.ring
         } else {
             theme.tokens.input
         };
 
-        let focus_ring = theme.tokens.focus_ring_light();
-        let recording_ring = BoxShadow {
-            offset: point(px(0.0), px(0.0)),
-            blur_radius: px(0.0),
-            spread_radius: px(3.0),
-            inset: false,
-            color: theme.tokens.primary.opacity(0.3),
-        };
+        let hover_ring = astryx::input_hover_ring(theme.tokens.input);
+        let focus_ring = astryx::focus_ring(theme.tokens.primary);
 
         let text_color = if hotkey.is_some() && !recording {
             theme.tokens.foreground
@@ -279,14 +284,18 @@ impl RenderOnce for HotkeyInput {
 
         let clear_button = if show_clear {
             Some(
-                div()
-                    .id("hotkey-clear")
-                    .ml(px(8.0))
-                    .px(px(6.0))
-                    .py(px(4.0))
-                    .rounded(px(4.0))
+                IconButton::new("x")
+                    .id(ElementId::NamedChild(
+                        Box::new(root_id.clone()),
+                        "clear".into(),
+                    ))
+                    .label("Clear keyboard shortcut")
+                    .variant(ButtonVariant::Ghost)
+                    .ml(px(4.0))
+                    .size(px(28.0))
+                    .icon_size(px(14.0))
+                    .rounded(theme.tokens.radius_sm)
                     .text_color(theme.tokens.muted_foreground)
-                    .hover(|s| s.bg(theme.tokens.muted).text_color(theme.tokens.foreground))
                     .on_click(move |_, window, cx| {
                         state_for_clear.update(cx, |state, cx| {
                             state.clear(cx);
@@ -295,8 +304,7 @@ impl RenderOnce for HotkeyInput {
                             handler(None, window, cx);
                         }
                         cx.stop_propagation();
-                    })
-                    .child("×"),
+                    }),
             )
         } else {
             None
@@ -310,30 +318,70 @@ impl RenderOnce for HotkeyInput {
             })
             .child(
                 div()
-                    .id(("hotkey-input", self.state.entity_id()))
-                    .track_focus(&focus_handle.tab_index(0).tab_stop(true))
+                    .id(root_id)
+                    .accessibility({
+                        let mut states = AccessibilityState::NONE;
+                        if disabled {
+                            states |= AccessibilityState::DISABLED;
+                        }
+                        if is_focused {
+                            states |= AccessibilityState::FOCUSED;
+                        }
+                        if recording {
+                            states |= AccessibilityState::EXPANDED;
+                        }
+                        let mut attributes =
+                            AccessibilityAttributes::new(AccessibilityRole::TextInput)
+                                .label(self.label.to_string())
+                                .value(AccessibilityValue::Text(display_text.to_string()))
+                                .states(states);
+                        if !disabled {
+                            attributes = attributes.actions(vec![
+                                AccessibilityAction::Focus,
+                                AccessibilityAction::Click,
+                            ]);
+                        }
+                        attributes
+                    })
+                    .when(!disabled, |d| {
+                        d.track_focus(&focus_handle.clone().tab_index(0).tab_stop(true))
+                    })
                     .h(px(40.0))
-                    .px(px(12.0))
+                    .px(px(8.0))
                     .flex()
                     .items_center()
                     .justify_between()
-                    .bg(theme.tokens.background)
+                    .gap(px(8.0))
+                    .bg(theme.tokens.card)
                     .border_1()
                     .border_color(border_color)
                     .rounded(theme.tokens.radius_md)
                     .font_family(theme.tokens.font_mono.clone())
                     .text_size(px(14.0))
-                    .when(self.disabled, |d| d.opacity(0.5).cursor_not_allowed())
-                    .when(!self.disabled, |d| d.cursor_pointer())
+                    .line_height(px(20.0))
+                    .transition(theme.tokens.transition_fast)
+                    .shadow(smallvec::smallvec![astryx::focus_ring(
+                        kael::transparent_black()
+                    )])
+                    .when(disabled, |d| d.opacity(0.5).cursor_not_allowed())
+                    .when(!disabled, |d| d.cursor_pointer())
                     .when(is_focused && !recording, |d| {
-                        d.shadow(smallvec::smallvec![focus_ring])
+                        d.shadow(smallvec::smallvec![focus_ring.clone()])
                     })
                     .when(recording, |d| {
-                        d.shadow(smallvec::smallvec![recording_ring])
+                        d.shadow(smallvec::smallvec![focus_ring])
                             .border_color(theme.tokens.primary)
                     })
-                    .when(!self.disabled, |d| {
+                    .when(!disabled && !is_focused && !recording, |d| {
+                        d.hover(move |style| {
+                            style
+                                .border_color(theme.tokens.input)
+                                .shadow(smallvec::smallvec![hover_ring])
+                        })
+                    })
+                    .when(!disabled, |d| {
                         d.on_click(move |_, window, cx| {
+                            window.focus(&focus_handle);
                             state_for_click.update(cx, |state, cx| {
                                 if !state.recording {
                                     state.start_recording(cx);
@@ -342,17 +390,30 @@ impl RenderOnce for HotkeyInput {
                             window.refresh();
                         })
                     })
-                    .when(!self.disabled, |d| {
+                    .when(!disabled, |d| {
                         d.on_key_down(move |event, window, cx| {
+                            if !recording
+                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                            {
+                                state_for_keydown.update(cx, |state, cx| {
+                                    state.start_recording(cx);
+                                });
+                                cx.stop_propagation();
+                                window.prevent_default();
+                                return;
+                            }
                             let (captured, hotkey) = state_for_keydown.update(cx, |state, cx| {
                                 let captured = state.capture_keystroke(&event.keystroke, cx);
                                 (captured, state.hotkey.clone())
                             });
                             if captured {
-                                if let Some(ref handler) = on_change_for_keydown {
-                                    handler(hotkey.as_ref(), window, cx);
+                                if event.keystroke.key.as_str() != "escape" {
+                                    if let Some(ref handler) = on_change_for_keydown {
+                                        handler(hotkey.as_ref(), window, cx);
+                                    }
                                 }
                                 cx.stop_propagation();
+                                window.prevent_default();
                             }
                         })
                     })

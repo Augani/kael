@@ -61,7 +61,7 @@ fn main() {
                     ))),
                     ..Default::default()
                 },
-                |_window, cx| cx.new(|cx| SelectTooltipDemoApp::new(cx)),
+                |_window, cx| cx.new(SelectTooltipDemoApp::new),
             )
             .unwrap();
         });

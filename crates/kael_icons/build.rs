@@ -1,6 +1,7 @@
 #![allow(clippy::disallowed_methods, reason = "build scripts are exempt")]
 
 use std::{
+    collections::HashSet,
     env, fs,
     path::{Path, PathBuf},
 };
@@ -30,7 +31,7 @@ struct IconAsset {
 fn load_icons(icon_dir: &Path) -> Vec<IconAsset> {
     let mut icons = fs::read_dir(icon_dir)
         .expect("failed to read icon asset directory")
-        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.expect("failed to read an icon asset directory entry"))
         .map(|entry| entry.path())
         .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("svg"))
         .map(|path| {
@@ -40,6 +41,10 @@ fn load_icons(icon_dir: &Path) -> Vec<IconAsset> {
                 .and_then(|stem| stem.to_str())
                 .expect("icon asset must have a valid UTF-8 file name")
                 .to_string();
+            validate_slug(&slug);
+            let svg = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+            validate_svg(&path, &svg);
             IconAsset {
                 variant_name: slug_to_variant_name(&slug),
                 slug,
@@ -49,7 +54,55 @@ fn load_icons(icon_dir: &Path) -> Vec<IconAsset> {
         .collect::<Vec<_>>();
 
     icons.sort_by(|left, right| left.slug.cmp(&right.slug));
+    assert!(!icons.is_empty(), "icon catalog must not be empty");
+    let mut variants = HashSet::new();
+    for icon in &icons {
+        assert!(
+            variants.insert(icon.variant_name.as_str()),
+            "icon slugs generate a duplicate Rust variant: {}",
+            icon.variant_name
+        );
+    }
     icons
+}
+
+fn validate_slug(slug: &str) {
+    let mut bytes = slug.bytes();
+    assert!(
+        bytes.next().is_some_and(|byte| byte.is_ascii_lowercase()),
+        "icon slug must start with an ASCII lowercase letter: {slug:?}"
+    );
+    assert!(
+        bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'),
+        "icon slug contains unsupported characters: {slug:?}"
+    );
+    assert!(
+        !slug.ends_with('_') && !slug.contains("__"),
+        "icon slug contains an empty segment: {slug:?}"
+    );
+}
+
+fn validate_svg(path: &Path, svg: &str) {
+    assert!(
+        svg.contains("<svg"),
+        "{} is not an SVG document",
+        path.display()
+    );
+    assert!(
+        svg.contains("viewBox="),
+        "{} must define a viewBox",
+        path.display()
+    );
+    assert!(
+        svg.contains("currentColor"),
+        "{} must use currentColor for theme tinting",
+        path.display()
+    );
+    assert!(
+        !svg.to_ascii_lowercase().contains("<script"),
+        "{} must not contain scripts",
+        path.display()
+    );
 }
 
 fn generate_catalog(icons: &[IconAsset]) -> String {
@@ -82,6 +135,12 @@ fn generate_catalog(icons: &[IconAsset]) -> String {
     source.push_str("}\n\n");
 
     source.push_str("impl IconName {\n");
+    source.push_str("    /// Every icon name in deterministic catalog order.\n");
+    source.push_str("    pub const ALL: &'static [Self] = &[\n");
+    for icon in icons {
+        source.push_str(&format!("        Self::{},\n", icon.variant_name));
+    }
+    source.push_str("    ];\n\n");
     source.push_str("    /// Returns the canonical slug for this icon.\n");
     source.push_str("    pub const fn slug(self) -> &'static str {\n");
     source.push_str("        match self {\n");
@@ -119,6 +178,28 @@ fn generate_catalog(icons: &[IconAsset]) -> String {
     source.push_str("            _ => None,\n");
     source.push_str("        }\n");
     source.push_str("    }\n");
+    source.push_str("}\n\n");
+
+    source.push_str("impl std::fmt::Display for IconName {\n");
+    source.push_str("    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { formatter.write_str(self.slug()) }\n");
+    source.push_str("}\n\n");
+
+    source.push_str(
+        "/// Error returned when an icon slug is not present in the generated catalog.\n",
+    );
+    source.push_str("#[derive(Debug, Clone, PartialEq, Eq)]\n");
+    source.push_str("pub struct UnknownIconName(String);\n\n");
+    source.push_str("impl UnknownIconName {\n");
+    source.push_str("    /// Returns the unresolved slug.\n");
+    source.push_str("    pub fn slug(&self) -> &str { &self.0 }\n");
+    source.push_str("}\n\n");
+    source.push_str("impl std::fmt::Display for UnknownIconName {\n");
+    source.push_str("    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(formatter, \"unknown icon slug: {:?}\", self.0) }\n");
+    source.push_str("}\n\n");
+    source.push_str("impl std::error::Error for UnknownIconName {}\n\n");
+    source.push_str("impl std::str::FromStr for IconName {\n");
+    source.push_str("    type Err = UnknownIconName;\n");
+    source.push_str("    fn from_str(slug: &str) -> Result<Self, Self::Err> { Self::from_slug(slug).ok_or_else(|| UnknownIconName(slug.to_string())) }\n");
     source.push_str("}\n\n");
 
     source.push_str("/// The generated icon metadata bundled in this crate.\n");

@@ -40,6 +40,61 @@ pub struct EffectLayer {
 }
 
 impl EffectLayer {
+    /// Returns true when the effect layer still owns a child element.
+    pub fn has_child(&self) -> bool {
+        self.child.is_some()
+    }
+
+    /// Returns true when the caller supplied a stable explicit cache id.
+    pub fn has_explicit_id(&self) -> bool {
+        self.element_id.is_some()
+    }
+
+    /// Returns true when content blur is enabled.
+    pub fn has_content_blur(&self) -> bool {
+        self.content_blur > px(0.)
+    }
+
+    /// Coarse content blur class for content-safe diagnostics.
+    pub fn content_blur_class(&self) -> &'static str {
+        if self.content_blur <= px(0.) {
+            "none"
+        } else if self.content_blur <= px(4.) {
+            "subtle"
+        } else if self.content_blur <= px(12.) {
+            "medium"
+        } else {
+            "heavy"
+        }
+    }
+
+    /// Returns true when a drop shadow is configured.
+    pub fn has_drop_shadow(&self) -> bool {
+        self.drop_shadow.is_some()
+    }
+
+    /// Stable effect combination key.
+    pub fn effect_key(&self) -> &'static str {
+        match (self.has_content_blur(), self.has_drop_shadow()) {
+            (false, false) => "none",
+            (true, false) => "blur",
+            (false, true) => "shadow",
+            (true, true) => "blur_shadow",
+        }
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "effect_layer(has_child={}, explicit_id={}, effect={}, content_blur_class={}, has_drop_shadow={})",
+            self.has_child(),
+            self.has_explicit_id(),
+            self.effect_key(),
+            self.content_blur_class(),
+            self.has_drop_shadow()
+        )
+    }
+
     /// Overrides the cache key used to preserve this subtree across frames.
     pub fn id(mut self, id: impl Into<ElementId>) -> Self {
         self.element_id = Some(id.into());
@@ -135,7 +190,7 @@ impl IntoElement for EffectLayer {
 #[cfg(test)]
 mod tests {
     use super::effect_layer;
-    use crate::{BoxShadow, ParentElement, Styled, div, hsla, point, px};
+    use crate::{BoxShadow, ParentElement, div, hsla, point, px};
 
     #[test]
     fn effect_layer_defaults_to_no_effects() {
@@ -161,6 +216,36 @@ mod tests {
         assert_eq!(stored.blur_radius, px(8.));
         assert_eq!(stored.offset, point(px(4.), px(6.)));
     }
+
+    #[test]
+    fn effect_layer_summary_is_content_safe() {
+        let shadow = BoxShadow {
+            color: hsla(0., 0., 0., 0.5),
+            offset: point(px(4.), px(6.)),
+            blur_radius: px(8.),
+            spread_radius: px(0.),
+            inset: false,
+        };
+        let layer = effect_layer(div().child("private frosted content"))
+            .id("private-effect-cache")
+            .content_blur(px(6.))
+            .drop_shadow(shadow);
+
+        assert!(layer.has_child());
+        assert!(layer.has_explicit_id());
+        assert!(layer.has_content_blur());
+        assert_eq!(layer.content_blur_class(), "medium");
+        assert!(layer.has_drop_shadow());
+        assert_eq!(layer.effect_key(), "blur_shadow");
+
+        let summary = layer.to_text();
+        assert!(summary.contains("effect=blur_shadow"));
+        assert!(summary.contains("content_blur_class=medium"));
+        assert!(!summary.contains("private frosted content"));
+        assert!(!summary.contains("private-effect-cache"));
+        assert!(!summary.contains("6"));
+        assert!(!summary.contains("8"));
+    }
 }
 
 #[cfg(test)]
@@ -169,7 +254,7 @@ mod render_tests {
     use crate::{
         BoxShadow, Context, IntoElement, POLYCHROME_SPRITE_KIND_CONTENT_BLURRED,
         POLYCHROME_SPRITE_KIND_CONTENT_SHADOW, POLYCHROME_SPRITE_KIND_PREMULTIPLIED, ParentElement,
-        Render, Styled, TestAppContext, VisualContext, Window, div, hsla, point, px,
+        Render, Styled, TestAppContext, Window, div, hsla, point, px,
     };
 
     struct BlurView;

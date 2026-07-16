@@ -66,7 +66,7 @@ pub(crate) fn pressed_button_from_mask(button_mask: u32) -> Option<MouseButton> 
 }
 
 pub(crate) fn get_valuator_axis_index(
-    valuator_mask: &Vec<u32>,
+    valuator_mask: &[u32],
     valuator_number: u16,
 ) -> Option<usize> {
     // XInput valuator masks have a 1 at the bit indexes corresponding to each
@@ -81,7 +81,7 @@ pub(crate) fn get_valuator_axis_index(
 }
 
 /// Returns the number of 1 bits in `bit_vec` for all bits where `i < bit_index`.
-fn popcount_upto_bit_index(bit_vec: &Vec<u32>, bit_index: u16) -> u32 {
+fn popcount_upto_bit_index(bit_vec: &[u32], bit_index: u16) -> u32 {
     let array_index = bit_index as usize / 32;
     let popcount: u32 = bit_vec
         .get(array_index)
@@ -100,7 +100,7 @@ fn popcount_upto_bit_index(bit_vec: &Vec<u32>, bit_index: u16) -> u32 {
     }
 }
 
-fn bit_is_set_in_vec(bit_vec: &Vec<u32>, bit_index: u16) -> bool {
+fn bit_is_set_in_vec(bit_vec: &[u32], bit_index: u16) -> bool {
     let array_index = bit_index as usize / 32;
     bit_vec
         .get(array_index)

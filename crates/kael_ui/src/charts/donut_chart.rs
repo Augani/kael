@@ -1,10 +1,10 @@
-use crate::charts::pie_chart::PieChartSegment;
+use crate::charts::{
+    data_summary, finite_or_zero, paint_radial_segments, pie_chart::PieChartSegment,
+};
 use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 
-const CHART_COLORS: [u32; 8] = [
-    0x3b82f6, 0x22c55e, 0xf59e0b, 0xef4444, 0x8b5cf6, 0x06b6d4, 0xf97316, 0xec4899,
-];
+const CHART_COLORS: [u32; 8] = crate::astryx::CHART_PALETTE;
 
 fn default_color(index: usize) -> Hsla {
     rgb(CHART_COLORS[index % CHART_COLORS.len()]).into()
@@ -39,6 +39,8 @@ pub struct DonutChart {
     size: DonutChartSize,
     show_legend: bool,
     show_percentages: bool,
+    start_angle_degrees: f32,
+    segment_gap_degrees: f32,
     style: StyleRefinement,
 }
 
@@ -58,6 +60,8 @@ impl DonutChart {
             size: DonutChartSize::default(),
             show_legend: false,
             show_percentages: false,
+            start_angle_degrees: -90.0,
+            segment_gap_degrees: 0.0,
             style: StyleRefinement::default(),
         }
     }
@@ -73,7 +77,11 @@ impl DonutChart {
     }
 
     pub fn inner_radius(mut self, ratio: f32) -> Self {
-        self.inner_radius = ratio.clamp(0.0, 0.9);
+        self.inner_radius = if ratio.is_finite() {
+            ratio.clamp(0.0, 0.9)
+        } else {
+            0.6
+        };
         self
     }
 
@@ -106,31 +114,28 @@ impl DonutChart {
         self.show_percentages = show;
         self
     }
+
+    /// Rotates the first segment; `-90` starts at twelve o'clock.
+    pub fn start_angle_degrees(mut self, angle: f32) -> Self {
+        self.start_angle_degrees = if angle.is_finite() { angle } else { -90.0 };
+        self
+    }
+
+    /// Adds angular spacing between segments, clamped to a restrained 0–12 degrees.
+    pub fn segment_gap_degrees(mut self, gap: f32) -> Self {
+        self.segment_gap_degrees = if gap.is_finite() {
+            gap.clamp(0.0, 12.0)
+        } else {
+            0.0
+        };
+        self
+    }
 }
 
 impl Styled for DonutChart {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.style
     }
-}
-
-fn get_color_at_angle(angle: f32, segment_data: &[(f32, f32, Hsla)]) -> Hsla {
-    let normalized = if angle < -std::f32::consts::FRAC_PI_2 {
-        angle + std::f32::consts::TAU
-    } else {
-        angle
-    };
-
-    for &(start, sweep, color) in segment_data {
-        if normalized >= start && normalized < start + sweep {
-            return color;
-        }
-    }
-
-    segment_data
-        .last()
-        .map(|&(_, _, c)| c)
-        .unwrap_or(hsla(0.0, 0.0, 0.5, 1.0))
 }
 
 impl RenderOnce for DonutChart {
@@ -140,8 +145,18 @@ impl RenderOnce for DonutChart {
         let chart_size = self.size.to_pixels();
         let show_legend = self.show_legend;
         let show_percentages = self.show_percentages;
+        let description = data_summary(
+            "Donut chart",
+            self.segments
+                .iter()
+                .map(|segment| (segment.label.as_ref(), segment.value)),
+        );
 
-        let total: f64 = self.segments.iter().map(|s| s.value).sum();
+        let total: f64 = self
+            .segments
+            .iter()
+            .map(|segment| finite_or_zero(segment.value).max(0.0))
+            .sum();
 
         let chart = if total == 0.0 || self.segments.is_empty() {
             render_empty(chart_size, theme)
@@ -153,6 +168,8 @@ impl RenderOnce for DonutChart {
                 self.inner_radius,
                 self.center_label.clone(),
                 self.center_value.clone(),
+                self.start_angle_degrees,
+                self.segment_gap_degrees,
                 theme,
             )
         };
@@ -169,7 +186,13 @@ impl RenderOnce for DonutChart {
         };
 
         div()
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Image)
+                    .label("Donut chart")
+                    .description(description),
+            )
             .flex()
+            .flex_wrap()
             .gap(px(24.0))
             .items_center()
             .child(chart)
@@ -205,6 +228,8 @@ fn render_donut(
     inner_ratio: f32,
     center_label: Option<SharedString>,
     center_value: Option<SharedString>,
+    start_angle_degrees: f32,
+    segment_gap_degrees: f32,
     theme: &crate::theme::Theme,
 ) -> Div {
     let size_f32 = chart_size / px(1.0);
@@ -213,16 +238,22 @@ fn render_donut(
     let inner_radius = outer_radius * inner_ratio;
 
     let mut segment_data: Vec<(f32, f32, Hsla)> = Vec::new();
-    let mut current_angle: f32 = -std::f32::consts::FRAC_PI_2;
+    let mut current_angle = start_angle_degrees.to_radians();
+    let gap = segment_gap_degrees.to_radians();
 
     for (idx, segment) in segments.iter().enumerate() {
-        if segment.value <= 0.0 {
+        if !segment.value.is_finite() || segment.value <= 0.0 {
             continue;
         }
         let fraction = (segment.value / total) as f32;
         let sweep = fraction * std::f32::consts::TAU;
         let color = segment.color.unwrap_or_else(|| default_color(idx));
-        segment_data.push((current_angle, sweep, color));
+        let visible_gap = gap.min(sweep * 0.5);
+        segment_data.push((
+            current_angle + visible_gap * 0.5,
+            (sweep - visible_gap).max(0.0),
+            color,
+        ));
         current_angle += sweep;
     }
 
@@ -237,38 +268,21 @@ fn render_donut(
         );
     }
 
-    let ring_width = outer_radius - inner_radius;
-    let ring_count = ((ring_width / 3.0).max(1.0) as usize).min(20);
-
     let mut container = div()
         .size(chart_size)
         .rounded(px(9999.0))
         .relative()
-        .overflow_hidden();
-
-    for ring_idx in 0..ring_count {
-        let ring_radius = inner_radius + (ring_idx as f32 + 0.5) * (ring_width / ring_count as f32);
-        let circumference = std::f32::consts::TAU * ring_radius;
-        let dots_in_ring = (circumference / 4.0).max(16.0) as usize;
-
-        for i in 0..dots_in_ring {
-            let angle = -std::f32::consts::FRAC_PI_2
-                + (i as f32 / dots_in_ring as f32) * std::f32::consts::TAU;
-            let color = get_color_at_angle(angle, &segment_data);
-            let x = center + ring_radius * angle.cos() - 2.0;
-            let y = center + ring_radius * angle.sin() - 2.0;
-
-            container = container.child(
-                div()
-                    .absolute()
-                    .size(px(5.0))
-                    .rounded(px(9999.0))
-                    .bg(color)
-                    .left(px(x))
-                    .top(px(y)),
-            );
-        }
-    }
+        .overflow_hidden()
+        .child(
+            canvas_with_prepaint(
+                move |_bounds, _window, _cx| segment_data,
+                move |bounds, segments, window, _cx| {
+                    paint_radial_segments(bounds, &segments, window);
+                },
+            )
+            .absolute()
+            .inset_0(),
+        );
 
     let inner_size = inner_radius * 2.0 - 4.0;
     let inner_offset = center - inner_radius + 2.0;
@@ -370,7 +384,7 @@ fn render_legend(
         .flex_col()
         .gap(px(8.0))
         .children(segments.iter().enumerate().filter_map(|(idx, segment)| {
-            if segment.value <= 0.0 {
+            if !segment.value.is_finite() || segment.value <= 0.0 {
                 return None;
             }
 

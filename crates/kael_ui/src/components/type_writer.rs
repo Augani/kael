@@ -7,7 +7,6 @@ pub struct TypeWriterState {
     full_text: SharedString,
     visible_count: usize,
     is_typing: bool,
-    _cursor_visible: bool,
     version: usize,
     speed: Duration,
     on_complete: Option<Box<dyn Fn(&mut App)>>,
@@ -19,7 +18,6 @@ impl TypeWriterState {
             full_text: text.into(),
             visible_count: 0,
             is_typing: false,
-            _cursor_visible: true,
             version: 0,
             speed: Duration::from_millis(50),
             on_complete: None,
@@ -38,6 +36,16 @@ impl TypeWriterState {
         let version = self.version;
         let total_chars = self.full_text.chars().count();
         let speed = self.speed;
+
+        if cx.reduce_motion() {
+            self.visible_count = total_chars;
+            self.is_typing = false;
+            if let Some(cb) = self.on_complete.take() {
+                cb(cx);
+            }
+            cx.notify();
+            return;
+        }
 
         cx.spawn(async move |this, cx| {
             for i in 1..=total_chars {
@@ -104,6 +112,10 @@ impl TypeWriterState {
         &self.full_text[..byte_end]
     }
 
+    pub fn full_text(&self) -> &str {
+        &self.full_text
+    }
+
     pub fn is_typing(&self) -> bool {
         self.is_typing
     }
@@ -155,33 +167,69 @@ impl RenderOnce for TypeWriter {
         let foreground = Theme::of(cx).tokens.foreground;
         let state = self.state.read(cx);
         let text = String::from(state.visible_text());
+        let accessible_text = if state.full_text().trim().is_empty() {
+            "Typewriter text".to_string()
+        } else {
+            state.full_text().to_string()
+        };
         let is_typing = state.is_typing();
         let cursor_str = SharedString::from(String::from(self.cursor_char));
 
         self.base
+            .id(self.id.clone())
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::StaticText).label(accessible_text),
+            )
             .flex()
             .flex_row()
             .text_color(foreground)
-            .child(text)
+            .child(StyledText::new(text).accessibility_hidden(true))
             .when(
                 self.show_cursor && (is_typing || !state.is_complete()),
                 |el| {
                     el.child(
-                        div().id(self.id).child(cursor_str).with_animation(
-                            "cursor-blink",
-                            Animation::new(Duration::from_millis(530))
-                                .repeat_forever()
-                                .with_easing(kael::linear),
-                            |el, delta| {
-                                if delta < 0.5 {
-                                    el.opacity(1.0)
-                                } else {
-                                    el.opacity(0.0)
-                                }
-                            },
-                        ),
+                        div()
+                            .id(ElementId::NamedChild(Box::new(self.id), "cursor".into()))
+                            .accessibility(
+                                AccessibilityAttributes::new(AccessibilityRole::Group)
+                                    .states(AccessibilityState::HIDDEN),
+                            )
+                            .child(cursor_str)
+                            .with_animation(
+                                "cursor-blink",
+                                Animation::new(Duration::from_millis(530))
+                                    .repeat_forever()
+                                    .with_easing(kael::linear),
+                                |el, delta| {
+                                    if delta < 0.5 {
+                                        el.opacity(1.0)
+                                    } else {
+                                        el.opacity(0.0)
+                                    }
+                                },
+                            ),
                     )
                 },
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn reduced_motion_reveals_text_without_typing_animation() {
+        let mut cx = TestAppContext::single();
+        cx.set_reduce_motion(true);
+        let state = cx.new(|_| TypeWriterState::new("Accessible motion"));
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| state.start(cx));
+            let state = state.read(cx);
+            assert_eq!(state.visible_text(), "Accessible motion");
+            assert!(state.is_complete());
+            assert!(!state.is_typing());
+        });
     }
 }

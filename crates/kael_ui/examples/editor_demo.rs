@@ -276,7 +276,7 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_, cx| cx.new(|cx| EditorDemo::new(cx)),
+            |_, cx| cx.new(EditorDemo::new),
         )
         .unwrap();
 

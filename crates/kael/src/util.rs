@@ -176,11 +176,14 @@ where
 pub(crate) fn atomic_incr_if_not_zero(counter: &AtomicUsize) -> usize {
     let mut loaded = counter.load(SeqCst);
     loop {
+        let Some(next) = loaded.checked_add(1) else {
+            return 0;
+        };
         if loaded == 0 {
             return 0;
         }
-        match counter.compare_exchange_weak(loaded, loaded + 1, SeqCst, SeqCst) {
-            Ok(x) => return x + 1,
+        match counter.compare_exchange_weak(loaded, next, SeqCst, SeqCst) {
+            Ok(_) => return next,
             Err(actual) => loaded = actual,
         }
     }
@@ -191,6 +194,17 @@ mod tests {
     use crate::TestAppContext;
 
     use super::*;
+
+    #[test]
+    fn atomic_increment_rejects_zero_and_exhaustion_without_wrapping() {
+        let zero = AtomicUsize::new(0);
+        assert_eq!(atomic_incr_if_not_zero(&zero), 0);
+        assert_eq!(zero.load(SeqCst), 0);
+
+        let exhausted = AtomicUsize::new(usize::MAX);
+        assert_eq!(atomic_incr_if_not_zero(&exhausted), 0);
+        assert_eq!(exhausted.load(SeqCst), usize::MAX);
+    }
 
     #[kael::test]
     async fn test_with_timeout(cx: &mut TestAppContext) {

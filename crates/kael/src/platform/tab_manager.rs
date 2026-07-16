@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::{AnyWindowHandle, SharedString, SystemWindowTab, WindowId};
 
@@ -27,6 +27,13 @@ pub struct WindowTabManager {
 }
 
 impl WindowTabManager {
+    fn lock_state(&self) -> MutexGuard<'_, TabManagerState> {
+        self.state.lock().unwrap_or_else(|poisoned| {
+            log::error!("recovering poisoned window tab-manager state");
+            poisoned.into_inner()
+        })
+    }
+
     /// Create a new `WindowTabManager` for the given window, using shared state.
     pub fn new(window_handle: AnyWindowHandle, state: Arc<Mutex<TabManagerState>>) -> Self {
         Self {
@@ -47,7 +54,7 @@ impl WindowTabManager {
     /// for that identifier. When set to `None`, the window leaves its current
     /// tab group.
     pub fn set_tabbing_identifier(&self, identifier: Option<String>) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.lock_state();
         let window_id = self.window_handle.window_id();
 
         // Remove from current group if any.
@@ -79,7 +86,7 @@ impl WindowTabManager {
     /// After this call, `tabbed_windows()` returns all windows with the same
     /// identifier.
     pub fn merge_all_windows(&self) {
-        let state = self.state.lock().unwrap();
+        let state = self.lock_state();
         let window_id = self.window_handle.window_id();
 
         // The current implementation already groups by identifier, so
@@ -98,7 +105,7 @@ impl WindowTabManager {
     /// After this call, the original group has N-1 tabs and this window
     /// exists as a standalone (single-tab or no-tab) window.
     pub fn move_tab_to_new_window(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.lock_state();
         let window_id = self.window_handle.window_id();
 
         if let Some(identifier) = state.window_identifiers.remove(&window_id) {
@@ -116,7 +123,7 @@ impl WindowTabManager {
     /// Returns `None` if this window has no tabbing identifier set.
     /// Returns `Some(vec)` with all windows sharing the same identifier.
     pub fn tabbed_windows(&self) -> Option<Vec<SystemWindowTab>> {
-        let state = self.state.lock().unwrap();
+        let state = self.lock_state();
         let window_id = self.window_handle.window_id();
 
         let identifier = state.window_identifiers.get(&window_id)?;
@@ -140,7 +147,7 @@ impl WindowTabManager {
     /// Update the stored title for this window. Called by the platform backend
     /// when `set_title` is invoked so that `tabbed_windows` returns current titles.
     pub fn set_title(&self, title: SharedString) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.lock_state();
         state
             .window_titles
             .insert(self.window_handle.window_id(), title);
@@ -148,7 +155,7 @@ impl WindowTabManager {
 
     /// Remove this window from all tracking. Should be called when the window closes.
     pub fn remove_window(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.lock_state();
         let window_id = self.window_handle.window_id();
 
         state.window_titles.remove(&window_id);
@@ -165,7 +172,7 @@ impl WindowTabManager {
 
     /// Get the tabbing identifier for this window, if any.
     pub fn tabbing_identifier(&self) -> Option<String> {
-        let state = self.state.lock().unwrap();
+        let state = self.lock_state();
         state
             .window_identifiers
             .get(&self.window_handle.window_id())
@@ -174,7 +181,7 @@ impl WindowTabManager {
 
     /// Get the number of tabs in this window's current group.
     pub fn tab_count(&self) -> usize {
-        let state = self.state.lock().unwrap();
+        let state = self.lock_state();
         let window_id = self.window_handle.window_id();
 
         state
@@ -341,5 +348,28 @@ mod tests {
         assert_eq!(m2.tab_count(), 1); // alpha now has only m2
         assert_eq!(m3.tab_count(), 2); // beta now has m3 + m1
         assert_eq!(m1.tabbing_identifier(), Some("beta".into()));
+    }
+
+    #[test]
+    fn poisoned_shared_state_is_recovered() {
+        let state = WindowTabManager::shared_state();
+        let poison_state = state.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = poison_state
+                .lock()
+                .expect("test state should start unlocked");
+            panic!("poison tab-manager state");
+        })
+        .join();
+
+        let manager = WindowTabManager::new(make_handle(50), state);
+        manager.set_title("Recovered".into());
+        manager.set_tabbing_identifier(Some("recovered".into()));
+
+        let tabs = manager
+            .tabbed_windows()
+            .expect("recovered state should remain usable");
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs[0].title.as_ref(), "Recovered");
     }
 }

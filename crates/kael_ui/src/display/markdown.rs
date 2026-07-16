@@ -2,12 +2,31 @@
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use kael::*;
+use std::rc::Rc;
 
+#[cfg(feature = "markdown")]
+use crate::display::rich_text::render_blocks;
 use crate::display::rich_text::LinkClickHandler;
 #[cfg(feature = "markdown")]
-use crate::display::rich_text::{render_blocks, ListItem, RichBlock, RichInline, TableAlignment};
+use crate::display::rich_text::TableAlignment;
+use crate::display::rich_text::{ListItem, RichBlock, RichInline};
 #[cfg(feature = "markdown")]
 use crate::theme::Theme;
+
+pub type MarkdownSource = SharedString;
+pub type BlockNode = RichBlock;
+pub type InlineNode = RichInline;
+pub type ListItemNode = ListItem;
+pub type TableCellNode = Vec<RichInline>;
+pub type MarkdownComponents = ();
+pub type MarkdownInlinePlugin = ();
+pub type IncrementalParseState = IncrementalState;
+
+#[derive(Debug, Clone, Default)]
+pub struct IncrementalState {
+    pub previous_source: SharedString,
+    pub blocks: Vec<BlockNode>,
+}
 
 #[derive(IntoElement)]
 pub struct Markdown {
@@ -28,7 +47,8 @@ impl Markdown {
     }
 
     pub fn base_font_size(mut self, size: Pixels) -> Self {
-        self.base_font_size = Some(size);
+        let value = f32::from(size);
+        self.base_font_size = (value.is_finite() && value > 0.0).then_some(size);
         self
     }
 
@@ -36,7 +56,7 @@ impl Markdown {
         mut self,
         handler: impl Fn(&str, &mut Window, &mut App) + 'static,
     ) -> Self {
-        self.on_link_click = Some(Box::new(handler));
+        self.on_link_click = Some(Rc::new(handler));
         self
     }
 }
@@ -81,11 +101,11 @@ fn inlines_to_plain_text(inlines: &[RichInline]) -> String {
 
 #[cfg(feature = "markdown")]
 impl RenderOnce for Markdown {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = Theme::of(cx);
         let base_size = self.base_font_size.unwrap_or(px(14.0));
 
-        let blocks = parse_markdown_with_urls(&self.source);
+        let blocks = parse_markdown(&self.source);
         let elements = render_blocks(&blocks, base_size, &self.on_link_click, "md");
 
         self.base
@@ -113,12 +133,70 @@ impl Styled for Markdown {
 }
 
 #[cfg(feature = "markdown")]
+pub fn parse_markdown(source: &str) -> Vec<BlockNode> {
+    parse_markdown_with_urls(source)
+}
+
+#[cfg(not(feature = "markdown"))]
+pub fn parse_markdown(source: &str) -> Vec<BlockNode> {
+    vec![RichBlock::Paragraph(vec![RichInline::Text(
+        source.to_string(),
+    )])]
+}
+
+#[allow(non_snake_case)]
+pub fn parseMarkdown(source: &str) -> Vec<BlockNode> {
+    parse_markdown(source)
+}
+
+pub fn parse_inline(source: &str) -> Vec<InlineNode> {
+    parse_markdown(source)
+        .into_iter()
+        .flat_map(|block| match block {
+            RichBlock::Paragraph(inlines) => inlines,
+            RichBlock::Heading { content, .. } => content,
+            RichBlock::CodeBlock { code, .. } => vec![RichInline::Code(code)],
+            RichBlock::Image { alt, url } => vec![RichInline::Image { alt, url }],
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+#[allow(non_snake_case)]
+pub fn parseInline(source: &str) -> Vec<InlineNode> {
+    parse_inline(source)
+}
+
+pub fn create_incremental_state() -> IncrementalState {
+    IncrementalState::default()
+}
+
+#[allow(non_snake_case)]
+pub fn createIncrementalState() -> IncrementalState {
+    create_incremental_state()
+}
+
+pub fn parse_markdown_incremental(state: &mut IncrementalState, source: &str) -> Vec<BlockNode> {
+    if state.previous_source.as_ref() != source {
+        state.previous_source = SharedString::from(source.to_string());
+        state.blocks = parse_markdown(source);
+    }
+    state.blocks.clone()
+}
+
+#[allow(non_snake_case)]
+pub fn parseMarkdownIncremental(state: &mut IncrementalState, source: &str) -> Vec<BlockNode> {
+    parse_markdown_incremental(state, source)
+}
+
+#[cfg(feature = "markdown")]
 struct ListState {
     ordered: bool,
     start: u64,
     items: Vec<ListItem>,
-    current_item_inlines: Vec<RichInline>,
     current_item_checked: Option<bool>,
+    current_item_children: Vec<ListItem>,
+    item_open: bool,
 }
 
 #[cfg(feature = "markdown")]
@@ -238,14 +316,16 @@ impl UrlTrackingBlockBuilder {
                     ordered: start.is_some(),
                     start: start.unwrap_or(1),
                     items: Vec::new(),
-                    current_item_inlines: Vec::new(),
                     current_item_checked: None,
+                    current_item_children: Vec::new(),
+                    item_open: false,
                 });
             }
             Tag::Item => {
                 if let Some(list) = self.list_stack.last_mut() {
-                    list.current_item_inlines.clear();
                     list.current_item_checked = None;
+                    list.current_item_children.clear();
+                    list.item_open = true;
                 }
                 self.inline_stack.push(Vec::new());
             }
@@ -305,7 +385,16 @@ impl UrlTrackingBlockBuilder {
         match tag {
             TagEnd::Paragraph => {
                 let inlines = self.inline_stack.pop().unwrap_or_default();
-                self.push_block(RichBlock::Paragraph(inlines));
+                if self.list_stack.last().is_some_and(|list| list.item_open) {
+                    if let Some(item_inlines) = self.inline_stack.last_mut() {
+                        if !item_inlines.is_empty() && !inlines.is_empty() {
+                            item_inlines.extend([RichInline::LineBreak, RichInline::LineBreak]);
+                        }
+                        item_inlines.extend(inlines);
+                    }
+                } else {
+                    self.push_block(RichBlock::Paragraph(inlines));
+                }
             }
             TagEnd::Heading(_level) => {
                 let inlines = self.inline_stack.pop().unwrap_or_default();
@@ -331,15 +420,25 @@ impl UrlTrackingBlockBuilder {
             }
             TagEnd::List(_ordered) => {
                 if let Some(list) = self.list_stack.pop() {
-                    let block = if list.ordered {
-                        RichBlock::OrderedList {
-                            start: list.start,
-                            items: list.items,
+                    let nested_in_item = self
+                        .list_stack
+                        .last()
+                        .is_some_and(|parent| parent.item_open);
+                    if nested_in_item {
+                        if let Some(parent) = self.list_stack.last_mut() {
+                            parent.current_item_children.extend(list.items);
                         }
                     } else {
-                        RichBlock::UnorderedList { items: list.items }
-                    };
-                    self.push_block(block);
+                        let block = if list.ordered {
+                            RichBlock::OrderedList {
+                                start: list.start,
+                                items: list.items,
+                            }
+                        } else {
+                            RichBlock::UnorderedList { items: list.items }
+                        };
+                        self.push_block(block);
+                    }
                 }
             }
             TagEnd::Item => {
@@ -348,8 +447,9 @@ impl UrlTrackingBlockBuilder {
                     list.items.push(ListItem {
                         checked: list.current_item_checked,
                         content: inlines,
-                        children: Vec::new(),
+                        children: std::mem::take(&mut list.current_item_children),
                     });
+                    list.item_open = false;
                 }
             }
             TagEnd::Strong => {
@@ -433,5 +533,100 @@ impl UrlTrackingBlockBuilder {
             }
         }
         self.blocks.push(block);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(feature = "markdown")]
+    #[::core::prelude::v1::test]
+    fn parser_preserves_headings_tasks_and_link_destinations() {
+        let blocks = parse_markdown(
+            "# Release\n\n- [x] Accessible\n\nRead [the docs](https://example.com/docs).",
+        );
+        assert!(
+            matches!(blocks.first(), Some(RichBlock::Heading { level: 1, .. })),
+            "{blocks:?}"
+        );
+        assert!(blocks.iter().any(|block| matches!(
+            block,
+            RichBlock::UnorderedList { items }
+                if items.first().is_some_and(|item|
+                    item.checked == Some(true)
+                        && inlines_to_plain_text(&item.content) == "Accessible"
+                )
+        )));
+        assert!(blocks.iter().any(|block| matches!(
+            block,
+            RichBlock::Paragraph(inlines)
+                if inlines.iter().any(|inline| matches!(
+                    inline,
+                    RichInline::Link { url, .. } if url == "https://example.com/docs"
+                ))
+        )));
+    }
+
+    #[cfg(feature = "markdown")]
+    #[::core::prelude::v1::test]
+    fn parser_keeps_nested_list_items_attached_to_their_parent() {
+        let blocks = parse_markdown("- Parent\n  - Child one\n  - Child two\n- Sibling");
+
+        let items = match blocks.as_slice() {
+            [RichBlock::UnorderedList { items }] => items,
+            _ => panic!("expected one list block, got {blocks:?}"),
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(inlines_to_plain_text(&items[0].content), "Parent");
+        assert_eq!(items[0].children.len(), 2);
+        assert_eq!(
+            inlines_to_plain_text(&items[0].children[0].content),
+            "Child one"
+        );
+        assert_eq!(
+            inlines_to_plain_text(&items[0].children[1].content),
+            "Child two"
+        );
+        assert_eq!(inlines_to_plain_text(&items[1].content), "Sibling");
+    }
+
+    #[cfg(feature = "markdown")]
+    #[::core::prelude::v1::test]
+    fn parser_preserves_multiple_paragraphs_inside_a_list_item() {
+        let blocks = parse_markdown("- First paragraph\n\n  Second paragraph");
+        let item = match blocks.as_slice() {
+            [RichBlock::UnorderedList { items }] => &items[0],
+            _ => panic!("expected one list block, got {blocks:?}"),
+        };
+
+        assert_eq!(
+            inlines_to_plain_text(&item.content),
+            "First paragraph\n\nSecond paragraph"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn incremental_parser_reuses_and_replaces_cached_blocks() {
+        let mut state = create_incremental_state();
+        let first = parse_markdown_incremental(&mut state, "One");
+        let repeated = parse_markdown_incremental(&mut state, "One");
+        assert_eq!(format!("{first:?}"), format!("{repeated:?}"));
+
+        let changed = parse_markdown_incremental(&mut state, "Two");
+        assert_ne!(format!("{first:?}"), format!("{changed:?}"));
+        assert_eq!(state.previous_source.as_ref(), "Two");
+    }
+
+    #[::core::prelude::v1::test]
+    fn invalid_font_sizes_are_ignored() {
+        assert!(Markdown::new("text")
+            .base_font_size(px(f32::NAN))
+            .base_font_size
+            .is_none());
+        assert!(Markdown::new("text")
+            .base_font_size(px(0.0))
+            .base_font_size
+            .is_none());
     }
 }

@@ -54,7 +54,7 @@ fn main() {
                     })),
                     ..Default::default()
                 },
-                |_, cx| cx.new(|cx| ToastStyledDemo::new(cx)),
+                |_, cx| cx.new(ToastStyledDemo::new),
             )
             .unwrap();
         });
@@ -68,7 +68,7 @@ struct ToastStyledDemo {
 impl ToastStyledDemo {
     fn new(cx: &mut Context<Self>) -> Self {
         Self {
-            toast_manager: cx.new(|cx| ToastManager::new(cx)),
+            toast_manager: cx.new(ToastManager::new),
             next_id: 0,
         }
     }

@@ -16,6 +16,28 @@ use std::time::Duration;
 
 const NANOS_PER_SEC: u128 = 1_000_000_000;
 
+fn duration_from_nanos_saturating(nanos: u128) -> Duration {
+    if nanos >= Duration::MAX.as_nanos() {
+        return Duration::MAX;
+    }
+    Duration::new(
+        (nanos / NANOS_PER_SEC) as u64,
+        (nanos % NANOS_PER_SEC) as u32,
+    )
+}
+
+fn scale_duration_saturating(duration: Duration, factor: f64) -> Duration {
+    let seconds = duration.as_secs_f64() * factor;
+    if !seconds.is_finite() {
+        return if seconds.is_sign_positive() {
+            Duration::MAX
+        } else {
+            Duration::ZERO
+        };
+    }
+    Duration::try_from_secs_f64(seconds).unwrap_or(Duration::MAX)
+}
+
 fn gcd(mut a: u32, mut b: u32) -> u32 {
     while b != 0 {
         let t = b;
@@ -98,7 +120,11 @@ impl Timebase {
                 return Some(candidate);
             }
         }
-        Timebase::new((fps * 1000.0).round() as u32, 1000)
+        let numerator = (fps * 1000.0).round();
+        if !(1.0..=f64::from(u32::MAX)).contains(&numerator) {
+            return None;
+        }
+        Timebase::new(numerator as u32, 1000)
     }
 
     /// The numerator of the reduced rational rate.
@@ -122,19 +148,21 @@ impl Timebase {
     pub fn frame_to_time(&self, index: u64) -> Duration {
         let numerator = index as u128 * self.den as u128 * NANOS_PER_SEC;
         let nanos = numerator.div_ceil(self.num as u128);
-        Duration::from_nanos(nanos.min(u64::MAX as u128) as u64)
+        duration_from_nanos_saturating(nanos)
     }
 
     /// Index of the frame visible at `time` — the frame whose presentation
     /// interval contains `time`, i.e. `floor(time * fps)`.
     pub fn time_to_frame(&self, time: Duration) -> u64 {
         let nanos = time.as_nanos();
-        ((nanos * self.num as u128) / (self.den as u128 * NANOS_PER_SEC)) as u64
+        let frame = (nanos * self.num as u128) / (self.den as u128 * NANOS_PER_SEC);
+        frame.min(u128::from(u64::MAX)) as u64
     }
 
     /// Duration a single frame is on screen.
     pub fn frame_duration(&self) -> Duration {
-        Duration::from_nanos(((self.den as u128 * NANOS_PER_SEC) / self.num as u128) as u64)
+        let nanos = (self.den as u128 * NANOS_PER_SEC) / self.num as u128;
+        Duration::from_nanos(nanos.max(1) as u64)
     }
 }
 
@@ -153,18 +181,18 @@ pub struct SeekPlan {
     pub discard: u64,
 }
 
-/// Resolve a frame-accurate seek against a sorted list of keyframe indices.
+/// Resolve a frame-accurate seek against a list of keyframe indices.
 ///
-/// `keyframes` must be sorted ascending. When no keyframe lies at or before the
-/// target (or the list is empty) the plan starts from frame 0, matching the
-/// convention that the first frame of a stream is always a sync sample.
+/// Input order does not matter. When no keyframe lies at or before the target
+/// (or the list is empty) the plan starts from frame 0, matching the convention
+/// that the first frame of a stream is always a sync sample.
 pub fn resolve_seek(target: u64, keyframes: &[u64]) -> SeekPlan {
-    let boundary = keyframes.partition_point(|&k| k <= target);
-    let keyframe = if boundary == 0 {
-        0
-    } else {
-        keyframes[boundary - 1]
-    };
+    let keyframe = keyframes
+        .iter()
+        .copied()
+        .filter(|&keyframe| keyframe <= target)
+        .max()
+        .unwrap_or(0);
     SeekPlan {
         target,
         keyframe,
@@ -311,7 +339,8 @@ impl PlaybackClock {
         match (self.playing, self.anchor_master) {
             (true, Some(anchor)) => {
                 let elapsed = master_now.saturating_sub(anchor);
-                self.anchor_media + elapsed.mul_f64(self.rate)
+                self.anchor_media
+                    .saturating_add(scale_duration_saturating(elapsed, self.rate))
             }
             _ => self.anchor_media,
         }
@@ -369,7 +398,8 @@ impl LoopRegion {
             return position;
         }
         let offset_nanos = (position - self.start).as_nanos() % length.as_nanos();
-        self.start + Duration::from_nanos(offset_nanos as u64)
+        self.start
+            .saturating_add(duration_from_nanos_saturating(offset_nanos))
     }
 }
 
@@ -390,6 +420,8 @@ mod tests {
         assert_eq!(Timebase::from_fps(25.0), Some(Timebase::PAL));
         assert_eq!(Timebase::from_fps(0.0), None);
         assert_eq!(Timebase::from_fps(f64::NAN), None);
+        assert_eq!(Timebase::from_fps(0.000_1), None);
+        assert_eq!(Timebase::from_fps(f64::from(u32::MAX)), None);
     }
 
     #[test]
@@ -466,6 +498,7 @@ mod tests {
                 discard: 42
             }
         );
+        assert_eq!(resolve_seek(75, &[90, 30, 60, 0]).keyframe, 60);
     }
 
     #[test]
@@ -561,5 +594,28 @@ mod tests {
         let region = LoopRegion::new(ms(0), ms(1000)); // 30 frames @ 30 fps
         // 1.5s media -> looped 0.5s -> frame 15.
         assert_eq!(clock.current_frame_looped(ms(1500), &region), 15);
+    }
+
+    #[test]
+    fn extreme_timing_values_saturate_without_panicking() {
+        let slow = Timebase::new(1, u32::MAX).unwrap();
+        assert_eq!(slow.frame_to_time(u64::MAX), Duration::MAX);
+
+        let fast = Timebase::new(u32::MAX, 1).unwrap();
+        assert_eq!(fast.time_to_frame(Duration::MAX), u64::MAX);
+        assert_eq!(fast.frame_duration(), Duration::from_nanos(1));
+
+        let mut clock = PlaybackClock::new(Timebase::THIRTY);
+        clock.seek(Duration::MAX, Duration::ZERO);
+        clock.set_rate(f64::MAX, Duration::ZERO);
+        clock.play(Duration::ZERO);
+        assert_eq!(clock.position(Duration::MAX), Duration::MAX);
+    }
+
+    #[test]
+    fn long_loop_regions_preserve_offsets_beyond_u64_nanoseconds() {
+        let region = LoopRegion::new(Duration::ZERO, Duration::from_secs(1_000_000_000_000));
+        let position = Duration::from_secs(1_500_000_000_000);
+        assert_eq!(region.wrap(position), Duration::from_secs(500_000_000_000));
     }
 }

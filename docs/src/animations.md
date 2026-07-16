@@ -67,6 +67,19 @@ Animation::new(Duration::from_millis(400))
 
 `repeat_forever()` is shorthand for `repeat(Repeat::Forever)`, and `with_easing(f)` accepts any `Fn(f32) -> f32` (including the helpers `ease_in_out`, `ease_out_quint()`, and `bounce(inner)`).
 
+Generated motion can be inspected before it is attached to UI:
+
+```rust
+let animation = Animation::new(Duration::from_millis(400))
+    .delay(Duration::from_millis(100))
+    .easing(Easing::EaseInOut)
+    .repeat(Repeat::Count(3));
+
+tracing::info!(summary = animation.to_text(), "animation");
+```
+
+Use `Animation::to_text()`, `Repeat::to_text()`, and `Easing::to_text()` for stable timeline, repeat, and curve summaries. The summaries name curve classes such as `ease-in-out`, `cubic-bezier`, `steps`, or `custom` without logging custom callbacks or cubic-bezier control points.
+
 ## Easing curves
 
 `kael::Easing` is the single, canonical easing vocabulary for the workspace. It
@@ -122,6 +135,26 @@ div().with_keyframes(
 ```
 
 Chain whole animations with `AnimationSequence::new().then(...).then_for(duration).with_overlap(...)` and drive them with `with_animation_sequence`. For animations you may need to interrupt, `with_cancellable_animation` returns an `(element, AnimationHandle)`; call `handle.cancel()` to jump to the final state.
+
+`AnimationSequence::to_text()` reports animation count, finite scheduled duration, whether any step repeats forever, and empty state. `Keyframes::to_text()`, `StyledKeyframe::to_text()`, `MediaKeyframe::to_text()`, and `KeyframeTrack::to_text()` report frame/property/interpolation counts and finite-value checks without logging opacity values, transform distances, media automation values, or keyframe times.
+
+## Lottie animated assets
+
+Use `lottie(src)` for native vector animation assets instead of routing every animated visual through a WebView. Sources can be embedded resources, paths, URLs, byte buffers, or pre-decoded `LottieAnimation` values, and the element supports autoplay, once/loop/ping-pong playback, object-fit placement, loading content, failure fallback content, and frame prefetching:
+
+```rust
+use kael::{ObjectFit, lottie};
+
+let loader = lottie("animations/spinner.json")
+    .autoplay()
+    .loop_forever()
+    .object_fit(ObjectFit::Contain)
+    .prefetch_frames(8);
+
+tracing::info!(summary = loader.to_text(), "lottie element");
+```
+
+Inspect generated animated UI with `LottieSource::to_text()`, `LottieAnimation::to_text()`, `LottiePlayer::to_text()`, and `lottie(...).to_text()`. These summaries report source class, byte presence, decoded metadata, playback state, loop mode, object-fit mode, prefetch counts, and loading/fallback configuration without logging paths, URLs, embedded resource names, raw bytes, or replacement text.
 
 ## Elastic scrolling
 

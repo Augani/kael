@@ -60,6 +60,33 @@ fn shadows_dark() -> [ShadowStack; 5] {
     ]
 }
 
+/// Astryx elevation: soft, diffuse two-layer shadows (`--shadow-low/med/high`).
+/// `a` is the per-layer black alpha (~0.10 light, ~0.20 dark).
+fn astryx_shadows(a: f32, a_high: f32) -> [ShadowStack; 5] {
+    [
+        smallvec![
+            shadow_layer(1.0, 1.0, 0.0, a),
+            shadow_layer(2.0, 8.0, 0.0, a),
+        ],
+        smallvec![
+            shadow_layer(1.0, 1.0, 0.0, a),
+            shadow_layer(2.0, 8.0, 0.0, a),
+        ],
+        smallvec![
+            shadow_layer(1.0, 2.0, 0.0, a),
+            shadow_layer(2.0, 12.0, 0.0, a),
+        ],
+        smallvec![
+            shadow_layer(2.0, 2.0, 0.0, a),
+            shadow_layer(8.0, 24.0, 0.0, a_high),
+        ],
+        smallvec![
+            shadow_layer(2.0, 2.0, 0.0, a),
+            shadow_layer(8.0, 24.0, 0.0, a_high),
+        ],
+    ]
+}
+
 /// Shadcn-inspired semantic color and layout tokens
 #[derive(Clone, Debug)]
 pub struct ThemeTokens {
@@ -79,6 +106,10 @@ pub struct ThemeTokens {
     pub secondary_foreground: Hsla,
     pub destructive: Hsla,
     pub destructive_foreground: Hsla,
+    pub success: Hsla,
+    pub success_foreground: Hsla,
+    pub warning: Hsla,
+    pub warning_foreground: Hsla,
     pub border: Hsla,
     pub input: Hsla,
     pub ring: Hsla,
@@ -248,6 +279,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0x0a0a0a).into(),
             destructive: rgb(0xef4444).into(),
             destructive_foreground: rgb(0xffffff).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0xe5e5e5).into(),
             input: rgb(0xe5e5e5).into(),
             ring: rgb(0xd4d4d8).into(),
@@ -316,6 +351,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xf5f5f5).into(),
             destructive: rgb(0xff4444).into(),
             destructive_foreground: rgb(0xffffff).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x333333).into(),
             input: rgb(0x333333).into(),
             ring: rgb(0xffffff).into(),
@@ -384,6 +423,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xe2e8f0).into(),
             destructive: rgb(0xef4444).into(),
             destructive_foreground: rgb(0xffffff).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x21262d).into(),
             input: rgb(0x21262d).into(),
             ring: rgb(0x60a5fa).into(),
@@ -452,6 +495,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xbbf7d0).into(),
             destructive: rgb(0xf87171).into(),
             destructive_foreground: rgb(0xffffff).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x1a2520).into(),
             input: rgb(0x1a2520).into(),
             ring: rgb(0x4ade80).into(),
@@ -520,6 +567,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xe9d5ff).into(),
             destructive: rgb(0xef4444).into(),
             destructive_foreground: rgb(0xffffff).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x3a2415).into(),
             input: rgb(0x3a2415).into(),
             ring: rgb(0xfbbf24).into(),
@@ -588,6 +639,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xe0f2fe).into(),
             destructive: rgb(0xf87171).into(),
             destructive_foreground: rgb(0xffffff).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x0f2638).into(),
             input: rgb(0x0f2638).into(),
             ring: rgb(0x22d3ee).into(),
@@ -656,6 +711,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xf8f8f2).into(),
             destructive: rgb(0xff6e6e).into(),
             destructive_foreground: rgb(0xf8f8f2).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x3a3c4e).into(),
             input: rgb(0x3a3c4e).into(),
             ring: rgb(0xc9a9ff).into(),
@@ -724,6 +783,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xeceff4).into(),
             destructive: rgb(0xbf616a).into(),
             destructive_foreground: rgb(0xeceff4).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x3b4252).into(),
             input: rgb(0x3b4252).into(),
             ring: rgb(0x8fbcbb).into(),
@@ -792,6 +855,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xfcfcfa).into(),
             destructive: rgb(0xff6e97).into(),
             destructive_foreground: rgb(0xfcfcfa).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x403e41).into(),
             input: rgb(0x403e41).into(),
             ring: rgb(0xffe66d).into(),
@@ -860,6 +927,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xc0caf5).into(),
             destructive: rgb(0xf7768e).into(),
             destructive_foreground: rgb(0xc0caf5).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x292e42).into(),
             input: rgb(0x292e42).into(),
             ring: rgb(0x7dcfff).into(),
@@ -928,6 +999,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xcdd6f4).into(),
             destructive: rgb(0xf38ba8).into(),
             destructive_foreground: rgb(0xcdd6f4).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x313244).into(),
             input: rgb(0x313244).into(),
             ring: rgb(0x89b4fa).into(),
@@ -996,6 +1071,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xe0def4).into(),
             destructive: rgb(0xeb6f92).into(),
             destructive_foreground: rgb(0xe0def4).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x26233a).into(),
             input: rgb(0x26233a).into(),
             ring: rgb(0xc4a7e7).into(),
@@ -1064,6 +1143,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xFFFFFF).into(),
             destructive: rgb(0xF56565).into(), // Bright red
             destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0xFFD4C2).into(), // Soft coral border
             input: rgb(0xFFE4D6).into(),
             ring: rgb(0xFF6B6B).into(), // Coral ring
@@ -1132,6 +1215,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xFFFFFF).into(),
             destructive: rgb(0xE53E3E).into(), // Red
             destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0xD6CEFF).into(), // Lavender border
             input: rgb(0xE8E3FF).into(),
             ring: rgb(0x9F7AEA).into(), // Lavender ring
@@ -1200,6 +1287,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xFFFFFF).into(),
             destructive: rgb(0xF56565).into(), // Red
             destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0xB8EBD9).into(), // Mint border
             input: rgb(0xD4F4E8).into(),
             ring: rgb(0x38B2AC).into(), // Teal ring
@@ -1268,6 +1359,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xFFFFFF).into(),
             destructive: rgb(0xE53E3E).into(), // Red
             destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0xFFD9B3).into(), // Peach border
             input: rgb(0xFFE4CC).into(),
             ring: rgb(0xFF9966).into(), // Peach ring
@@ -1336,6 +1431,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xFFFFFF).into(),
             destructive: rgb(0xF44336).into(), // Red
             destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0x90CAF9).into(), // Sky blue border
             input: rgb(0xBBDEFB).into(),
             ring: rgb(0x2196F3).into(), // Blue ring
@@ -1404,6 +1503,10 @@ impl ThemeTokens {
             secondary_foreground: rgb(0xFFFFFF).into(),
             destructive: rgb(0xE53935).into(), // Red
             destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x22c55e).into(),
+            success_foreground: rgb(0xffffff).into(),
+            warning: rgb(0xf59e0b).into(),
+            warning_foreground: rgb(0x422006).into(),
             border: rgb(0xFFB3D9).into(), // Pink border
             input: rgb(0xFFD6ED).into(),
             ring: rgb(0xE91E63).into(), // Pink ring
@@ -1452,6 +1555,201 @@ impl ThemeTokens {
             z_tooltip: 0,
         }
         .apply_standard()
+    }
+
+    /// Astryx — Facebook's open design system look, light mode.
+    ///
+    /// Signature traits: a vivid blue accent (`#0064E0`) on a tinted body
+    /// canvas (`#F1F4F7`) with white floating surfaces, ultra-subtle borders
+    /// (~10% navy), the 4 / 8 / 12 / 16 radius ladder (element = 8px), soft
+    /// elevation shadows, and snappy motion.
+    pub fn astryx() -> Self {
+        let sh = astryx_shadows(0.10, 0.10);
+        Self {
+            background: rgb(0xF1F4F7).into(),
+            foreground: rgb(0x0A1317).into(),
+            card: rgb(0xFFFFFF).into(),
+            card_foreground: rgb(0x0A1317).into(),
+            popover: rgb(0xFFFFFF).into(),
+            popover_foreground: rgb(0x0A1317).into(),
+            muted: rgb(0xE9EDF1).into(),
+            muted_foreground: rgb(0x4E606F).into(),
+            accent: rgb(0xE8EDF2).into(),
+            accent_foreground: rgb(0x0A1317).into(),
+            primary: rgb(0x0064E0).into(),
+            primary_foreground: rgb(0xFFFFFF).into(),
+            secondary: rgb(0xE4E9EE).into(),
+            secondary_foreground: rgb(0x0A1317).into(),
+            destructive: rgb(0xE3193B).into(),
+            destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x0D8626).into(),
+            success_foreground: rgb(0xFFFFFF).into(),
+            warning: rgb(0xE9AF08).into(),
+            warning_foreground: rgb(0x0A1317).into(),
+            border: rgba(0x05365919).into(),
+            input: rgba(0x05365926).into(),
+            ring: rgb(0x0064E0).into(),
+
+            radius_sm: px(4.0),
+            radius_md: px(8.0),
+            radius_lg: px(12.0),
+            radius_xl: px(16.0),
+
+            shadow_xs: sh[0].clone(),
+            shadow_sm: sh[1].clone(),
+            shadow_md: sh[2].clone(),
+            shadow_lg: sh[3].clone(),
+            shadow_xl: sh[4].clone(),
+
+            transition_fast: Duration::from_millis(140),
+            transition_base: Duration::from_millis(220),
+            transition_slow: Duration::from_millis(320),
+
+            ..Self::light()
+        }
+    }
+
+    /// Astryx — dark mode (vivid `#2694FE` accent on near-black surfaces).
+    pub fn astryx_dark() -> Self {
+        let sh = astryx_shadows(0.22, 0.30);
+        Self {
+            background: rgb(0x111112).into(),
+            foreground: rgb(0xDFE2E5).into(),
+            card: rgb(0x1F1F22).into(),
+            card_foreground: rgb(0xDFE2E5).into(),
+            popover: rgb(0x28292C).into(),
+            popover_foreground: rgb(0xDFE2E5).into(),
+            muted: rgb(0x1C1C1F).into(),
+            muted_foreground: rgb(0xAAAFB5).into(),
+            accent: rgb(0x2A2B2E).into(),
+            accent_foreground: rgb(0xDFE2E5).into(),
+            primary: rgb(0x2694FE).into(),
+            primary_foreground: rgb(0xFFFFFF).into(),
+            secondary: rgb(0x2A2B2E).into(),
+            secondary_foreground: rgb(0xDFE2E5).into(),
+            destructive: rgb(0xF5394F).into(),
+            destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x0D8626).into(),
+            success_foreground: rgb(0xFFFFFF).into(),
+            warning: rgb(0xF2C00B).into(),
+            warning_foreground: rgb(0x0A1317).into(),
+            border: rgba(0xF2F4F619).into(),
+            input: rgba(0xF2F4F626).into(),
+            ring: rgb(0x2694FE).into(),
+
+            radius_sm: px(4.0),
+            radius_md: px(8.0),
+            radius_lg: px(12.0),
+            radius_xl: px(16.0),
+
+            shadow_xs: sh[0].clone(),
+            shadow_sm: sh[1].clone(),
+            shadow_md: sh[2].clone(),
+            shadow_lg: sh[3].clone(),
+            shadow_xl: sh[4].clone(),
+
+            transition_fast: Duration::from_millis(140),
+            transition_base: Duration::from_millis(220),
+            transition_slow: Duration::from_millis(320),
+
+            ..Self::dark()
+        }
+    }
+
+    /// Astryx Neutral — the canonical grayscale look used across the Astryx
+    /// component gallery: a near-black accent (`#262626`) on a pure neutral
+    /// ramp, deep muted status colors, hairline borders and soft elevation.
+    pub fn astryx_neutral() -> Self {
+        let sh = astryx_shadows(0.10, 0.10);
+        Self {
+            background: rgb(0xF1F1F1).into(),
+            foreground: rgb(0x171717).into(),
+            card: rgb(0xFFFFFF).into(),
+            card_foreground: rgb(0x171717).into(),
+            popover: rgb(0xFFFFFF).into(),
+            popover_foreground: rgb(0x171717).into(),
+            muted: rgb(0xF5F5F5).into(),
+            muted_foreground: rgb(0x737373).into(),
+            accent: rgb(0xF5F5F5).into(),
+            accent_foreground: rgb(0x171717).into(),
+            primary: rgb(0x262626).into(),
+            primary_foreground: rgb(0xFFFFFF).into(),
+            secondary: rgba(0x0000000F).into(),
+            secondary_foreground: rgb(0x171717).into(),
+            destructive: rgb(0xA50C25).into(),
+            destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x007004).into(),
+            success_foreground: rgb(0xFFFFFF).into(),
+            warning: rgb(0x745B00).into(),
+            warning_foreground: rgb(0xFFFFFF).into(),
+            border: rgb(0xEBEBEB).into(),
+            input: rgb(0xD4D4D4).into(),
+            ring: rgb(0x262626).into(),
+
+            radius_sm: px(4.0),
+            radius_md: px(10.0),
+            radius_lg: px(12.0),
+            radius_xl: px(16.0),
+
+            shadow_xs: sh[0].clone(),
+            shadow_sm: sh[1].clone(),
+            shadow_md: sh[2].clone(),
+            shadow_lg: sh[3].clone(),
+            shadow_xl: sh[4].clone(),
+
+            transition_fast: Duration::from_millis(125),
+            transition_base: Duration::from_millis(200),
+            transition_slow: Duration::from_millis(300),
+
+            ..Self::light()
+        }
+    }
+
+    /// Astryx Neutral — grayscale spine, dark mode.
+    pub fn astryx_neutral_dark() -> Self {
+        let sh = astryx_shadows(0.30, 0.40);
+        Self {
+            background: rgb(0x1B1B1B).into(),
+            foreground: rgb(0xFAFAFA).into(),
+            card: rgb(0x1F1F1F).into(),
+            card_foreground: rgb(0xFAFAFA).into(),
+            popover: rgb(0x232323).into(),
+            popover_foreground: rgb(0xFAFAFA).into(),
+            muted: rgb(0x262626).into(),
+            muted_foreground: rgb(0xA3A3A3).into(),
+            accent: rgb(0x262626).into(),
+            accent_foreground: rgb(0xFAFAFA).into(),
+            primary: rgb(0xEBEBEB).into(),
+            primary_foreground: rgb(0x171717).into(),
+            secondary: rgba(0xFFFFFF1A).into(),
+            secondary_foreground: rgb(0xFAFAFA).into(),
+            destructive: rgb(0xF5394F).into(),
+            destructive_foreground: rgb(0xFFFFFF).into(),
+            success: rgb(0x26A756).into(),
+            success_foreground: rgb(0x171717).into(),
+            warning: rgb(0xFDCF4F).into(),
+            warning_foreground: rgb(0x171717).into(),
+            border: rgba(0xFFFFFF1A).into(),
+            input: rgba(0xFFFFFF40).into(),
+            ring: rgb(0xEBEBEB).into(),
+
+            radius_sm: px(4.0),
+            radius_md: px(10.0),
+            radius_lg: px(12.0),
+            radius_xl: px(16.0),
+
+            shadow_xs: sh[0].clone(),
+            shadow_sm: sh[1].clone(),
+            shadow_md: sh[2].clone(),
+            shadow_lg: sh[3].clone(),
+            shadow_xl: sh[4].clone(),
+
+            transition_fast: Duration::from_millis(125),
+            transition_base: Duration::from_millis(200),
+            transition_slow: Duration::from_millis(300),
+
+            ..Self::dark()
+        }
     }
 }
 
@@ -1622,5 +1920,25 @@ impl ThemeTokens {
             ));
         }
         layers
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ThemeTokens;
+    use kael::black;
+
+    #[test]
+    fn themes_carry_overridable_semantic_tokens() {
+        let light = ThemeTokens::light();
+        assert_ne!(light.success, light.destructive);
+        assert_ne!(light.warning, light.success);
+
+        let custom = ThemeTokens {
+            success: black(),
+            ..ThemeTokens::light()
+        };
+        assert_eq!(custom.success, black());
+        assert_eq!(custom.warning, light.warning);
     }
 }

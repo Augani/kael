@@ -1,0 +1,5 @@
+error: #[app] must be placed on a named struct field
+ --> tests/compile_fail/app_context_tuple_attr.rs:5:21
+  |
+5 | struct TupleApp<'a>(#[app] &'a mut App);
+  |                     ^^^^^^^^^^^^^^^^^^

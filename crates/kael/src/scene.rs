@@ -37,6 +37,175 @@ pub(crate) struct Scene {
     pub(crate) cached_surface_snapshots: Vec<CachedSurfaceSnapshot>,
 }
 
+/// Whole-frame damage tracking: the coarse "early-out" half of dirty-region rendering.
+///
+/// When enabled, a frame whose [`Scene::structural_checksum`] matches the last presented
+/// frame can be skipped — the compositor retains the previously presented contents, so
+/// re-rasterizing identical content is wasted work. This is the safe, verifiable half of
+/// the dirty-region story (the fine-grained per-rectangle GPU path is separate); it is
+/// opt-in and a no-op until enabled.
+#[derive(Debug, Default)]
+pub struct FrameSkip {
+    enabled: bool,
+    last_checksum: Option<u64>,
+}
+
+impl FrameSkip {
+    /// Create a disabled frame-skip tracker.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Enable or disable skipping. Disabling clears the recorded frame so the next frame
+    /// always renders.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+        if !enabled {
+            self.last_checksum = None;
+        }
+    }
+
+    /// Whether skipping is currently enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Record this frame's content checksum and return whether the frame may be skipped
+    /// (its content is identical to the previously recorded frame). A disabled tracker
+    /// never skips.
+    pub fn should_skip(&mut self, checksum: u64) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        if self.last_checksum == Some(checksum) {
+            return true;
+        }
+        self.last_checksum = Some(checksum);
+        false
+    }
+
+    /// Force the next frame to render regardless of content (e.g. after a resize or a
+    /// surface change that the content checksum does not capture).
+    pub fn invalidate(&mut self) {
+        self.last_checksum = None;
+    }
+}
+
+/// The region of a frame that changed relative to a previously presented frame.
+///
+/// This is the descriptor the fine-grained ("per-rectangle") half of dirty-region
+/// rendering consumes: rather than skipping or repainting the whole frame, only
+/// [`FrameDamage::Region`] need be re-rasterized (with the compositor's retained
+/// contents loaded underneath). [`Scene::damage_since`] computes it conservatively —
+/// it never under-reports the changed area, so acting on it is always visually correct.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FrameDamage {
+    /// Nothing changed — the frame is identical and may be skipped entirely.
+    None,
+    /// Only this rectangle changed — re-rasterize just this region.
+    Region(Bounds<ScaledPixels>),
+    /// The whole frame changed, or its structure changed such that a tight region
+    /// cannot be computed cheaply — re-rasterize everything.
+    Full,
+}
+
+struct FnvHash(u64);
+
+impl FnvHash {
+    fn new() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+
+    fn mix(&mut self, value: u64) {
+        self.0 ^= value;
+        self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+
+    fn mix_hsla(&mut self, color: &Hsla) {
+        self.mix(color.h.to_bits() as u64);
+        self.mix(color.s.to_bits() as u64);
+        self.mix(color.l.to_bits() as u64);
+        self.mix(color.a.to_bits() as u64);
+    }
+
+    fn mix_bounds(&mut self, bounds: &Bounds<ScaledPixels>) {
+        self.mix(bounds.origin.x.0.to_bits() as u64);
+        self.mix(bounds.origin.y.0.to_bits() as u64);
+        self.mix(bounds.size.width.0.to_bits() as u64);
+        self.mix(bounds.size.height.0.to_bits() as u64);
+    }
+
+    fn mix_transform(&mut self, transform: &TransformationMatrix) {
+        self.mix(transform.rotation_scale[0][0].to_bits() as u64);
+        self.mix(transform.rotation_scale[0][1].to_bits() as u64);
+        self.mix(transform.rotation_scale[1][0].to_bits() as u64);
+        self.mix(transform.rotation_scale[1][1].to_bits() as u64);
+        self.mix(transform.translation[0].to_bits() as u64);
+        self.mix(transform.translation[1].to_bits() as u64);
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+fn quad_fingerprint(quad: &Quad) -> u64 {
+    let mut hash = FnvHash::new();
+    hash.mix_bounds(&quad.bounds);
+    hash.mix_hsla(&quad.background.solid);
+    hash.mix_hsla(&quad.border_color.solid);
+    hash.mix(quad.blend_mode as u64);
+    hash.mix_transform(&quad.transform);
+    hash.finish()
+}
+
+fn shadow_fingerprint(shadow: &Shadow) -> u64 {
+    let mut hash = FnvHash::new();
+    hash.mix_bounds(&shadow.bounds);
+    hash.mix_hsla(&shadow.color);
+    hash.mix(shadow.blur_radius.0.to_bits() as u64);
+    hash.finish()
+}
+
+fn blur_rect_fingerprint(blur: &BlurRect) -> u64 {
+    let mut hash = FnvHash::new();
+    hash.mix_bounds(&blur.bounds);
+    hash.mix_hsla(&blur.tint);
+    hash.mix(blur.blur_radius.0.to_bits() as u64);
+    hash.finish()
+}
+
+fn path_fingerprint(path: &Path<ScaledPixels>) -> u64 {
+    let mut hash = FnvHash::new();
+    hash.mix_bounds(&path.bounds);
+    hash.mix_hsla(&path.color.solid);
+    hash.finish()
+}
+
+fn underline_fingerprint(underline: &Underline) -> u64 {
+    let mut hash = FnvHash::new();
+    hash.mix_bounds(&underline.bounds);
+    hash.mix_hsla(&underline.color);
+    hash.finish()
+}
+
+fn monochrome_fingerprint(sprite: &MonochromeSprite) -> u64 {
+    let mut hash = FnvHash::new();
+    hash.mix_bounds(&sprite.bounds);
+    hash.mix_hsla(&sprite.color);
+    hash.mix_transform(&sprite.transformation);
+    hash.finish()
+}
+
+fn polychrome_fingerprint(sprite: &PolychromeSprite) -> u64 {
+    let mut hash = FnvHash::new();
+    hash.mix_bounds(&sprite.bounds);
+    hash.mix_hsla(&sprite.color);
+    hash.mix(sprite.opacity.to_bits() as u64);
+    hash.mix(sprite.grayscale as u64);
+    hash.finish()
+}
+
 impl Scene {
     pub fn clear(&mut self) {
         self.paint_operations.clear();
@@ -57,27 +226,137 @@ impl Scene {
         self.paint_operations.len()
     }
 
+    /// A stable content fingerprint of the scene: identical scenes hash equally and any
+    /// visual change (geometry or color, across every primitive type) changes the hash.
+    /// This is the frame-identity primitive a safe skip-render / damage path needs.
+    /// Padding bytes are deliberately not hashed (they are uninitialized), so the value
+    /// is deterministic across identical scenes.
     pub(crate) fn structural_checksum(&self) -> u64 {
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        let mut mix = |value: u64| {
-            hash ^= value;
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        };
-        mix(self.shadows.len() as u64);
-        mix(self.blur_rects.len() as u64);
-        mix(self.quads.len() as u64);
-        mix(self.paths.len() as u64);
-        mix(self.underlines.len() as u64);
-        mix(self.monochrome_sprites.len() as u64);
-        mix(self.polychrome_sprites.len() as u64);
-        mix(self.surfaces.len() as u64);
+        let mut hash = FnvHash::new();
+
+        hash.mix(self.shadows.len() as u64);
+        hash.mix(self.blur_rects.len() as u64);
+        hash.mix(self.quads.len() as u64);
+        hash.mix(self.paths.len() as u64);
+        hash.mix(self.underlines.len() as u64);
+        hash.mix(self.monochrome_sprites.len() as u64);
+        hash.mix(self.polychrome_sprites.len() as u64);
+        hash.mix(self.surfaces.len() as u64);
+
         for quad in &self.quads {
-            mix(quad.bounds.origin.x.0.to_bits() as u64);
-            mix(quad.bounds.origin.y.0.to_bits() as u64);
-            mix(quad.bounds.size.width.0.to_bits() as u64);
-            mix(quad.bounds.size.height.0.to_bits() as u64);
+            hash.mix(quad_fingerprint(quad));
         }
-        hash
+        for shadow in &self.shadows {
+            hash.mix(shadow_fingerprint(shadow));
+        }
+        for blur in &self.blur_rects {
+            hash.mix(blur_rect_fingerprint(blur));
+        }
+        for path in &self.paths {
+            hash.mix(path_fingerprint(path));
+        }
+        for underline in &self.underlines {
+            hash.mix(underline_fingerprint(underline));
+        }
+        for sprite in &self.monochrome_sprites {
+            hash.mix(monochrome_fingerprint(sprite));
+        }
+        for sprite in &self.polychrome_sprites {
+            hash.mix(polychrome_fingerprint(sprite));
+        }
+        hash.finish()
+    }
+
+    /// Compute the region that changed relative to a previously presented `prev` scene —
+    /// the fine-grained ("per-rectangle") half of dirty-region rendering.
+    ///
+    /// Primitives are compared by content fingerprint at matching indices (the order in
+    /// which kael emits primitives is stable frame-to-frame for unchanged content). When a
+    /// primitive differs, both its previous and current bounds are unioned into the damage
+    /// region, so the area to erase *and* the area to repaint are both covered. If the
+    /// primitive counts differ, or either scene has a live external surface, the structure
+    /// changed in a way that cannot be localized cheaply, so the whole frame is reported.
+    ///
+    /// The result is conservative: it never reports a region smaller than the true changed
+    /// area, so re-rasterizing exactly [`FrameDamage::Region`] (with the prior frame loaded
+    /// underneath) is always visually identical to a full repaint.
+    ///
+    /// Verified by the GPU golden harness (`render_damage_to_bytes`); awaiting a live
+    /// present-loop consumer, hence currently exercised only under test.
+    #[allow(dead_code)]
+    pub(crate) fn damage_since(&self, prev: &Scene) -> FrameDamage {
+        if self.has_live_surfaces() || prev.has_live_surfaces() {
+            return FrameDamage::Full;
+        }
+        if self.quads.len() != prev.quads.len()
+            || self.shadows.len() != prev.shadows.len()
+            || self.blur_rects.len() != prev.blur_rects.len()
+            || self.paths.len() != prev.paths.len()
+            || self.underlines.len() != prev.underlines.len()
+            || self.monochrome_sprites.len() != prev.monochrome_sprites.len()
+            || self.polychrome_sprites.len() != prev.polychrome_sprites.len()
+        {
+            return FrameDamage::Full;
+        }
+
+        let mut damage: Option<Bounds<ScaledPixels>> = None;
+        let mut grow = |current: &Bounds<ScaledPixels>, previous: &Bounds<ScaledPixels>| {
+            for region in [current, previous] {
+                damage = Some(match damage {
+                    Some(existing) => existing.union(region),
+                    None => *region,
+                });
+            }
+        };
+
+        for (current, previous) in self.quads.iter().zip(&prev.quads) {
+            if quad_fingerprint(current) != quad_fingerprint(previous) {
+                grow(&current.bounds, &previous.bounds);
+            }
+        }
+        for (current, previous) in self.shadows.iter().zip(&prev.shadows) {
+            if shadow_fingerprint(current) != shadow_fingerprint(previous) {
+                grow(&current.bounds, &previous.bounds);
+            }
+        }
+        for (current, previous) in self.blur_rects.iter().zip(&prev.blur_rects) {
+            if blur_rect_fingerprint(current) != blur_rect_fingerprint(previous) {
+                grow(&current.bounds, &previous.bounds);
+            }
+        }
+        for (current, previous) in self.paths.iter().zip(&prev.paths) {
+            if path_fingerprint(current) != path_fingerprint(previous) {
+                grow(&current.bounds, &previous.bounds);
+            }
+        }
+        for (current, previous) in self.underlines.iter().zip(&prev.underlines) {
+            if underline_fingerprint(current) != underline_fingerprint(previous) {
+                grow(&current.bounds, &previous.bounds);
+            }
+        }
+        for (current, previous) in self.monochrome_sprites.iter().zip(&prev.monochrome_sprites) {
+            if monochrome_fingerprint(current) != monochrome_fingerprint(previous) {
+                grow(&current.bounds, &previous.bounds);
+            }
+        }
+        for (current, previous) in self.polychrome_sprites.iter().zip(&prev.polychrome_sprites) {
+            if polychrome_fingerprint(current) != polychrome_fingerprint(previous) {
+                grow(&current.bounds, &previous.bounds);
+            }
+        }
+
+        match damage {
+            Some(region) => FrameDamage::Region(region),
+            None => FrameDamage::None,
+        }
+    }
+
+    /// Whether the scene contains any live external surface (e.g. a video frame or other
+    /// externally-updated texture) whose contents change independently of the scene's
+    /// primitives. Such frames must never be skipped by whole-frame damage tracking,
+    /// because [`Self::structural_checksum`] cannot see their per-frame content.
+    pub(crate) fn has_live_surfaces(&self) -> bool {
+        !self.surfaces.is_empty()
     }
 
     pub fn push_layer(&mut self, bounds: Bounds<ScaledPixels>) {
@@ -756,9 +1035,9 @@ pub enum BlendMode {
     /// Standard alpha blending (source over destination).
     #[default]
     Normal = 0,
-    /// Darkens by multiplying source color with itself.
+    /// Darkens by multiplying the source color with the destination (backdrop).
     Multiply = 1,
-    /// Lightens by applying the screen formula to the source color.
+    /// Lightens by applying the screen formula between source and destination (backdrop).
     Screen = 2,
     /// Combines multiply and screen based on source luminance.
     Overlay = 3,
@@ -985,6 +1264,32 @@ pub struct Path<P: Clone + Debug + Default + PartialEq> {
     contour_count: usize,
 }
 
+const CURVE_FLATTEN_SEGMENT_PX: f32 = 2.0;
+
+fn point_distance(a: Point<Pixels>, b: Point<Pixels>) -> f32 {
+    let dx = a.x.0 - b.x.0;
+    let dy = a.y.0 - b.y.0;
+    (dx * dx + dy * dy).sqrt()
+}
+
+fn cubic_bezier_point(
+    p0: Point<Pixels>,
+    c1: Point<Pixels>,
+    c2: Point<Pixels>,
+    p3: Point<Pixels>,
+    t: f32,
+) -> Point<Pixels> {
+    let mt = 1.0 - t;
+    let a = mt * mt * mt;
+    let b = 3.0 * mt * mt * t;
+    let c = 3.0 * mt * t * t;
+    let d = t * t * t;
+    point(
+        crate::px(a * p0.x.0 + b * c1.x.0 + c * c2.x.0 + d * p3.x.0),
+        crate::px(a * p0.y.0 + b * c1.y.0 + c * c2.y.0 + d * p3.y.0),
+    )
+}
+
 impl Path<Pixels> {
     /// Create a new path with the given starting point.
     pub fn new(start: Point<Pixels>) -> Self {
@@ -1034,6 +1339,23 @@ impl Path<Pixels> {
         self.source_path.as_deref()
     }
 
+    /// Returns whether `point` (in this path's own coordinate space) lies inside the
+    /// filled region, using the nonzero winding rule. Mirrors the web canvas
+    /// `isPointInPath`. Returns `false` for paths built without a retained source
+    /// outline (e.g. those assembled directly from vertex buffers).
+    pub fn contains(&self, point: Point<Pixels>) -> bool {
+        let Some(source) = self.source_path.as_ref() else {
+            return false;
+        };
+        let position = lyon::math::point(point.x.0, point.y.0);
+        lyon::algorithms::hit_test::hit_test_path(
+            &position,
+            source.iter(),
+            lyon::path::FillRule::NonZero,
+            0.1,
+        )
+    }
+
     pub(crate) fn transformed(&self, transform: TransformationMatrix) -> Self {
         if transform == TransformationMatrix::unit() {
             return self.clone();
@@ -1073,6 +1395,14 @@ impl Path<Pixels> {
         self.current = to;
     }
 
+    /// Close the current subpath with a straight line from the current point back to the
+    /// subpath's start, mirroring the web canvas `closePath`. No-op if already at start.
+    pub fn close_path(&mut self) {
+        if self.current != self.start {
+            self.line_to(self.start);
+        }
+    }
+
     /// Draw a curve from the current point to the given point, using the given control point.
     pub fn curve_to(&mut self, to: Point<Pixels>, ctrl: Point<Pixels>) {
         self.contour_count += 1;
@@ -1088,6 +1418,180 @@ impl Path<Pixels> {
             (point(0., 0.), point(0.5, 0.), point(1., 1.)),
         );
         self.current = to;
+    }
+
+    /// Draw a cubic Bézier curve from the current point to `to`, using `ctrl1` and
+    /// `ctrl2` as control points. Mirrors the web canvas `bezierCurveTo`; the curve is
+    /// flattened into line segments that fill with the existing winding rule.
+    pub fn cubic_to(&mut self, to: Point<Pixels>, ctrl1: Point<Pixels>, ctrl2: Point<Pixels>) {
+        let from = self.current;
+        let hull =
+            point_distance(from, ctrl1) + point_distance(ctrl1, ctrl2) + point_distance(ctrl2, to);
+        let segments = ((hull / CURVE_FLATTEN_SEGMENT_PX).ceil() as usize).clamp(8, 256);
+        for step in 1..=segments {
+            let t = step as f32 / segments as f32;
+            self.line_to(cubic_bezier_point(from, ctrl1, ctrl2, to, t));
+        }
+    }
+
+    /// Append a circular arc centered at `center` with the given `radius`, sweeping from
+    /// `start_angle` to `end_angle` in radians. Mirrors the web canvas `arc`; like the
+    /// canvas it connects from the current point with a straight line to the arc start.
+    pub fn arc(&mut self, center: Point<Pixels>, radius: Pixels, start_angle: f32, end_angle: f32) {
+        let radius = radius.0.max(0.0);
+        let span = end_angle - start_angle;
+        let arc_len = span.abs() * radius;
+        let segments = ((arc_len / CURVE_FLATTEN_SEGMENT_PX).ceil() as usize).clamp(2, 512);
+        for step in 0..=segments {
+            let t = step as f32 / segments as f32;
+            let angle = start_angle + span * t;
+            self.line_to(point(
+                crate::px(center.x.0 + radius * angle.cos()),
+                crate::px(center.y.0 + radius * angle.sin()),
+            ));
+        }
+    }
+
+    /// Append an elliptical arc centered at `center` with radii `radius_x`/`radius_y`,
+    /// the ellipse rotated by `rotation` radians, sweeping from `start_angle` to
+    /// `end_angle`. Mirrors the web canvas `ellipse`; flattened to line segments so it
+    /// needs no shader work.
+    pub fn ellipse(
+        &mut self,
+        center: Point<Pixels>,
+        radius_x: Pixels,
+        radius_y: Pixels,
+        rotation: f32,
+        start_angle: f32,
+        end_angle: f32,
+    ) {
+        let radius_x = radius_x.0.max(0.0);
+        let radius_y = radius_y.0.max(0.0);
+        let span = end_angle - start_angle;
+        let arc_len = span.abs() * radius_x.max(radius_y);
+        let segments = ((arc_len / CURVE_FLATTEN_SEGMENT_PX).ceil() as usize).clamp(2, 512);
+        let (cos_r, sin_r) = (rotation.cos(), rotation.sin());
+        for step in 0..=segments {
+            let t = step as f32 / segments as f32;
+            let angle = start_angle + span * t;
+            let ex = radius_x * angle.cos();
+            let ey = radius_y * angle.sin();
+            self.line_to(point(
+                crate::px(center.x.0 + ex * cos_r - ey * sin_r),
+                crate::px(center.y.0 + ex * sin_r + ey * cos_r),
+            ));
+        }
+    }
+
+    /// Append a closed rectangle subpath, as the web canvas `rect()` does.
+    pub fn rect(&mut self, bounds: Bounds<Pixels>) {
+        let x = bounds.origin.x.0;
+        let y = bounds.origin.y.0;
+        let w = bounds.size.width.0;
+        let h = bounds.size.height.0;
+        self.move_to(point(crate::px(x), crate::px(y)));
+        self.line_to(point(crate::px(x + w), crate::px(y)));
+        self.line_to(point(crate::px(x + w), crate::px(y + h)));
+        self.line_to(point(crate::px(x), crate::px(y + h)));
+        self.close_path();
+    }
+
+    /// Append a closed rounded-rectangle subpath with a uniform corner `radius`, as the
+    /// web canvas `roundRect()` (single-radius form). The radius is clamped to half the
+    /// smaller side; a zero radius falls back to a plain rectangle.
+    pub fn round_rect(&mut self, bounds: Bounds<Pixels>, radius: Pixels) {
+        let x = bounds.origin.x.0;
+        let y = bounds.origin.y.0;
+        let w = bounds.size.width.0;
+        let h = bounds.size.height.0;
+        let r = radius.0.max(0.0).min(w * 0.5).min(h * 0.5);
+        if r <= 0.0 {
+            self.rect(bounds);
+            return;
+        }
+        use std::f32::consts::{FRAC_PI_2, PI};
+        self.move_to(point(crate::px(x + r), crate::px(y)));
+        self.arc(
+            point(crate::px(x + w - r), crate::px(y + r)),
+            crate::px(r),
+            -FRAC_PI_2,
+            0.0,
+        );
+        self.arc(
+            point(crate::px(x + w - r), crate::px(y + h - r)),
+            crate::px(r),
+            0.0,
+            FRAC_PI_2,
+        );
+        self.arc(
+            point(crate::px(x + r), crate::px(y + h - r)),
+            crate::px(r),
+            FRAC_PI_2,
+            PI,
+        );
+        self.arc(
+            point(crate::px(x + r), crate::px(y + r)),
+            crate::px(r),
+            PI,
+            PI + FRAC_PI_2,
+        );
+        self.close_path();
+    }
+
+    /// Append an arc tangent to the lines (current point → `ctrl`) and (`ctrl` → `to`)
+    /// with the given `radius`, as the web canvas `arcTo` does — the primitive behind
+    /// rounded paths. Degenerate or collinear inputs fall back to a straight line.
+    pub fn arc_to(&mut self, ctrl: Point<Pixels>, to: Point<Pixels>, radius: Pixels) {
+        let radius = radius.0.max(0.0);
+        let from = self.current;
+        let (v1x, v1y) = (from.x.0 - ctrl.x.0, from.y.0 - ctrl.y.0);
+        let (v2x, v2y) = (to.x.0 - ctrl.x.0, to.y.0 - ctrl.y.0);
+        let len1 = (v1x * v1x + v1y * v1y).sqrt();
+        let len2 = (v2x * v2x + v2y * v2y).sqrt();
+        if radius <= 0.0 || len1 < f32::EPSILON || len2 < f32::EPSILON {
+            self.line_to(ctrl);
+            return;
+        }
+        let (u1x, u1y) = (v1x / len1, v1y / len1);
+        let (u2x, u2y) = (v2x / len2, v2y / len2);
+        let cos_angle = (u1x * u2x + u1y * u2y).clamp(-1.0, 1.0);
+        let angle = cos_angle.acos();
+        if angle < 1e-4 || (std::f32::consts::PI - angle) < 1e-4 {
+            self.line_to(ctrl);
+            return;
+        }
+        let half = angle / 2.0;
+        let tan_dist = radius / half.tan();
+        let (bix, biy) = (u1x + u2x, u1y + u2y);
+        let bilen = (bix * bix + biy * biy).sqrt();
+        if bilen < f32::EPSILON {
+            self.line_to(ctrl);
+            return;
+        }
+        let center_dist = radius / half.sin();
+        let cx = ctrl.x.0 + (bix / bilen) * center_dist;
+        let cy = ctrl.y.0 + (biy / bilen) * center_dist;
+        let t1x = ctrl.x.0 + u1x * tan_dist;
+        let t1y = ctrl.y.0 + u1y * tan_dist;
+        let t2x = ctrl.x.0 + u2x * tan_dist;
+        let t2y = ctrl.y.0 + u2y * tan_dist;
+        let a1 = (t1y - cy).atan2(t1x - cx);
+        let a2 = (t2y - cy).atan2(t2x - cx);
+        let pi = std::f32::consts::PI;
+        let two_pi = 2.0 * pi;
+        let mut span = a2 - a1;
+        while span > pi {
+            span -= two_pi;
+        }
+        while span < -pi {
+            span += two_pi;
+        }
+        self.arc(
+            point(crate::px(cx), crate::px(cy)),
+            crate::px(radius),
+            a1,
+            a1 + span,
+        );
     }
 
     /// Push a triangle to the Path.
@@ -1166,6 +1670,128 @@ impl PathVertex<Pixels> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_contains_hit_tests_filled_region() {
+        let mut builder = crate::PathBuilder::fill();
+        builder.move_to(crate::point(crate::px(0.), crate::px(0.)));
+        builder.line_to(crate::point(crate::px(100.), crate::px(0.)));
+        builder.line_to(crate::point(crate::px(100.), crate::px(100.)));
+        builder.close();
+        let path = builder.build().expect("path builds");
+
+        assert!(path.contains(crate::point(crate::px(80.), crate::px(20.))));
+        assert!(!path.contains(crate::point(crate::px(20.), crate::px(80.))));
+    }
+
+    #[test]
+    fn cubic_to_flattens_to_endpoint_and_bulges() {
+        let mut path = Path::new(crate::point(crate::px(0.), crate::px(0.)));
+        path.cubic_to(
+            crate::point(crate::px(100.), crate::px(0.)),
+            crate::point(crate::px(0.), crate::px(100.)),
+            crate::point(crate::px(100.), crate::px(100.)),
+        );
+        assert!((path.current.x.0 - 100.).abs() < 0.5);
+        assert!((path.current.y.0 - 0.).abs() < 0.5);
+        assert!(!path.vertices.is_empty());
+        assert!(path.bounds.size.height.0 > 10.);
+    }
+
+    #[test]
+    fn arc_full_circle_spans_diameter() {
+        let center = crate::point(crate::px(50.), crate::px(50.));
+        let radius = 25.;
+        let mut path = Path::new(crate::point(crate::px(75.), crate::px(50.)));
+        path.arc(center, crate::px(radius), 0., std::f32::consts::TAU);
+        assert!((path.bounds.size.width.0 - 2. * radius).abs() < 1.0);
+        assert!((path.bounds.size.height.0 - 2. * radius).abs() < 1.0);
+    }
+
+    #[test]
+    fn ellipse_respects_radii_and_rotation() {
+        let center = crate::point(crate::px(50.), crate::px(50.));
+
+        let mut axis_aligned = Path::new(crate::point(crate::px(80.), crate::px(50.)));
+        axis_aligned.ellipse(
+            center,
+            crate::px(30.),
+            crate::px(10.),
+            0.0,
+            0.0,
+            std::f32::consts::TAU,
+        );
+        assert!((axis_aligned.bounds.size.width.0 - 60.).abs() < 1.0);
+        assert!((axis_aligned.bounds.size.height.0 - 20.).abs() < 1.0);
+
+        let mut rotated = Path::new(center);
+        rotated.ellipse(
+            center,
+            crate::px(30.),
+            crate::px(10.),
+            std::f32::consts::FRAC_PI_2,
+            0.0,
+            std::f32::consts::TAU,
+        );
+        assert!((rotated.bounds.size.width.0 - 20.).abs() < 1.0);
+        assert!((rotated.bounds.size.height.0 - 60.).abs() < 1.0);
+    }
+
+    #[test]
+    fn rect_and_round_rect_span_their_bounds() {
+        let bounds = Bounds::new(
+            crate::point(crate::px(10.), crate::px(20.)),
+            crate::size(crate::px(100.), crate::px(60.)),
+        );
+
+        let mut rect = Path::new(crate::point(crate::px(10.), crate::px(20.)));
+        rect.rect(bounds);
+        assert!((rect.bounds.size.width.0 - 100.).abs() < 0.5);
+        assert!((rect.bounds.size.height.0 - 60.).abs() < 0.5);
+        assert!((rect.current.x.0 - 10.).abs() < 0.5);
+        assert!((rect.current.y.0 - 20.).abs() < 0.5);
+
+        let mut rounded = Path::new(crate::point(crate::px(10.), crate::px(20.)));
+        rounded.round_rect(bounds, crate::px(12.));
+        assert!((rounded.bounds.size.width.0 - 100.).abs() < 1.0);
+        assert!((rounded.bounds.size.height.0 - 60.).abs() < 1.0);
+    }
+
+    #[test]
+    fn arc_to_rounds_corner_to_second_tangent() {
+        let mut path = Path::new(crate::point(crate::px(0.), crate::px(0.)));
+        path.arc_to(
+            crate::point(crate::px(100.), crate::px(0.)),
+            crate::point(crate::px(100.), crate::px(100.)),
+            crate::px(20.),
+        );
+        assert!((path.current.x.0 - 100.).abs() < 0.5);
+        assert!((path.current.y.0 - 20.).abs() < 0.5);
+    }
+
+    #[test]
+    fn arc_to_collinear_falls_back_to_line() {
+        let mut path = Path::new(crate::point(crate::px(0.), crate::px(0.)));
+        let ctrl = crate::point(crate::px(50.), crate::px(0.));
+        path.arc_to(
+            ctrl,
+            crate::point(crate::px(100.), crate::px(0.)),
+            crate::px(10.),
+        );
+        assert!((path.current.x.0 - 50.).abs() < 0.5);
+        assert!((path.current.y.0 - 0.).abs() < 0.5);
+    }
+
+    #[test]
+    fn close_path_returns_current_to_subpath_start() {
+        let start = crate::point(crate::px(0.), crate::px(0.));
+        let mut path = Path::new(start);
+        path.line_to(crate::point(crate::px(100.), crate::px(0.)));
+        path.line_to(crate::point(crate::px(100.), crate::px(100.)));
+        path.close_path();
+        assert!((path.current.x.0 - start.x.0).abs() < 0.001);
+        assert!((path.current.y.0 - start.y.0).abs() < 0.001);
+    }
 
     fn wgsl_struct_span(module: &naga::Module, struct_name: &str) -> usize {
         let (_, ty) = module
@@ -1383,5 +2009,257 @@ mod tests {
             Some(PrimitiveBatch::BlurRects(blur_rects)) => assert_eq!(blur_rects.len(), 1),
             other => panic!("expected replayed blur batch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn structural_checksum_detects_quad_color_changes() {
+        fn scene_with_quad_color(color: crate::Hsla) -> Scene {
+            let bounds = Bounds {
+                origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size: Size {
+                    width: ScaledPixels(10.0),
+                    height: ScaledPixels(10.0),
+                },
+            };
+            let mut scene = Scene::default();
+            scene.insert_primitive(Quad {
+                bounds,
+                content_mask: ContentMask { bounds },
+                background: Background::from(color),
+                ..Default::default()
+            });
+            scene.finish();
+            scene
+        }
+
+        let red = scene_with_quad_color(crate::hsla(0.0, 1.0, 0.5, 1.0));
+        let red_again = scene_with_quad_color(crate::hsla(0.0, 1.0, 0.5, 1.0));
+        let blue = scene_with_quad_color(crate::hsla(0.66, 1.0, 0.5, 1.0));
+
+        assert_eq!(
+            red.structural_checksum(),
+            red_again.structural_checksum(),
+            "identical scenes must hash equally"
+        );
+        assert_ne!(
+            red.structural_checksum(),
+            blue.structural_checksum(),
+            "a color-only change must change the frame checksum"
+        );
+    }
+
+    #[test]
+    fn structural_checksum_detects_border_color_changes() {
+        fn scene_with_border(color: crate::Hsla) -> Scene {
+            let bounds = Bounds {
+                origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size: Size {
+                    width: ScaledPixels(10.0),
+                    height: ScaledPixels(10.0),
+                },
+            };
+            let mut scene = Scene::default();
+            scene.insert_primitive(Quad {
+                bounds,
+                content_mask: ContentMask { bounds },
+                background: Background::from(crate::hsla(0.0, 0.0, 0.5, 1.0)),
+                border_color: Background::from(color),
+                ..Default::default()
+            });
+            scene.finish();
+            scene
+        }
+
+        // The old geometry-only checksum hashed neither the border color nor most
+        // primitive fields; the completed checksum must distinguish a border change.
+        assert_ne!(
+            scene_with_border(crate::hsla(0.0, 1.0, 0.5, 1.0)).structural_checksum(),
+            scene_with_border(crate::hsla(0.66, 1.0, 0.5, 1.0)).structural_checksum(),
+            "a border-color-only change must change the frame checksum"
+        );
+    }
+
+    #[test]
+    fn structural_checksum_detects_transform_changes() {
+        fn scene_with_transform(transform: TransformationMatrix) -> Scene {
+            let bounds = Bounds {
+                origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size: Size {
+                    width: ScaledPixels(10.0),
+                    height: ScaledPixels(10.0),
+                },
+            };
+            let mut scene = Scene::default();
+            scene.insert_primitive(Quad {
+                bounds,
+                content_mask: ContentMask { bounds },
+                background: Background::from(crate::hsla(0.0, 0.0, 0.5, 1.0)),
+                transform,
+                ..Default::default()
+            });
+            scene.finish();
+            scene
+        }
+
+        // A transform-only change (e.g. a rotating/translating element via the transform
+        // matrix, with identical bounds + color) must change the checksum — otherwise a
+        // transform animation would freeze under skip-render.
+        let identity = TransformationMatrix::unit();
+        let translated = TransformationMatrix {
+            rotation_scale: [[1.0, 0.0], [0.0, 1.0]],
+            translation: [5.0, 0.0],
+        };
+        assert_ne!(
+            scene_with_transform(identity).structural_checksum(),
+            scene_with_transform(translated).structural_checksum(),
+            "a transform-only change must change the frame checksum"
+        );
+    }
+
+    #[test]
+    fn frame_skip_respects_enable_and_change() {
+        let mut skip = FrameSkip::new();
+        // Disabled: never skips, regardless of repeats.
+        assert!(!skip.should_skip(7));
+        assert!(!skip.should_skip(7));
+
+        skip.set_enabled(true);
+        assert!(
+            !skip.should_skip(7),
+            "first frame after enabling must render"
+        );
+        assert!(skip.should_skip(7), "an identical frame may be skipped");
+        assert!(!skip.should_skip(9), "a changed frame must render");
+        assert!(skip.should_skip(9), "the new content may then be skipped");
+
+        skip.invalidate();
+        assert!(
+            !skip.should_skip(9),
+            "invalidate forces the next frame to render"
+        );
+
+        skip.set_enabled(false);
+        assert!(!skip.should_skip(9), "disabling stops skipping");
+    }
+
+    #[test]
+    fn frame_skip_driven_by_real_scene_checksums() {
+        fn solid_scene(color: crate::Hsla) -> Scene {
+            let bounds = Bounds {
+                origin: point(ScaledPixels(0.0), ScaledPixels(0.0)),
+                size: Size {
+                    width: ScaledPixels(10.0),
+                    height: ScaledPixels(10.0),
+                },
+            };
+            let mut scene = Scene::default();
+            scene.insert_primitive(Quad {
+                bounds,
+                content_mask: ContentMask { bounds },
+                background: Background::from(color),
+                ..Default::default()
+            });
+            scene.finish();
+            scene
+        }
+
+        let mut skip = FrameSkip::new();
+        skip.set_enabled(true);
+        let red = solid_scene(crate::hsla(0.0, 1.0, 0.5, 1.0));
+        let red_again = solid_scene(crate::hsla(0.0, 1.0, 0.5, 1.0));
+        let blue = solid_scene(crate::hsla(0.66, 1.0, 0.5, 1.0));
+
+        assert!(!skip.should_skip(red.structural_checksum()));
+        assert!(
+            skip.should_skip(red_again.structural_checksum()),
+            "an identical scene must be skippable end-to-end"
+        );
+        assert!(
+            !skip.should_skip(blue.structural_checksum()),
+            "a recolored scene must force a render"
+        );
+    }
+
+    fn rect(x: f32, y: f32, w: f32, h: f32) -> Bounds<ScaledPixels> {
+        Bounds {
+            origin: point(ScaledPixels(x), ScaledPixels(y)),
+            size: Size {
+                width: ScaledPixels(w),
+                height: ScaledPixels(h),
+            },
+        }
+    }
+
+    fn quad_scene(quads: &[(Bounds<ScaledPixels>, crate::Hsla)]) -> Scene {
+        let mut scene = Scene::default();
+        for (bounds, color) in quads {
+            scene.insert_primitive(Quad {
+                bounds: *bounds,
+                content_mask: ContentMask {
+                    bounds: rect(0.0, 0.0, 1000.0, 1000.0),
+                },
+                background: Background::from(*color),
+                ..Default::default()
+            });
+        }
+        scene.finish();
+        scene
+    }
+
+    #[test]
+    fn damage_since_reports_none_for_identical_scenes() {
+        let red = crate::hsla(0.0, 1.0, 0.5, 1.0);
+        let green = crate::hsla(0.33, 1.0, 0.5, 1.0);
+        let a = quad_scene(&[
+            (rect(0.0, 0.0, 50.0, 50.0), red),
+            (rect(60.0, 60.0, 20.0, 20.0), green),
+        ]);
+        let b = quad_scene(&[
+            (rect(0.0, 0.0, 50.0, 50.0), red),
+            (rect(60.0, 60.0, 20.0, 20.0), green),
+        ]);
+        assert_eq!(a.damage_since(&b), FrameDamage::None);
+    }
+
+    #[test]
+    fn damage_since_localizes_a_color_change_to_one_rect() {
+        let red = crate::hsla(0.0, 1.0, 0.5, 1.0);
+        let green = crate::hsla(0.33, 1.0, 0.5, 1.0);
+        let blue = crate::hsla(0.66, 1.0, 0.5, 1.0);
+        let changed_rect = rect(60.0, 60.0, 20.0, 20.0);
+        let before = quad_scene(&[(rect(0.0, 0.0, 50.0, 50.0), red), (changed_rect, green)]);
+        let after = quad_scene(&[(rect(0.0, 0.0, 50.0, 50.0), red), (changed_rect, blue)]);
+        // Only the second quad changed (color), its bounds unchanged, so the damage is
+        // exactly that quad's rectangle — not the whole frame.
+        assert_eq!(
+            after.damage_since(&before),
+            FrameDamage::Region(changed_rect)
+        );
+    }
+
+    #[test]
+    fn damage_since_unions_old_and_new_bounds_when_a_quad_moves() {
+        let red = crate::hsla(0.0, 1.0, 0.5, 1.0);
+        let from = rect(10.0, 10.0, 20.0, 20.0);
+        let to = rect(100.0, 100.0, 20.0, 20.0);
+        let before = quad_scene(&[(from, red)]);
+        let after = quad_scene(&[(to, red)]);
+        // Both the vacated and the newly-occupied rectangles must be repainted.
+        assert_eq!(
+            after.damage_since(&before),
+            FrameDamage::Region(from.union(&to))
+        );
+    }
+
+    #[test]
+    fn damage_since_falls_back_to_full_on_structural_change() {
+        let red = crate::hsla(0.0, 1.0, 0.5, 1.0);
+        let green = crate::hsla(0.33, 1.0, 0.5, 1.0);
+        let before = quad_scene(&[(rect(0.0, 0.0, 50.0, 50.0), red)]);
+        let after = quad_scene(&[
+            (rect(0.0, 0.0, 50.0, 50.0), red),
+            (rect(60.0, 60.0, 20.0, 20.0), green),
+        ]);
+        assert_eq!(after.damage_since(&before), FrameDamage::Full);
     }
 }

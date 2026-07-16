@@ -39,6 +39,37 @@ impl Label {
         self.target_focus = Some(focus_handle);
         self
     }
+
+    /// Returns true when explicit label text is configured.
+    pub fn has_text(&self) -> bool {
+        self.text.is_some()
+    }
+
+    /// Length of the configured text in bytes, without exposing text.
+    pub fn text_len_bytes(&self) -> usize {
+        self.text.as_ref().map_or(0, |text| text.len())
+    }
+
+    /// Returns true when the label forwards focus to a control.
+    pub fn has_target_focus(&self) -> bool {
+        self.target_focus.is_some()
+    }
+
+    /// Number of custom child elements configured on the label.
+    pub fn child_count(&self) -> usize {
+        self.children.len()
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "label(has_text={}, text_len_bytes={}, has_target_focus={}, child_count={})",
+            self.has_text(),
+            self.text_len_bytes(),
+            self.has_target_focus(),
+            self.child_count()
+        )
+    }
 }
 
 impl ParentElement for Label {
@@ -101,7 +132,7 @@ impl IntoElement for Label {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Context, Modifiers, Render, Styled, TestAppContext};
+    use crate::{AppContext, Context, Modifiers, Render, Styled, TestAppContext};
 
     struct LabelView {
         focus_handle: FocusHandle,
@@ -172,5 +203,31 @@ mod tests {
         });
 
         assert!(window.debug_bounds("custom-label-body").is_some());
+    }
+
+    #[crate::test]
+    fn label_summary_is_content_safe(cx: &mut TestAppContext) {
+        let (view, _window) = cx.add_window_view(|_, cx| LabelView {
+            focus_handle: cx.focus_handle(),
+        });
+        let focus_handle = cx.read_entity(&view, |view, _| view.focus_handle.clone());
+        let label = label("secret_label")
+            .text("Secret project name")
+            .for_focus_handle(focus_handle)
+            .child(div().child("Visible child"));
+
+        assert!(label.has_text());
+        assert_eq!(label.text_len_bytes(), "Secret project name".len());
+        assert!(label.has_target_focus());
+        assert_eq!(label.child_count(), 1);
+
+        let summary = label.to_text();
+        assert!(summary.contains("has_text=true"));
+        assert!(summary.contains("text_len_bytes=19"));
+        assert!(summary.contains("has_target_focus=true"));
+        assert!(summary.contains("child_count=1"));
+        assert!(!summary.contains("Secret"));
+        assert!(!summary.contains("project"));
+        assert!(!summary.contains("Visible child"));
     }
 }

@@ -76,8 +76,8 @@ impl InfiniteScrollApp {
             "Brian Kernighan",
         ];
 
-        let roles = vec!["Engineer", "Senior Engineer", "Lead", "Manager", "Director"];
-        let statuses = vec!["Active", "Away", "Offline"];
+        let roles = ["Engineer", "Senior Engineer", "Lead", "Manager", "Director"];
+        let statuses = ["Active", "Away", "Offline"];
 
         (0..count)
             .map(|i| {

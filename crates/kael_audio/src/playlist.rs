@@ -39,8 +39,9 @@ impl Playlist {
 
     /// Adds a new source to the playlist.
     pub fn add(&mut self, source: AudioSource) {
+        let current = self.current_index();
         self.items.push(source);
-        self.rebuild_order();
+        self.rebuild_order(current);
     }
 
     /// Removes the source at `index` and returns it when present.
@@ -49,8 +50,20 @@ impl Playlist {
             return None;
         }
 
+        let current = self.current_index();
         let removed = self.items.remove(index);
-        self.rebuild_order();
+        let current = current.and_then(|current| {
+            if self.items.is_empty() {
+                None
+            } else if current > index {
+                Some(current - 1)
+            } else if current == index {
+                Some(index.min(self.items.len() - 1))
+            } else {
+                Some(current)
+            }
+        });
+        self.rebuild_order(current);
         Some(removed)
     }
 
@@ -99,7 +112,7 @@ impl Playlist {
         }
 
         self.shuffle_enabled = enabled;
-        self.rebuild_order();
+        self.rebuild_order(self.current_index());
     }
 
     /// Returns the currently selected source.
@@ -117,8 +130,13 @@ impl Default for Playlist {
 }
 
 impl Playlist {
-    fn rebuild_order(&mut self) {
-        let current = self.current().cloned();
+    fn current_index(&self) -> Option<usize> {
+        self.order_position
+            .and_then(|position| self.order.get(position).copied())
+            .filter(|index| *index < self.items.len())
+    }
+
+    fn rebuild_order(&mut self, current: Option<usize>) {
         self.order = (0..self.items.len()).collect();
 
         if self.shuffle_enabled {
@@ -127,11 +145,11 @@ impl Playlist {
 
         self.order_position = if self.order.is_empty() {
             None
-        } else if let Some(current) = current {
+        } else if let Some(current) = current.filter(|index| *index < self.items.len()) {
             let current_position = self
                 .order
                 .iter()
-                .position(|index| self.items.get(*index) == Some(&current))
+                .position(|index| *index == current)
                 .unwrap_or(0);
             self.order.rotate_left(current_position);
             Some(0)
@@ -150,7 +168,8 @@ fn deterministic_shuffle(order: &mut [usize], mut seed: u64) {
         seed ^= seed << 7;
         seed ^= seed >> 9;
         seed ^= seed << 8;
-        let swap_index = (seed as usize) % (index + 1);
+        let modulus = u64::try_from(index + 1).unwrap_or(u64::MAX);
+        let swap_index = usize::try_from(seed % modulus).unwrap_or(0);
         order.swap(index, swap_index);
     }
 }
@@ -200,5 +219,34 @@ mod tests {
         }
 
         assert_eq!(visited.len(), 3);
+    }
+
+    #[test]
+    fn removing_before_or_at_current_preserves_a_valid_selection() {
+        let mut playlist = Playlist::new();
+        for name in ["a.wav", "b.wav", "c.wav"] {
+            playlist.add(AudioSource::File(name.into()));
+        }
+        playlist.next();
+        assert_eq!(playlist.current(), Some(&AudioSource::File("b.wav".into())));
+
+        playlist.remove(0);
+        assert_eq!(playlist.current(), Some(&AudioSource::File("b.wav".into())));
+
+        playlist.remove(0);
+        assert_eq!(playlist.current(), Some(&AudioSource::File("c.wav".into())));
+    }
+
+    #[test]
+    fn duplicate_sources_keep_the_selected_occurrence() {
+        let duplicate = AudioSource::File("same.wav".into());
+        let mut playlist = Playlist::new();
+        playlist.add(duplicate.clone());
+        playlist.add(duplicate);
+        playlist.add(AudioSource::File("last.wav".into()));
+        playlist.next();
+        assert_eq!(playlist.current_index(), Some(1));
+        playlist.set_shuffle(true);
+        assert_eq!(playlist.current_index(), Some(1));
     }
 }

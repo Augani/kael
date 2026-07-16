@@ -777,11 +777,11 @@ impl ShowcaseApp {
                                     .right(px(16.0))
                                     .child(
                                         FloatingActionButton::new("fab-demo", fab_state)
-                                            .icon(SharedString::from("+"))
+                                            .icon("plus")
                                             .size(FABSize::Md)
-                                            .action("new-file", "F", |_, _| {})
-                                            .action("new-folder", "D", |_, _| {})
-                                            .action("upload", "U", |_, _| {}),
+                                            .action("new-file", "file-plus", |_, _| {})
+                                            .action("new-folder", "folder-plus", |_, _| {})
+                                            .action("upload", "upload", |_, _| {}),
                                     ),
                             ),
                     ),

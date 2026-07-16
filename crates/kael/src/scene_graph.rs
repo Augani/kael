@@ -6,8 +6,16 @@
 
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
+
+const MAX_FRAME_BUDGET_SAMPLES: usize = 100_000;
+const MIN_TARGET_FPS: f64 = 0.001;
+const MAX_TARGET_FPS: f64 = 1_000_000.0;
+const MAX_SPATIAL_ENTRIES: usize = 100_000;
+const MAX_SCENE_NODES: usize = 100_000;
+const MAX_SCENE_DEPTH: usize = 256;
+const MAX_SCENE_NAME_BYTES: usize = 1_024;
 
 /// An axis-aligned rectangle used throughout the scene graph.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -35,14 +43,33 @@ impl<T> SceneRect<T> {
 }
 
 impl SceneRect<f64> {
+    /// Return whether every coordinate is finite and dimensions are non-negative.
+    pub fn is_valid(&self) -> bool {
+        [self.x, self.y, self.width, self.height]
+            .into_iter()
+            .all(f64::is_finite)
+            && self.width >= 0.0
+            && self.height >= 0.0
+            && (self.x + self.width).is_finite()
+            && (self.y + self.height).is_finite()
+    }
+
     /// Returns `true` if the given point lies inside this rectangle.
     pub fn contains_point(&self, px: f64, py: f64) -> bool {
-        px >= self.x && px <= self.x + self.width && py >= self.y && py <= self.y + self.height
+        self.is_valid()
+            && px.is_finite()
+            && py.is_finite()
+            && px >= self.x
+            && px <= self.x + self.width
+            && py >= self.y
+            && py <= self.y + self.height
     }
 
     /// Returns `true` if this rectangle intersects another rectangle.
     pub fn intersects(&self, other: &Self) -> bool {
-        self.x < other.x + other.width
+        self.is_valid()
+            && other.is_valid()
+            && self.x < other.x + other.width
             && self.x + self.width > other.x
             && self.y < other.y + other.height
             && self.y + self.height > other.y
@@ -63,12 +90,30 @@ pub struct FrameBudget {
 impl FrameBudget {
     /// Create a new frame budget tracker.
     pub fn new(target_fps: f64, max_samples: usize) -> Self {
-        let max_samples = max_samples.max(1);
+        let target_fps = if target_fps.is_finite() && target_fps > 0.0 {
+            target_fps.clamp(MIN_TARGET_FPS, MAX_TARGET_FPS)
+        } else {
+            60.0
+        };
+        let max_samples = max_samples.clamp(1, MAX_FRAME_BUDGET_SAMPLES);
         Self {
-            target_fps: target_fps.max(1.0),
+            target_fps,
             frame_times: VecDeque::with_capacity(max_samples),
             max_samples,
         }
+    }
+
+    /// Create a tracker after validating its target and retention bound.
+    pub fn new_checked(target_fps: f64, max_samples: usize) -> Result<Self> {
+        anyhow::ensure!(
+            target_fps.is_finite() && (MIN_TARGET_FPS..=MAX_TARGET_FPS).contains(&target_fps),
+            "target FPS is out of range"
+        );
+        anyhow::ensure!(
+            max_samples > 0 && max_samples <= MAX_FRAME_BUDGET_SAMPLES,
+            "frame budget sample count is out of range"
+        );
+        Ok(Self::new(target_fps, max_samples))
     }
 
     /// Record a single frame's duration.
@@ -89,8 +134,12 @@ impl FrameBudget {
         if self.frame_times.is_empty() {
             return 0.0;
         }
-        let total: Duration = self.frame_times.iter().sum();
-        total.as_secs_f64() * 1000.0 / self.frame_times.len() as f64
+        let total_seconds = self
+            .frame_times
+            .iter()
+            .map(Duration::as_secs_f64)
+            .sum::<f64>();
+        total_seconds * 1000.0 / self.frame_times.len() as f64
     }
 
     /// Number of recorded frames that exceeded the budget.
@@ -154,12 +203,12 @@ impl RenderStats {
 
     /// Increment the layout counter.
     pub fn record_layout(&mut self) {
-        self.layout_count += 1;
+        self.layout_count = self.layout_count.saturating_add(1);
     }
 
     /// Increment the paint counter.
     pub fn record_paint(&mut self) {
-        self.paint_count += 1;
+        self.paint_count = self.paint_count.saturating_add(1);
     }
 
     /// Set the total scene node count.
@@ -169,7 +218,7 @@ impl RenderStats {
 
     /// Add bytes to the GPU upload counter.
     pub fn add_gpu_upload(&mut self, bytes: u64) {
-        self.gpu_upload_bytes += bytes;
+        self.gpu_upload_bytes = self.gpu_upload_bytes.saturating_add(bytes);
     }
 
     /// Set the texture atlas byte count.
@@ -179,7 +228,11 @@ impl RenderStats {
 
     /// Set the overdraw ratio.
     pub fn set_overdraw(&mut self, ratio: f64) {
-        self.overdraw_ratio = ratio;
+        self.overdraw_ratio = if ratio.is_finite() && ratio >= 0.0 {
+            ratio
+        } else {
+            0.0
+        };
     }
 }
 
@@ -216,7 +269,18 @@ impl<T> SpatialIndex<T> {
 
     /// Insert an entry with the given bounds and data.
     pub fn insert(&mut self, bounds: SceneRect<f64>, data: T) {
+        let _ = self.insert_checked(bounds, data);
+    }
+
+    /// Insert a bounded entry after validating its geometry.
+    pub fn insert_checked(&mut self, bounds: SceneRect<f64>, data: T) -> Result<()> {
+        anyhow::ensure!(bounds.is_valid(), "spatial bounds are invalid");
+        anyhow::ensure!(
+            self.entries.len() < MAX_SPATIAL_ENTRIES,
+            "spatial index cannot exceed {MAX_SPATIAL_ENTRIES} entries"
+        );
         self.entries.push(SpatialEntry { bounds, data });
+        Ok(())
     }
 
     /// Return all entries whose bounds contain the given point.
@@ -300,36 +364,118 @@ impl ViewportTransform {
 
     /// Translate the viewport by `(dx, dy)` in screen space.
     pub fn pan(&mut self, dx: f64, dy: f64) {
-        self.offset_x += dx;
-        self.offset_y += dy;
+        let _ = self.pan_checked(dx, dy);
+    }
+
+    /// Translate the viewport while rejecting non-finite or overflowing offsets.
+    pub fn pan_checked(&mut self, dx: f64, dy: f64) -> Result<()> {
+        anyhow::ensure!(
+            dx.is_finite() && dy.is_finite(),
+            "viewport pan must be finite"
+        );
+        let offset_x = self.offset_x + dx;
+        let offset_y = self.offset_y + dy;
+        anyhow::ensure!(
+            offset_x.is_finite() && offset_y.is_finite(),
+            "viewport pan overflowed"
+        );
+        self.offset_x = offset_x;
+        self.offset_y = offset_y;
+        Ok(())
     }
 
     /// Zoom by `factor` relative to a center point in screen coordinates.
     pub fn zoom(&mut self, factor: f64, center_x: f64, center_y: f64) {
+        let _ = self.zoom_checked(factor, center_x, center_y);
+    }
+
+    /// Zoom while validating scale limits, factor, center, and resulting offsets.
+    pub fn zoom_checked(&mut self, factor: f64, center_x: f64, center_y: f64) -> Result<()> {
+        self.validate()?;
+        anyhow::ensure!(
+            factor.is_finite() && factor > 0.0,
+            "viewport zoom factor must be finite and positive"
+        );
+        anyhow::ensure!(
+            center_x.is_finite() && center_y.is_finite(),
+            "viewport zoom center must be finite"
+        );
         let new_scale = (self.scale * factor).clamp(self.min_scale, self.max_scale);
         let actual_factor = new_scale / self.scale;
-        self.offset_x = center_x - actual_factor * (center_x - self.offset_x);
-        self.offset_y = center_y - actual_factor * (center_y - self.offset_y);
+        let offset_x = center_x - actual_factor * (center_x - self.offset_x);
+        let offset_y = center_y - actual_factor * (center_y - self.offset_y);
+        anyhow::ensure!(
+            new_scale.is_finite() && offset_x.is_finite() && offset_y.is_finite(),
+            "viewport zoom overflowed"
+        );
+        self.offset_x = offset_x;
+        self.offset_y = offset_y;
         self.scale = new_scale;
+        Ok(())
     }
 
     /// Set the scale, clamped to `[min_scale, max_scale]`.
     pub fn set_scale(&mut self, scale: f64) {
+        let _ = self.set_scale_checked(scale);
+    }
+
+    /// Set scale after validating the configured range.
+    pub fn set_scale_checked(&mut self, scale: f64) -> Result<()> {
+        self.validate()?;
+        anyhow::ensure!(
+            scale.is_finite() && scale > 0.0,
+            "viewport scale must be finite and positive"
+        );
         self.scale = scale.clamp(self.min_scale, self.max_scale);
+        Ok(())
     }
 
     /// Convert screen coordinates to world coordinates.
     pub fn screen_to_world(&self, screen_x: f64, screen_y: f64) -> (f64, f64) {
-        let wx = (screen_x - self.offset_x) / self.scale;
-        let wy = (screen_y - self.offset_y) / self.scale;
-        (wx, wy)
+        self.screen_to_world_checked(screen_x, screen_y)
+            .unwrap_or((0.0, 0.0))
+    }
+
+    /// Convert screen coordinates after validating the viewport and inputs.
+    pub fn screen_to_world_checked(&self, screen_x: f64, screen_y: f64) -> Result<(f64, f64)> {
+        self.validate()?;
+        anyhow::ensure!(
+            screen_x.is_finite() && screen_y.is_finite(),
+            "screen coordinates must be finite"
+        );
+        let result = (
+            (screen_x - self.offset_x) / self.scale,
+            (screen_y - self.offset_y) / self.scale,
+        );
+        anyhow::ensure!(
+            result.0.is_finite() && result.1.is_finite(),
+            "world coordinates overflowed"
+        );
+        Ok(result)
     }
 
     /// Convert world coordinates to screen coordinates.
     pub fn world_to_screen(&self, world_x: f64, world_y: f64) -> (f64, f64) {
-        let sx = world_x * self.scale + self.offset_x;
-        let sy = world_y * self.scale + self.offset_y;
-        (sx, sy)
+        self.world_to_screen_checked(world_x, world_y)
+            .unwrap_or((0.0, 0.0))
+    }
+
+    /// Convert world coordinates after validating the viewport and inputs.
+    pub fn world_to_screen_checked(&self, world_x: f64, world_y: f64) -> Result<(f64, f64)> {
+        self.validate()?;
+        anyhow::ensure!(
+            world_x.is_finite() && world_y.is_finite(),
+            "world coordinates must be finite"
+        );
+        let result = (
+            world_x * self.scale + self.offset_x,
+            world_y * self.scale + self.offset_y,
+        );
+        anyhow::ensure!(
+            result.0.is_finite() && result.1.is_finite(),
+            "screen coordinates overflowed"
+        );
+        Ok(result)
     }
 
     /// Reset to identity (scale=1, no offset).
@@ -337,6 +483,25 @@ impl ViewportTransform {
         self.scale = 1.0;
         self.offset_x = 0.0;
         self.offset_y = 0.0;
+    }
+
+    fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.scale.is_finite() && self.scale > 0.0,
+            "viewport scale is invalid"
+        );
+        anyhow::ensure!(
+            self.offset_x.is_finite() && self.offset_y.is_finite(),
+            "viewport offset is invalid"
+        );
+        anyhow::ensure!(
+            self.min_scale.is_finite()
+                && self.max_scale.is_finite()
+                && self.min_scale > 0.0
+                && self.min_scale <= self.max_scale,
+            "viewport scale limits are invalid"
+        );
+        Ok(())
     }
 }
 
@@ -395,15 +560,50 @@ impl SceneGraph {
         bounds: SceneRect<f64>,
         parent: Option<SceneNodeId>,
     ) -> SceneNodeId {
-        let id = self.next_id;
-        self.next_id += 1;
+        let parent = parent.filter(|parent| self.nodes.contains_key(parent));
+        self.add_node_checked(name, bounds, parent).unwrap_or(0)
+    }
+
+    /// Add a validated node while enforcing graph size, depth, and identifier bounds.
+    pub fn add_node_checked(
+        &mut self,
+        name: impl Into<String>,
+        bounds: SceneRect<f64>,
+        parent: Option<SceneNodeId>,
+    ) -> Result<SceneNodeId> {
+        anyhow::ensure!(
+            self.nodes.len() < MAX_SCENE_NODES,
+            "scene graph cannot exceed {MAX_SCENE_NODES} nodes"
+        );
+        anyhow::ensure!(bounds.is_valid(), "scene node bounds are invalid");
+        let name = name.into();
+        anyhow::ensure!(!name.trim().is_empty(), "scene node name cannot be empty");
+        anyhow::ensure!(
+            name.len() <= MAX_SCENE_NAME_BYTES,
+            "scene node name cannot exceed {MAX_SCENE_NAME_BYTES} bytes"
+        );
+        anyhow::ensure!(
+            !name.chars().any(char::is_control),
+            "scene node name cannot contain control characters"
+        );
+        if let Some(parent_id) = parent {
+            anyhow::ensure!(
+                self.nodes.contains_key(&parent_id),
+                "scene parent does not exist"
+            );
+            anyhow::ensure!(
+                self.ancestor_depth(parent_id)? < MAX_SCENE_DEPTH,
+                "scene graph cannot exceed depth {MAX_SCENE_DEPTH}"
+            );
+        }
+        let id = self.allocate_id()?;
 
         let node = SceneNode {
             id,
             bounds,
             visible: true,
             locked: false,
-            name: name.into(),
+            name,
             children: Vec::new(),
             parent,
         };
@@ -411,37 +611,37 @@ impl SceneGraph {
         self.nodes.insert(id, node);
 
         if let Some(parent_id) = parent {
-            if let Some(parent_node) = self.nodes.get_mut(&parent_id) {
-                parent_node.children.push(id);
-            } else {
-                self.roots.push(id);
-                if let Some(n) = self.nodes.get_mut(&id) {
-                    n.parent = None;
-                }
-            }
+            self.nodes
+                .get_mut(&parent_id)
+                .expect("validated scene parent disappeared")
+                .children
+                .push(id);
         } else {
             self.roots.push(id);
         }
 
-        id
+        Ok(id)
     }
 
     /// Remove a node and all its descendants. Returns the removed node (without children removed).
     pub fn remove_node(&mut self, id: SceneNodeId) -> Option<SceneNode> {
         let node = self.nodes.remove(&id)?;
-
-        let children = node.children.clone();
-        for child_id in children {
-            self.remove_node(child_id);
-        }
-
-        if let Some(parent_id) = node.parent {
-            if let Some(parent_node) = self.nodes.get_mut(&parent_id) {
-                parent_node.children.retain(|c| *c != id);
+        let mut removed_ids = HashSet::from([id]);
+        let mut pending = node.children.clone();
+        while let Some(child_id) = pending.pop() {
+            if !removed_ids.insert(child_id) {
+                continue;
             }
-        } else {
-            self.roots.retain(|r| *r != id);
+            if let Some(child) = self.nodes.remove(&child_id) {
+                pending.extend(child.children);
+            }
         }
+        for remaining in self.nodes.values_mut() {
+            remaining
+                .children
+                .retain(|child| !removed_ids.contains(child));
+        }
+        self.roots.retain(|root| !removed_ids.contains(root));
 
         Some(node)
     }
@@ -468,34 +668,34 @@ impl SceneGraph {
 
     /// Find all visible nodes whose bounds contain the given point, topmost first.
     pub fn hit_test(&self, x: f64, y: f64) -> Vec<SceneNodeId> {
+        if !x.is_finite() || !y.is_finite() {
+            return Vec::new();
+        }
         let mut hits = Vec::new();
-        for root_id in self.roots.iter().rev() {
-            self.hit_test_recursive(*root_id, x, y, &mut hits);
+        let mut visited = HashSet::new();
+        let mut pending = self
+            .roots
+            .iter()
+            .copied()
+            .map(|root| (root, false))
+            .collect::<Vec<_>>();
+        while let Some((node_id, children_visited)) = pending.pop() {
+            let Some(node) = self.nodes.get(&node_id) else {
+                continue;
+            };
+            if children_visited {
+                if node.visible && node.bounds.contains_point(x, y) {
+                    hits.push(node_id);
+                }
+                continue;
+            }
+            if !node.visible || !visited.insert(node_id) {
+                continue;
+            }
+            pending.push((node_id, true));
+            pending.extend(node.children.iter().copied().map(|child| (child, false)));
         }
         hits
-    }
-
-    fn hit_test_recursive(
-        &self,
-        node_id: SceneNodeId,
-        x: f64,
-        y: f64,
-        hits: &mut Vec<SceneNodeId>,
-    ) {
-        let Some(node) = self.nodes.get(&node_id) else {
-            return;
-        };
-        if !node.visible {
-            return;
-        }
-
-        for child_id in node.children.iter().rev() {
-            self.hit_test_recursive(*child_id, x, y, hits);
-        }
-
-        if node.bounds.contains_point(x, y) {
-            hits.push(node_id);
-        }
     }
 
     /// Move a node by the given delta, updating its bounds.
@@ -504,8 +704,16 @@ impl SceneGraph {
             .nodes
             .get_mut(&id)
             .ok_or_else(|| anyhow!("node {} not found", id))?;
-        node.bounds.x += dx;
-        node.bounds.y += dy;
+        anyhow::ensure!(!node.locked, "locked scene node cannot be moved");
+        anyhow::ensure!(
+            dx.is_finite() && dy.is_finite(),
+            "scene movement must be finite"
+        );
+        let x = node.bounds.x + dx;
+        let y = node.bounds.y + dy;
+        anyhow::ensure!(x.is_finite() && y.is_finite(), "scene movement overflowed");
+        node.bounds.x = x;
+        node.bounds.y = y;
         Ok(())
     }
 
@@ -521,7 +729,31 @@ impl SceneGraph {
             if np == id {
                 return Err(anyhow!("cannot parent a node to itself"));
             }
+            let mut ancestor = Some(np);
+            let mut visited = HashSet::new();
+            while let Some(ancestor_id) = ancestor {
+                anyhow::ensure!(
+                    visited.insert(ancestor_id),
+                    "scene graph contains a parent cycle"
+                );
+                anyhow::ensure!(
+                    ancestor_id != id,
+                    "cannot parent a node beneath its descendant"
+                );
+                ancestor = self.nodes.get(&ancestor_id).and_then(|node| node.parent);
+            }
+            let parent_depth = self.ancestor_depth(np)?;
+            let subtree_height = self.subtree_height(id)?;
+            anyhow::ensure!(
+                parent_depth.saturating_add(subtree_height) <= MAX_SCENE_DEPTH,
+                "scene graph cannot exceed depth {MAX_SCENE_DEPTH}"
+            );
         }
+
+        anyhow::ensure!(
+            !self.nodes[&id].locked,
+            "locked scene node cannot be reparented"
+        );
 
         let old_parent = self.nodes.get(&id).and_then(|n| n.parent);
 
@@ -546,6 +778,62 @@ impl SceneGraph {
         }
 
         Ok(())
+    }
+
+    fn allocate_id(&mut self) -> Result<SceneNodeId> {
+        for _ in 0..=self.nodes.len() {
+            let id = self.next_id.max(1);
+            self.next_id = id.wrapping_add(1).max(1);
+            if !self.nodes.contains_key(&id) {
+                return Ok(id);
+            }
+        }
+        anyhow::bail!("scene node identifier space is exhausted")
+    }
+
+    fn ancestor_depth(&self, id: SceneNodeId) -> Result<usize> {
+        let mut depth = 0;
+        let mut current = Some(id);
+        let mut visited = HashSet::new();
+        while let Some(node_id) = current {
+            anyhow::ensure!(
+                visited.insert(node_id),
+                "scene graph contains a parent cycle"
+            );
+            depth += 1;
+            anyhow::ensure!(
+                depth <= MAX_SCENE_DEPTH,
+                "scene graph cannot exceed depth {MAX_SCENE_DEPTH}"
+            );
+            current = self.nodes.get(&node_id).and_then(|node| node.parent);
+        }
+        Ok(depth)
+    }
+
+    fn subtree_height(&self, id: SceneNodeId) -> Result<usize> {
+        let mut max_depth = 0;
+        let mut pending = vec![(id, 1_usize)];
+        let mut visited = HashSet::new();
+        while let Some((node_id, depth)) = pending.pop() {
+            anyhow::ensure!(
+                visited.insert(node_id),
+                "scene graph contains a child cycle"
+            );
+            max_depth = max_depth.max(depth);
+            anyhow::ensure!(
+                max_depth <= MAX_SCENE_DEPTH,
+                "scene graph cannot exceed depth {MAX_SCENE_DEPTH}"
+            );
+            if let Some(node) = self.nodes.get(&node_id) {
+                pending.extend(
+                    node.children
+                        .iter()
+                        .copied()
+                        .map(|child| (child, depth + 1)),
+                );
+            }
+        }
+        Ok(max_depth)
     }
 }
 
@@ -593,6 +881,12 @@ pub struct TransformHandle {
 
 /// Compute the eight transform handles for the given bounding rectangle.
 pub fn compute_handles(bounds: &SceneRect<f64>) -> Vec<TransformHandle> {
+    compute_handles_checked(bounds).unwrap_or_default()
+}
+
+/// Compute transform handles after validating the bounding rectangle.
+pub fn compute_handles_checked(bounds: &SceneRect<f64>) -> Result<Vec<TransformHandle>> {
+    anyhow::ensure!(bounds.is_valid(), "transform handle bounds are invalid");
     let x = bounds.x;
     let y = bounds.y;
     let mx = x + bounds.width / 2.0;
@@ -600,7 +894,7 @@ pub fn compute_handles(bounds: &SceneRect<f64>) -> Vec<TransformHandle> {
     let rx = x + bounds.width;
     let by = y + bounds.height;
 
-    vec![
+    Ok(vec![
         TransformHandle {
             position: HandlePosition::TopLeft,
             x,
@@ -641,7 +935,7 @@ pub fn compute_handles(bounds: &SceneRect<f64>) -> Vec<TransformHandle> {
             x,
             y: my,
         },
-    ]
+    ])
 }
 
 // ---------------------------------------------------------------------------
@@ -682,6 +976,29 @@ pub struct SnapResult {
 /// The `threshold` specifies the maximum snap distance in world units.
 /// Returns the snapped position and any guides that were activated.
 pub fn snap_to_guides(x: f64, y: f64, all_bounds: &[SceneRect<f64>], threshold: f64) -> SnapResult {
+    snap_to_guides_checked(x, y, all_bounds, threshold).unwrap_or(SnapResult {
+        snapped_x: if x.is_finite() { x } else { 0.0 },
+        snapped_y: if y.is_finite() { y } else { 0.0 },
+        guides: Vec::new(),
+    })
+}
+
+/// Snap a point after validating coordinates, threshold, and guide geometry.
+pub fn snap_to_guides_checked(
+    x: f64,
+    y: f64,
+    all_bounds: &[SceneRect<f64>],
+    threshold: f64,
+) -> Result<SnapResult> {
+    anyhow::ensure!(x.is_finite() && y.is_finite(), "snap point must be finite");
+    anyhow::ensure!(
+        threshold.is_finite() && threshold >= 0.0,
+        "snap threshold must be finite and non-negative"
+    );
+    anyhow::ensure!(
+        all_bounds.iter().all(SceneRect::is_valid),
+        "snap guide bounds are invalid"
+    );
     let mut best_dx = f64::MAX;
     let mut best_dy = f64::MAX;
     let mut snapped_x = x;
@@ -730,11 +1047,11 @@ pub fn snap_to_guides(x: f64, y: f64, all_bounds: &[SceneRect<f64>], threshold: 
         });
     }
 
-    SnapResult {
+    Ok(SnapResult {
         snapped_x,
         snapped_y,
         guides,
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1162,5 +1479,90 @@ mod tests {
         assert!((vt.scale - 0.5).abs() < 1e-10);
         vt.set_scale(10.0);
         assert!((vt.scale - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn invalid_geometry_and_metrics_fail_closed() {
+        assert!(!rect(f64::NAN, 0.0, 1.0, 1.0).is_valid());
+        assert!(!rect(0.0, 0.0, -1.0, 1.0).contains_point(0.0, 0.0));
+        assert!(!rect(f64::MAX, 0.0, f64::MAX, 1.0).is_valid());
+
+        assert!(FrameBudget::new_checked(f64::NAN, 1).is_err());
+        assert!(FrameBudget::new_checked(60.0, 0).is_err());
+        assert!(FrameBudget::new_checked(60.0, MAX_FRAME_BUDGET_SAMPLES + 1).is_err());
+        let mut budget = FrameBudget::new(60.0, usize::MAX);
+        budget.record_frame(Duration::MAX);
+        budget.record_frame(Duration::MAX);
+        assert!(budget.average_ms().is_finite());
+
+        let mut stats = RenderStats::new();
+        stats.layout_count = u64::MAX;
+        stats.paint_count = u64::MAX;
+        stats.gpu_upload_bytes = u64::MAX;
+        stats.record_layout();
+        stats.record_paint();
+        stats.add_gpu_upload(1);
+        stats.set_overdraw(f64::NAN);
+        assert_eq!(stats.layout_count, u64::MAX);
+        assert_eq!(stats.paint_count, u64::MAX);
+        assert_eq!(stats.gpu_upload_bytes, u64::MAX);
+        assert_eq!(stats.overdraw_ratio, 0.0);
+    }
+
+    #[test]
+    fn spatial_and_viewport_checked_paths_reject_invalid_values() {
+        let mut index = SpatialIndex::new();
+        assert!(index.insert_checked(rect(0.0, 0.0, -1.0, 1.0), 1).is_err());
+        assert!(index.is_empty());
+
+        let mut viewport = ViewportTransform::new();
+        assert!(viewport.pan_checked(f64::NAN, 0.0).is_err());
+        assert!(viewport.zoom_checked(0.0, 0.0, 0.0).is_err());
+        assert!(viewport.set_scale_checked(f64::INFINITY).is_err());
+        viewport.scale = 0.0;
+        assert!(viewport.screen_to_world_checked(1.0, 1.0).is_err());
+        assert_eq!(viewport.screen_to_world(1.0, 1.0), (0.0, 0.0));
+
+        assert!(compute_handles_checked(&rect(0.0, 0.0, -1.0, 1.0)).is_err());
+        assert!(snap_to_guides_checked(0.0, 0.0, &[], f64::NAN).is_err());
+    }
+
+    #[test]
+    fn scene_graph_rejects_cycles_locked_edits_and_identifier_wrap() {
+        let mut graph = SceneGraph::new();
+        let root = graph
+            .add_node_checked("root", rect(0.0, 0.0, 10.0, 10.0), None)
+            .unwrap();
+        let child = graph
+            .add_node_checked("child", rect(0.0, 0.0, 5.0, 5.0), Some(root))
+            .unwrap();
+        assert!(graph.reparent(root, Some(child)).is_err());
+
+        graph.get_mut(child).unwrap().locked = true;
+        assert!(graph.move_node(child, 1.0, 0.0).is_err());
+        assert!(graph.reparent(child, None).is_err());
+
+        graph.next_id = u64::MAX;
+        let near_wrap = graph
+            .add_node_checked("near wrap", rect(0.0, 0.0, 1.0, 1.0), None)
+            .unwrap();
+        let after_wrap = graph
+            .add_node_checked("after wrap", rect(0.0, 0.0, 1.0, 1.0), None)
+            .unwrap();
+        assert_ne!(near_wrap, after_wrap);
+        assert_ne!(after_wrap, root);
+    }
+
+    #[test]
+    fn scene_graph_traversal_contains_corrupt_child_cycles() {
+        let mut graph = SceneGraph::new();
+        let root = graph.add_node("root", rect(0.0, 0.0, 10.0, 10.0), None);
+        let child = graph.add_node("child", rect(0.0, 0.0, 5.0, 5.0), Some(root));
+        graph.get_mut(child).unwrap().children.push(root);
+
+        let hits = graph.hit_test(1.0, 1.0);
+        assert_eq!(hits.len(), 2);
+        assert!(graph.remove_node(root).is_some());
+        assert_eq!(graph.node_count(), 0);
     }
 }

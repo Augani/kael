@@ -11,7 +11,10 @@
 /// `\n`.
 pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
     let mut lines = Vec::new();
-    for paragraph in text.split('\n') {
+    for paragraph in text
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+    {
         if max_width == 0 {
             lines.push(paragraph.to_string());
             continue;
@@ -37,7 +40,11 @@ pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
             if line_len == 0 {
                 line = word.to_string();
                 line_len = word_len;
-            } else if line_len + 1 + word_len <= max_width {
+            } else if line_len
+                .checked_add(1)
+                .and_then(|length| length.checked_add(word_len))
+                .is_some_and(|length| length <= max_width)
+            {
                 line.push(' ');
                 line.push_str(word);
                 line_len += 1 + word_len;
@@ -106,5 +113,10 @@ mod tests {
     #[test]
     fn collapses_runs_of_spaces() {
         assert_eq!(wrap_text("a   b", 10), vec!["a b".to_string()]);
+    }
+
+    #[test]
+    fn windows_newlines_do_not_leave_carriage_returns() {
+        assert_eq!(wrap_text("a\r\nb", 10), vec!["a", "b"]);
     }
 }

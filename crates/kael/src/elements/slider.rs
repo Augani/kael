@@ -171,6 +171,46 @@ pub struct SliderRenderState {
     pub disabled: bool,
 }
 
+impl SliderRenderState {
+    /// Returns true when the current value is at the normalized minimum.
+    pub fn is_at_min(&self) -> bool {
+        self.percentage <= f64::EPSILON
+    }
+
+    /// Returns true when the current value is at the normalized maximum.
+    pub fn is_at_max(&self) -> bool {
+        (1.0 - self.percentage).abs() <= f64::EPSILON
+    }
+
+    /// Coarse slider position class for content-safe diagnostics.
+    pub fn position_class(&self) -> &'static str {
+        if self.is_at_min() {
+            "min"
+        } else if self.is_at_max() {
+            "max"
+        } else if self.percentage < 0.5 {
+            "lower"
+        } else if self.percentage > 0.5 {
+            "upper"
+        } else {
+            "middle"
+        }
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "slider_render_state(position_class={}, at_min={}, at_max={}, dragging={}, focused={}, disabled={})",
+            self.position_class(),
+            self.is_at_min(),
+            self.is_at_max(),
+            self.dragging,
+            self.focused,
+            self.disabled
+        )
+    }
+}
+
 type SliderCustomRenderer = Rc<dyn Fn(SliderRenderState, Bounds<Pixels>, &mut Window, &mut App)>;
 
 /// Construct a controlled slider form control.
@@ -583,7 +623,8 @@ impl Element for Slider {
             }
         });
 
-        window.register_accessibility_node(
+        let accessibility_id = window.next_anonymous_accessibility_id();
+        window.register_accessibility_node_at(
             AccessibilityAttributes::new(AccessibilityRole::Slider)
                 .states(if is_focused {
                     AccessibilityState::FOCUSED
@@ -601,7 +642,8 @@ impl Element for Slider {
                     AccessibilityAction::Increment,
                     AccessibilityAction::Decrement,
                 ])
-                .to_node(crate::AccessibilityId::new()),
+                .to_node(accessibility_id),
+            bounds,
         );
     }
 }
@@ -884,5 +926,34 @@ mod tests {
         });
 
         assert_eq!(snapshot.get(), Some((25.0, 0.25, false)));
+    }
+
+    #[test]
+    fn slider_render_state_summary_is_content_safe() {
+        let state = SliderRenderState {
+            value: 42.5,
+            min: 10.0,
+            max: 90.0,
+            percentage: 0.40625,
+            dragging: true,
+            focused: true,
+            disabled: false,
+        };
+
+        assert_eq!(state.position_class(), "lower");
+        assert!(!state.is_at_min());
+        assert!(!state.is_at_max());
+
+        let summary = state.to_text();
+        assert!(summary.contains("position_class=lower"));
+        assert!(summary.contains("at_min=false"));
+        assert!(summary.contains("at_max=false"));
+        assert!(summary.contains("dragging=true"));
+        assert!(summary.contains("focused=true"));
+        assert!(summary.contains("disabled=false"));
+        assert!(!summary.contains("42.5"));
+        assert!(!summary.contains("10.0"));
+        assert!(!summary.contains("90.0"));
+        assert!(!summary.contains("0.40625"));
     }
 }

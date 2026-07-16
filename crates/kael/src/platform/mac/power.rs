@@ -50,7 +50,7 @@ pub fn start_power_save_blocker(kind: crate::PowerSaveBlockerKind) -> Option<u32
             &mut assertion_id,
         );
 
-        if result == 0 {
+        if result == 0 && assertion_id != 0 {
             Some(assertion_id)
         } else {
             None
@@ -59,6 +59,9 @@ pub fn start_power_save_blocker(kind: crate::PowerSaveBlockerKind) -> Option<u32
 }
 
 pub fn stop_power_save_blocker(id: u32) {
+    if id == 0 {
+        return;
+    }
     unsafe {
         IOPMAssertionRelease(id);
     }
@@ -91,15 +94,31 @@ fn on_battery_power() -> bool {
 pub fn system_idle_time() -> Option<std::time::Duration> {
     unsafe {
         let seconds = CGEventSourceSecondsSinceLastEventType(0, u32::MAX);
-        if seconds >= 0.0 {
-            Some(std::time::Duration::from_secs_f64(seconds))
-        } else {
-            None
-        }
+        idle_duration(seconds)
     }
+}
+
+fn idle_duration(seconds: f64) -> Option<std::time::Duration> {
+    std::time::Duration::try_from_secs_f64(seconds).ok()
 }
 
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn CGEventSourceSecondsSinceLastEventType(source_state: u32, event_type: u32) -> f64;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_idle_durations_fail_closed() {
+        assert!(idle_duration(f64::NAN).is_none());
+        assert!(idle_duration(f64::INFINITY).is_none());
+        assert!(idle_duration(-1.0).is_none());
+        assert_eq!(
+            idle_duration(1.5),
+            Some(std::time::Duration::from_millis(1_500))
+        );
+    }
 }

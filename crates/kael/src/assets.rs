@@ -59,9 +59,12 @@ impl RenderImage {
     /// Create a new image from the given data.
     pub fn new(data: impl Into<SmallVec<[Frame; 1]>>) -> Self {
         static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+        let id = NEXT_ID
+            .fetch_update(SeqCst, SeqCst, |current| current.checked_add(1))
+            .expect("render image identifier space exhausted");
 
         Self {
-            id: ImageId(NEXT_ID.fetch_add(1, SeqCst)),
+            id: ImageId(id),
             scale_factor: 1.0,
             data: data.into(),
         }

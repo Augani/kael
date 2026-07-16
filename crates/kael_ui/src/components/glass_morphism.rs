@@ -34,7 +34,11 @@ impl GlassMorphism {
     }
 
     pub fn opacity(mut self, opacity: f32) -> Self {
-        self.opacity = opacity.clamp(0.0, 1.0);
+        self.opacity = if opacity.is_finite() {
+            opacity.clamp(0.0, 1.0)
+        } else {
+            0.8
+        };
         self
     }
 
@@ -174,5 +178,17 @@ impl StatefulInteractiveElement for GlassMorphism {}
 impl ParentElement for GlassMorphism {
     fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
         self.base.extend(elements)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GlassMorphism;
+
+    #[test]
+    fn invalid_opacity_uses_the_default() {
+        assert_eq!(GlassMorphism::new().opacity(f32::NAN).opacity, 0.8);
+        assert_eq!(GlassMorphism::new().opacity(-1.0).opacity, 0.0);
+        assert_eq!(GlassMorphism::new().opacity(2.0).opacity, 1.0);
     }
 }

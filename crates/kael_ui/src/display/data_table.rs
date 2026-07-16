@@ -8,7 +8,7 @@ use crate::virtual_list::vlist_uniform_view;
 use kael::{prelude::FluentBuilder as _, *};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
-use std::rc::Rc;
+use std::{panic::Location, rc::Rc};
 
 #[derive(Clone)]
 pub struct RowAction {
@@ -43,12 +43,53 @@ impl RowAction {
         self.destructive = true;
         self
     }
+
+    /// Returns the action id length without exposing the id.
+    pub fn id_len_bytes(&self) -> usize {
+        self.id.len()
+    }
+
+    /// Returns the action label length without exposing the label.
+    pub fn label_len_bytes(&self) -> usize {
+        self.label.len()
+    }
+
+    /// Returns true when this action has an icon.
+    pub fn has_icon(&self) -> bool {
+        self.icon.is_some()
+    }
+
+    /// Returns true when this action is destructive.
+    pub fn is_destructive(&self) -> bool {
+        self.destructive
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "row_action(id_len_bytes={}, label_len_bytes={}, has_icon={}, destructive={}, has_handler=true)",
+            self.id_len_bytes(),
+            self.label_len_bytes(),
+            self.has_icon(),
+            self.is_destructive(),
+        )
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SortDirection {
     Ascending,
     Descending,
+}
+
+impl SortDirection {
+    /// Stable sort direction key for content-safe diagnostics.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Ascending => "ascending",
+            Self::Descending => "descending",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +107,25 @@ impl ViewportState {
     }
 }
 
+fn should_capture_vertical_scroll(
+    scroll_y: f32,
+    content_height: f32,
+    viewport_height: f32,
+    delta_y: f32,
+) -> bool {
+    if !scroll_y.is_finite()
+        || !content_height.is_finite()
+        || !viewport_height.is_finite()
+        || !delta_y.is_finite()
+    {
+        return false;
+    }
+
+    let max_scroll = (content_height - viewport_height).max(0.0);
+    let scroll_y = scroll_y.clamp(0.0, max_scroll);
+    (delta_y < 0.0 && scroll_y < max_scroll) || (delta_y > 0.0 && scroll_y > 0.0)
+}
+
 struct VirtualScroller {
     viewport: ViewportState,
     total_items: usize,
@@ -77,10 +137,6 @@ impl VirtualScroller {
             viewport,
             total_items,
         }
-    }
-
-    fn total_height(&self) -> f32 {
-        self.total_items as f32 * self.viewport.row_height
     }
 
     fn set_total_items(&mut self, count: usize) {
@@ -121,12 +177,12 @@ impl<T: 'static> ColumnDef<T> {
     }
 
     pub fn width(mut self, width: impl Into<Pixels>) -> Self {
-        self.width = width.into();
+        self.width = valid_column_width(width.into(), px(150.0));
         self
     }
 
     pub fn min_width(mut self, width: impl Into<Pixels>) -> Self {
-        self.min_width = width.into();
+        self.min_width = valid_column_width(width.into(), px(80.0));
         self
     }
 
@@ -143,6 +199,67 @@ impl<T: 'static> ColumnDef<T> {
     pub fn editable(mut self, editable: bool) -> Self {
         self.editable = editable;
         self
+    }
+
+    /// Returns the column id length without exposing the id.
+    pub fn id_len_bytes(&self) -> usize {
+        self.id.len()
+    }
+
+    /// Returns the header length without exposing header text.
+    pub fn header_len_bytes(&self) -> usize {
+        self.header.len()
+    }
+
+    /// Coarse width class for content-safe diagnostics.
+    pub fn width_class(&self) -> &'static str {
+        let width: f32 = self.width.into();
+        if width <= 96.0 {
+            "compact"
+        } else if width <= 180.0 {
+            "standard"
+        } else if width <= 320.0 {
+            "wide"
+        } else {
+            "extra_wide"
+        }
+    }
+
+    /// Coarse minimum width class for content-safe diagnostics.
+    pub fn min_width_class(&self) -> &'static str {
+        let width: f32 = self.min_width.into();
+        if width <= 64.0 {
+            "compact"
+        } else if width <= 120.0 {
+            "standard"
+        } else if width <= 240.0 {
+            "wide"
+        } else {
+            "extra_wide"
+        }
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "column_def(id_len_bytes={}, header_len_bytes={}, width_class={}, min_width_class={}, resizable={}, sortable={}, editable={})",
+            self.id_len_bytes(),
+            self.header_len_bytes(),
+            self.width_class(),
+            self.min_width_class(),
+            self.resizable,
+            self.sortable,
+            self.editable
+        )
+    }
+}
+
+fn valid_column_width(width: Pixels, fallback: Pixels) -> Pixels {
+    let value: f32 = width.into();
+    if value.is_finite() && value > 0.0 {
+        width
+    } else {
+        fallback
     }
 }
 
@@ -170,7 +287,13 @@ pub struct DataTableState<T: Clone + 'static> {
 
 impl<T: Clone + 'static> DataTableState<T> {
     pub fn new(data: Vec<T>, columns: Vec<ColumnDef<T>>) -> Self {
-        let column_widths = columns.iter().map(|col| col.width).collect();
+        let column_widths = columns
+            .iter()
+            .map(|column| {
+                let minimum = valid_column_width(column.min_width, px(80.0));
+                valid_column_width(column.width, px(150.0)).max(minimum)
+            })
+            .collect();
         let total_items = data.len();
         let viewport = ViewportState::new(48.0, 600.0);
 
@@ -185,16 +308,21 @@ impl<T: Clone + 'static> DataTableState<T> {
         }
     }
 
-    fn total_height(&self) -> f32 {
-        self.scroller.total_height()
-    }
-
     fn row_height(&self) -> f32 {
         self.scroller.viewport.row_height
     }
 
     fn viewport_height(&self) -> f32 {
         self.scroller.viewport.viewport_height
+    }
+
+    fn effective_viewport_height(&self, visible_items: usize) -> f32 {
+        if self.is_virtual() {
+            self.viewport_height()
+        } else {
+            self.viewport_height()
+                .min(self.row_height() * visible_items.max(1) as f32)
+        }
     }
 
     fn total_items(&self) -> usize {
@@ -215,6 +343,11 @@ impl<T: Clone + 'static> DataTableState<T> {
         let count = data.len();
         self.backing = DataBacking::InMemory { data };
         self.scroller.set_total_items(count);
+        self.selected_rows.clear();
+
+        if let Some(column_index) = self.sort_column {
+            self.sort_by_column(column_index, self.sort_direction);
+        }
     }
 
     fn virtual_reset(&mut self, total_items: usize, page_size: Option<usize>) {
@@ -242,6 +375,7 @@ impl<T: Clone + 'static> DataTableState<T> {
             }
         }
         self.scroller.set_total_items(total_items);
+        self.selected_rows.clear();
     }
 
     fn virtual_set_page(&mut self, page_start: usize, rows: Vec<T>) {
@@ -259,33 +393,49 @@ impl<T: Clone + 'static> DataTableState<T> {
     }
 
     pub fn sort_by_column(&mut self, column_index: usize, direction: SortDirection) {
+        let Some(column) = self.columns.get(column_index) else {
+            return;
+        };
+        if !column.sortable {
+            return;
+        }
+
         self.sort_column = Some(column_index);
         self.sort_direction = direction;
 
         if let DataBacking::InMemory { data } = &mut self.backing {
-            if let Some(column) = self.columns.get(column_index) {
-                let mut indexed_values: Vec<(usize, String)> = data
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, row)| (idx, (column.accessor)(row).to_string()))
-                    .collect();
+            let mut indexed_values: Vec<(usize, String)> = data
+                .iter()
+                .enumerate()
+                .map(|(idx, row)| (idx, (column.accessor)(row).to_string()))
+                .collect();
 
-                indexed_values.sort_by(|(_, a), (_, b)| match direction {
-                    SortDirection::Ascending => a.cmp(b),
-                    SortDirection::Descending => b.cmp(a),
-                });
+            indexed_values.sort_by(|(_, a), (_, b)| match direction {
+                SortDirection::Ascending => a.cmp(b),
+                SortDirection::Descending => b.cmp(a),
+            });
 
-                let sorted_data: Vec<T> = indexed_values
-                    .into_iter()
-                    .filter_map(|(idx, _)| data.get(idx).cloned())
-                    .collect();
+            let selected: HashSet<usize> = self.selected_rows.iter().copied().collect();
+            self.selected_rows = indexed_values
+                .iter()
+                .enumerate()
+                .filter_map(|(new_index, (old_index, _))| {
+                    selected.contains(old_index).then_some(new_index)
+                })
+                .collect();
 
-                *data = sorted_data;
-            }
+            let sorted_data = indexed_values
+                .into_iter()
+                .map(|(old_index, _)| data[old_index].clone())
+                .collect();
+            *data = sorted_data;
         }
     }
 
     pub fn toggle_row(&mut self, row_index: usize) {
+        if row_index >= self.total_items() {
+            return;
+        }
         if let Some(pos) = self.selected_rows.iter().position(|&i| i == row_index) {
             self.selected_rows.remove(pos);
         } else {
@@ -298,13 +448,149 @@ impl<T: Clone + 'static> DataTableState<T> {
     }
 
     pub fn resize_column(&mut self, column_index: usize, new_width: Pixels) {
-        if let Some(width) = self.column_widths.get_mut(column_index) {
-            *width = new_width;
+        if let (Some(column), Some(width)) = (
+            self.columns.get(column_index),
+            self.column_widths.get_mut(column_index),
+        ) {
+            let minimum = valid_column_width(column.min_width, px(80.0));
+            *width = valid_column_width(new_width, *width).max(minimum);
         }
+    }
+
+    /// Returns the number of configured columns.
+    pub fn column_count(&self) -> usize {
+        self.columns.len()
+    }
+
+    /// Returns the total row count advertised by the backing store.
+    pub fn row_count(&self) -> usize {
+        self.total_items()
+    }
+
+    /// Stable backing kind key.
+    pub fn backing_kind(&self) -> &'static str {
+        match &self.backing {
+            DataBacking::InMemory { .. } => "in_memory",
+            DataBacking::Virtual { .. } => "virtual",
+        }
+    }
+
+    /// Returns true when the table uses virtual backing.
+    pub fn is_virtual(&self) -> bool {
+        matches!(&self.backing, DataBacking::Virtual { .. })
+    }
+
+    /// Number of cached virtual rows.
+    pub fn cached_row_count(&self) -> usize {
+        match &self.backing {
+            DataBacking::Virtual { cache, .. } => cache.len(),
+            DataBacking::InMemory { data } => data.len(),
+        }
+    }
+
+    /// Number of in-flight virtual pages.
+    pub fn in_flight_page_count(&self) -> usize {
+        match &self.backing {
+            DataBacking::Virtual {
+                in_flight_pages, ..
+            } => in_flight_pages.len(),
+            DataBacking::InMemory { .. } => 0,
+        }
+    }
+
+    /// Page size for virtual backing, when enabled.
+    pub fn page_size(&self) -> Option<usize> {
+        match &self.backing {
+            DataBacking::Virtual { page_size, .. } => Some(*page_size),
+            DataBacking::InMemory { .. } => None,
+        }
+    }
+
+    /// Number of selected rows.
+    pub fn selected_count(&self) -> usize {
+        self.selected_rows.len()
+    }
+
+    /// Returns true when a sort column is configured.
+    pub fn has_sort(&self) -> bool {
+        self.sort_column.is_some()
+    }
+
+    /// Current sort column index, without exposing column ids or headers.
+    pub fn sort_column_index(&self) -> Option<usize> {
+        self.sort_column
+    }
+
+    /// Stable sort direction key.
+    pub fn sort_direction_key(&self) -> &'static str {
+        self.sort_direction.to_text()
+    }
+
+    /// Counts sortable columns.
+    pub fn sortable_column_count(&self) -> usize {
+        self.columns.iter().filter(|column| column.sortable).count()
+    }
+
+    /// Counts editable columns.
+    pub fn editable_column_count(&self) -> usize {
+        self.columns.iter().filter(|column| column.editable).count()
+    }
+
+    /// Counts resizable columns.
+    pub fn resizable_column_count(&self) -> usize {
+        self.columns
+            .iter()
+            .filter(|column| column.resizable)
+            .count()
+    }
+
+    /// Coarse row-height class for content-safe diagnostics.
+    pub fn row_height_class(&self) -> &'static str {
+        match self.row_height() {
+            h if h <= 36.0 => "compact",
+            h if h <= 56.0 => "standard",
+            h if h <= 80.0 => "spacious",
+            _ => "extra_spacious",
+        }
+    }
+
+    /// Coarse viewport class for content-safe diagnostics.
+    pub fn viewport_class(&self) -> &'static str {
+        match self.viewport_height() {
+            h if h <= 360.0 => "short",
+            h if h <= 720.0 => "medium",
+            h if h <= 1080.0 => "tall",
+            _ => "extra_tall",
+        }
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "data_table_state(columns={}, rows={}, backing={}, virtual={}, cached_rows={}, in_flight_pages={}, page_size={}, selected={}, has_sort={}, sort_column={}, sort_direction={}, sortable_columns={}, editable_columns={}, resizable_columns={}, row_height_class={}, viewport_class={})",
+            self.column_count(),
+            self.row_count(),
+            self.backing_kind(),
+            self.is_virtual(),
+            self.cached_row_count(),
+            self.in_flight_page_count(),
+            self.page_size().map_or(0, |size| size),
+            self.selected_count(),
+            self.has_sort(),
+            self.sort_column_index()
+                .map_or_else(|| "none".to_string(), |index| index.to_string()),
+            self.sort_direction_key(),
+            self.sortable_column_count(),
+            self.editable_column_count(),
+            self.resizable_column_count(),
+            self.row_height_class(),
+            self.viewport_class()
+        )
     }
 }
 
 pub struct DataTable<T: Clone + 'static> {
+    id: ElementId,
     state: DataTableState<T>,
     resizing_column: Option<usize>,
     resize_start_x: f32,
@@ -336,14 +622,28 @@ pub struct DataTable<T: Clone + 'static> {
     on_selection_change: Option<Box<dyn Fn(&[usize], &mut Window, &mut Context<Self>) + 'static>>,
     row_actions: Vec<RowAction>,
     context_menu: Option<(usize, Point<Pixels>)>,
-    is_dragging_horizontal: bool,
-    drag_start_x: f32,
-    drag_scroll_start_x: f32,
+    empty_message: SharedString,
+    no_results_message: SharedString,
+    select_all_focus_handle: FocusHandle,
+    header_focus_handles: Vec<FocusHandle>,
     style: StyleRefinement,
 }
 
 impl<T: Clone + 'static> DataTable<T> {
+    #[track_caller]
     pub fn new(data: Vec<T>, columns: Vec<ColumnDef<T>>, cx: &mut Context<Self>) -> Self {
+        let caller = Location::caller();
+        let id = ElementId::Name(
+            format!(
+                "data-table:{}:{}:{}",
+                caller.file(),
+                caller.line(),
+                caller.column()
+            )
+            .into(),
+        );
+        let header_focus_handles = columns.iter().map(|_| cx.focus_handle()).collect();
+        let select_all_focus_handle = cx.focus_handle();
         let mut select_options = vec![SelectOption::new(usize::MAX, "All Columns")];
         for (idx, column) in columns.iter().enumerate() {
             select_options.push(SelectOption::new(idx, column.header.clone()));
@@ -375,6 +675,7 @@ impl<T: Clone + 'static> DataTable<T> {
         let search_input = cx.new(InputState::new);
 
         Self {
+            id,
             state: DataTableState::new(data, columns),
             resizing_column: None,
             resize_start_x: 0.0,
@@ -402,11 +703,18 @@ impl<T: Clone + 'static> DataTable<T> {
             on_selection_change: None,
             row_actions: Vec::new(),
             context_menu: None,
-            is_dragging_horizontal: false,
-            drag_start_x: 0.0,
-            drag_scroll_start_x: 0.0,
+            empty_message: "No rows to display".into(),
+            no_results_message: "No matching rows".into(),
+            select_all_focus_handle,
+            header_focus_handles,
             style: StyleRefinement::default(),
         }
+    }
+
+    /// Overrides the stable identity used to scope generated child element ids.
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
     }
 
     pub fn sticky_header(mut self, sticky: bool) -> Self {
@@ -427,12 +735,25 @@ impl<T: Clone + 'static> DataTable<T> {
         self
     }
 
+    #[track_caller]
     pub fn new_virtual(
         total_items: usize,
         columns: Vec<ColumnDef<T>>,
         page_size: usize,
         cx: &mut Context<Self>,
     ) -> Self {
+        let caller = Location::caller();
+        let id = ElementId::Name(
+            format!(
+                "data-table:{}:{}:{}",
+                caller.file(),
+                caller.line(),
+                caller.column()
+            )
+            .into(),
+        );
+        let header_focus_handles = columns.iter().map(|_| cx.focus_handle()).collect();
+        let select_all_focus_handle = cx.focus_handle();
         let mut select_options = vec![SelectOption::new(usize::MAX, "All Columns")];
         for (idx, column) in columns.iter().enumerate() {
             select_options.push(SelectOption::new(idx, column.header.clone()));
@@ -464,6 +785,7 @@ impl<T: Clone + 'static> DataTable<T> {
         let search_input = cx.new(InputState::new);
 
         Self {
+            id,
             state: DataTableState::new(Vec::new(), columns),
             resizing_column: None,
             resize_start_x: 0.0,
@@ -491,9 +813,10 @@ impl<T: Clone + 'static> DataTable<T> {
             on_selection_change: None,
             row_actions: Vec::new(),
             context_menu: None,
-            is_dragging_horizontal: false,
-            drag_start_x: 0.0,
-            drag_scroll_start_x: 0.0,
+            empty_message: "No rows to display".into(),
+            no_results_message: "No matching rows".into(),
+            select_all_focus_handle,
+            header_focus_handles,
             style: StyleRefinement::default(),
         }
         .with_virtual_backing(total_items, page_size)
@@ -577,6 +900,130 @@ impl<T: Clone + 'static> DataTable<T> {
     pub fn row_actions(mut self, actions: Vec<RowAction>) -> Self {
         self.row_actions = actions;
         self
+    }
+
+    /// Sets the message displayed when the table's backing data is empty.
+    pub fn empty_message(mut self, message: impl Into<SharedString>) -> Self {
+        self.empty_message = message.into();
+        self
+    }
+
+    /// Sets the message displayed when filtering produces no matching rows.
+    pub fn no_results_message(mut self, message: impl Into<SharedString>) -> Self {
+        self.no_results_message = message.into();
+        self
+    }
+
+    /// Returns true when sticky headers are enabled.
+    pub fn has_sticky_header(&self) -> bool {
+        self.sticky_header
+    }
+
+    /// Returns true when infinite-scroll load-more is configured.
+    pub fn has_load_more_handler(&self) -> bool {
+        self.on_load_more.is_some()
+    }
+
+    /// Coarse load-more threshold class for content-safe diagnostics.
+    pub fn load_more_threshold_class(&self) -> &'static str {
+        if self.load_more_threshold <= 0.33 {
+            "early"
+        } else if self.load_more_threshold <= 0.75 {
+            "normal"
+        } else {
+            "late"
+        }
+    }
+
+    /// Returns true when page fetching is configured for virtual data.
+    pub fn has_fetch_page_handler(&self) -> bool {
+        self.on_fetch_page.is_some()
+    }
+
+    /// Returns true when cell edit callbacks are configured.
+    pub fn has_cell_edit_handler(&self) -> bool {
+        self.on_cell_edit.is_some()
+    }
+
+    /// Returns true when cell double-click callbacks are configured.
+    pub fn has_cell_double_click_handler(&self) -> bool {
+        self.on_cell_double_click.is_some()
+    }
+
+    /// Returns true when row click callbacks are configured.
+    pub fn has_row_click_handler(&self) -> bool {
+        self.on_row_click.is_some()
+    }
+
+    /// Returns true when row selection UI is enabled.
+    pub fn has_selection_ui(&self) -> bool {
+        self.show_selection
+    }
+
+    /// Returns true when selection-change callbacks are configured.
+    pub fn has_selection_change_handler(&self) -> bool {
+        self.on_selection_change.is_some()
+    }
+
+    /// Returns true when search UI is enabled.
+    pub fn has_search_ui(&self) -> bool {
+        self.show_search
+    }
+
+    /// Returns true when the active search query is non-empty.
+    pub fn has_search_query(&self) -> bool {
+        !self.search_query.is_empty()
+    }
+
+    /// Returns the active search query length without exposing the query.
+    pub fn search_query_len_bytes(&self) -> usize {
+        self.search_query.len()
+    }
+
+    /// Returns true when search is scoped to one column.
+    pub fn has_search_column(&self) -> bool {
+        self.search_column.is_some()
+    }
+
+    /// Returns the number of row actions.
+    pub fn row_action_count(&self) -> usize {
+        self.row_actions.len()
+    }
+
+    /// Returns true when the context menu is open.
+    pub fn has_context_menu(&self) -> bool {
+        self.context_menu.is_some()
+    }
+
+    /// Returns true when a cell is currently being edited.
+    pub fn has_editing_cell(&self) -> bool {
+        self.editing_cell.is_some()
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "data_table({}, sticky_header={}, load_more={}, load_more_threshold={}, load_more_triggered={}, fetch_page={}, edit_handler={}, double_click_handler={}, row_click_handler={}, selection_ui={}, selection_handler={}, search_ui={}, has_search_query={}, search_query_len_bytes={}, search_column={}, row_actions={}, context_menu={}, editing_cell={}, edit_dialog={})",
+            self.state.to_text(),
+            self.has_sticky_header(),
+            self.has_load_more_handler(),
+            self.load_more_threshold_class(),
+            self.load_more_triggered,
+            self.has_fetch_page_handler(),
+            self.has_cell_edit_handler(),
+            self.has_cell_double_click_handler(),
+            self.has_row_click_handler(),
+            self.has_selection_ui(),
+            self.has_selection_change_handler(),
+            self.has_search_ui(),
+            self.has_search_query(),
+            self.search_query_len_bytes(),
+            self.has_search_column(),
+            self.row_action_count(),
+            self.has_context_menu(),
+            self.has_editing_cell(),
+            self.use_edit_dialog
+        )
     }
 
     pub fn set_search(&mut self, query: String, cx: &mut Context<Self>) {
@@ -807,17 +1254,40 @@ impl<T: Clone + 'static> DataTable<T> {
         let theme = Theme::of(cx);
 
         let total_width = self.total_table_width();
-        let mut header_row = div().flex().w(total_width).min_w(total_width);
+        let mut header_row = div().flex().w_full().min_w(total_width);
 
         if self.show_selection {
             let all_selected = self.is_all_selected();
+            let focus_handle = self.select_all_focus_handle.clone();
+            let focus_on_mouse = focus_handle.clone();
+            let checked_state = if all_selected {
+                AccessibilityState::CHECKED
+            } else {
+                AccessibilityState::NONE
+            };
 
             header_row = header_row.child(
                 div()
+                    .id(ElementId::NamedChild(
+                        Box::new(self.id.clone()),
+                        "select-all".into(),
+                    ))
+                    .accessibility(
+                        AccessibilityAttributes::new(AccessibilityRole::CheckBox)
+                            .label(if all_selected {
+                                "Clear row selection"
+                            } else {
+                                "Select all rows"
+                            })
+                            .states(checked_state)
+                            .actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]),
+                    )
+                    .track_focus(&focus_handle.tab_index(0).tab_stop(true))
                     .flex()
                     .items_center()
                     .justify_center()
                     .w(px(50.0))
+                    .flex_shrink_0()
                     .px(px(16.0))
                     .py(px(12.0))
                     .text_size(px(13.0))
@@ -831,7 +1301,8 @@ impl<T: Clone + 'static> DataTable<T> {
                     .hover(|style| style.bg(theme.tokens.muted.opacity(0.7)))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|this, _event, window, cx| {
+                        cx.listener(move |this, _event, window, cx| {
+                            window.focus(&focus_on_mouse);
                             if this.is_all_selected() {
                                 this.clear_selection(window, cx);
                             } else {
@@ -839,11 +1310,21 @@ impl<T: Clone + 'static> DataTable<T> {
                             }
                         }),
                     )
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            if this.is_all_selected() {
+                                this.clear_selection(window, cx);
+                            } else {
+                                this.select_all(window, cx);
+                            }
+                            cx.stop_propagation();
+                        }
+                    }))
                     .child(
                         div()
                             .w(px(16.0))
                             .h(px(16.0))
-                            .rounded(px(3.0))
+                            .rounded(theme.tokens.radius_sm)
                             .border_1()
                             .border_color(if all_selected {
                                 theme.tokens.primary
@@ -866,16 +1347,38 @@ impl<T: Clone + 'static> DataTable<T> {
             .enumerate()
             .map(|(col_idx, column)| {
                 let width = self.state.column_widths[col_idx];
+                let is_last_column = col_idx + 1 == self.state.columns.len();
                 let is_sorted = self.state.sort_column == Some(col_idx);
                 let sortable = column.sortable;
+                let focus_handle = self.header_focus_handles[col_idx].clone();
+                let focus_on_mouse = focus_handle.clone();
+                let header_label = if sortable {
+                    format!("Sort by {}", column.header)
+                } else {
+                    column.header.to_string()
+                };
 
                 let mut header_cell = div()
+                    .id(ElementId::NamedChild(
+                        Box::new(self.id.clone()),
+                        format!("header-{col_idx}").into(),
+                    ))
+                    .accessibility(
+                        AccessibilityAttributes::new(if sortable {
+                            AccessibilityRole::Button
+                        } else {
+                            AccessibilityRole::StaticText
+                        })
+                        .label(header_label),
+                    )
                     .flex()
                     .items_center()
                     .justify_between()
                     .px(px(16.0))
                     .py(px(12.0))
-                    .w(width)
+                    .min_w(width)
+                    .when(is_last_column, |cell| cell.flex_1())
+                    .when(!is_last_column, |cell| cell.w(width).flex_shrink_0())
                     .text_size(px(13.0))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.tokens.muted_foreground)
@@ -909,27 +1412,55 @@ impl<T: Clone + 'static> DataTable<T> {
                     );
 
                 if sortable {
-                    header_cell = header_cell.on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _event, _window, cx| {
-                            let new_direction = if this.state.sort_column == Some(col_idx) {
-                                match this.state.sort_direction {
-                                    SortDirection::Ascending => SortDirection::Descending,
-                                    SortDirection::Descending => SortDirection::Ascending,
-                                }
-                            } else {
-                                SortDirection::Ascending
-                            };
+                    header_cell = header_cell
+                        .track_focus(&focus_handle.tab_index(0).tab_stop(true))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _event, window, cx| {
+                                window.focus(&focus_on_mouse);
+                                let new_direction = if this.state.sort_column == Some(col_idx) {
+                                    match this.state.sort_direction {
+                                        SortDirection::Ascending => SortDirection::Descending,
+                                        SortDirection::Descending => SortDirection::Ascending,
+                                    }
+                                } else {
+                                    SortDirection::Ascending
+                                };
 
-                            this.state.sort_by_column(col_idx, new_direction);
-                            cx.notify();
-                        }),
-                    );
+                                this.state.sort_by_column(col_idx, new_direction);
+                                cx.notify();
+                            }),
+                        )
+                        .on_key_down(cx.listener(
+                            move |this, event: &KeyDownEvent, _window, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    let new_direction = if this.state.sort_column == Some(col_idx) {
+                                        match this.state.sort_direction {
+                                            SortDirection::Ascending => SortDirection::Descending,
+                                            SortDirection::Descending => SortDirection::Ascending,
+                                        }
+                                    } else {
+                                        SortDirection::Ascending
+                                    };
+                                    this.state.sort_by_column(col_idx, new_direction);
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }
+                            },
+                        ));
                 }
 
                 header_cell = header_cell.when(column.resizable, |el| {
                     el.child(
                         div()
+                            .id(ElementId::NamedChild(
+                                Box::new(self.id.clone()),
+                                format!("resize-{col_idx}").into(),
+                            ))
+                            .accessibility(
+                                AccessibilityAttributes::new(AccessibilityRole::Separator)
+                                    .label(format!("Resize {} column", column.header)),
+                            )
                             .w(px(4.0))
                             .h_full()
                             .absolute()
@@ -950,10 +1481,291 @@ impl<T: Clone + 'static> DataTable<T> {
                     )
                 });
 
-                header_cell
+                header_cell.relative()
             });
 
-        header_row.children(header_cells)
+        header_row
+            .accessibility(AccessibilityAttributes::new(AccessibilityRole::Group).label("Columns"))
+            .children(header_cells)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::*;
+    use kael::{px, TestAppContext};
+
+    #[derive(Clone)]
+    struct PrivateRow {
+        name: SharedString,
+        revenue: SharedString,
+    }
+
+    fn private_columns() -> Vec<ColumnDef<PrivateRow>> {
+        vec![
+            ColumnDef::new("private-name", "Secret Customer", |row: &PrivateRow| {
+                row.name.clone()
+            })
+            .width(px(220.0))
+            .sortable(true)
+            .editable(true),
+            ColumnDef::new("private-revenue", "Private Revenue", |row: &PrivateRow| {
+                row.revenue.clone()
+            })
+            .resizable(false)
+            .sortable(false),
+        ]
+    }
+
+    #[::core::prelude::v1::test]
+    fn data_table_column_and_action_summary_is_content_safe() {
+        let column = ColumnDef::new("private-customer", "Secret Customer", |row: &PrivateRow| {
+            row.name.clone()
+        })
+        .width(px(240.0))
+        .min_width(px(120.0))
+        .sortable(true)
+        .editable(true);
+
+        assert_eq!(column.id_len_bytes(), "private-customer".len());
+        assert_eq!(column.header_len_bytes(), "Secret Customer".len());
+        assert_eq!(column.width_class(), "wide");
+        assert_eq!(column.min_width_class(), "standard");
+
+        let column_summary = column.to_text();
+        assert!(column_summary.contains("sortable=true"));
+        assert!(column_summary.contains("editable=true"));
+        assert!(!column_summary.contains("private-customer"));
+        assert!(!column_summary.contains("Secret Customer"));
+        assert!(!column_summary.contains("240"));
+        assert!(!column_summary.contains("120"));
+
+        let action =
+            RowAction::new("private-delete", "Delete Secret Customer", |_, _, _| {}).destructive();
+        assert_eq!(action.id_len_bytes(), "private-delete".len());
+        assert_eq!(action.label_len_bytes(), "Delete Secret Customer".len());
+        assert!(action.is_destructive());
+
+        let action_summary = action.to_text();
+        assert!(action_summary.contains("destructive=true"));
+        assert!(!action_summary.contains("private-delete"));
+        assert!(!action_summary.contains("Delete Secret Customer"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn data_table_state_summary_is_content_safe() {
+        let mut state = DataTableState::new(
+            vec![
+                PrivateRow {
+                    name: "Acme Private".into(),
+                    revenue: "$42,000".into(),
+                },
+                PrivateRow {
+                    name: "Zenith Secret".into(),
+                    revenue: "$12,000".into(),
+                },
+            ],
+            private_columns(),
+        );
+
+        state.sort_by_column(0, SortDirection::Descending);
+        state.toggle_row(1);
+
+        assert_eq!(SortDirection::Descending.to_text(), "descending");
+        assert_eq!(state.column_count(), 2);
+        assert_eq!(state.row_count(), 2);
+        assert_eq!(state.backing_kind(), "in_memory");
+        assert_eq!(state.selected_count(), 1);
+        assert!(state.has_sort());
+        assert_eq!(state.sort_column_index(), Some(0));
+        assert_eq!(state.sort_direction_key(), "descending");
+        assert_eq!(state.sortable_column_count(), 1);
+        assert_eq!(state.editable_column_count(), 1);
+        assert_eq!(state.resizable_column_count(), 1);
+
+        let summary = state.to_text();
+        assert!(summary.contains("columns=2"));
+        assert!(summary.contains("rows=2"));
+        assert!(summary.contains("backing=in_memory"));
+        assert!(summary.contains("selected=1"));
+        assert!(!summary.contains("Acme Private"));
+        assert!(!summary.contains("Zenith Secret"));
+        assert!(!summary.contains("Secret Customer"));
+        assert!(!summary.contains("private-name"));
+        assert!(!summary.contains("$42,000"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn sorting_preserves_selected_records_and_rejects_inert_columns() {
+        let mut state = DataTableState::new(
+            vec![
+                PrivateRow {
+                    name: "Bravo".into(),
+                    revenue: "$20".into(),
+                },
+                PrivateRow {
+                    name: "Alpha".into(),
+                    revenue: "$10".into(),
+                },
+            ],
+            private_columns(),
+        );
+        state.toggle_row(0);
+
+        state.sort_by_column(0, SortDirection::Ascending);
+
+        assert_eq!(state.selected_rows, vec![1]);
+        assert_eq!(state.get_row(1).map(|row| row.name.as_ref()), Some("Bravo"));
+
+        state.sort_by_column(1, SortDirection::Descending);
+        assert_eq!(state.sort_column_index(), Some(0));
+        state.sort_by_column(99, SortDirection::Descending);
+        assert_eq!(state.sort_column_index(), Some(0));
+    }
+
+    #[::core::prelude::v1::test]
+    fn data_changes_and_column_resizing_keep_state_valid() {
+        let mut state = DataTableState::new(
+            vec![PrivateRow {
+                name: "Selected".into(),
+                revenue: "$1".into(),
+            }],
+            private_columns(),
+        );
+        state.toggle_row(0);
+        state.toggle_row(9);
+        assert_eq!(state.selected_rows, vec![0]);
+
+        state.resize_column(0, px(f32::NAN));
+        assert_eq!(state.column_widths[0], px(220.0));
+        state.resize_column(0, px(1.0));
+        assert_eq!(state.column_widths[0], px(80.0));
+
+        state.replace_in_memory_data(vec![PrivateRow {
+            name: "Replacement".into(),
+            revenue: "$2".into(),
+        }]);
+        assert!(state.selected_rows.is_empty());
+    }
+
+    #[::core::prelude::v1::test]
+    fn short_in_memory_tables_fit_their_rows_but_virtual_tables_keep_a_viewport() {
+        let short = DataTableState::new(
+            vec![
+                PrivateRow {
+                    name: "One".into(),
+                    revenue: "$1".into(),
+                },
+                PrivateRow {
+                    name: "Two".into(),
+                    revenue: "$2".into(),
+                },
+            ],
+            private_columns(),
+        );
+        assert_eq!(short.effective_viewport_height(2), 96.0);
+        assert_eq!(short.effective_viewport_height(0), 48.0);
+
+        let mut virtual_table = DataTableState::new(Vec::<PrivateRow>::new(), private_columns());
+        virtual_table.virtual_reset(10_000, Some(200));
+        assert_eq!(virtual_table.effective_viewport_height(10_000), 600.0);
+    }
+
+    #[::core::prelude::v1::test]
+    fn nested_table_scroll_only_captures_wheel_input_it_can_consume() {
+        assert!(!should_capture_vertical_scroll(0.0, 192.0, 192.0, -40.0));
+        assert!(!should_capture_vertical_scroll(0.0, 192.0, 192.0, 40.0));
+
+        assert!(should_capture_vertical_scroll(0.0, 960.0, 240.0, -40.0));
+        assert!(!should_capture_vertical_scroll(0.0, 960.0, 240.0, 40.0));
+        assert!(should_capture_vertical_scroll(320.0, 960.0, 240.0, -40.0));
+        assert!(should_capture_vertical_scroll(320.0, 960.0, 240.0, 40.0));
+        assert!(!should_capture_vertical_scroll(720.0, 960.0, 240.0, -40.0));
+        assert!(should_capture_vertical_scroll(720.0, 960.0, 240.0, 40.0));
+
+        assert!(!should_capture_vertical_scroll(
+            f32::NAN,
+            960.0,
+            240.0,
+            -40.0
+        ));
+    }
+
+    #[::core::prelude::v1::test]
+    fn data_table_virtual_summary_is_content_safe() {
+        let mut state = DataTableState::new(Vec::<PrivateRow>::new(), private_columns());
+        state.virtual_reset(10_000, Some(250));
+        state.virtual_set_page(
+            0,
+            vec![PrivateRow {
+                name: "Cached Secret Row".into(),
+                revenue: "$99,000".into(),
+            }],
+        );
+
+        assert_eq!(state.backing_kind(), "virtual");
+        assert!(state.is_virtual());
+        assert_eq!(state.row_count(), 10_000);
+        assert_eq!(state.cached_row_count(), 1);
+        assert_eq!(state.page_size(), Some(250));
+
+        let summary = state.to_text();
+        assert!(summary.contains("backing=virtual"));
+        assert!(summary.contains("rows=10000"));
+        assert!(summary.contains("cached_rows=1"));
+        assert!(!summary.contains("Cached Secret Row"));
+        assert!(!summary.contains("$99,000"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn data_table_summary_is_content_safe() {
+        let cx = TestAppContext::single();
+        let table = cx.update(|cx| {
+            cx.new(|cx| {
+                DataTable::new(
+                    vec![PrivateRow {
+                        name: "Delta Confidential".into(),
+                        revenue: "$7,000".into(),
+                    }],
+                    private_columns(),
+                    cx,
+                )
+                .show_selection(true)
+                .on_selection_change(|_, _, _| {})
+                .on_load_more(|_, _| {})
+                .on_fetch_page(|_, _, _, _| {})
+                .on_cell_edit(|_, _, _, _, _| {})
+                .on_cell_double_click(|_, _, _, _, _| {})
+                .on_row_click(|_, _, _, _| {})
+                .row_actions(vec![RowAction::new(
+                    "private-open",
+                    "Open Secret Customer",
+                    |_, _, _| {},
+                )])
+            })
+        });
+
+        cx.update(|cx| {
+            let mut table = table.update(cx, |table, cx| {
+                table.set_search("delta confidential".to_string(), cx);
+                table.set_search_column(Some(0), cx);
+                table.to_text()
+            });
+
+            assert!(table.contains("selection_ui=true"));
+            assert!(table.contains("load_more=true"));
+            assert!(table.contains("fetch_page=true"));
+            assert!(table.contains("edit_handler=true"));
+            assert!(table.contains("row_actions=1"));
+            assert!(table.contains("has_search_query=true"));
+            assert!(!table.contains("delta confidential"));
+            assert!(!table.contains("Delta Confidential"));
+            assert!(!table.contains("Open Secret Customer"));
+            assert!(!table.contains("$7,000"));
+
+            table.clear();
+        });
     }
 }
 
@@ -969,8 +1781,6 @@ impl<T: Clone + 'static> Render for DataTable<T> {
 
         let user_style = self.style.clone();
 
-        let viewport_height = self.state.viewport_height();
-
         let (total_items, filtered_indices): (usize, Option<Rc<Vec<usize>>>) =
             match &self.state.backing {
                 DataBacking::InMemory { .. } => {
@@ -979,16 +1789,19 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                 }
                 DataBacking::Virtual { .. } => (self.state.total_items(), None),
             };
+        let viewport_height = self.state.effective_viewport_height(total_items);
         let row_extent = px(self.state.row_height());
         let total_width = self.total_table_width();
 
         let view_entity = cx.entity().clone();
         let filtered_indices_for_render = filtered_indices.clone();
+        let table_id = self.id.clone();
+        let table_id_for_rows = table_id.clone();
         let renderer = move |this: &mut DataTable<T>,
                              range: Range<usize>,
-                             _window: &mut Window,
+                             window: &mut Window,
                              cx: &mut Context<DataTable<T>>| {
-            let theme = Theme::of(cx);
+            let theme = Theme::of(cx).clone();
             range
                 .map(|row_idx| {
                     let actual_idx = if let Some(ref map) = filtered_indices_for_render {
@@ -999,10 +1812,34 @@ impl<T: Clone + 'static> Render for DataTable<T> {
 
                     if let Some(row_data) = this.state.get_row(actual_idx) {
                         let is_selected = this.state.is_row_selected(actual_idx);
+                        let row_clickable = this.on_row_click.is_some();
+                        let row_id = ElementId::NamedChild(
+                            Box::new(table_id_for_rows.clone()),
+                            format!("row-{actual_idx}").into(),
+                        );
+                        let row_focus_handle = window
+                            .use_keyed_state(row_id.clone(), cx, |_, cx| cx.focus_handle())
+                            .read(cx)
+                            .clone();
+                        let mut row_state = AccessibilityState::NONE;
+                        if is_selected {
+                            row_state |= AccessibilityState::SELECTED;
+                        }
 
                         let mut row_div = div()
+                            .id(row_id)
+                            .accessibility(
+                                AccessibilityAttributes::new(AccessibilityRole::ListItem)
+                                    .label(format!("Row {}", actual_idx + 1))
+                                    .states(row_state),
+                            )
+                            .when(row_clickable, |row| {
+                                row.track_focus(
+                                    &row_focus_handle.clone().tab_index(0).tab_stop(true),
+                                )
+                            })
                             .flex()
-                            .w(total_width)
+                            .w_full()
                             .min_w(total_width)
                             .h(row_extent)
                             .bg(if is_selected {
@@ -1025,28 +1862,73 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                         }
 
                         if this.on_row_click.is_some() {
-                            row_div = row_div.on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                                    if event.click_count > 1 {
-                                        return;
-                                    }
-                                    if let Some(row) = this.state.get_row(actual_idx) {
-                                        if let Some(ref cb) = this.on_row_click {
-                                            (cb)(actual_idx, row, window, cx);
+                            let focus_on_mouse = row_focus_handle.clone();
+                            row_div = row_div
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                        if event.click_count > 1 {
+                                            return;
                                         }
-                                    }
-                                }),
-                            );
+                                        window.focus(&focus_on_mouse);
+                                        if let Some(row) = this.state.get_row(actual_idx) {
+                                            if let Some(ref cb) = this.on_row_click {
+                                                (cb)(actual_idx, row, window, cx);
+                                            }
+                                        }
+                                    }),
+                                )
+                                .on_key_down(cx.listener(
+                                    move |this, event: &KeyDownEvent, window, cx| {
+                                        if matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                        {
+                                            if let Some(row) = this.state.get_row(actual_idx) {
+                                                if let Some(ref cb) = this.on_row_click {
+                                                    (cb)(actual_idx, row, window, cx);
+                                                }
+                                            }
+                                            cx.stop_propagation();
+                                        }
+                                    },
+                                ));
                         }
 
                         if this.show_selection {
+                            let selection_id = ElementId::NamedChild(
+                                Box::new(table_id_for_rows.clone()),
+                                format!("select-{actual_idx}").into(),
+                            );
+                            let selection_focus_handle = window
+                                .use_keyed_state(selection_id.clone(), cx, |_, cx| {
+                                    cx.focus_handle()
+                                })
+                                .read(cx)
+                                .clone();
+                            let focus_on_mouse = selection_focus_handle.clone();
                             row_div = row_div.child(
                                 div()
+                                    .id(selection_id)
+                                    .accessibility(
+                                        AccessibilityAttributes::new(AccessibilityRole::CheckBox)
+                                            .label(format!("Select row {}", actual_idx + 1))
+                                            .states(if is_selected {
+                                                AccessibilityState::CHECKED
+                                            } else {
+                                                AccessibilityState::NONE
+                                            })
+                                            .actions(vec![
+                                                AccessibilityAction::Focus,
+                                                AccessibilityAction::Click,
+                                            ]),
+                                    )
+                                    .track_focus(
+                                        &selection_focus_handle.tab_index(0).tab_stop(true),
+                                    )
                                     .flex()
                                     .items_center()
                                     .justify_center()
                                     .w(px(50.0))
+                                    .flex_shrink_0()
                                     .px(px(16.0))
                                     .py(px(12.0))
                                     .border_b_1()
@@ -1056,14 +1938,27 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |this, _event, window, cx| {
+                                            window.focus(&focus_on_mouse);
                                             this.toggle_row_selection(actual_idx, window, cx);
+                                            cx.stop_propagation();
                                         }),
                                     )
+                                    .on_key_down(cx.listener(
+                                        move |this, event: &KeyDownEvent, window, cx| {
+                                            if matches!(
+                                                event.keystroke.key.as_str(),
+                                                "enter" | "space"
+                                            ) {
+                                                this.toggle_row_selection(actual_idx, window, cx);
+                                                cx.stop_propagation();
+                                            }
+                                        },
+                                    ))
                                     .child(
                                         div()
                                             .w(px(16.0))
                                             .h(px(16.0))
-                                            .rounded(px(3.0))
+                                            .rounded(theme.tokens.radius_sm)
                                             .border_1()
                                             .border_color(if is_selected {
                                                 theme.tokens.primary
@@ -1086,17 +1981,28 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                                 .enumerate()
                                 .map(|(col_idx, column)| {
                                     let width = this.state.column_widths[col_idx];
+                                    let is_last_column = col_idx + 1 == this.state.columns.len();
                                     let cell_value = (column.accessor)(row_data);
                                     let is_editable = column.editable;
                                     let is_editing =
                                         this.editing_cell == Some((actual_idx, col_idx));
 
                                     let mut cell_div = div()
+                                        .accessibility(
+                                            AccessibilityAttributes::new(AccessibilityRole::Group)
+                                                .label(format!(
+                                                    "{} column, row {}",
+                                                    column.header,
+                                                    actual_idx + 1
+                                                )),
+                                        )
                                         .flex()
                                         .items_center()
                                         .px(px(16.0))
                                         .py(px(12.0))
-                                        .w(width)
+                                        .min_w(width)
+                                        .when(is_last_column, |cell| cell.flex_1())
+                                        .when(!is_last_column, |cell| cell.w(width).flex_shrink_0())
                                         .text_size(px(13.0))
                                         .text_color(theme.tokens.foreground)
                                         .border_b_1()
@@ -1189,18 +2095,16 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                                     }
                                 });
 
-                        row_div.children(cells)
+                        row_div.children(cells).into_any_element()
                     } else {
-                        let mut skeleton_row = div()
-                            .flex()
-                            .w(total_width)
-                            .min_w(total_width)
-                            .h(row_extent)
-                            .bg(if row_idx % 2 == 0 {
-                                theme.tokens.background
-                            } else {
-                                theme.tokens.muted.opacity(0.3)
-                            });
+                        let mut skeleton_row =
+                            div().flex().w_full().min_w(total_width).h(row_extent).bg(
+                                if row_idx % 2 == 0 {
+                                    theme.tokens.background
+                                } else {
+                                    theme.tokens.muted.opacity(0.3)
+                                },
+                            );
                         if this.show_selection {
                             skeleton_row = skeleton_row.child(
                                 div()
@@ -1208,6 +2112,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                                     .items_center()
                                     .justify_center()
                                     .w(px(50.0))
+                                    .flex_shrink_0()
                                     .px(px(16.0))
                                     .py(px(12.0))
                                     .border_b_1()
@@ -1217,12 +2122,15 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                         }
                         let cells = this.state.columns.iter().enumerate().map(|(col_idx, _)| {
                             let width = this.state.column_widths[col_idx];
+                            let is_last_column = col_idx + 1 == this.state.columns.len();
                             div()
                                 .flex()
                                 .items_center()
                                 .px(px(16.0))
                                 .py(px(12.0))
-                                .w(width)
+                                .min_w(width)
+                                .when(is_last_column, |cell| cell.flex_1())
+                                .when(!is_last_column, |cell| cell.w(width).flex_shrink_0())
                                 .border_b_1()
                                 .border_r_1()
                                 .border_color(theme.tokens.border.opacity(0.5))
@@ -1230,11 +2138,11 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                                     div()
                                         .w(px(96.0))
                                         .h(px(12.0))
-                                        .rounded(px(4.0))
+                                        .rounded(theme.tokens.radius_sm)
                                         .bg(theme.tokens.muted.opacity(0.6)),
                                 )
                         });
-                        skeleton_row.children(cells)
+                        skeleton_row.children(cells).into_any_element()
                     }
                 })
                 .collect::<Vec<_>>()
@@ -1244,7 +2152,7 @@ impl<T: Clone + 'static> Render for DataTable<T> {
         let view_for_near_end = view_entity.clone();
         let body_scroll = vlist_uniform_view(
             view_entity,
-            "data-table-body",
+            ElementId::NamedChild(Box::new(table_id.clone()), "body-list".into()),
             total_items,
             row_extent,
             renderer,
@@ -1310,73 +2218,69 @@ impl<T: Clone + 'static> Render for DataTable<T> {
             });
         });
 
+        let body_content_height = total_items as f32 * self.state.row_height();
+        let body_viewport_height = viewport_height;
+        let empty_body_message = if self.search_query.is_empty() {
+            self.empty_message.clone()
+        } else {
+            self.no_results_message.clone()
+        };
+        let body_content = if total_items == 0 {
+            div()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .px(px(16.0))
+                .text_size(px(13.0))
+                .text_color(theme.tokens.muted_foreground)
+                .child(empty_body_message)
+                .into_any_element()
+        } else {
+            body_scroll.into_any_element()
+        };
         let body_container = div()
-            .id("data-table-body-container")
+            .id(ElementId::NamedChild(
+                Box::new(table_id.clone()),
+                "body".into(),
+            ))
+            .accessibility(AccessibilityAttributes::new(AccessibilityRole::List))
             .h(px(viewport_height))
-            .on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, _window, cx| {
-                let delta_y: f32 = match &event.delta {
-                    ScrollDelta::Lines(delta) => delta.y,
-                    ScrollDelta::Pixels(delta) => delta.y.into(),
-                };
+            .on_scroll_wheel(
+                cx.listener(move |view, event: &ScrollWheelEvent, _window, cx| {
+                    let delta_y: f32 = match &event.delta {
+                        ScrollDelta::Lines(delta) => delta.y,
+                        ScrollDelta::Pixels(delta) => delta.y.into(),
+                    };
 
-                let scroll_offset = view.scroll_handle.offset();
-                let scroll_y: f32 = (-scroll_offset.y).into();
-                let max_scroll = view.state.total_height() - view.state.viewport_height();
-
-                let can_scroll_down = scroll_y < max_scroll && delta_y < 0.0;
-                let can_scroll_up = scroll_y > 0.0 && delta_y > 0.0;
-
-                let at_top = scroll_y <= 0.0 && delta_y > 0.0;
-                let at_bottom = scroll_y >= max_scroll && delta_y < 0.0;
-
-                if can_scroll_down || can_scroll_up || at_top || at_bottom {
-                    cx.stop_propagation();
-                }
-
-                cx.notify();
-            }))
-            .child(body_scroll);
+                    let scroll_offset = view.scroll_handle.offset();
+                    let scroll_y: f32 = (-scroll_offset.y).into();
+                    if should_capture_vertical_scroll(
+                        scroll_y,
+                        body_content_height,
+                        body_viewport_height,
+                        delta_y,
+                    ) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .child(body_content);
 
         let scrollable_content = div()
-            .id("data-table-content")
+            .id(ElementId::NamedChild(
+                Box::new(table_id.clone()),
+                "content".into(),
+            ))
             .flex()
             .flex_col()
             .overflow_x_scroll()
             .w_full()
-            .cursor(CursorStyle::PointingHand)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-                    this.is_dragging_horizontal = true;
-                    this.drag_start_x = event.position.x.into();
-                    this.drag_scroll_start_x = 0.0;
-                    cx.notify();
-                }),
-            )
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
-                if this.is_dragging_horizontal {
-                    let current_x: f32 = event.position.x.into();
-                    let delta_x = this.drag_start_x - current_x;
-
-                    let _new_scroll_x = this.drag_scroll_start_x + delta_x;
-
-                    cx.notify();
-                }
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _event, _window, cx| {
-                    if this.is_dragging_horizontal {
-                        this.is_dragging_horizontal = false;
-                        cx.notify();
-                    }
-                }),
-            )
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .w(total_width)
+                    .w_full()
                     .min_w(total_width)
                     .child(self.render_header(cx))
                     .child(body_container),
@@ -1427,6 +2331,10 @@ impl<T: Clone + 'static> Render for DataTable<T> {
             .map(|(row_idx, position)| self.render_context_menu(row_idx, position, cx));
 
         div()
+            .id(table_id)
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group).label("Data table"),
+            )
             .relative()
             .w_full()
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
@@ -1482,7 +2390,7 @@ impl<T: Clone + 'static> DataTable<T> {
                         .bg(theme.tokens.popover)
                         .border_1()
                         .border_color(theme.tokens.border)
-                        .rounded(theme.tokens.radius_md)
+                        .rounded(theme.tokens.radius_lg)
                         .shadow_xl()
                         .p(px(4.0))
                         .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -1499,6 +2407,7 @@ impl<T: Clone + 'static> DataTable<T> {
                                 .py(px(8.0))
                                 .rounded(theme.tokens.radius_sm)
                                 .cursor(CursorStyle::PointingHand)
+                                .transition(theme.tokens.transition_fast)
                                 .hover(|style| style.bg(theme.tokens.accent))
                                 .text_size(px(14.0))
                                 .text_color(if action.destructive {

@@ -2,7 +2,13 @@
 
 use crate::components::icon::Icon;
 use crate::components::icon_source::IconSource;
+use crate::components::input::InputSize;
 use crate::components::scrollable::scrollable_vertical;
+use crate::components::{
+    field::{Field, FieldStatusType},
+    field_status::FieldStatusVariant,
+    spinner::{Spinner, SpinnerSize},
+};
 use crate::theme::Theme;
 use kael::{prelude::*, *};
 
@@ -21,6 +27,7 @@ pub struct SelectOption<T: Clone> {
     pub label: SharedString,
     pub group: Option<SharedString>,
     pub icon: Option<IconSource>,
+    pub disabled: bool,
 }
 
 impl<T: Clone> SelectOption<T> {
@@ -30,6 +37,7 @@ impl<T: Clone> SelectOption<T> {
             label: label.into(),
             group: None,
             icon: None,
+            disabled: false,
         }
     }
 
@@ -42,6 +50,88 @@ impl<T: Clone> SelectOption<T> {
         self.icon = Some(icon.into());
         self
     }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SelectorOptionData {
+    pub value: SharedString,
+    pub label: Option<SharedString>,
+    pub disabled: bool,
+    pub icon: Option<IconSource>,
+}
+
+impl SelectorOptionData {
+    pub fn new(value: impl Into<SharedString>) -> Self {
+        Self {
+            value: value.into(),
+            label: None,
+            disabled: false,
+            icon: None,
+        }
+    }
+
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    pub fn icon(mut self, icon: impl Into<IconSource>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
+    pub fn into_select_option(self) -> SelectOption<SharedString> {
+        let label = self.label.unwrap_or_else(|| self.value.clone());
+        let mut option = SelectOption::new(self.value, label);
+        option.icon = self.icon;
+        option.disabled = self.disabled;
+        option
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SelectorDivider;
+
+#[derive(Clone, Debug)]
+pub struct SelectorSection {
+    pub title: Option<SharedString>,
+    pub options: Vec<SelectorOptionData>,
+}
+
+impl SelectorSection {
+    pub fn new(options: impl IntoIterator<Item = SelectorOptionData>) -> Self {
+        Self {
+            title: None,
+            options: options.into_iter().collect(),
+        }
+    }
+
+    pub fn title(mut self, title: impl Into<SharedString>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    pub fn into_select_options(self) -> Vec<SelectOption<SharedString>> {
+        let title = self.title;
+        self.options
+            .into_iter()
+            .map(|option| {
+                let mut option = option.into_select_option();
+                option.group = title.clone();
+                option
+            })
+            .collect()
+    }
 }
 
 pub struct Select<T: Clone + 'static> {
@@ -49,12 +139,19 @@ pub struct Select<T: Clone + 'static> {
     options: Vec<SelectOption<T>>,
     selected_index: Option<usize>,
     highlighted_index: Option<usize>,
+    label: Option<SharedString>,
+    label_hidden: bool,
+    description: Option<SharedString>,
     placeholder: Option<SharedString>,
     open: bool,
     disabled: bool,
+    optional: bool,
+    required: bool,
+    size: InputSize,
     searchable: bool,
     clearable: bool,
     loading: bool,
+    status: Option<(FieldStatusType, SharedString)>,
     search_query: String,
     on_change: Option<Box<dyn Fn(&T, &mut Window, &mut App) + Send + Sync + 'static>>,
     bounds: Bounds<Pixels>,
@@ -69,12 +166,19 @@ impl<T: Clone + 'static> Select<T> {
             options: Vec::new(),
             selected_index: None,
             highlighted_index: None,
+            label: None,
+            label_hidden: false,
+            description: None,
             placeholder: None,
             open: false,
             disabled: false,
+            optional: false,
+            required: false,
+            size: InputSize::default(),
             searchable: false,
             clearable: false,
             loading: false,
+            status: None,
             search_query: String::new(),
             on_change: None,
             bounds: Bounds::default(),
@@ -94,6 +198,26 @@ impl<T: Clone + 'static> Select<T> {
         self
     }
 
+    pub fn label<S: Into<SharedString>>(mut self, label: S) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    pub fn is_label_hidden(mut self, hidden: bool) -> Self {
+        self.label_hidden = hidden;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isLabelHidden(self, hidden: bool) -> Self {
+        self.is_label_hidden(hidden)
+    }
+
+    pub fn description<S: Into<SharedString>>(mut self, description: S) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
     pub fn placeholder<S: Into<SharedString>>(mut self, placeholder: S) -> Self {
         self.placeholder = Some(placeholder.into());
         self
@@ -104,9 +228,44 @@ impl<T: Clone + 'static> Select<T> {
         self
     }
 
+    #[allow(non_snake_case)]
+    pub fn isDisabled(self, disabled: bool) -> Self {
+        self.disabled(disabled)
+    }
+
+    pub fn optional(mut self, optional: bool) -> Self {
+        self.optional = optional;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isOptional(self, optional: bool) -> Self {
+        self.optional(optional)
+    }
+
+    pub fn required(mut self, required: bool) -> Self {
+        self.required = required;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isRequired(self, required: bool) -> Self {
+        self.required(required)
+    }
+
+    pub fn size(mut self, size: InputSize) -> Self {
+        self.size = size;
+        self
+    }
+
     pub fn searchable(mut self, searchable: bool) -> Self {
         self.searchable = searchable;
         self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn hasSearch(self, searchable: bool) -> Self {
+        self.searchable(searchable)
     }
 
     pub fn clearable(mut self, clearable: bool) -> Self {
@@ -114,8 +273,27 @@ impl<T: Clone + 'static> Select<T> {
         self
     }
 
+    #[allow(non_snake_case)]
+    pub fn hasClear(self, clearable: bool) -> Self {
+        self.clearable(clearable)
+    }
+
     pub fn loading(mut self, loading: bool) -> Self {
         self.loading = loading;
+        self
+    }
+
+    pub fn is_loading(self, loading: bool) -> Self {
+        self.loading(loading)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isLoading(self, loading: bool) -> Self {
+        self.loading(loading)
+    }
+
+    pub fn status(mut self, status: FieldStatusType, message: impl Into<SharedString>) -> Self {
+        self.status = Some((status, message.into()));
         self
     }
 
@@ -130,6 +308,15 @@ impl<T: Clone + 'static> Select<T> {
     pub fn leading_icon(mut self, icon: impl Into<IconSource>) -> Self {
         self.leading_icon = Some(icon.into());
         self
+    }
+
+    pub fn start_icon(self, icon: impl Into<IconSource>) -> Self {
+        self.leading_icon(icon)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn startIcon(self, icon: impl Into<IconSource>) -> Self {
+        self.start_icon(icon)
     }
 
     pub fn selected_value(&self) -> Option<&T> {
@@ -162,7 +349,18 @@ impl<T: Clone + 'static> Select<T> {
             self.open = !self.open;
             if self.open {
                 window.focus(&self.focus_handle);
-                self.highlighted_index = self.selected_index.or(Some(0));
+                self.highlighted_index = self
+                    .selected_index
+                    .filter(|index| {
+                        self.options
+                            .get(*index)
+                            .is_some_and(|option| !option.disabled)
+                    })
+                    .or_else(|| {
+                        self.filtered_options()
+                            .into_iter()
+                            .find_map(|(index, option)| (!option.disabled).then_some(index))
+                    });
             }
             cx.notify();
         }
@@ -184,7 +382,11 @@ impl<T: Clone + 'static> Select<T> {
     }
 
     fn select_option(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if index < self.options.len() {
+        if self
+            .options
+            .get(index)
+            .is_some_and(|option| !option.disabled)
+        {
             self.selected_index = Some(index);
             self.highlighted_index = Some(index);
             self.open = false;
@@ -205,7 +407,11 @@ impl<T: Clone + 'static> Select<T> {
             return;
         }
 
-        let filtered = self.filtered_options();
+        let filtered: Vec<_> = self
+            .filtered_options()
+            .into_iter()
+            .filter(|(_, option)| !option.disabled)
+            .collect();
         if filtered.is_empty() {
             return;
         }
@@ -229,7 +435,11 @@ impl<T: Clone + 'static> Select<T> {
             return;
         }
 
-        let filtered = self.filtered_options();
+        let filtered: Vec<_> = self
+            .filtered_options()
+            .into_iter()
+            .filter(|(_, option)| !option.disabled)
+            .collect();
         if filtered.is_empty() {
             return;
         }
@@ -272,7 +482,7 @@ impl<T: Clone + 'static> Styled for Select<T> {
 }
 
 impl<T: Clone + 'static> Render for Select<T> {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
         let user_style = self.style.clone();
 
@@ -285,25 +495,93 @@ impl<T: Clone + 'static> Render for Select<T> {
         let open = self.open;
         let highlighted_idx = self.highlighted_index;
         let bounds = self.bounds;
+        let entity_id = cx.entity().entity_id().as_u64();
+        let is_focused = self.focus_handle.is_focused(window);
 
         let maybe_selected_icon: Option<IconSource> = self
             .selected_index
             .and_then(|i| self.options.get(i))
             .and_then(|opt| opt.icon.clone());
         let leading_icon = self.leading_icon.clone().or(maybe_selected_icon);
+        let hover_ring = crate::astryx::input_hover_ring(theme.tokens.input);
+        let focus_ring = crate::astryx::focus_ring(theme.tokens.primary);
+        let status = self.status.clone();
+        let status_color = status.as_ref().map(|(status, _)| match status {
+            FieldStatusType::Warning => theme.tokens.warning,
+            FieldStatusType::Error => theme.tokens.destructive,
+            FieldStatusType::Success => theme.tokens.success,
+        });
+        let (height, padding_x, text_size, icon_size) = match self.size {
+            InputSize::Sm => (px(28.0), px(8.0), px(14.0), px(16.0)),
+            InputSize::Md => (px(32.0), px(12.0), px(14.0), px(16.0)),
+            InputSize::Lg => (px(36.0), px(12.0), px(14.0), px(16.0)),
+        };
+
+        let mut accessibility_state = if open {
+            AccessibilityState::EXPANDED
+        } else {
+            AccessibilityState::COLLAPSED
+        };
+        if self.disabled {
+            accessibility_state |= AccessibilityState::DISABLED;
+        }
+        if self.required {
+            accessibility_state |= AccessibilityState::REQUIRED;
+        }
+        if self.loading {
+            accessibility_state |= AccessibilityState::BUSY;
+        }
+        if is_focused {
+            accessibility_state |= AccessibilityState::FOCUSED;
+        }
+        if matches!(status.as_ref(), Some((FieldStatusType::Error, _))) {
+            accessibility_state |= AccessibilityState::INVALID;
+        }
+        let accessibility_label = self
+            .label
+            .clone()
+            .unwrap_or_else(|| SharedString::from("Select"));
+        let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::ComboBox)
+            .label(accessibility_label.to_string())
+            .placeholder(
+                self.placeholder
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "Select...".to_owned()),
+            )
+            .states(accessibility_state);
+        if self.selected_index.is_some() {
+            accessibility = accessibility.value(AccessibilityValue::Text(display_text.to_string()));
+        }
+        if !self.disabled && !self.loading {
+            accessibility = accessibility.actions(vec![
+                AccessibilityAction::Focus,
+                AccessibilityAction::Click,
+                if open {
+                    AccessibilityAction::Collapse
+                } else {
+                    AccessibilityAction::Expand
+                },
+            ]);
+        }
 
         let trigger = div()
-            .id("select-trigger")
+            .id(("select-trigger", entity_id))
             .relative()
+            .track_focus(&self.focus_handle.clone().tab_index(0).tab_stop(true))
+            .accessibility(accessibility)
             .flex()
             .items_center()
             .justify_between()
-            .h(px(40.0))
-            .px(px(12.0))
-            .bg(theme.tokens.background)
+            .gap(px(8.0))
+            .h(height)
+            .px(padding_x)
+            .bg(theme.tokens.card)
             .border_1()
-            .border_color(if open {
-                theme.tokens.ring
+            .border_color(if let Some(color) = status_color {
+                color
+            } else if open {
+                theme.tokens.primary
             } else {
                 theme.tokens.input
             })
@@ -313,18 +591,27 @@ impl<T: Clone + 'static> Render for Select<T> {
             } else {
                 theme.tokens.muted_foreground
             })
-            .text_size(px(14.0))
+            .text_size(text_size)
             .font_family(theme.tokens.font_family.clone())
             .transition(theme.tokens.transition_fast)
+            .shadow(smallvec::smallvec![crate::astryx::focus_ring(
+                kael::transparent_black()
+            )])
+            .when(open && !self.disabled, |div| {
+                div.shadow(smallvec::smallvec![focus_ring])
+            })
             .cursor(if self.disabled {
                 CursorStyle::Arrow
             } else {
                 CursorStyle::PointingHand
             })
             .when(!self.disabled, |div: Stateful<Div>| {
-                div.hover(|mut style| {
-                    style.border_color = Some(theme.tokens.ring);
+                div.hover(move |style| {
                     style
+                        .border_color(status_color.unwrap_or(theme.tokens.input))
+                        .shadow(smallvec::smallvec![
+                            status_color.map_or(hover_ring, crate::astryx::input_hover_ring)
+                        ])
                 })
             })
             .on_mouse_down(
@@ -338,14 +625,24 @@ impl<T: Clone + 'static> Render for Select<T> {
                     .flex()
                     .items_center()
                     .gap(px(8.0))
-                    .when_some(leading_icon.as_ref(), |div, src| {
-                        div.child(
-                            Icon::new(src.clone())
-                                .size(px(14.0))
-                                .color(theme.tokens.muted_foreground),
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .when_some(leading_icon.as_ref(), |this, src| {
+                        this.child(
+                            div()
+                                .size(px(16.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .flex_shrink_0()
+                                .child(
+                                    Icon::new(src.clone())
+                                        .size(icon_size)
+                                        .color(theme.tokens.muted_foreground),
+                                ),
                         )
                     })
-                    .child(display_text),
+                    .child(div().flex_1().min_w(px(0.0)).child(display_text)),
             )
             .child(
                 div()
@@ -356,12 +653,11 @@ impl<T: Clone + 'static> Render for Select<T> {
                     .child(
                         if self.clearable && self.selected_index.is_some() && !self.disabled {
                             div()
-                                .w(px(20.0))
-                                .h(px(20.0))
+                                .size(px(24.0))
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .rounded(px(10.0))
+                                .rounded(theme.tokens.radius_sm)
                                 .cursor(CursorStyle::PointingHand)
                                 .hover(|mut style| {
                                     style.background = Some(theme.tokens.muted.into());
@@ -371,22 +667,54 @@ impl<T: Clone + 'static> Render for Select<T> {
                                     MouseButton::Left,
                                     cx.listener(|this, _event: &MouseDownEvent, window, cx| {
                                         this.clear_selection(window, cx);
+                                        cx.stop_propagation();
                                     }),
+                                )
+                                .accessibility(
+                                    AccessibilityAttributes::new(AccessibilityRole::Button)
+                                        .label("Clear selection")
+                                        .actions(vec![AccessibilityAction::Click]),
                                 )
                                 .child(
                                     Icon::new("x")
-                                        .size(px(14.0))
+                                        .size(icon_size)
                                         .color(theme.tokens.muted_foreground),
                                 )
                                 .into_any_element()
+                        } else if self.loading {
+                            div()
+                                .size(px(24.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(Spinner::new().size(SpinnerSize::Sm))
+                                .into_any_element()
+                        } else if let Some((status, _)) = status.as_ref() {
+                            let (icon, color) = match status {
+                                FieldStatusType::Warning => {
+                                    ("triangle-alert", theme.tokens.warning)
+                                }
+                                FieldStatusType::Error => {
+                                    ("circle-alert", theme.tokens.destructive)
+                                }
+                                FieldStatusType::Success => ("circle-check", theme.tokens.success),
+                            };
+                            div()
+                                .size(px(24.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(Icon::new(icon).size(icon_size).color(color))
+                                .into_any_element()
                         } else {
                             div()
+                                .size(px(24.0))
                                 .flex()
                                 .items_center()
                                 .justify_center()
                                 .child(
-                                    Icon::new(if open { "arrow-up" } else { "arrow-down" })
-                                        .size(px(14.0))
+                                    Icon::new(if open { "chevron-up" } else { "chevron-down" })
+                                        .size(icon_size)
                                         .color(theme.tokens.muted_foreground),
                                 )
                                 .into_any_element()
@@ -410,7 +738,7 @@ impl<T: Clone + 'static> Render for Select<T> {
         let searchable = self.searchable;
         let search_query: SharedString = self.search_query.clone().into();
 
-        div()
+        let control = div()
             .relative()
             .w_full()
             .key_context("Select")
@@ -430,9 +758,9 @@ impl<T: Clone + 'static> Render for Select<T> {
                     else if event.keystroke.key.len() == 1 && !event.keystroke.modifiers.control && !event.keystroke.modifiers.platform {
                         this.search_query.push_str(&event.keystroke.key);
                         let filtered = this.filtered_options();
-                        if !filtered.is_empty() {
-                            this.highlighted_index = Some(filtered[0].0);
-                        }
+                        this.highlighted_index = filtered
+                            .into_iter()
+                            .find_map(|(index, option)| (!option.disabled).then_some(index));
                         cx.notify();
                     }
                 }))
@@ -457,10 +785,10 @@ impl<T: Clone + 'static> Render for Select<T> {
                                             .occlude()
                                             .mt(DROPDOWN_MARGIN)
                                             .bg(theme.tokens.popover)
-                                            .border_2()
-                                            .border_color(theme.tokens.ring)
-                                            .rounded(theme.tokens.radius_md)
-                                            .shadow_xl()
+                                            .border_1()
+                                            .border_color(theme.tokens.border)
+                                            .rounded(theme.tokens.radius_lg)
+                                            .shadow(theme.tokens.shadow_lg.to_vec())
                                             .overflow_hidden()
                                             .child(
                                                 div()
@@ -481,7 +809,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                         .px(px(8.0))
                                                                         .flex()
                                                                         .items_center()
-                                                                        .bg(theme.tokens.background)
+                                                                        .bg(theme.tokens.card)
                                                                         .border_1()
                                                                         .border_color(theme.tokens.input)
                                                                         .rounded(theme.tokens.radius_sm)
@@ -507,6 +835,11 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                 scrollable_vertical({
                                                                 let filtered = self.filtered_options();
                                                                 let loading = self.loading;
+                                                                let (item_padding_x, item_padding_y) = match self.size {
+                                                                    InputSize::Sm => (px(8.0), px(4.0)),
+                                                                    InputSize::Md => (px(8.0), px(6.0)),
+                                                                    InputSize::Lg => (px(8.0), px(8.0)),
+                                                                };
 
                                                                 div()
                                                                     .py(px(4.0))
@@ -571,45 +904,115 @@ impl<T: Clone + 'static> Render for Select<T> {
 
                                                                             let is_selected = self.selected_index == Some(*index);
                                                                             let is_highlighted = highlighted_idx == Some(*index);
+                                                                            let is_disabled = option.disabled;
                                                                             let index = *index;
+                                                                            let option_icon = option.icon.clone();
+                                                                            let option_label = option.label.clone();
+                                                                            let mut option_state = AccessibilityState::NONE;
+                                                                            if is_selected {
+                                                                                option_state |= AccessibilityState::SELECTED;
+                                                                            }
+                                                                            if is_highlighted {
+                                                                                option_state |= AccessibilityState::FOCUSED;
+                                                                            }
+                                                                            if is_disabled {
+                                                                                option_state |= AccessibilityState::DISABLED;
+                                                                            }
 
                                                                             elements.push(
                                                                                 div()
-                                                                                    .px(px(12.0))
-                                                                                    .py(px(8.0))
-                                                                                    .text_color(if is_selected {
-                                                                                        theme.tokens.primary
-                                                                                    } else {
-                                                                                        theme.tokens.popover_foreground
+                                                                                    .id(ElementId::NamedInteger(
+                                                                                        format!("select-option-{entity_id}").into(),
+                                                                                        index as u64,
+                                                                                    ))
+                                                                                    .accessibility({
+                                                                                        let mut attributes = AccessibilityAttributes::new(AccessibilityRole::ListItem)
+                                                                                            .label(option_label.to_string())
+                                                                                            .states(option_state);
+                                                                                        if !is_disabled {
+                                                                                            attributes = attributes.actions(vec![AccessibilityAction::Click]);
+                                                                                        }
+                                                                                        attributes
                                                                                     })
+                                                                                    .px(item_padding_x)
+                                                                                    .py(item_padding_y)
+                                                                                    .flex()
+                                                                                    .items_center()
+                                                                                    .justify_between()
+                                                                                    .gap(px(8.0))
+                                                                                    .rounded(theme.tokens.radius_md)
+                                                                                    .text_color(theme.tokens.popover_foreground)
                                                                                     .bg(if is_highlighted {
-                                                                                        theme.tokens.accent
+                                                                                        crate::astryx::overlay_hover(theme.tokens.background.l < 0.5)
                                                                                     } else {
                                                                                         kael::transparent_black()
                                                                                     })
-                                                                                    .hover(|mut style| {
-                                                                                        style.background = Some(theme.tokens.accent.into());
-                                                                                        style
+                                                                                    .when(!is_disabled, |this| {
+                                                                                        this.hover(|style| {
+                                                                                            style.bg(crate::astryx::overlay_hover(
+                                                                                                theme.tokens.background.l < 0.5,
+                                                                                            ))
+                                                                                        })
                                                                                     })
-                                                                                    .cursor(CursorStyle::PointingHand)
+                                                                                    .cursor(if is_disabled {
+                                                                                        CursorStyle::OperationNotAllowed
+                                                                                    } else {
+                                                                                        CursorStyle::PointingHand
+                                                                                    })
+                                                                                    .when(is_disabled, |this| this.opacity(0.5))
                                                                                     .text_size(px(14.0))
+                                                                                    .when(is_selected, |this| {
+                                                                                        this.font_weight(FontWeight::MEDIUM)
+                                                                                    })
                                                                                     .font_family(theme.tokens.font_family.clone())
-                                                                                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
-                                                                                        this.select_option(index, window, cx);
-                                                                                    }))
+                                                                                    .when(!is_disabled, |this| {
+                                                                                        this.on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
+                                                                                            this.select_option(index, window, cx);
+                                                                                        }))
+                                                                                    })
                                                                                     .child(
                                                                                         div()
                                                                                             .flex()
                                                                                             .items_center()
                                                                                             .gap(px(8.0))
-                                                                                            .when_some(option.icon.as_ref(), |div, src| {
-                                                                                                div.child(
-                                                                                                    Icon::new(src.clone())
-                                                                                                        .size(px(14.0))
-                                                                                                        .color(theme.tokens.muted_foreground)
+                                                                                            .flex_1()
+                                                                                            .min_w(px(0.0))
+                                                                                            .when_some(option_icon, |row, src| {
+                                                                                                row.child(
+                                                                                                    div()
+                                                                                                        .size(px(16.0))
+                                                                                                        .flex()
+                                                                                                        .items_center()
+                                                                                                        .justify_center()
+                                                                                                        .flex_shrink_0()
+                                                                                                        .child(
+                                                                                                            Icon::new(src)
+                                                                                                                .size(px(16.0))
+                                                                                                                .color(theme.tokens.muted_foreground)
+                                                                                                        )
                                                                                                 )
                                                                                             })
-                                                                                            .child(option.label.clone())
+                                                                                            .child(
+                                                                                                div()
+                                                                                                    .flex_1()
+                                                                                                    .min_w(px(0.0))
+                                                                                                    .child(option_label)
+                                                                                            )
+                                                                                    )
+                                                                                    .child(
+                                                                                        div()
+                                                                                            .size(px(16.0))
+                                                                                            .flex()
+                                                                                            .items_center()
+                                                                                            .justify_center()
+                                                                                            .flex_shrink_0()
+                                                                                            .when(is_selected, |slot| {
+                                                                                                slot.child(
+                                                                                                    Icon::new("check")
+                                                                                                        .size(px(16.0))
+                                                                                                        .color(theme.tokens.popover_foreground)
+                                                                                                )
+                                                                                            })
                                                                                     )
                                                                                     .into_any_element()
                                                                             );
@@ -619,6 +1022,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                     )
                                                                 })
                                                             })
+                                                            .id(("select-options", entity_id))
                                                         )
                                                     )
                                             ),
@@ -632,7 +1036,29 @@ impl<T: Clone + 'static> Render for Select<T> {
                 let mut div = this;
                 div.style().refine(&user_style);
                 div
-            })
+            });
+
+        match self.label.clone() {
+            Some(label) => {
+                let mut field = Field::new(label, control)
+                    .hidden_label(self.label_hidden)
+                    .optional(self.optional)
+                    .required(self.required)
+                    .disabled(self.disabled)
+                    .status_variant(FieldStatusVariant::Detached);
+
+                if let Some(description) = self.description.clone() {
+                    field = field.description(description);
+                }
+
+                if let Some((status, message)) = self.status.clone() {
+                    field = field.status(status, message);
+                }
+
+                field.into_any_element()
+            }
+            None => control.into_any_element(),
+        }
     }
 }
 

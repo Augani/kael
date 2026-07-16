@@ -54,7 +54,7 @@ fn main() {
                     })),
                     ..Default::default()
                 },
-                |_, cx| cx.new(|cx| SplitPaneDemo::new(cx)),
+                |_, cx| cx.new(SplitPaneDemo::new),
             )
             .unwrap();
         });

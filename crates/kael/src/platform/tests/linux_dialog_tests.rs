@@ -19,12 +19,16 @@ mod linux_dialog {
             message: SharedString::from("Test Message"),
             detail: Some(SharedString::from("Detail text")),
             buttons: vec![SharedString::from("OK"), SharedString::from("Cancel")],
+            default_button: Some(0),
+            cancel_button: Some(1),
         };
 
         assert_eq!(options.title.as_ref(), "Test Title");
         assert_eq!(options.message.as_ref(), "Test Message");
         assert_eq!(options.detail.as_ref().unwrap().as_ref(), "Detail text");
         assert_eq!(options.buttons.len(), 2);
+        assert_eq!(options.default_button, Some(0));
+        assert_eq!(options.cancel_button, Some(1));
     }
 
     #[test]
@@ -43,12 +47,22 @@ mod linux_dialog {
             directories: false,
             multiple: true,
             prompt: Some(SharedString::from("Select files")),
+            filters: vec![crate::FileDialogFilter::new("Images", [".png", "jpg"])],
         };
 
         assert!(options.files);
         assert!(!options.directories);
         assert!(options.multiple);
         assert!(options.prompt.is_some());
+        assert_eq!(options.filters[0].name.as_ref(), "Images");
+        assert_eq!(
+            options.filters[0]
+                .extensions
+                .iter()
+                .map(|extension| extension.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["png", "jpg"]
+        );
     }
 
     #[test]
@@ -59,6 +73,7 @@ mod linux_dialog {
             directories: true,
             multiple: false,
             prompt: None,
+            filters: vec![],
         };
 
         assert!(!options.files);

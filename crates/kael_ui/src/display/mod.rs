@@ -8,4 +8,5 @@ pub mod data_table;
 pub mod html;
 pub mod markdown;
 pub mod rich_text;
+pub mod selectable_card;
 pub mod table;

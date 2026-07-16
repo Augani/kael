@@ -1,1 +1,1 @@
-pub(crate) const BACKEND_NAME: &str = "mach-exception";
+pub(crate) const BACKEND_NAME: &str = "signal-handler";

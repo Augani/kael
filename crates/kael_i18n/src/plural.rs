@@ -20,23 +20,75 @@ pub enum PluralCategory {
 /// Applies locale-aware pluralization rules to select the correct string form.
 #[derive(Debug, Clone)]
 pub struct PluralRules {
-    #[allow(dead_code)]
-    locale: String,
+    language: String,
 }
 
 impl PluralRules {
     /// Creates plural rules for the given locale.
     pub fn new(locale: impl Into<String>) -> Self {
+        let locale = locale.into();
         Self {
-            locale: locale.into(),
+            language: locale
+                .split(['-', '_'])
+                .next()
+                .unwrap_or_default()
+                .to_ascii_lowercase(),
         }
     }
 
-    /// Selects the plural category for a given count using English-style rules.
+    /// Selects the CLDR-style cardinal plural category for an integer count.
     pub fn select(&self, count: u64) -> PluralCategory {
-        match count {
-            0 => PluralCategory::Zero,
-            1 => PluralCategory::One,
+        let modulo_10 = count % 10;
+        let modulo_100 = count % 100;
+        match self.language.as_str() {
+            "ar" => match count {
+                0 => PluralCategory::Zero,
+                1 => PluralCategory::One,
+                2 => PluralCategory::Two,
+                _ if (3..=10).contains(&modulo_100) => PluralCategory::Few,
+                _ if (11..=99).contains(&modulo_100) => PluralCategory::Many,
+                _ => PluralCategory::Other,
+            },
+            "cs" | "sk" => match count {
+                1 => PluralCategory::One,
+                2..=4 => PluralCategory::Few,
+                _ => PluralCategory::Other,
+            },
+            "fr" if count == 0 || count == 1 => PluralCategory::One,
+            "pl" => {
+                if count == 1 {
+                    PluralCategory::One
+                } else if (2..=4).contains(&modulo_10) && !(12..=14).contains(&modulo_100) {
+                    PluralCategory::Few
+                } else {
+                    PluralCategory::Many
+                }
+            }
+            "ro" => {
+                if count == 1 {
+                    PluralCategory::One
+                } else if count == 0 || (1..=19).contains(&modulo_100) {
+                    PluralCategory::Few
+                } else {
+                    PluralCategory::Other
+                }
+            }
+            "ru" | "uk" => {
+                if modulo_10 == 1 && modulo_100 != 11 {
+                    PluralCategory::One
+                } else if (2..=4).contains(&modulo_10) && !(12..=14).contains(&modulo_100) {
+                    PluralCategory::Few
+                } else if modulo_10 == 0
+                    || (5..=9).contains(&modulo_10)
+                    || (11..=14).contains(&modulo_100)
+                {
+                    PluralCategory::Many
+                } else {
+                    PluralCategory::Other
+                }
+            }
+            "ja" | "ko" | "th" | "vi" | "zh" => PluralCategory::Other,
+            _ if count == 1 => PluralCategory::One,
             _ => PluralCategory::Other,
         }
     }
@@ -81,7 +133,7 @@ mod tests {
     #[test]
     fn test_select_zero() {
         let rules = PluralRules::new("en-US");
-        assert_eq!(rules.select(0), PluralCategory::Zero);
+        assert_eq!(rules.select(0), PluralCategory::Other);
     }
 
     #[test]
@@ -107,7 +159,7 @@ mod tests {
 
         let rules = PluralRules::new("en-US");
 
-        assert_eq!(rules.format("items", 0, &catalog), "No items");
+        assert_eq!(rules.format("items", 0, &catalog), "0 items");
         assert_eq!(rules.format("items", 1, &catalog), "1 item");
         assert_eq!(rules.format("items", 5, &catalog), "5 items");
     }
@@ -135,5 +187,25 @@ mod tests {
         let catalog = StringCatalog::new("en-US");
         let rules = PluralRules::new("en-US");
         assert_eq!(rules.format("missing", 1, &catalog), "missing");
+    }
+
+    #[test]
+    fn selects_arabic_and_slavic_categories() {
+        let arabic = PluralRules::new("ar-SA");
+        assert_eq!(arabic.select(0), PluralCategory::Zero);
+        assert_eq!(arabic.select(2), PluralCategory::Two);
+        assert_eq!(arabic.select(7), PluralCategory::Few);
+        assert_eq!(arabic.select(15), PluralCategory::Many);
+        assert_eq!(arabic.select(100), PluralCategory::Other);
+
+        let russian = PluralRules::new("ru-RU");
+        assert_eq!(russian.select(1), PluralCategory::One);
+        assert_eq!(russian.select(2), PluralCategory::Few);
+        assert_eq!(russian.select(5), PluralCategory::Many);
+        assert_eq!(russian.select(11), PluralCategory::Many);
+        assert_eq!(russian.select(21), PluralCategory::One);
+
+        let japanese = PluralRules::new("ja-JP");
+        assert_eq!(japanese.select(1), PluralCategory::Other);
     }
 }

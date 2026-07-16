@@ -40,8 +40,7 @@ impl OfflineQueue {
     ///
     /// If the queue is at capacity, the lowest-priority (highest number) item is dropped.
     pub fn enqueue(&mut self, request: ApiRequest, priority: u32) -> String {
-        let id = format!("req_{}", self.next_id);
-        self.next_id += 1;
+        let id = self.allocate_id();
 
         if self.max_size == 0 {
             return id;
@@ -82,6 +81,16 @@ impl OfflineQueue {
         id
     }
 
+    fn allocate_id(&mut self) -> String {
+        loop {
+            let id = format!("req_{}", self.next_id);
+            self.next_id = self.next_id.checked_add(1).unwrap_or(1);
+            if self.queue.iter().all(|queued| queued.id != id) {
+                return id;
+            }
+        }
+    }
+
     /// Remove and return the highest-priority request from the front of the queue.
     pub fn dequeue(&mut self) -> Option<QueuedRequest> {
         self.queue.pop_front()
@@ -119,7 +128,9 @@ fn now_unix_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() as u64
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
@@ -244,5 +255,18 @@ mod tests {
         assert!(!id.is_empty());
         assert!(queue.is_empty());
         assert!(queue.dequeue().is_none());
+    }
+
+    #[test]
+    fn request_ids_wrap_without_panicking_or_colliding() {
+        let mut queue = OfflineQueue::new(4);
+        queue.next_id = u64::MAX;
+        let max = queue.enqueue(make_request("/max"), 1);
+        let wrapped = queue.enqueue(make_request("/wrapped"), 1);
+        assert_eq!(max, format!("req_{}", u64::MAX));
+        assert_eq!(wrapped, "req_1");
+
+        queue.next_id = 1;
+        assert_eq!(queue.enqueue(make_request("/skip-duplicate"), 1), "req_2");
     }
 }

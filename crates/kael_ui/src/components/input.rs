@@ -1,11 +1,16 @@
 //! Input component - Advanced text input with validation, masking, and accessibility.
 
 use crate::animations::{easings, shake_offset};
-use crate::components::icon::Icon;
+use crate::astryx;
 pub use crate::components::input_state::{
     Backspace, Copy, Cut, Delete, End, Enter, Escape, Home, InputEvent, InputMask, InputState,
     InputType, Left, Paste, Right, SelectAll, SelectLeft, SelectRight, ShiftTab, Tab,
     ValidationError, ValidationRules,
+};
+use crate::components::{
+    field::FieldStatusType,
+    icon_button::IconButton,
+    spinner::{Spinner, SpinnerSize},
 };
 use crate::layout::{HStack, VStack};
 use crate::theme::use_theme;
@@ -46,11 +51,55 @@ pub fn init(cx: &mut App) {
     ]);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A custom color set for [`InputVariant::Custom`], letting an app give inputs and
+/// textareas a distinctive look without forking the component.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InputColors {
+    /// Resting background fill.
+    pub background: Hsla,
+    /// Border color.
+    pub border: Hsla,
+    /// Text color.
+    pub text: Hsla,
+}
+
+impl InputColors {
+    /// Construct a color set from background, border, and text colors.
+    pub fn new(
+        background: impl Into<Hsla>,
+        border: impl Into<Hsla>,
+        text: impl Into<Hsla>,
+    ) -> Self {
+        Self {
+            background: background.into(),
+            border: border.into(),
+            text: text.into(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod input_colors_tests {
+    use super::{InputColors, InputVariant};
+
+    #[test]
+    fn input_colors_round_trip_and_custom_variant() {
+        let colors = InputColors::new(kael::black(), kael::white(), kael::black());
+        assert_eq!(colors.background, kael::black());
+        assert_eq!(colors.border, kael::white());
+
+        let variant = InputVariant::Custom(colors);
+        assert!(matches!(variant, InputVariant::Custom(_)));
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InputVariant {
     Default,
     Outline,
     Ghost,
+    /// An app-defined color set — build any look without forking the component.
+    Custom(InputColors),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -64,11 +113,16 @@ pub enum InputSize {
 #[derive(IntoElement)]
 pub struct Input {
     state: Entity<InputState>,
+    label: Option<SharedString>,
+    label_hidden: bool,
+    optional: bool,
     placeholder: SharedString,
     variant: InputVariant,
     size: InputSize,
     disabled: bool,
+    read_only: bool,
     error: bool,
+    loading: bool,
     password: bool,
     clearable: bool,
     prefix: Option<AnyElement>,
@@ -106,11 +160,16 @@ impl Input {
     pub fn new(state: &Entity<InputState>) -> Self {
         Self {
             state: state.clone(),
+            label: None,
+            label_hidden: false,
+            optional: false,
             placeholder: "".into(),
             variant: InputVariant::Default,
             size: InputSize::default(),
             disabled: false,
+            read_only: false,
             error: false,
+            loading: false,
             password: false,
             clearable: false,
             prefix: None,
@@ -150,6 +209,35 @@ impl Input {
         self
     }
 
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    pub fn is_label_hidden(mut self, hidden: bool) -> Self {
+        self.label_hidden = hidden;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isLabelHidden(self, hidden: bool) -> Self {
+        self.is_label_hidden(hidden)
+    }
+
+    pub fn description(self, description: impl Into<SharedString>) -> Self {
+        self.helper_text(description)
+    }
+
+    pub fn is_optional(mut self, optional: bool) -> Self {
+        self.optional = optional;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isOptional(self, optional: bool) -> Self {
+        self.is_optional(optional)
+    }
+
     /// Set placeholder text
     pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
         self.placeholder = placeholder.into();
@@ -161,9 +249,20 @@ impl Input {
         self
     }
 
+    #[allow(non_snake_case)]
+    pub fn hasClear(self, clearable: bool) -> Self {
+        self.clearable(clearable)
+    }
+
     /// Set the input variant
     pub fn variant(mut self, variant: InputVariant) -> Self {
         self.variant = variant;
+        self
+    }
+
+    /// Use a fully custom color set, setting the variant to [`InputVariant::Custom`].
+    pub fn colors(mut self, colors: InputColors) -> Self {
+        self.variant = InputVariant::Custom(colors);
         self
     }
 
@@ -179,16 +278,59 @@ impl Input {
         self
     }
 
+    #[allow(non_snake_case)]
+    pub fn isDisabled(self, disabled: bool) -> Self {
+        self.disabled(disabled)
+    }
+
+    /// Prevent editing while keeping the input focusable and selectable.
+    pub fn read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isReadOnly(self, read_only: bool) -> Self {
+        self.read_only(read_only)
+    }
+
     /// Set error state (shows error styling)
     pub fn error(mut self, error: bool) -> Self {
         self.error = error;
         self
     }
 
+    pub fn status(mut self, status: FieldStatusType, message: impl Into<SharedString>) -> Self {
+        self.error = matches!(status, FieldStatusType::Error | FieldStatusType::Warning);
+        self.helper_text = Some(message.into());
+        self
+    }
+
+    pub fn is_loading(mut self, loading: bool) -> Self {
+        self.loading = loading;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isLoading(self, loading: bool) -> Self {
+        self.is_loading(loading)
+    }
+
     /// Enable password masking
     pub fn password(mut self, password: bool) -> Self {
         self.password = password;
         self
+    }
+
+    pub fn text_type(mut self, input_type: InputType) -> Self {
+        self.input_type = Some(input_type);
+        self.password = input_type == InputType::Password;
+        self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn inputType(self, input_type: InputType) -> Self {
+        self.text_type(input_type)
     }
 
     /// Enable clear button when input has value
@@ -203,10 +345,28 @@ impl Input {
         self
     }
 
+    pub fn start_icon(self, icon: impl IntoElement) -> Self {
+        self.prefix(icon)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn startIcon(self, icon: impl IntoElement) -> Self {
+        self.start_icon(icon)
+    }
+
     /// Add a suffix element (icon, label, etc.)
     pub fn suffix(mut self, suffix: impl IntoElement) -> Self {
         self.suffix = Some(suffix.into_any_element());
         self
+    }
+
+    pub fn end_icon(self, icon: impl IntoElement) -> Self {
+        self.suffix(icon)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn endIcon(self, icon: impl IntoElement) -> Self {
+        self.end_icon(icon)
     }
 
     /// Set callback when value changes
@@ -218,6 +378,14 @@ impl Input {
         self
     }
 
+    #[allow(non_snake_case)]
+    pub fn onChange<F>(self, callback: F) -> Self
+    where
+        F: Fn(SharedString, &mut App) + 'static,
+    {
+        self.on_change(callback)
+    }
+
     /// Set callback when Enter key is pressed
     pub fn on_enter<F>(mut self, callback: F) -> Self
     where
@@ -225,6 +393,14 @@ impl Input {
     {
         self.on_enter = Some(Rc::new(callback));
         self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn onEnter<F>(self, callback: F) -> Self
+    where
+        F: Fn(SharedString, &mut App) + 'static,
+    {
+        self.on_enter(callback)
     }
 
     /// Set callback when input gains focus
@@ -289,6 +465,11 @@ impl Input {
             rules.required = required;
         }
         self
+    }
+
+    #[allow(non_snake_case)]
+    pub fn isRequired(self, required: bool) -> Self {
+        self.required(required)
     }
 
     /// Set helper text displayed below the input
@@ -392,9 +573,9 @@ impl Input {
     /// Get height based on size
     fn height(&self) -> Pixels {
         match self.size {
-            InputSize::Sm => px(32.0),
-            InputSize::Md => px(40.0),
-            InputSize::Lg => px(48.0),
+            InputSize::Sm => px(28.0),
+            InputSize::Md => px(32.0),
+            InputSize::Lg => px(36.0),
         }
     }
 
@@ -442,6 +623,7 @@ impl RenderOnce for Input {
 
         self.state.update(cx, |state, cx| {
             state.disabled = self.disabled;
+            state.read_only = self.read_only;
             if !self.placeholder.is_empty() {
                 state.placeholder = self.placeholder.clone();
             }
@@ -522,70 +704,16 @@ impl RenderOnce for Input {
             state.aria_description = self.aria_description.clone();
             state.autocomplete = self.autocomplete.clone();
             state.helper_text = self.helper_text.clone();
+            state.on_change_callback = self.on_change.clone();
+            state.on_enter_callback = self.on_enter.clone();
+            state.on_focus_callback = self.on_focus.clone();
+            state.on_blur_callback = self.on_blur.clone();
+            state.on_validate_callback = self.on_validate.clone();
 
             if let Some(value) = self.initial_value.clone() {
                 state.set_value(value, window, cx);
             }
         });
-
-        let on_change_callback = self.on_change.clone();
-        let on_enter_callback = self.on_enter.clone();
-        let on_focus_callback = self.on_focus.clone();
-        let on_blur_callback = self.on_blur.clone();
-        let on_validate_callback = self.on_validate.clone();
-
-        if on_change_callback.is_some()
-            || on_enter_callback.is_some()
-            || on_focus_callback.is_some()
-            || on_blur_callback.is_some()
-            || on_validate_callback.is_some()
-        {
-            let state_entity = self.state.clone();
-            let state_for_callback = state_entity.clone();
-            cx.subscribe(
-                &state_entity,
-                move |_emitter: Entity<InputState>, event: &InputEvent, cx: &mut App| {
-                    match event {
-                        InputEvent::Change => {
-                            if let Some(callback) = on_change_callback.as_ref() {
-                                let value = state_for_callback.read(cx).content.clone();
-                                callback(value, cx);
-                            }
-                        }
-                        InputEvent::Enter => {
-                            if let Some(callback) = on_enter_callback.as_ref() {
-                                let value = state_for_callback.read(cx).content.clone();
-                                callback(value, cx);
-                            }
-                        }
-                        InputEvent::Focus => {
-                            if let Some(callback) = on_focus_callback.as_ref() {
-                                let value = state_for_callback.read(cx).content.clone();
-                                callback(value, cx);
-                            }
-                        }
-                        InputEvent::Blur => {
-                            if let Some(callback) = on_blur_callback.as_ref() {
-                                let value = state_for_callback.read(cx).content.clone();
-                                callback(value, cx);
-                            }
-                        }
-                        InputEvent::Validate(result) => {
-                            if let Some(callback) = on_validate_callback.as_ref() {
-                                callback(result.clone(), cx);
-                            }
-                        }
-                        InputEvent::Tab => {
-                            // Focus navigation handled in InputState action handlers
-                        }
-                        InputEvent::ShiftTab => {
-                            // Focus navigation handled in InputState action handlers
-                        }
-                    }
-                },
-            )
-            .detach();
-        }
 
         let (bg_color, border_color, text_color) = if self.disabled {
             (
@@ -596,12 +724,12 @@ impl RenderOnce for Input {
         } else if self.error {
             match self.variant {
                 InputVariant::Default => (
-                    theme.tokens.background,
+                    theme.tokens.card,
                     theme.tokens.destructive,
                     theme.tokens.foreground,
                 ),
                 InputVariant::Outline => (
-                    theme.tokens.background,
+                    theme.tokens.card,
                     theme.tokens.destructive,
                     theme.tokens.foreground,
                 ),
@@ -610,16 +738,19 @@ impl RenderOnce for Input {
                     theme.tokens.destructive.opacity(0.3),
                     theme.tokens.foreground,
                 ),
+                InputVariant::Custom(colors) => {
+                    (colors.background, theme.tokens.destructive, colors.text)
+                }
             }
         } else {
             match self.variant {
                 InputVariant::Default => (
-                    theme.tokens.background,
+                    theme.tokens.card,
                     theme.tokens.input,
                     theme.tokens.foreground,
                 ),
                 InputVariant::Outline => (
-                    theme.tokens.background,
+                    theme.tokens.card,
                     theme.tokens.border,
                     theme.tokens.foreground,
                 ),
@@ -628,22 +759,64 @@ impl RenderOnce for Input {
                     theme.tokens.border.opacity(0.3),
                     theme.tokens.foreground,
                 ),
+                InputVariant::Custom(colors) => (colors.background, colors.border, colors.text),
             }
         };
 
         let has_value = !self.state.read(cx).content.is_empty();
-        let show_clear = self.clearable && has_value && !self.disabled;
+        let show_clear =
+            self.clearable && has_value && !self.disabled && !self.read_only && !self.loading;
         let state_for_clear = self.state.clone();
         let state_for_password = self.state.clone();
 
         let input_state = self.state.read(cx);
         let validation_error = input_state.validation_error.clone();
         let success_message = input_state.success_message.clone();
-        let content_length = input_state.content.len();
+        let content_length = input_state.content.chars().count();
         let max_length = input_state.validation_rules.max_length;
         let is_focused = input_state.focus_handle(cx).is_focused(window);
         let is_masked = input_state.masked;
         let shake_triggered = input_state.shake_triggered;
+        let input_value = input_state.content.clone();
+        let accessibility_label = self
+            .aria_label
+            .clone()
+            .or_else(|| self.label.clone())
+            .unwrap_or_else(|| "Text input".into());
+        let mut accessibility_states = AccessibilityState::NONE;
+        if self.disabled {
+            accessibility_states |= AccessibilityState::DISABLED;
+        }
+        if self.read_only {
+            accessibility_states |= AccessibilityState::READ_ONLY;
+        }
+        if self.error || validation_error.is_some() {
+            accessibility_states |= AccessibilityState::INVALID;
+        }
+        if self.required {
+            accessibility_states |= AccessibilityState::REQUIRED;
+        }
+        if is_focused {
+            accessibility_states |= AccessibilityState::FOCUSED;
+        }
+        let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::TextInput)
+            .label(accessibility_label.to_string())
+            .value(AccessibilityValue::Text(input_value.to_string()))
+            .placeholder(self.placeholder.to_string())
+            .states(accessibility_states);
+        if let Some(description) = self.aria_description.as_ref() {
+            accessibility = accessibility.description(description.to_string());
+        }
+        accessibility = if self.disabled {
+            accessibility.actions(Vec::new())
+        } else if self.read_only {
+            accessibility.actions(vec![AccessibilityAction::Focus])
+        } else {
+            accessibility.actions(vec![
+                AccessibilityAction::Focus,
+                AccessibilityAction::SetValue,
+            ])
+        };
 
         if shake_triggered {
             self.state.update(cx, |state, _cx| {
@@ -653,7 +826,6 @@ impl RenderOnce for Input {
         }
         let shake_count = self.state.read(cx).shake_count;
 
-        let shadow_xs = theme.tokens.shadow_xs.clone();
         let focus_ring = theme.tokens.focus_ring_light();
         let error_ring_focused = theme.tokens.error_ring();
         let error_ring_unfocused = theme.tokens.error_ring();
@@ -665,22 +837,55 @@ impl RenderOnce for Input {
         VStack::new()
             .w_full()
             .gap(px(4.0))
+            .when_some(
+                self.label.clone().filter(|_| !self.label_hidden),
+                |v, label| {
+                    v.child(
+                        HStack::new()
+                            .items_center()
+                            .gap(px(4.0))
+                            .px(px(2.0))
+                            .text_size(px(14.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .font_family(theme.tokens.font_family.clone())
+                            .text_color(if self.disabled {
+                                theme.tokens.muted_foreground
+                            } else {
+                                theme.tokens.foreground
+                            })
+                            .child(label)
+                            .when(self.required && !self.optional, |this| {
+                                this.child(div().text_color(theme.tokens.destructive).child("*"))
+                            })
+                            .when(self.optional && !self.required, |this| {
+                                this.child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .font_weight(FontWeight::NORMAL)
+                                        .text_color(theme.tokens.muted_foreground)
+                                        .child("(optional)"),
+                                )
+                            }),
+                    )
+                },
+            )
             .child({
                 let input_container = div()
                     .id(("input", self.state.entity_id()))
                     .key_context("Input")
-                    .track_focus(
-                        &self
-                            .state
-                            .read(cx)
-                            .focus_handle(cx)
-                            .tab_index(0)
-                            .tab_stop(true),
-                    )
+                    .accessibility(accessibility)
                     .when(!self.disabled, |this| {
-                        this.on_action(window.listener_for(&self.state, InputState::backspace))
-                            .on_action(window.listener_for(&self.state, InputState::delete))
-                            .on_action(window.listener_for(&self.state, InputState::left))
+                        this.track_focus(
+                            &self
+                                .state
+                                .read(cx)
+                                .focus_handle(cx)
+                                .tab_index(0)
+                                .tab_stop(true),
+                        )
+                    })
+                    .when(!self.disabled, |this| {
+                        this.on_action(window.listener_for(&self.state, InputState::left))
                             .on_action(window.listener_for(&self.state, InputState::right))
                             .on_action(window.listener_for(&self.state, InputState::select_left))
                             .on_action(window.listener_for(&self.state, InputState::select_right))
@@ -688,12 +893,38 @@ impl RenderOnce for Input {
                             .on_action(window.listener_for(&self.state, InputState::home))
                             .on_action(window.listener_for(&self.state, InputState::end))
                             .on_action(window.listener_for(&self.state, InputState::copy))
-                            .on_action(window.listener_for(&self.state, InputState::cut))
-                            .on_action(window.listener_for(&self.state, InputState::paste))
                             .on_action(window.listener_for(&self.state, InputState::enter))
                             .on_action(window.listener_for(&self.state, InputState::tab))
                             .on_action(window.listener_for(&self.state, InputState::shift_tab))
                             .on_action(window.listener_for(&self.state, InputState::escape))
+                    })
+                    .when(!self.disabled && !self.read_only, |this| {
+                        this.on_action(window.listener_for(&self.state, InputState::backspace))
+                            .on_action(window.listener_for(&self.state, InputState::delete))
+                            .on_action(window.listener_for(&self.state, InputState::cut))
+                            .on_action(window.listener_for(&self.state, InputState::paste))
+                    })
+                    .when(!self.disabled && !self.read_only, |this| {
+                        let state = self.state.clone();
+                        this.on_accessibility_action(
+                            AccessibilityAction::SetValue,
+                            move |request, window, cx| {
+                                let value = match request.payload.as_ref() {
+                                    Some(AccessibilityActionPayload::Value(value)) => {
+                                        Some(value.clone())
+                                    }
+                                    Some(AccessibilityActionPayload::NumericValue(value)) => {
+                                        Some(value.to_string())
+                                    }
+                                    None => None,
+                                };
+                                if let Some(value) = value {
+                                    state.update(cx, |state, cx| {
+                                        state.set_value(value, window, cx);
+                                    });
+                                }
+                            },
+                        )
                     })
                     .child(
                         HStack::new()
@@ -707,17 +938,18 @@ impl RenderOnce for Input {
                             .rounded(theme.tokens.radius_md)
                             .items_center()
                             .text_size(font_size)
-                            .font_family(theme.tokens.font_mono.clone())
+                            .font_family(theme.tokens.font_family.clone())
                             .text_color(text_color)
-                            .shadow(shadow_xs.to_vec())
                             .when(!self.disabled, |h| h.cursor(kael::CursorStyle::IBeam))
-                            .when(!self.disabled, |h| {
+                            .when(!self.disabled && !is_focused, |h| {
                                 h.hover(move |style| {
-                                    style.border_color(if self.error {
-                                        destructive_color
-                                    } else {
-                                        ring_color
-                                    })
+                                    style.shadow(smallvec::smallvec![astryx::input_hover_ring(
+                                        if self.error {
+                                            destructive_color
+                                        } else {
+                                            theme.tokens.input
+                                        },
+                                    )])
                                 })
                             })
                             .when(is_focused && !self.disabled, |h| {
@@ -736,34 +968,32 @@ impl RenderOnce for Input {
                             .child(div().flex_1().overflow_hidden().child(self.state.clone()))
                             .when(show_clear, |h| {
                                 h.child(
-                                    div()
+                                    IconButton::new("x")
                                         .id(("input-clear", self.state.entity_id()))
-                                        .px(px(4.0))
-                                        .py(px(4.0))
-                                        .rounded(px(4.0))
-                                        .cursor_pointer()
-                                        .transition(theme.tokens.transition_fast)
-                                        .hover(|style| style.bg(theme.tokens.muted))
-                                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                        .label("Clear input")
+                                        .size(px(24.0))
+                                        .icon_size(px(14.0))
+                                        .no_background(true)
+                                        .on_click(move |_, window, cx| {
                                             state_for_clear.update(cx, |state, cx| {
                                                 state.set_value("", window, cx);
-                                            })
-                                        })
-                                        .child("×")
-                                        .text_color(theme.tokens.muted_foreground),
+                                            });
+                                        }),
                                 )
                             })
                             .when(self.password, |h| {
                                 h.child(
-                                    div()
+                                    IconButton::new(if is_masked { "eye" } else { "eye-off" })
                                         .id(("input-reveal", self.state.entity_id()))
-                                        .px(px(4.0))
-                                        .py(px(4.0))
-                                        .rounded(px(4.0))
-                                        .cursor_pointer()
-                                        .transition(theme.tokens.transition_fast)
-                                        .hover(|style| style.bg(theme.tokens.muted))
-                                        .on_mouse_down(MouseButton::Left, {
+                                        .label(if is_masked {
+                                            "Show password"
+                                        } else {
+                                            "Hide password"
+                                        })
+                                        .size(px(24.0))
+                                        .icon_size(px(16.0))
+                                        .no_background(true)
+                                        .on_click({
                                             let state = state_for_password.clone();
                                             move |_, window, cx| {
                                                 state.update(cx, |state, cx| {
@@ -772,12 +1002,17 @@ impl RenderOnce for Input {
                                                 });
                                                 window.refresh();
                                             }
-                                        })
-                                        .child(
-                                            Icon::new(if is_masked { "eye" } else { "eye-off" })
-                                                .size(px(16.0))
-                                                .color(theme.tokens.muted_foreground),
-                                        ),
+                                        }),
+                                )
+                            })
+                            .when(self.loading, |h| {
+                                h.child(
+                                    div()
+                                        .size(px(24.0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(Spinner::new().size(SpinnerSize::Xs)),
                                 )
                             })
                             .children(self.suffix),
@@ -858,5 +1093,158 @@ impl RenderOnce for Input {
                 vstack.style().refine(&user_style);
                 vstack
             })
+    }
+}
+
+#[cfg(test)]
+mod typing_tests {
+    use super::{Input, InputState};
+    use kael::{
+        div, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled,
+        TestAppContext, Window,
+    };
+
+    struct Host {
+        field: Entity<InputState>,
+        read_only: bool,
+        disabled: bool,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _w: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                Input::new(&self.field)
+                    .label("Example")
+                    .read_only(self.read_only)
+                    .disabled(self.disabled),
+            )
+        }
+    }
+
+    #[kael::test]
+    fn typing_into_input_updates_state(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            super::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let field = cx.new(InputState::new);
+
+        let (_host, cx) = cx.add_window_view({
+            let field = field.clone();
+            move |_, _| Host {
+                field,
+                read_only: false,
+                disabled: false,
+            }
+        });
+
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+            let handle = field.read(cx).focus_handle(cx);
+            window.focus(&handle);
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        cx.simulate_input("hello");
+
+        let value = cx.update(|_window, cx| field.read(cx).content().to_string());
+        assert_eq!(value, "hello");
+    }
+
+    #[kael::test]
+    fn select_all_replaces_the_complete_value(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            super::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let field = cx.new(InputState::new);
+        let (_host, window) = cx.add_window_view({
+            let field = field.clone();
+            move |_, _| Host {
+                field,
+                read_only: false,
+                disabled: false,
+            }
+        });
+
+        window.update(|window, cx| {
+            field.update(cx, |state, cx| state.set_value("Grace Hopper", window, cx));
+            window.draw(cx).clear();
+            window.focus(&field.read(cx).focus_handle(cx));
+        });
+        #[cfg(target_os = "macos")]
+        window.simulate_keystrokes("cmd-a");
+        #[cfg(not(target_os = "macos"))]
+        window.simulate_keystrokes("ctrl-a");
+        window.simulate_input("Ada");
+
+        assert_eq!(cx.read(|cx| field.read(cx).content().to_string()), "Ada");
+    }
+
+    #[kael::test]
+    fn read_only_input_is_focusable_but_rejects_native_edits(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            super::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let field = cx.new(InputState::new);
+        let (_host, window) = cx.add_window_view({
+            let field = field.clone();
+            move |_, _| Host {
+                field,
+                read_only: true,
+                disabled: false,
+            }
+        });
+
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.focus(&field.read(cx).focus_handle(cx));
+        });
+        window.simulate_input("blocked");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let node = window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| node.role == kael::AccessibilityRole::TextInput)
+                .expect("input should expose text-input semantics");
+            assert!(node.states.contains(kael::AccessibilityState::READ_ONLY));
+            assert!(node.actions.contains(&kael::AccessibilityAction::Focus));
+            assert!(!node.actions.contains(&kael::AccessibilityAction::SetValue));
+        });
+        assert!(cx.read(|cx| field.read(cx).content().is_empty()));
+    }
+
+    #[kael::test]
+    fn disabled_input_is_not_focusable_or_editable(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            super::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let field = cx.new(InputState::new);
+        let (_host, window) = cx.add_window_view({
+            let field = field.clone();
+            move |_, _| Host {
+                field,
+                read_only: false,
+                disabled: true,
+            }
+        });
+
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let node = window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| node.role == kael::AccessibilityRole::TextInput)
+                .expect("input should expose text-input semantics");
+            assert!(node.states.contains(kael::AccessibilityState::DISABLED));
+            assert!(node.actions.is_empty());
+        });
     }
 }

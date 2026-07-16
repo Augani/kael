@@ -131,6 +131,11 @@ impl Position {
     pub fn zero() -> Self {
         Self { line: 0, col: 0 }
     }
+
+    /// Content-safe cursor position summary for diagnostics and agent tools.
+    pub fn to_text(&self) -> String {
+        format!("position(line={}, col={})", self.line, self.col)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,6 +160,21 @@ impl Selection {
             (self.cursor, self.anchor)
         }
     }
+
+    /// Content-safe selection summary that exposes geometry, not selected text.
+    pub fn to_text(&self) -> String {
+        let (start, end) = self.range();
+        format!(
+            "selection(empty={}, reversed={}, start_line={}, start_col={}, end_line={}, end_col={}, line_span={})",
+            self.is_empty(),
+            self.anchor > self.cursor,
+            start.line,
+            start.col,
+            end.line,
+            end.col,
+            end.line.saturating_sub(start.line) + 1
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -169,6 +189,18 @@ pub struct FoldRange {
     pub end_line: usize,
 }
 
+impl FoldRange {
+    /// Content-safe fold geometry summary.
+    pub fn to_text(&self) -> String {
+        format!(
+            "fold_range(start_line={}, end_line={}, line_span={})",
+            self.start_line,
+            self.end_line,
+            self.end_line.saturating_sub(self.start_line) + 1
+        )
+    }
+}
+
 const AUTO_CLOSE_PAIRS: &[(char, char)] = &[
     ('(', ')'),
     ('[', ']'),
@@ -177,6 +209,7 @@ const AUTO_CLOSE_PAIRS: &[(char, char)] = &[
     ('\'', '\''),
     ('`', '`'),
 ];
+const MAX_ACCESSIBILITY_VALUE_CHARS: usize = 65_536;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Language {
@@ -206,6 +239,35 @@ pub enum Language {
 }
 
 impl Language {
+    /// Stable language key for content-safe diagnostics.
+    pub fn to_text(&self) -> &'static str {
+        match self {
+            Language::Rust => "rust",
+            Language::JavaScript => "javascript",
+            Language::TypeScript => "typescript",
+            Language::Python => "python",
+            Language::Json => "json",
+            Language::Toml => "toml",
+            Language::Markdown => "markdown",
+            Language::Go => "go",
+            Language::C => "c",
+            Language::Cpp => "cpp",
+            Language::Java => "java",
+            Language::Ruby => "ruby",
+            Language::Bash => "bash",
+            Language::Css => "css",
+            Language::Html => "html",
+            Language::Yaml => "yaml",
+            Language::Lua => "lua",
+            Language::Zig => "zig",
+            Language::Scala => "scala",
+            Language::Php => "php",
+            Language::OCaml => "ocaml",
+            Language::Sql => "sql",
+            Language::Plain => "plain",
+        }
+    }
+
     pub fn from_extension(ext: &str) -> Self {
         match ext.to_lowercase().as_str() {
             "rs" => Language::Rust,
@@ -585,6 +647,42 @@ pub enum DiagnosticSeverity {
     Hint,
 }
 
+impl DiagnosticSeverity {
+    /// Stable severity key for content-safe diagnostics.
+    pub fn to_text(&self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warning => "warning",
+            Self::Information => "information",
+            Self::Hint => "hint",
+        }
+    }
+}
+
+impl EditorDiagnostic {
+    pub fn line_span(&self) -> u32 {
+        self.end_line.saturating_sub(self.start_line) + 1
+    }
+
+    pub fn message_len_bytes(&self) -> usize {
+        self.message.len()
+    }
+
+    /// Content-safe diagnostic summary that never includes the message text.
+    pub fn to_text(&self) -> String {
+        format!(
+            "editor_diagnostic(severity={}, start_line={}, start_col={}, end_line={}, end_col={}, line_span={}, message_len_bytes={})",
+            self.severity.to_text(),
+            self.start_line,
+            self.start_col,
+            self.end_line,
+            self.end_col,
+            self.line_span(),
+            self.message_len_bytes()
+        )
+    }
+}
+
 impl EditorState {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let parser = Parser::new();
@@ -718,6 +816,150 @@ impl EditorState {
             .iter()
             .filter(|d| d.start_line as usize <= line && line <= d.end_line as usize)
             .collect()
+    }
+
+    pub fn content_len_bytes(&self) -> usize {
+        self.rope.len_bytes()
+    }
+
+    fn accessibility_value(&self) -> String {
+        self.rope
+            .chars()
+            .take(MAX_ACCESSIBILITY_VALUE_CHARS)
+            .collect()
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.selection.is_some()
+    }
+
+    pub fn selection_is_empty(&self) -> bool {
+        self.selection
+            .as_ref()
+            .map(|selection| selection.is_empty())
+            .unwrap_or(true)
+    }
+
+    pub fn undo_depth(&self) -> usize {
+        self.undo_stack.len()
+    }
+
+    pub fn redo_depth(&self) -> usize {
+        self.redo_stack.len()
+    }
+
+    pub fn has_file_path(&self) -> bool {
+        self.file_path.is_some()
+    }
+
+    pub fn has_syntax_tree(&self) -> bool {
+        self.syntax_tree.is_some()
+    }
+
+    pub fn has_highlight_query(&self) -> bool {
+        self.highlight_query.is_some()
+    }
+
+    pub fn tab_size(&self) -> usize {
+        self.tab_size
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    pub fn search_query_len_bytes(&self) -> usize {
+        self.search_query.len()
+    }
+
+    pub fn has_search_query(&self) -> bool {
+        !self.search_query.is_empty()
+    }
+
+    pub fn has_current_match(&self) -> bool {
+        self.current_match_idx.is_some()
+    }
+
+    pub fn fold_range_count(&self) -> usize {
+        self.fold_ranges.len()
+    }
+
+    pub fn folded_range_count(&self) -> usize {
+        self.folded.len()
+    }
+
+    pub fn diagnostic_count(&self) -> usize {
+        self.diagnostics.len()
+    }
+
+    pub fn diagnostic_count_by_severity(&self, severity: DiagnosticSeverity) -> usize {
+        self.diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == severity)
+            .count()
+    }
+
+    pub fn has_visual_overrides(&self) -> bool {
+        self.cursor_color_override.is_some()
+            || self.selection_color_override.is_some()
+            || self.line_number_color_override.is_some()
+            || self.line_number_active_color_override.is_some()
+            || self.gutter_bg_override.is_some()
+            || self.search_match_color_overrides.is_some()
+            || self.current_line_color_override.is_some()
+            || self.bracket_match_color_override.is_some()
+            || self.word_highlight_color_override.is_some()
+            || self.indent_guide_color_override.is_some()
+            || self.indent_guide_active_color_override.is_some()
+            || self.fold_marker_color_override.is_some()
+            || self.diagnostic_error_color.is_some()
+            || self.diagnostic_warning_color.is_some()
+            || self.diagnostic_info_color.is_some()
+            || self.diagnostic_hint_color.is_some()
+            || self.syntax_color_fn.is_some()
+    }
+
+    /// Content-safe editor state summary for diagnostics and agent inspection.
+    pub fn to_text(&self) -> String {
+        let selection_summary = self
+            .selection
+            .as_ref()
+            .map(|selection| selection.to_text())
+            .unwrap_or_else(|| "none".to_string());
+
+        format!(
+            "editor_state(language={}, lines={}, content_len_bytes={}, cursor={}, selection={}, has_selection={}, selection_empty={}, modified={}, has_file_path={}, undo_depth={}, redo_depth={}, has_syntax_tree={}, has_highlight_query={}, show_line_numbers={}, tab_size={}, read_only={}, search_query_len_bytes={}, has_search_query={}, search_match_count={}, has_current_match={}, search_case_sensitive={}, search_use_regex={}, fold_range_count={}, folded_range_count={}, diagnostics={}, errors={}, warnings={}, information={}, hints={}, has_visual_overrides={})",
+            self.language.to_text(),
+            self.line_count(),
+            self.content_len_bytes(),
+            self.cursor.to_text(),
+            selection_summary,
+            self.has_selection(),
+            self.selection_is_empty(),
+            self.is_modified,
+            self.has_file_path(),
+            self.undo_depth(),
+            self.redo_depth(),
+            self.has_syntax_tree(),
+            self.has_highlight_query(),
+            self.show_line_numbers,
+            self.tab_size(),
+            self.is_read_only(),
+            self.search_query_len_bytes(),
+            self.has_search_query(),
+            self.search_match_count(),
+            self.has_current_match(),
+            self.search_case_sensitive(),
+            self.search_use_regex(),
+            self.fold_range_count(),
+            self.folded_range_count(),
+            self.diagnostic_count(),
+            self.diagnostic_count_by_severity(DiagnosticSeverity::Error),
+            self.diagnostic_count_by_severity(DiagnosticSeverity::Warning),
+            self.diagnostic_count_by_severity(DiagnosticSeverity::Information),
+            self.diagnostic_count_by_severity(DiagnosticSeverity::Hint),
+            self.has_visual_overrides()
+        )
     }
 
     pub fn content(&self) -> String {
@@ -3943,6 +4185,7 @@ impl EditorElement {
 #[derive(IntoElement)]
 pub struct Editor {
     state: Entity<EditorState>,
+    accessibility_label: SharedString,
     min_lines: Option<usize>,
     max_lines: Option<usize>,
     show_border: bool,
@@ -3966,6 +4209,7 @@ impl Editor {
     pub fn new(state: &Entity<EditorState>) -> Self {
         Self {
             state: state.clone(),
+            accessibility_label: "Code editor".into(),
             min_lines: None,
             max_lines: None,
             show_border: true,
@@ -3984,6 +4228,12 @@ impl Editor {
             fold_marker_color: None,
             syntax_color_fn: None,
         }
+    }
+
+    /// Set the label announced for the editor by assistive technology.
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessibility_label = label.into();
+        self
     }
 
     pub fn content(self, content: impl Into<String>, cx: &mut App) -> Self {
@@ -4080,6 +4330,39 @@ impl Editor {
     pub fn get_content(&self, cx: &App) -> String {
         self.state.read(cx).content()
     }
+
+    pub fn visual_override_count(&self) -> usize {
+        [
+            self.cursor_color.is_some(),
+            self.selection_color.is_some(),
+            self.line_number_color.is_some(),
+            self.line_number_active_color.is_some(),
+            self.gutter_bg.is_some(),
+            self.search_match_colors.is_some(),
+            self.current_line_color.is_some(),
+            self.bracket_match_color.is_some(),
+            self.word_highlight_color.is_some(),
+            self.indent_guide_color.is_some(),
+            self.indent_guide_active_color.is_some(),
+            self.fold_marker_color.is_some(),
+            self.syntax_color_fn.is_some(),
+        ]
+        .into_iter()
+        .filter(|is_set| *is_set)
+        .count()
+    }
+
+    /// Content-safe editor element summary for diagnostics and agent inspection.
+    pub fn to_text(&self, cx: &App) -> String {
+        format!(
+            "editor(min_lines_set={}, max_lines_set={}, border={}, visual_override_count={}, state={})",
+            self.min_lines.is_some(),
+            self.max_lines.is_some(),
+            self.show_border,
+            self.visual_override_count(),
+            self.state.read(cx).to_text()
+        )
+    }
 }
 
 impl Styled for Editor {
@@ -4117,10 +4400,37 @@ impl RenderOnce for Editor {
         let max_height = self.max_lines.map(|lines| px(lines as f32 * 20.0));
         let scroll_handle = self.state.read(cx).scroll_handle.clone();
 
+        let (accessibility_value, read_only, focus_handle) = {
+            let state = self.state.read(cx);
+            (
+                state.accessibility_value(),
+                state.read_only,
+                state.focus_handle(cx),
+            )
+        };
+        let mut accessibility_state = AccessibilityState::NONE;
+        if read_only {
+            accessibility_state |= AccessibilityState::READ_ONLY;
+        }
+        if focus_handle.is_focused(window) {
+            accessibility_state |= AccessibilityState::FOCUSED;
+        }
+        let accessibility_actions = if read_only {
+            vec![AccessibilityAction::Focus]
+        } else {
+            vec![AccessibilityAction::Focus, AccessibilityAction::SetValue]
+        };
+        let accessibility = AccessibilityAttributes::new(AccessibilityRole::TextInput)
+            .label(self.accessibility_label.to_string())
+            .value(AccessibilityValue::Text(accessibility_value))
+            .states(accessibility_state)
+            .actions(accessibility_actions);
+
         let mut base = div()
             .id(("editor", self.state.entity_id()))
+            .accessibility(accessibility)
             .key_context("Editor")
-            .track_focus(&self.state.read(cx).focus_handle(cx))
+            .track_focus(&focus_handle.tab_index(0).tab_stop(true))
             .w_full()
             .h_full()
             .max_h_full();
@@ -4304,9 +4614,21 @@ impl IntoElement for HorizontalScrollbar {
 
         let theme = use_theme();
         let editor_state = self.state.clone();
+        let scrollbar_id: ElementId =
+            ("editor-horizontal-scrollbar", self.state.entity_id()).into();
 
         div()
-            .id("h-scrollbar")
+            .id(scrollbar_id)
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::ScrollBar)
+                    .label("Horizontal editor scroll")
+                    .value(AccessibilityValue::Range {
+                        current: self.thumb_left_pct as f64,
+                        min: 0.0,
+                        max: 100.0,
+                        step: None,
+                    }),
+            )
             .w_full()
             .h(px(12.0))
             .bg(theme.tokens.muted.opacity(0.3))
@@ -4421,9 +4743,20 @@ impl IntoElement for VerticalScrollbar {
 
         let theme = use_theme();
         let editor_state = self.state.clone();
+        let scrollbar_id: ElementId = ("editor-vertical-scrollbar", self.state.entity_id()).into();
 
         div()
-            .id("v-scrollbar")
+            .id(scrollbar_id)
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::ScrollBar)
+                    .label("Vertical editor scroll")
+                    .value(AccessibilityValue::Range {
+                        current: self.thumb_top_pct as f64,
+                        min: 0.0,
+                        max: 100.0,
+                        step: None,
+                    }),
+            )
             .h_full()
             .w(px(12.0))
             .bg(theme.tokens.muted.opacity(0.3))
@@ -4472,5 +4805,164 @@ impl IntoElement for VerticalScrollbar {
                     .hover(|s| s.bg(theme.tokens.muted_foreground.opacity(0.8))),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kael::{hsla, TestAppContext};
+
+    #[::core::prelude::v1::test]
+    fn editor_position_selection_and_diagnostic_summaries_are_content_safe() {
+        let selection = Selection::new(Position::new(4, 12), Position::new(2, 3));
+        let diagnostic = EditorDiagnostic {
+            start_line: 7,
+            start_col: 5,
+            end_line: 9,
+            end_col: 14,
+            severity: DiagnosticSeverity::Error,
+            message: "Private customer token leaked here".to_string(),
+        };
+
+        assert_eq!(Language::TypeScript.to_text(), "typescript");
+        assert_eq!(DiagnosticSeverity::Error.to_text(), "error");
+        assert_eq!(Position::new(2, 3).to_text(), "position(line=2, col=3)");
+        assert!(selection.to_text().contains("reversed=true"));
+        assert!(selection.to_text().contains("line_span=3"));
+        assert_eq!(
+            FoldRange {
+                start_line: 10,
+                end_line: 15
+            }
+            .to_text(),
+            "fold_range(start_line=10, end_line=15, line_span=6)"
+        );
+
+        let summary = diagnostic.to_text();
+        assert!(summary.contains("severity=error"));
+        assert!(summary.contains("message_len_bytes=34"));
+        assert!(!summary.contains("Private customer"));
+        assert!(!summary.contains("token"));
+    }
+
+    #[::core::prelude::v1::test]
+    fn editor_state_summary_is_content_safe() {
+        let cx = TestAppContext::single();
+        let state = cx.update(|cx| cx.new(EditorState::new));
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.set_content("const secret = 'alpha-token';\nconsole.log(secret);", cx);
+                state.language = Language::TypeScript;
+                state.cursor = Position::new(1, 7);
+                state.selection = Some(Selection::new(Position::new(0, 6), Position::new(0, 12)));
+                state.is_modified = true;
+                state.file_path = Some(PathBuf::from("/private/customer/secrets.ts"));
+                state.undo_stack.push(EditOp::Insert {
+                    byte_offset: 0,
+                    text: "secret undo text".to_string(),
+                });
+                state.search_query = "alpha-token".to_string();
+                state.search_matches.push((15, 26));
+                state.current_match_idx = Some(0);
+                state.search_case_sensitive = true;
+                state.search_use_regex = true;
+                state.read_only = true;
+                state.fold_ranges.push(FoldRange {
+                    start_line: 0,
+                    end_line: 3,
+                });
+                state.folded.push(FoldRange {
+                    start_line: 0,
+                    end_line: 3,
+                });
+                state.diagnostics.push(EditorDiagnostic {
+                    start_line: 1,
+                    start_col: 0,
+                    end_line: 1,
+                    end_col: 12,
+                    severity: DiagnosticSeverity::Warning,
+                    message: "Confidential warning".to_string(),
+                });
+                state.cursor_color_override = Some(hsla(0.0, 0.5, 0.5, 1.0));
+            });
+        });
+
+        cx.update(|cx| {
+            let state = state.read(cx);
+            assert_eq!(state.content_len_bytes(), 51);
+            assert!(state.has_selection());
+            assert!(!state.selection_is_empty());
+            assert_eq!(state.undo_depth(), 1);
+            assert_eq!(state.redo_depth(), 0);
+            assert!(state.has_file_path());
+            assert_eq!(state.search_query_len_bytes(), "alpha-token".len());
+            assert!(state.has_search_query());
+            assert!(state.has_current_match());
+            assert_eq!(state.fold_range_count(), 1);
+            assert_eq!(state.folded_range_count(), 1);
+            assert_eq!(
+                state.diagnostic_count_by_severity(DiagnosticSeverity::Warning),
+                1
+            );
+            assert!(state.has_visual_overrides());
+
+            let summary = state.to_text();
+            assert!(summary.contains("language=typescript"));
+            assert!(summary.contains("cursor=position(line=1, col=7)"));
+            assert!(summary.contains("has_selection=true"));
+            assert!(summary.contains("read_only=true"));
+            assert!(summary.contains("search_query_len_bytes=11"));
+            assert!(summary.contains("diagnostics=1"));
+            assert!(!summary.contains("alpha-token"));
+            assert!(!summary.contains("secret"));
+            assert!(!summary.contains("/private/customer"));
+            assert!(!summary.contains("Confidential warning"));
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn editor_element_summary_is_content_safe() {
+        let cx = TestAppContext::single();
+        let state = cx.update(|cx| cx.new(EditorState::new));
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.set_content("internal draft notes", cx);
+                state.language = Language::Markdown;
+            });
+
+            let editor = Editor::new(&state)
+                .min_lines(3)
+                .max_lines(12)
+                .show_border(false)
+                .cursor_color(hsla(0.0, 0.5, 0.5, 1.0))
+                .selection_color(hsla(0.5, 0.5, 0.5, 1.0))
+                .syntax_color_fn(|_| hsla(0.1, 0.5, 0.5, 1.0));
+
+            assert_eq!(editor.visual_override_count(), 3);
+            let summary = editor.to_text(cx);
+            assert!(summary.contains("min_lines_set=true"));
+            assert!(summary.contains("max_lines_set=true"));
+            assert!(summary.contains("border=false"));
+            assert!(summary.contains("visual_override_count=3"));
+            assert!(summary.contains("language=markdown"));
+            assert!(!summary.contains("internal draft"));
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn editor_accessibility_value_is_bounded_on_character_boundaries() {
+        let cx = TestAppContext::single();
+        let state = cx.update(|cx| cx.new(EditorState::new));
+        let content = "界".repeat(MAX_ACCESSIBILITY_VALUE_CHARS + 10);
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| state.set_content(&content, cx));
+            let value = state.read(cx).accessibility_value();
+            assert_eq!(value.chars().count(), MAX_ACCESSIBILITY_VALUE_CHARS);
+            assert!(value.chars().all(|character| character == '界'));
+        });
     }
 }

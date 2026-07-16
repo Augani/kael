@@ -1,4 +1,7 @@
 pub use derive_refineable::Refineable;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_CASCADE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// A trait for types that can be refined with partial updates.
 ///
@@ -77,11 +80,17 @@ pub trait IsEmpty {
 /// This is useful for implementing configuration hierarchies like CSS cascading,
 /// where styles from different sources (user agent, user, author) are combined
 /// with specific precedence rules.
-pub struct Cascade<S: Refineable>(Vec<Option<S::Refinement>>);
+pub struct Cascade<S: Refineable> {
+    id: u64,
+    refinements: Vec<Option<S::Refinement>>,
+}
 
 impl<S: Refineable + Default> Default for Cascade<S> {
     fn default() -> Self {
-        Self(vec![Some(Default::default())])
+        Self {
+            id: NEXT_CASCADE_ID.fetch_add(1, Ordering::Relaxed),
+            refinements: vec![Some(Default::default())],
+        }
     }
 }
 
@@ -89,8 +98,23 @@ impl<S: Refineable + Default> Default for Cascade<S> {
 ///
 /// Slots are used to identify specific positions in the cascade where
 /// refinements can be set or updated.
-#[derive(Copy, Clone)]
-pub struct CascadeSlot(usize);
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CascadeSlot {
+    cascade_id: u64,
+    index: usize,
+}
+
+/// Error returned when a slot does not belong to the target cascade.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InvalidCascadeSlot;
+
+impl std::fmt::Display for InvalidCascadeSlot {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("cascade slot does not belong to this cascade")
+    }
+}
+
+impl std::error::Error for InvalidCascadeSlot {}
 
 impl<S: Refineable + Default> Cascade<S> {
     /// Reserves a new slot in the cascade and returns a handle to it.
@@ -98,8 +122,11 @@ impl<S: Refineable + Default> Cascade<S> {
     /// The new slot is initially empty (`None`) and can be populated later
     /// using `set()`.
     pub fn reserve(&mut self) -> CascadeSlot {
-        self.0.push(None);
-        CascadeSlot(self.0.len() - 1)
+        self.refinements.push(None);
+        CascadeSlot {
+            cascade_id: self.id,
+            index: self.refinements.len() - 1,
+        }
     }
 
     /// Returns a mutable reference to the base refinement (slot 0).
@@ -107,15 +134,28 @@ impl<S: Refineable + Default> Cascade<S> {
     /// The base refinement is always present and serves as the foundation
     /// for the cascade.
     pub fn base(&mut self) -> &mut S::Refinement {
-        self.0[0].as_mut().unwrap()
+        self.refinements[0]
+            .as_mut()
+            .expect("cascade base refinement is an internal invariant")
     }
 
     /// Sets the refinement for a specific slot in the cascade.
     ///
     /// Setting a slot to `None` effectively removes it from consideration
     /// during merging.
-    pub fn set(&mut self, slot: CascadeSlot, refinement: Option<S::Refinement>) {
-        self.0[slot.0] = refinement
+    pub fn set(
+        &mut self,
+        slot: CascadeSlot,
+        refinement: Option<S::Refinement>,
+    ) -> Result<(), InvalidCascadeSlot> {
+        if slot.cascade_id != self.id {
+            return Err(InvalidCascadeSlot);
+        }
+        let Some(target) = self.refinements.get_mut(slot.index) else {
+            return Err(InvalidCascadeSlot);
+        };
+        *target = refinement;
+        Ok(())
     }
 
     /// Merges all refinements in the cascade into a single refinement.
@@ -123,10 +163,143 @@ impl<S: Refineable + Default> Cascade<S> {
     /// Refinements are applied in order, with later slots taking precedence.
     /// Empty slots (`None`) are skipped during merging.
     pub fn merged(&self) -> S::Refinement {
-        let mut merged = self.0[0].clone().unwrap();
-        for refinement in self.0.iter().skip(1).flatten() {
+        let mut merged = self.refinements[0]
+            .clone()
+            .expect("cascade base refinement is an internal invariant");
+        for refinement in self.refinements.iter().skip(1).flatten() {
             merged.refine(refinement);
         }
         merged
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cascade, IsEmpty, Refineable};
+
+    #[derive(Clone, Default, Refineable)]
+    struct EmptyStyle {}
+
+    mod theme {
+        use super::Refineable;
+
+        #[derive(Clone, Default, Refineable)]
+        pub struct Child<T: Clone + Default> {
+            pub value: T,
+        }
+    }
+
+    #[derive(Clone, Default, Refineable)]
+    struct ParentStyle {
+        #[refineable]
+        child: theme::Child<u8>,
+    }
+
+    #[derive(Clone, Default, PartialEq, Eq)]
+    struct TestStyle {
+        value: i32,
+    }
+
+    #[derive(Clone, Default, PartialEq, Eq)]
+    struct TestRefinement {
+        value: Option<i32>,
+    }
+
+    impl IsEmpty for TestRefinement {
+        fn is_empty(&self) -> bool {
+            self.value.is_none()
+        }
+    }
+
+    impl Refineable for TestStyle {
+        type Refinement = TestRefinement;
+
+        fn refine(&mut self, refinement: &Self::Refinement) {
+            if let Some(value) = refinement.value {
+                self.value = value;
+            }
+        }
+
+        fn refined(mut self, refinement: Self::Refinement) -> Self {
+            self.refine(&refinement);
+            self
+        }
+
+        fn is_superset_of(&self, refinement: &Self::Refinement) -> bool {
+            refinement.value.is_none_or(|value| self.value == value)
+        }
+
+        fn subtract(&self, refinement: &Self::Refinement) -> Self::Refinement {
+            TestRefinement {
+                value: (refinement.value != Some(self.value)).then_some(self.value),
+            }
+        }
+    }
+
+    impl Refineable for TestRefinement {
+        type Refinement = Self;
+
+        fn refine(&mut self, refinement: &Self::Refinement) {
+            if refinement.value.is_some() {
+                self.value = refinement.value;
+            }
+        }
+
+        fn refined(mut self, refinement: Self::Refinement) -> Self {
+            self.refine(&refinement);
+            self
+        }
+
+        fn is_superset_of(&self, refinement: &Self::Refinement) -> bool {
+            refinement.value.is_none() || self.value == refinement.value
+        }
+
+        fn subtract(&self, refinement: &Self::Refinement) -> Self::Refinement {
+            TestRefinement {
+                value: if self.value != refinement.value {
+                    self.value
+                } else {
+                    None
+                },
+            }
+        }
+    }
+
+    #[test]
+    fn slots_are_bound_to_their_own_cascade() {
+        let mut first = Cascade::<TestStyle>::default();
+        let slot = first.reserve();
+        first
+            .set(slot, Some(TestRefinement { value: Some(7) }))
+            .unwrap();
+        assert_eq!(first.merged().value, Some(7));
+
+        let mut second = Cascade::<TestStyle>::default();
+        second.reserve();
+        assert!(
+            second
+                .set(slot, Some(TestRefinement { value: Some(9) }))
+                .is_err()
+        );
+        assert!(second.merged().is_empty());
+    }
+
+    #[test]
+    fn derived_empty_struct_has_an_empty_refinement() {
+        let _style = EmptyStyle {};
+        let refinement = EmptyStyleRefinement::default();
+
+        assert!(refinement.is_empty());
+        assert!(!refinement.is_some());
+    }
+
+    #[test]
+    fn derived_nested_refinement_keeps_its_module_path() {
+        let refinement = ParentStyleRefinement {
+            child: theme::ChildRefinement { value: Some(7) },
+        };
+        let style = ParentStyle::default().refined(refinement);
+
+        assert_eq!(style.child.value, 7);
     }
 }

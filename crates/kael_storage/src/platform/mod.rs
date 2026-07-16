@@ -1,6 +1,9 @@
 //! Platform-specific storage path resolution.
 
-use std::path::{Path, PathBuf};
+use std::{
+    ffi::OsStr,
+    path::{Component, Path, PathBuf},
+};
 
 use crate::{Error, Result};
 
@@ -38,6 +41,7 @@ pub const fn backend_name() -> &'static str {
 
 /// Resolves storage paths for the given application identifier.
 pub fn storage_paths(app_id: &str) -> Result<StoragePaths> {
+    validate_identifier(app_id)?;
     let config_dir = imp::base_config_dir()?.join(app_id);
     let data_dir = imp::base_data_dir()?.join(app_id);
 
@@ -63,14 +67,15 @@ pub fn ensure_storage_paths(app_id: &str) -> Result<StoragePaths> {
 /// Resolves a database file path for the given application identifier and database name.
 pub fn database_path(app_id: &str, name: &str) -> Result<PathBuf> {
     let paths = ensure_storage_paths(app_id)?;
-    Ok(paths.databases_dir.join(database_file_name(name)))
+    Ok(paths.databases_dir.join(database_file_name(name)?))
 }
 
 fn create_dir_all(path: &Path) -> Result<()> {
     std::fs::create_dir_all(path).map_err(|source| Error::io(path.to_path_buf(), source))
 }
 
-fn database_file_name(name: &str) -> String {
+fn database_file_name(name: &str) -> Result<String> {
+    validate_identifier(name)?;
     let sanitized = name
         .chars()
         .map(|character| match character {
@@ -80,8 +85,37 @@ fn database_file_name(name: &str) -> String {
         .collect::<String>();
 
     if sanitized.ends_with(".sqlite") || sanitized.ends_with(".sqlite3") {
-        sanitized
+        Ok(sanitized)
     } else {
-        format!("{sanitized}.sqlite3")
+        Ok(format!("{sanitized}.sqlite3"))
+    }
+}
+
+fn validate_identifier(identifier: &str) -> Result<()> {
+    let mut components = Path::new(identifier).components();
+    let valid = matches!(components.next(), Some(Component::Normal(component)) if component == OsStr::new(identifier))
+        && components.next().is_none();
+    if valid {
+        Ok(())
+    } else {
+        Err(Error::InvalidStorageIdentifier(identifier.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{database_file_name, validate_identifier};
+
+    #[test]
+    fn database_names_cannot_escape_the_storage_directory() {
+        assert!(database_file_name("").is_err());
+        assert!(database_file_name(".").is_err());
+        assert!(database_file_name("..").is_err());
+        assert!(database_file_name("../outside").is_err());
+        assert!(database_file_name("nested/database").is_err());
+        assert_eq!(database_file_name("main db").unwrap(), "main_db.sqlite3");
+        assert!(validate_identifier("../com.example.app").is_err());
+        assert!(validate_identifier("/tmp/com.example.app").is_err());
+        assert!(validate_identifier("com.example.app").is_ok());
     }
 }

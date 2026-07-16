@@ -5,11 +5,12 @@ use crate::platform::blade::{BladeContext, BladeRenderer, BladeSurfaceConfig};
 use crate::platform::linux::webview::{self as linux_webview, LinuxWebViewHost};
 use crate::platform::tab_manager::{TabManagerState, WindowTabManager};
 use crate::{
-    AnyWindowHandle, Bounds, Decorations, DevicePixels, ForegroundExecutor, GpuSpecs, Modifiers,
-    Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow,
-    Point, PromptButton, PromptLevel, RequestFrameOptions, ResizeEdge, ScaledPixels, Scene,
-    SharedString, Size, Tiling, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowControlArea, WindowDecorations, WindowKind, WindowParams, X11ClientStatePtr, px, size,
+    AnyWindowHandle, Bounds, Decorations, DevicePixels, DispatchEventResult, ForegroundExecutor,
+    GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
+    PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
+    ResizeEdge, ScaledPixels, Scene, SharedString, Size, Tiling, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowDecorations, WindowKind,
+    WindowParams, X11ClientStatePtr, px, size,
     webview::{PlatformWebView, PlatformWebViewCommand},
 };
 
@@ -78,6 +79,7 @@ x11rb::atom_manager! {
         _NET_WM_STATE_HIDDEN,
         _NET_WM_STATE_FOCUSED,
         _NET_WM_STATE_ABOVE,
+        _NET_WM_WINDOW_OPACITY,
         _NET_ACTIVE_WINDOW,
         _NET_WM_SYNC_REQUEST,
         _NET_WM_SYNC_REQUEST_COUNTER,
@@ -389,7 +391,8 @@ where
         .with_context(failure_context)
 }
 
-/// Convert X11 connection errors to `anyhow::Error` and panic for unrecoverable errors.
+/// Convert X11 connection errors to `anyhow::Error` so backend failures can be
+/// surfaced without aborting the application.
 pub(crate) fn handle_connection_error(err: ConnectionError) -> anyhow::Error {
     match err {
         ConnectionError::UnknownError => anyhow!("X11 connection: Unknown error"),
@@ -398,12 +401,12 @@ pub(crate) fn handle_connection_error(err: ConnectionError) -> anyhow::Error {
             anyhow!("X11 connection: Maximum request length exceeded")
         }
         ConnectionError::FdPassingFailed => {
-            panic!("X11 connection: File descriptor passing failed")
+            anyhow!("X11 connection: File descriptor passing failed")
         }
         ConnectionError::ParseError(parse_error) => {
             anyhow!(parse_error).context("Parse error in X11 response")
         }
-        ConnectionError::InsufficientMemory => panic!("X11 connection: Insufficient memory"),
+        ConnectionError::InsufficientMemory => anyhow!("X11 connection: Insufficient memory"),
         ConnectionError::IoError(err) => anyhow!(err).context("X11 connection: IOError"),
         _ => anyhow!(err),
     }
@@ -833,8 +836,8 @@ impl Drop for X11Window {
 }
 
 enum WmHintPropertyState {
-    // Remove = 0,
-    // Add = 1,
+    Remove = 0,
+    Add = 1,
     Toggle = 2,
 }
 
@@ -967,10 +970,14 @@ impl X11Window {
 
 impl X11WindowStatePtr {
     pub fn should_close(&self) -> bool {
-        let mut cb = self.callbacks.borrow_mut();
-        if let Some(mut should_close) = cb.should_close.take() {
-            let result = (should_close)();
-            cb.should_close = Some(should_close);
+        let callback = self.callbacks.borrow_mut().should_close.take();
+        if let Some(mut should_close) = callback {
+            let result = super::super::catch_platform_callback(
+                "window should-close",
+                false,
+                &mut should_close,
+            );
+            self.callbacks.borrow_mut().should_close = Some(should_close);
             result
         } else {
             true
@@ -1063,22 +1070,36 @@ impl X11WindowStatePtr {
     pub fn close(&self) {
         let mut callbacks = self.callbacks.borrow_mut();
         if let Some(fun) = callbacks.close.take() {
-            fun()
+            drop(callbacks);
+            super::super::catch_platform_callback("window close", (), fun);
         }
     }
 
     pub fn refresh(&self, request_frame_options: RequestFrameOptions) {
-        let mut cb = self.callbacks.borrow_mut();
-        if let Some(ref mut fun) = cb.request_frame {
-            fun(request_frame_options);
+        let mut callback = self.callbacks.borrow_mut().request_frame.take();
+        if let Some(ref mut fun) = callback {
+            super::super::catch_platform_callback("frame request", (), || {
+                fun(request_frame_options)
+            });
         }
+        self.callbacks.borrow_mut().request_frame = callback;
     }
 
     pub fn handle_input(&self, input: PlatformInput) {
-        if let Some(ref mut fun) = self.callbacks.borrow_mut().input
-            && !fun(input.clone()).propagate
-        {
-            return;
+        let mut callback = self.callbacks.borrow_mut().input.take();
+        if let Some(ref mut fun) = callback {
+            let result = super::super::catch_platform_callback(
+                "window input",
+                DispatchEventResult {
+                    propagate: true,
+                    default_prevented: false,
+                },
+                || fun(input.clone()),
+            );
+            self.callbacks.borrow_mut().input = callback;
+            if !result.propagate {
+                return;
+            }
         }
         if let PlatformInput::KeyDown(event) = input {
             // only allow shift modifier when inserting text
@@ -1187,30 +1208,41 @@ impl X11WindowStatePtr {
             }
         }
 
-        let mut callbacks = self.callbacks.borrow_mut();
-        if let Some((content_size, scale_factor)) = resize_args
-            && let Some(ref mut fun) = callbacks.resize
-        {
-            fun(content_size, scale_factor)
+        if let Some((content_size, scale_factor)) = resize_args {
+            let mut callback = self.callbacks.borrow_mut().resize.take();
+            if let Some(ref mut fun) = callback {
+                super::super::catch_platform_callback("window resize", (), || {
+                    fun(content_size, scale_factor)
+                });
+            }
+            self.callbacks.borrow_mut().resize = callback;
         }
 
-        if !is_resize && let Some(ref mut fun) = callbacks.moved {
-            fun();
+        if !is_resize {
+            let mut callback = self.callbacks.borrow_mut().moved.take();
+            if let Some(ref mut fun) = callback {
+                super::super::catch_platform_callback("window moved", (), fun);
+            }
+            self.callbacks.borrow_mut().moved = callback;
         }
 
         Ok(())
     }
 
     pub fn set_active(&self, focus: bool) {
-        if let Some(ref mut fun) = self.callbacks.borrow_mut().active_status_change {
-            fun(focus);
+        let mut callback = self.callbacks.borrow_mut().active_status_change.take();
+        if let Some(ref mut fun) = callback {
+            super::super::catch_platform_callback("active status change", (), || fun(focus));
         }
+        self.callbacks.borrow_mut().active_status_change = callback;
     }
 
     pub fn set_hovered(&self, focus: bool) {
-        if let Some(ref mut fun) = self.callbacks.borrow_mut().hovered_status_change {
-            fun(focus);
+        let mut callback = self.callbacks.borrow_mut().hovered_status_change.take();
+        if let Some(ref mut fun) = callback {
+            super::super::catch_platform_callback("hover status change", (), || fun(focus));
         }
+        self.callbacks.borrow_mut().hovered_status_change = callback;
     }
 
     pub fn set_appearance(&mut self, appearance: WindowAppearance) {
@@ -1220,10 +1252,15 @@ impl X11WindowStatePtr {
         state.renderer.update_transparency(is_transparent);
         state.appearance = appearance;
         drop(state);
-        let mut callbacks = self.callbacks.borrow_mut();
-        if let Some(ref mut fun) = callbacks.appearance_changed {
-            (fun)()
+        self.notify_appearance_changed();
+    }
+
+    fn notify_appearance_changed(&self) {
+        let mut callback = self.callbacks.borrow_mut().appearance_changed.take();
+        if let Some(ref mut fun) = callback {
+            super::super::catch_platform_callback("appearance change", (), fun);
         }
+        self.callbacks.borrow_mut().appearance_changed = callback;
     }
 }
 
@@ -1284,8 +1321,8 @@ impl PlatformWindow for X11Window {
     fn resize(&mut self, size: Size<Pixels>) {
         let state = self.0.state.borrow();
         let size = size.to_device_pixels(state.scale_factor);
-        let width = size.width.0 as u32;
-        let height = size.height.0 as u32;
+        let width = crate::platform::safe_gpu_dimension(size.width.0 as f32);
+        let height = crate::platform::safe_gpu_dimension(size.height.0 as f32);
 
         check_reply(
             || {
@@ -1471,6 +1508,38 @@ impl PlatformWindow for X11Window {
         state.renderer.update_transparency(transparent);
     }
 
+    fn set_opacity(&self, opacity: f32) {
+        let state = self.0.state.borrow();
+        let opacity = (opacity.clamp(0.0, 1.0) * u32::MAX as f32).round() as u32;
+        check_reply(
+            || "X11 ChangeProperty for _NET_WM_WINDOW_OPACITY failed.",
+            self.0.xcb.change_property32(
+                xproto::PropMode::REPLACE,
+                self.0.x_window,
+                state.atoms._NET_WM_WINDOW_OPACITY,
+                xproto::AtomEnum::CARDINAL,
+                &[opacity],
+            ),
+        )
+        .log_err();
+        xcb_flush(&self.0.xcb);
+    }
+
+    fn set_always_on_top(&self, always_on_top: bool) {
+        let state = if always_on_top {
+            WmHintPropertyState::Add
+        } else {
+            WmHintPropertyState::Remove
+        };
+        self.set_wm_hints(
+            || "X11 SendEvent to update always-on-top state failed.",
+            state,
+            self.0.state.borrow().atoms._NET_WM_STATE_ABOVE,
+            xproto::AtomEnum::NONE.into(),
+        )
+        .log_err();
+    }
+
     fn minimize(&self) {
         let state = self.0.state.borrow();
         const WINDOW_ICONIC_STATE: u32 = 3;
@@ -1524,6 +1593,12 @@ impl PlatformWindow for X11Window {
             .borrow()
             .client
             .set_frame_polling(self.0.x_window, active);
+    }
+
+    fn close(&self) {
+        if self.0.should_close() {
+            self.0.close();
+        }
     }
 
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
@@ -1754,10 +1829,7 @@ impl PlatformWindow for X11Window {
         }
 
         drop(state);
-        let mut callbacks = self.0.callbacks.borrow_mut();
-        if let Some(appearance_changed) = callbacks.appearance_changed.as_mut() {
-            appearance_changed();
-        }
+        self.0.notify_appearance_changed();
     }
 
     fn update_ime_position(&self, bounds: Bounds<Pixels>) {
@@ -1875,17 +1947,12 @@ impl PlatformWindow for X11Window {
         })
     }
 
-    fn update_accessibility_tree(&mut self, tree: &crate::AccessibilityTree) {
+    fn update_accessibility_tree(
+        &mut self,
+        tree: &crate::AccessibilityTree,
+    ) -> Vec<crate::AccessibilityActionRequest> {
         let state = self.0.state.borrow();
         state.accessibility_root.update_tree(tree);
-        let actions = state.accessibility_root.drain_actions();
-        drop(state);
-        for (target, action) in actions {
-            log::debug!(
-                "AccessKit action request: {:?} on node {}",
-                action,
-                target.0
-            );
-        }
+        state.accessibility_root.drain_actions(tree)
     }
 }

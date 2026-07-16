@@ -28,11 +28,11 @@ use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_l
 use crate::platform::linux::webview::{self as linux_webview, LinuxWebViewHost};
 use crate::platform::tab_manager::{TabManagerState, WindowTabManager};
 use crate::{
-    AnyWindowHandle, Bounds, Decorations, Globals, GpuSpecs, Modifiers, Output, Pixels,
-    PlatformDisplay, PlatformInput, Point, PromptButton, PromptLevel, RequestFrameOptions,
-    ResizeEdge, SharedString, Size, Tiling, WaylandClientStatePtr, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls, WindowDecorations,
-    WindowParams, px, size,
+    AnyWindowHandle, Bounds, Decorations, DispatchEventResult, Globals, GpuSpecs, Modifiers,
+    Output, Pixels, PlatformDisplay, PlatformInput, Point, PromptButton, PromptLevel,
+    RequestFrameOptions, ResizeEdge, SharedString, Size, Tiling, WaylandClientStatePtr,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls,
+    WindowDecorations, WindowParams, px, size,
     webview::{PlatformWebView, PlatformWebViewCommand},
 };
 use crate::{
@@ -65,14 +65,14 @@ struct RawWindow {
 
 impl rwh::HasWindowHandle for RawWindow {
     fn window_handle(&self) -> Result<rwh::WindowHandle<'_>, rwh::HandleError> {
-        let window = NonNull::new(self.window).unwrap();
+        let window = NonNull::new(self.window).ok_or(rwh::HandleError::Unavailable)?;
         let handle = rwh::WaylandWindowHandle::new(window);
         Ok(unsafe { rwh::WindowHandle::borrow_raw(handle.into()) })
     }
 }
 impl rwh::HasDisplayHandle for RawWindow {
     fn display_handle(&self) -> Result<rwh::DisplayHandle<'_>, rwh::HandleError> {
-        let display = NonNull::new(self.display).unwrap();
+        let display = NonNull::new(self.display).ok_or(rwh::HandleError::Unavailable)?;
         let handle = rwh::WaylandDisplayHandle::new(display);
         Ok(unsafe { rwh::DisplayHandle::borrow_raw(handle.into()) })
     }
@@ -157,19 +157,17 @@ impl WaylandWindowState {
         tab_manager_state: Arc<Mutex<TabManagerState>>,
     ) -> anyhow::Result<Self> {
         let renderer = {
+            let backend = surface.backend().upgrade().ok_or_else(|| {
+                anyhow::anyhow!("Wayland display backend disappeared while creating a window")
+            })?;
             let raw_window = RawWindow {
                 window: surface.id().as_ptr().cast::<c_void>(),
-                display: surface
-                    .backend()
-                    .upgrade()
-                    .unwrap()
-                    .display_ptr()
-                    .cast::<c_void>(),
+                display: backend.display_ptr().cast::<c_void>(),
             };
             let config = BladeSurfaceConfig {
                 size: gpu::Extent {
-                    width: options.bounds.size.width.0 as u32,
-                    height: options.bounds.size.height.0 as u32,
+                    width: crate::platform::safe_gpu_dimension(options.bounds.size.width.0),
+                    height: crate::platform::safe_gpu_dimension(options.bounds.size.height.0),
                     depth: 1,
                 },
                 transparent: true,
@@ -350,10 +348,9 @@ impl WaylandWindow {
         let use_layer_shell = params.kind == WindowKind::Overlay && globals.layer_shell.is_some();
 
         let (xdg_surface, toplevel, layer_surface, decoration) = if use_layer_shell {
-            let layer_shell = globals
-                .layer_shell
-                .as_ref()
-                .expect("layer_shell presence checked by use_layer_shell");
+            let Some(layer_shell) = globals.layer_shell.as_ref() else {
+                anyhow::bail!("Wayland layer-shell disappeared during window creation");
+            };
             let layer_surface = layer_shell.get_layer_surface(
                 &surface,
                 None,
@@ -490,10 +487,11 @@ impl WaylandWindowStatePtr {
         state.resize_throttle = false;
         drop(state);
 
-        let mut cb = self.callbacks.borrow_mut();
-        if let Some(fun) = cb.request_frame.as_mut() {
-            fun(Default::default());
+        let mut callback = self.callbacks.borrow_mut().request_frame.take();
+        if let Some(ref mut fun) = callback {
+            super::super::catch_platform_callback("frame request", (), || fun(Default::default()));
         }
+        self.callbacks.borrow_mut().request_frame = callback;
     }
 
     pub fn handle_xdg_surface_event(&self, event: xdg_surface::Event) {
@@ -504,10 +502,13 @@ impl WaylandWindowStatePtr {
                     state.window_controls = window_controls;
 
                     drop(state);
-                    let mut callbacks = self.callbacks.borrow_mut();
-                    if let Some(appearance_changed) = callbacks.appearance_changed.as_mut() {
-                        appearance_changed();
+                    let mut callback = self.callbacks.borrow_mut().appearance_changed.take();
+                    if let Some(ref mut appearance_changed) = callback {
+                        super::super::catch_platform_callback("appearance change", (), || {
+                            appearance_changed()
+                        });
                     }
+                    self.callbacks.borrow_mut().appearance_changed = callback;
                 }
             }
             {
@@ -626,20 +627,12 @@ impl WaylandWindowStatePtr {
             match mode {
                 WEnum::Value(zxdg_toplevel_decoration_v1::Mode::ServerSide) => {
                     self.state.borrow_mut().decorations = WindowDecorations::Server;
-                    if let Some(mut appearance_changed) =
-                        self.callbacks.borrow_mut().appearance_changed.as_mut()
-                    {
-                        appearance_changed();
-                    }
+                    self.notify_appearance_changed();
                 }
                 WEnum::Value(zxdg_toplevel_decoration_v1::Mode::ClientSide) => {
                     self.state.borrow_mut().decorations = WindowDecorations::Client;
                     // Update background to be transparent
-                    if let Some(mut appearance_changed) =
-                        self.callbacks.borrow_mut().appearance_changed.as_mut()
-                    {
-                        appearance_changed();
-                    }
+                    self.notify_appearance_changed();
                 }
                 WEnum::Value(_) => {
                     log::warn!("Unknown decoration mode");
@@ -722,10 +715,14 @@ impl WaylandWindowStatePtr {
             xdg_toplevel::Event::Close => {
                 let mut cb = self.callbacks.borrow_mut();
                 if let Some(mut should_close) = cb.should_close.take() {
-                    let result = (should_close)();
-                    cb.should_close = Some(should_close);
+                    drop(cb);
+                    let result = super::super::catch_platform_callback(
+                        "window should-close",
+                        false,
+                        &mut should_close,
+                    );
+                    self.callbacks.borrow_mut().should_close = Some(should_close);
                     if result {
-                        drop(cb);
                         self.close();
                     }
                     result
@@ -871,9 +868,11 @@ impl WaylandWindowStatePtr {
             (state.bounds.size, state.scale)
         };
 
-        if let Some(ref mut fun) = self.callbacks.borrow_mut().resize {
-            fun(size, scale);
+        let mut callback = self.callbacks.borrow_mut().resize.take();
+        if let Some(ref mut fun) = callback {
+            super::super::catch_platform_callback("window resize", (), || fun(size, scale));
         }
+        self.callbacks.borrow_mut().resize = callback;
 
         {
             let state = self.state.borrow();
@@ -894,15 +893,26 @@ impl WaylandWindowStatePtr {
     pub fn close(&self) {
         let mut callbacks = self.callbacks.borrow_mut();
         if let Some(fun) = callbacks.close.take() {
-            fun()
+            drop(callbacks);
+            super::super::catch_platform_callback("window close", (), fun);
         }
     }
 
     pub fn handle_input(&self, input: PlatformInput) {
-        if let Some(ref mut fun) = self.callbacks.borrow_mut().input
-            && !fun(input.clone()).propagate
-        {
-            return;
+        let mut callback = self.callbacks.borrow_mut().input.take();
+        if let Some(ref mut fun) = callback {
+            let result = super::super::catch_platform_callback(
+                "window input",
+                DispatchEventResult {
+                    propagate: true,
+                    default_prevented: false,
+                },
+                || fun(input.clone()),
+            );
+            self.callbacks.borrow_mut().input = callback;
+            if !result.propagate {
+                return;
+            }
         }
         if let PlatformInput::KeyDown(event) = input
             && event.keystroke.modifiers.is_subset_of(&Modifiers::shift())
@@ -919,24 +929,33 @@ impl WaylandWindowStatePtr {
 
     pub fn set_focused(&self, focus: bool) {
         self.state.borrow_mut().active = focus;
-        if let Some(ref mut fun) = self.callbacks.borrow_mut().active_status_change {
-            fun(focus);
+        let mut callback = self.callbacks.borrow_mut().active_status_change.take();
+        if let Some(ref mut fun) = callback {
+            super::super::catch_platform_callback("active status change", (), || fun(focus));
         }
+        self.callbacks.borrow_mut().active_status_change = callback;
     }
 
     pub fn set_hovered(&self, focus: bool) {
-        if let Some(ref mut fun) = self.callbacks.borrow_mut().hover_status_change {
-            fun(focus);
+        let mut callback = self.callbacks.borrow_mut().hover_status_change.take();
+        if let Some(ref mut fun) = callback {
+            super::super::catch_platform_callback("hover status change", (), || fun(focus));
         }
+        self.callbacks.borrow_mut().hover_status_change = callback;
     }
 
     pub fn set_appearance(&mut self, appearance: WindowAppearance) {
         self.state.borrow_mut().appearance = appearance;
 
-        let mut callbacks = self.callbacks.borrow_mut();
-        if let Some(ref mut fun) = callbacks.appearance_changed {
-            (fun)()
+        self.notify_appearance_changed();
+    }
+
+    fn notify_appearance_changed(&self) {
+        let mut callback = self.callbacks.borrow_mut().appearance_changed.take();
+        if let Some(ref mut fun) = callback {
+            super::super::catch_platform_callback("appearance change", (), fun);
         }
+        self.callbacks.borrow_mut().appearance_changed = callback;
     }
 
     pub fn primary_output_scale(&self) -> i32 {
@@ -1024,19 +1043,18 @@ impl PlatformWindow for WaylandWindow {
         let state = self.borrow();
         let state_ptr = self.0.clone();
         let dp_size = size.to_device_pixels(self.scale_factor());
+        let width = crate::platform::safe_gpu_dimension(dp_size.width.0 as f32);
+        let height = crate::platform::safe_gpu_dimension(dp_size.height.0 as f32);
 
         if let Some(xdg_surface) = state.xdg_surface.as_ref() {
             xdg_surface.set_window_geometry(
                 state.bounds.origin.x.0 as i32,
                 state.bounds.origin.y.0 as i32,
-                dp_size.width.0,
-                dp_size.height.0,
+                width as i32,
+                height as i32,
             );
         } else if let Some(layer_surface) = state.layer_surface.as_ref() {
-            layer_surface.set_size(
-                dp_size.width.0.max(1) as u32,
-                dp_size.height.0.max(1) as u32,
-            );
+            layer_surface.set_size(width, height);
         }
 
         state
@@ -1061,6 +1079,7 @@ impl PlatformWindow for WaylandWindow {
                 id: id.clone(),
                 name: display.name.clone(),
                 bounds: display.bounds.to_pixels(state.scale),
+                scale_factor: state.scale,
                 refresh_mhz: display.refresh_mhz,
             }) as Rc<dyn PlatformDisplay>
         })
@@ -1070,17 +1089,24 @@ impl PlatformWindow for WaylandWindow {
         self.borrow()
             .client
             .get_client()
-            .borrow()
-            .mouse_location
+            .and_then(|client| client.borrow().mouse_location)
             .unwrap_or_default()
     }
 
     fn modifiers(&self) -> Modifiers {
-        self.borrow().client.get_client().borrow().modifiers
+        self.borrow()
+            .client
+            .get_client()
+            .map(|client| client.borrow().modifiers)
+            .unwrap_or_default()
     }
 
     fn capslock(&self) -> Capslock {
-        self.borrow().client.get_client().borrow().capslock
+        self.borrow()
+            .client
+            .get_client()
+            .map(|client| client.borrow().capslock)
+            .unwrap_or_default()
     }
 
     fn set_input_handler(&mut self, input_handler: PlatformInputHandler) {
@@ -1149,6 +1175,10 @@ impl PlatformWindow for WaylandWindow {
         update_window(state);
     }
 
+    fn set_opacity(&self, _opacity: f32) {}
+
+    fn set_always_on_top(&self, _always_on_top: bool) {}
+
     fn set_frame_polling(&self, active: bool) {
         let should_kick = {
             let mut state = self.borrow_mut();
@@ -1197,6 +1227,24 @@ impl PlatformWindow for WaylandWindow {
 
     fn is_fullscreen(&self) -> bool {
         self.borrow().fullscreen
+    }
+
+    fn close(&self) {
+        let callback = self.0.callbacks.borrow_mut().should_close.take();
+        let should_close = if let Some(mut should_close) = callback {
+            let result = super::super::catch_platform_callback(
+                "window should-close",
+                false,
+                &mut should_close,
+            );
+            self.0.callbacks.borrow_mut().should_close = Some(should_close);
+            result
+        } else {
+            true
+        };
+        if should_close {
+            self.0.close();
+        }
     }
 
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
@@ -1393,18 +1441,13 @@ impl PlatformWindow for WaylandWindow {
         self.borrow().display_refresh_rate()
     }
 
-    fn update_accessibility_tree(&mut self, tree: &crate::AccessibilityTree) {
+    fn update_accessibility_tree(
+        &mut self,
+        tree: &crate::AccessibilityTree,
+    ) -> Vec<crate::AccessibilityActionRequest> {
         let state = self.borrow();
         state.accessibility_root.update_tree(tree);
-        let actions = state.accessibility_root.drain_actions();
-        drop(state);
-        for (target, action) in actions {
-            log::debug!(
-                "AccessKit action request: {:?} on node {}",
-                action,
-                target.0
-            );
-        }
+        state.accessibility_root.drain_actions(tree)
     }
 }
 
@@ -1445,7 +1488,9 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
                 let blur = blur_manager.create(&state.surface, &state.globals.qh, ());
                 state.blur = Some(blur);
             }
-            state.blur.as_ref().unwrap().commit();
+            if let Some(blur) = state.blur.as_ref() {
+                blur.commit();
+            }
         } else {
             // It probably doesn't hurt to clear the blur for opaque windows
             blur_manager.unset(&state.surface);

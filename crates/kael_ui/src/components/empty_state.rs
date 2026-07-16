@@ -26,7 +26,7 @@ impl EmptyStateSize {
         match self {
             EmptyStateSize::Sm => px(14.0),
             EmptyStateSize::Md => px(18.0),
-            EmptyStateSize::Lg => px(24.0),
+            EmptyStateSize::Lg => px(18.0),
         }
     }
 
@@ -34,15 +34,14 @@ impl EmptyStateSize {
         match self {
             EmptyStateSize::Sm => px(12.0),
             EmptyStateSize::Md => px(14.0),
-            EmptyStateSize::Lg => px(16.0),
+            EmptyStateSize::Lg => px(14.0),
         }
     }
 
     fn gap(self) -> Pixels {
         match self {
-            EmptyStateSize::Sm => px(12.0),
-            EmptyStateSize::Md => px(16.0),
-            EmptyStateSize::Lg => px(20.0),
+            EmptyStateSize::Sm => px(8.0),
+            EmptyStateSize::Md | EmptyStateSize::Lg => px(16.0),
         }
     }
 }
@@ -122,15 +121,28 @@ impl RenderOnce for EmptyState {
         let description_size = self.size.description_size();
         let gap = self.size.gap();
         let id = self.id.clone();
+        let compact = self.size == EmptyStateSize::Sm;
+        let accessible_title = self.title.clone();
+        let accessible_description = self.description.clone();
 
         div()
             .id(self.id)
+            .accessibility({
+                let attributes = AccessibilityAttributes::new(AccessibilityRole::Group)
+                    .label(accessible_title.to_string());
+                if let Some(description) = accessible_description {
+                    attributes.description(description.to_string())
+                } else {
+                    attributes
+                }
+            })
             .flex()
             .flex_col()
             .items_center()
             .justify_center()
             .gap(gap)
-            .p(px(24.0))
+            .py(if compact { px(16.0) } else { px(32.0) })
+            .px(if compact { px(16.0) } else { px(24.0) })
             .map(|mut this| {
                 this.style().refine(&user_style);
                 this
@@ -147,25 +159,26 @@ impl RenderOnce for EmptyState {
                     .flex()
                     .flex_col()
                     .items_center()
-                    .gap(px(8.0))
+                    .max_w(px(360.0))
                     .child(
                         div()
                             .text_size(title_size)
+                            .line_height(if compact { px(20.0) } else { px(24.0) })
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.tokens.foreground)
                             .font_family(theme.tokens.font_family.clone())
                             .text_align(TextAlign::Center)
-                            .child(self.title),
+                            .child(StyledText::new(self.title).accessibility_hidden(true)),
                     )
                     .when_some(self.description, |d, desc| {
                         d.child(
                             div()
                                 .text_size(description_size)
+                                .line_height(if compact { px(16.0) } else { px(20.0) })
                                 .text_color(theme.tokens.muted_foreground)
                                 .font_family(theme.tokens.font_family.clone())
                                 .text_align(TextAlign::Center)
-                                .max_w(px(320.0))
-                                .child(desc),
+                                .child(StyledText::new(desc).accessibility_hidden(true)),
                         )
                     }),
             )
@@ -175,9 +188,10 @@ impl RenderOnce for EmptyState {
                     d.child(
                         div()
                             .flex()
+                            .when(compact, |this| this.flex_col())
                             .items_center()
-                            .gap(px(12.0))
-                            .mt(px(8.0))
+                            .gap(px(8.0))
+                            .mt(px(4.0))
                             .when_some(self.action, |d, (label, handler)| {
                                 let handler_clone = handler.clone();
                                 d.child(

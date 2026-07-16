@@ -95,7 +95,10 @@ impl Database {
         let path = path.as_ref().to_path_buf();
 
         smol::unblock(move || {
-            if let Some(parent) = path.parent() {
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
                 std::fs::create_dir_all(parent)
                     .map_err(|source| Error::io(parent.to_path_buf(), source))?;
             }

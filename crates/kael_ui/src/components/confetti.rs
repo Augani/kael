@@ -5,6 +5,8 @@ use std::time::Duration;
 
 const DEFAULT_CONFETTI_COLORS: [u32; 6] =
     [0xFF6B6B, 0x4ECDC4, 0x45B7D1, 0xFFA07A, 0x98D8C8, 0xF7DC6F];
+const MAX_PARTICLES: usize = 1_000;
+const SIMULATION_REFERENCE_SIZE: f32 = 500.0;
 
 #[derive(Clone)]
 pub struct ConfettiParticle {
@@ -47,7 +49,7 @@ impl ConfettiState {
     }
 
     pub fn set_particle_count(&mut self, count: usize) {
-        self.particle_count = count;
+        self.particle_count = count.min(MAX_PARTICLES);
     }
 
     pub fn set_colors(&mut self, colors: Vec<Hsla>) {
@@ -57,11 +59,24 @@ impl ConfettiState {
     }
 
     pub fn set_gravity(&mut self, gravity: f32) {
-        self.gravity = gravity;
+        if gravity.is_finite() {
+            self.gravity = gravity;
+        }
     }
 
     pub fn set_origin(&mut self, origin: Point<f32>) {
-        self.origin = origin;
+        if origin.x.is_finite() && origin.y.is_finite() {
+            self.origin = Point {
+                x: origin.x.clamp(0.0, 1.0),
+                y: origin.y.clamp(0.0, 1.0),
+            };
+        }
+    }
+
+    pub fn set_spread(&mut self, spread: f32) {
+        if spread.is_finite() && spread >= 0.0 {
+            self.spread = spread;
+        }
     }
 
     pub fn is_active(&self) -> bool {
@@ -70,6 +85,13 @@ impl ConfettiState {
 
     pub fn burst(&mut self, cx: &mut Context<Self>) {
         self.particles.clear();
+
+        if cx.reduce_motion() || self.particle_count == 0 {
+            self.is_active = false;
+            cx.notify();
+            return;
+        }
+
         self.is_active = true;
 
         let count = self.particle_count;
@@ -112,10 +134,12 @@ impl ConfettiState {
 
         for particle in &mut self.particles {
             particle.age += dt;
+            // Positions are normalized to the canvas. Keep the physics values in
+            // familiar pixel-like units while converting displacement once here.
             particle.velocity.y += gravity * dt;
             particle.velocity.x *= 0.99;
-            particle.position.x += particle.velocity.x * dt;
-            particle.position.y += particle.velocity.y * dt;
+            particle.position.x += particle.velocity.x * dt / SIMULATION_REFERENCE_SIZE;
+            particle.position.y += particle.velocity.y * dt / SIMULATION_REFERENCE_SIZE;
         }
 
         self.particles.retain(|p| p.age < p.lifetime);
@@ -140,7 +164,10 @@ impl ConfettiState {
                 .await;
 
             _ = this.update(cx, |state, cx| {
-                if !state.is_active {
+                if !state.is_active || cx.reduce_motion() {
+                    state.is_active = false;
+                    state.particles.clear();
+                    cx.notify();
                     return;
                 }
 
@@ -185,7 +212,7 @@ impl Confetti {
     }
 
     pub fn particle_count(self, count: usize, cx: &mut App) -> Self {
-        self.state.update(cx, |s, _| s.particle_count = count);
+        self.state.update(cx, |s, _| s.set_particle_count(count));
         self
     }
 
@@ -195,7 +222,12 @@ impl Confetti {
     }
 
     pub fn gravity(self, gravity: f32, cx: &mut App) -> Self {
-        self.state.update(cx, |s, _| s.gravity = gravity);
+        self.state.update(cx, |s, _| s.set_gravity(gravity));
+        self
+    }
+
+    pub fn spread(self, spread: f32, cx: &mut App) -> Self {
+        self.state.update(cx, |s, _| s.set_spread(spread));
         self
     }
 }
@@ -288,4 +320,63 @@ fn pseudo_random_f32(seed: u32) -> f32 {
     x = x.wrapping_mul(0x45D9F3B);
     x ^= x >> 16;
     (x & 0xFFFF) as f32 / 65535.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn particle_motion_stays_in_normalized_canvas_coordinates() {
+        let mut cx = TestAppContext::single();
+        let state = cx.new(ConfettiState::new);
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.set_particle_count(1);
+                state.burst(cx);
+                state.update_particles(1.0 / 60.0);
+
+                let particle = &state.particles()[0];
+                assert!((particle.position.x - 0.5).abs() < 0.02);
+                assert!((particle.position.y - 0.5).abs() < 0.02);
+            });
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn reduced_motion_suppresses_the_particle_burst() {
+        let mut cx = TestAppContext::single();
+        cx.set_reduce_motion(true);
+        let state = cx.new(ConfettiState::new);
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| state.burst(cx));
+            assert!(!state.read(cx).is_active());
+            assert!(state.read(cx).particles().is_empty());
+        });
+    }
+
+    #[::core::prelude::v1::test]
+    fn invalid_configuration_keeps_safe_values() {
+        let mut cx = TestAppContext::single();
+        let state = cx.new(ConfettiState::new);
+
+        cx.update(|cx| {
+            state.update(cx, |state, _| {
+                state.set_particle_count(usize::MAX);
+                state.set_gravity(f32::NAN);
+                state.set_origin(Point {
+                    x: f32::INFINITY,
+                    y: 0.0,
+                });
+                state.set_spread(-1.0);
+
+                assert_eq!(state.particle_count, MAX_PARTICLES);
+                assert_eq!(state.gravity, 120.0);
+                assert_eq!(state.origin, Point { x: 0.5, y: 0.5 });
+                assert_eq!(state.spread, 300.0);
+            });
+        });
+    }
 }

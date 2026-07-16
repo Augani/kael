@@ -1,6 +1,7 @@
 #![allow(non_upper_case_globals)]
 
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use windows::Win32::Foundation::*;
@@ -18,6 +19,7 @@ pub enum AccessibleRole {
     Button,
     TextInput,
     StaticText,
+    Heading,
     Group,
     List,
     ListItem,
@@ -47,6 +49,7 @@ impl AccessibleRole {
             AccessibleRole::Button => UIA_ButtonControlTypeId,
             AccessibleRole::TextInput => UIA_EditControlTypeId,
             AccessibleRole::StaticText => UIA_TextControlTypeId,
+            AccessibleRole::Heading => UIA_TextControlTypeId,
             AccessibleRole::Group => UIA_GroupControlTypeId,
             AccessibleRole::List => UIA_ListControlTypeId,
             AccessibleRole::ListItem => UIA_ListItemControlTypeId,
@@ -77,6 +80,7 @@ impl From<crate::AccessibilityRole> for AccessibleRole {
             crate::AccessibilityRole::Button => AccessibleRole::Button,
             crate::AccessibilityRole::TextInput => AccessibleRole::TextInput,
             crate::AccessibilityRole::StaticText => AccessibleRole::StaticText,
+            crate::AccessibilityRole::Heading => AccessibleRole::Heading,
             crate::AccessibilityRole::Group => AccessibleRole::Group,
             crate::AccessibilityRole::List => AccessibleRole::List,
             crate::AccessibilityRole::ListItem => AccessibleRole::ListItem,
@@ -113,17 +117,37 @@ pub struct AccessibleElementInfo {
     pub name: Option<String>,
     pub value: Option<String>,
     pub element_id: u32,
+    pub node_id: crate::AccessibilityId,
+    pub actions: Vec<crate::AccessibilityAction>,
+    pub toggle_value: Option<bool>,
+    pub range_value: Option<AccessibleRangeValue>,
+    pub text_value: Option<String>,
+}
+
+/// Numeric range metadata for a UIA range-value provider.
+#[derive(Debug, Clone, Copy)]
+pub struct AccessibleRangeValue {
+    pub current: f64,
+    pub min: f64,
+    pub max: f64,
+    pub step: Option<f64>,
 }
 
 static NEXT_ELEMENT_ID: AtomicU32 = AtomicU32::new(1);
 
 impl AccessibleElementInfo {
     pub fn new(role: AccessibleRole) -> Self {
+        let element_id = NEXT_ELEMENT_ID.fetch_add(1, Ordering::Relaxed);
         Self {
             role,
             name: None,
             value: None,
-            element_id: NEXT_ELEMENT_ID.fetch_add(1, Ordering::Relaxed),
+            element_id,
+            node_id: crate::AccessibilityId(element_id as u64),
+            actions: Vec::new(),
+            toggle_value: None,
+            range_value: None,
+            text_value: None,
         }
     }
 
@@ -136,7 +160,43 @@ impl AccessibleElementInfo {
         self.value = Some(value.into());
         self
     }
+
+    pub fn with_actions(mut self, actions: Vec<crate::AccessibilityAction>) -> Self {
+        self.actions = actions;
+        self
+    }
+
+    pub fn with_node_id(mut self, node_id: crate::AccessibilityId) -> Self {
+        self.node_id = node_id;
+        self
+    }
+
+    pub fn with_toggle_value(mut self, toggle_value: bool) -> Self {
+        self.toggle_value = Some(toggle_value);
+        self
+    }
+
+    pub fn with_range_value(mut self, current: f64, min: f64, max: f64, step: Option<f64>) -> Self {
+        self.range_value = Some(AccessibleRangeValue {
+            current,
+            min,
+            max,
+            step,
+        });
+        self
+    }
+
+    pub fn with_text_value(mut self, value: impl Into<String>) -> Self {
+        self.text_value = Some(value.into());
+        self
+    }
+
+    fn supports_action(&self, action: crate::AccessibilityAction) -> bool {
+        self.actions.contains(&action)
+    }
 }
+
+type PendingActionQueue = Rc<RefCell<Vec<crate::AccessibilityActionRequest>>>;
 
 /// The root UIA provider for a GPUI window. Implements `IRawElementProviderSimple`
 /// and `IRawElementProviderFragment` to expose the window to screen readers.
@@ -150,6 +210,7 @@ pub struct GpuiUiaProvider {
     pub(crate) info: RefCell<AccessibleElementInfo>,
     pub(crate) children: RefCell<Vec<ComObject<GpuiElementProvider>>>,
     pub(crate) focused_child_id: RefCell<Option<u32>>,
+    pending_actions: PendingActionQueue,
 }
 
 impl GpuiUiaProvider {
@@ -161,6 +222,7 @@ impl GpuiUiaProvider {
             ),
             children: RefCell::new(Vec::new()),
             focused_child_id: RefCell::new(None),
+            pending_actions: Rc::new(RefCell::new(Vec::new())),
         })
     }
 
@@ -189,13 +251,22 @@ impl GpuiUiaProvider {
         {
             *existing.info.borrow_mut() = info;
         } else {
-            children.push(GpuiElementProvider::new(self.hwnd, info));
+            children.push(GpuiElementProvider::new(
+                self.hwnd,
+                info,
+                self.pending_actions.clone(),
+            ));
         }
     }
 
     /// Remove all children (e.g., on re-render).
     pub fn clear_elements(&self) {
         self.children.borrow_mut().clear();
+    }
+
+    /// Drain normalized UIA action requests that child providers received.
+    pub fn drain_actions(&self) -> Vec<crate::AccessibilityActionRequest> {
+        self.pending_actions.borrow_mut().drain(..).collect()
     }
 }
 
@@ -321,18 +392,32 @@ impl IRawElementProviderFragmentRoot_Impl for GpuiUiaProvider_Impl {
 }
 
 /// UIA provider for individual GPUI elements (children of the root window provider).
-#[implement(IRawElementProviderSimple, IRawElementProviderFragment)]
+#[implement(
+    IRawElementProviderSimple,
+    IRawElementProviderFragment,
+    IInvokeProvider,
+    IToggleProvider,
+    IExpandCollapseProvider,
+    IRangeValueProvider,
+    IValueProvider
+)]
 pub struct GpuiElementProvider {
     #[allow(dead_code)]
     hwnd: HWND,
     pub(crate) info: RefCell<AccessibleElementInfo>,
+    pending_actions: PendingActionQueue,
 }
 
 impl GpuiElementProvider {
-    fn new(hwnd: HWND, info: AccessibleElementInfo) -> ComObject<Self> {
+    fn new(
+        hwnd: HWND,
+        info: AccessibleElementInfo,
+        pending_actions: PendingActionQueue,
+    ) -> ComObject<Self> {
         ComObject::new(Self {
             hwnd,
             info: RefCell::new(info),
+            pending_actions,
         })
     }
 }
@@ -342,8 +427,44 @@ impl IRawElementProviderSimple_Impl for GpuiElementProvider_Impl {
         Ok(ProviderOptions_ServerSideProvider)
     }
 
-    fn GetPatternProvider(&self, _pattern_id: UIA_PATTERN_ID) -> Result<IUnknown> {
-        Err(Error::empty())
+    fn GetPatternProvider(&self, pattern_id: UIA_PATTERN_ID) -> Result<IUnknown> {
+        let info = self.info.borrow();
+        match pattern_id {
+            UIA_InvokePatternId
+                if info.supports_action(crate::AccessibilityAction::Click)
+                    || info.supports_action(crate::AccessibilityAction::ShowMenu)
+                    || info.supports_action(crate::AccessibilityAction::Dismiss) =>
+            {
+                let provider: IInvokeProvider = self.to_interface();
+                Ok(provider.into())
+            }
+            UIA_TogglePatternId if info.supports_action(crate::AccessibilityAction::Toggle) => {
+                let provider: IToggleProvider = self.to_interface();
+                Ok(provider.into())
+            }
+            UIA_ExpandCollapsePatternId
+                if info.supports_action(crate::AccessibilityAction::Expand)
+                    || info.supports_action(crate::AccessibilityAction::Collapse) =>
+            {
+                let provider: IExpandCollapseProvider = self.to_interface();
+                Ok(provider.into())
+            }
+            UIA_RangeValuePatternId
+                if info.supports_action(crate::AccessibilityAction::SetValue)
+                    && info.range_value.is_some() =>
+            {
+                let provider: IRangeValueProvider = self.to_interface();
+                Ok(provider.into())
+            }
+            UIA_ValuePatternId
+                if info.supports_action(crate::AccessibilityAction::SetValue)
+                    && info.text_value.is_some() =>
+            {
+                let provider: IValueProvider = self.to_interface();
+                Ok(provider.into())
+            }
+            _ => Err(Error::empty()),
+        }
     }
 
     fn GetPropertyValue(&self, property_id: UIA_PROPERTY_ID) -> Result<VARIANT> {
@@ -421,11 +542,192 @@ impl IRawElementProviderFragment_Impl for GpuiElementProvider_Impl {
     }
 
     fn SetFocus(&self) -> Result<()> {
+        self.record_action(crate::AccessibilityAction::Focus);
         Ok(())
     }
 
     fn FragmentRoot(&self) -> Result<IRawElementProviderFragmentRoot> {
         Err(Error::empty())
+    }
+}
+
+impl GpuiElementProvider_Impl {
+    fn record_action(&self, action: crate::AccessibilityAction) -> bool {
+        let info = self.info.borrow();
+        if !info.supports_action(action) {
+            return false;
+        }
+        self.pending_actions
+            .borrow_mut()
+            .push(crate::AccessibilityActionRequest::new(info.node_id, action));
+        true
+    }
+
+    fn record_action_with_payload(
+        &self,
+        action: crate::AccessibilityAction,
+        payload: crate::AccessibilityActionPayload,
+    ) -> bool {
+        let info = self.info.borrow();
+        if !info.supports_action(action) {
+            return false;
+        }
+        self.pending_actions
+            .borrow_mut()
+            .push(crate::AccessibilityActionRequest::with_payload(
+                info.node_id,
+                action,
+                payload,
+            ));
+        true
+    }
+
+    fn invoke_action(&self) -> Option<crate::AccessibilityAction> {
+        let info = self.info.borrow();
+        [
+            crate::AccessibilityAction::Click,
+            crate::AccessibilityAction::ShowMenu,
+            crate::AccessibilityAction::Dismiss,
+        ]
+        .into_iter()
+        .find(|action| info.supports_action(*action))
+    }
+}
+
+impl IInvokeProvider_Impl for GpuiElementProvider_Impl {
+    fn Invoke(&self) -> Result<()> {
+        if let Some(action) = self.invoke_action() {
+            self.record_action(action);
+            Ok(())
+        } else {
+            Err(Error::empty())
+        }
+    }
+}
+
+impl IToggleProvider_Impl for GpuiElementProvider_Impl {
+    fn Toggle(&self) -> Result<()> {
+        if self.record_action(crate::AccessibilityAction::Toggle) {
+            Ok(())
+        } else {
+            Err(Error::empty())
+        }
+    }
+
+    fn ToggleState(&self) -> Result<ToggleState> {
+        Ok(match self.info.borrow().toggle_value {
+            Some(true) => ToggleState_On,
+            Some(false) => ToggleState_Off,
+            None => ToggleState_Indeterminate,
+        })
+    }
+}
+
+impl IExpandCollapseProvider_Impl for GpuiElementProvider_Impl {
+    fn Expand(&self) -> Result<()> {
+        if self.record_action(crate::AccessibilityAction::Expand) {
+            Ok(())
+        } else {
+            Err(Error::empty())
+        }
+    }
+
+    fn Collapse(&self) -> Result<()> {
+        if self.record_action(crate::AccessibilityAction::Collapse) {
+            Ok(())
+        } else {
+            Err(Error::empty())
+        }
+    }
+
+    fn ExpandCollapseState(&self) -> Result<ExpandCollapseState> {
+        Ok(ExpandCollapseState_LeafNode)
+    }
+}
+
+impl IRangeValueProvider_Impl for GpuiElementProvider_Impl {
+    fn SetValue(&self, val: f64) -> Result<()> {
+        if self.record_action_with_payload(
+            crate::AccessibilityAction::SetValue,
+            crate::AccessibilityActionPayload::NumericValue(val),
+        ) {
+            Ok(())
+        } else {
+            Err(Error::empty())
+        }
+    }
+
+    fn Value(&self) -> Result<f64> {
+        self.info
+            .borrow()
+            .range_value
+            .map(|range| range.current)
+            .ok_or_else(Error::empty)
+    }
+
+    fn IsReadOnly(&self) -> Result<BOOL> {
+        Ok(BOOL(0))
+    }
+
+    fn Maximum(&self) -> Result<f64> {
+        self.info
+            .borrow()
+            .range_value
+            .map(|range| range.max)
+            .ok_or_else(Error::empty)
+    }
+
+    fn Minimum(&self) -> Result<f64> {
+        self.info
+            .borrow()
+            .range_value
+            .map(|range| range.min)
+            .ok_or_else(Error::empty)
+    }
+
+    fn LargeChange(&self) -> Result<f64> {
+        Ok(self
+            .info
+            .borrow()
+            .range_value
+            .and_then(|range| range.step)
+            .unwrap_or(10.0))
+    }
+
+    fn SmallChange(&self) -> Result<f64> {
+        Ok(self
+            .info
+            .borrow()
+            .range_value
+            .and_then(|range| range.step)
+            .unwrap_or(1.0))
+    }
+}
+
+impl IValueProvider_Impl for GpuiElementProvider_Impl {
+    fn SetValue(&self, val: &PCWSTR) -> Result<()> {
+        let value = unsafe { val.to_string()? };
+        if self.record_action_with_payload(
+            crate::AccessibilityAction::SetValue,
+            crate::AccessibilityActionPayload::Value(value),
+        ) {
+            Ok(())
+        } else {
+            Err(Error::empty())
+        }
+    }
+
+    fn Value(&self) -> Result<BSTR> {
+        self.info
+            .borrow()
+            .text_value
+            .as_ref()
+            .map(|value| BSTR::from(value.as_str()))
+            .ok_or_else(Error::empty)
+    }
+
+    fn IsReadOnly(&self) -> Result<BOOL> {
+        Ok(BOOL(0))
     }
 }
 

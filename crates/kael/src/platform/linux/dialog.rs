@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use crate::{DialogKind, DialogOptions, PathPromptOptions};
 
+const MAX_DIALOG_OUTPUT_BYTES: u64 = 64 * 1024;
+
 /// Fallback file-open dialog using zenity/kdialog when XDG Desktop Portal is unavailable.
 /// Returns `None` if the user cancelled, or `Some(paths)` on success.
 pub fn prompt_for_paths_fallback(options: &PathPromptOptions) -> Option<Vec<PathBuf>> {
@@ -51,8 +53,11 @@ fn try_zenity_open(options: &PathPromptOptions) -> Option<Option<Vec<PathBuf>>> 
         };
         cmd.args(["--title", title]);
     }
+    for filter in &options.filters {
+        cmd.arg(format!("--file-filter={}", zenity_filter_arg(filter)));
+    }
 
-    let output = cmd.output().ok()?;
+    let output = bounded_output(&mut cmd)?;
 
     if !output.status.success() {
         // User cancelled
@@ -83,13 +88,13 @@ fn try_kdialog_open(options: &PathPromptOptions) -> Option<Option<Vec<PathBuf>>>
         if options.multiple {
             cmd.arg("--getopenfilename");
             cmd.arg(".");
-            cmd.arg("*");
+            cmd.arg(kdialog_filter_arg(options));
             cmd.arg("--multiple");
             cmd.args(["--separate-output"]);
         } else {
             cmd.arg("--getopenfilename");
             cmd.arg(".");
-            cmd.arg("*");
+            cmd.arg(kdialog_filter_arg(options));
         }
     }
 
@@ -102,7 +107,7 @@ fn try_kdialog_open(options: &PathPromptOptions) -> Option<Option<Vec<PathBuf>>>
     };
     cmd.args(["--title", &title]);
 
-    let output = cmd.output().ok()?;
+    let output = bounded_output(&mut cmd)?;
 
     if !output.status.success() {
         return Some(None);
@@ -122,6 +127,37 @@ fn try_kdialog_open(options: &PathPromptOptions) -> Option<Option<Vec<PathBuf>>>
     }
 }
 
+fn zenity_filter_arg(filter: &crate::FileDialogFilter) -> String {
+    let patterns = filter
+        .extensions
+        .iter()
+        .map(|extension| format!("*.{}", extension.as_ref()))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("{} | {}", filter.name.as_ref(), patterns)
+}
+
+fn kdialog_filter_arg(options: &PathPromptOptions) -> String {
+    if options.filters.is_empty() {
+        return "*".to_string();
+    }
+
+    options
+        .filters
+        .iter()
+        .map(|filter| {
+            let patterns = filter
+                .extensions
+                .iter()
+                .map(|extension| format!("*.{}", extension.as_ref()))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("{} ({})", filter.name.as_ref(), patterns)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn try_zenity_save(directory: &Path, suggested_name: Option<&str>) -> Option<Option<PathBuf>> {
     let mut cmd = std::process::Command::new("zenity");
     cmd.args(["--file-selection", "--save", "--confirm-overwrite"]);
@@ -136,7 +172,7 @@ fn try_zenity_save(directory: &Path, suggested_name: Option<&str>) -> Option<Opt
         cmd.args(["--filename", &dir_str]);
     }
 
-    let output = cmd.output().ok()?;
+    let output = bounded_output(&mut cmd)?;
 
     if !output.status.success() {
         return Some(None);
@@ -165,7 +201,7 @@ fn try_kdialog_save(directory: &Path, suggested_name: Option<&str>) -> Option<Op
 
     cmd.args(["--title", "Save File"]);
 
-    let output = cmd.output().ok()?;
+    let output = bounded_output(&mut cmd)?;
 
     if !output.status.success() {
         return Some(None);
@@ -181,6 +217,9 @@ fn try_kdialog_save(directory: &Path, suggested_name: Option<&str>) -> Option<Op
 }
 
 pub fn show_dialog(options: &DialogOptions) -> usize {
+    if !valid_dialog_options(options) {
+        return 0;
+    }
     if let Some(idx) = try_zenity(options) {
         return idx;
     }
@@ -188,6 +227,20 @@ pub fn show_dialog(options: &DialogOptions) -> usize {
         return idx;
     }
     0
+}
+
+fn valid_dialog_options(options: &DialogOptions) -> bool {
+    !options.title.is_empty()
+        && options.title.len() <= 256
+        && options.message.len() <= 2_048
+        && options
+            .detail
+            .as_ref()
+            .is_none_or(|detail| detail.len() <= 4_096)
+        && (1..=6).contains(&options.buttons.len())
+        && options.buttons.iter().all(|button| {
+            !button.is_empty() && button.len() <= 128 && !button.chars().any(char::is_control)
+        })
 }
 
 fn try_zenity(options: &DialogOptions) -> Option<usize> {
@@ -202,7 +255,10 @@ fn try_zenity(options: &DialogOptions) -> Option<usize> {
         };
         let _ = std::process::Command::new("zenity")
             .args([zenity_type, "--title", &options.title, "--text", &message])
-            .output()
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
             .ok()?;
         return Some(0);
     }
@@ -217,7 +273,7 @@ fn try_zenity(options: &DialogOptions) -> Option<usize> {
         cmd.args(["--extra-button", button]);
     }
 
-    let output = cmd.output().ok()?;
+    let output = bounded_output(&mut cmd)?;
 
     if output.status.success() {
         return Some(0);
@@ -248,7 +304,10 @@ fn try_kdialog(options: &DialogOptions) -> Option<usize> {
         };
         let _ = std::process::Command::new("kdialog")
             .args([kdialog_type, &message, "--title", &options.title])
-            .output()
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
             .ok()?;
         return Some(0);
     }
@@ -274,10 +333,9 @@ fn try_kdialog(options: &DialogOptions) -> Option<usize> {
         args.push(options.buttons[2].to_string());
     }
 
-    let output = std::process::Command::new("kdialog")
-        .args(&args)
-        .output()
-        .ok()?;
+    let mut command = std::process::Command::new("kdialog");
+    command.args(&args);
+    let output = bounded_output(&mut command)?;
 
     match output.status.code() {
         Some(0) => Some(0),
@@ -295,4 +353,46 @@ fn build_message(options: &DialogOptions) -> String {
         Some(detail) => detail.to_string(),
         None => options.message.to_string(),
     }
+}
+
+fn bounded_output(command: &mut std::process::Command) -> Option<std::process::Output> {
+    use std::io::Read as _;
+
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let mut child = command.spawn().ok()?;
+    let pid = child.id();
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::Builder::new()
+        .name("linux-dialog-output".into())
+        .spawn(move || {
+            let mut bytes = Vec::new();
+            stdout
+                .by_ref()
+                .take(MAX_DIALOG_OUTPUT_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .ok()?;
+            if bytes.len() as u64 > MAX_DIALOG_OUTPUT_BYTES {
+                unsafe {
+                    libc::kill(pid as i32, libc::SIGKILL);
+                }
+                return None;
+            }
+            Some(bytes)
+        })
+        .ok();
+    let Some(reader) = reader else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    };
+    let status = child.wait().ok()?;
+    let stdout = reader.join().ok()??;
+    Some(std::process::Output {
+        status,
+        stdout,
+        stderr: Vec::new(),
+    })
 }

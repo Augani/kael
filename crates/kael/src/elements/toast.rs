@@ -17,6 +17,17 @@ pub enum ToastPosition {
     TopCenter,
 }
 
+impl ToastPosition {
+    /// Stable text key for diagnostics and generated tests.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::TopRight => "top_right",
+            Self::BottomRight => "bottom_right",
+            Self::TopCenter => "top_center",
+        }
+    }
+}
+
 /// Configuration for a single toast notification.
 #[derive(Clone)]
 pub struct Toast {
@@ -53,6 +64,48 @@ impl Toast {
     pub fn position(mut self, position: ToastPosition) -> Self {
         self.position = position;
         self
+    }
+
+    /// Returns true when body text is configured.
+    pub fn has_body(&self) -> bool {
+        self.body.is_some()
+    }
+
+    /// Length of the configured title in bytes, without exposing title text.
+    pub fn title_len_bytes(&self) -> usize {
+        self.title.len()
+    }
+
+    /// Length of the configured body in bytes, without exposing body text.
+    pub fn body_len_bytes(&self) -> usize {
+        self.body.as_ref().map_or(0, |body| body.len())
+    }
+
+    /// Coarse duration class for content-safe diagnostics.
+    pub fn duration_class(&self) -> &'static str {
+        match self.duration {
+            duration if duration.is_zero() => "instant",
+            duration if duration <= Duration::from_secs(2) => "short",
+            duration if duration <= Duration::from_secs(8) => "normal",
+            _ => "long",
+        }
+    }
+
+    /// Configured toast position.
+    pub fn position_key(&self) -> &'static str {
+        self.position.to_text()
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "toast(title_len_bytes={}, has_body={}, body_len_bytes={}, duration_class={}, position={})",
+            self.title_len_bytes(),
+            self.has_body(),
+            self.body_len_bytes(),
+            self.duration_class(),
+            self.position_key()
+        )
     }
 }
 
@@ -198,4 +251,34 @@ fn render_toast_item(toast: &Toast, is_dark: bool) -> AnyElement {
     }
 
     toast_div.into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toast_summary_is_content_safe() {
+        let toast = Toast::new("Secret sync complete")
+            .body("Private workspace finished")
+            .duration(Duration::from_secs(12))
+            .position(ToastPosition::BottomRight);
+
+        assert_eq!(ToastPosition::BottomRight.to_text(), "bottom_right");
+        assert!(toast.has_body());
+        assert_eq!(toast.title_len_bytes(), "Secret sync complete".len());
+        assert_eq!(toast.body_len_bytes(), "Private workspace finished".len());
+        assert_eq!(toast.duration_class(), "long");
+        assert_eq!(toast.position_key(), "bottom_right");
+
+        let summary = toast.to_text();
+        assert!(summary.contains("title_len_bytes=20"));
+        assert!(summary.contains("has_body=true"));
+        assert!(summary.contains("body_len_bytes=26"));
+        assert!(summary.contains("duration_class=long"));
+        assert!(summary.contains("position=bottom_right"));
+        assert!(!summary.contains("Secret"));
+        assert!(!summary.contains("Private"));
+        assert!(!summary.contains("12"));
+    }
 }

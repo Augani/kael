@@ -39,9 +39,30 @@ where
     K: Clone + Ord;
 
 impl<K: Clone + Ord, V: Clone> TreeMap<K, V> {
+    /// Builds a map from entries that are expected to already be ordered.
+    ///
+    /// The input is still normalized defensively: unordered keys are sorted and
+    /// duplicate keys retain the last supplied value. This prevents malformed
+    /// tree search invariants when data crosses an untrusted boundary.
     pub fn from_ordered_entries(entries: impl IntoIterator<Item = (K, V)>) -> Self {
+        let mut entries = entries.into_iter().collect::<Vec<_>>();
+        if !entries.is_sorted_by(|left, right| left.0 <= right.0) {
+            entries.sort_by(|left, right| left.0.cmp(&right.0));
+        }
+
+        let mut unique_entries: Vec<(K, V)> = Vec::with_capacity(entries.len());
+        for entry in entries {
+            if let Some(previous) = unique_entries.last_mut() {
+                if previous.0 == entry.0 {
+                    *previous = entry;
+                    continue;
+                }
+            }
+            unique_entries.push(entry);
+        }
+
         let tree = SumTree::from_iter(
-            entries
+            unique_entries
                 .into_iter()
                 .map(|(key, value)| MapEntry { key, value }),
             (),
@@ -457,6 +478,24 @@ mod tests {
         assert_eq!(map.get(&"b"), Some(&2));
         assert_eq!(map.get(&"c"), Some(&3));
         assert_eq!(map.get(&"d"), Some(&4));
+    }
+
+    #[test]
+    fn ordered_constructor_defensively_normalizes_input() {
+        let map = TreeMap::from_ordered_entries([
+            (3, "old three"),
+            (1, "one"),
+            (3, "new three"),
+            (2, "two"),
+        ]);
+
+        assert_eq!(
+            map.iter()
+                .map(|(key, value)| (*key, *value))
+                .collect::<Vec<_>>(),
+            [(1, "one"), (2, "two"), (3, "new three")]
+        );
+        assert_eq!(map.get(&3), Some(&"new three"));
     }
 
     #[test]

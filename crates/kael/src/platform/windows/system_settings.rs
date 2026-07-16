@@ -125,12 +125,23 @@ impl AutoHideTaskbarPosition {
                 std::io::Error::last_os_error()
             );
         }
+        let taskbar_width = info
+            .rc
+            .right
+            .checked_sub(info.rc.left)
+            .ok_or_else(|| anyhow::anyhow!("taskbar width overflow"))?;
+        let taskbar_height = info
+            .rc
+            .bottom
+            .checked_sub(info.rc.top)
+            .ok_or_else(|| anyhow::anyhow!("taskbar height overflow"))?;
+        anyhow::ensure!(
+            taskbar_width >= 0 && taskbar_height >= 0,
+            "taskbar returned negative dimensions"
+        );
         let taskbar_bounds: Bounds<DevicePixels> = Bounds::new(
             point(info.rc.left.into(), info.rc.top.into()),
-            size(
-                (info.rc.right - info.rc.left).into(),
-                (info.rc.bottom - info.rc.top).into(),
-            ),
+            size(taskbar_width.into(), taskbar_height.into()),
         );
         let display_bounds = display.physical_bounds();
         if display_bounds.intersect(&taskbar_bounds) != taskbar_bounds {

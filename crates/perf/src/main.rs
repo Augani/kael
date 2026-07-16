@@ -148,36 +148,50 @@ fn parse_mdata(t_bin: &str, mdata_fn: &str) -> Result<TestMdata, FailKind> {
     let out = cmd
         .output()
         .expect("FATAL: Could not run test binary {t_bin}");
-    assert!(out.status.success());
+    if !out.status.success() {
+        return Err(FailKind::BadMetadata);
+    }
     let stdout = String::from_utf8_lossy(&out.stdout);
+    parse_mdata_stdout(&stdout)
+}
+
+/// Parses the versioned metadata protocol emitted by a perf metadata test.
+fn parse_mdata_stdout(stdout: &str) -> Result<TestMdata, FailKind> {
     let mut version = None;
     let mut iterations = None;
     let mut importance = Importance::default();
     let mut weight = consts::WEIGHT_DEFAULT;
+    let mut importance_set = false;
+    let mut weight_set = false;
     for line in stdout
         .lines()
         .filter_map(|l| l.strip_prefix(consts::MDATA_LINE_PREF))
     {
         let mut items = line.split_whitespace();
-        // For v0, we know the ident always comes first, then one field.
-        match items.next().ok_or(FailKind::BadMetadata)? {
+        // For v0, the identifier comes first, followed by exactly one value.
+        let identifier = items.next().ok_or(FailKind::BadMetadata)?;
+        let value = items.next().ok_or(FailKind::BadMetadata)?;
+        if items.next().is_some() {
+            return Err(FailKind::BadMetadata);
+        }
+        match identifier {
             consts::VERSION_LINE_NAME => {
-                let v = items
-                    .next()
-                    .ok_or(FailKind::BadMetadata)?
-                    .parse::<u32>()
-                    .map_err(|_| FailKind::BadMetadata)?;
+                if version.is_some() {
+                    return Err(FailKind::BadMetadata);
+                }
+                let v = value.parse::<u32>().map_err(|_| FailKind::BadMetadata)?;
                 if v > consts::MDATA_VER {
                     return Err(FailKind::VersionMismatch);
                 }
                 version = Some(v);
             }
             consts::ITER_COUNT_LINE_NAME => {
+                if iterations.is_some() {
+                    return Err(FailKind::BadMetadata);
+                }
                 // This should never be zero!
                 iterations = Some(
-                    items
-                        .next()
-                        .ok_or(FailKind::BadMetadata)?
+                    value
                         .parse::<usize>()
                         .map_err(|_| FailKind::BadMetadata)?
                         .try_into()
@@ -185,7 +199,11 @@ fn parse_mdata(t_bin: &str, mdata_fn: &str) -> Result<TestMdata, FailKind> {
                 );
             }
             consts::IMPORTANCE_LINE_NAME => {
-                importance = match items.next().ok_or(FailKind::BadMetadata)? {
+                if importance_set {
+                    return Err(FailKind::BadMetadata);
+                }
+                importance_set = true;
+                importance = match value {
                     "critical" => Importance::Critical,
                     "important" => Importance::Important,
                     "average" => Importance::Average,
@@ -195,13 +213,16 @@ fn parse_mdata(t_bin: &str, mdata_fn: &str) -> Result<TestMdata, FailKind> {
                 };
             }
             consts::WEIGHT_LINE_NAME => {
-                weight = items
-                    .next()
-                    .ok_or(FailKind::BadMetadata)?
-                    .parse::<u8>()
-                    .map_err(|_| FailKind::BadMetadata)?;
+                if weight_set {
+                    return Err(FailKind::BadMetadata);
+                }
+                weight_set = true;
+                weight = value.parse::<u8>().map_err(|_| FailKind::BadMetadata)?;
+                if weight == 0 {
+                    return Err(FailKind::BadMetadata);
+                }
             }
-            _ => unreachable!(),
+            _ => return Err(FailKind::BadMetadata),
         }
     }
 
@@ -563,4 +584,41 @@ fn main() {
     }
 
     out_kind.log(&output, t_bin);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_parser_accepts_a_complete_version_zero_record() {
+        let metadata = parse_mdata_stdout(
+            "ignored harness output\n\
+             ZED_MDATA_version 0\n\
+             ZED_MDATA_iter_count 12\n\
+             ZED_MDATA_importance critical\n\
+             ZED_MDATA_weight 75\n",
+        )
+        .unwrap();
+
+        assert_eq!(metadata.version, 0);
+        assert_eq!(metadata.iterations, NonZero::new(12));
+        assert_eq!(metadata.importance, Importance::Critical);
+        assert_eq!(metadata.weight, 75);
+    }
+
+    #[test]
+    fn metadata_parser_rejects_ambiguous_or_unknown_fields() {
+        for metadata in [
+            "ZED_MDATA_version 0\nZED_MDATA_version 0\n",
+            "ZED_MDATA_version 0 trailing\n",
+            "ZED_MDATA_version 0\nZED_MDATA_unknown 1\n",
+            "ZED_MDATA_version 0\nZED_MDATA_weight 0\n",
+        ] {
+            assert!(matches!(
+                parse_mdata_stdout(metadata),
+                Err(FailKind::BadMetadata)
+            ));
+        }
+    }
 }

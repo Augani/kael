@@ -9,6 +9,8 @@ pub struct LinuxGlobalHotkey {
     registered: HashMap<u32, Keystroke>,
 }
 
+const MAX_GLOBAL_HOTKEYS: usize = 1_024;
+
 impl LinuxGlobalHotkey {
     pub fn new() -> Self {
         Self {
@@ -17,6 +19,11 @@ impl LinuxGlobalHotkey {
     }
 
     pub fn register(&mut self, id: u32, keystroke: &Keystroke) -> Result<()> {
+        anyhow::ensure!(id != 0, "global hotkey id must be nonzero");
+        anyhow::ensure!(
+            self.registered.contains_key(&id) || self.registered.len() < MAX_GLOBAL_HOTKEYS,
+            "global hotkey capacity exceeded"
+        );
         self.registered.insert(id, keystroke.clone());
         Ok(())
     }
@@ -26,6 +33,7 @@ impl LinuxGlobalHotkey {
     }
 }
 
+#[cfg(feature = "wayland")]
 pub(crate) use crate::platform::global_hotkey_portal as portal;
 
 #[cfg(feature = "x11")]
@@ -61,8 +69,11 @@ pub mod x11 {
 
         let keysym = key_name_to_keysym(&keystroke.key)?;
 
+        let keycode_count = u16::from(max_keycode)
+            .checked_sub(u16::from(min_keycode))?
+            .checked_add(1)?;
         let reply = xcb
-            .get_keyboard_mapping(min_keycode, max_keycode - min_keycode + 1)
+            .get_keyboard_mapping(min_keycode, u8::try_from(keycode_count).ok()?)
             .ok()?
             .reply()
             .ok()?;
@@ -72,11 +83,11 @@ pub mod x11 {
             return None;
         }
 
-        for i in 0..((max_keycode - min_keycode + 1) as usize) {
+        for i in 0..usize::from(keycode_count) {
             let base = i * keysyms_per_keycode;
             for j in 0..keysyms_per_keycode {
-                if reply.keysyms[base + j] == keysym {
-                    return Some(min_keycode + i as u8);
+                if reply.keysyms.get(base + j) == Some(&keysym) {
+                    return u8::try_from(u16::from(min_keycode) + i as u16).ok();
                 }
             }
         }

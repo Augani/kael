@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use anyhow::Context as _;
 use calloop::{EventLoop, LoopHandle};
 use util::ResultExt;
 
@@ -21,8 +22,9 @@ pub struct HeadlessClientState {
 pub(crate) struct HeadlessClient(Rc<RefCell<HeadlessClientState>>);
 
 impl HeadlessClient {
-    pub(crate) fn new() -> Self {
-        let event_loop = EventLoop::try_new().unwrap();
+    pub(crate) fn new() -> anyhow::Result<Self> {
+        let event_loop =
+            EventLoop::try_new().context("failed to create the headless event loop")?;
 
         let (common, main_receiver, network_rx, system_power_rx) =
             LinuxCommon::new(event_loop.get_signal());
@@ -32,10 +34,19 @@ impl HeadlessClient {
         handle
             .insert_source(main_receiver, |event, _, _: &mut HeadlessClient| {
                 if let calloop::channel::Event::Msg(runnable) = event {
-                    runnable.run();
+                    crate::platform::catch_platform_callback(
+                        "Linux",
+                        "foreground task",
+                        (),
+                        || {
+                            runnable.run();
+                        },
+                    );
                 }
             })
-            .ok();
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register the headless task source: {error:?}")
+            })?;
 
         handle
             .insert_source(network_rx, |event, _, client: &mut HeadlessClient| {
@@ -47,13 +58,17 @@ impl HeadlessClient {
                         let mut callback = state.common.callbacks.network_status_change.take();
                         drop(state);
                         if let Some(ref mut cb) = callback {
-                            cb(status);
+                            super::super::catch_platform_callback("network change", (), || {
+                                cb(status)
+                            });
                         }
                         client.0.borrow_mut().common.callbacks.network_status_change = callback;
                     }
                 }
             })
-            .ok();
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register the headless network source: {error:?}")
+            })?;
 
         handle
             .insert_source(system_power_rx, |event, _, client: &mut HeadlessClient| {
@@ -62,18 +77,22 @@ impl HeadlessClient {
                     let mut callback = state.common.callbacks.system_power.take();
                     drop(state);
                     if let Some(ref mut cb) = callback {
-                        cb(power_event);
+                        super::super::catch_platform_callback("system power", (), || {
+                            cb(power_event)
+                        });
                     }
                     client.0.borrow_mut().common.callbacks.system_power = callback;
                 }
             })
-            .ok();
+            .map_err(|error| {
+                anyhow::anyhow!("failed to register the headless power source: {error:?}")
+            })?;
 
-        HeadlessClient(Rc::new(RefCell::new(HeadlessClientState {
+        Ok(HeadlessClient(Rc::new(RefCell::new(HeadlessClientState {
             event_loop: Some(event_loop),
             _loop_handle: handle,
             common,
-        })))
+        }))))
     }
 }
 
@@ -146,6 +165,8 @@ impl LinuxClient for HeadlessClient {
 
     fn write_to_clipboard(&self, _item: crate::ClipboardItem) {}
 
+    fn clear_clipboard(&self) {}
+
     fn read_from_primary(&self) -> Option<crate::ClipboardItem> {
         None
     }
@@ -155,12 +176,10 @@ impl LinuxClient for HeadlessClient {
     }
 
     fn run(&self) {
-        let mut event_loop = self
-            .0
-            .borrow_mut()
-            .event_loop
-            .take()
-            .expect("App is already running");
+        let Some(mut event_loop) = self.0.borrow_mut().event_loop.take() else {
+            log::warn!("ignoring a second attempt to run the headless event loop");
+            return;
+        };
 
         event_loop.run(None, &mut self.clone(), |_| {}).log_err();
     }

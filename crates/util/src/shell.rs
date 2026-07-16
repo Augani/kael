@@ -228,14 +228,15 @@ impl ShellKind {
 
     fn to_cmd_variable(input: &str) -> String {
         if let Some(var_str) = input.strip_prefix("${") {
-            if var_str.find(':').is_none() {
-                // If the input starts with "${", remove the trailing "}"
-                format!("%{}%", &var_str[..var_str.len() - 1])
-            } else {
-                // `${SOME_VAR:-SOME_DEFAULT}`, we currently do not handle this situation,
-                // which will result in the task failing to run in such cases.
-                input.into()
+            if let Some(var_str) = var_str.strip_suffix('}')
+                && !var_str.is_empty()
+                && var_str.find(':').is_none()
+            {
+                return format!("%{var_str}%");
             }
+            // `${SOME_VAR:-SOME_DEFAULT}` and malformed braced variables are
+            // not translated because CMD has no equivalent expression.
+            input.into()
         } else if let Some(var_str) = input.strip_prefix('$') {
             // If the input starts with "$", directly append to "$env:"
             format!("%{}%", var_str)
@@ -247,14 +248,14 @@ impl ShellKind {
 
     fn to_powershell_variable(input: &str) -> String {
         if let Some(var_str) = input.strip_prefix("${") {
-            if var_str.find(':').is_none() {
-                // If the input starts with "${", remove the trailing "}"
-                format!("$env:{}", &var_str[..var_str.len() - 1])
-            } else {
-                // `${SOME_VAR:-SOME_DEFAULT}`, we currently do not handle this situation,
-                // which will result in the task failing to run in such cases.
-                input.into()
+            if let Some(var_str) = var_str.strip_suffix('}')
+                && !var_str.is_empty()
+                && var_str.find(':').is_none()
+            {
+                return format!("$env:{var_str}");
             }
+            // Preserve unsupported or malformed expressions verbatim.
+            input.into()
         } else if let Some(var_str) = input.strip_prefix('$') {
             // If the input starts with "$", directly append to "$env:"
             format!("$env:{}", var_str)
@@ -400,5 +401,23 @@ impl ShellKind {
             ShellKind::Cmd => "cls",
             _ => "clear",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ShellKind;
+
+    #[test]
+    fn malformed_braced_variables_are_left_unchanged() {
+        for input in ["${", "${NAME", "${}"] {
+            assert_eq!(ShellKind::Cmd.to_shell_variable(input), input);
+            assert_eq!(ShellKind::PowerShell.to_shell_variable(input), input);
+        }
+        assert_eq!(ShellKind::Cmd.to_shell_variable("${NAME}"), "%NAME%");
+        assert_eq!(
+            ShellKind::PowerShell.to_shell_variable("${NAME}"),
+            "$env:NAME"
+        );
     }
 }

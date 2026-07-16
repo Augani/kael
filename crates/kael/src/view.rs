@@ -30,7 +30,9 @@ impl<V: Render> Element for Entity<V> {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
+        let render_started_at = std::time::Instant::now();
         let mut element = self.update(cx, |view, cx| view.render(window, cx).into_any_element());
+        window.record_view_render_duration(render_started_at.elapsed());
         let layout_id = window.with_rendered_view(self.entity_id(), |window| {
             element.request_layout(window, cx)
         });
@@ -161,7 +163,9 @@ impl Element for AnyView {
                     (layout_id, None)
                 }
                 _ => {
+                    let render_started_at = std::time::Instant::now();
                     let mut element = (self.render)(self, window, cx);
+                    window.record_view_render_duration(render_started_at.elapsed());
                     let layout_id = element.request_layout(window, cx);
                     (layout_id, Some(element))
                 }
@@ -212,7 +216,9 @@ impl Element for AnyView {
                     let refreshing = mem::replace(&mut window.refreshing, true);
                     let prepaint_start = window.prepaint_index();
                     let (mut element, accessed_entities) = cx.detect_accessed_entities(|cx| {
+                        let render_started_at = std::time::Instant::now();
                         let mut element = (self.render)(self, window, cx);
+                        window.record_view_render_duration(render_started_at.elapsed());
                         element.layout_as_root(bounds.size.into(), window, cx);
                         element.prepaint_at(bounds.origin, window, cx);
                         element

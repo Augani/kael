@@ -134,9 +134,9 @@ impl DataTableDemoApp {
             "John von Neumann",
         ];
 
-        let roles = vec!["Engineer", "Senior Engineer", "Lead", "Manager", "Director"];
-        let statuses = vec!["Active", "Away", "Offline"];
-        let departments = vec!["Engineering", "Product", "Design", "Marketing", "Sales"];
+        let roles = ["Engineer", "Senior Engineer", "Lead", "Manager", "Director"];
+        let statuses = ["Active", "Away", "Offline"];
+        let departments = ["Engineering", "Product", "Design", "Marketing", "Sales"];
 
         (0..count)
             .map(|i| {

@@ -14,7 +14,7 @@ struct TagInputDemo {
 
 impl TagInputDemo {
     fn new(cx: &mut Context<Self>) -> Self {
-        let basic_tags = cx.new(|cx| TagInputState::new(cx));
+        let basic_tags = cx.new(TagInputState::new);
         let limited_tags = cx.new(|cx| {
             let mut state = TagInputState::new(cx);
             state.set_max_tags(Some(5), cx);
@@ -205,7 +205,7 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_, cx| cx.new(|cx| TagInputDemo::new(cx)),
+            |_, cx| cx.new(TagInputDemo::new),
         )
         .unwrap();
 

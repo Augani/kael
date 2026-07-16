@@ -2,17 +2,17 @@ use crate::{
     ActiveTooltip, AnyView, App, Bounds, DispatchPhase, Element, ElementId, GlobalElementId,
     HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Size, TextOverflow,
-    TextRun, TextStyle, TooltipId, WhiteSpace, Window, WrappedLine, WrappedLineLayout,
+    TextRun, TextStyle, TooltipId, WhiteSpace, Window, WrappedLine, WrappedLineLayout, px,
     register_tooltip_mouse_handlers, set_tooltip_on_window,
 };
 use anyhow::Context as _;
 use smallvec::SmallVec;
 use std::{
     cell::{Cell, RefCell},
-    mem,
     ops::Range,
     rc::Rc,
     sync::Arc,
+    time::Duration,
 };
 use util::ResultExt;
 
@@ -56,16 +56,17 @@ impl Element for &'static str {
         &mut self,
         _id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
+        bounds: Bounds<Pixels>,
         text_layout: &mut TextLayout,
         _: &mut (),
         window: &mut Window,
         cx: &mut App,
     ) {
         text_layout.paint(self, window, cx);
-        let node = crate::AccessibilityNode::new(crate::AccessibilityRole::StaticText)
+        let mut node = crate::AccessibilityNode::new(crate::AccessibilityRole::StaticText)
             .with_label(self.to_string());
-        window.register_accessibility_node(node);
+        node.id = window.next_anonymous_accessibility_id();
+        window.register_accessibility_node_at(node, bounds);
     }
 }
 
@@ -125,16 +126,17 @@ impl Element for SharedString {
         &mut self,
         _id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
+        bounds: Bounds<Pixels>,
         text_layout: &mut Self::RequestLayoutState,
         _: &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
     ) {
         text_layout.paint(self.as_ref(), window, cx);
-        let node = crate::AccessibilityNode::new(crate::AccessibilityRole::StaticText)
+        let mut node = crate::AccessibilityNode::new(crate::AccessibilityRole::StaticText)
             .with_label(self.to_string());
-        window.register_accessibility_node(node);
+        node.id = window.next_anonymous_accessibility_id();
+        window.register_accessibility_node_at(node, bounds);
     }
 }
 
@@ -156,6 +158,7 @@ pub struct StyledText {
     runs: Option<Vec<TextRun>>,
     delayed_highlights: Option<Vec<(Range<usize>, HighlightStyle)>>,
     layout: TextLayout,
+    accessibility_hidden: bool,
 }
 
 impl StyledText {
@@ -166,6 +169,7 @@ impl StyledText {
             runs: None,
             delayed_highlights: None,
             layout: TextLayout::default(),
+            accessibility_hidden: false,
         }
     }
 
@@ -234,6 +238,16 @@ impl StyledText {
         self.runs = Some(runs);
         self
     }
+
+    /// Hide this visual text run from the accessibility tree.
+    ///
+    /// Use this only when an ancestor exposes an equivalent semantic label,
+    /// such as an animated digit ticker whose rolling columns contain every
+    /// possible digit.
+    pub fn accessibility_hidden(mut self, hidden: bool) -> Self {
+        self.accessibility_hidden = hidden;
+        self
+    }
 }
 
 impl Element for StyledText {
@@ -281,16 +295,19 @@ impl Element for StyledText {
         &mut self,
         _id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
+        bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
         _: &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
     ) {
         self.layout.paint(&self.text, window, cx);
-        let node = crate::AccessibilityNode::new(crate::AccessibilityRole::StaticText)
-            .with_label(self.text.to_string());
-        window.register_accessibility_node(node);
+        if !self.accessibility_hidden {
+            let mut node = crate::AccessibilityNode::new(crate::AccessibilityRole::StaticText)
+                .with_label(self.text.to_string());
+            node.id = window.next_anonymous_accessibility_id();
+            window.register_accessibility_node_at(node, bounds);
+        }
     }
 }
 
@@ -539,6 +556,42 @@ impl TextLayout {
         None
     }
 
+    /// Returns the visual bounds that contain a UTF-8 byte range.
+    ///
+    /// A wrapped range is represented by the smallest rectangle containing its
+    /// first and last line. This is suitable for accessibility hit testing,
+    /// where a single semantic node must describe the entire text span.
+    pub fn bounds_for_range(&self, range: Range<usize>) -> Option<Bounds<Pixels>> {
+        if range.start >= range.end || range.end > self.len() {
+            return None;
+        }
+        let start = self.position_for_index(range.start)?;
+        let end = self.position_for_index(range.end)?;
+        let line_height = self.line_height();
+
+        if start.y == end.y {
+            return Some(Bounds {
+                origin: start,
+                size: Size {
+                    width: (end.x - start.x).max(px(1.0)),
+                    height: line_height,
+                },
+            });
+        }
+
+        let layout_bounds = self.bounds();
+        Some(Bounds::from_corners(
+            Point {
+                x: layout_bounds.left().min(start.x),
+                y: start.y,
+            },
+            Point {
+                x: layout_bounds.right().max(end.x),
+                y: end.y + line_height,
+            },
+        ))
+    }
+
     /// Retrieve the layout for the line containing the given byte index.
     pub fn line_layout_for_index(&self, index: usize) -> Option<Arc<WrappedLineLayout>> {
         let element_state = self.0.borrow();
@@ -622,7 +675,7 @@ pub struct InteractiveText {
     element_id: ElementId,
     text: StyledText,
     click_listener:
-        Option<Box<dyn Fn(&[Range<usize>], InteractiveTextClickEvent, &mut Window, &mut App)>>,
+        Option<Rc<dyn Fn(&[Range<usize>], InteractiveTextClickEvent, &mut Window, &mut App)>>,
     hover_listener: Option<Box<dyn Fn(Option<usize>, MouseMoveEvent, &mut Window, &mut App)>>,
     tooltip_builder: Option<Rc<dyn Fn(usize, &mut Window, &mut App) -> Option<AnyView>>>,
     tooltip_id: Option<TooltipId>,
@@ -640,6 +693,7 @@ pub struct InteractiveTextState {
     mouse_down_index: Rc<Cell<Option<usize>>>,
     hovered_index: Rc<Cell<Option<usize>>>,
     active_tooltip: Rc<RefCell<Option<ActiveTooltip>>>,
+    accessibility_ids: Vec<crate::AccessibilityId>,
 }
 
 /// InteractiveTest is a wrapper around StyledText that adds mouse interactions.
@@ -664,7 +718,7 @@ impl InteractiveText {
         ranges: Vec<Range<usize>>,
         listener: impl Fn(usize, &mut Window, &mut App) + 'static,
     ) -> Self {
-        self.click_listener = Some(Box::new(move |ranges, event, window, cx| {
+        self.click_listener = Some(Rc::new(move |ranges, event, window, cx| {
             for (range_ix, range) in ranges.iter().enumerate() {
                 if range.contains(&event.mouse_down_index) && range.contains(&event.mouse_up_index)
                 {
@@ -694,6 +748,67 @@ impl InteractiveText {
         self.tooltip_builder = Some(Rc::new(builder));
         self
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct InteractiveTextAccessibilitySegment {
+    label: String,
+    range: Range<usize>,
+    clickable_range_index: Option<usize>,
+}
+
+fn interactive_text_accessibility_segments(
+    text: &str,
+    ranges: &[Range<usize>],
+) -> Vec<InteractiveTextAccessibilitySegment> {
+    let mut ranges: Vec<_> = ranges
+        .iter()
+        .cloned()
+        .enumerate()
+        .filter(|(_, range)| {
+            range.start < range.end
+                && range.end <= text.len()
+                && text.is_char_boundary(range.start)
+                && text.is_char_boundary(range.end)
+        })
+        .collect();
+    ranges.sort_by_key(|(_, range)| (range.start, range.end));
+
+    let mut segments = Vec::new();
+    let mut cursor = 0;
+    for (range_index, range) in ranges {
+        if range.start < cursor {
+            continue;
+        }
+        if cursor < range.start {
+            segments.push(InteractiveTextAccessibilitySegment {
+                label: text[cursor..range.start].to_string(),
+                range: cursor..range.start,
+                clickable_range_index: None,
+            });
+        }
+        segments.push(InteractiveTextAccessibilitySegment {
+            label: text[range.clone()].to_string(),
+            range: range.clone(),
+            clickable_range_index: Some(range_index),
+        });
+        cursor = range.end;
+    }
+    if cursor < text.len() {
+        segments.push(InteractiveTextAccessibilitySegment {
+            label: text[cursor..].to_string(),
+            range: cursor..text.len(),
+            clickable_range_index: None,
+        });
+    }
+    if segments.is_empty() && !text.is_empty() {
+        segments.push(InteractiveTextAccessibilitySegment {
+            label: text.to_string(),
+            range: 0..text.len(),
+            clickable_range_index: None,
+        });
+    }
+    segments
 }
 
 impl Element for InteractiveText {
@@ -754,7 +869,7 @@ impl Element for InteractiveText {
     fn paint(
         &mut self,
         global_id: Option<&GlobalElementId>,
-        inspector_id: Option<&InspectorElementId>,
+        _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
         hitbox: &mut Hitbox,
@@ -767,7 +882,7 @@ impl Element for InteractiveText {
             global_id.unwrap(),
             |interactive_state, window| {
                 let mut interactive_state = interactive_state.unwrap_or_default();
-                if let Some(click_listener) = self.click_listener.take() {
+                if let Some(click_listener) = self.click_listener.clone() {
                     let mouse_position = window.mouse_position();
                     if let Ok(ix) = text_layout.index_for_position(mouse_position)
                         && self
@@ -780,44 +895,47 @@ impl Element for InteractiveText {
 
                     let text_layout = text_layout.clone();
                     let mouse_down = interactive_state.mouse_down_index.clone();
-                    if let Some(mouse_down_index) = mouse_down.get() {
-                        let hitbox = hitbox.clone();
-                        let clickable_ranges = mem::take(&mut self.clickable_ranges);
-                        window.on_mouse_event(
-                            move |event: &MouseUpEvent, phase, window: &mut Window, cx| {
-                                if phase == DispatchPhase::Bubble && hitbox.is_hovered(window) {
-                                    if let Ok(mouse_up_index) =
-                                        text_layout.index_for_position(event.position)
-                                    {
-                                        click_listener(
-                                            &clickable_ranges,
-                                            InteractiveTextClickEvent {
-                                                mouse_down_index,
-                                                mouse_up_index,
-                                            },
-                                            window,
-                                            cx,
-                                        )
-                                    }
+                    let mouse_down_hitbox = hitbox.clone();
+                    let mouse_down_layout = text_layout.clone();
+                    let pending_mouse_down = mouse_down.clone();
+                    window.on_mouse_event(move |event: &MouseDownEvent, phase, window, _| {
+                        if phase == DispatchPhase::Bubble
+                            && mouse_down_hitbox.is_hovered(window)
+                            && let Ok(mouse_down_index) =
+                                mouse_down_layout.index_for_position(event.position)
+                        {
+                            pending_mouse_down.set(Some(mouse_down_index));
+                            window.refresh();
+                        }
+                    });
 
-                                    mouse_down.take();
-                                    window.refresh();
-                                }
-                            },
-                        );
-                    } else {
-                        let hitbox = hitbox.clone();
-                        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, _| {
-                            if phase == DispatchPhase::Bubble
-                                && hitbox.is_hovered(window)
-                                && let Ok(mouse_down_index) =
+                    let mouse_up_hitbox = hitbox.clone();
+                    let clickable_ranges = self.clickable_ranges.clone();
+                    window.on_mouse_event(
+                        move |event: &MouseUpEvent, phase, window: &mut Window, cx| {
+                            if phase != DispatchPhase::Bubble {
+                                return;
+                            }
+                            let Some(mouse_down_index) = mouse_down.take() else {
+                                return;
+                            };
+                            if mouse_up_hitbox.is_hovered(window)
+                                && let Ok(mouse_up_index) =
                                     text_layout.index_for_position(event.position)
                             {
-                                mouse_down.set(Some(mouse_down_index));
-                                window.refresh();
+                                click_listener(
+                                    &clickable_ranges,
+                                    InteractiveTextClickEvent {
+                                        mouse_down_index,
+                                        mouse_up_index,
+                                    },
+                                    window,
+                                    cx,
+                                );
                             }
-                        });
-                    }
+                            window.refresh();
+                        },
+                    );
                 }
 
                 window.on_mouse_event({
@@ -859,7 +977,7 @@ impl Element for InteractiveText {
                         let source_bounds = hitbox.bounds;
                         let text_layout = text_layout.clone();
                         let pending_mouse_down = interactive_state.mouse_down_index.clone();
-                        move |window: &Window| {
+                        move |window: &Window, _cx: &App| {
                             text_layout
                                 .index_for_position(window.mouse_position())
                                 .is_ok()
@@ -872,7 +990,7 @@ impl Element for InteractiveText {
                         let hitbox = hitbox.clone();
                         let text_layout = text_layout.clone();
                         let pending_mouse_down = interactive_state.mouse_down_index.clone();
-                        move |window: &Window| {
+                        move |window: &Window, _cx: &App| {
                             text_layout
                                 .index_for_position(window.mouse_position())
                                 .is_ok()
@@ -887,16 +1005,80 @@ impl Element for InteractiveText {
                         build_tooltip,
                         check_is_hovered,
                         check_is_hovered_during_prepaint,
+                        Duration::from_millis(500),
+                        Duration::ZERO,
+                        None,
                         window,
                     );
                 }
 
-                self.text
-                    .paint(None, inspector_id, bounds, &mut (), &mut (), window, cx);
+                self.text.layout.paint(&self.text.text, window, cx);
 
-                let node = crate::AccessibilityNode::new(crate::AccessibilityRole::StaticText)
-                    .with_label(self.text.text.to_string());
-                window.register_accessibility_node(node);
+                let segments = interactive_text_accessibility_segments(
+                    self.text.text.as_ref(),
+                    &self.clickable_ranges,
+                );
+                interactive_state
+                    .accessibility_ids
+                    .resize_with(segments.len(), crate::AccessibilityId::new);
+                interactive_state.accessibility_ids.truncate(segments.len());
+
+                for (segment_index, segment) in segments.into_iter().enumerate() {
+                    let node_id = interactive_state.accessibility_ids[segment_index];
+                    let accessibility_bounds = text_layout
+                        .bounds_for_range(segment.range.clone())
+                        .unwrap_or(bounds);
+                    let mut node =
+                        crate::AccessibilityNode::new(if segment.clickable_range_index.is_some() {
+                            crate::AccessibilityRole::Link
+                        } else {
+                            crate::AccessibilityRole::StaticText
+                        })
+                        .with_label(segment.label);
+                    node.id = node_id;
+                    if segment.clickable_range_index.is_some() {
+                        node.actions = vec![crate::AccessibilityAction::Click];
+                    }
+                    window.register_accessibility_node_at(node, accessibility_bounds);
+
+                    if let (Some(range_index), Some(click_listener)) =
+                        (segment.clickable_range_index, self.click_listener.clone())
+                    {
+                        let clickable_ranges = self.clickable_ranges.clone();
+                        let Some(range) = clickable_ranges.get(range_index).cloned() else {
+                            continue;
+                        };
+                        let window_handle = window.window_handle();
+                        let mut async_cx = cx.to_async();
+                        let executor = cx.foreground_executor().clone();
+                        window.on_accessibility_action(
+                            node_id,
+                            crate::AccessibilityAction::Click,
+                            move |_| {
+                                let click_listener = click_listener.clone();
+                                let clickable_ranges = clickable_ranges.clone();
+                                let range = range.clone();
+                                let mut async_cx = async_cx.clone();
+                                executor
+                                    .spawn(async move {
+                                        _ = window_handle.update(&mut async_cx, |_, window, cx| {
+                                            click_listener(
+                                                &clickable_ranges,
+                                                InteractiveTextClickEvent {
+                                                    mouse_down_index: range.start,
+                                                    mouse_up_index: range.start,
+                                                },
+                                                window,
+                                                cx,
+                                            );
+                                            window.refresh();
+                                        });
+                                    })
+                                    .detach();
+                            },
+                        );
+                    }
+                }
 
                 ((), interactive_state)
             },
@@ -909,5 +1091,120 @@ impl IntoElement for InteractiveText {
 
     fn into_element(self) -> Self::Element {
         self
+    }
+}
+
+#[cfg(test)]
+mod interactive_text_accessibility_tests {
+    use super::*;
+    use crate::{Context, ParentElement as _, Render, Styled as _, TestAppContext, div};
+
+    #[test]
+    fn segments_preserve_text_and_link_boundaries() {
+        assert_eq!(
+            interactive_text_accessibility_segments("Before Docs after", &[7..11]),
+            vec![
+                InteractiveTextAccessibilitySegment {
+                    label: "Before ".into(),
+                    range: 0..7,
+                    clickable_range_index: None,
+                },
+                InteractiveTextAccessibilitySegment {
+                    label: "Docs".into(),
+                    range: 7..11,
+                    clickable_range_index: Some(0),
+                },
+                InteractiveTextAccessibilitySegment {
+                    label: " after".into(),
+                    range: 11..17,
+                    clickable_range_index: None,
+                },
+            ]
+        );
+        assert_eq!(
+            interactive_text_accessibility_segments("éDocs", &[1..5]),
+            vec![InteractiveTextAccessibilitySegment {
+                label: "éDocs".into(),
+                range: 0..6,
+                clickable_range_index: None,
+            }]
+        );
+    }
+
+    struct AccessibleInteractiveText {
+        clicks: Rc<Cell<usize>>,
+    }
+
+    impl Render for AccessibleInteractiveText {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let clicks = self.clicks.clone();
+            div().size_full().child(
+                InteractiveText::new(
+                    "accessible-interactive-text",
+                    StyledText::new("Before Docs after"),
+                )
+                .on_click(vec![7..11], move |_, _, _| clicks.set(clicks.get() + 1)),
+            )
+        }
+    }
+
+    #[crate::test]
+    fn links_are_distinct_and_route_accessibility_clicks(cx: &mut TestAppContext) {
+        let clicks = Rc::new(Cell::new(0));
+        let (_view, mut window) = cx.add_window_view({
+            let clicks = clicks.clone();
+            move |_, _| AccessibleInteractiveText { clicks }
+        });
+
+        let (link_id, link_bounds) = window.update(|window, cx| {
+            window.draw(cx).clear();
+            let link = window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| {
+                    node.role == crate::AccessibilityRole::Link
+                        && node.label.as_deref() == Some("Docs")
+                })
+                .expect("interactive range should be exposed as a link");
+            assert_eq!(
+                window
+                    .accessibility_tree()
+                    .nodes
+                    .values()
+                    .filter(|node| node.label.as_deref() == Some("Before Docs after"))
+                    .count(),
+                0,
+                "the full label must not be registered a second time"
+            );
+            assert!(link.actions.contains(&crate::AccessibilityAction::Click));
+            (
+                link.id,
+                link.bounds
+                    .expect("the link should have glyph-range bounds"),
+            )
+        });
+
+        window.simulate_click(
+            Point {
+                x: px((link_bounds.x + link_bounds.width / 2.0) as f32),
+                y: px((link_bounds.y + link_bounds.height / 2.0) as f32),
+            },
+            crate::Modifiers::default(),
+        );
+        assert_eq!(
+            clicks.get(),
+            1,
+            "a same-frame pointer click should activate"
+        );
+
+        window.update(|window, _| {
+            window.dispatch_accessibility_action_for_test(crate::AccessibilityActionRequest::new(
+                link_id,
+                crate::AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        assert_eq!(clicks.get(), 2);
     }
 }

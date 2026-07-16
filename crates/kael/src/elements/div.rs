@@ -23,15 +23,17 @@ use crate::scroll_elasticity::{
 use crate::{
     AbsoluteLength, Action, AnyDrag, AnyElement, AnyTooltip, AnyView, App, AppContext, Background,
     Bounds, BoxShadow, ClickEvent, Context, Corners, CursorStyle, DispatchPhase, Element,
-    ElementId, Entity, Fill, FocusHandle, GestureRecognizer, Global, GlobalElementId, Hitbox,
-    HitboxBehavior, HitboxId, Hsla, InspectorElementId, IntoElement, IsZero, KeyContext,
-    KeyDownEvent, KeyUpEvent, KeyboardButton, KeyboardClickEvent, LayoutId, LongPressGesture,
-    LongPressGestureEvent, MagnifyEvent, ModifiersChangedEvent, MouseButton, MouseClickEvent,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Overflow, PanGesture, PanGestureEvent, PanState,
-    ParentElement, PinchGesture, PinchGestureEvent, Pixels, Point, Render, Rgba, ScaledPixels,
-    ScrollDelta, ScrollWheelEvent, SharedString, Size, Style, StyleRefinement, Styled,
-    SwipeDirection, SwipeGesture, SwipeGestureEvent, TapGesture, TapGestureEvent, Task, TooltipId,
-    TouchPhase, TransformationMatrix, Visibility, Window, WindowControlArea, point, px, size,
+    ElementId, Entity, ExternalDropData, ExternalPaths, FileDropFilter, Fill, FocusHandle,
+    GestureRecognizer, Global, GlobalElementId, Hitbox, HitboxBehavior, HitboxId, Hsla,
+    InspectorElementId, IntoElement, IsZero, KeyContext, KeyDownEvent, KeyUpEvent, KeyboardButton,
+    KeyboardClickEvent, LayoutId, LongPressGesture, LongPressGestureEvent, MagnifyEvent,
+    ModifiersChangedEvent, MouseButton, MouseClickEvent, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Overflow, PanGesture, PanGestureEvent, PanState, ParentElement, PinchGesture,
+    PinchGestureEvent, Pixels, Point, Render, Rgba, ScaledPixels, ScrollDelta, ScrollWheelEvent,
+    SharedString, Size, Style, StyleRefinement, Styled, SwipeDirection, SwipeGesture,
+    SwipeGestureEvent, TapGesture, TapGestureEvent, Task, TooltipId, TouchPhase,
+    TransformationMatrix, Visibility, Window, WindowControlArea, point, px, scroll_trace_enabled,
+    size,
 };
 use collections::HashMap;
 use refineable::Refineable;
@@ -63,6 +65,18 @@ const CONTEXT_MENU_ITEM_HEIGHT: f32 = 32.0;
 const CONTEXT_MENU_SEPARATOR_HEIGHT: f32 = 9.0;
 const TOOLTIP_PANEL_RADIUS: f32 = 8.0;
 
+/// Controls whether a tooltip also opens when its trigger receives focus.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TooltipFocusBehavior {
+    /// Never open the tooltip from focus alone.
+    #[default]
+    Never,
+    /// Open for keyboard-originated focus, but not pointer-originated focus.
+    Auto,
+    /// Open whenever the trigger or one of its descendants receives focus.
+    Always,
+}
+
 #[derive(Clone, PartialEq)]
 struct ImplicitVisualStyle {
     opacity: f32,
@@ -74,6 +88,9 @@ struct ImplicitVisualStyle {
     text_color: Option<Hsla>,
     corner_radii: Corners<AbsoluteLength>,
     box_shadow: SmallVec<[BoxShadow; 1]>,
+    translate: Point<Pixels>,
+    skew: Point<f32>,
+    color_filter: crate::ColorFilter,
 }
 
 impl From<&Style> for ImplicitVisualStyle {
@@ -88,6 +105,9 @@ impl From<&Style> for ImplicitVisualStyle {
             text_color: style.text.color,
             corner_radii: style.corner_radii,
             box_shadow: style.box_shadow.clone(),
+            translate: style.translate.unwrap_or_default(),
+            skew: style.skew.unwrap_or_default(),
+            color_filter: style.color_filter.unwrap_or_default(),
         }
     }
 }
@@ -102,6 +122,9 @@ impl ImplicitVisualStyle {
             || self.text_color != other.text_color
             || self.corner_radii != other.corner_radii
             || self.box_shadow != other.box_shadow
+            || self.translate != other.translate
+            || self.skew != other.skew
+            || self.color_filter != other.color_filter
             || optional_backgrounds_can_interpolate(self.background, other.background)
                 && self.background != other.background
     }
@@ -131,6 +154,44 @@ impl ImplicitVisualStyle {
             text_color: interpolate_optional_hsla(self.text_color, other.text_color, progress),
             corner_radii: interpolate_corners(&self.corner_radii, &other.corner_radii, progress),
             box_shadow: interpolate_shadows(&self.box_shadow, &other.box_shadow, progress),
+            translate: Point {
+                x: px(interpolate_f32(
+                    self.translate.x.0,
+                    other.translate.x.0,
+                    progress,
+                )),
+                y: px(interpolate_f32(
+                    self.translate.y.0,
+                    other.translate.y.0,
+                    progress,
+                )),
+            },
+            skew: Point {
+                x: interpolate_f32(self.skew.x, other.skew.x, progress),
+                y: interpolate_f32(self.skew.y, other.skew.y, progress),
+            },
+            color_filter: crate::ColorFilter {
+                grayscale: interpolate_f32(
+                    self.color_filter.grayscale,
+                    other.color_filter.grayscale,
+                    progress,
+                ),
+                saturate: interpolate_f32(
+                    self.color_filter.saturate,
+                    other.color_filter.saturate,
+                    progress,
+                ),
+                brightness: interpolate_f32(
+                    self.color_filter.brightness,
+                    other.color_filter.brightness,
+                    progress,
+                ),
+                contrast: interpolate_f32(
+                    self.color_filter.contrast,
+                    other.color_filter.contrast,
+                    progress,
+                ),
+            },
         }
     }
 
@@ -144,6 +205,10 @@ impl ImplicitVisualStyle {
         style.text.color = self.text_color;
         style.corner_radii = self.corner_radii;
         style.box_shadow = self.box_shadow.clone();
+        style.translate = (self.translate != Point::default()).then_some(self.translate);
+        style.skew = (self.skew != Point::default()).then_some(self.skew);
+        style.color_filter =
+            (self.color_filter != crate::ColorFilter::identity()).then_some(self.color_filter);
     }
 }
 
@@ -950,6 +1015,26 @@ impl Interactivity {
         ));
     }
 
+    /// Bind a callback to external OS/WebView-style drops, normalizing file-only
+    /// [`ExternalPaths`] and browser-like [`ExternalDropData`] payloads.
+    ///
+    /// The callback sees one `ExternalDropData` value either way, so drop zones
+    /// can handle files, text, and URLs with the same code path.
+    pub fn on_external_drop(
+        &mut self,
+        listener: impl Fn(&ExternalDropData, &mut Window, &mut App) + 'static,
+    ) {
+        let listener = Rc::new(listener);
+        let data_listener = listener.clone();
+        self.on_drop(move |data: &ExternalDropData, window, cx| {
+            data_listener(data, window, cx);
+        });
+        self.on_drop(move |paths: &ExternalPaths, window, cx| {
+            let data = paths.clone().into_drop_data();
+            listener(&data, window, cx);
+        });
+    }
+
     /// Use the given predicate to determine whether or not a drop event should be dispatched to this element
     /// The imperative API equivalent to [`InteractiveElement::can_drop`]
     pub fn can_drop(
@@ -957,6 +1042,15 @@ impl Interactivity {
         predicate: impl Fn(&dyn Any, &mut Window, &mut App) -> bool + 'static,
     ) {
         self.can_drop_predicate = Some(Box::new(predicate));
+    }
+
+    /// Accept external drops whose file paths match the filter, or whose payload
+    /// contains text/URLs and no files. This mirrors browser `DataTransfer`
+    /// ergonomics while preserving file-only compatibility.
+    pub fn can_drop_external(&mut self, filter: FileDropFilter) {
+        self.can_drop(move |value, _, _| {
+            ExternalDropData::from_drag_value(value).is_some_and(|data| data.accepted_by(&filter))
+        });
     }
 
     /// Bind the given callback to click events of this element
@@ -1040,6 +1134,10 @@ impl Interactivity {
         self.tooltip_builder = Some(TooltipBuilder {
             build: tooltip.into_tooltip_renderer(),
             hoverable: false,
+            focus_behavior: TooltipFocusBehavior::Never,
+            show_delay: TOOLTIP_SHOW_DELAY,
+            hide_delay: Duration::ZERO,
+            visibility_listener: None,
         });
     }
 
@@ -1062,6 +1160,132 @@ impl Interactivity {
                 .into()
             }),
             hoverable: false,
+            focus_behavior: TooltipFocusBehavior::Never,
+            show_delay: TOOLTIP_SHOW_DELAY,
+            hide_delay: Duration::ZERO,
+            visibility_listener: None,
+        });
+    }
+
+    /// Use the given callback to construct a rich tooltip with per-instance delays.
+    pub fn tooltip_element_with_delays<E>(
+        &mut self,
+        show_delay: Duration,
+        hide_delay: Duration,
+        build_tooltip: impl Fn() -> E + 'static,
+    ) where
+        Self: Sized,
+        E: IntoElement,
+    {
+        let build_tooltip = Rc::new(move || build_tooltip().into_any_element());
+        debug_assert!(
+            self.tooltip_builder.is_none(),
+            "calling tooltip more than once on the same element is not supported"
+        );
+        self.tooltip_builder = Some(TooltipBuilder {
+            build: Rc::new(move |_, cx| {
+                cx.new(|_| TooltipElementView {
+                    build: build_tooltip.clone(),
+                })
+                .into()
+            }),
+            hoverable: false,
+            focus_behavior: TooltipFocusBehavior::Never,
+            show_delay,
+            hide_delay,
+            visibility_listener: None,
+        });
+    }
+
+    /// Construct a rich tooltip with custom delays and visibility notifications.
+    pub fn tooltip_element_with_options<E>(
+        &mut self,
+        show_delay: Duration,
+        hide_delay: Duration,
+        on_visibility_change: impl Fn(bool, &mut Window, &mut App) + 'static,
+        build_tooltip: impl Fn() -> E + 'static,
+    ) where
+        Self: Sized,
+        E: IntoElement,
+    {
+        let build_tooltip = Rc::new(move || build_tooltip().into_any_element());
+        debug_assert!(
+            self.tooltip_builder.is_none(),
+            "calling tooltip more than once on the same element is not supported"
+        );
+        self.tooltip_builder = Some(TooltipBuilder {
+            build: Rc::new(move |_, cx| {
+                cx.new(|_| TooltipElementView {
+                    build: build_tooltip.clone(),
+                })
+                .into()
+            }),
+            hoverable: false,
+            focus_behavior: TooltipFocusBehavior::Never,
+            show_delay,
+            hide_delay,
+            visibility_listener: Some(Rc::new(on_visibility_change)),
+        });
+    }
+
+    /// Use the given callback to construct an interactive tooltip with per-instance delays.
+    pub fn hoverable_tooltip_element_with_delays<E>(
+        &mut self,
+        show_delay: Duration,
+        hide_delay: Duration,
+        build_tooltip: impl Fn() -> E + 'static,
+    ) where
+        Self: Sized,
+        E: IntoElement,
+    {
+        let build_tooltip = Rc::new(move || build_tooltip().into_any_element());
+        debug_assert!(
+            self.tooltip_builder.is_none(),
+            "calling tooltip more than once on the same element is not supported"
+        );
+        self.tooltip_builder = Some(TooltipBuilder {
+            build: Rc::new(move |_, cx| {
+                cx.new(|_| TooltipElementView {
+                    build: build_tooltip.clone(),
+                })
+                .into()
+            }),
+            hoverable: true,
+            focus_behavior: TooltipFocusBehavior::Never,
+            show_delay,
+            hide_delay,
+            visibility_listener: None,
+        });
+    }
+
+    /// Construct an interactive tooltip with custom delays and visibility notifications.
+    pub fn hoverable_tooltip_element_with_options<E>(
+        &mut self,
+        show_delay: Duration,
+        hide_delay: Duration,
+        on_visibility_change: impl Fn(bool, &mut Window, &mut App) + 'static,
+        build_tooltip: impl Fn() -> E + 'static,
+    ) where
+        Self: Sized,
+        E: IntoElement,
+    {
+        let build_tooltip = Rc::new(move || build_tooltip().into_any_element());
+        debug_assert!(
+            self.tooltip_builder.is_none(),
+            "calling tooltip more than once on the same element is not supported"
+        );
+        self.tooltip_builder = Some(TooltipBuilder {
+            build: Rc::new(move |_, cx| {
+                cx.new(|_| TooltipElementView {
+                    build: build_tooltip.clone(),
+                })
+                .into()
+            }),
+            hoverable: true,
+            focus_behavior: TooltipFocusBehavior::Never,
+            show_delay,
+            hide_delay,
+            visibility_listener: Some(Rc::new(on_visibility_change)),
         });
     }
 
@@ -1091,7 +1315,23 @@ impl Interactivity {
         self.tooltip_builder = Some(TooltipBuilder {
             build: Rc::new(build_tooltip),
             hoverable: true,
+            focus_behavior: TooltipFocusBehavior::Never,
+            show_delay: TOOLTIP_SHOW_DELAY,
+            hide_delay: HOVERABLE_TOOLTIP_HIDE_DELAY,
+            visibility_listener: None,
         });
+    }
+
+    /// Configure whether the tooltip also opens when the element receives focus.
+    /// Call this after configuring tooltip content on the same element.
+    pub fn tooltip_focus_behavior(&mut self, behavior: TooltipFocusBehavior) {
+        debug_assert!(
+            self.tooltip_builder.is_some(),
+            "tooltip_focus_behavior requires tooltip content"
+        );
+        if let Some(builder) = self.tooltip_builder.as_mut() {
+            builder.focus_behavior = behavior;
+        }
     }
 
     /// Use the given callback to construct an in-window context menu when the user secondary-clicks this element.
@@ -1185,6 +1425,16 @@ pub trait InteractiveElement: Sized {
         self.interactivity().implicit_transition = Some(TransitionConfig {
             duration,
             easing: Some(easing),
+        });
+        self
+    }
+
+    /// Animate keyed style changes with a spring-like preset (tuned duration + overshoot easing),
+    /// so hover/active/state restyles settle with physical-feeling motion.
+    fn transition_spring(mut self, preset: crate::animation::SpringPreset) -> Self {
+        self.interactivity().implicit_transition = Some(TransitionConfig {
+            duration: preset.duration(),
+            easing: Some(preset.easing()),
         });
         self
     }
@@ -1600,6 +1850,18 @@ pub trait InteractiveElement: Sized {
         self
     }
 
+    /// Bind a callback to external file/text/URL drops, normalized as [`ExternalDropData`].
+    ///
+    /// Handles both file-only [`ExternalPaths`] and browser-like
+    /// [`ExternalDropData`] payloads.
+    fn on_external_drop(
+        mut self,
+        listener: impl Fn(&ExternalDropData, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.interactivity().on_external_drop(listener);
+        self
+    }
+
     /// Use the given predicate to determine whether or not a drop event should be dispatched to this element
     /// The fluent API equivalent to [`Interactivity::can_drop`]
     fn can_drop(
@@ -1607,6 +1869,12 @@ pub trait InteractiveElement: Sized {
         predicate: impl Fn(&dyn Any, &mut Window, &mut App) -> bool + 'static,
     ) -> Self {
         self.interactivity().can_drop(predicate);
+        self
+    }
+
+    /// Accept external drops whose files match the filter, plus text/URL-only payloads.
+    fn can_drop_external(mut self, filter: FileDropFilter) -> Self {
+        self.interactivity().can_drop_external(filter);
         self
     }
 
@@ -1670,6 +1938,24 @@ pub trait InteractiveElement: Sized {
         Self: Sized,
     {
         self.interactivity().accessibility_attributes = Some(attributes);
+        self
+    }
+
+    /// Handle an action requested by assistive technology for this element.
+    ///
+    /// The action must also be included in the element's
+    /// [`crate::AccessibilityAttributes`] for platforms to expose it.
+    fn on_accessibility_action(
+        mut self,
+        action: crate::AccessibilityAction,
+        listener: impl Fn(&crate::AccessibilityActionRequest, &mut Window, &mut App) + 'static,
+    ) -> Self
+    where
+        Self: Sized,
+    {
+        self.interactivity()
+            .accessibility_action_listeners
+            .push((action, Rc::new(listener)));
         self
     }
 }
@@ -1895,6 +2181,93 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Use the given callback to construct a rich tooltip with per-instance delays.
+    fn tooltip_element_with_delays<E>(
+        mut self,
+        show_delay: Duration,
+        hide_delay: Duration,
+        build_tooltip: impl Fn() -> E + 'static,
+    ) -> Self
+    where
+        Self: Sized,
+        E: IntoElement,
+    {
+        self.interactivity()
+            .tooltip_element_with_delays(show_delay, hide_delay, build_tooltip);
+        self
+    }
+
+    /// Construct a rich tooltip with custom delays and visibility notifications.
+    fn tooltip_element_with_options<E>(
+        mut self,
+        show_delay: Duration,
+        hide_delay: Duration,
+        on_visibility_change: impl Fn(bool, &mut Window, &mut App) + 'static,
+        build_tooltip: impl Fn() -> E + 'static,
+    ) -> Self
+    where
+        Self: Sized,
+        E: IntoElement,
+    {
+        self.interactivity().tooltip_element_with_options(
+            show_delay,
+            hide_delay,
+            on_visibility_change,
+            build_tooltip,
+        );
+        self
+    }
+
+    /// Use the given callback to construct an interactive tooltip with per-instance delays.
+    fn hoverable_tooltip_element_with_delays<E>(
+        mut self,
+        show_delay: Duration,
+        hide_delay: Duration,
+        build_tooltip: impl Fn() -> E + 'static,
+    ) -> Self
+    where
+        Self: Sized,
+        E: IntoElement,
+    {
+        self.interactivity().hoverable_tooltip_element_with_delays(
+            show_delay,
+            hide_delay,
+            build_tooltip,
+        );
+        self
+    }
+
+    /// Construct an interactive tooltip with custom delays and visibility notifications.
+    fn hoverable_tooltip_element_with_options<E>(
+        mut self,
+        show_delay: Duration,
+        hide_delay: Duration,
+        on_visibility_change: impl Fn(bool, &mut Window, &mut App) + 'static,
+        build_tooltip: impl Fn() -> E + 'static,
+    ) -> Self
+    where
+        Self: Sized,
+        E: IntoElement,
+    {
+        self.interactivity().hoverable_tooltip_element_with_options(
+            show_delay,
+            hide_delay,
+            on_visibility_change,
+            build_tooltip,
+        );
+        self
+    }
+
+    /// Configure whether the tooltip also opens when this element receives focus.
+    /// Call this after configuring tooltip content on the same element.
+    fn tooltip_focus_behavior(mut self, behavior: TooltipFocusBehavior) -> Self
+    where
+        Self: Sized,
+    {
+        self.interactivity().tooltip_focus_behavior(behavior);
+        self
+    }
+
     /// Use the given callback to construct a custom tooltip view when the mouse hovers over this element.
     fn tooltip_view(
         mut self,
@@ -1982,6 +2355,9 @@ pub(crate) type LongPressListener =
 
 pub(crate) type ClickListener = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
+pub(crate) type AccessibilityActionListener =
+    Rc<dyn Fn(&crate::AccessibilityActionRequest, &mut Window, &mut App) + 'static>;
+
 pub(crate) type DragListener =
     Box<dyn Fn(&dyn Any, Point<Pixels>, &mut Window, &mut App) -> AnyView + 'static>;
 
@@ -1992,6 +2368,10 @@ type CanDropPredicate = Box<dyn Fn(&dyn Any, &mut Window, &mut App) -> bool + 's
 pub(crate) struct TooltipBuilder {
     build: Rc<dyn Fn(&mut Window, &mut App) -> AnyView + 'static>,
     hoverable: bool,
+    focus_behavior: TooltipFocusBehavior,
+    show_delay: Duration,
+    hide_delay: Duration,
+    visibility_listener: Option<Rc<dyn Fn(bool, &mut Window, &mut App)>>,
 }
 
 /// Accepted content sources for tooltips on interactive elements.
@@ -2183,7 +2563,16 @@ pub struct DivFrameState {
 pub struct DivPrepaintState {
     hitbox: Option<Hitbox>,
     auto_scrollbars: AutoScrollbarHitboxes,
+    /// One entry per child, in child order: `true` when the child was prepainted and must also be
+    /// painted, `false` when it was culled because it fell outside the visible content mask. Empty
+    /// means "no culling applied — paint every child" (e.g. elements with no children).
+    child_visibility: SmallVec<[bool; 8]>,
 }
+
+/// Extra margin, beyond the visible content mask, within which a scroll container's children are
+/// still prepainted/painted. Keeps content ready just outside the viewport so fast flings don't
+/// reveal blank space for a frame.
+const SCROLL_CULL_OVERDRAW: Pixels = Pixels(256.0);
 
 #[derive(Default)]
 struct AutoScrollbarHitboxes {
@@ -2332,9 +2721,27 @@ impl Element for Div {
             window,
             cx,
             |style, scroll_offset, hitbox, window, cx| {
+                let child_layout_ids = &request_layout.child_layout_ids;
+                let mut child_visibility =
+                    SmallVec::<[bool; 8]>::with_capacity(self.children.len());
                 window.with_element_offset(scroll_offset, |window| {
-                    for child in &mut self.children {
-                        child.prepaint(window, cx);
+                    // Cull children that fall entirely outside the active content mask (the
+                    // intersection of every ancestor clip, e.g. an enclosing scroll viewport).
+                    // Such children are clipped to nothing on the GPU anyway, so skipping their
+                    // prepaint/paint makes scrolling cost proportional to what is visible rather
+                    // than to the full content. The mask is dilated by an overdraw margin so
+                    // content just outside the viewport stays ready during fast scrolling.
+                    let visible_region = window.content_mask().bounds.dilate(SCROLL_CULL_OVERDRAW);
+                    for (child, child_layout_id) in
+                        self.children.iter_mut().zip(child_layout_ids.iter())
+                    {
+                        let visible = window
+                            .layout_bounds(*child_layout_id)
+                            .intersects(&visible_region);
+                        child_visibility.push(visible);
+                        if visible {
+                            child.prepaint(window, cx);
+                        }
                     }
                 });
 
@@ -2352,6 +2759,7 @@ impl Element for Div {
                 DivPrepaintState {
                     hitbox,
                     auto_scrollbars,
+                    child_visibility,
                 }
             },
         )
@@ -2373,13 +2781,45 @@ impl Element for Div {
             .as_mut()
             .map(|provider| provider.provide(window, cx));
 
+        let anonymous_accessibility_id = self
+            .interactivity
+            .accessibility_attributes
+            .as_ref()
+            .filter(|_| global_id.is_none())
+            .map(|_| window.next_anonymous_accessibility_id());
+        let accessibility_id = self
+            .interactivity
+            .accessibility_attributes
+            .as_ref()
+            .map(|_| {
+                window.with_optional_element_state::<InteractiveElementState, _>(
+                    global_id,
+                    |element_state, _window| {
+                        let mut element_state =
+                            element_state.map(|state| state.unwrap_or_default());
+                        let id = element_state
+                            .as_mut()
+                            .and_then(|state| state.accessibility_id)
+                            .or(anonymous_accessibility_id)
+                            .unwrap_or_else(crate::AccessibilityId::new);
+                        if let Some(state) = element_state.as_mut() {
+                            state.accessibility_id = Some(id);
+                        }
+                        (id, element_state)
+                    },
+                )
+            });
+
         window.with_image_cache(image_cache, |window| {
             let accessibility_node =
                 self.interactivity
                     .accessibility_attributes
                     .as_ref()
                     .map(|attrs| {
-                        let mut node = attrs.to_node(crate::AccessibilityId::new());
+                        let mut node = attrs.to_node(
+                            accessibility_id.expect("an accessible element must have an id"),
+                        );
+                        node.bounds = Some(crate::AccessibilityRect::from_bounds(bounds));
                         if self
                             .interactivity
                             .tracked_focus_handle
@@ -2394,6 +2834,11 @@ impl Element for Div {
                         node
                     });
 
+            if let Some(node) = accessibility_node.as_ref() {
+                self.interactivity
+                    .register_accessibility_handlers(node, bounds, window, cx);
+            }
+
             self.interactivity.paint_with_auto_scrollbars(
                 global_id,
                 inspector_id,
@@ -2403,27 +2848,48 @@ impl Element for Div {
                 window,
                 cx,
                 |_style, window, cx| {
+                    let child_visibility = &prepaint.child_visibility;
                     if let Some(node) = accessibility_node.as_ref() {
                         window.register_accessibility_node(node.clone());
                         if node.role.is_container() {
                             window.with_accessibility_parent(node.id, |window| {
-                                for child in &mut self.children {
-                                    child.paint(window, cx);
-                                }
+                                paint_visible_children(
+                                    &mut self.children,
+                                    child_visibility,
+                                    window,
+                                    cx,
+                                );
                             });
                         } else {
-                            for child in &mut self.children {
-                                child.paint(window, cx);
-                            }
+                            paint_visible_children(
+                                &mut self.children,
+                                child_visibility,
+                                window,
+                                cx,
+                            );
                         }
                     } else {
-                        for child in &mut self.children {
-                            child.paint(window, cx);
-                        }
+                        paint_visible_children(&mut self.children, child_visibility, window, cx);
                     }
                 },
             )
         });
+    }
+}
+
+fn paint_visible_children(
+    children: &mut [StackSafe<AnyElement>],
+    visibility: &[bool],
+    window: &mut Window,
+    cx: &mut App,
+) {
+    for (index, child) in children.iter_mut().enumerate() {
+        // A child is painted only if it was prepainted (`true`). Painting a culled child would
+        // violate the element draw-phase contract (paint requires a prior prepaint). When no
+        // visibility was recorded, fall back to painting every child.
+        if visibility.get(index).copied().unwrap_or(true) {
+            child.paint(window, cx);
+        }
     }
 }
 
@@ -2490,6 +2956,8 @@ pub struct Interactivity {
     pub(crate) drop_listeners: Vec<(TypeId, DropListener)>,
     pub(crate) can_drop_predicate: Option<CanDropPredicate>,
     pub(crate) click_listeners: Vec<ClickListener>,
+    pub(crate) accessibility_action_listeners:
+        Vec<(crate::AccessibilityAction, AccessibilityActionListener)>,
     pub(crate) drag_listener: Option<(Arc<dyn Any>, DragListener)>,
     pub(crate) hover_listener: Option<Box<dyn Fn(&bool, &mut Window, &mut App)>>,
     pub(crate) resize_listeners: Vec<ResizeListener>,
@@ -2510,6 +2978,95 @@ pub struct Interactivity {
 }
 
 impl Interactivity {
+    fn register_accessibility_handlers(
+        &self,
+        node: &crate::AccessibilityNode,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if node.actions.contains(&crate::AccessibilityAction::Focus)
+            && let Some(focus_handle) = self.tracked_focus_handle.clone()
+        {
+            let window_handle = window.window_handle();
+            let async_cx = cx.to_async();
+            let executor = cx.foreground_executor().clone();
+            window.on_accessibility_action(node.id, crate::AccessibilityAction::Focus, move |_| {
+                let focus_handle = focus_handle.clone();
+                let mut async_cx = async_cx.clone();
+                executor
+                    .spawn(async move {
+                        _ = window_handle.update(&mut async_cx, |_, window, _| {
+                            window.focus(&focus_handle);
+                            window.refresh();
+                        });
+                    })
+                    .detach();
+            });
+        }
+
+        for (action, listener) in &self.accessibility_action_listeners {
+            if !node.actions.contains(action) {
+                continue;
+            }
+
+            let action = *action;
+            let listener = listener.clone();
+            let window_handle = window.window_handle();
+            let async_cx = cx.to_async();
+            let executor = cx.foreground_executor().clone();
+            window.on_accessibility_action(node.id, action, move |request| {
+                let listener = listener.clone();
+                let mut async_cx = async_cx.clone();
+                executor
+                    .spawn(async move {
+                        _ = window_handle.update(&mut async_cx, |_, window, cx| {
+                            listener(&request, window, cx);
+                            window.refresh();
+                        });
+                    })
+                    .detach();
+            });
+        }
+
+        if self.click_listeners.is_empty() {
+            return;
+        }
+
+        for action in [
+            crate::AccessibilityAction::Click,
+            crate::AccessibilityAction::Toggle,
+            crate::AccessibilityAction::ShowMenu,
+        ] {
+            if !node.actions.contains(&action) {
+                continue;
+            }
+
+            let listeners = self.click_listeners.clone();
+            let window_handle = window.window_handle();
+            let async_cx = cx.to_async();
+            let executor = cx.foreground_executor().clone();
+            window.on_accessibility_action(node.id, action, move |_| {
+                let listeners = listeners.clone();
+                let mut async_cx = async_cx.clone();
+                executor
+                    .spawn(async move {
+                        _ = window_handle.update(&mut async_cx, |_, window, cx| {
+                            let event = ClickEvent::Keyboard(KeyboardClickEvent {
+                                button: KeyboardButton::Enter,
+                                bounds,
+                            });
+                            for listener in &listeners {
+                                listener(&event, window, cx);
+                            }
+                            window.refresh();
+                        });
+                    })
+                    .detach();
+            });
+        }
+    }
+
     /// Layout this element according to this interactivity state's configured styles
     pub fn request_layout(
         &mut self,
@@ -3433,32 +3990,81 @@ impl Interactivity {
                     .clone();
 
                 let tooltip_is_hoverable = tooltip_builder.hoverable;
-                let build_tooltip = Rc::new(move |window: &mut Window, cx: &mut App| {
-                    Some(((tooltip_builder.build)(window, cx), tooltip_is_hoverable))
-                });
+                let tooltip_focus_behavior = tooltip_builder.focus_behavior;
+                let tooltip_show_delay = tooltip_builder.show_delay;
+                let tooltip_hide_delay = tooltip_builder.hide_delay;
+                let tooltip_visibility_listener = tooltip_builder.visibility_listener.clone();
+                let tooltip_build = tooltip_builder.build.clone();
+                let build_tooltip: Rc<dyn Fn(&mut Window, &mut App) -> Option<(AnyView, bool)>> =
+                    Rc::new(move |window: &mut Window, cx: &mut App| {
+                        Some((tooltip_build(window, cx), tooltip_is_hoverable))
+                    });
+                let tooltip_focus_handle = self.tracked_focus_handle.clone();
                 // Use bounds instead of testing hitbox since this is called during prepaint.
-                let check_is_hovered_during_prepaint = Rc::new({
-                    let pending_mouse_down = pending_mouse_down.clone();
-                    let source_bounds = hitbox.bounds;
-                    move |window: &Window| {
-                        pending_mouse_down.borrow().is_none()
-                            && source_bounds.contains(&window.mouse_position())
-                    }
-                });
-                let check_is_hovered = Rc::new({
+                let check_is_hovered_during_prepaint: Rc<dyn Fn(&Window, &App) -> bool> =
+                    Rc::new({
+                        let pending_mouse_down = pending_mouse_down.clone();
+                        let focus_handle = tooltip_focus_handle.clone();
+                        let source_bounds = hitbox.bounds;
+                        move |window: &Window, cx: &App| {
+                            (pending_mouse_down.borrow().is_none()
+                                && source_bounds.contains(&window.mouse_position()))
+                                || tooltip_focus_is_active(
+                                    tooltip_focus_behavior,
+                                    focus_handle.as_ref(),
+                                    window,
+                                    cx,
+                                )
+                        }
+                    });
+                let check_is_hovered: Rc<dyn Fn(&Window, &App) -> bool> = Rc::new({
                     let hitbox = hitbox.clone();
-                    move |window: &Window| {
-                        pending_mouse_down.borrow().is_none() && hitbox.is_hovered(window)
+                    let focus_handle = tooltip_focus_handle.clone();
+                    move |window: &Window, cx: &App| {
+                        (pending_mouse_down.borrow().is_none() && hitbox.is_hovered(window))
+                            || tooltip_focus_is_active(
+                                tooltip_focus_behavior,
+                                focus_handle.as_ref(),
+                                window,
+                                cx,
+                            )
                     }
                 });
                 register_tooltip_mouse_handlers(
                     &active_tooltip,
                     self.tooltip_id,
-                    build_tooltip,
-                    check_is_hovered,
-                    check_is_hovered_during_prepaint,
+                    build_tooltip.clone(),
+                    check_is_hovered.clone(),
+                    check_is_hovered_during_prepaint.clone(),
+                    tooltip_show_delay,
+                    tooltip_hide_delay,
+                    tooltip_visibility_listener.clone(),
                     window,
                 );
+                if tooltip_focus_is_active(
+                    tooltip_focus_behavior,
+                    tooltip_focus_handle.as_ref(),
+                    window,
+                    cx,
+                ) {
+                    schedule_tooltip_show(
+                        &active_tooltip,
+                        &build_tooltip,
+                        &check_is_hovered_during_prepaint,
+                        tooltip_show_delay,
+                        tooltip_hide_delay,
+                        tooltip_visibility_listener,
+                        window,
+                        cx,
+                    );
+                } else if !check_is_hovered(window, cx)
+                    && matches!(
+                        active_tooltip.borrow().as_ref(),
+                        Some(ActiveTooltip::WaitingForShow { .. })
+                    )
+                {
+                    active_tooltip.borrow_mut().take();
+                }
             }
 
             if let Some(context_menu_builder) = self.context_menu_builder.take() {
@@ -3821,7 +4427,6 @@ impl Interactivity {
             let restrict_scroll_to_axis = style.restrict_scroll_to_axis;
             let line_height = window.line_height();
             let hitbox = hitbox.clone();
-            let current_view = window.current_view();
             window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
                 if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
                     let mut scroll_offset = scroll_offset.borrow_mut();
@@ -3914,12 +4519,39 @@ impl Interactivity {
                         });
                     let handled_scroll =
                         *scroll_offset != old_scroll_offset || new_overscroll != old_overscroll;
+                    if scroll_trace_enabled() {
+                        eprintln!(
+                            "[kael-scroll:apply] event={} precise={} momentum={} phase={:?} line_h={:.2} px=({:.2},{:.2}) applied=({:.2},{:.2}) can=(x:{},y:{}) offset=({:.2},{:.2})->({:.2},{:.2}) max=({:.2},{:.2}) overscroll=({:.2},{:.2})->({:.2},{:.2}) handled={}",
+                            event.delta.trace_label(),
+                            event.delta.precise(),
+                            event.is_momentum,
+                            event.touch_phase,
+                            f32::from(line_height),
+                            f32::from(delta.x),
+                            f32::from(delta.y),
+                            f32::from(delta_x),
+                            f32::from(delta_y),
+                            can_scroll_x,
+                            can_scroll_y,
+                            f32::from(old_scroll_offset.x),
+                            f32::from(old_scroll_offset.y),
+                            f32::from(scroll_offset.x),
+                            f32::from(scroll_offset.y),
+                            f32::from(max_offset.width),
+                            f32::from(max_offset.height),
+                            f32::from(old_overscroll.x),
+                            f32::from(old_overscroll.y),
+                            f32::from(new_overscroll.x),
+                            f32::from(new_overscroll.y),
+                            handled_scroll,
+                        );
+                    }
                     if handled_scroll {
                         if let Some(scroll_elastic_state) = scroll_elastic_state.as_deref_mut() {
                             scroll_elastic_state.mark_scrolled();
                         }
                         cx.stop_propagation();
-                        cx.notify(current_view);
+                        window.refresh_preserving_caches();
                     }
                 }
             });
@@ -4282,6 +4914,7 @@ impl Interactivity {
 /// and scroll offsets.
 #[derive(Default)]
 pub struct InteractiveElementState {
+    pub(crate) accessibility_id: Option<crate::AccessibilityId>,
     pub(crate) focus_handle: Option<FocusHandle>,
     pub(crate) clicked_state: Option<Rc<RefCell<ElementClickedState>>>,
     pub(crate) hover_state: Option<Rc<RefCell<bool>>>,
@@ -4652,19 +5285,20 @@ fn context_menu_path_key(path: &[usize]) -> usize {
 pub(crate) fn clear_active_tooltip(
     active_tooltip: &Rc<RefCell<Option<ActiveTooltip>>>,
     window: &mut Window,
-) {
+) -> bool {
     match active_tooltip.borrow_mut().take() {
-        None => {}
-        Some(ActiveTooltip::WaitingForShow { .. }) => {}
-        Some(ActiveTooltip::Visible { .. }) => window.refresh(),
-        Some(ActiveTooltip::WaitingForHide { .. }) => window.refresh(),
+        None | Some(ActiveTooltip::WaitingForShow { .. }) => false,
+        Some(ActiveTooltip::Visible { .. }) | Some(ActiveTooltip::WaitingForHide { .. }) => {
+            window.refresh();
+            true
+        }
     }
 }
 
 pub(crate) fn clear_active_tooltip_if_not_hoverable(
     active_tooltip: &Rc<RefCell<Option<ActiveTooltip>>>,
     window: &mut Window,
-) {
+) -> bool {
     let should_clear = match active_tooltip.borrow().as_ref() {
         None => false,
         Some(ActiveTooltip::WaitingForShow { .. }) => false,
@@ -4675,6 +5309,7 @@ pub(crate) fn clear_active_tooltip_if_not_hoverable(
         active_tooltip.borrow_mut().take();
         window.refresh();
     }
+    should_clear
 }
 
 pub(crate) fn clear_active_context_menu(
@@ -4713,20 +5348,27 @@ pub(crate) fn register_tooltip_mouse_handlers(
     active_tooltip: &Rc<RefCell<Option<ActiveTooltip>>>,
     tooltip_id: Option<TooltipId>,
     build_tooltip: Rc<dyn Fn(&mut Window, &mut App) -> Option<(AnyView, bool)>>,
-    check_is_hovered: Rc<dyn Fn(&Window) -> bool>,
-    check_is_hovered_during_prepaint: Rc<dyn Fn(&Window) -> bool>,
+    check_is_hovered: Rc<dyn Fn(&Window, &App) -> bool>,
+    check_is_hovered_during_prepaint: Rc<dyn Fn(&Window, &App) -> bool>,
+    show_delay: Duration,
+    hide_delay: Duration,
+    visibility_listener: Option<Rc<dyn Fn(bool, &mut Window, &mut App)>>,
     window: &mut Window,
 ) {
     window.on_mouse_event({
         let active_tooltip = active_tooltip.clone();
         let build_tooltip = build_tooltip.clone();
         let check_is_hovered = check_is_hovered.clone();
+        let move_visibility_listener = visibility_listener.clone();
         move |_: &MouseMoveEvent, phase, window, cx| {
             handle_tooltip_mouse_move(
                 &active_tooltip,
                 &build_tooltip,
                 &check_is_hovered,
                 &check_is_hovered_during_prepaint,
+                show_delay,
+                hide_delay,
+                move_visibility_listener.clone(),
                 phase,
                 window,
                 cx,
@@ -4736,21 +5378,50 @@ pub(crate) fn register_tooltip_mouse_handlers(
 
     window.on_mouse_event({
         let active_tooltip = active_tooltip.clone();
+        let visibility_listener = visibility_listener.clone();
         move |_: &MouseDownEvent, _phase, window: &mut Window, _cx| {
             if !tooltip_id.is_some_and(|tooltip_id| tooltip_id.is_hovered(window)) {
-                clear_active_tooltip_if_not_hoverable(&active_tooltip, window);
+                let cleared = clear_active_tooltip_if_not_hoverable(&active_tooltip, window);
+                if cleared {
+                    if let Some(listener) = visibility_listener.as_ref() {
+                        listener(false, window, _cx);
+                    }
+                }
             }
         }
     });
 
     window.on_mouse_event({
         let active_tooltip = active_tooltip.clone();
-        move |_: &ScrollWheelEvent, _phase, window: &mut Window, _cx| {
+        let visibility_listener = visibility_listener.clone();
+        move |_: &ScrollWheelEvent, _phase, window: &mut Window, cx| {
             if !tooltip_id.is_some_and(|tooltip_id| tooltip_id.is_hovered(window)) {
-                clear_active_tooltip_if_not_hoverable(&active_tooltip, window);
+                let cleared = clear_active_tooltip_if_not_hoverable(&active_tooltip, window);
+                if cleared {
+                    if let Some(listener) = visibility_listener.as_ref() {
+                        listener(false, window, cx);
+                    }
+                }
             }
         }
     });
+}
+
+fn tooltip_focus_is_active(
+    behavior: TooltipFocusBehavior,
+    focus_handle: Option<&FocusHandle>,
+    window: &Window,
+    cx: &App,
+) -> bool {
+    let Some(focus_handle) = focus_handle else {
+        return false;
+    };
+    focus_handle.contains_focused(window, cx)
+        && match behavior {
+            TooltipFocusBehavior::Never => false,
+            TooltipFocusBehavior::Auto => window.is_keyboard_navigation_active(),
+            TooltipFocusBehavior::Always => true,
+        }
 }
 
 pub(crate) fn register_context_menu_mouse_handlers(
@@ -4838,8 +5509,11 @@ pub(crate) fn register_context_menu_mouse_handlers(
 fn handle_tooltip_mouse_move(
     active_tooltip: &Rc<RefCell<Option<ActiveTooltip>>>,
     build_tooltip: &Rc<dyn Fn(&mut Window, &mut App) -> Option<(AnyView, bool)>>,
-    check_is_hovered: &Rc<dyn Fn(&Window) -> bool>,
-    check_is_hovered_during_prepaint: &Rc<dyn Fn(&Window) -> bool>,
+    check_is_hovered: &Rc<dyn Fn(&Window, &App) -> bool>,
+    check_is_hovered_during_prepaint: &Rc<dyn Fn(&Window, &App) -> bool>,
+    show_delay: Duration,
+    hide_delay: Duration,
+    visibility_listener: Option<Rc<dyn Fn(bool, &mut Window, &mut App)>>,
     phase: DispatchPhase,
     window: &mut Window,
     cx: &mut App,
@@ -4854,7 +5528,7 @@ fn handle_tooltip_mouse_move(
 
     let action = match active_tooltip.borrow().as_ref() {
         None => {
-            let is_hovered = check_is_hovered(window);
+            let is_hovered = check_is_hovered(window, cx);
             if is_hovered && phase.bubble() {
                 Action::ScheduleShow
             } else {
@@ -4862,7 +5536,7 @@ fn handle_tooltip_mouse_move(
             }
         }
         Some(ActiveTooltip::WaitingForShow { .. }) => {
-            let is_hovered = check_is_hovered(window);
+            let is_hovered = check_is_hovered(window, cx);
             if is_hovered {
                 Action::None
             } else {
@@ -4882,49 +5556,82 @@ fn handle_tooltip_mouse_move(
             active_tooltip.borrow_mut().take();
         }
         Action::ScheduleShow => {
-            let delayed_show_task = window.spawn(cx, {
-                let active_tooltip = active_tooltip.clone();
-                let build_tooltip = build_tooltip.clone();
-                let check_is_hovered_during_prepaint = check_is_hovered_during_prepaint.clone();
-                async move |cx| {
-                    cx.background_executor().timer(TOOLTIP_SHOW_DELAY).await;
-                    cx.update(|window, cx| {
-                        let new_tooltip =
-                            build_tooltip(window, cx).map(|(view, tooltip_is_hoverable)| {
-                                let active_tooltip = active_tooltip.clone();
-                                ActiveTooltip::Visible {
-                                    tooltip: AnyTooltip {
-                                        view,
-                                        mouse_position: window.mouse_position(),
-                                        check_visible_and_update: Rc::new(
-                                            move |tooltip_bounds, window, cx| {
-                                                handle_tooltip_check_visible_and_update(
-                                                    &active_tooltip,
-                                                    tooltip_is_hoverable,
-                                                    &check_is_hovered_during_prepaint,
-                                                    tooltip_bounds,
-                                                    window,
-                                                    cx,
-                                                )
-                                            },
-                                        ),
-                                    },
-                                    is_hoverable: tooltip_is_hoverable,
-                                }
-                            });
-                        *active_tooltip.borrow_mut() = new_tooltip;
-                        window.refresh();
-                    })
-                    .ok();
-                }
-            });
-            active_tooltip
-                .borrow_mut()
-                .replace(ActiveTooltip::WaitingForShow {
-                    _task: delayed_show_task,
-                });
+            schedule_tooltip_show(
+                active_tooltip,
+                build_tooltip,
+                check_is_hovered_during_prepaint,
+                show_delay,
+                hide_delay,
+                visibility_listener,
+                window,
+                cx,
+            );
         }
     }
+}
+
+fn schedule_tooltip_show(
+    active_tooltip: &Rc<RefCell<Option<ActiveTooltip>>>,
+    build_tooltip: &Rc<dyn Fn(&mut Window, &mut App) -> Option<(AnyView, bool)>>,
+    check_is_visible_during_prepaint: &Rc<dyn Fn(&Window, &App) -> bool>,
+    show_delay: Duration,
+    hide_delay: Duration,
+    visibility_listener: Option<Rc<dyn Fn(bool, &mut Window, &mut App)>>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if active_tooltip.borrow().is_some() {
+        return;
+    }
+    let delayed_show_task = window.spawn(cx, {
+        let active_tooltip = active_tooltip.clone();
+        let build_tooltip = build_tooltip.clone();
+        let check_is_visible_during_prepaint = check_is_visible_during_prepaint.clone();
+        let visibility_listener = visibility_listener.clone();
+        async move |cx| {
+            if !show_delay.is_zero() {
+                cx.background_executor().timer(show_delay).await;
+            }
+            cx.update(|window, cx| {
+                let check_visibility_listener = visibility_listener.clone();
+                let new_tooltip = build_tooltip(window, cx).map(|(view, tooltip_is_hoverable)| {
+                    let active_tooltip = active_tooltip.clone();
+                    ActiveTooltip::Visible {
+                        tooltip: AnyTooltip {
+                            view,
+                            mouse_position: window.mouse_position(),
+                            check_visible_and_update: Rc::new(move |tooltip_bounds, window, cx| {
+                                handle_tooltip_check_visible_and_update(
+                                    &active_tooltip,
+                                    tooltip_is_hoverable,
+                                    &check_is_visible_during_prepaint,
+                                    tooltip_bounds,
+                                    hide_delay,
+                                    check_visibility_listener.clone(),
+                                    window,
+                                    cx,
+                                )
+                            }),
+                        },
+                        is_hoverable: tooltip_is_hoverable,
+                    }
+                });
+                *active_tooltip.borrow_mut() = new_tooltip;
+                if active_tooltip.borrow().is_some() {
+                    if let Some(listener) = visibility_listener.as_ref() {
+                        listener(true, window, cx);
+                    }
+                }
+                window.refresh();
+            })
+            .ok();
+        }
+    });
+    active_tooltip
+        .borrow_mut()
+        .replace(ActiveTooltip::WaitingForShow {
+            _task: delayed_show_task,
+        });
 }
 
 /// Returns a callback which will be called by window prepaint to update tooltip visibility. The
@@ -4933,8 +5640,10 @@ fn handle_tooltip_mouse_move(
 fn handle_tooltip_check_visible_and_update(
     active_tooltip: &Rc<RefCell<Option<ActiveTooltip>>>,
     tooltip_is_hoverable: bool,
-    check_is_hovered: &Rc<dyn Fn(&Window) -> bool>,
+    check_is_hovered: &Rc<dyn Fn(&Window, &App) -> bool>,
     tooltip_bounds: Bounds<Pixels>,
+    hide_delay: Duration,
+    visibility_listener: Option<Rc<dyn Fn(bool, &mut Window, &mut App)>>,
     window: &mut Window,
     cx: &mut App,
 ) -> bool {
@@ -4947,14 +5656,14 @@ fn handle_tooltip_check_visible_and_update(
         CancelHide(AnyTooltip),
     }
 
-    let is_hovered = check_is_hovered(window)
+    let is_hovered = check_is_hovered(window, cx)
         || (tooltip_is_hoverable && tooltip_bounds.contains(&window.mouse_position()));
     let action = match active_tooltip.borrow().as_ref() {
         Some(ActiveTooltip::Visible { tooltip, .. }) => {
             if is_hovered {
                 Action::None
             } else {
-                if tooltip_is_hoverable {
+                if !hide_delay.is_zero() {
                     Action::ScheduleHide(tooltip.clone())
                 } else {
                     Action::Hide
@@ -4973,16 +5682,28 @@ fn handle_tooltip_check_visible_and_update(
 
     match action {
         Action::None => {}
-        Action::Hide => clear_active_tooltip(active_tooltip, window),
+        Action::Hide => {
+            let cleared = clear_active_tooltip(active_tooltip, window);
+            if cleared {
+                if let Some(listener) = visibility_listener.as_ref() {
+                    listener(false, window, cx);
+                }
+            }
+        }
         Action::ScheduleHide(tooltip) => {
             let delayed_hide_task = window.spawn(cx, {
                 let active_tooltip = active_tooltip.clone();
+                let visibility_listener = visibility_listener.clone();
                 async move |cx| {
-                    cx.background_executor()
-                        .timer(HOVERABLE_TOOLTIP_HIDE_DELAY)
-                        .await;
+                    cx.background_executor().timer(hide_delay).await;
                     if active_tooltip.borrow_mut().take().is_some() {
-                        cx.update(|window, _cx| window.refresh()).ok();
+                        cx.update(|window, cx| {
+                            if let Some(listener) = visibility_listener.as_ref() {
+                                listener(false, window, cx);
+                            }
+                            window.refresh();
+                        })
+                        .ok();
                     }
                 }
             });
@@ -4997,7 +5718,7 @@ fn handle_tooltip_check_visible_and_update(
             // Cancel waiting to hide tooltip when it becomes hovered.
             active_tooltip.borrow_mut().replace(ActiveTooltip::Visible {
                 tooltip,
-                is_hoverable: true,
+                is_hoverable: tooltip_is_hoverable,
             });
         }
     }
@@ -5657,7 +6378,8 @@ impl ScrollHandle {
 #[cfg(test)]
 mod test {
     use super::{
-        ImplicitStyleAnimationState, ImplicitVisualStyle, TOOLTIP_SHOW_DELAY, TransitionConfig,
+        ImplicitStyleAnimationState, ImplicitVisualStyle, TOOLTIP_SHOW_DELAY, TooltipFocusBehavior,
+        TransitionConfig,
     };
     use crate::scroll_elasticity::{
         add_scroll_elasticity, advance_scroll_elasticity, apply_scroll_delta_axis,
@@ -5677,6 +6399,74 @@ mod test {
     };
 
     crate::actions!(context_menu_test, [PrimaryMenuAction, ShareViaLinkAction]);
+
+    struct CountingProbe {
+        height: crate::Pixels,
+        prepaints: Rc<Cell<usize>>,
+        paints: Rc<Cell<usize>>,
+    }
+
+    impl crate::Element for CountingProbe {
+        type RequestLayoutState = ();
+        type PrepaintState = ();
+
+        fn id(&self) -> Option<crate::ElementId> {
+            None
+        }
+
+        fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+            None
+        }
+
+        fn request_layout(
+            &mut self,
+            _: Option<&crate::GlobalElementId>,
+            _: Option<&crate::InspectorElementId>,
+            window: &mut Window,
+            _: &mut crate::App,
+        ) -> (crate::LayoutId, ()) {
+            let height = self.height;
+            (
+                window.request_measured_layout(crate::Style::default(), move |_, _, _, _| {
+                    crate::size(px(100.), height)
+                }),
+                (),
+            )
+        }
+
+        fn prepaint(
+            &mut self,
+            _: Option<&crate::GlobalElementId>,
+            _: Option<&crate::InspectorElementId>,
+            _: crate::Bounds<crate::Pixels>,
+            _: &mut (),
+            _: &mut Window,
+            _: &mut crate::App,
+        ) {
+            self.prepaints.set(self.prepaints.get() + 1);
+        }
+
+        fn paint(
+            &mut self,
+            _: Option<&crate::GlobalElementId>,
+            _: Option<&crate::InspectorElementId>,
+            bounds: crate::Bounds<crate::Pixels>,
+            _: &mut (),
+            _: &mut (),
+            window: &mut Window,
+            _: &mut crate::App,
+        ) {
+            window.paint_quad(crate::fill(bounds, crate::black()));
+            self.paints.set(self.paints.get() + 1);
+        }
+    }
+
+    impl crate::IntoElement for CountingProbe {
+        type Element = Self;
+        fn into_element(self) -> Self {
+            self
+        }
+    }
 
     #[test]
     fn scroll_elasticity_consumes_reverse_delta_before_scrolling_content() {
@@ -5762,6 +6552,201 @@ mod test {
     }
 
     #[kael::test]
+    fn wheel_scroll_reuses_cached_sibling_subtree(cx: &mut TestAppContext) {
+        let scroll_handle = ScrollHandle::new();
+        let prepaints = Rc::new(Cell::new(0));
+        let paints = Rc::new(Cell::new(0));
+
+        struct TestView {
+            scroll: ScrollHandle,
+            prepaints: Rc<Cell<usize>>,
+            paints: Rc<Cell<usize>>,
+        }
+
+        impl Render for TestView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div()
+                    .flex()
+                    .flex_col()
+                    .w(px(100.))
+                    .h(px(400.))
+                    .child(
+                        div()
+                            .w(px(100.))
+                            .h(px(100.))
+                            .id("keystone-scroll")
+                            .overflow_y_scroll()
+                            .track_scroll(&self.scroll)
+                            .child(div().w(px(100.)).h(px(300.))),
+                    )
+                    .child(
+                        crate::cached(CountingProbe {
+                            height: px(50.),
+                            prepaints: self.prepaints.clone(),
+                            paints: self.paints.clone(),
+                        })
+                        .id("keystone-probe"),
+                    )
+            }
+        }
+
+        let (_view, mut cx) = cx.add_window_view(|_, _| TestView {
+            scroll: scroll_handle.clone(),
+            prepaints: prepaints.clone(),
+            paints: paints.clone(),
+        });
+
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+        let baseline_prepaints = prepaints.get();
+        let baseline_paints = paints.get();
+        assert!(baseline_prepaints >= 1);
+        assert!(baseline_paints >= 1);
+
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(50.), px(50.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-40.))),
+            ..Default::default()
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        assert_eq!(scroll_handle.offset().y, px(-40.));
+        assert_eq!(
+            prepaints.get(),
+            baseline_prepaints,
+            "cached sibling subtree must not re-prepaint when a neighboring div scrolls"
+        );
+        assert_eq!(
+            paints.get(),
+            baseline_paints,
+            "cached sibling subtree must not re-paint when a neighboring div scrolls"
+        );
+    }
+
+    #[kael::test]
+    fn overflow_scroll_culls_offscreen_children(cx: &mut TestAppContext) {
+        let scroll_handle = ScrollHandle::new();
+        let probes: Vec<(Rc<Cell<usize>>, Rc<Cell<usize>>)> = (0..10)
+            .map(|_| (Rc::new(Cell::new(0)), Rc::new(Cell::new(0))))
+            .collect();
+
+        struct TestView {
+            scroll: ScrollHandle,
+            probes: Vec<(Rc<Cell<usize>>, Rc<Cell<usize>>)>,
+        }
+
+        impl Render for TestView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                let mut content = div().flex().flex_col().w(px(100.));
+                for (prepaints, paints) in &self.probes {
+                    content = content.child(CountingProbe {
+                        height: px(100.),
+                        prepaints: prepaints.clone(),
+                        paints: paints.clone(),
+                    });
+                }
+                div()
+                    .w(px(100.))
+                    .h(px(100.))
+                    .id("cull-scroll")
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
+                    .child(content)
+            }
+        }
+
+        let (_view, mut cx) = cx.add_window_view(|_, _| TestView {
+            scroll: scroll_handle.clone(),
+            probes: probes.clone(),
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        assert!(
+            probes[0].0.get() >= 1,
+            "the first, visible child should prepaint"
+        );
+        assert_eq!(
+            probes[9].0.get(),
+            0,
+            "an off-screen child must not prepaint"
+        );
+        assert_eq!(probes[9].1.get(), 0, "an off-screen child must not paint");
+
+        assert!(
+            scroll_handle.max_offset().height >= px(800.),
+            "scroll extent must reflect the full content height, not just visible children"
+        );
+
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(50.), px(50.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-900.))),
+            ..Default::default()
+        });
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+        assert!(
+            probes[9].0.get() >= 1,
+            "a child scrolled into view must prepaint"
+        );
+    }
+
+    #[kael::test]
+    fn scrolling_keeps_text_measured_for_visible_siblings(cx: &mut TestAppContext) {
+        let scroll_handle = ScrollHandle::new();
+
+        struct TestView(ScrollHandle);
+
+        impl Render for TestView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div()
+                    .flex()
+                    .flex_col()
+                    .w(px(200.))
+                    .h(px(260.))
+                    .child(div().child("Header title that must stay measured"))
+                    .child(
+                        div()
+                            .w(px(200.))
+                            .h(px(120.))
+                            .id("measure-scroll")
+                            .overflow_y_scroll()
+                            .track_scroll(&self.0)
+                            .child(
+                                div()
+                                    .w(px(200.))
+                                    .h(px(600.))
+                                    .child("scrollable content body"),
+                            ),
+                    )
+            }
+        }
+
+        let (_view, mut cx) = cx.add_window_view(|_, _| TestView(scroll_handle.clone()));
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+
+        for _ in 0..3 {
+            cx.simulate_event(ScrollWheelEvent {
+                position: point(px(100.), px(90.)),
+                delta: ScrollDelta::Pixels(point(px(0.), px(-40.))),
+                ..Default::default()
+            });
+            cx.update(|window, cx| {
+                window.draw(cx).clear();
+            });
+        }
+
+        assert!(scroll_handle.offset().y < px(0.));
+    }
+
+    #[kael::test]
     fn scroll_restarts_frame_polling_after_idle(cx: &mut TestAppContext) {
         let scroll_handle = ScrollHandle::new();
 
@@ -5791,6 +6776,47 @@ mod test {
 
         assert_eq!(scroll_handle.offset().y, px(-40.));
         assert!(test_window.0.lock().frame_polling_active);
+    }
+
+    #[kael::test]
+    fn wheel_scroll_redraws_without_notifying_view(cx: &mut TestAppContext) {
+        let scroll_handle = ScrollHandle::new();
+
+        struct TestView(ScrollHandle);
+
+        impl Render for TestView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div()
+                    .w(px(100.))
+                    .h(px(100.))
+                    .id("scroll-notify-test")
+                    .overflow_y_scroll()
+                    .track_scroll(&self.0)
+                    .child(div().w(px(100.)).h(px(300.)))
+            }
+        }
+
+        let (view, cx) = cx.add_window_view(|_, _| TestView(scroll_handle.clone()));
+        let notification_count = Rc::new(Cell::new(0));
+
+        cx.cx.update({
+            let notification_count = notification_count.clone();
+            |app| {
+                app.observe(&view, move |_, _| {
+                    notification_count.set(notification_count.get() + 1);
+                })
+                .detach();
+            }
+        });
+
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(50.), px(50.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-40.))),
+            ..Default::default()
+        });
+
+        assert_eq!(scroll_handle.offset().y, px(-40.));
+        assert_eq!(notification_count.get(), 0);
     }
 
     #[kael::test]
@@ -6360,6 +7386,167 @@ mod test {
     }
 
     #[kael::test]
+    fn tooltip_element_honors_custom_delays_and_reports_visibility(cx: &mut TestAppContext) {
+        const SHOW_DELAY: Duration = Duration::from_millis(40);
+        const HIDE_DELAY: Duration = Duration::from_millis(60);
+
+        struct TooltipRoot {
+            visibility_changes: Rc<RefCell<Vec<bool>>>,
+        }
+
+        impl Render for TooltipRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                let visibility_changes = self.visibility_changes.clone();
+                div().relative().size_full().child(
+                    div()
+                        .id("delayed-tooltip-target")
+                        .debug_selector(|| "delayed-tooltip-target".to_string())
+                        .w(px(120.0))
+                        .h(px(40.0))
+                        .tooltip_element_with_options(
+                            SHOW_DELAY,
+                            HIDE_DELAY,
+                            move |visible, _, _| {
+                                visibility_changes.borrow_mut().push(visible);
+                            },
+                            || {
+                                div()
+                                    .debug_selector(|| "delayed-tooltip".to_string())
+                                    .child("Delayed tooltip")
+                            },
+                        ),
+                )
+            }
+        }
+
+        let visibility_changes = Rc::new(RefCell::new(Vec::new()));
+        let (_view, mut window) = cx.add_window_view(|_, _| TooltipRoot {
+            visibility_changes: visibility_changes.clone(),
+        });
+
+        let target_bounds = window.debug_bounds("delayed-tooltip-target").unwrap();
+        window.simulate_mouse_move(target_bounds.center(), None, crate::Modifiers::default());
+        window.update(|window, cx| window.draw(cx).clear());
+
+        window
+            .executor()
+            .advance_clock(SHOW_DELAY - Duration::from_millis(1));
+        window.run_until_parked();
+        window.update(|window, cx| window.draw(cx).clear());
+        assert!(window.debug_bounds("delayed-tooltip").is_none());
+        assert!(visibility_changes.borrow().is_empty());
+
+        window.executor().advance_clock(Duration::from_millis(1));
+        window.run_until_parked();
+        window.update(|window, cx| window.draw(cx).clear());
+        assert!(window.debug_bounds("delayed-tooltip").is_some());
+        assert_eq!(&*visibility_changes.borrow(), &[true]);
+
+        window.simulate_mouse_move(
+            point(px(300.0), px(300.0)),
+            None,
+            crate::Modifiers::default(),
+        );
+        window.update(|window, cx| window.draw(cx).clear());
+        window.run_until_parked();
+        assert!(window.debug_bounds("delayed-tooltip").is_some());
+
+        window
+            .executor()
+            .advance_clock(HIDE_DELAY - Duration::from_millis(1));
+        window.run_until_parked();
+        window.update(|window, cx| window.draw(cx).clear());
+        assert!(window.debug_bounds("delayed-tooltip").is_some());
+        assert_eq!(&*visibility_changes.borrow(), &[true]);
+
+        window.executor().advance_clock(Duration::from_millis(1));
+        window.run_until_parked();
+        window.update(|window, cx| window.draw(cx).clear());
+        assert_eq!(&*visibility_changes.borrow(), &[true, false]);
+    }
+
+    #[kael::test]
+    fn tooltip_focus_behavior_opens_for_focused_descendants_and_closes_on_blur(
+        cx: &mut TestAppContext,
+    ) {
+        struct TooltipRoot {
+            group_focus: FocusHandle,
+            child_focus: FocusHandle,
+            outside_focus: FocusHandle,
+            visibility_changes: Rc<RefCell<Vec<bool>>>,
+        }
+
+        impl Render for TooltipRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                let visibility_changes = self.visibility_changes.clone();
+                div()
+                    .size_full()
+                    .child(
+                        div()
+                            .track_focus(&self.group_focus)
+                            .tab_stop(false)
+                            .id("focus-tooltip-target")
+                            .child(
+                                div()
+                                    .track_focus(&self.child_focus)
+                                    .tab_index(0)
+                                    .w(px(80.0))
+                                    .h(px(32.0)),
+                            )
+                            .tooltip_element_with_options(
+                                Duration::ZERO,
+                                Duration::ZERO,
+                                move |visible, _, _| {
+                                    visibility_changes.borrow_mut().push(visible);
+                                },
+                                || {
+                                    div()
+                                        .debug_selector(|| "focus-tooltip".to_string())
+                                        .child("Focus tooltip")
+                                },
+                            )
+                            .tooltip_focus_behavior(TooltipFocusBehavior::Always),
+                    )
+                    .child(
+                        div()
+                            .track_focus(&self.outside_focus)
+                            .tab_index(1)
+                            .w(px(80.0))
+                            .h(px(32.0)),
+                    )
+            }
+        }
+
+        let visibility_changes = Rc::new(RefCell::new(Vec::new()));
+        let (view, mut window) = cx.add_window_view(|_, cx| TooltipRoot {
+            group_focus: cx.focus_handle(),
+            child_focus: cx.focus_handle(),
+            outside_focus: cx.focus_handle(),
+            visibility_changes: visibility_changes.clone(),
+        });
+        window.update(|window, cx| {
+            window.focus(&view.read(cx).child_focus);
+            window.draw(cx).clear();
+        });
+        window.run_until_parked();
+        window.update(|window, cx| window.draw(cx).clear());
+        assert_eq!(&*visibility_changes.borrow(), &[true]);
+        assert!(window.debug_bounds("focus-tooltip").is_some());
+
+        window.simulate_mouse_move(
+            point(px(300.0), px(300.0)),
+            None,
+            crate::Modifiers::default(),
+        );
+        window.update(|window, cx| {
+            window.focus(&view.read(cx).outside_focus);
+            window.draw(cx).clear();
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        assert_eq!(&*visibility_changes.borrow(), &[true, false]);
+    }
+
+    #[kael::test]
     fn tab_and_arrow_keys_move_focus(cx: &mut TestAppContext) {
         struct KeyboardNavigationRoot {
             first: FocusHandle,
@@ -6563,6 +7750,435 @@ mod test {
             assert_eq!(button.label.as_deref(), Some("Child Button"));
             assert_eq!(button.parent, Some(container.id));
         });
+    }
+
+    #[kael::test]
+    fn accessibility_tree_root_identity_is_stable_across_frames(cx: &mut TestAppContext) {
+        struct AccessibilityRootIdentity;
+
+        impl Render for AccessibilityRootIdentity {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div().size_full().child(
+                    div()
+                        .accessibility(
+                            AccessibilityAttributes::new(AccessibilityRole::Group)
+                                .label("Frame content"),
+                        )
+                        .child("Content"),
+                )
+            }
+        }
+
+        let (_view, mut window) = cx.add_window_view(|_, _| AccessibilityRootIdentity);
+        let first_root = window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.accessibility_tree.root
+        });
+        let second_root = window.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+            window.accessibility_tree.root
+        });
+
+        assert_eq!(first_root, second_root);
+    }
+
+    #[kael::test]
+    fn anonymous_accessibility_nodes_keep_path_identity_across_frames(cx: &mut TestAppContext) {
+        struct AnonymousAccessibleRoot;
+
+        impl Render for AnonymousAccessibleRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div().size_full().child(div().accessibility(
+                    AccessibilityAttributes::new(AccessibilityRole::Group).label("Anonymous group"),
+                ))
+            }
+        }
+
+        let (_view, mut window) = cx.add_window_view(|_, _| AnonymousAccessibleRoot);
+        let node_id = |window: &Window| {
+            window
+                .accessibility_tree
+                .nodes
+                .values()
+                .find(|node| node.label.as_deref() == Some("Anonymous group"))
+                .expect("anonymous accessible node should be registered")
+                .id
+        };
+        let first = window.update(|window, cx| {
+            window.draw(cx).clear();
+            node_id(window)
+        });
+        let second = window.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+            node_id(window)
+        });
+
+        assert_eq!(first, second);
+    }
+
+    #[kael::test]
+    fn stateful_accessibility_nodes_keep_identity_and_route_press_actions(cx: &mut TestAppContext) {
+        struct AccessibleButtonRoot {
+            presses: Rc<Cell<usize>>,
+        }
+
+        impl Render for AccessibleButtonRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                let presses = self.presses.clone();
+                div().size_full().child(
+                    div()
+                        .id("stable-accessible-button")
+                        .accessibility(
+                            AccessibilityAttributes::new(AccessibilityRole::Button)
+                                .label("Stable Button")
+                                .actions(vec![
+                                    crate::AccessibilityAction::Focus,
+                                    crate::AccessibilityAction::Click,
+                                ]),
+                        )
+                        .on_click(move |_, _, _| presses.set(presses.get() + 1))
+                        .w(px(80.0))
+                        .h(px(32.0)),
+                )
+            }
+        }
+
+        let presses = Rc::new(Cell::new(0));
+        let (_view, mut window) = cx.add_window_view({
+            let presses = presses.clone();
+            move |_, _| AccessibleButtonRoot { presses }
+        });
+
+        let first_id = window.update(|window, cx| {
+            window.draw(cx).clear();
+            let node = window
+                .accessibility_tree
+                .nodes
+                .values()
+                .find(|node| node.label.as_deref() == Some("Stable Button"))
+                .expect("accessible button should be registered");
+            assert!(
+                window
+                    .has_accessibility_action_handler(node.id, crate::AccessibilityAction::Click,)
+            );
+            node.id
+        });
+
+        window.update(|window, _| {
+            window.dispatch_accessibility_action_for_test(crate::AccessibilityActionRequest::new(
+                first_id,
+                crate::AccessibilityAction::Click,
+            ));
+        });
+        window.run_until_parked();
+        assert_eq!(presses.get(), 1);
+
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let node = window
+                .accessibility_tree
+                .nodes
+                .values()
+                .find(|node| node.label.as_deref() == Some("Stable Button"))
+                .expect("accessible button should remain registered");
+            assert_eq!(node.id, first_id);
+            assert!(
+                window
+                    .has_accessibility_action_handler(node.id, crate::AccessibilityAction::Click,)
+            );
+        });
+    }
+
+    #[kael::test]
+    fn interactive_elements_route_custom_accessibility_actions(cx: &mut TestAppContext) {
+        struct AccessibleSliderRoot {
+            increments: Rc<Cell<usize>>,
+        }
+
+        impl Render for AccessibleSliderRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                let increments = self.increments.clone();
+                div().size_full().child(
+                    div()
+                        .id("custom-accessibility-slider")
+                        .accessibility(
+                            AccessibilityAttributes::new(AccessibilityRole::Slider)
+                                .label("Custom slider")
+                                .actions(vec![crate::AccessibilityAction::Increment]),
+                        )
+                        .on_accessibility_action(
+                            crate::AccessibilityAction::Increment,
+                            move |_, _, _| increments.set(increments.get() + 1),
+                        )
+                        .w(px(120.0))
+                        .h(px(24.0)),
+                )
+            }
+        }
+
+        let increments = Rc::new(Cell::new(0));
+        let (_view, mut window) = cx.add_window_view({
+            let increments = increments.clone();
+            move |_, _| AccessibleSliderRoot { increments }
+        });
+
+        let node_id =
+            window.update(|window, cx| {
+                window.draw(cx).clear();
+                let node = window
+                    .accessibility_tree
+                    .nodes
+                    .values()
+                    .find(|node| node.label.as_deref() == Some("Custom slider"))
+                    .expect("accessible slider should be registered");
+                assert!(window.has_accessibility_action_handler(
+                    node.id,
+                    crate::AccessibilityAction::Increment,
+                ));
+                node.id
+            });
+
+        window.update(|window, _| {
+            window.dispatch_accessibility_action_for_test(crate::AccessibilityActionRequest::new(
+                node_id,
+                crate::AccessibilityAction::Increment,
+            ));
+        });
+        window.run_until_parked();
+        assert_eq!(increments.get(), 1);
+    }
+
+    #[kael::test]
+    fn accessibility_node_carries_layout_bounds(cx: &mut TestAppContext) {
+        struct BoundsRoot;
+
+        impl Render for BoundsRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div().size_full().child(
+                    div()
+                        .id("bounded-button")
+                        .debug_selector(|| "bounded-button".to_string())
+                        .w(px(40.0))
+                        .h(px(24.0))
+                        .accessibility(
+                            AccessibilityAttributes::new(AccessibilityRole::Button)
+                                .label("Bounded"),
+                        ),
+                )
+            }
+        }
+
+        let (_view, mut window) = cx.add_window_view(|_, _| BoundsRoot);
+        let rendered = window.debug_bounds("bounded-button").unwrap();
+
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+
+            let node = window
+                .accessibility_tree
+                .nodes
+                .values()
+                .find(|node| {
+                    node.role == AccessibilityRole::Button
+                        && node.label.as_deref() == Some("Bounded")
+                })
+                .unwrap();
+            let node_bounds = node
+                .bounds
+                .expect("accessibility node should carry layout bounds");
+            assert_eq!(node_bounds.width, 40.0);
+            assert_eq!(node_bounds.height, 24.0);
+            assert_eq!(node_bounds.x, rendered.origin.x.0 as f64);
+            assert_eq!(node_bounds.y, rendered.origin.y.0 as f64);
+        });
+    }
+
+    #[test]
+    fn refine_style_applies_reusable_preset() {
+        use crate::{StyleRefinement, Styled, black, div, px};
+
+        let preset = StyleRefinement::default().bg(black()).w(px(120.0));
+        let mut element = div().refine_style(&preset);
+        assert!(element.style().background.is_some());
+        assert_eq!(element.style().size.width, Some(px(120.0).into()));
+    }
+
+    #[test]
+    fn glow_and_shadow_inner_set_box_shadow() {
+        use crate::{Styled, black, div, px};
+
+        let mut glowing = div().glow(black(), px(8.0));
+        let glow_shadows = glowing.style().box_shadow.clone().unwrap();
+        assert_eq!(glow_shadows.len(), 1);
+        assert!(!glow_shadows[0].inset);
+        assert_eq!(glow_shadows[0].blur_radius, px(8.0));
+
+        let mut inset = div().shadow_inner(black(), px(4.0), px(0.0));
+        assert!(inset.style().box_shadow.clone().unwrap()[0].inset);
+    }
+
+    #[test]
+    fn implicit_transition_interpolates_translate() {
+        let from = ImplicitVisualStyle::from(&crate::Style::default());
+
+        let mut to_style = crate::Style::default();
+        to_style.translate = Some(crate::point(crate::px(100.0), crate::px(0.0)));
+        let to = ImplicitVisualStyle::from(&to_style);
+
+        assert!(from.can_transition_to(&to));
+        let mid = from.interpolate(&to, 0.5);
+        assert_eq!(mid.translate.x, crate::px(50.0));
+        assert_eq!(mid.translate.y, crate::px(0.0));
+    }
+
+    #[test]
+    fn implicit_transition_interpolates_skew_and_filter() {
+        let from = ImplicitVisualStyle::from(&crate::Style::default());
+
+        let mut to_style = crate::Style::default();
+        to_style.skew = Some(crate::point(0.4, 0.0));
+        to_style.color_filter = Some(crate::ColorFilter {
+            grayscale: 1.0,
+            saturate: 1.0,
+            brightness: 1.0,
+            contrast: 1.0,
+        });
+        let to = ImplicitVisualStyle::from(&to_style);
+
+        assert!(from.can_transition_to(&to));
+        let mid = from.interpolate(&to, 0.5);
+        assert_eq!(mid.skew.x, 0.2);
+        assert_eq!(mid.color_filter.grayscale, 0.5);
+    }
+
+    #[kael::test]
+    fn gpu_memory_budget_is_queryable(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            if let Some(budget) = cx.gpu_memory_budget() {
+                assert!(budget.total_bytes > 0);
+                assert!(budget.available_bytes() <= budget.total_bytes);
+            }
+        });
+    }
+
+    #[kael::test]
+    fn reduce_motion_disables_animations(cx: &mut TestAppContext) {
+        struct MotionRoot;
+
+        impl Render for MotionRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div().size_full()
+            }
+        }
+
+        cx.set_reduce_motion(true);
+        let (_view, mut window) = cx.add_window_view(|_, _| MotionRoot);
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(window.reduce_motion());
+            assert!(!window.animations_enabled());
+        });
+    }
+
+    #[kael::test]
+    fn aspect_ratio_derives_missing_dimension(cx: &mut TestAppContext) {
+        struct AspectRoot;
+
+        impl Render for AspectRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div().size_full().items_start().child(
+                    div()
+                        .id("aspect-box")
+                        .debug_selector(|| "aspect-box".to_string())
+                        .w(px(160.0))
+                        .aspect_video(),
+                )
+            }
+        }
+
+        let (_view, mut window) = cx.add_window_view(|_, _| AspectRoot);
+        let bounds = window.debug_bounds("aspect-box").unwrap();
+        assert_eq!(bounds.size.width.0, 160.0);
+        assert_eq!(bounds.size.height.0, 90.0);
+    }
+
+    #[kael::test]
+    fn grid_template_columns_size_tracks(cx: &mut TestAppContext) {
+        struct GridRoot;
+
+        impl Render for GridRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div()
+                    .grid()
+                    .w(px(300.0))
+                    .h(px(100.0))
+                    .grid_template_columns(vec![
+                        crate::GridTrack::px(100.0),
+                        crate::GridTrack::fr(1.0),
+                    ])
+                    .child(
+                        div()
+                            .id("cell-a")
+                            .debug_selector(|| "cell-a".to_string())
+                            .h(px(20.0)),
+                    )
+                    .child(
+                        div()
+                            .id("cell-b")
+                            .debug_selector(|| "cell-b".to_string())
+                            .h(px(20.0)),
+                    )
+            }
+        }
+
+        let (_view, mut window) = cx.add_window_view(|_, _| GridRoot);
+        let a = window.debug_bounds("cell-a").unwrap();
+        let b = window.debug_bounds("cell-b").unwrap();
+        assert_eq!(a.size.width.0, 100.0);
+        assert_eq!(b.size.width.0, 200.0);
+    }
+
+    #[kael::test]
+    fn grid_repeat_columns_expand(cx: &mut TestAppContext) {
+        struct RepeatRoot;
+
+        impl Render for RepeatRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl crate::IntoElement {
+                div()
+                    .grid()
+                    .w(px(300.0))
+                    .h(px(50.0))
+                    .grid_template_columns(vec![crate::GridTrack::repeat(
+                        3,
+                        vec![crate::GridTrack::fr(1.0)],
+                    )])
+                    .child(
+                        div()
+                            .id("r0")
+                            .debug_selector(|| "r0".to_string())
+                            .h(px(10.0)),
+                    )
+                    .child(
+                        div()
+                            .id("r1")
+                            .debug_selector(|| "r1".to_string())
+                            .h(px(10.0)),
+                    )
+                    .child(
+                        div()
+                            .id("r2")
+                            .debug_selector(|| "r2".to_string())
+                            .h(px(10.0)),
+                    )
+            }
+        }
+
+        let (_view, mut window) = cx.add_window_view(|_, _| RepeatRoot);
+        for id in ["r0", "r1", "r2"] {
+            assert_eq!(window.debug_bounds(id).unwrap().size.width.0, 100.0);
+        }
     }
 
     #[kael::test]

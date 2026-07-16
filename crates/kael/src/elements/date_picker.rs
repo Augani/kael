@@ -27,6 +27,23 @@ pub struct DatePickerRenderState {
     pub focused: bool,
 }
 
+impl DatePickerRenderState {
+    /// Length of the trigger display label in bytes.
+    pub fn display_label_len_bytes(&self) -> usize {
+        self.display_label.len()
+    }
+
+    /// Content-safe summary for custom trigger renderers.
+    pub fn to_text(&self) -> String {
+        format!(
+            "date picker render state: open {}, focused {}, display-label-bytes {}",
+            self.open,
+            self.focused,
+            self.display_label_len_bytes()
+        )
+    }
+}
+
 #[non_exhaustive]
 /// Snapshot of a calendar day cell passed to a custom renderer.
 pub struct DatePickerDayRenderState {
@@ -40,6 +57,23 @@ pub struct DatePickerDayRenderState {
     pub selected: bool,
     /// Whether this day is currently highlighted for keyboard navigation.
     pub highlighted: bool,
+}
+
+impl DatePickerDayRenderState {
+    /// Whether this day can be selected.
+    pub fn is_selectable(&self) -> bool {
+        !self.disabled
+    }
+
+    /// Content-safe summary for custom day-cell renderers.
+    pub fn to_text(&self) -> String {
+        format!(
+            "date picker day render state: selectable {}, selected {}, highlighted {}",
+            self.is_selectable(),
+            self.selected,
+            self.highlighted
+        )
+    }
 }
 
 #[non_exhaustive]
@@ -59,6 +93,35 @@ pub struct DatePickerPopupRenderState {
     pub can_navigate_next: bool,
 }
 
+impl DatePickerPopupRenderState {
+    /// Length of the formatted month label in bytes.
+    pub fn month_label_len_bytes(&self) -> usize {
+        self.month_label.len()
+    }
+
+    /// Whether the selected date is also highlighted.
+    pub fn selected_is_highlighted(&self) -> bool {
+        self.selected_date == self.highlighted_date
+    }
+
+    /// Whether either month navigation direction is available.
+    pub fn can_navigate(&self) -> bool {
+        self.can_navigate_previous || self.can_navigate_next
+    }
+
+    /// Content-safe summary for custom popup renderers.
+    pub fn to_text(&self) -> String {
+        format!(
+            "date picker popup render state: month-label-bytes {}, selected-highlighted {}, can-prev {}, can-next {}, can-navigate {}",
+            self.month_label_len_bytes(),
+            self.selected_is_highlighted(),
+            self.can_navigate_previous,
+            self.can_navigate_next,
+            self.can_navigate()
+        )
+    }
+}
+
 type DatePickerPopupCustomRenderer =
     Rc<dyn Fn(DatePickerPopupRenderState, Vec<AnyElement>, &Window, &App) -> AnyElement>;
 
@@ -73,6 +136,29 @@ pub struct DatePickerHeaderRenderState {
     pub can_navigate_next: bool,
 }
 
+impl DatePickerHeaderRenderState {
+    /// Length of the formatted month label in bytes.
+    pub fn month_label_len_bytes(&self) -> usize {
+        self.month_label.len()
+    }
+
+    /// Whether either month navigation direction is available.
+    pub fn can_navigate(&self) -> bool {
+        self.can_navigate_previous || self.can_navigate_next
+    }
+
+    /// Content-safe summary for custom header renderers.
+    pub fn to_text(&self) -> String {
+        format!(
+            "date picker header render state: month-label-bytes {}, can-prev {}, can-next {}, can-navigate {}",
+            self.month_label_len_bytes(),
+            self.can_navigate_previous,
+            self.can_navigate_next,
+            self.can_navigate()
+        )
+    }
+}
+
 type DatePickerHeaderCustomRenderer =
     Rc<dyn Fn(DatePickerHeaderRenderState, AnyElement, AnyElement, &Window, &App) -> AnyElement>;
 
@@ -83,6 +169,16 @@ pub enum DatePickerNavigationDirection {
     PreviousMonth,
     /// Navigate to the next month.
     NextMonth,
+}
+
+impl DatePickerNavigationDirection {
+    /// Stable label for diagnostics and custom navigation button renderers.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::PreviousMonth => "previous-month",
+            Self::NextMonth => "next-month",
+        }
+    }
 }
 
 #[non_exhaustive]
@@ -96,6 +192,23 @@ pub struct DatePickerNavButtonRenderState {
     pub enabled: bool,
 }
 
+impl DatePickerNavButtonRenderState {
+    /// Length of the visible navigation label in bytes.
+    pub fn label_len_bytes(&self) -> usize {
+        self.label.len()
+    }
+
+    /// Content-safe summary for custom navigation button renderers.
+    pub fn to_text(&self) -> String {
+        format!(
+            "date picker nav button render state: direction {}, enabled {}, label-bytes {}",
+            self.direction.to_text(),
+            self.enabled,
+            self.label_len_bytes()
+        )
+    }
+}
+
 type DatePickerNavButtonCustomRenderer =
     Rc<dyn Fn(DatePickerNavButtonRenderState, AnyElement, &Window, &App) -> AnyElement>;
 
@@ -106,6 +219,22 @@ pub struct DatePickerWeekdayRenderState {
     pub index: usize,
     /// The visible weekday label.
     pub label: SharedString,
+}
+
+impl DatePickerWeekdayRenderState {
+    /// Length of the visible weekday label in bytes.
+    pub fn label_len_bytes(&self) -> usize {
+        self.label.len()
+    }
+
+    /// Content-safe summary for custom weekday renderers.
+    pub fn to_text(&self) -> String {
+        format!(
+            "date picker weekday render state: index {}, label-bytes {}",
+            self.index,
+            self.label_len_bytes()
+        )
+    }
 }
 
 type DatePickerWeekdayCustomRenderer =
@@ -1705,6 +1834,100 @@ mod tests {
             ),
             Date::from_calendar_date(2026, Month::May, 15).unwrap()
         );
+    }
+
+    #[test]
+    fn render_state_summaries_are_content_safe() {
+        let selected = Date::from_calendar_date(2026, Month::May, 20).unwrap();
+        let highlighted = Date::from_calendar_date(2026, Month::May, 21).unwrap();
+
+        let trigger = DatePickerRenderState {
+            open: true,
+            date: selected,
+            display_label: "2026-05-20".into(),
+            focused: false,
+        };
+        assert_eq!(trigger.display_label_len_bytes(), 10);
+        assert_eq!(
+            trigger.to_text(),
+            "date picker render state: open true, focused false, display-label-bytes 10"
+        );
+        assert!(!trigger.to_text().contains("2026"));
+        assert!(!trigger.to_text().contains("05-20"));
+
+        let day = DatePickerDayRenderState {
+            date: selected,
+            day: 20,
+            disabled: false,
+            selected: true,
+            highlighted: false,
+        };
+        assert!(day.is_selectable());
+        assert_eq!(
+            day.to_text(),
+            "date picker day render state: selectable true, selected true, highlighted false"
+        );
+        assert!(!day.to_text().contains("20"));
+        assert!(!day.to_text().contains("2026"));
+
+        let popup = DatePickerPopupRenderState {
+            width: px(280.0),
+            month_label: "May 2026".into(),
+            selected_date: selected,
+            highlighted_date: highlighted,
+            can_navigate_previous: true,
+            can_navigate_next: false,
+        };
+        assert_eq!(popup.month_label_len_bytes(), 8);
+        assert!(!popup.selected_is_highlighted());
+        assert!(popup.can_navigate());
+        assert_eq!(
+            popup.to_text(),
+            "date picker popup render state: month-label-bytes 8, selected-highlighted false, can-prev true, can-next false, can-navigate true"
+        );
+        assert!(!popup.to_text().contains("May"));
+        assert!(!popup.to_text().contains("2026"));
+        assert!(!popup.to_text().contains("280"));
+
+        let header = DatePickerHeaderRenderState {
+            month_label: "May 2026".into(),
+            can_navigate_previous: false,
+            can_navigate_next: false,
+        };
+        assert_eq!(header.month_label_len_bytes(), 8);
+        assert!(!header.can_navigate());
+        assert_eq!(
+            header.to_text(),
+            "date picker header render state: month-label-bytes 8, can-prev false, can-next false, can-navigate false"
+        );
+        assert!(!header.to_text().contains("May"));
+
+        let nav = DatePickerNavButtonRenderState {
+            direction: DatePickerNavigationDirection::PreviousMonth,
+            label: "< Previous".into(),
+            enabled: true,
+        };
+        assert_eq!(
+            DatePickerNavigationDirection::NextMonth.to_text(),
+            "next-month"
+        );
+        assert_eq!(nav.label_len_bytes(), 10);
+        assert_eq!(
+            nav.to_text(),
+            "date picker nav button render state: direction previous-month, enabled true, label-bytes 10"
+        );
+        assert!(!nav.to_text().contains("Previous"));
+
+        let weekday = DatePickerWeekdayRenderState {
+            index: 2,
+            label: "Wednesday".into(),
+        };
+        assert_eq!(weekday.label_len_bytes(), 9);
+        assert_eq!(
+            weekday.to_text(),
+            "date picker weekday render state: index 2, label-bytes 9"
+        );
+        assert!(!weekday.to_text().contains("Wednesday"));
     }
 
     #[test]

@@ -41,6 +41,7 @@ enum ResolvedMediaInput {
 static STAGED_READER_COUNTER: AtomicU64 = AtomicU64::new(0);
 const MAX_DECODED_VIDEO_FRAMES: usize = 256;
 const MAX_DECODED_VIDEO_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_DECODED_AUDIO_BYTES: usize = 128 * 1024 * 1024;
 
 /// A source of media content that can be played back.
 #[derive(Clone)]
@@ -94,6 +95,14 @@ impl MediaSource {
     /// Create a media source backed by compile-time bytes.
     pub fn from_static_bytes(bytes: &'static [u8]) -> Self {
         Self::Bytes(Arc::<[u8]>::from(bytes))
+    }
+
+    /// Return the cache key for a reader-backed media source.
+    pub fn reader_key(&self) -> Option<&str> {
+        match self {
+            Self::Reader(source) => Some(&source.key),
+            _ => None,
+        }
     }
 
     fn open_reader(&self) -> Result<MediaReader, AudioPlaybackError> {
@@ -366,12 +375,36 @@ impl VideoFrameStream {
         Ok(())
     }
 
+    /// Seek the stream near the requested playback position.
+    ///
+    /// FFmpeg seeks to a nearby keyframe, so callers should continue decoding
+    /// forward and select the closest frame for the exact requested position.
+    pub fn seek(&mut self, position: Duration) -> Result<(), MediaDecodeError> {
+        let timestamp =
+            duration_to_time_base(position, ffmpeg::util::mathematics::rescale::TIME_BASE);
+        let seek_margin = i64::from(ffmpeg::ffi::AV_TIME_BASE);
+        let min_timestamp = timestamp.saturating_sub(seek_margin);
+
+        self.input_context
+            .seek(timestamp, min_timestamp..timestamp)
+            .map_err(ffmpeg_decode_error)?;
+        self.decoder.flush();
+        self.sent_eof = false;
+        Ok(())
+    }
+
     /// Decode and return the next video frame, or `None` after end-of-stream.
     pub fn next_frame(&mut self) -> Result<Option<VideoFrame>, MediaDecodeError> {
         loop {
             let mut decoded = ffmpeg::util::frame::video::Video::empty();
-            if self.decoder.receive_frame(&mut decoded).is_ok() {
-                return decode_video_frame(&mut self.scaler, &decoded, self.time_base).map(Some);
+            match self.decoder.receive_frame(&mut decoded) {
+                Ok(()) => {
+                    return decode_video_frame(&mut self.scaler, &decoded, self.time_base)
+                        .map(Some);
+                }
+                Err(error) if ffmpeg_needs_more_input(error) => {}
+                Err(ffmpeg::Error::Eof) if self.sent_eof => return Ok(None),
+                Err(error) => return Err(ffmpeg_decode_error(error)),
             }
 
             if self.sent_eof {
@@ -470,9 +503,11 @@ struct DecodedAudio {
 struct AudioHandleState {
     source: MediaSource,
     volume: f32,
+    speed: f32,
     duration: Option<Duration>,
     decoded_audio: Option<Arc<DecodedAudio>>,
     position: Duration,
+    engine_origin: Duration,
     started_at: Option<Instant>,
     state: PlaybackState,
     engine: Option<AudioEngine>,
@@ -483,6 +518,7 @@ struct AudioPlaybackRequest {
     generation: u64,
     source: MediaSource,
     volume: f32,
+    speed: f32,
     position: Duration,
     duration: Option<Duration>,
     decoded_audio: Option<Arc<DecodedAudio>>,
@@ -521,9 +557,11 @@ impl AudioHandle {
             state: Rc::new(Mutex::new(AudioHandleState {
                 source: source.into(),
                 volume: 1.0,
+                speed: 1.0,
                 duration: None,
                 decoded_audio: None,
                 position: Duration::ZERO,
+                engine_origin: Duration::ZERO,
                 started_at: None,
                 state: PlaybackState::Stopped,
                 engine: None,
@@ -547,7 +585,7 @@ impl AudioHandle {
                 engine.sink.play();
                 state.started_at = Some(Instant::now());
                 state.state = PlaybackState::Playing;
-                state.generation += 1;
+                state.generation = state.generation.wrapping_add(1);
                 return Ok(());
             }
 
@@ -564,6 +602,7 @@ impl AudioHandle {
                 generation: state.generation,
                 source: state.source.clone(),
                 volume: state.volume,
+                speed: state.speed,
                 position: requested_position,
                 duration: state.duration,
                 decoded_audio: state.decoded_audio.clone(),
@@ -574,6 +613,7 @@ impl AudioHandle {
         let (engine, duration, position, decoded_audio) = create_engine_with_cache(
             &request.source,
             request.volume,
+            request.speed,
             request.position,
             request.decoded_audio,
         )?;
@@ -589,11 +629,13 @@ impl AudioHandle {
         }
         state.duration = duration.or(state.duration);
         state.position = position;
+        state.engine_origin = position;
         state.started_at = Some(Instant::now());
         state.state = PlaybackState::Playing;
-        engine.sink.set_volume(state.volume.max(0.0));
+        engine.sink.set_volume(sanitize_volume(state.volume));
+        engine.sink.set_speed(state.speed);
         state.engine = Some(engine);
-        state.generation += 1;
+        state.generation = state.generation.wrapping_add(1);
         Ok(())
     }
 
@@ -611,7 +653,7 @@ impl AudioHandle {
             engine.sink.pause();
         }
         state.state = PlaybackState::Paused;
-        state.generation += 1;
+        state.generation = state.generation.wrapping_add(1);
     }
 
     /// Stop playback and reset the position to the start.
@@ -621,9 +663,10 @@ impl AudioHandle {
             engine.sink.stop();
         }
         state.position = Duration::ZERO;
+        state.engine_origin = Duration::ZERO;
         state.started_at = None;
         state.state = PlaybackState::Stopped;
-        state.generation += 1;
+        state.generation = state.generation.wrapping_add(1);
     }
 
     /// Seek to the given playback position.
@@ -635,6 +678,7 @@ impl AudioHandle {
                 generation: state.generation,
                 source: state.source.clone(),
                 volume: state.volume,
+                speed: state.speed,
                 position,
                 duration: state.duration,
                 decoded_audio: state.decoded_audio.clone(),
@@ -655,6 +699,7 @@ impl AudioHandle {
                     create_engine_with_cache(
                         &request.source,
                         request.volume,
+                        request.speed,
                         clamped_position,
                         decoded_audio,
                     )?;
@@ -679,18 +724,20 @@ impl AudioHandle {
         }
         state.duration = duration.or(state.duration);
         state.position = actual_position;
+        state.engine_origin = actual_position;
         state.started_at = if request.playback_state == PlaybackState::Playing {
             Some(Instant::now())
         } else {
             None
         };
         if let Some(engine) = engine {
-            engine.sink.set_volume(state.volume.max(0.0));
+            engine.sink.set_volume(sanitize_volume(state.volume));
+            engine.sink.set_speed(state.speed);
             state.engine = Some(engine);
         } else {
             state.engine = None;
         }
-        state.generation += 1;
+        state.generation = state.generation.wrapping_add(1);
 
         Ok(())
     }
@@ -698,11 +745,34 @@ impl AudioHandle {
     /// Set the playback volume where `1.0` is the original amplitude.
     pub fn set_volume(&self, volume: f32) {
         let mut state = self.state.lock();
-        let clamped_volume = volume.max(0.0);
+        let clamped_volume = sanitize_volume(volume);
         state.volume = clamped_volume;
         if let Some(engine) = state.engine.as_ref() {
             engine.sink.set_volume(clamped_volume);
         }
+    }
+
+    /// Set playback speed. Values less than or equal to zero are clamped to a
+    /// small positive value so playback can keep advancing.
+    pub fn set_speed(&self, speed: f32) {
+        let mut state = self.state.lock();
+        state.refresh_finished();
+        let speed = sanitize_playback_speed(speed);
+        state.position = state.current_position();
+        state.started_at = if state.state == PlaybackState::Playing {
+            Some(Instant::now())
+        } else {
+            None
+        };
+        state.speed = speed;
+        if let Some(engine) = state.engine.as_ref() {
+            engine.sink.set_speed(speed);
+        }
+    }
+
+    /// Return the current playback speed.
+    pub fn speed(&self) -> f32 {
+        self.state.lock().speed
     }
 
     /// Return the current playback volume.
@@ -769,9 +839,16 @@ pub fn probe_audio_duration(
 impl AudioHandleState {
     fn current_position(&self) -> Duration {
         let position = if self.state == PlaybackState::Playing {
-            self.started_at
-                .map(|started_at| self.position + started_at.elapsed())
-                .unwrap_or(self.position)
+            if let Some(engine) = self.engine.as_ref() {
+                self.engine_origin.saturating_add(engine.sink.get_pos())
+            } else {
+                self.started_at
+                    .map(|started_at| {
+                        self.position
+                            .saturating_add(scale_duration(started_at.elapsed(), self.speed))
+                    })
+                    .unwrap_or(self.position)
+            }
         } else {
             self.position
         };
@@ -797,6 +874,7 @@ impl AudioHandleState {
         }
 
         self.position = self.duration.unwrap_or(position);
+        self.engine_origin = self.position;
         self.started_at = None;
         self.state = PlaybackState::Stopped;
         self.engine = None;
@@ -829,6 +907,7 @@ fn probe_duration_with_cache(
 fn create_engine_with_cache(
     source: &MediaSource,
     volume: f32,
+    speed: f32,
     position: Duration,
     decoded_audio: Option<Arc<DecodedAudio>>,
 ) -> Result<
@@ -842,13 +921,14 @@ fn create_engine_with_cache(
 > {
     let mut decoded_audio = decoded_audio;
     let (engine, duration, clamped_position) =
-        create_engine(source, volume, position, &mut decoded_audio)?;
+        create_engine(source, volume, speed, position, &mut decoded_audio)?;
     Ok((engine, duration, clamped_position, decoded_audio))
 }
 
 fn create_engine(
     source: &MediaSource,
     volume: f32,
+    speed: f32,
     position: Duration,
     decoded_audio: &mut Option<Arc<DecodedAudio>>,
 ) -> Result<(AudioEngine, Option<Duration>, Duration), AudioPlaybackError> {
@@ -880,7 +960,8 @@ fn create_engine(
             (Some(decoded_audio.duration), clamped_position)
         }
     };
-    sink.set_volume(volume.max(0.0));
+    sink.set_volume(sanitize_volume(volume));
+    sink.set_speed(sanitize_playback_speed(speed));
     Ok((
         AudioEngine {
             _stream: stream,
@@ -889,6 +970,28 @@ fn create_engine(
         duration,
         clamped_position,
     ))
+}
+
+fn sanitize_playback_speed(speed: f32) -> f32 {
+    if speed.is_finite() && speed > 0.0 {
+        speed
+    } else {
+        1.0
+    }
+}
+
+fn sanitize_volume(volume: f32) -> f32 {
+    if volume.is_finite() {
+        volume.max(0.0)
+    } else {
+        1.0
+    }
+}
+
+fn scale_duration(duration: Duration, factor: f32) -> Duration {
+    duration_from_seconds_saturating(
+        duration.as_secs_f64() * f64::from(sanitize_playback_speed(factor)),
+    )
 }
 
 fn ensure_decoded_audio(
@@ -931,6 +1034,17 @@ fn decode_audio(source: &MediaSource) -> Result<DecodedAudio, MediaDecodeError> 
         decoder.channel_layout()
     };
     let sample_rate = decoder.rate();
+    let channels = u16::try_from(channel_layout.channels()).map_err(|_| {
+        MediaDecodeError::Decode(format!(
+            "unsupported audio channel count: {}",
+            channel_layout.channels()
+        ))
+    })?;
+    if channels == 0 || sample_rate == 0 {
+        return Err(MediaDecodeError::Decode(
+            "audio stream has zero channels or sample rate".into(),
+        ));
+    }
     let mut resampler = ffmpeg::software::resampling::context::Context::get(
         decoder.format(),
         channel_layout,
@@ -947,12 +1061,20 @@ fn decode_audio(source: &MediaSource) -> Result<DecodedAudio, MediaDecodeError> 
                                                   samples: &mut Vec<f32>|
      -> Result<(), MediaDecodeError> {
         let mut decoded = ffmpeg::util::frame::Audio::empty();
-        while decoder.receive_frame(&mut decoded).is_ok() {
-            let mut output = ffmpeg::util::frame::Audio::empty();
-            resampler
-                .run(&decoded, &mut output)
-                .map_err(ffmpeg_decode_error)?;
-            samples.extend_from_slice(output.plane::<f32>(0));
+        loop {
+            match decoder.receive_frame(&mut decoded) {
+                Ok(()) => {
+                    let mut output = ffmpeg::util::frame::Audio::empty();
+                    resampler
+                        .run(&decoded, &mut output)
+                        .map_err(ffmpeg_decode_error)?;
+                    append_audio_samples(samples, output.plane::<f32>(0))?;
+                }
+                Err(error) if ffmpeg_needs_more_input(error) || error == ffmpeg::Error::Eof => {
+                    break;
+                }
+                Err(error) => return Err(ffmpeg_decode_error(error)),
+            }
         }
 
         Ok(())
@@ -972,19 +1094,16 @@ fn decode_audio(source: &MediaSource) -> Result<DecodedAudio, MediaDecodeError> 
         let mut output = ffmpeg::util::frame::Audio::empty();
         let delayed = resampler.flush(&mut output).map_err(ffmpeg_decode_error)?;
         if output.samples() > 0 {
-            samples.extend_from_slice(output.plane::<f32>(0));
+            append_audio_samples(&mut samples, output.plane::<f32>(0))?;
         }
         if delayed.is_none() {
             break;
         }
     }
 
-    let channels = channel_layout.channels() as u16;
-    let duration = if channels == 0 || sample_rate == 0 {
-        Duration::ZERO
-    } else {
-        Duration::from_secs_f64(samples.len() as f64 / channels as f64 / sample_rate as f64)
-    };
+    let duration = duration_from_seconds_saturating(
+        samples.len() as f64 / f64::from(channels) / f64::from(sample_rate),
+    );
 
     Ok(DecodedAudio {
         channels,
@@ -992,6 +1111,38 @@ fn decode_audio(source: &MediaSource) -> Result<DecodedAudio, MediaDecodeError> 
         samples: Arc::<[f32]>::from(samples),
         duration,
     })
+}
+
+fn append_audio_samples(samples: &mut Vec<f32>, incoming: &[f32]) -> Result<(), MediaDecodeError> {
+    ensure_audio_sample_capacity(samples.len(), incoming.len())?;
+    samples
+        .try_reserve(incoming.len())
+        .map_err(|error| MediaDecodeError::Decode(format!("audio allocation failed: {error}")))?;
+    samples.extend_from_slice(incoming);
+    Ok(())
+}
+
+fn ensure_audio_sample_capacity(
+    current_samples: usize,
+    incoming_samples: usize,
+) -> Result<(), MediaDecodeError> {
+    let max_samples = MAX_DECODED_AUDIO_BYTES / std::mem::size_of::<f32>();
+    let next_len = current_samples
+        .checked_add(incoming_samples)
+        .ok_or_else(|| MediaDecodeError::Decode("decoded audio sample count overflowed".into()))?;
+    if next_len > max_samples {
+        return Err(MediaDecodeError::Decode(format!(
+            "audio decode exceeded {MAX_DECODED_AUDIO_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn ffmpeg_needs_more_input(error: ffmpeg::Error) -> bool {
+    error
+        == (ffmpeg::Error::Other {
+            errno: ffmpeg::util::error::EAGAIN,
+        })
 }
 
 fn open_video_stream(source: &MediaSource) -> Result<OpenedVideoStream, MediaDecodeError> {
@@ -1027,6 +1178,11 @@ fn open_video_stream(source: &MediaSource) -> Result<OpenedVideoStream, MediaDec
         .map_err(ffmpeg_decode_error)?;
     let width = decoder.width();
     let height = decoder.height();
+    if width == 0 || height == 0 {
+        return Err(MediaDecodeError::Decode(format!(
+            "video stream has invalid dimensions {width}x{height}"
+        )));
+    }
     let scaler = ffmpeg::software::scaling::context::Context::get(
         decoder.format(),
         width,
@@ -1063,7 +1219,7 @@ fn decode_video_frame(
         .map_err(ffmpeg_decode_error)?;
 
     Ok(VideoFrame {
-        data: Arc::<[u8]>::from(copy_bgra_frame(&bgra_frame)),
+        data: Arc::<[u8]>::from(copy_bgra_frame(&bgra_frame)?),
         width: bgra_frame.width(),
         height: bgra_frame.height(),
         timestamp: duration_from_time_base(decoded.timestamp().unwrap_or_default(), time_base),
@@ -1085,9 +1241,13 @@ fn try_create_decoder(
 
 impl ReaderMediaSource {
     fn stage_to_path(&self) -> io::Result<PathBuf> {
-        if let Some(path) = self.staged_path.lock().clone() {
-            return Ok(path);
+        let mut staged_path = self.staged_path.lock();
+        if let Some(path) = staged_path.as_ref()
+            && is_regular_file(path)
+        {
+            return Ok(path.clone());
         }
+        *staged_path = None;
 
         let path = staged_media_dir().join(format!(
             "reader-{:016x}-{}",
@@ -1099,7 +1259,7 @@ impl ReaderMediaSource {
             io::copy(&mut reader, file)?;
             Ok(())
         })?;
-        *self.staged_path.lock() = Some(path.clone());
+        *staged_path = Some(path.clone());
         Ok(path)
     }
 }
@@ -1117,7 +1277,18 @@ impl ResolvedMediaInput {
 }
 
 fn stage_bytes(bytes: &Arc<[u8]>) -> Result<PathBuf, MediaDecodeError> {
-    let path = staged_media_dir().join(format!("bytes-{:016x}", hash_value(bytes)));
+    let directory = staged_media_dir();
+    let base_name = format!("bytes-{:016x}-{}", hash_value(bytes), bytes.len());
+    let mut path = directory.join(&base_name);
+    if staged_file_matches(&path, bytes).map_err(MediaDecodeError::from_io)? {
+        return Ok(path);
+    }
+    if path.exists() {
+        path = directory.join(format!(
+            "{base_name}-{}",
+            STAGED_READER_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+    }
     write_path_atomically(&path, |file| {
         file.write_all(bytes.as_ref())?;
         Ok(())
@@ -1135,11 +1306,36 @@ fn write_path_atomically(
     populate: impl FnOnce(&mut File) -> io::Result<()>,
 ) -> io::Result<()> {
     if path.exists() {
-        return Ok(());
+        return if is_regular_file(path) {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "staged media path is not a regular file: {}",
+                    path.display()
+                ),
+            ))
+        };
     }
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
+        let metadata = fs::symlink_metadata(parent)?;
+        if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "staged media directory is not a real directory: {}",
+                    parent.display()
+                ),
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+        }
     }
 
     let temporary_path = path.with_extension(format!(
@@ -1156,6 +1352,7 @@ fn write_path_atomically(
         let _ = fs::remove_file(&temporary_path);
         return Err(error);
     }
+    drop(file);
 
     match fs::rename(&temporary_path, path) {
         Ok(()) => Ok(()),
@@ -1168,6 +1365,37 @@ fn write_path_atomically(
             Err(error)
         }
     }
+}
+
+fn is_regular_file(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| metadata.file_type().is_file())
+        .unwrap_or(false)
+}
+
+fn staged_file_matches(path: &Path, expected: &[u8]) -> io::Result<bool> {
+    if !is_regular_file(path) {
+        return Ok(false);
+    }
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let expected_len = u64::try_from(expected.len())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "staged media is too large"))?;
+    if file.metadata()?.len() != expected_len {
+        return Ok(false);
+    }
+
+    let mut buffer = [0u8; 8 * 1024];
+    for expected_chunk in expected.chunks(buffer.len()) {
+        file.read_exact(&mut buffer[..expected_chunk.len()])?;
+        if buffer[..expected_chunk.len()] != expected_chunk[..] {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn hash_value(value: &impl Hash) -> u64 {
@@ -1187,20 +1415,74 @@ fn ffmpeg_decode_error(error: ffmpeg::Error) -> MediaDecodeError {
 }
 
 fn duration_from_time_base(timestamp: i64, time_base: ffmpeg::Rational) -> Duration {
-    if timestamp <= 0 {
+    if timestamp <= 0 || time_base.0 <= 0 || time_base.1 <= 0 {
         return Duration::ZERO;
     }
 
-    Duration::from_secs_f64((timestamp as f64) * f64::from(time_base))
+    let seconds = (timestamp as f64) * f64::from(time_base);
+    duration_from_seconds_saturating(seconds)
 }
 
-fn copy_bgra_frame(frame: &ffmpeg::util::frame::video::Video) -> Box<[u8]> {
-    let width = frame.width() as usize;
-    let height = frame.height() as usize;
-    let row_len = width * 4;
+fn duration_to_time_base(duration: Duration, time_base: ffmpeg::Rational) -> i64 {
+    if time_base.0 <= 0 || time_base.1 <= 0 {
+        return 0;
+    }
+    let seconds = duration.as_secs_f64();
+    let units = seconds / f64::from(time_base);
+    if !units.is_finite() || units <= 0.0 {
+        return 0;
+    }
+
+    units.round().min(i64::MAX as f64) as i64
+}
+
+fn duration_from_seconds_saturating(seconds: f64) -> Duration {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return if seconds.is_sign_positive() && seconds.is_infinite() {
+            Duration::MAX
+        } else {
+            Duration::ZERO
+        };
+    }
+    Duration::try_from_secs_f64(seconds).unwrap_or(Duration::MAX)
+}
+
+fn copy_bgra_frame(
+    frame: &ffmpeg::util::frame::video::Video,
+) -> Result<Box<[u8]>, MediaDecodeError> {
+    let width = usize::try_from(frame.width())
+        .map_err(|_| MediaDecodeError::Decode("video frame width is too large".into()))?;
+    let height = usize::try_from(frame.height())
+        .map_err(|_| MediaDecodeError::Decode("video frame height is too large".into()))?;
+    let row_len = width
+        .checked_mul(4)
+        .ok_or_else(|| MediaDecodeError::Decode("video row size overflowed".into()))?;
+    let byte_len = row_len
+        .checked_mul(height)
+        .ok_or_else(|| MediaDecodeError::Decode("video frame size overflowed".into()))?;
     let stride = frame.stride(0);
     let source = frame.data(0);
-    let mut bytes = vec![0u8; row_len * height];
+    if stride < row_len {
+        return Err(MediaDecodeError::Decode(format!(
+            "video frame stride {stride} is shorter than row size {row_len}"
+        )));
+    }
+    let required_source_len = stride
+        .checked_mul(height.saturating_sub(1))
+        .and_then(|offset| offset.checked_add(row_len))
+        .unwrap_or(usize::MAX);
+    if source.len() < required_source_len {
+        return Err(MediaDecodeError::Decode(format!(
+            "video frame data is truncated: {} bytes, expected at least {required_source_len}",
+            source.len()
+        )));
+    }
+
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(byte_len)
+        .map_err(|error| MediaDecodeError::Decode(format!("video allocation failed: {error}")))?;
+    bytes.resize(byte_len, 0);
 
     for row in 0..height {
         let source_offset = row * stride;
@@ -1209,16 +1491,19 @@ fn copy_bgra_frame(frame: &ffmpeg::util::frame::video::Video) -> Box<[u8]> {
             .copy_from_slice(&source[source_offset..source_offset + row_len]);
     }
 
-    bytes.into_boxed_slice()
+    Ok(bytes.into_boxed_slice())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        AudioHandle, MAX_DECODED_VIDEO_BYTES, MAX_DECODED_VIDEO_FRAMES, MediaDecodeError,
-        MediaDecoder, MediaSource, PlaybackState, VideoFrame, push_decoded_video_frame,
+        AudioHandle, MAX_DECODED_AUDIO_BYTES, MAX_DECODED_VIDEO_BYTES, MAX_DECODED_VIDEO_FRAMES,
+        MediaDecodeError, MediaDecoder, MediaSource, PlaybackState, ResolvedMediaInput, VideoFrame,
+        duration_from_time_base, duration_to_time_base, ensure_audio_sample_capacity,
+        push_decoded_video_frame, scale_duration,
     };
-    use std::{io::Cursor, sync::Arc, time::Duration};
+    use ffmpeg_next as ffmpeg;
+    use std::{fs, io::Cursor, sync::Arc, time::Duration};
 
     #[test]
     fn duration_probe_works_for_memory_backed_wav() {
@@ -1237,6 +1522,33 @@ mod tests {
 
         assert_eq!(handle.state(), PlaybackState::Stopped);
         assert_eq!(handle.position(), Duration::from_millis(250));
+    }
+
+    #[test]
+    fn speed_updates_without_starting_playback() {
+        let handle = AudioHandle::new(MediaSource::bytes(silent_wav(8_000, 8_000)));
+
+        handle.seek(Duration::from_millis(250)).unwrap();
+        handle.set_speed(1.75);
+
+        assert_eq!(handle.speed(), 1.75);
+        assert_eq!(handle.position(), Duration::from_millis(250));
+        assert_eq!(handle.state(), PlaybackState::Stopped);
+
+        handle.set_speed(0.0);
+
+        assert_eq!(handle.speed(), 1.0);
+    }
+
+    #[test]
+    fn non_finite_controls_are_sanitized() {
+        let handle = AudioHandle::new(MediaSource::bytes(silent_wav(8_000, 8_000)));
+
+        handle.set_volume(f32::NAN);
+        handle.set_speed(f32::INFINITY);
+
+        assert_eq!(handle.volume(), 1.0);
+        assert_eq!(handle.speed(), 1.0);
     }
 
     #[test]
@@ -1260,6 +1572,38 @@ mod tests {
 
         assert_eq!(handle.position(), Duration::ZERO);
         assert_eq!(handle.state(), PlaybackState::Stopped);
+    }
+
+    #[test]
+    fn duration_time_base_conversion_round_trips() {
+        let time_base = ffmpeg::Rational(1, 1_000);
+        let duration = Duration::from_millis(1_234);
+        let timestamp = duration_to_time_base(duration, time_base);
+
+        assert_eq!(timestamp, 1_234);
+        assert_eq!(duration_from_time_base(timestamp, time_base), duration);
+        assert_eq!(duration_to_time_base(Duration::ZERO, time_base), 0);
+    }
+
+    #[test]
+    fn invalid_or_extreme_duration_conversions_do_not_panic() {
+        assert_eq!(
+            duration_from_time_base(1, ffmpeg::Rational(1, 0)),
+            Duration::ZERO
+        );
+        assert_eq!(
+            duration_to_time_base(Duration::MAX, ffmpeg::Rational(0, 1)),
+            0
+        );
+        assert_eq!(scale_duration(Duration::MAX, f32::MAX), Duration::MAX);
+    }
+
+    #[test]
+    fn decoded_audio_cap_rejects_overflow_without_allocating() {
+        let max_samples = MAX_DECODED_AUDIO_BYTES / std::mem::size_of::<f32>();
+        assert!(ensure_audio_sample_capacity(max_samples, 0).is_ok());
+        assert!(ensure_audio_sample_capacity(max_samples, 1).is_err());
+        assert!(ensure_audio_sample_capacity(usize::MAX, 1).is_err());
     }
 
     #[test]
@@ -1291,6 +1635,29 @@ mod tests {
             decoder.decode_video_frames().unwrap_err(),
             MediaDecodeError::Decode(_) | MediaDecodeError::NoVideoStream
         ));
+    }
+
+    #[test]
+    fn reader_source_restages_when_cached_file_disappears() {
+        let payload = Arc::<[u8]>::from([1, 2, 3, 4]);
+        let source = MediaSource::reader(format!("reader-restage-{}", std::process::id()), {
+            let payload = payload.clone();
+            move || Ok(Cursor::new(payload.clone()))
+        });
+
+        let first = match source.resolve_ffmpeg_input().unwrap() {
+            ResolvedMediaInput::Path(path) => path,
+            ResolvedMediaInput::Url(_) => unreachable!(),
+        };
+        fs::remove_file(&first).unwrap();
+        let second = match source.resolve_ffmpeg_input().unwrap() {
+            ResolvedMediaInput::Path(path) => path,
+            ResolvedMediaInput::Url(_) => unreachable!(),
+        };
+
+        assert_ne!(first, second);
+        assert_eq!(fs::read(&second).unwrap(), payload.as_ref());
+        let _ = fs::remove_file(second);
     }
 
     #[test]

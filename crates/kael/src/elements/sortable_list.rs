@@ -41,6 +41,83 @@ pub fn reorder_target(
     (target_index != source_index).then_some((source_index, target_index))
 }
 
+/// Content-safe reorder plan for a sortable-list drop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SortableReorderPlan {
+    source_index: usize,
+    insertion_index: usize,
+    item_count: usize,
+    target: Option<(usize, usize)>,
+}
+
+impl SortableReorderPlan {
+    /// Source item index supplied by the drag payload.
+    pub fn source_index(&self) -> usize {
+        self.source_index
+    }
+
+    /// Insertion slot supplied by the drop target.
+    pub fn insertion_index(&self) -> usize {
+        self.insertion_index
+    }
+
+    /// Number of items in the list at planning time.
+    pub fn item_count(&self) -> usize {
+        self.item_count
+    }
+
+    /// Final `(from, to)` move, or `None` for invalid/no-op drops.
+    pub fn target(&self) -> Option<(usize, usize)> {
+        self.target
+    }
+
+    /// Returns true when the drop results in a valid move.
+    pub fn has_move(&self) -> bool {
+        self.target.is_some()
+    }
+
+    /// Returns true when the source or insertion slot is outside the list.
+    pub fn is_out_of_range(&self) -> bool {
+        self.source_index >= self.item_count || self.insertion_index > self.item_count
+    }
+
+    /// Returns true when the drop is valid but would leave the item in place.
+    pub fn is_noop(&self) -> bool {
+        !self.is_out_of_range() && self.target.is_none()
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        let target = self
+            .target
+            .map_or_else(|| "none".to_string(), |(_, to)| to.to_string());
+        format!(
+            "sortable_reorder_plan(source_index={}, insertion_index={}, item_count={}, has_move={}, out_of_range={}, noop={}, target_index={})",
+            self.source_index,
+            self.insertion_index,
+            self.item_count,
+            self.has_move(),
+            self.is_out_of_range(),
+            self.is_noop(),
+            target
+        )
+    }
+}
+
+/// Build a content-safe reorder plan from a source item and insertion slot.
+pub fn sortable_reorder_plan(
+    source_index: usize,
+    insertion_index: usize,
+    item_count: usize,
+) -> SortableReorderPlan {
+    SortableReorderPlan {
+        source_index,
+        insertion_index,
+        item_count,
+        target: reorder_target(source_index, insertion_index, item_count),
+    }
+}
+
 /// Moves the item at `from` to `to` within `items`, clamping `to` into range.
 ///
 /// Returns whether the vector changed. Both core's delegate-based list and
@@ -67,6 +144,18 @@ pub fn auto_scroll_distance(position: Point<Pixels>, bounds: Bounds<Pixels>) -> 
         px(AUTO_SCROLL_STEP_PX)
     } else {
         Pixels::ZERO
+    }
+}
+
+/// Coarse auto-scroll class for a drag position inside list bounds.
+pub fn sortable_auto_scroll_class(position: Point<Pixels>, bounds: Bounds<Pixels>) -> &'static str {
+    let distance = auto_scroll_distance(position, bounds);
+    if distance < Pixels::ZERO {
+        "toward_start"
+    } else if distance > Pixels::ZERO {
+        "toward_end"
+    } else {
+        "none"
     }
 }
 
@@ -600,7 +689,8 @@ where
 mod tests {
     use super::{
         AUTO_SCROLL_STEP_PX, SortableDelegate, SortableDragPayload, SortableListElementState,
-        apply_reorder, auto_scroll_distance, reorder_target,
+        apply_reorder, auto_scroll_distance, reorder_target, sortable_auto_scroll_class,
+        sortable_reorder_plan,
     };
     use crate::{
         AnyElement, App, Bounds, IntoElement, ListAlignment, Pixels, Window, div, point, px,
@@ -633,6 +723,38 @@ mod tests {
     }
 
     #[test]
+    fn sortable_reorder_plan_summary_is_content_safe() {
+        let plan = sortable_reorder_plan(0, 3, 4);
+
+        assert_eq!(plan.source_index(), 0);
+        assert_eq!(plan.insertion_index(), 3);
+        assert_eq!(plan.item_count(), 4);
+        assert_eq!(plan.target(), Some((0, 2)));
+        assert!(plan.has_move());
+        assert!(!plan.is_out_of_range());
+        assert!(!plan.is_noop());
+
+        let summary = plan.to_text();
+        assert!(summary.contains("source_index=0"));
+        assert!(summary.contains("insertion_index=3"));
+        assert!(summary.contains("item_count=4"));
+        assert!(summary.contains("has_move=true"));
+        assert!(summary.contains("out_of_range=false"));
+        assert!(summary.contains("noop=false"));
+        assert!(summary.contains("target_index=2"));
+
+        let noop = sortable_reorder_plan(1, 2, 4);
+        assert_eq!(noop.target(), None);
+        assert!(noop.is_noop());
+        assert!(noop.to_text().contains("noop=true"));
+
+        let invalid = sortable_reorder_plan(9, 0, 4);
+        assert_eq!(invalid.target(), None);
+        assert!(invalid.is_out_of_range());
+        assert!(invalid.to_text().contains("out_of_range=true"));
+    }
+
+    #[test]
     fn auto_scroll_distance_triggers_only_near_edges() {
         let bounds = Bounds::from_corners(point(px(0.0), px(0.0)), point(px(100.0), px(300.0)));
         assert_eq!(
@@ -646,6 +768,18 @@ mod tests {
         assert_eq!(
             auto_scroll_distance(point(px(50.0), px(150.0)), bounds),
             Pixels::ZERO
+        );
+        assert_eq!(
+            sortable_auto_scroll_class(point(px(50.0), px(10.0)), bounds),
+            "toward_start"
+        );
+        assert_eq!(
+            sortable_auto_scroll_class(point(px(50.0), px(290.0)), bounds),
+            "toward_end"
+        );
+        assert_eq!(
+            sortable_auto_scroll_class(point(px(50.0), px(150.0)), bounds),
+            "none"
         );
     }
 

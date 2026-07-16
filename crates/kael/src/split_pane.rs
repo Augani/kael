@@ -1,5 +1,11 @@
 use anyhow::{Result, anyhow};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use std::collections::HashSet;
+
+const MAX_TABS_PER_PANE: usize = 1_024;
+const MAX_SPLIT_PANES: usize = 4_096;
+const MAX_SPLIT_DEPTH: usize = 256;
+const MAX_TAB_LABEL_BYTES: usize = 1_024;
 
 /// Direction of a split within the pane tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,9 +56,24 @@ impl Pane {
 
     /// Add a tab to this pane and make it the active tab.
     pub fn add_tab(&mut self, tab: Tab) {
+        let _ = self.add_tab_checked(tab);
+    }
+
+    /// Add a validated, uniquely identified tab and make it active.
+    pub fn add_tab_checked(&mut self, tab: Tab) -> Result<()> {
+        validate_tab(&tab)?;
+        anyhow::ensure!(
+            self.tabs.len() < MAX_TABS_PER_PANE,
+            "pane cannot exceed {MAX_TABS_PER_PANE} tabs"
+        );
+        anyhow::ensure!(
+            !self.tabs.iter().any(|existing| existing.id == tab.id),
+            "tab identifier is already present in pane"
+        );
         let tab_id = tab.id;
         self.tabs.push(tab);
         self.active_tab = Some(tab_id);
+        Ok(())
     }
 
     /// Close and remove a tab by its identifier, returning it if found.
@@ -61,6 +82,9 @@ impl Pane {
     /// one if it was the first tab).
     pub fn close_tab(&mut self, tab_id: TabId) -> Option<Tab> {
         let position = self.tabs.iter().position(|t| t.id == tab_id)?;
+        if !self.tabs[position].closable {
+            return None;
+        }
         let removed = self.tabs.remove(position);
 
         if self.active_tab == Some(tab_id) {
@@ -97,6 +121,42 @@ impl Pane {
     pub fn tabs(&self) -> &[Tab] {
         &self.tabs
     }
+}
+
+fn validate_tab(tab: &Tab) -> Result<()> {
+    anyhow::ensure!(tab.id.0 != 0, "tab identifier cannot be zero");
+    anyhow::ensure!(!tab.label.trim().is_empty(), "tab label cannot be empty");
+    anyhow::ensure!(
+        tab.label.len() <= MAX_TAB_LABEL_BYTES,
+        "tab label cannot exceed {MAX_TAB_LABEL_BYTES} bytes"
+    );
+    anyhow::ensure!(
+        !tab.label.chars().any(char::is_control),
+        "tab label cannot contain control characters"
+    );
+    Ok(())
+}
+
+fn validate_pane(pane: &Pane) -> Result<()> {
+    anyhow::ensure!(pane.id.0 != 0, "pane identifier cannot be zero");
+    anyhow::ensure!(
+        pane.tabs.len() <= MAX_TABS_PER_PANE,
+        "pane cannot exceed {MAX_TABS_PER_PANE} tabs"
+    );
+    let mut tab_ids = HashSet::new();
+    for tab in &pane.tabs {
+        validate_tab(tab)?;
+        anyhow::ensure!(
+            tab_ids.insert(tab.id),
+            "pane contains duplicate tab identifiers"
+        );
+    }
+    anyhow::ensure!(
+        pane.active_tab
+            .is_none_or(|active| tab_ids.contains(&active)),
+        "active tab does not exist in pane"
+    );
+    Ok(())
 }
 
 /// A node in the split tree — either a leaf pane or an interior split.
@@ -179,10 +239,8 @@ impl SplitNode {
             SplitNode::Leaf { .. } => Err(anyhow!("pane not found")),
             SplitNode::Split { children, .. } => {
                 for child in children.iter_mut() {
-                    if child
-                        .split_at(target_id, direction, new_pane.clone())
-                        .is_ok()
-                    {
+                    if child.find_pane(target_id).is_some() {
+                        child.split_at(target_id, direction, new_pane)?;
                         return Ok(());
                     }
                 }
@@ -217,17 +275,23 @@ impl SplitNode {
 
                 if let Some(index) = found_index {
                     children.remove(index);
-                    ratios.remove(index);
+                    if index < ratios.len() {
+                        ratios.remove(index);
+                    }
 
                     if children.len() == 1 {
                         let remaining = children.remove(0);
                         *self = remaining;
                     } else {
-                        let total: f32 = ratios.iter().sum();
-                        if total > 0.0 {
+                        let total = ratios.iter().map(|ratio| f64::from(*ratio)).sum::<f64>();
+                        if total.is_finite() && total > 0.0 {
                             for ratio in ratios.iter_mut() {
-                                *ratio /= total;
+                                *ratio = (f64::from(*ratio) / total) as f32;
                             }
+                        } else {
+                            let equal = 1.0 / children.len() as f32;
+                            ratios.clear();
+                            ratios.resize(children.len(), equal);
                         }
                     }
                     Ok(false)
@@ -251,9 +315,28 @@ impl SplitNode {
 }
 
 /// Manages a tree of split panes for IDE-style layouts.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SplitTree {
     root: SplitNode,
+}
+
+impl<'de> Deserialize<'de> for SplitTree {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct SerializedSplitTree {
+            root: SplitNode,
+        }
+
+        let serialized = SerializedSplitTree::deserialize(deserializer)?;
+        let tree = Self {
+            root: serialized.root,
+        };
+        tree.validate().map_err(D::Error::custom)?;
+        Ok(tree)
+    }
 }
 
 impl SplitTree {
@@ -264,6 +347,12 @@ impl SplitTree {
         }
     }
 
+    /// Create a split tree after validating its root pane.
+    pub fn new_checked(root_pane: Pane) -> Result<Self> {
+        validate_pane(&root_pane)?;
+        Ok(Self::new(root_pane))
+    }
+
     /// Split an existing pane in the given direction, placing a new pane alongside it.
     pub fn split(
         &mut self,
@@ -271,6 +360,22 @@ impl SplitTree {
         direction: SplitDirection,
         new_pane: Pane,
     ) -> Result<()> {
+        self.validate()?;
+        validate_pane(&new_pane)?;
+        anyhow::ensure!(
+            self.find_pane(new_pane.id).is_none(),
+            "pane identifier is already present in split tree"
+        );
+        let (pane_count, target_depth) = self.layout_stats(Some(pane_id))?;
+        anyhow::ensure!(
+            pane_count < MAX_SPLIT_PANES,
+            "split tree cannot exceed {MAX_SPLIT_PANES} panes"
+        );
+        let target_depth = target_depth.ok_or_else(|| anyhow!("pane not found"))?;
+        anyhow::ensure!(
+            target_depth < MAX_SPLIT_DEPTH,
+            "split tree cannot exceed depth {MAX_SPLIT_DEPTH}"
+        );
         self.root.split_at(pane_id, direction, new_pane)
     }
 
@@ -289,6 +394,7 @@ impl SplitTree {
     /// If the parent split has only one child remaining after removal, the
     /// parent collapses to that single child.
     pub fn remove_pane(&mut self, pane_id: PaneId) -> Result<()> {
+        self.validate()?;
         match self.root.remove_pane(pane_id) {
             Ok(true) => Err(anyhow!("cannot remove the last pane in the tree")),
             Ok(false) => Ok(()),
@@ -301,6 +407,61 @@ impl SplitTree {
         let mut panes = Vec::new();
         self.root.collect_panes(&mut panes);
         panes
+    }
+
+    /// Validate pane/tab identifiers, ratios, tree shape, count, and depth.
+    pub fn validate(&self) -> Result<()> {
+        self.layout_stats(None).map(|_| ())
+    }
+
+    fn layout_stats(&self, target: Option<PaneId>) -> Result<(usize, Option<usize>)> {
+        let mut pane_ids = HashSet::new();
+        let mut pane_count = 0;
+        let mut target_depth = None;
+        let mut pending = vec![(&self.root, 1_usize)];
+        while let Some((node, depth)) = pending.pop() {
+            anyhow::ensure!(
+                depth <= MAX_SPLIT_DEPTH,
+                "split tree cannot exceed depth {MAX_SPLIT_DEPTH}"
+            );
+            match node {
+                SplitNode::Leaf { pane } => {
+                    validate_pane(pane)?;
+                    anyhow::ensure!(
+                        pane_ids.insert(pane.id),
+                        "split tree contains duplicate pane identifiers"
+                    );
+                    pane_count += 1;
+                    anyhow::ensure!(
+                        pane_count <= MAX_SPLIT_PANES,
+                        "split tree cannot exceed {MAX_SPLIT_PANES} panes"
+                    );
+                    if target == Some(pane.id) {
+                        target_depth = Some(depth);
+                    }
+                }
+                SplitNode::Split {
+                    children, ratios, ..
+                } => {
+                    anyhow::ensure!(
+                        children.len() >= 2,
+                        "split node must contain at least two children"
+                    );
+                    anyhow::ensure!(
+                        children.len() == ratios.len(),
+                        "split ratios must match child count"
+                    );
+                    anyhow::ensure!(
+                        ratios.iter().all(|ratio| ratio.is_finite() && *ratio > 0.0),
+                        "split ratios must be finite and positive"
+                    );
+                    let total = ratios.iter().map(|ratio| f64::from(*ratio)).sum::<f64>();
+                    anyhow::ensure!((total - 1.0).abs() <= 0.01, "split ratios must sum to one");
+                    pending.extend(children.iter().rev().map(|child| (child, depth + 1)));
+                }
+            }
+        }
+        Ok((pane_count, target_depth))
     }
 }
 
@@ -495,5 +656,76 @@ mod tests {
 
         assert_eq!(restored.all_panes().len(), 2);
         assert_eq!(restored.find_pane(PaneId(1)).unwrap().tabs().len(), 1);
+    }
+
+    #[test]
+    fn non_closable_tabs_are_preserved() {
+        let mut pane = Pane::new(PaneId(1));
+        pane.add_tab(Tab {
+            id: TabId(1),
+            label: "Pinned".into(),
+            closable: false,
+        });
+
+        assert!(pane.close_tab(TabId(1)).is_none());
+        assert_eq!(pane.tabs().len(), 1);
+        assert_eq!(pane.active_tab().map(|tab| tab.id), Some(TabId(1)));
+    }
+
+    #[test]
+    fn checked_tab_and_pane_insertion_rejects_invalid_identity() {
+        let mut pane = Pane::new(PaneId(1));
+        assert!(
+            pane.add_tab_checked(Tab {
+                id: TabId(0),
+                label: "Invalid".into(),
+                closable: true,
+            })
+            .is_err()
+        );
+        pane.add_tab_checked(make_tab(1, "One")).unwrap();
+        assert!(pane.add_tab_checked(make_tab(1, "Duplicate")).is_err());
+        assert_eq!(pane.tabs().len(), 1);
+
+        assert!(SplitTree::new_checked(Pane::new(PaneId(0))).is_err());
+        let mut tree = SplitTree::new_checked(Pane::new(PaneId(1))).unwrap();
+        assert!(
+            tree.split(PaneId(1), SplitDirection::Horizontal, Pane::new(PaneId(1)),)
+                .is_err()
+        );
+        assert_eq!(tree.all_panes().len(), 1);
+    }
+
+    #[test]
+    fn persisted_split_layouts_validate_shape_ratios_and_active_tabs() {
+        let ratio_mismatch = r#"{
+            "root": {
+                "Split": {
+                    "direction": "Horizontal",
+                    "children": [
+                        {"Leaf":{"pane":{"id":1,"tabs":[],"active_tab":null}}},
+                        {"Leaf":{"pane":{"id":2,"tabs":[],"active_tab":null}}}
+                    ],
+                    "ratios": [1.0]
+                }
+            }
+        }"#;
+        assert!(serde_json::from_str::<SplitTree>(ratio_mismatch).is_err());
+
+        let zero_ratio = ratio_mismatch.replace("[1.0]", "[0.0, 1.0]");
+        assert!(serde_json::from_str::<SplitTree>(&zero_ratio).is_err());
+
+        let missing_active = r#"{
+            "root": {
+                "Leaf": {
+                    "pane": {
+                        "id": 1,
+                        "tabs": [{"id":1,"label":"One","closable":true}],
+                        "active_tab": 2
+                    }
+                }
+            }
+        }"#;
+        assert!(serde_json::from_str::<SplitTree>(missing_active).is_err());
     }
 }

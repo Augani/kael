@@ -40,11 +40,12 @@ impl CacheStats {
     ///
     /// Returns `0.0` when no lookups have been recorded.
     pub fn hit_rate(&self) -> f64 {
-        let total = self.memory_hits + self.memory_misses + self.disk_hits + self.disk_misses;
+        let hits = u128::from(self.memory_hits) + u128::from(self.disk_hits);
+        let total = hits + u128::from(self.memory_misses) + u128::from(self.disk_misses);
         if total == 0 {
             return 0.0;
         }
-        (self.memory_hits + self.disk_hits) as f64 / total as f64
+        hits as f64 / total as f64
     }
 }
 
@@ -76,7 +77,7 @@ impl CacheManager {
     ///
     /// On a disk hit the value is promoted into the memory cache.
     pub fn get<V: DeserializeOwned>(&mut self, namespace: &str, key: &str) -> Result<Option<V>> {
-        let mem_key = format!("{namespace}:{key}");
+        let mem_key = memory_key(namespace, key);
 
         if let Some(bytes) = self.memory.get(&mem_key) {
             let value: V = serde_json::from_slice(bytes.as_ref())?;
@@ -84,15 +85,14 @@ impl CacheManager {
         }
 
         if let Some(bytes) = self.disk.get(namespace, key)? {
-            self.disk_hits.fetch_add(1, Ordering::Relaxed);
+            increment_saturating(&self.disk_hits);
             let bytes = Arc::<[u8]>::from(bytes);
-            self.memory
-                .insert(mem_key, bytes.clone(), CachePriority::Normal);
             let value: V = serde_json::from_slice(bytes.as_ref())?;
+            self.memory.insert(mem_key, bytes, CachePriority::Normal);
             return Ok(Some(value));
         }
 
-        self.disk_misses.fetch_add(1, Ordering::Relaxed);
+        increment_saturating(&self.disk_misses);
         Ok(None)
     }
 
@@ -105,25 +105,26 @@ impl CacheManager {
         priority: CachePriority,
     ) -> Result<()> {
         let bytes = Arc::<[u8]>::from(serde_json::to_vec(value)?);
-        let mem_key = format!("{namespace}:{key}");
+        let mem_key = memory_key(namespace, key);
 
-        self.memory.insert(mem_key, bytes.clone(), priority);
         self.disk.put(namespace, key, bytes.as_ref())?;
+        self.memory.insert(mem_key, bytes, priority);
         Ok(())
     }
 
     /// Removes a single entry from both tiers.
     pub fn invalidate(&mut self, namespace: &str, key: &str) -> Result<()> {
-        let mem_key = format!("{namespace}:{key}");
+        let mem_key = memory_key(namespace, key);
         self.memory.remove(&mem_key);
         self.disk.remove(namespace, key)?;
         Ok(())
     }
 
-    /// Removes all entries for a namespace from disk and clears the memory cache.
+    /// Removes all entries for a namespace from both tiers.
     pub fn invalidate_namespace(&mut self, namespace: &str) -> Result<()> {
         self.disk.clear_namespace(namespace)?;
-        self.memory.clear();
+        let prefix = memory_namespace_prefix(namespace);
+        self.memory.remove_matching(|key| key.starts_with(&prefix));
         Ok(())
     }
 
@@ -139,6 +140,20 @@ impl CacheManager {
             disk_bytes,
         }
     }
+}
+
+fn memory_namespace_prefix(namespace: &str) -> String {
+    format!("{}:{namespace}", namespace.len())
+}
+
+fn memory_key(namespace: &str, key: &str) -> String {
+    format!("{}{key}", memory_namespace_prefix(namespace))
+}
+
+fn increment_saturating(counter: &AtomicU64) {
+    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+        Some(value.saturating_add(1))
+    });
 }
 
 #[cfg(test)]
@@ -268,6 +283,19 @@ mod tests {
     }
 
     #[test]
+    fn hit_rate_handles_counter_saturation() {
+        let stats = CacheStats {
+            memory_hits: u64::MAX,
+            memory_misses: u64::MAX,
+            disk_hits: u64::MAX,
+            disk_misses: u64::MAX,
+            memory_entries: 0,
+            disk_bytes: 0,
+        };
+        assert!((stats.hit_rate() - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
     fn put_with_priority() {
         let tmp = TempDir::new().unwrap();
         let mut mgr = CacheManager::new(test_config(&tmp)).unwrap();
@@ -307,5 +335,38 @@ mod tests {
             .unwrap();
         let restored: Option<Widget> = mgr.get("widgets", "gear").unwrap();
         assert_eq!(restored, Some(widget));
+    }
+
+    #[test]
+    fn memory_keys_do_not_collide_and_namespace_invalidation_is_scoped() {
+        let tmp = TempDir::new().unwrap();
+        let mut manager = CacheManager::new(test_config(&tmp)).unwrap();
+        manager.put("a:b", "c", &1, CachePriority::Normal).unwrap();
+        manager.put("a", "b:c", &2, CachePriority::Normal).unwrap();
+        manager
+            .put("other", "kept", &3, CachePriority::Normal)
+            .unwrap();
+
+        assert_eq!(manager.get::<i32>("a:b", "c").unwrap(), Some(1));
+        assert_eq!(manager.get::<i32>("a", "b:c").unwrap(), Some(2));
+        manager.invalidate_namespace("a:b").unwrap();
+        assert_eq!(manager.get::<i32>("a:b", "c").unwrap(), None);
+        assert_eq!(manager.get::<i32>("a", "b:c").unwrap(), Some(2));
+        assert_eq!(manager.get::<i32>("other", "kept").unwrap(), Some(3));
+    }
+
+    #[test]
+    fn failed_disk_put_does_not_leave_a_memory_only_value() {
+        let tmp = TempDir::new().unwrap();
+        let mut config = test_config(&tmp);
+        config.disk_max_bytes = 1;
+        let mut manager = CacheManager::new(config).unwrap();
+
+        assert!(
+            manager
+                .put("ns", "too-big", &"value", CachePriority::Normal)
+                .is_err()
+        );
+        assert_eq!(manager.memory.len(), 0);
     }
 }

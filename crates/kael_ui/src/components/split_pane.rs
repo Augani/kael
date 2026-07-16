@@ -1,10 +1,14 @@
-use crate::theme::Theme;
+use crate::{
+    components::{button::ButtonVariant, icon_button::IconButton},
+    theme::Theme,
+};
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
 const MIN_PANE_SIZE: f32 = 50.0;
-const DIVIDER_SIZE: Pixels = px(4.0);
-const DIVIDER_HIT_AREA: Pixels = px(8.0);
+const DIVIDER_SIZE: Pixels = px(1.0);
+const DIVIDER_HIT_AREA: Pixels = px(12.0);
+const KEYBOARD_RESIZE_STEP: f32 = 0.02;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum SplitDirection {
@@ -62,6 +66,9 @@ impl SplitPaneState {
     }
 
     pub fn set_ratio(&mut self, ratio: f32, cx: &mut Context<Self>) {
+        if !ratio.is_finite() {
+            return;
+        }
         let clamped = self.clamp_ratio(ratio);
         if (self.ratio - clamped).abs() > f32::EPSILON {
             self.ratio = clamped;
@@ -79,24 +86,36 @@ impl SplitPaneState {
     }
 
     pub fn set_min_first(&mut self, min: f32, cx: &mut Context<Self>) {
+        if !min.is_finite() {
+            return;
+        }
         self.min_first = min.max(0.0);
         self.ratio = self.clamp_ratio(self.ratio);
         cx.notify();
     }
 
     pub fn set_max_first(&mut self, max: f32, cx: &mut Context<Self>) {
+        if !max.is_finite() {
+            return;
+        }
         self.max_first = max.max(self.min_first);
         self.ratio = self.clamp_ratio(self.ratio);
         cx.notify();
     }
 
     pub fn set_min_second(&mut self, min: f32, cx: &mut Context<Self>) {
+        if !min.is_finite() {
+            return;
+        }
         self.min_second = min.max(0.0);
         self.ratio = self.clamp_ratio(self.ratio);
         cx.notify();
     }
 
     pub fn set_max_second(&mut self, max: f32, cx: &mut Context<Self>) {
+        if !max.is_finite() {
+            return;
+        }
         self.max_second = max.max(self.min_second);
         self.ratio = self.clamp_ratio(self.ratio);
         cx.notify();
@@ -160,10 +179,10 @@ impl SplitPaneState {
         }
     }
 
-    fn update_from_position(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+    fn update_from_position(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) -> bool {
         let total_size = self.total_size();
         if total_size <= px(0.0) {
-            return;
+            return false;
         }
 
         let relative_pos = match self.direction {
@@ -177,6 +196,9 @@ impl SplitPaneState {
 
         if (self.ratio - old_ratio).abs() > f32::EPSILON {
             cx.emit(SplitPaneEvent::Resized { ratio: self.ratio });
+            true
+        } else {
+            false
         }
     }
 }
@@ -261,7 +283,12 @@ impl Styled for SplitPane {
 
 impl RenderOnce for SplitPane {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = Theme::of(cx);
+        let theme = Theme::of(cx).clone();
+        if let Some(direction) = self.direction {
+            self.state.update(cx, |state, _| {
+                state.direction = direction;
+            });
+        }
         let state = self.state.read(cx);
         let direction = self.direction.unwrap_or(state.direction);
         let ratio = state.ratio;
@@ -283,27 +310,103 @@ impl RenderOnce for SplitPane {
 
         let is_horizontal = direction == SplitDirection::Horizontal;
         let is_dragging = state.is_dragging;
+        let focus_handle = state.focus_handle(cx);
+        let divider_focused = focus_handle.is_focused(window);
+        let entity_id = self.state.entity_id().as_u64();
+        let mut divider_accessibility_state = AccessibilityState::NONE;
+        if divider_focused {
+            divider_accessibility_state |= AccessibilityState::FOCUSED;
+        }
+        let divider_accessibility = AccessibilityAttributes::new(AccessibilityRole::Slider)
+            .label(if is_horizontal {
+                "Resize left and right panes"
+            } else {
+                "Resize top and bottom panes"
+            })
+            .value(AccessibilityValue::Number((ratio * 100.0) as f64))
+            .states(divider_accessibility_state)
+            .actions(vec![
+                AccessibilityAction::Focus,
+                AccessibilityAction::Increment,
+                AccessibilityAction::Decrement,
+            ]);
+        let state_for_keys = self.state.clone();
+        let state_for_increment = self.state.clone();
+        let state_for_decrement = self.state.clone();
+        let on_resize_keys = self.on_resize.clone();
+        let on_resize_increment = self.on_resize.clone();
+        let on_resize_decrement = self.on_resize.clone();
 
         let divider = div()
-            .id("split-pane-divider")
+            .id(("split-pane-divider", entity_id))
+            .track_focus(&focus_handle.tab_index(0).tab_stop(true))
+            .accessibility(divider_accessibility)
             .flex_shrink_0()
-            .bg(theme.tokens.border)
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(kael::transparent_black())
             .when(is_horizontal, |this| {
-                this.w(DIVIDER_SIZE)
-                    .h_full()
-                    .cursor_col_resize()
-                    .px((DIVIDER_HIT_AREA - DIVIDER_SIZE) / 2.0)
+                this.w(DIVIDER_HIT_AREA).h_full().cursor_col_resize()
             })
             .when(!is_horizontal, |this| {
-                this.h(DIVIDER_SIZE)
-                    .w_full()
-                    .cursor_row_resize()
-                    .py((DIVIDER_HIT_AREA - DIVIDER_SIZE) / 2.0)
+                this.h(DIVIDER_HIT_AREA).w_full().cursor_row_resize()
             })
             .when(collapsed_pane.is_none(), |this| {
-                this.hover(|s| s.bg(theme.tokens.accent))
+                this.hover(|s| s.bg(theme.tokens.accent.opacity(0.35)))
             })
-            .when(is_dragging, |this| this.bg(theme.tokens.accent))
+            .when(is_dragging || divider_focused, |this| {
+                this.bg(theme.tokens.accent.opacity(0.45))
+            })
+            .on_accessibility_action(AccessibilityAction::Increment, move |_, window, cx| {
+                state_for_increment.update(cx, |state, cx| {
+                    let old_ratio = state.ratio;
+                    state.set_ratio(old_ratio + KEYBOARD_RESIZE_STEP, cx);
+                    if (state.ratio - old_ratio).abs() > f32::EPSILON {
+                        cx.emit(SplitPaneEvent::Resized { ratio: state.ratio });
+                        if let Some(handler) = on_resize_increment.as_ref() {
+                            handler(state.ratio, window, cx);
+                        }
+                    }
+                });
+            })
+            .on_accessibility_action(AccessibilityAction::Decrement, move |_, window, cx| {
+                state_for_decrement.update(cx, |state, cx| {
+                    let old_ratio = state.ratio;
+                    state.set_ratio(old_ratio - KEYBOARD_RESIZE_STEP, cx);
+                    if (state.ratio - old_ratio).abs() > f32::EPSILON {
+                        cx.emit(SplitPaneEvent::Resized { ratio: state.ratio });
+                        if let Some(handler) = on_resize_decrement.as_ref() {
+                            handler(state.ratio, window, cx);
+                        }
+                    }
+                });
+            })
+            .on_key_down(move |event, window, cx| {
+                if event.keystroke.modifiers.modified() {
+                    return;
+                }
+                let delta = match (is_horizontal, event.keystroke.key.as_str()) {
+                    (true, "left") | (false, "up") => Some(-KEYBOARD_RESIZE_STEP),
+                    (true, "right") | (false, "down") => Some(KEYBOARD_RESIZE_STEP),
+                    _ => None,
+                };
+                let Some(delta) = delta else {
+                    return;
+                };
+                state_for_keys.update(cx, |state, cx| {
+                    let old_ratio = state.ratio;
+                    state.set_ratio(old_ratio + delta, cx);
+                    if (state.ratio - old_ratio).abs() > f32::EPSILON {
+                        cx.emit(SplitPaneEvent::Resized { ratio: state.ratio });
+                        if let Some(handler) = on_resize_keys.as_ref() {
+                            handler(state.ratio, window, cx);
+                        }
+                    }
+                });
+                cx.stop_propagation();
+                window.prevent_default();
+            })
             .when(collapsed_pane.is_none(), |this| {
                 this.on_mouse_down(
                     MouseButton::Left,
@@ -311,22 +414,33 @@ impl RenderOnce for SplitPane {
                         &state_for_drag,
                         move |state, e: &MouseDownEvent, window, cx| {
                             state.is_dragging = true;
-                            state.update_from_position(e.position, cx);
+                            cx.notify();
 
-                            if let Some(ref handler) = on_resize_drag {
-                                handler(state.ratio, window, cx);
+                            if state.update_from_position(e.position, cx) {
+                                if let Some(ref handler) = on_resize_drag {
+                                    handler(state.ratio, window, cx);
+                                }
                             }
                         },
                     ),
                 )
-            });
+            })
+            .child(
+                div()
+                    .rounded_full()
+                    .bg(if is_dragging || divider_focused {
+                        theme.tokens.primary
+                    } else {
+                        theme.tokens.border
+                    })
+                    .when(is_horizontal, |this| this.h_full().w(DIVIDER_SIZE))
+                    .when(!is_horizontal, |this| this.w_full().h(DIVIDER_SIZE)),
+            );
 
         let container_mouse_move = window.listener_for(
             &state_for_move,
             move |state, e: &MouseMoveEvent, window, cx| {
-                if state.is_dragging {
-                    state.update_from_position(e.position, cx);
-
+                if state.is_dragging && state.update_from_position(e.position, cx) {
                     if let Some(ref handler) = on_resize_move {
                         handler(state.ratio, window, cx);
                     }
@@ -335,8 +449,9 @@ impl RenderOnce for SplitPane {
         );
 
         let container_mouse_up =
-            window.listener_for(&state_for_up, move |state, _: &MouseUpEvent, _, _cx| {
+            window.listener_for(&state_for_up, move |state, _: &MouseUpEvent, _, cx| {
                 state.is_dragging = false;
+                cx.notify();
             });
 
         let mut container = div()
@@ -388,62 +503,64 @@ impl RenderOnce for SplitPane {
                 div()
                     .absolute()
                     .when(is_horizontal, |this| {
-                        this.top(px(4.0))
+                        this.top(relative(0.5))
                             .left(relative(ratio))
-                            .ml(-px(8.0))
+                            .mt(-px(27.0))
+                            .ml(-px(13.0))
                             .flex()
                             .flex_col()
                             .gap(px(2.0))
                     })
                     .when(!is_horizontal, |this| {
-                        this.left(px(4.0))
+                        this.left(relative(0.5))
                             .top(relative(ratio))
-                            .mt(-px(8.0))
+                            .ml(-px(27.0))
+                            .mt(-px(13.0))
                             .flex()
                             .flex_row()
                             .gap(px(2.0))
                     })
                     .child(
-                        div()
-                            .id("collapse-first")
-                            .size(px(16.0))
-                            .rounded_full()
-                            .bg(theme.tokens.muted)
-                            .hover(|s| s.bg(theme.tokens.accent))
-                            .cursor_pointer()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_size(px(10.0))
-                            .text_color(theme.tokens.muted_foreground)
-                            .when(is_horizontal, |this| this.child("<"))
-                            .when(!is_horizontal, |this| this.child("^"))
-                            .on_click(move |_, _, cx| {
-                                state_first.update(cx, |state, cx| {
-                                    state.collapse(CollapsiblePane::First, cx);
-                                });
-                            }),
+                        IconButton::new(if is_horizontal {
+                            "chevron-left"
+                        } else {
+                            "chevron-up"
+                        })
+                        .id(("split-collapse-first", entity_id))
+                        .label(if is_horizontal {
+                            "Collapse left pane"
+                        } else {
+                            "Collapse top pane"
+                        })
+                        .variant(ButtonVariant::Outline)
+                        .size(px(26.0))
+                        .icon_size(px(14.0))
+                        .on_click(move |_, _, cx| {
+                            state_first.update(cx, |state, cx| {
+                                state.collapse(CollapsiblePane::First, cx);
+                            });
+                        }),
                     )
                     .child(
-                        div()
-                            .id("collapse-second")
-                            .size(px(16.0))
-                            .rounded_full()
-                            .bg(theme.tokens.muted)
-                            .hover(|s| s.bg(theme.tokens.accent))
-                            .cursor_pointer()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_size(px(10.0))
-                            .text_color(theme.tokens.muted_foreground)
-                            .when(is_horizontal, |this| this.child(">"))
-                            .when(!is_horizontal, |this| this.child("v"))
-                            .on_click(move |_, _, cx| {
-                                state_second.update(cx, |state, cx| {
-                                    state.collapse(CollapsiblePane::Second, cx);
-                                });
-                            }),
+                        IconButton::new(if is_horizontal {
+                            "chevron-right"
+                        } else {
+                            "chevron-down"
+                        })
+                        .id(("split-collapse-second", entity_id))
+                        .label(if is_horizontal {
+                            "Collapse right pane"
+                        } else {
+                            "Collapse bottom pane"
+                        })
+                        .variant(ButtonVariant::Outline)
+                        .size(px(26.0))
+                        .icon_size(px(14.0))
+                        .on_click(move |_, _, cx| {
+                            state_second.update(cx, |state, cx| {
+                                state.collapse(CollapsiblePane::Second, cx);
+                            });
+                        }),
                     ),
             )
         } else if self.show_collapse_buttons && collapsed_pane.is_some() {
@@ -467,39 +584,22 @@ impl RenderOnce for SplitPane {
                         }
                     })
                     .child(
-                        div()
-                            .id("expand-pane")
-                            .size(px(20.0))
-                            .rounded_full()
-                            .bg(theme.tokens.accent)
-                            .hover(|s| s.bg(theme.tokens.primary))
-                            .cursor_pointer()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_size(px(12.0))
-                            .text_color(theme.tokens.accent_foreground)
-                            .when(
-                                is_horizontal && collapsed_pane == Some(CollapsiblePane::First),
-                                |this| this.child(">"),
-                            )
-                            .when(
-                                is_horizontal && collapsed_pane == Some(CollapsiblePane::Second),
-                                |this| this.child("<"),
-                            )
-                            .when(
-                                !is_horizontal && collapsed_pane == Some(CollapsiblePane::First),
-                                |this| this.child("v"),
-                            )
-                            .when(
-                                !is_horizontal && collapsed_pane == Some(CollapsiblePane::Second),
-                                |this| this.child("^"),
-                            )
-                            .on_click(move |_, _, cx| {
-                                state_expand.update(cx, |state, cx| {
-                                    state.expand(cx);
-                                });
-                            }),
+                        IconButton::new(match (is_horizontal, collapsed_pane) {
+                            (true, Some(CollapsiblePane::First)) => "chevron-right",
+                            (true, _) => "chevron-left",
+                            (false, Some(CollapsiblePane::First)) => "chevron-down",
+                            (false, _) => "chevron-up",
+                        })
+                        .id(("split-expand-pane", entity_id))
+                        .label("Expand collapsed pane")
+                        .variant(ButtonVariant::Outline)
+                        .size(px(28.0))
+                        .icon_size(px(16.0))
+                        .on_click(move |_, _, cx| {
+                            state_expand.update(cx, |state, cx| {
+                                state.expand(cx);
+                            });
+                        }),
                     ),
             )
         } else {
@@ -524,5 +624,70 @@ impl RenderOnce for SplitPane {
                 .absolute()
                 .size_full(),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SplitDirection, SplitPane, SplitPaneState};
+    use kael::{
+        div, AppContext, Context, IntoElement, ParentElement, Render, Styled, TestAppContext,
+        Window,
+    };
+
+    struct VerticalHost {
+        state: kael::Entity<SplitPaneState>,
+    }
+
+    impl Render for VerticalHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(
+                SplitPane::vertical(self.state.clone())
+                    .first(div().child("Top"))
+                    .second(div().child("Bottom")),
+            )
+        }
+    }
+
+    #[kael::test]
+    fn ignores_non_finite_constraints_and_ratios(cx: &mut TestAppContext) {
+        let state = cx.new(SplitPaneState::new);
+        state.update(cx, |state, cx| {
+            state.set_ratio(0.7, cx);
+            state.set_ratio(f32::NAN, cx);
+            state.set_min_first(f32::INFINITY, cx);
+            state.set_max_second(f32::NEG_INFINITY, cx);
+        });
+
+        assert_eq!(cx.read(|cx| state.read(cx).ratio()), 0.7);
+    }
+
+    #[kael::test]
+    fn vertical_builder_syncs_drag_axis_and_exposes_adjustment_actions(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let state = cx.new(SplitPaneState::new);
+        let (_host, window) = cx.add_window_view({
+            let state = state.clone();
+            move |_, _| VerticalHost { state }
+        });
+
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(state.read(cx).direction(), SplitDirection::Vertical);
+            let divider = window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| node.role == kael::AccessibilityRole::Slider)
+                .expect("split pane should expose its divider");
+            assert!(divider
+                .actions
+                .contains(&kael::AccessibilityAction::Increment));
+            assert!(divider
+                .actions
+                .contains(&kael::AccessibilityAction::Decrement));
+        });
     }
 }

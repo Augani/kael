@@ -17,39 +17,59 @@ native performance and 120fps rendering through dirty tracking and render-on-dem
 kael = "0.2"
 ```
 
-```rust
-use kael::*;
+```rust,no_run
 use kael::prelude::*;
+use kael::{button, div, Application, Window, WindowOptionsBuilder};
 
-struct Counter { count: i32 }
+struct Counter {
+    count: i32,
+}
 
 impl Render for Counter {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity().clone();
         div()
-            .flex().flex_col().gap_2()
+            .flex()
+            .flex_col()
+            .gap_2()
             .child(format!("Count: {}", self.count))
-            .child(
-                button("inc", "Increment")
-                    .on_click(move |_, window, cx| {
-                        entity.update(cx, |this, cx| {
-                            this.count += 1;
-                            cx.notify();
-                        });
-                    }),
-            )
+            .child(button("inc").label("Increment").on_click(
+                move |_, _window, cx| {
+                    entity.update(cx, |this, cx| {
+                        this.count += 1;
+                        cx.notify();
+                    });
+                },
+            ))
     }
 }
 
 fn main() {
     Application::new().run(|cx| {
-        cx.open_window(WindowOptions::default(), |_, cx| {
+        cx.open_window(WindowOptionsBuilder::new().title("Counter"), |_, cx| {
             cx.new(|_| Counter { count: 0 })
         })
-        .unwrap();
+            .unwrap();
     });
 }
 ```
+
+For applications that need to present startup failures instead of terminating, use the fallible
+constructor:
+
+```rust,no_run
+use kael::Application;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    Application::try_new()?.run(|_cx| {
+        // Initialize application state and windows.
+    });
+    Ok(())
+}
+```
+
+`Application::try_headless()` and `try_background_executor()` provide the same error-reporting
+behavior for services, tests, and command-line processes.
 
 ## What's Included
 

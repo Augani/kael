@@ -700,7 +700,7 @@ impl Styled for InlineEdit {
 }
 
 impl RenderOnce for InlineEdit {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = Theme::of(cx);
         let user_style = self.style;
         let is_editing = self.state.read(cx).is_editing();
@@ -716,16 +716,22 @@ impl RenderOnce for InlineEdit {
         let on_cancel = self.on_cancel.clone();
         let trigger = self.trigger;
         let placeholder = self.placeholder.clone();
+        let is_focused = focus_handle.is_focused(window);
 
         if is_editing {
             div()
                 .id(("inline-edit", state.entity_id()))
+                .accessibility(
+                    AccessibilityAttributes::text_input("Inline edit", state.read(cx).edit_value())
+                        .placeholder(self.placeholder.to_string())
+                        .focused(is_focused),
+                )
                 .key_context("InlineEdit")
                 .track_focus(&focus_handle)
                 .h(px(32.0))
                 .px(px(8.0))
                 .py(px(4.0))
-                .bg(theme.tokens.background)
+                .bg(theme.tokens.card)
                 .border_1()
                 .border_color(theme.tokens.ring)
                 .rounded(theme.tokens.radius_md)
@@ -848,6 +854,14 @@ impl RenderOnce for InlineEdit {
 
             div()
                 .id(("inline-edit-display", state.entity_id()))
+                .accessibility(
+                    AccessibilityAttributes::button(format!("Edit {display_text}"))
+                        .disabled(self.disabled)
+                        .focused(is_focused),
+                )
+                .when(!self.disabled, |this| {
+                    this.track_focus(&focus_handle.tab_index(0).tab_stop(true))
+                })
                 .h(px(32.0))
                 .px(px(8.0))
                 .py(px(4.0))
@@ -859,6 +873,7 @@ impl RenderOnce for InlineEdit {
                 .rounded(theme.tokens.radius_md)
                 .transition(theme.tokens.transition_fast)
                 .when(!self.disabled, |d| {
+                    let state_for_key = state.clone();
                     d.cursor_pointer()
                         .hover(|s| {
                             s.bg(theme.tokens.muted.opacity(0.5))
@@ -885,6 +900,17 @@ impl RenderOnce for InlineEdit {
                                     }
                                 }
                             })
+                        })
+                        .on_key_down(move |event, window, cx| {
+                            if event.keystroke.modifiers.modified()
+                                || !matches!(event.keystroke.key.as_str(), "enter" | "space")
+                            {
+                                return;
+                            }
+                            state_for_key.update(cx, |state, cx| state.start_editing(cx));
+                            window.focus(&state_for_key.read(cx).focus_handle(cx));
+                            window.prevent_default();
+                            cx.stop_propagation();
                         })
                 })
                 .when(self.disabled, |d| d.opacity(0.5))

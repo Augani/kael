@@ -23,6 +23,8 @@ type PanicHook = dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static;
 type BeforeSend = dyn Fn(&mut CrashReport) -> bool + Sync + Send + 'static;
 
 static NEXT_REPORT_ID: AtomicU64 = AtomicU64::new(1);
+const MAX_REPORT_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_APP_ID_BYTES: usize = 255;
 
 /// Information about the host operating system.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,6 +140,7 @@ impl CrashReporter {
     /// Creates a new crash reporter for the given application identifier.
     pub fn new(app_id: impl Into<String>, breadcrumbs: BreadcrumbBuffer) -> Result<Self> {
         let app_id = app_id.into();
+        validate_app_id(&app_id)?;
         let reports_dir = crash_reports_dir(&app_id)?;
         fs::create_dir_all(&reports_dir).with_context(|| {
             format!(
@@ -206,6 +209,9 @@ impl CrashReporter {
 
     /// Installs a panic hook that persists crash reports.
     pub fn install_hook(&mut self) {
+        if self.previous_hook.is_some() {
+            return;
+        }
         let reports_dir = self.reports_dir.clone();
         let breadcrumbs = self.breadcrumbs.clone();
         let release = self.release.clone();
@@ -221,16 +227,16 @@ impl CrashReporter {
                 release.clone(),
                 environment.clone(),
             );
-            let should_send = before_send
-                .as_ref()
-                .map(|before_send| before_send(&mut report))
-                .unwrap_or(true);
+            let should_send = before_send.as_ref().is_none_or(|before_send| {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| before_send(&mut report)))
+                    .unwrap_or(false)
+            });
 
             if should_send {
                 let _ = write_crash_report(&reports_dir, &report);
             }
 
-            previous(info);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| previous(info)));
         }));
     }
 
@@ -305,11 +311,7 @@ impl CrashReporter {
             breadcrumbs: self.breadcrumbs.snapshot(),
         };
 
-        let should_send = self
-            .before_send
-            .as_ref()
-            .map(|before_send| before_send(&mut report))
-            .unwrap_or(true);
+        let should_send = run_before_send(self.before_send.as_ref(), &mut report);
 
         if !should_send {
             return Err(anyhow!("crash report was dropped by before_send"));
@@ -333,7 +335,10 @@ impl CrashReporter {
         })? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
+            let file_type = entry.file_type()?;
+            if file_type.is_file()
+                && path.extension().and_then(|extension| extension.to_str()) == Some("json")
+            {
                 reports.push(path);
             }
         }
@@ -354,6 +359,15 @@ impl CrashReporter {
             .ok_or_else(|| anyhow!("no HTTP client configured for crash reporter"))?;
 
         for path in self.pending_reports()? {
+            let metadata = fs::metadata(&path)
+                .with_context(|| format!("failed to inspect crash report: {}", path.display()))?;
+            if metadata.len() > MAX_REPORT_BYTES {
+                return Err(anyhow!(
+                    "crash report exceeds {} byte limit: {}",
+                    MAX_REPORT_BYTES,
+                    path.display()
+                ));
+            }
             let json = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read crash report: {}", path.display()))?;
 
@@ -362,9 +376,19 @@ impl CrashReporter {
                 .await
                 .with_context(|| format!("failed to submit crash report: {}", path.display()))?;
 
-            if response.status().is_success() {
-                let _ = fs::remove_file(&path);
+            if !response.status().is_success() {
+                return Err(anyhow!(
+                    "crash report submission returned HTTP {} for {}",
+                    response.status(),
+                    path.display()
+                ));
             }
+            fs::remove_file(&path).with_context(|| {
+                format!(
+                    "failed to remove submitted crash report: {}",
+                    path.display()
+                )
+            })?;
         }
 
         Ok(())
@@ -420,14 +444,10 @@ impl CrashReporter {
             }
 
             let mut report = self.report_from_native(&crash);
-            let should_keep = self
-                .before_send
-                .as_ref()
-                .map(|before_send| before_send(&mut report))
-                .unwrap_or(true);
+            let should_keep = run_before_send(self.before_send.as_ref(), &mut report);
 
             if should_keep {
-                let _ = write_crash_report(&self.reports_dir, &report);
+                write_crash_report(&self.reports_dir, &report)?;
             }
             native::clear_crash(&crash);
         }
@@ -486,26 +506,45 @@ pub fn capture_crash_report(
 
 /// Persists a crash report to disk.
 pub fn write_crash_report(dir: &Path, report: &CrashReport) -> Result<PathBuf> {
+    fs::create_dir_all(dir).with_context(|| {
+        format!(
+            "failed to create crash reports directory: {}",
+            dir.display()
+        )
+    })?;
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    let sequence = NEXT_REPORT_ID.fetch_add(1, Ordering::Relaxed);
+    let sequence = NEXT_REPORT_ID
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(1)
+        })
+        .map_err(|_| anyhow!("crash report identifier space exhausted"))?;
     let filename = format!("crash_report_{timestamp}_{sequence}.json");
     let path = dir.join(filename);
     let temp_path = path.with_extension("json.tmp");
 
     let json = serde_json::to_string_pretty(report).context("failed to serialize crash report")?;
-    let mut file = fs::File::create(&temp_path).with_context(|| {
-        format!(
-            "failed to create temporary crash report file: {}",
-            temp_path.display()
-        )
-    })?;
+    if json.len() as u64 > MAX_REPORT_BYTES {
+        return Err(anyhow!(
+            "serialized crash report exceeds {MAX_REPORT_BYTES} byte limit"
+        ));
+    }
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
+        .with_context(|| {
+            format!(
+                "failed to create temporary crash report file: {}",
+                temp_path.display()
+            )
+        })?;
     file.write_all(json.as_bytes())
         .with_context(|| format!("failed to write crash report file: {}", temp_path.display()))?;
-    file.flush()
-        .with_context(|| format!("failed to flush crash report file: {}", temp_path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("failed to sync crash report file: {}", temp_path.display()))?;
     fs::rename(&temp_path, &path).with_context(|| {
         format!(
             "failed to finalize crash report file from {} to {}",
@@ -536,6 +575,29 @@ pub fn collect_os_info() -> OsInfo {
 fn crash_reports_dir(app_id: &str) -> Result<PathBuf> {
     let base = base_data_dir()?;
     Ok(base.join(app_id).join("crash_reports"))
+}
+
+fn validate_app_id(app_id: &str) -> Result<()> {
+    if app_id.is_empty()
+        || app_id.len() > MAX_APP_ID_BYTES
+        || !app_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        || app_id == "."
+        || app_id == ".."
+    {
+        return Err(anyhow!(
+            "application identifier must be 1-{MAX_APP_ID_BYTES} ASCII letters, digits, '.', '_' or '-'"
+        ));
+    }
+    Ok(())
+}
+
+fn run_before_send(before_send: Option<&Arc<BeforeSend>>, report: &mut CrashReport) -> bool {
+    before_send.is_none_or(|before_send| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| before_send(report)))
+            .unwrap_or(false)
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -640,6 +702,23 @@ mod tests {
 
         let pending = reporter.pending_reports().unwrap();
         assert_eq!(pending.len(), 2);
+    }
+
+    #[test]
+    fn rejects_path_like_application_identifiers() {
+        let breadcrumbs = BreadcrumbBuffer::new(1);
+        assert!(CrashReporter::new("../escape", breadcrumbs.clone()).is_err());
+        assert!(CrashReporter::new("nested/app", breadcrumbs).is_err());
+    }
+
+    #[test]
+    fn panicking_before_send_drops_non_panic_report_without_unwinding() {
+        let directory = tempdir().unwrap();
+        let mut reporter = reporter_in(directory.path());
+        reporter.set_before_send(std::sync::Arc::new(|_| panic!("callback failed")));
+        let error = std::io::Error::other("captured");
+        assert!(reporter.capture_error(&error).is_err());
+        assert!(reporter.pending_reports().unwrap().is_empty());
     }
 
     #[test]

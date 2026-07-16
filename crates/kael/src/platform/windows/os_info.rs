@@ -34,7 +34,7 @@ fn get_hostname() -> String {
     let mut size: u32 = 256;
     let mut buffer = vec![0u16; size as usize];
     let result = unsafe { GetComputerNameW(Some(PWSTR(buffer.as_mut_ptr())), &mut size) };
-    if result.is_ok() {
+    if result.is_ok() && size as usize <= buffer.len() {
         String::from_utf16_lossy(&buffer[..size as usize])
     } else {
         String::new()
@@ -44,7 +44,7 @@ fn get_hostname() -> String {
 fn get_locale() -> String {
     let mut buffer = [0u16; 85];
     let len = unsafe { windows::Win32::Globalization::GetUserDefaultLocaleName(&mut buffer) };
-    if len > 0 {
+    if len > 0 && len as usize <= buffer.len() {
         String::from_utf16_lossy(&buffer[..(len as usize - 1)])
     } else {
         String::new()

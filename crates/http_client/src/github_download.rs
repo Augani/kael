@@ -1,11 +1,23 @@
 use std::{path::Path, pin::Pin, task::Poll};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use async_compression::futures::bufread::GzipDecoder;
-use futures::{AsyncRead, AsyncSeek, AsyncSeekExt, AsyncWrite, io::BufReader};
+use futures::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt, AsyncWrite, io::BufReader};
+use http::header::CONTENT_LENGTH;
 use sha2::{Digest, Sha256};
 
 use crate::{HttpClient, github::AssetKind};
+
+const MAX_COMPRESSED_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_EXTRACTED_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+fn parse_sha_256(digest: &str) -> Result<String> {
+    let digest = digest.strip_prefix("sha256:").unwrap_or(digest);
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("expected SHA-256 must contain exactly 64 hexadecimal characters");
+    }
+    Ok(digest.to_ascii_lowercase())
+}
 
 #[derive(serde::Deserialize, serde::Serialize, Debug)]
 pub struct GithubBinaryMetadata {
@@ -39,65 +51,70 @@ pub async fn download_server_binary(
     destination_path: &Path,
     asset_kind: AssetKind,
 ) -> Result<(), anyhow::Error> {
+    let expected_sha_256 = digest.map(parse_sha_256).transpose()?;
     log::info!("downloading github artifact from {url}");
     let mut response = http_client
         .get(url, Default::default(), true)
         .await
         .with_context(|| format!("downloading release from {url}"))?;
-    let body = response.body_mut();
-    match digest {
-        Some(expected_sha_256) => {
-            let temp_asset_file = tempfile::NamedTempFile::new()
-                .with_context(|| format!("creating a temporary file for {url}"))?;
-            let (temp_asset_file, _temp_guard) = temp_asset_file.into_parts();
-            let mut writer = HashingWriter {
-                writer: async_fs::File::from(temp_asset_file),
-                hasher: Sha256::new(),
-            };
-            futures::io::copy(&mut BufReader::new(body), &mut writer)
-                .await
-                .with_context(|| {
-                    format!("saving archive contents into the temporary file for {url}",)
-                })?;
-            let asset_sha_256 = format!("{:x}", writer.hasher.finalize());
-
-            anyhow::ensure!(
-                asset_sha_256 == expected_sha_256,
-                "{url} asset got SHA-256 mismatch. Expected: {expected_sha_256}, Got: {asset_sha_256}",
-            );
-            writer
-                .writer
-                .seek(std::io::SeekFrom::Start(0))
-                .await
-                .with_context(|| format!("seeking temporary file {destination_path:?}",))?;
-            stream_file_archive(&mut writer.writer, url, destination_path, asset_kind)
-                .await
-                .with_context(|| {
-                    format!("extracting downloaded asset for {url} into {destination_path:?}",)
-                })?;
-        }
-        None => stream_response_archive(body, url, destination_path, asset_kind)
-            .await
-            .with_context(|| {
-                format!("extracting response for asset {url} into {destination_path:?}",)
-            })?,
+    if !response.status().is_success() {
+        bail!(
+            "downloading {url} failed with HTTP status {}",
+            response.status()
+        );
     }
-    Ok(())
-}
 
-async fn stream_response_archive(
-    response: impl AsyncRead + Unpin,
-    url: &str,
-    destination_path: &Path,
-    asset_kind: AssetKind,
-) -> Result<()> {
-    match asset_kind {
-        AssetKind::TarGz => extract_tar_gz(destination_path, url, response).await?,
-        AssetKind::Gz => extract_gz(destination_path, url, response).await?,
-        AssetKind::Zip => {
-            util::archive::extract_zip(destination_path, response).await?;
-        }
+    if let Some(content_length) = response
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        anyhow::ensure!(
+            content_length <= MAX_COMPRESSED_ARCHIVE_BYTES,
+            "{url} archive is {content_length} bytes, exceeding the {MAX_COMPRESSED_ARCHIVE_BYTES} byte limit"
+        );
+    }
+
+    // Stage every response before extraction. Besides making ZIP seekable, this
+    // avoids leaving an extraction blocked on a network stream and gives all
+    // archive formats the same size and digest checks.
+    let temp_asset_file = tempfile::NamedTempFile::new()
+        .with_context(|| format!("creating a temporary file for {url}"))?;
+    let (temp_asset_file, _temp_guard) = temp_asset_file.into_parts();
+    let mut writer = HashingWriter {
+        writer: async_fs::File::from(temp_asset_file),
+        hasher: Sha256::new(),
     };
+    let mut limited_body = response
+        .body_mut()
+        .take(MAX_COMPRESSED_ARCHIVE_BYTES.saturating_add(1));
+    let copied = futures::io::copy(&mut limited_body, &mut writer)
+        .await
+        .with_context(|| format!("saving archive contents into a temporary file for {url}"))?;
+    anyhow::ensure!(
+        copied <= MAX_COMPRESSED_ARCHIVE_BYTES,
+        "{url} archive exceeds the {MAX_COMPRESSED_ARCHIVE_BYTES} byte limit"
+    );
+
+    let asset_sha_256 = format!("{:x}", writer.hasher.finalize_reset());
+    if let Some(expected_sha_256) = expected_sha_256 {
+        anyhow::ensure!(
+            asset_sha_256 == expected_sha_256,
+            "{url} asset got SHA-256 mismatch. Expected: {expected_sha_256}, Got: {asset_sha_256}",
+        );
+    }
+
+    writer
+        .writer
+        .seek(std::io::SeekFrom::Start(0))
+        .await
+        .with_context(|| format!("seeking temporary file for {destination_path:?}"))?;
+    stream_file_archive(&mut writer.writer, url, destination_path, asset_kind)
+        .await
+        .with_context(|| {
+            format!("extracting downloaded asset for {url} into {destination_path:?}")
+        })?;
     Ok(())
 }
 
@@ -112,11 +129,21 @@ async fn stream_file_archive(
         AssetKind::Gz => extract_gz(destination_path, url, file_archive).await?,
         #[cfg(not(windows))]
         AssetKind::Zip => {
-            util::archive::extract_seekable_zip(destination_path, file_archive).await?;
+            util::archive::extract_seekable_zip_with_limit(
+                destination_path,
+                file_archive,
+                MAX_EXTRACTED_ARCHIVE_BYTES,
+            )
+            .await?;
         }
         #[cfg(windows)]
         AssetKind::Zip => {
-            util::archive::extract_zip(destination_path, file_archive).await?;
+            util::archive::extract_zip_with_limit(
+                destination_path,
+                file_archive,
+                MAX_EXTRACTED_ARCHIVE_BYTES,
+            )
+            .await?;
         }
     };
     Ok(())
@@ -127,7 +154,8 @@ async fn extract_tar_gz(
     url: &str,
     from: impl AsyncRead + Unpin,
 ) -> Result<(), anyhow::Error> {
-    let decompressed_bytes = GzipDecoder::new(BufReader::new(from));
+    let decompressed_bytes =
+        GzipDecoder::new(BufReader::new(from)).take(MAX_EXTRACTED_ARCHIVE_BYTES.saturating_add(1));
     let mut archive = async_tar::Archive::new(decompressed_bytes);
     archive
         .unpack(&destination_path)
@@ -147,9 +175,13 @@ async fn extract_gz(
         .with_context(|| {
             format!("creating a file {destination_path:?} for a download from {url}")
         })?;
-    futures::io::copy(&mut decompressed_bytes, &mut file)
+    let copied = futures::io::copy(&mut decompressed_bytes, &mut file)
         .await
         .with_context(|| format!("extracting {url} to {destination_path:?}"))?;
+    anyhow::ensure!(
+        copied <= MAX_EXTRACTED_ARCHIVE_BYTES,
+        "{url} expands beyond the {MAX_EXTRACTED_ARCHIVE_BYTES} byte limit"
+    );
     Ok(())
 }
 
@@ -185,5 +217,113 @@ impl<W: AsyncWrite + Unpin> AsyncWrite for HashingWriter<W> {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<std::result::Result<(), std::io::Error>> {
         Pin::new(&mut self.writer).poll_close(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use futures::{FutureExt as _, future::BoxFuture};
+    use http::{HeaderValue, Request, Response, StatusCode};
+
+    use super::*;
+    use crate::AsyncBody;
+
+    struct StaticClient {
+        status: StatusCode,
+        body: Arc<[u8]>,
+    }
+
+    impl HttpClient for StaticClient {
+        fn type_name(&self) -> &'static str {
+            "StaticClient"
+        }
+
+        fn user_agent(&self) -> Option<&HeaderValue> {
+            None
+        }
+
+        fn send(
+            &self,
+            _request: Request<AsyncBody>,
+        ) -> BoxFuture<'static, anyhow::Result<Response<AsyncBody>>> {
+            let status = self.status;
+            let body = self.body.to_vec();
+            async move {
+                Ok(Response::builder()
+                    .status(status)
+                    .body(AsyncBody::from(body))?)
+            }
+            .boxed()
+        }
+
+        fn proxy(&self) -> Option<&url::Url> {
+            None
+        }
+    }
+
+    #[test]
+    fn validates_and_normalizes_sha_256_values() {
+        let uppercase = "A".repeat(64);
+        assert_eq!(parse_sha_256(&uppercase).unwrap(), "a".repeat(64));
+        assert_eq!(
+            parse_sha_256(&format!("sha256:{uppercase}")).unwrap(),
+            "a".repeat(64)
+        );
+        assert!(parse_sha_256("abc").is_err());
+        assert!(parse_sha_256(&"g".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn rejects_http_errors_before_creating_a_destination() {
+        let client = StaticClient {
+            status: StatusCode::NOT_FOUND,
+            body: Arc::from(&b"not found"[..]),
+        };
+        let destination = tempfile::tempdir().unwrap().path().join("asset");
+
+        let error = futures::executor::block_on(download_server_binary(
+            &client,
+            "https://example.test/missing.gz",
+            None,
+            &destination,
+            AssetKind::Gz,
+        ))
+        .unwrap_err();
+
+        assert!(error.to_string().contains("404"));
+        assert!(!destination.exists());
+    }
+
+    #[test]
+    fn verifies_and_extracts_a_staged_gzip_download() {
+        futures::executor::block_on(async {
+            let source = b"verified artifact";
+            let mut encoder = async_compression::futures::bufread::GzipEncoder::new(
+                BufReader::new(futures::io::Cursor::new(source)),
+            );
+            let mut compressed = Vec::new();
+            encoder.read_to_end(&mut compressed).await.unwrap();
+            let digest = format!("sha256:{:x}", Sha256::digest(&compressed));
+            let client = StaticClient {
+                status: StatusCode::OK,
+                body: Arc::from(compressed),
+            };
+            let directory = tempfile::tempdir().unwrap();
+            let destination = directory.path().join("asset");
+
+            download_server_binary(
+                &client,
+                "https://example.test/asset.gz",
+                Some(&digest),
+                &destination,
+                AssetKind::Gz,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(async_fs::read(destination).await.unwrap(), source);
+        });
     }
 }

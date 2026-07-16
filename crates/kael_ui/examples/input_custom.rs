@@ -26,19 +26,19 @@ impl CustomInputApp {
     fn new(cx: &mut Context<Self>) -> Self {
         Self {
             // 1. SIMPLE USAGE - Just a basic input, no configuration needed
-            simple_input: cx.new(|cx| InputState::new(cx)),
+            simple_input: cx.new(InputState::new),
 
             // 2. Custom validation - company email
-            company_email_input: cx.new(|cx| InputState::new(cx)),
+            company_email_input: cx.new(InputState::new),
 
             // 3. Custom filter - username
-            username_input: cx.new(|cx| InputState::new(cx)),
+            username_input: cx.new(InputState::new),
 
             // 4. Custom formatter - currency
-            currency_input: cx.new(|cx| InputState::new(cx)),
+            currency_input: cx.new(InputState::new),
 
             // 5. Complex custom - product code
-            product_code_input: cx.new(|cx| InputState::new(cx)),
+            product_code_input: cx.new(InputState::new),
         }
     }
 }
@@ -410,7 +410,7 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|cx| CustomInputApp::new(cx)),
+            |_window, cx| cx.new(CustomInputApp::new),
         )
         .unwrap();
     });

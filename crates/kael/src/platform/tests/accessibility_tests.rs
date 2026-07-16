@@ -154,12 +154,8 @@ mod windows_tests {
             Some("Submit")
         );
 
-        let updated = AccessibleElementInfo {
-            role: AccessibleRole::Button,
-            name: Some("Cancel".to_string()),
-            value: None,
-            element_id: elem_id,
-        };
+        let mut updated = AccessibleElementInfo::new(AccessibleRole::Button).with_name("Cancel");
+        updated.element_id = elem_id;
         provider.update_element(updated);
 
         assert_eq!(provider.children.borrow().len(), 1);

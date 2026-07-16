@@ -492,7 +492,7 @@ mod tests {
             trigger_description: "Super+P".to_string(),
         }]);
         state.drive(&mut binder).unwrap();
-        assert_eq!(state.trigger_description(7).as_deref(), Some("Super+P"));
+        assert_eq!(state.trigger_description(7), Some("Super+P"));
     }
 
     #[test]

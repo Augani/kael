@@ -29,21 +29,30 @@ impl AnimatedPresenceState {
             }
             self.is_visible = true;
             self.is_animating_out = false;
-            self.version += 1;
+            self.version = self.version.wrapping_add(1);
             cx.notify();
         } else {
             if !self.is_visible || self.is_animating_out {
                 return;
             }
+            self.version = self.version.wrapping_add(1);
+
+            if cx.reduce_motion() {
+                self.is_visible = false;
+                self.is_animating_out = false;
+                cx.notify();
+                return;
+            }
+
             self.is_animating_out = true;
-            self.version += 1;
+            let version = self.version;
             cx.notify();
 
             let duration = self.exit_duration + EXIT_GRACE;
             cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(duration).await;
                 _ = this.update(cx, |state, cx| {
-                    if state.is_animating_out {
+                    if state.is_animating_out && state.version == version {
                         state.is_visible = false;
                         state.is_animating_out = false;
                         cx.notify();
@@ -179,5 +188,25 @@ impl StatefulInteractiveElement for AnimatedPresence {}
 impl ParentElement for AnimatedPresence {
     fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
         self.base.extend(elements)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn reduced_motion_unmounts_hidden_content_immediately() {
+        let mut cx = TestAppContext::single();
+        cx.set_reduce_motion(true);
+        let state = cx.new(|_| AnimatedPresenceState::new());
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| state.set_visible(true, cx));
+            state.update(cx, |state, cx| state.set_visible(false, cx));
+            let state = state.read(cx);
+            assert!(!state.is_visible());
+            assert!(!state.is_animating_out());
+        });
     }
 }

@@ -317,13 +317,11 @@ impl Render for ToolbarDemo {
                                     })
                             );
 
-                        cx.new(|_cx| {
-                            Toolbar::new()
-                                .size(self.toolbar_size)
-                                .group(formatting_group)
-                                .group(alignment_group)
-                                .group(list_group)
-                        })
+                        Toolbar::new()
+                            .size(self.toolbar_size)
+                            .group(formatting_group)
+                            .group(alignment_group)
+                            .group(list_group)
                     })
                     .child({
                         let file_group = ToolbarGroup::new()
@@ -408,14 +406,12 @@ impl Render for ToolbarDemo {
                                     })
                             );
 
-                        cx.new(|_cx| {
-                            Toolbar::new()
-                                .size(self.toolbar_size)
-                                .group(file_group)
-                                .group(edit_group)
-                                .group(spacer_group)
-                                .group(settings_group)
-                        })
+                        Toolbar::new()
+                            .size(self.toolbar_size)
+                            .group(file_group)
+                            .group(edit_group)
+                            .group(spacer_group)
+                            .group(settings_group)
                     })
                     .child({
                         let group = ToolbarGroup::new()
@@ -451,11 +447,9 @@ impl Render for ToolbarDemo {
                                     })
                             );
 
-                        cx.new(|_cx| {
-                            Toolbar::new()
-                                .size(self.toolbar_size)
-                                .group(group)
-                        })
+                        Toolbar::new()
+                            .size(self.toolbar_size)
+                            .group(group)
                     })
                     .child(
                         div()
@@ -544,7 +538,7 @@ fn main() {
                     }),
                     ..Default::default()
                 },
-                |_window, cx| cx.new(|cx| ToolbarDemo::new(cx)),
+                |_window, cx| cx.new(ToolbarDemo::new),
             )
             .unwrap();
         });

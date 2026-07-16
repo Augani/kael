@@ -18,30 +18,19 @@ pub enum Direction {
 /// The strong direction of `ch`, or `None` for neutral/weak characters (digits,
 /// punctuation, whitespace, symbols).
 pub fn strong_direction(ch: char) -> Option<Direction> {
-    if is_rtl_char(ch) {
-        Some(Direction::Rtl)
-    } else if ch.is_alphabetic() {
-        Some(Direction::Ltr)
-    } else {
-        None
+    match unicode_bidi::bidi_class(ch) {
+        unicode_bidi::BidiClass::L => Some(Direction::Ltr),
+        unicode_bidi::BidiClass::R | unicode_bidi::BidiClass::AL => Some(Direction::Rtl),
+        _ => None,
     }
 }
 
 /// Whether `ch` has strong right-to-left directionality (Hebrew, Arabic, Syriac,
 /// Thaana, N'Ko, and the Hebrew/Arabic presentation forms).
 pub fn is_rtl_char(ch: char) -> bool {
-    let code = ch as u32;
-    matches!(code,
-        0x0590..=0x05FF // Hebrew
-        | 0x0600..=0x06FF // Arabic
-        | 0x0700..=0x074F // Syriac
-        | 0x0750..=0x077F // Arabic Supplement
-        | 0x0780..=0x07BF // Thaana
-        | 0x07C0..=0x07FF // N'Ko
-        | 0x08A0..=0x08FF // Arabic Extended-A
-        | 0xFB1D..=0xFB4F // Hebrew presentation forms
-        | 0xFB50..=0xFDFF // Arabic presentation forms-A
-        | 0xFE70..=0xFEFF // Arabic presentation forms-B
+    matches!(
+        unicode_bidi::bidi_class(ch),
+        unicode_bidi::BidiClass::R | unicode_bidi::BidiClass::AL
     )
 }
 
@@ -189,24 +178,16 @@ pub enum BidiClass {
 /// Classify a character into its [`BidiClass`] (common ranges; approximate, used as the
 /// input to [`resolve_weak_types`]).
 pub fn bidi_class(ch: char) -> BidiClass {
-    let code = ch as u32;
-    match code {
-        0x0660..=0x0669 | 0x066B..=0x066C | 0x06F0..=0x06F9 => BidiClass::An,
-        0x0030..=0x0039 => BidiClass::En,
-        0x002B | 0x002D => BidiClass::Es,
-        0x0023 | 0x0024 | 0x0025 | 0x00A2..=0x00A5 => BidiClass::Et,
-        0x002C | 0x002E | 0x002F | 0x003A => BidiClass::Cs,
-        0x0300..=0x036F | 0x0483..=0x0489 | 0x0591..=0x05BD => BidiClass::Nsm,
-        _ if is_rtl_char(ch) => {
-            // Arabic letters are AL; Hebrew and other RTL scripts are R.
-            if matches!(code, 0x0600..=0x06FF | 0x0750..=0x077F | 0x08A0..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFF)
-            {
-                BidiClass::Al
-            } else {
-                BidiClass::R
-            }
-        }
-        _ if ch.is_alphabetic() => BidiClass::L,
+    match unicode_bidi::bidi_class(ch) {
+        unicode_bidi::BidiClass::L => BidiClass::L,
+        unicode_bidi::BidiClass::R => BidiClass::R,
+        unicode_bidi::BidiClass::AL => BidiClass::Al,
+        unicode_bidi::BidiClass::EN => BidiClass::En,
+        unicode_bidi::BidiClass::ES => BidiClass::Es,
+        unicode_bidi::BidiClass::ET => BidiClass::Et,
+        unicode_bidi::BidiClass::AN => BidiClass::An,
+        unicode_bidi::BidiClass::CS => BidiClass::Cs,
+        unicode_bidi::BidiClass::NSM => BidiClass::Nsm,
         _ => BidiClass::On,
     }
 }
@@ -374,6 +355,7 @@ mod tests {
         assert_eq!(strong_direction('5'), None);
         assert_eq!(strong_direction(' '), None);
         assert_eq!(strong_direction('!'), None);
+        assert_eq!(strong_direction('\u{1E900}'), Some(Direction::Rtl)); // Adlam
     }
 
     #[test]

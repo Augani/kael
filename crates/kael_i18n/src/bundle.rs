@@ -31,10 +31,20 @@ impl LocaleBundle {
     /// Sets the active locale. Returns an error if no catalog exists for the locale.
     pub fn set_active(&mut self, locale: impl Into<String>) -> Result<()> {
         let locale = locale.into();
-        if !self.catalogs.contains_key(&locale) {
-            bail!("No catalog found for locale '{}'", locale);
-        }
-        self.active_locale = locale;
+        let Some(resolved) = self.resolve_locale(&locale) else {
+            bail!("No catalog found for locale '{locale}'");
+        };
+        self.active_locale = resolved.to_string();
+        Ok(())
+    }
+
+    /// Sets the fallback locale after resolving an exact or language-compatible catalog.
+    pub fn set_fallback(&mut self, locale: impl Into<String>) -> Result<()> {
+        let locale = locale.into();
+        let Some(resolved) = self.resolve_locale(&locale) else {
+            bail!("No catalog found for locale '{locale}'");
+        };
+        self.fallback_locale = resolved.to_string();
         Ok(())
     }
 
@@ -43,24 +53,40 @@ impl LocaleBundle {
         &self.active_locale
     }
 
+    /// Returns the currently configured fallback locale identifier.
+    pub fn fallback_locale(&self) -> &str {
+        &self.fallback_locale
+    }
+
     /// Translates a key using the active locale, falling back to the fallback locale.
     ///
     /// Returns the key itself if no translation is found in either catalog.
     pub fn translate<'a>(&'a self, key: &'a str) -> &'a str {
-        if let Some(catalog) = self.catalogs.get(&self.active_locale)
+        if let Some(active_locale) = self.resolve_locale(&self.active_locale)
+            && let Some(catalog) = self.catalogs.get(active_locale)
             && let Some(value) = catalog.get(key)
         {
             return value;
         }
 
         if self.active_locale != self.fallback_locale
-            && let Some(catalog) = self.catalogs.get(&self.fallback_locale)
+            && let Some(fallback_locale) = self.resolve_locale(&self.fallback_locale)
+            && let Some(catalog) = self.catalogs.get(fallback_locale)
             && let Some(value) = catalog.get(key)
         {
             return value;
         }
 
         key
+    }
+
+    /// Translates a key and substitutes named `{placeholder}` values.
+    pub fn translate_with_args(&self, key: &str, arguments: &[(&str, &str)]) -> String {
+        let mut translated = self.translate(key).to_string();
+        for (name, value) in arguments {
+            translated = translated.replace(&format!("{{{name}}}"), value);
+        }
+        translated
     }
 
     /// Returns a sorted list of all available locale identifiers.
@@ -72,8 +98,34 @@ impl LocaleBundle {
 
     /// Returns true if a catalog exists for the given locale.
     pub fn has_locale(&self, locale: &str) -> bool {
-        self.catalogs.contains_key(locale)
+        self.resolve_locale(locale).is_some()
     }
+
+    fn resolve_locale(&self, requested: &str) -> Option<&str> {
+        let requested = normalize_locale(requested);
+        if requested.is_empty() {
+            return None;
+        }
+        let mut locales = self.catalogs.keys().map(String::as_str).collect::<Vec<_>>();
+        locales.sort_unstable();
+        locales
+            .iter()
+            .copied()
+            .find(|locale| normalize_locale(locale) == requested)
+            .or_else(|| {
+                let language = requested.split('-').next().unwrap_or_default();
+                locales.into_iter().find(|locale| {
+                    normalize_locale(locale)
+                        .split('-')
+                        .next()
+                        .is_some_and(|candidate| candidate == language)
+                })
+            })
+    }
+}
+
+fn normalize_locale(locale: &str) -> String {
+    locale.trim().replace('_', "-").to_ascii_lowercase()
 }
 
 #[cfg(test)]
@@ -166,5 +218,24 @@ mod tests {
 
         assert!(bundle.has_locale("en-US"));
         assert!(!bundle.has_locale("fr-FR"));
+    }
+
+    #[test]
+    fn resolves_compatible_locales_and_supports_named_arguments() {
+        let mut bundle = LocaleBundle::new("en-US");
+        let mut english = make_en_catalog();
+        english.insert("welcome", "Welcome, {name}");
+        bundle.add_catalog(english);
+        bundle.add_catalog(make_de_catalog());
+
+        bundle.set_active("de_AT").unwrap();
+        assert_eq!(bundle.active_locale(), "de-DE");
+        bundle.set_fallback("EN_us").unwrap();
+        assert_eq!(bundle.fallback_locale(), "en-US");
+        assert_eq!(
+            bundle.translate_with_args("welcome", &[("name", "Ada")]),
+            "Welcome, Ada"
+        );
+        assert!(bundle.has_locale("de-CH"));
     }
 }

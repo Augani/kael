@@ -28,23 +28,47 @@ impl Noise {
     }
 
     pub fn density(mut self, density: f32) -> Self {
-        self.density = density.clamp(0.01, 1.0);
+        if density.is_finite() {
+            self.density = density.clamp(0.01, 1.0);
+        }
         self
     }
 
     pub fn opacity(mut self, opacity: f32) -> Self {
-        self.noise_opacity = opacity.clamp(0.0, 1.0);
+        if opacity.is_finite() {
+            self.noise_opacity = opacity.clamp(0.0, 1.0);
+        }
         self
     }
 
     pub fn grain_size(mut self, size: Pixels) -> Self {
-        self.grain_size = size;
+        if f32::from(size).is_finite() && size > px(0.0) {
+            self.grain_size = size;
+        }
         self
     }
 
     pub fn color(mut self, color: Hsla) -> Self {
         self.color = Some(color);
         self
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn invalid_noise_geometry_keeps_safe_defaults() {
+        let noise = Noise::new()
+            .density(f32::NAN)
+            .opacity(f32::NAN)
+            .grain_size(px(0.0));
+
+        assert_eq!(noise.density, 0.3);
+        assert_eq!(noise.noise_opacity, 0.08);
+        assert_eq!(noise.grain_size, px(1.0));
     }
 }
 

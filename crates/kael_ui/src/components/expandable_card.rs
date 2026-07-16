@@ -34,60 +34,77 @@ impl ExpandableCardState {
     }
 
     pub fn toggle(&mut self, cx: &mut Context<Self>) {
+        self.toggle_with_duration(durations::NORMAL, cx);
+    }
+
+    pub fn toggle_with_duration(&mut self, duration: Duration, cx: &mut Context<Self>) {
         if self.is_expanded {
-            self.collapse(cx);
+            self.collapse_with_duration(duration, cx);
         } else {
-            self.expand(cx);
+            self.expand_with_duration(duration, cx);
         }
     }
 
     pub fn expand(&mut self, cx: &mut Context<Self>) {
-        if !self.is_expanded && !self.is_animating {
-            self.is_expanded = true;
-            self.is_expanding = true;
-            self.is_animating = true;
-            self.animation_version = self.animation_version.wrapping_add(1);
-            cx.notify();
+        self.expand_with_duration(durations::NORMAL, cx);
+    }
 
-            cx.spawn(async move |this, cx| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(300))
-                    .await;
-                _ = this.update(cx, |state, cx| {
-                    state.is_animating = false;
-                    state.is_expanding = false;
-                    cx.notify();
-                });
-            })
-            .detach();
+    pub fn expand_with_duration(&mut self, duration: Duration, cx: &mut Context<Self>) {
+        if self.is_expanded {
+            return;
         }
+
+        self.start_transition(true, duration, cx);
     }
 
     pub fn collapse(&mut self, cx: &mut Context<Self>) {
-        if self.is_expanded && !self.is_animating {
-            self.is_expanding = false;
-            self.is_animating = true;
-            self.animation_version = self.animation_version.wrapping_add(1);
-            cx.notify();
+        self.collapse_with_duration(durations::NORMAL, cx);
+    }
 
-            cx.spawn(async move |this, cx| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(300))
-                    .await;
-                _ = this.update(cx, |state, cx| {
-                    state.is_expanded = false;
-                    state.is_animating = false;
-                    cx.notify();
-                });
-            })
-            .detach();
+    pub fn collapse_with_duration(&mut self, duration: Duration, cx: &mut Context<Self>) {
+        if !self.is_expanded {
+            return;
         }
+
+        self.start_transition(false, duration, cx);
+    }
+
+    fn start_transition(
+        &mut self,
+        target_expanded: bool,
+        duration: Duration,
+        cx: &mut Context<Self>,
+    ) {
+        self.is_expanded = target_expanded;
+        self.is_expanding = target_expanded;
+        self.is_animating = !duration.is_zero();
+        self.animation_version = self.animation_version.wrapping_add(1);
+        let version = self.animation_version;
+        cx.notify();
+
+        if duration.is_zero() {
+            self.is_expanding = false;
+            return;
+        }
+
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(duration).await;
+            _ = this.update(cx, |state, cx| {
+                if state.animation_version == version {
+                    state.is_animating = false;
+                    state.is_expanding = false;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 }
 
 #[derive(IntoElement)]
 pub struct ExpandableCard {
     id: ElementId,
+    label: SharedString,
     state: Entity<ExpandableCardState>,
     collapsed_content: Option<AnyElement>,
     expanded_content: Option<AnyElement>,
@@ -99,12 +116,18 @@ impl ExpandableCard {
     pub fn new(id: impl Into<ElementId>, state: Entity<ExpandableCardState>) -> Self {
         Self {
             id: id.into(),
+            label: "Expandable card".into(),
             state,
             collapsed_content: None,
             expanded_content: None,
             duration: durations::NORMAL,
             style: StyleRefinement::default(),
         }
+    }
+
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = label.into();
+        self
     }
 
     pub fn collapsed(mut self, content: impl IntoElement) -> Self {
@@ -130,7 +153,14 @@ impl Styled for ExpandableCard {
 }
 
 impl RenderOnce for ExpandableCard {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let card_id = self.id.clone();
+        let focus_handle = window
+            .use_keyed_state(card_id.clone(), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone();
+        let focus_on_mouse = focus_handle.clone();
+        let is_focused = focus_handle.is_focused(window);
         let theme = Theme::of(cx);
         let user_style = self.style;
         let state = self.state.read(cx);
@@ -140,6 +170,7 @@ impl RenderOnce for ExpandableCard {
         let animation_version = state.animation_version;
         let duration = self.duration;
         let state_for_click = self.state.clone();
+        let state_for_key = self.state.clone();
 
         let shadow = BoxShadow {
             color: hsla(0.0, 0.0, 0.0, 0.08),
@@ -150,7 +181,19 @@ impl RenderOnce for ExpandableCard {
         };
 
         div()
-            .id(self.id)
+            .id(card_id.clone())
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Button)
+                    .label(if is_expanded {
+                        format!("Collapse {}", self.label)
+                    } else {
+                        format!("Expand {}", self.label)
+                    })
+                    .expanded(is_expanded)
+                    .focused(is_focused)
+                    .actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]),
+            )
+            .track_focus(&focus_handle.tab_index(0).tab_stop(true))
             .bg(theme.tokens.card)
             .border_1()
             .border_color(theme.tokens.border)
@@ -158,8 +201,19 @@ impl RenderOnce for ExpandableCard {
             .shadow(smallvec::smallvec![shadow])
             .overflow_hidden()
             .cursor_pointer()
-            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                state_for_click.update(cx, |s, cx| s.toggle(cx));
+            .when(is_focused, |this| {
+                this.shadow(smallvec::smallvec![theme.tokens.focus_ring_light()])
+            })
+            .on_click(move |_, window, cx| {
+                window.focus(&focus_on_mouse);
+                state_for_click.update(cx, |s, cx| s.toggle_with_duration(duration, cx));
+            })
+            .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    state_for_key.update(cx, |state, cx| state.toggle_with_duration(duration, cx));
+                    cx.stop_propagation();
+                    window.prevent_default();
+                }
             })
             .when(!is_expanded && !is_animating, |this| {
                 this.when_some(self.collapsed_content, |this, content| {
@@ -170,7 +224,7 @@ impl RenderOnce for ExpandableCard {
                 this.when_some(self.expanded_content, |this, content| {
                     this.child(
                         div()
-                            .id("expandable-content")
+                            .id(ElementId::NamedChild(Box::new(card_id), "content".into()))
                             .px(px(24.0))
                             .py(px(16.0))
                             .overflow_hidden()

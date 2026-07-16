@@ -19,6 +19,44 @@ pub struct ModalRenderState {
     pub label: Option<SharedString>,
     /// Whether the modal currently owns keyboard focus.
     pub focused: bool,
+    /// Whether clicking outside the dialog requests dismissal.
+    pub dismiss_on_click_outside: bool,
+    /// Whether pressing escape requests dismissal.
+    pub dismiss_on_escape: bool,
+}
+
+impl ModalRenderState {
+    /// Returns true when the modal has an accessibility label.
+    pub fn has_label(&self) -> bool {
+        self.label.is_some()
+    }
+
+    /// Length of the configured label in bytes, without exposing label text.
+    pub fn label_len_bytes(&self) -> usize {
+        self.label.as_ref().map_or(0, |label| label.len())
+    }
+
+    /// Stable class describing which user gestures can dismiss the modal.
+    pub fn dismissal_mode(&self) -> &'static str {
+        match (self.dismiss_on_click_outside, self.dismiss_on_escape) {
+            (true, true) => "outside_and_escape",
+            (true, false) => "outside_only",
+            (false, true) => "escape_only",
+            (false, false) => "manual",
+        }
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "modal_render_state(open={}, focused={}, has_label={}, label_len_bytes={}, dismissal_mode={})",
+            self.open,
+            self.focused,
+            self.has_label(),
+            self.label_len_bytes(),
+            self.dismissal_mode()
+        )
+    }
 }
 
 type ModalCustomRenderer = Rc<dyn Fn(ModalRenderState, &Window, &App) -> AnyElement>;
@@ -481,6 +519,8 @@ impl Render for ModalLayer {
                     open: true,
                     label: label.clone(),
                     focused: self.root_focus.is_focused(window),
+                    dismiss_on_click_outside,
+                    dismiss_on_escape,
                 },
                 window,
                 cx,
@@ -705,5 +745,29 @@ mod tests {
         });
 
         assert!(window.debug_bounds("persistent-modal-focused").is_some());
+    }
+
+    #[test]
+    fn modal_render_state_summary_is_content_safe() {
+        let state = ModalRenderState {
+            open: true,
+            label: Some(SharedString::from("Secret Confirmation")),
+            focused: true,
+            dismiss_on_click_outside: false,
+            dismiss_on_escape: true,
+        };
+
+        assert!(state.has_label());
+        assert_eq!(state.label_len_bytes(), "Secret Confirmation".len());
+        assert_eq!(state.dismissal_mode(), "escape_only");
+
+        let summary = state.to_text();
+        assert!(summary.contains("open=true"));
+        assert!(summary.contains("focused=true"));
+        assert!(summary.contains("has_label=true"));
+        assert!(summary.contains("label_len_bytes=19"));
+        assert!(summary.contains("dismissal_mode=escape_only"));
+        assert!(!summary.contains("Secret"));
+        assert!(!summary.contains("Confirmation"));
     }
 }

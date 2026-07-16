@@ -16,9 +16,9 @@ struct DropdownDemo {
 impl DropdownDemo {
     fn new(cx: &mut Context<Self>) -> Self {
         Self {
-            basic_dropdown: cx.new(|cx| DropdownState::new(cx)),
-            icon_dropdown: cx.new(|cx| DropdownState::new(cx)),
-            aligned_dropdown: cx.new(|cx| DropdownState::new(cx)),
+            basic_dropdown: cx.new(DropdownState::new),
+            icon_dropdown: cx.new(DropdownState::new),
+            aligned_dropdown: cx.new(DropdownState::new),
             last_action: None,
         }
     }
@@ -246,7 +246,7 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_, cx| cx.new(|cx| DropdownDemo::new(cx)),
+            |_, cx| cx.new(DropdownDemo::new),
         )
         .unwrap();
 

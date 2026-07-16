@@ -1,4 +1,7 @@
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context as _, Result, bail};
 use clap::{Parser, Subcommand};
@@ -11,11 +14,99 @@ mod scaffold;
 mod sign;
 mod update_feed;
 
+const MAX_METADATA_FILE_BYTES: u64 = 1024 * 1024;
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn read_bounded_utf8_file(path: &Path, max_bytes: u64) -> Result<String> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!("expected a regular file: {}", path.display());
+    }
+    if metadata.len() > max_bytes {
+        bail!(
+            "file is too large (maximum {max_bytes} bytes): {}",
+            path.display()
+        );
+    }
+
+    let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut bytes = Vec::with_capacity(metadata.len().min(max_bytes) as usize);
+    file.take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    if bytes.len() as u64 > max_bytes {
+        bail!(
+            "file grew beyond the maximum of {max_bytes} bytes while reading: {}",
+            path.display()
+        );
+    }
+    String::from_utf8(bytes).with_context(|| format!("{} is not valid UTF-8", path.display()))
+}
+
+fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("output path must have a UTF-8 file name")?;
+    let mut last_collision = None;
+    for _ in 0..32 {
+        let nonce = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temp = parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), nonce));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = match options.open(&temp) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                last_collision = Some(error);
+                continue;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to create temporary file in {}", parent.display())
+                });
+            }
+        };
+
+        let result = (|| -> Result<()> {
+            file.write_all(contents).with_context(|| {
+                format!("failed to write temporary file for {}", path.display())
+            })?;
+            file.sync_all()
+                .with_context(|| format!("failed to sync temporary file for {}", path.display()))?;
+            drop(file);
+            fs::rename(&temp, path)
+                .with_context(|| format!("failed to replace {}", path.display()))?;
+            #[cfg(unix)]
+            File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .with_context(|| format!("failed to sync {}", parent.display()))?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temp);
+        }
+        return result;
+    }
+
+    Err(last_collision.unwrap_or_else(|| std::io::Error::other("temporary file collision")))
+        .with_context(|| format!("failed to reserve a temporary file in {}", parent.display()))
+}
+
 // ---------------------------------------------------------------------------
 // Distribution Config Contract
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DistConfig {
     pub app_id: String,
     pub name: String,
@@ -27,6 +118,7 @@ pub struct DistConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IconSet {
     pub macos: Option<PathBuf>,
     pub windows: Option<PathBuf>,
@@ -34,6 +126,7 @@ pub struct IconSet {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BundleMetadata {
     pub copyright: Option<String>,
     pub category: Option<String>,
@@ -43,6 +136,7 @@ pub struct BundleMetadata {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SigningConfig {
     pub macos_team_id: Option<String>,
     pub macos_certificate: Option<String>,
@@ -51,6 +145,7 @@ pub struct SigningConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdaterConfig {
     pub feed_url: String,
     pub public_key: Option<String>,
@@ -60,7 +155,7 @@ pub struct UpdaterConfig {
 
 impl DistConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
-        let contents = std::fs::read_to_string(&path)
+        let contents = read_bounded_utf8_file(path.as_ref(), MAX_METADATA_FILE_BYTES)
             .with_context(|| format!("failed to read dist config: {}", path.as_ref().display()))?;
         let config: DistConfig = toml::from_str(&contents)
             .with_context(|| format!("failed to parse dist config: {}", path.as_ref().display()))?;
@@ -68,20 +163,41 @@ impl DistConfig {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.app_id.is_empty() {
-            bail!("dist config: app_id must not be empty");
+        if self.app_id.is_empty()
+            || self.app_id.len() > 255
+            || self.app_id.starts_with('.')
+            || self.app_id.ends_with('.')
+            || self.app_id.split('.').any(str::is_empty)
+            || !self
+                .app_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+        {
+            bail!("dist config: app_id must be a valid reverse-DNS identifier");
         }
         if self.app_id.starts_with("com.example") || self.app_id.contains("example") {
             bail!("dist config: app_id still contains placeholder/example identity");
         }
-        if self.name.is_empty() {
-            bail!("dist config: name must not be empty");
+        if self.name.is_empty()
+            || self.name.chars().count() > 128
+            || matches!(self.name.as_str(), "." | "..")
+            || self
+                .name
+                .chars()
+                .any(|character| character.is_control() || matches!(character, '/' | '\\'))
+        {
+            bail!("dist config: name must be a safe name of at most 128 characters");
         }
         if self.name.contains("GPUI") || self.name.eq_ignore_ascii_case("example") {
             bail!("dist config: name still contains placeholder branding");
         }
-        if self.version.is_empty() {
-            bail!("dist config: version must not be empty");
+        if self.version.is_empty()
+            || self.version.len() > 64
+            || !self.version.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+' | b'~')
+            })
+        {
+            bail!("dist config: version contains unsupported characters");
         }
         for icon in [
             self.icons.macos.as_ref(),
@@ -108,6 +224,13 @@ impl DistConfig {
             }
         }
         if let Some(updater) = &self.updater {
+            if updater.feed_url.len() > 2048
+                || !(updater.feed_url.starts_with("https://")
+                    || updater.feed_url.starts_with("http://"))
+                || updater.feed_url.chars().any(char::is_control)
+            {
+                bail!("dist config: updater feed URL must be a bounded HTTP(S) URL");
+            }
             if updater.feed_url.contains("example.com") {
                 bail!("dist config: updater feed URL is still a placeholder");
             }
@@ -117,6 +240,15 @@ impl DistConfig {
                 .is_some_and(|key| key.contains("REPLACE_WITH"))
             {
                 bail!("dist config: updater public key is still a placeholder");
+            }
+            if updater.channel.as_deref().is_some_and(|channel| {
+                channel.is_empty()
+                    || channel.len() > 64
+                    || !channel
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            }) {
+                bail!("dist config: updater channel contains unsupported characters");
             }
         }
         Ok(())
@@ -349,10 +481,6 @@ fn main() -> Result<()> {
         } => {
             let template = scaffold::Template::parse(&template)?;
             let target_dir = target_dir.unwrap_or_else(|| PathBuf::from(&name));
-            let templates_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .map(|root| root.join("templates"))
-                .context("locating templates directory")?;
             let options = scaffold::ScaffoldOptions {
                 name,
                 template,
@@ -360,7 +488,7 @@ fn main() -> Result<()> {
                 app_id,
                 local_dev,
             };
-            let outcome = scaffold::run(&templates_root, &options)?;
+            let outcome = scaffold::run(&options)?;
             println!(
                 "scaffolded '{}' ({}) into {}",
                 outcome.app_name,
@@ -377,6 +505,38 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn bounded_reader_rejects_oversized_files() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("large.toml");
+        fs::write(&path, b"12345").unwrap();
+        assert!(read_bounded_utf8_file(&path, 4).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_reader_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let directory = TempDir::new().unwrap();
+        let target = directory.path().join("target.toml");
+        let link = directory.path().join("link.toml");
+        fs::write(&target, b"name = 'target'").unwrap();
+        symlink(&target, &link).unwrap();
+        assert!(read_bounded_utf8_file(&link, 1024).is_err());
+    }
+
+    #[test]
+    fn atomic_write_replaces_complete_contents() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("feed.json");
+        fs::write(&path, b"old").unwrap();
+        atomic_write(&path, b"new contents").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new contents");
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
 
     #[test]
     fn test_dist_config_parsing() {
@@ -425,6 +585,33 @@ category = "public.app-category.utilities"
             signing: None,
             updater: None,
         };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn dist_config_rejects_path_components_and_unknown_fields() {
+        let source = r#"
+app_id = "com.kael.app"
+name = "../escaped"
+version = "1.0.0"
+unexpected = true
+
+[icons]
+[bundle]
+"#;
+        assert!(toml::from_str::<DistConfig>(source).is_err());
+
+        let mut config: DistConfig = toml::from_str(
+            r#"
+app_id = "com.kael.app"
+name = "Safe App"
+version = "1.0.0"
+[icons]
+[bundle]
+"#,
+        )
+        .unwrap();
+        config.name = "../escaped".to_string();
         assert!(config.validate().is_err());
     }
 

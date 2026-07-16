@@ -27,7 +27,7 @@ pub struct RelPath(str);
 /// relative and normalized.
 ///
 /// This type is to [`RelPath`] as [`std::path::PathBuf`] is to [`std::path::Path`]
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 pub struct RelPathBuf(String);
 
 impl RelPath {
@@ -176,7 +176,7 @@ impl RelPath {
     }
 
     pub fn len(&self) -> usize {
-        self.0.matches('/').count() + 1
+        self.components().count()
     }
 
     pub fn last_n_components(&self, count: usize) -> Option<&Self> {
@@ -261,6 +261,17 @@ impl ToOwned for RelPath {
 impl Borrow<RelPath> for RelPathBuf {
     fn borrow(&self) -> &RelPath {
         self.as_rel_path()
+    }
+}
+
+impl<'de> Deserialize<'de> for RelPathBuf {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let path = String::deserialize(deserializer)?;
+        RelPath::unix(&path).map_err(serde::de::Error::custom)?;
+        Ok(Self(path))
     }
 }
 
@@ -503,6 +514,7 @@ mod tests {
         let path = rel_path("");
         let mut components = path.components();
         assert_eq!(components.next(), None);
+        assert_eq!(path.len(), 0);
     }
 
     #[test]
@@ -575,5 +587,18 @@ mod tests {
         assert_eq!(path.as_rel_path().as_unix_str(), "");
         path.pop();
         assert_eq!(path.as_rel_path().as_unix_str(), "");
+    }
+
+    #[test]
+    fn deserialization_preserves_relative_path_invariants() {
+        assert_eq!(
+            serde_json::from_str::<RelPathBuf>(r#""foo/bar""#)
+                .unwrap()
+                .as_unix_str(),
+            "foo/bar"
+        );
+        for invalid in [r#""../outside""#, r#""/absolute""#, r#""foo/./bar""#] {
+            assert!(serde_json::from_str::<RelPathBuf>(invalid).is_err());
+        }
     }
 }

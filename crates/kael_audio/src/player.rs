@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, path::PathBuf, rc::Rc, sync::Arc, time::Duratio
 use anyhow::Result;
 use parking_lot::Mutex;
 
-use crate::effects::clamp_volume;
+use crate::effects::{clamp_playback_rate, clamp_volume};
 
 type StateListener = Arc<dyn Fn(PlaybackState) + Send + Sync + 'static>;
 type PositionListener = Arc<dyn Fn(Duration) + Send + Sync + 'static>;
@@ -158,18 +158,28 @@ impl AudioPlayer {
         channels: u16,
         bits_per_sample: u16,
     ) -> bool {
-        let bytes_per_sample = (bits_per_sample as u64).div_ceil(8);
-        let total = (duration.as_secs_f64() * sample_rate as f64) as u64
-            * channels as u64
-            * bytes_per_sample;
-        total > MAX_DECODED_AUDIO_BYTES
+        if sample_rate == 0 || channels == 0 || bits_per_sample == 0 {
+            return true;
+        }
+        let bytes_per_sample = u128::from(bits_per_sample).div_ceil(8);
+        let frames = duration
+            .as_nanos()
+            .checked_mul(u128::from(sample_rate))
+            .map(|scaled| scaled.div_ceil(1_000_000_000));
+        let total = frames
+            .and_then(|frames| frames.checked_mul(u128::from(channels)))
+            .and_then(|samples| samples.checked_mul(bytes_per_sample));
+        total.is_none_or(|bytes| bytes > u128::from(MAX_DECODED_AUDIO_BYTES))
     }
 
     /// Loads a track and makes it the current player target.
     pub async fn load(&self, source: AudioSource) -> Result<Track> {
         let my_generation = {
             let mut state = self.inner.lock();
-            state.load_generation += 1;
+            state.load_generation = state
+                .load_generation
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("audio load generation exhausted"))?;
             state.load_generation
         };
 
@@ -190,13 +200,18 @@ impl AudioPlayer {
                     if state.load_generation != my_generation {
                         return Err(anyhow::anyhow!("load superseded by newer request"));
                     }
+                    let track_id = state.next_track_id;
+                    state.next_track_id = state
+                        .next_track_id
+                        .checked_add(1)
+                        .ok_or_else(|| anyhow::anyhow!("audio track id space exhausted"))?;
                     let track = Track {
-                        id: state.next_track_id,
+                        id: track_id,
                         source,
                         duration,
                     };
-                    state.next_track_id += 1;
                     handle.set_volume(state.volume);
+                    handle.set_speed(state.rate);
                     state.current_track = Some(track.clone());
                     state.handle = Some(handle);
                     state.playback_state = PlaybackState::Stopped;
@@ -210,7 +225,14 @@ impl AudioPlayer {
             }
             Err(error) => {
                 let message = error.to_string();
-                let listeners = self.set_state(PlaybackState::Error(message.clone()));
+                let listeners = {
+                    let mut state = self.inner.lock();
+                    if state.load_generation != my_generation {
+                        return Err(anyhow::anyhow!("load superseded by newer request"));
+                    }
+                    state.playback_state = PlaybackState::Error(message.clone());
+                    state.state_listeners.values().cloned().collect::<Vec<_>>()
+                };
                 notify_state_listeners(&listeners, PlaybackState::Error(message));
                 Err(error.into())
             }
@@ -220,7 +242,12 @@ impl AudioPlayer {
     /// Starts playback for the given track.
     pub fn play(&self, track: &Track) -> Result<()> {
         let handle = self.ensure_track_handle(track)?;
-        handle.play()?;
+        if let Err(error) = handle.play() {
+            let message = error.to_string();
+            let listeners = self.set_state(PlaybackState::Error(message.clone()));
+            notify_state_listeners(&listeners, PlaybackState::Error(message));
+            return Err(error.into());
+        }
         let listeners = self.set_state(PlaybackState::Playing);
         notify_state_listeners(&listeners, PlaybackState::Playing);
         let position = handle.position();
@@ -263,7 +290,7 @@ impl AudioPlayer {
 
     /// Seeks the current track.
     pub fn seek(&self, position: Duration) -> Result<()> {
-        let (handle, source) = {
+        let (handle, source, duration, volume, rate) = {
             let state = self.inner.lock();
             (
                 state.handle.clone(),
@@ -271,22 +298,35 @@ impl AudioPlayer {
                     .current_track
                     .as_ref()
                     .map(|track| track.source.clone()),
+                state
+                    .current_track
+                    .as_ref()
+                    .and_then(|track| track.duration),
+                state.volume,
+                state.rate,
             )
         };
 
         let handle = handle.or_else(|| {
-            source.map(|source| kael_media::AudioHandle::new(source.to_media_source()))
+            source.map(|source| {
+                let handle = kael_media::AudioHandle::new(source.to_media_source());
+                handle.set_volume(volume);
+                handle.set_speed(rate);
+                handle
+            })
         });
 
-        if let Some(handle) = handle {
-            handle.seek(position)?;
-            {
-                let mut state = self.inner.lock();
-                state.handle = Some(handle.clone());
-            }
-            let position_listeners = self.position_listeners();
-            notify_position_listeners(&position_listeners, handle.position());
+        let Some(handle) = handle else {
+            anyhow::bail!("cannot seek without a loaded track");
+        };
+        let position = duration.map_or(position, |duration| position.min(duration));
+        handle.seek(position)?;
+        {
+            let mut state = self.inner.lock();
+            state.handle = Some(handle.clone());
         }
+        let position_listeners = self.position_listeners();
+        notify_position_listeners(&position_listeners, handle.position());
         Ok(())
     }
 
@@ -307,6 +347,19 @@ impl AudioPlayer {
     /// Returns the current playback rate.
     pub fn rate(&self) -> f32 {
         self.inner.lock().rate
+    }
+
+    /// Sets the playback rate in the supported `0.5..=2.0` range.
+    pub fn set_rate(&self, rate: f32) {
+        let rate = clamp_playback_rate(rate);
+        let handle = {
+            let mut state = self.inner.lock();
+            state.rate = rate;
+            state.handle.clone()
+        };
+        if let Some(handle) = handle {
+            handle.set_speed(rate);
+        }
     }
 
     /// Returns the current playback position.
@@ -352,8 +405,7 @@ impl AudioPlayer {
         let state = self.inner.clone();
         let listener_id = {
             let mut state = state.lock();
-            let listener_id = state.next_listener_id;
-            state.next_listener_id += 1;
+            let listener_id = allocate_listener_id(&mut state);
             state
                 .state_listeners
                 .insert(listener_id, Arc::new(callback));
@@ -373,8 +425,7 @@ impl AudioPlayer {
         let state = self.inner.clone();
         let listener_id = {
             let mut state = state.lock();
-            let listener_id = state.next_listener_id;
-            state.next_listener_id += 1;
+            let listener_id = allocate_listener_id(&mut state);
             state
                 .position_listeners
                 .insert(listener_id, Arc::new(callback));
@@ -387,16 +438,17 @@ impl AudioPlayer {
     }
 
     fn ensure_track_handle(&self, track: &Track) -> Result<kael_media::AudioHandle> {
-        let (current_track, existing_handle, volume) = {
+        let (current_track, existing_handle, volume, rate) = {
             let state = self.inner.lock();
             (
                 state.current_track.clone(),
                 state.handle.clone(),
                 state.volume,
+                state.rate,
             )
         };
 
-        if current_track.as_ref().map(|current| current.id) == Some(track.id) {
+        if current_track.as_ref() == Some(track) {
             if let Some(handle) = existing_handle {
                 return Ok(handle);
             }
@@ -404,6 +456,7 @@ impl AudioPlayer {
 
         let handle = kael_media::AudioHandle::new(track.source.to_media_source());
         handle.set_volume(volume);
+        handle.set_speed(rate);
         let mut state = self.inner.lock();
         state.current_track = Some(track.clone());
         state.handle = Some(handle.clone());
@@ -419,6 +472,21 @@ impl AudioPlayer {
     fn position_listeners(&self) -> Vec<PositionListener> {
         let state = self.inner.lock();
         state.position_listeners.values().cloned().collect()
+    }
+}
+
+fn allocate_listener_id(state: &mut AudioPlayerState) -> usize {
+    let start = state.next_listener_id;
+    let mut candidate = start;
+    loop {
+        if !state.state_listeners.contains_key(&candidate)
+            && !state.position_listeners.contains_key(&candidate)
+        {
+            state.next_listener_id = candidate.wrapping_add(1);
+            return candidate;
+        }
+        candidate = candidate.wrapping_add(1);
+        assert!(candidate != start, "audio listener id space exhausted");
     }
 }
 
@@ -474,8 +542,28 @@ mod tests {
     }
 
     #[test]
+    fn buffer_limit_math_handles_invalid_and_extreme_formats() {
+        assert!(AudioPlayer::exceeds_buffer_limit(
+            Duration::MAX,
+            u32::MAX,
+            u16::MAX,
+            u16::MAX,
+        ));
+        assert!(AudioPlayer::exceeds_buffer_limit(
+            Duration::from_secs(1),
+            0,
+            2,
+            16,
+        ));
+    }
+
+    #[test]
     fn audio_player_rate_defaults_to_one() {
         let player = AudioPlayer::new();
+        assert_eq!(player.rate(), 1.0);
+        player.set_rate(3.0);
+        assert_eq!(player.rate(), 2.0);
+        player.set_rate(f32::NAN);
         assert_eq!(player.rate(), 1.0);
     }
 
@@ -489,6 +577,19 @@ mod tests {
         }
         let gen_after = player.inner.lock().load_generation;
         assert_eq!(gen_after, gen_before + 1);
+    }
+
+    #[test]
+    fn listener_ids_wrap_without_replacing_live_callbacks() {
+        let player = AudioPlayer::new();
+        player.inner.lock().next_listener_id = usize::MAX;
+        let max = player.on_state_change(|_| {});
+        let zero = player.on_position_change(|_| {});
+        let state = player.inner.lock();
+        assert!(state.state_listeners.contains_key(&usize::MAX));
+        assert!(state.position_listeners.contains_key(&0));
+        drop(state);
+        drop((max, zero));
     }
 
     #[test]
@@ -514,6 +615,17 @@ mod tests {
         let states = states.lock().unwrap().clone();
         assert_eq!(states[0], PlaybackState::Loading);
         assert_eq!(states[1], PlaybackState::Stopped);
+    }
+
+    #[test]
+    fn seek_requires_a_track_and_clamps_to_duration() {
+        let player = AudioPlayer::new();
+        assert!(player.seek(Duration::from_secs(1)).is_err());
+
+        let track = block_on(player.load(AudioSource::from(silent_wav_1s()))).unwrap();
+        assert_eq!(track.duration, Some(Duration::from_secs(1)));
+        player.seek(Duration::from_secs(5)).unwrap();
+        assert_eq!(player.position(), Duration::from_secs(1));
     }
 
     fn silent_wav_1s() -> Vec<u8> {

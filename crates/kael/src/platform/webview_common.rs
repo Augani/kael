@@ -11,11 +11,26 @@ use wry::{
 pub(crate) fn webview_command_id(command: &PlatformWebViewCommand) -> SharedString {
     match command {
         PlatformWebViewCommand::Navigate { id, .. }
+        | PlatformWebViewCommand::NavigateWithHeaders { id, .. }
+        | PlatformWebViewCommand::LoadHtml { id, .. }
         | PlatformWebViewCommand::EvaluateJavaScript { id, .. }
+        | PlatformWebViewCommand::EvaluateJavaScriptWithResult { id, .. }
         | PlatformWebViewCommand::PostMessage { id, .. }
         | PlatformWebViewCommand::Reload { id }
         | PlatformWebViewCommand::GoBack { id }
-        | PlatformWebViewCommand::GoForward { id } => id.clone(),
+        | PlatformWebViewCommand::GoForward { id }
+        | PlatformWebViewCommand::OpenDevTools { id }
+        | PlatformWebViewCommand::CloseDevTools { id }
+        | PlatformWebViewCommand::IsDevToolsOpen { id, .. }
+        | PlatformWebViewCommand::Print { id }
+        | PlatformWebViewCommand::SetZoomFactor { id, .. }
+        | PlatformWebViewCommand::Focus { id }
+        | PlatformWebViewCommand::FocusParent { id }
+        | PlatformWebViewCommand::ClearBrowsingData { id }
+        | PlatformWebViewCommand::ReadUrl { id, .. }
+        | PlatformWebViewCommand::ReadCookies { id, .. }
+        | PlatformWebViewCommand::SetCookie { id, .. }
+        | PlatformWebViewCommand::DeleteCookie { id, .. } => id.clone(),
     }
 }
 

@@ -9,11 +9,11 @@ use crate::{
 use anyhow::Result;
 use core_graphics::display::CGDirectDisplayID;
 use std::ffi::c_void;
-use util::ResultExt;
 
 pub struct DisplayLink {
     display_link: Option<sys::DisplayLink>,
     frame_requests: dispatch_source_t,
+    running: bool,
 }
 
 impl DisplayLink {
@@ -44,6 +44,10 @@ impl DisplayLink {
                 0,
                 dispatch_get_main_queue(),
             );
+            anyhow::ensure!(
+                !frame_requests.is_null(),
+                "unable to create frame dispatch source"
+            );
             dispatch_set_context(
                 crate::dispatch_sys::dispatch_object_t {
                     _ds: frame_requests,
@@ -52,43 +56,79 @@ impl DisplayLink {
             );
             dispatch_source_set_event_handler_f(frame_requests, Some(callback));
 
-            let display_link = sys::DisplayLink::new(
+            let display_link = match sys::DisplayLink::new(
                 display_id,
                 display_link_callback,
                 frame_requests as *mut c_void,
-            )?;
+            ) {
+                Ok(display_link) => display_link,
+                Err(error) => {
+                    dispatch_source_cancel(frame_requests);
+                    dispatch_resume(crate::dispatch_sys::dispatch_object_t {
+                        _ds: frame_requests,
+                    });
+                    return Err(error);
+                }
+            };
 
             Ok(Self {
                 display_link: Some(display_link),
                 frame_requests,
+                running: false,
             })
         }
     }
 
     pub fn start(&mut self) -> Result<()> {
+        if self.running {
+            return Ok(());
+        }
+        let display_link = self
+            .display_link
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("display link is unavailable"))?;
+        unsafe { display_link.start()? };
         unsafe {
             dispatch_resume(crate::dispatch_sys::dispatch_object_t {
                 _ds: self.frame_requests,
             });
-            self.display_link.as_mut().unwrap().start()?;
         }
+        self.running = true;
         Ok(())
     }
 
     pub fn stop(&mut self) -> Result<()> {
+        if !self.running {
+            return Ok(());
+        }
+        let display_link = self
+            .display_link
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("display link is unavailable"))?;
+        unsafe { display_link.stop()? };
         unsafe {
             dispatch_suspend(crate::dispatch_sys::dispatch_object_t {
                 _ds: self.frame_requests,
             });
-            self.display_link.as_mut().unwrap().stop()?;
         }
+        self.running = false;
         Ok(())
     }
 }
 
 impl Drop for DisplayLink {
     fn drop(&mut self) {
-        self.stop().log_err();
+        let source_is_suspended = if self.running {
+            match self.stop() {
+                Ok(()) => true,
+                Err(error) => {
+                    log::error!("failed to stop display link during teardown: {error:#}");
+                    false
+                }
+            }
+        } else {
+            true
+        };
         // We see occasional segfaults on the CVDisplayLink thread.
         //
         // It seems possible that this happens because CVDisplayLinkRelease releases the CVDisplayLink
@@ -99,6 +139,11 @@ impl Drop for DisplayLink {
         std::mem::forget(self.display_link.take());
         unsafe {
             dispatch_source_cancel(self.frame_requests);
+            if source_is_suspended {
+                dispatch_resume(crate::dispatch_sys::dispatch_object_t {
+                    _ds: self.frame_requests,
+                });
+            }
         }
     }
 }

@@ -24,6 +24,37 @@ pub struct TabRenderState<T> {
     pub focused: bool,
 }
 
+impl<T> TabRenderState<T> {
+    /// Length of the tab label in bytes, without exposing label text.
+    pub fn label_len_bytes(&self) -> usize {
+        self.label.len()
+    }
+
+    /// Returns true when this is the first tab in the set.
+    pub fn is_first(&self) -> bool {
+        self.index == 0
+    }
+
+    /// Returns true when this is the last tab in the set.
+    pub fn is_last(&self) -> bool {
+        self.index + 1 == self.tab_count
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "tab_render_state(index={}, tab_count={}, first={}, last={}, selected={}, focused={}, label_len_bytes={})",
+            self.index,
+            self.tab_count,
+            self.is_first(),
+            self.is_last(),
+            self.selected,
+            self.focused,
+            self.label_len_bytes()
+        )
+    }
+}
+
 type TabRenderer<T> = Rc<dyn Fn(TabRenderState<T>, &Window, &App) -> AnyElement>;
 
 /// Construct a controlled tabs primitive.
@@ -526,5 +557,33 @@ mod tests {
                 .debug_bounds("tabs-custom-Activity-selected-focused")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn tab_render_state_summary_is_content_safe() {
+        let state = TabRenderState {
+            value: "secret-tab",
+            label: SharedString::from("Secret Billing"),
+            index: 1,
+            tab_count: 3,
+            selected: true,
+            focused: false,
+        };
+
+        assert_eq!(state.label_len_bytes(), "Secret Billing".len());
+        assert!(!state.is_first());
+        assert!(!state.is_last());
+
+        let summary = state.to_text();
+        assert!(summary.contains("index=1"));
+        assert!(summary.contains("tab_count=3"));
+        assert!(summary.contains("first=false"));
+        assert!(summary.contains("last=false"));
+        assert!(summary.contains("selected=true"));
+        assert!(summary.contains("focused=false"));
+        assert!(summary.contains("label_len_bytes=14"));
+        assert!(!summary.contains("secret-tab"));
+        assert!(!summary.contains("Secret"));
+        assert!(!summary.contains("Billing"));
     }
 }

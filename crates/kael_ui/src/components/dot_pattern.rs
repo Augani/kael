@@ -27,12 +27,18 @@ impl DotPattern {
     }
 
     pub fn spacing(mut self, spacing: impl Into<Pixels>) -> Self {
-        self.spacing = spacing.into();
+        let spacing = spacing.into() / px(1.0);
+        self.spacing = px(if spacing.is_finite() {
+            spacing.max(1.0)
+        } else {
+            20.0
+        });
         self
     }
 
     pub fn dot_size(mut self, size: impl Into<Pixels>) -> Self {
-        self.dot_size = size.into();
+        let size = size.into() / px(1.0);
+        self.dot_size = px(if size.is_finite() { size.max(0.5) } else { 2.0 });
         self
     }
 
@@ -42,8 +48,30 @@ impl DotPattern {
     }
 
     pub fn opacity(mut self, opacity: f32) -> Self {
-        self.dot_opacity = opacity.clamp(0.0, 1.0);
+        self.dot_opacity = if opacity.is_finite() {
+            opacity.clamp(0.0, 1.0)
+        } else {
+            0.3
+        };
         self
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::DotPattern;
+    use kael::px;
+
+    #[test]
+    fn invalid_geometry_and_opacity_use_safe_defaults() {
+        let pattern = DotPattern::new()
+            .spacing(px(0.0))
+            .dot_size(px(f32::NAN))
+            .opacity(f32::NAN);
+        assert_eq!(pattern.spacing, px(1.0));
+        assert_eq!(pattern.dot_size, px(2.0));
+        assert_eq!(pattern.dot_opacity, 0.3);
     }
 }
 

@@ -5,12 +5,14 @@ use kael::{prelude::FluentBuilder as _, *};
 use crate::theme::Theme;
 
 pub struct DockState {
-    cursor_x: Option<Pixels>,
+    hovered_index: Option<usize>,
 }
 
 impl DockState {
     pub fn new(_cx: &mut Context<Self>) -> Self {
-        Self { cursor_x: None }
+        Self {
+            hovered_index: None,
+        }
     }
 }
 
@@ -79,17 +81,25 @@ impl Dock {
     }
 
     pub fn max_scale(mut self, scale: f32) -> Self {
-        self.max_scale = scale.max(0.0);
+        self.max_scale = if scale.is_finite() {
+            scale.clamp(0.0, 2.0)
+        } else {
+            0.5
+        };
         self
     }
 
     pub fn item_size(mut self, size: Pixels) -> Self {
-        self.item_size = size;
+        if f32::from(size).is_finite() {
+            self.item_size = size.max(px(1.0));
+        }
         self
     }
 
     pub fn gap(mut self, gap: Pixels) -> Self {
-        self.gap = gap;
+        if f32::from(gap).is_finite() {
+            self.gap = gap.max(px(0.0));
+        }
         self
     }
 }
@@ -114,9 +124,19 @@ impl RenderOnce for Dock {
         let item_count = self.children.len();
         let item_size_f = self.item_size / px(1.0);
         let gap_f = self.gap / px(1.0);
-        let sigma = item_size_f * 1.5;
+        let sigma = (item_size_f * 1.5).max(1.0);
 
-        let cursor_rel = state.cursor_x.map(|cx_pos| cx_pos / px(1.0));
+        let total_width =
+            item_count as f32 * item_size_f + item_count.saturating_sub(1) as f32 * gap_f;
+        let start_x = -total_width * 0.5;
+        let animations_enabled = !cx.reduce_motion();
+        let cursor_rel = if animations_enabled {
+            state
+                .hovered_index
+                .map(|index| start_x + index as f32 * (item_size_f + gap_f) + item_size_f * 0.5)
+        } else {
+            None
+        };
 
         let scales = compute_scales(
             item_count,
@@ -127,11 +147,14 @@ impl RenderOnce for Dock {
             sigma,
         );
 
-        let state_move = self.state.clone();
         let state_hover = self.state.clone();
+        let dock_id = self.id.clone();
 
         let mut row = div()
-            .id(self.id)
+            .id(dock_id.clone())
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Group).label("Application dock"),
+            )
             .flex()
             .flex_row()
             .items_end()
@@ -142,16 +165,10 @@ impl RenderOnce for Dock {
             .bg(theme.tokens.card)
             .border_1()
             .border_color(theme.tokens.border)
-            .on_mouse_move(move |event: &MouseMoveEvent, _window, cx| {
-                state_move.update(cx, |s, cx| {
-                    s.cursor_x = Some(event.position.x);
-                    cx.notify();
-                });
-            })
             .on_hover(move |hovered: &bool, _window, cx| {
-                if !*hovered {
+                if animations_enabled && !*hovered {
                     state_hover.update(cx, |s, cx| {
-                        s.cursor_x = None;
+                        s.hovered_index = None;
                         cx.notify();
                     });
                 }
@@ -162,20 +179,65 @@ impl RenderOnce for Dock {
                 el
             });
 
-        for (child, info) in self.children.into_iter().zip(scales.iter()) {
+        for (index, (child, info)) in self.children.into_iter().zip(scales.iter()).enumerate() {
             let scaled_size = px(item_size_f * info.scale);
+            let item_state = self.state.clone();
             row = row.child(
                 div()
+                    .id(ElementId::NamedChild(
+                        Box::new(dock_id.clone()),
+                        format!("item-{index}").into(),
+                    ))
                     .flex_shrink_0()
                     .w(scaled_size)
                     .h(scaled_size)
                     .flex()
                     .items_center()
                     .justify_center()
+                    .on_hover(move |hovered: &bool, _, cx| {
+                        if !animations_enabled {
+                            return;
+                        }
+                        item_state.update(cx, |state, cx| {
+                            let next = hovered.then_some(index);
+                            if state.hovered_index != next {
+                                state.hovered_index = next;
+                                cx.notify();
+                            }
+                        });
+                    })
                     .child(child),
             );
         }
 
         row
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_scales;
+
+    #[test]
+    fn hovered_item_receives_peak_magnification() {
+        let item_size = 48.0;
+        let gap = 4.0;
+        let count = 5;
+        let total_width = count as f32 * item_size + (count - 1) as f32 * gap;
+        let start = -total_width * 0.5;
+        let hovered_index = 2;
+        let cursor = start + hovered_index as f32 * (item_size + gap) + item_size * 0.5;
+        let scales = compute_scales(count, item_size, gap, Some(cursor), 0.5, 72.0);
+
+        assert_eq!(scales.len(), count);
+        assert!((scales[hovered_index].scale - 1.5).abs() < f32::EPSILON);
+        assert!(scales[hovered_index].scale > scales[0].scale);
+        assert!(scales[hovered_index].scale > scales[4].scale);
+    }
+
+    #[test]
+    fn idle_dock_keeps_every_item_at_base_scale() {
+        let scales = compute_scales(4, 48.0, 4.0, None, 0.5, 72.0);
+        assert!(scales.iter().all(|item| item.scale == 1.0));
     }
 }

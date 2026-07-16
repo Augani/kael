@@ -5,6 +5,8 @@
 //! the current format on load, newer-than-supported documents are rejected
 //! rather than misread, and media can be relinked when sources move.
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -20,7 +22,7 @@ pub enum ProjectError {
     /// The JSON could not be parsed or serialized.
     Parse(String),
     /// The document's format version is newer than this build supports.
-    UnsupportedVersion(u32),
+    UnsupportedVersion(u64),
 }
 
 impl std::fmt::Display for ProjectError {
@@ -100,19 +102,27 @@ impl Project {
     pub fn from_json(json: &str) -> Result<Self, ProjectError> {
         let value: Value =
             serde_json::from_str(json).map_err(|error| ProjectError::Parse(error.to_string()))?;
-        let version = value
-            .get("format_version")
-            .and_then(Value::as_u64)
-            .unwrap_or(1) as u32;
-        if version > PROJECT_FORMAT_VERSION {
+        let version = match value.get("format_version") {
+            None => 1,
+            Some(value) => value.as_u64().ok_or_else(|| {
+                ProjectError::Parse("format_version must be a positive integer".into())
+            })?,
+        };
+        if version == 0 {
+            return Err(ProjectError::Parse(
+                "format_version must be at least 1".into(),
+            ));
+        }
+        if version > u64::from(PROJECT_FORMAT_VERSION) {
             return Err(ProjectError::UnsupportedVersion(version));
         }
 
         let mut project: Project = serde_json::from_value(value)
             .map_err(|error| ProjectError::Parse(error.to_string()))?;
-        if version < PROJECT_FORMAT_VERSION {
-            project.migrate_from(version);
+        if version < u64::from(PROJECT_FORMAT_VERSION) {
+            project.migrate_from(version as u32);
         }
+        project.validate_and_canonicalize()?;
         Ok(project)
     }
 
@@ -123,6 +133,68 @@ impl Project {
             self.timeline.recompute_duration();
         }
         self.format_version = PROJECT_FORMAT_VERSION;
+    }
+
+    fn validate_and_canonicalize(&mut self) -> Result<(), ProjectError> {
+        if !self.timeline.frame_rate.is_finite() || self.timeline.frame_rate <= 0.0 {
+            return Err(ProjectError::Parse(
+                "timeline.frame_rate must be finite and positive".into(),
+            ));
+        }
+
+        let mut track_ids = HashSet::new();
+        for track in &self.timeline.tracks {
+            if track.id.is_empty() || !track_ids.insert(track.id.as_str()) {
+                return Err(ProjectError::Parse(
+                    "track ids must be non-empty and unique".into(),
+                ));
+            }
+            if !track.gain.is_finite() {
+                return Err(ProjectError::Parse("track gain must be finite".into()));
+            }
+
+            let mut clip_ids = HashSet::new();
+            for clip in &track.clips {
+                if clip.id.is_empty() || !clip_ids.insert(clip.id.as_str()) {
+                    return Err(ProjectError::Parse(format!(
+                        "clip ids on track '{}' must be non-empty and unique",
+                        track.id
+                    )));
+                }
+                if clip.source.is_empty() {
+                    return Err(ProjectError::Parse(format!(
+                        "clip '{}' has an empty source",
+                        clip.id
+                    )));
+                }
+                let duration = clip
+                    .end_frame
+                    .checked_sub(clip.start_frame)
+                    .ok_or_else(|| {
+                        ProjectError::Parse(format!(
+                            "clip '{}' has an invalid source range",
+                            clip.id
+                        ))
+                    })?;
+                if duration == 0 || clip.track_offset.checked_add(duration).is_none() {
+                    return Err(ProjectError::Parse(format!(
+                        "clip '{}' has an invalid or unrepresentable duration",
+                        clip.id
+                    )));
+                }
+                if !clip.opacity.is_finite() || !(0.0..=1.0).contains(&clip.opacity) {
+                    return Err(ProjectError::Parse(format!(
+                        "clip '{}' opacity must be in 0..=1",
+                        clip.id
+                    )));
+                }
+            }
+        }
+
+        // Persisted duration is derived data. Canonicalizing it on every load prevents a
+        // stale current-version document from truncating playback or export.
+        self.timeline.recompute_duration();
+        Ok(())
     }
 
     /// Relink clips whose source equals `old_source` to `new_source`, returning
@@ -303,6 +375,24 @@ mod tests {
             Project::from_json(json).unwrap_err(),
             ProjectError::UnsupportedVersion(999)
         );
+        let wrapped = r#"{ "format_version": 4294967298, "name": "future", "timeline": { "tracks": [], "frame_rate": 30.0, "duration_frames": 0 } }"#;
+        assert_eq!(
+            Project::from_json(wrapped).unwrap_err(),
+            ProjectError::UnsupportedVersion(4_294_967_298)
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_or_zero_version() {
+        for version in [r#""2""#, "0", "-1", "2.5"] {
+            let json = format!(
+                r#"{{ "format_version": {version}, "timeline": {{ "tracks": [], "frame_rate": 30.0, "duration_frames": 0 }} }}"#
+            );
+            assert!(matches!(
+                Project::from_json(&json),
+                Err(ProjectError::Parse(_))
+            ));
+        }
     }
 
     #[test]
@@ -311,6 +401,36 @@ mod tests {
             Project::from_json("{ not valid json"),
             Err(ProjectError::Parse(_))
         ));
+    }
+
+    #[test]
+    fn rejects_invalid_timeline_invariants() {
+        let cases = [
+            r#"{"format_version":2,"timeline":{"tracks":[],"frame_rate":0,"duration_frames":0}}"#,
+            r#"{"format_version":2,"timeline":{"tracks":[{"id":"v","name":"v","track_type":"Video","clips":[{"id":"a","source":"a.mov","start_frame":10,"end_frame":5,"track_offset":0}]}],"frame_rate":30,"duration_frames":0}}"#,
+            r#"{"format_version":2,"timeline":{"tracks":[{"id":"v","name":"v","track_type":"Video","clips":[{"id":"a","source":"a.mov","start_frame":0,"end_frame":5,"track_offset":0},{"id":"a","source":"b.mov","start_frame":0,"end_frame":5,"track_offset":5}]}],"frame_rate":30,"duration_frames":10}}"#,
+            r#"{"format_version":2,"timeline":{"tracks":[{"id":"v","name":"v","track_type":"Video","clips":[]},{"id":"v","name":"duplicate","track_type":"Video","clips":[]}],"frame_rate":30,"duration_frames":0}}"#,
+        ];
+        for json in cases {
+            assert!(matches!(
+                Project::from_json(json),
+                Err(ProjectError::Parse(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn current_documents_recompute_stale_duration() {
+        let json = r#"{
+            "format_version":2,
+            "timeline":{"tracks":[{"id":"v","name":"v","track_type":"Video","clips":[
+                {"id":"a","source":"a.mov","start_frame":0,"end_frame":10,"track_offset":20}
+            ]}],"frame_rate":30,"duration_frames":1}
+        }"#;
+        assert_eq!(
+            Project::from_json(json).unwrap().timeline.duration_frames,
+            30
+        );
     }
 
     #[test]

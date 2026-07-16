@@ -3,6 +3,14 @@ use std::collections::BTreeSet;
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 
+const MAX_SELECTION_ITEMS: usize = 100_000;
+const MAX_COLLECTION_CHANGES: usize = 100_000;
+const MAX_TABLE_COLUMNS: usize = 1_024;
+const MAX_COLUMN_ID_BYTES: usize = 256;
+const MAX_COLUMN_LABEL_BYTES: usize = 4_096;
+const MAX_TREE_NODES: usize = 100_000;
+const MAX_TREE_DEPTH: usize = 256;
+
 /// How a selection model handles user interaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SelectionMode {
@@ -16,11 +24,40 @@ pub enum SelectionMode {
 
 /// Tracks selected indices within a virtualized collection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "SelectionSerde")]
 pub struct Selection {
     mode: SelectionMode,
     selected: BTreeSet<usize>,
     anchor: Option<usize>,
     pivot: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SelectionSerde {
+    mode: SelectionMode,
+    selected: BTreeSet<usize>,
+    anchor: Option<usize>,
+    pivot: Option<usize>,
+}
+
+impl TryFrom<SelectionSerde> for Selection {
+    type Error = String;
+
+    fn try_from(value: SelectionSerde) -> std::result::Result<Self, Self::Error> {
+        if value.selected.len() > MAX_SELECTION_ITEMS {
+            return Err("selection capacity exceeded".into());
+        }
+        if value.mode == SelectionMode::Single && value.selected.len() > 1 {
+            return Err("single selection contains multiple indices".into());
+        }
+        Ok(Self {
+            mode: value.mode,
+            selected: value.selected,
+            anchor: value.anchor,
+            pivot: value.pivot,
+        })
+    }
 }
 
 impl Selection {
@@ -37,12 +74,24 @@ impl Selection {
     /// Select a single index. In [`SelectionMode::Single`] mode this clears
     /// any previous selection first.
     pub fn select(&mut self, index: usize) {
+        let _ = self.try_select(index);
+    }
+
+    /// Select an index, returning an error if the selection capacity is exhausted.
+    pub fn try_select(&mut self, index: usize) -> Result<()> {
+        if self.mode != SelectionMode::Single
+            && self.selected.len() >= MAX_SELECTION_ITEMS
+            && !self.selected.contains(&index)
+        {
+            return Err(anyhow!("selection capacity exceeded"));
+        }
         if self.mode == SelectionMode::Single {
             self.selected.clear();
         }
         self.selected.insert(index);
         self.anchor = Some(index);
         self.pivot = Some(index);
+        Ok(())
     }
 
     /// Toggle the presence of `index` in the selection.
@@ -56,6 +105,9 @@ impl Selection {
         if self.selected.contains(&index) {
             self.selected.remove(&index);
         } else {
+            if self.selected.len() >= MAX_SELECTION_ITEMS {
+                return;
+            }
             self.selected.insert(index);
         }
         self.anchor = Some(index);
@@ -65,34 +117,59 @@ impl Selection {
     /// any previous range. Requires [`SelectionMode::Range`] or
     /// [`SelectionMode::Multi`].
     pub fn extend_to(&mut self, index: usize) {
+        let _ = self.try_extend_to(index);
+    }
+
+    /// Extend the selection, returning an error when the requested range is too large.
+    pub fn try_extend_to(&mut self, index: usize) -> Result<()> {
         if self.mode == SelectionMode::Single {
-            self.select(index);
-            return;
+            return self.try_select(index);
         }
         let anchor = self.anchor.unwrap_or(0);
 
+        let start = anchor.min(index);
+        let end = anchor.max(index);
+        let range_len = end
+            .checked_sub(start)
+            .and_then(|len| len.checked_add(1))
+            .ok_or_else(|| anyhow!("selection range overflow"))?;
+        if range_len > MAX_SELECTION_ITEMS {
+            return Err(anyhow!("selection range exceeds capacity"));
+        }
+
+        if self.selected.len() > MAX_SELECTION_ITEMS {
+            return Err(anyhow!("selection exceeds capacity"));
+        }
+        let mut selected = self.selected.clone();
         if let Some(prev_pivot) = self.pivot {
             let old_start = anchor.min(prev_pivot);
             let old_end = anchor.max(prev_pivot);
-            for i in old_start..=old_end {
-                self.selected.remove(&i);
-            }
+            selected.retain(|selected| *selected < old_start || *selected > old_end);
         }
 
-        let start = anchor.min(index);
-        let end = anchor.max(index);
         for i in start..=end {
-            self.selected.insert(i);
+            selected.insert(i);
         }
+        if selected.len() > MAX_SELECTION_ITEMS {
+            return Err(anyhow!("selection capacity exceeded"));
+        }
+        self.selected = selected;
         self.pivot = Some(index);
+        Ok(())
     }
 
     /// Select all indices in `0..count`.
     pub fn select_all(&mut self, count: usize) {
-        self.selected.clear();
-        for i in 0..count {
-            self.selected.insert(i);
+        let _ = self.try_select_all(count);
+    }
+
+    /// Select all indices, returning an error when `count` exceeds capacity.
+    pub fn try_select_all(&mut self, count: usize) -> Result<()> {
+        if count > MAX_SELECTION_ITEMS {
+            return Err(anyhow!("selection count exceeds capacity"));
         }
+        self.selected = (0..count).collect();
+        Ok(())
     }
 
     /// Remove all selected indices.
@@ -170,8 +247,28 @@ pub enum CollectionChange {
 /// An ordered list of [`CollectionChange`]s describing how a data source
 /// transitioned between two states.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(try_from = "CollectionDiffSerde")]
 pub struct CollectionDiff {
     changes: Vec<CollectionChange>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CollectionDiffSerde {
+    changes: Vec<CollectionChange>,
+}
+
+impl TryFrom<CollectionDiffSerde> for CollectionDiff {
+    type Error = String;
+
+    fn try_from(value: CollectionDiffSerde) -> std::result::Result<Self, Self::Error> {
+        if value.changes.len() > MAX_COLLECTION_CHANGES {
+            return Err("collection diff capacity exceeded".into());
+        }
+        Ok(Self {
+            changes: value.changes,
+        })
+    }
 }
 
 impl CollectionDiff {
@@ -182,7 +279,16 @@ impl CollectionDiff {
 
     /// Append a change to this diff.
     pub fn push(&mut self, change: CollectionChange) {
+        let _ = self.try_push(change);
+    }
+
+    /// Append a change, returning an error if the diff is at capacity.
+    pub fn try_push(&mut self, change: CollectionChange) -> Result<()> {
+        if self.changes.len() >= MAX_COLLECTION_CHANGES {
+            return Err(anyhow!("collection diff capacity exceeded"));
+        }
         self.changes.push(change);
+        Ok(())
     }
 
     /// Returns a slice of all recorded changes.
@@ -204,10 +310,34 @@ impl CollectionDiff {
 /// Tracks which portion of a virtualized collection is currently visible,
 /// with optional prefetch margins.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "VisibleRangeSerde")]
 pub struct VisibleRange {
     start: usize,
     end: usize,
     prefetch: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VisibleRangeSerde {
+    start: usize,
+    end: usize,
+    prefetch: usize,
+}
+
+impl TryFrom<VisibleRangeSerde> for VisibleRange {
+    type Error = String;
+
+    fn try_from(value: VisibleRangeSerde) -> std::result::Result<Self, Self::Error> {
+        if value.end < value.start {
+            return Err("visible range ends before it starts".into());
+        }
+        Ok(Self {
+            start: value.start,
+            end: value.end,
+            prefetch: value.prefetch,
+        })
+    }
 }
 
 impl VisibleRange {
@@ -266,6 +396,7 @@ pub enum SortDirection {
 
 /// Describes a single column in a [`VirtualTableModel`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ColumnDescriptor {
     /// Unique identifier for this column.
     pub id: String,
@@ -285,6 +416,7 @@ pub struct ColumnDescriptor {
 
 /// Current sort state of a [`VirtualTableModel`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TableSort {
     /// The id of the column being sorted.
     pub column_id: String,
@@ -295,6 +427,7 @@ pub struct TableSort {
 /// Data model for a virtualized table with columns, selection, sorting,
 /// and visible-range tracking.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "VirtualTableModelSerde")]
 pub struct VirtualTableModel {
     columns: Vec<ColumnDescriptor>,
     row_count: usize,
@@ -303,16 +436,62 @@ pub struct VirtualTableModel {
     visible_range: VisibleRange,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VirtualTableModelSerde {
+    columns: Vec<ColumnDescriptor>,
+    row_count: usize,
+    sort: Option<TableSort>,
+    selection: Selection,
+    visible_range: VisibleRange,
+}
+
+impl TryFrom<VirtualTableModelSerde> for VirtualTableModel {
+    type Error = String;
+
+    fn try_from(value: VirtualTableModelSerde) -> std::result::Result<Self, Self::Error> {
+        let mut table =
+            Self::try_new(value.columns, value.row_count).map_err(|error| error.to_string())?;
+        table
+            .try_set_sort(value.sort)
+            .map_err(|error| error.to_string())?;
+        table.selection = value.selection;
+        table.visible_range = value.visible_range;
+        Ok(table)
+    }
+}
+
 impl VirtualTableModel {
     /// Create a new table model with the given columns and row count.
     pub fn new(columns: Vec<ColumnDescriptor>, row_count: usize) -> Self {
-        Self {
+        Self::try_new(columns, row_count).unwrap_or_else(|_| Self {
+            columns: Vec::new(),
+            row_count,
+            sort: None,
+            selection: Selection::new(SelectionMode::Single),
+            visible_range: VisibleRange::new(0, 0, 0),
+        })
+    }
+
+    /// Create a validated table model.
+    pub fn try_new(columns: Vec<ColumnDescriptor>, row_count: usize) -> Result<Self> {
+        if columns.len() > MAX_TABLE_COLUMNS {
+            return Err(anyhow!("table column capacity exceeded"));
+        }
+        let mut ids = BTreeSet::new();
+        for column in &columns {
+            validate_column(column)?;
+            if !ids.insert(column.id.as_str()) {
+                return Err(anyhow!("duplicate table column id"));
+            }
+        }
+        Ok(Self {
             columns,
             row_count,
             sort: None,
             selection: Selection::new(SelectionMode::Single),
             visible_range: VisibleRange::new(0, 0, 0),
-        }
+        })
     }
 
     /// Returns a slice of all column descriptors.
@@ -337,7 +516,28 @@ impl VirtualTableModel {
 
     /// Set or clear the sort state.
     pub fn set_sort(&mut self, sort: Option<TableSort>) {
+        if self.try_set_sort(sort).is_err() {
+            self.sort = None;
+        }
+    }
+
+    /// Set a validated sort state.
+    pub fn try_set_sort(&mut self, sort: Option<TableSort>) -> Result<()> {
+        if let Some(sort) = &sort {
+            if sort.column_id.is_empty() || sort.column_id.len() > MAX_COLUMN_ID_BYTES {
+                return Err(anyhow!("invalid sort column id"));
+            }
+            let column = self
+                .columns
+                .iter()
+                .find(|column| column.id == sort.column_id)
+                .ok_or_else(|| anyhow!("sort column not found"))?;
+            if !column.sortable {
+                return Err(anyhow!("column is not sortable"));
+            }
+        }
         self.sort = sort;
+        Ok(())
     }
 
     /// Returns a shared reference to the row selection.
@@ -364,23 +564,54 @@ impl VirtualTableModel {
     /// column's `[min_width, max_width]` bounds. Returns an error if no
     /// column with the given id exists or the column is not resizable.
     pub fn resize_column(&mut self, id: &str, width: f32) -> Result<()> {
+        if id.is_empty() || id.len() > MAX_COLUMN_ID_BYTES || !width.is_finite() {
+            return Err(anyhow!("invalid column resize request"));
+        }
         let col = self
             .columns
             .iter_mut()
             .find(|c| c.id == id)
-            .ok_or_else(|| anyhow!("column '{}' not found", id))?;
+            .ok_or_else(|| anyhow!("column not found"))?;
 
         if !col.resizable {
-            return Err(anyhow!("column '{}' is not resizable", id));
+            return Err(anyhow!("column is not resizable"));
         }
+
+        validate_column(col)?;
 
         col.width = width.clamp(col.min_width, col.max_width);
         Ok(())
     }
 }
 
+fn validate_column(column: &ColumnDescriptor) -> Result<()> {
+    if column.id.is_empty()
+        || column.id.len() > MAX_COLUMN_ID_BYTES
+        || column.id.chars().any(char::is_control)
+        || column.label.len() > MAX_COLUMN_LABEL_BYTES
+        || column
+            .label
+            .chars()
+            .any(|character| character.is_control() && character != '\n' && character != '\t')
+    {
+        return Err(anyhow!("invalid table column text"));
+    }
+    if !column.width.is_finite()
+        || !column.min_width.is_finite()
+        || !column.max_width.is_finite()
+        || column.min_width < 0.0
+        || column.max_width < column.min_width
+        || column.width < column.min_width
+        || column.width > column.max_width
+    {
+        return Err(anyhow!("invalid table column width bounds"));
+    }
+    Ok(())
+}
+
 /// A node in a tree structure used for virtualized tree views.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TreeNode<T> {
     /// The data payload for this node.
     pub data: T,
@@ -410,6 +641,7 @@ pub struct FlattenedTreeItem<'a, T> {
 /// A forest of [`TreeNode`]s with expand/collapse tracking and
 /// efficient flattening for virtualized rendering.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TreeModel<T> {
     roots: Vec<TreeNode<T>>,
 }
@@ -428,7 +660,22 @@ impl<T> TreeModel<T> {
 
     /// Append a root-level node.
     pub fn add_root(&mut self, node: TreeNode<T>) {
+        let _ = self.try_add_root(node);
+    }
+
+    /// Append a validated root node within the tree's count and depth limits.
+    pub fn try_add_root(&mut self, node: TreeNode<T>) -> Result<()> {
+        let existing = count_tree_nodes(&self.roots)
+            .ok_or_else(|| anyhow!("existing tree exceeds capacity"))?;
+        let incoming = validate_tree_node(&node)?;
+        if existing
+            .checked_add(incoming)
+            .map_or(true, |count| count > MAX_TREE_NODES)
+        {
+            return Err(anyhow!("tree node capacity exceeded"));
+        }
         self.roots.push(node);
+        Ok(())
     }
 
     /// Returns a slice of the root nodes.
@@ -440,70 +687,107 @@ impl<T> TreeModel<T> {
     /// Only expanded nodes have their children included.
     pub fn flatten(&self) -> Vec<FlattenedTreeItem<'_, T>> {
         let mut items = Vec::new();
-        for root in &self.roots {
-            Self::flatten_node(root, &mut items);
-        }
-        items
-    }
-
-    fn flatten_node<'a>(node: &'a TreeNode<T>, items: &mut Vec<FlattenedTreeItem<'a, T>>) {
-        let index = items.len();
-        items.push(FlattenedTreeItem {
-            data: &node.data,
-            depth: node.depth,
-            expanded: node.expanded,
-            has_children: !node.children.is_empty(),
-            index,
-        });
-        if node.expanded {
-            for child in &node.children {
-                Self::flatten_node(child, items);
+        let mut pending: Vec<_> = self.roots.iter().take(MAX_TREE_NODES).rev().collect();
+        while let Some(node) = pending.pop() {
+            if items.len() >= MAX_TREE_NODES {
+                break;
+            }
+            let index = items.len();
+            items.push(FlattenedTreeItem {
+                data: &node.data,
+                depth: node.depth,
+                expanded: node.expanded,
+                has_children: !node.children.is_empty(),
+                index,
+            });
+            if node.expanded {
+                let remaining = MAX_TREE_NODES.saturating_sub(pending.len());
+                pending.extend(node.children.iter().rev().take(remaining));
             }
         }
+        items
     }
 
     /// Toggle the expanded state of the node at `path` where each element
     /// is a child index at the corresponding depth. Returns the new
     /// expanded state, or `false` if the path is invalid.
     pub fn toggle_expanded(&mut self, path: &[usize]) -> bool {
-        if let Some(node) = Self::node_at_path_mut(&mut self.roots, path) {
-            node.expanded = !node.expanded;
-            node.expanded
-        } else {
-            false
+        if path.is_empty() || path.len() > MAX_TREE_DEPTH {
+            return false;
         }
+        let mut nodes = self.roots.as_mut_slice();
+        for (depth, index) in path.iter().copied().enumerate() {
+            let Some(node) = nodes.get_mut(index) else {
+                return false;
+            };
+            if depth + 1 == path.len() {
+                node.expanded = !node.expanded;
+                return node.expanded;
+            }
+            nodes = node.children.as_mut_slice();
+        }
+        false
     }
 
     /// Count the total number of currently visible (flattened) nodes.
     pub fn total_visible_count(&self) -> usize {
-        self.roots.iter().map(Self::visible_count_node).sum()
-    }
-
-    fn visible_count_node(node: &TreeNode<T>) -> usize {
-        let mut count = 1;
-        if node.expanded {
-            for child in &node.children {
-                count += Self::visible_count_node(child);
+        let mut count = 0usize;
+        let mut pending: Vec<_> = self.roots.iter().take(MAX_TREE_NODES).collect();
+        while let Some(node) = pending.pop() {
+            count = count.saturating_add(1);
+            if count >= MAX_TREE_NODES {
+                return MAX_TREE_NODES;
+            }
+            if node.expanded {
+                let remaining = MAX_TREE_NODES.saturating_sub(pending.len());
+                pending.extend(node.children.iter().take(remaining));
             }
         }
         count
     }
+}
 
-    fn node_at_path_mut<'a>(
-        nodes: &'a mut [TreeNode<T>],
-        path: &[usize],
-    ) -> Option<&'a mut TreeNode<T>> {
-        if path.is_empty() {
+fn count_tree_nodes<T>(roots: &[TreeNode<T>]) -> Option<usize> {
+    if roots.len() > MAX_TREE_NODES {
+        return None;
+    }
+    let mut count = 0usize;
+    let mut pending: Vec<_> = roots.iter().collect();
+    while let Some(node) = pending.pop() {
+        count = count.checked_add(1)?;
+        if count > MAX_TREE_NODES {
             return None;
         }
-        let idx = path[0];
-        let node = nodes.get_mut(idx)?;
-        if path.len() == 1 {
-            Some(node)
-        } else {
-            Self::node_at_path_mut(&mut node.children, &path[1..])
+        if node.children.len() > MAX_TREE_NODES.saturating_sub(pending.len()) {
+            return None;
         }
+        pending.extend(&node.children);
     }
+    Some(count)
+}
+
+fn validate_tree_node<T>(root: &TreeNode<T>) -> Result<usize> {
+    let mut count = 0usize;
+    let mut pending = vec![(root, 0usize)];
+    while let Some((node, expected_depth)) = pending.pop() {
+        if expected_depth >= MAX_TREE_DEPTH || node.depth != expected_depth {
+            return Err(anyhow!("invalid tree depth"));
+        }
+        count = count
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("tree node count overflow"))?;
+        if count > MAX_TREE_NODES {
+            return Err(anyhow!("tree node capacity exceeded"));
+        }
+        let child_depth = expected_depth
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("tree depth overflow"))?;
+        if node.children.len() > MAX_TREE_NODES.saturating_sub(pending.len()) {
+            return Err(anyhow!("tree node capacity exceeded"));
+        }
+        pending.extend(node.children.iter().map(|child| (child, child_depth)));
+    }
+    Ok(count)
 }
 
 #[cfg(test)]
@@ -615,6 +899,24 @@ mod tests {
             assert!(!sel.is_selected(0));
             assert!(sel.selected_indices().is_empty());
         }
+
+        #[test]
+        fn oversized_range_and_select_all_fail_without_mutation() {
+            let mut sel = Selection::new(SelectionMode::Range);
+            sel.select(7);
+            assert!(sel.try_extend_to(usize::MAX).is_err());
+            assert_eq!(sel.selected_indices(), &BTreeSet::from([7]));
+            assert!(sel.try_select_all(MAX_SELECTION_ITEMS + 1).is_err());
+            assert_eq!(sel.selected_indices(), &BTreeSet::from([7]));
+        }
+
+        #[test]
+        fn malformed_serialized_selection_is_rejected() {
+            let json = r#"{
+                "mode":"Single","selected":[1,2],"anchor":1,"pivot":2
+            }"#;
+            assert!(serde_json::from_str::<Selection>(json).is_err());
+        }
     }
 
     mod collection_diff_tests {
@@ -638,6 +940,15 @@ mod tests {
             assert_eq!(diff.len(), 5);
             assert!(!diff.is_empty());
             assert_eq!(diff.changes()[0], CollectionChange::Insert { index: 0 });
+        }
+
+        #[test]
+        fn diff_capacity_is_checked() {
+            let mut diff = CollectionDiff {
+                changes: vec![CollectionChange::Reset; MAX_COLLECTION_CHANGES],
+            };
+            assert!(diff.try_push(CollectionChange::Reset).is_err());
+            assert_eq!(diff.len(), MAX_COLLECTION_CHANGES);
         }
     }
 
@@ -689,6 +1000,20 @@ mod tests {
             let vr = VisibleRange::new(10, 5, 0);
             assert_eq!(vr.len(), 0);
             assert!(vr.is_empty());
+        }
+
+        #[test]
+        fn serialized_range_must_be_ordered_and_known() {
+            assert!(
+                serde_json::from_str::<VisibleRange>(r#"{"start":10,"end":2,"prefetch":0}"#)
+                    .is_err()
+            );
+            assert!(
+                serde_json::from_str::<VisibleRange>(
+                    r#"{"start":0,"end":2,"prefetch":0,"extra":1}"#
+                )
+                .is_err()
+            );
         }
     }
 
@@ -775,6 +1100,38 @@ mod tests {
             let mut table = VirtualTableModel::new(sample_columns(), 0);
             table.set_row_count(999);
             assert_eq!(table.row_count(), 999);
+        }
+
+        #[test]
+        fn invalid_columns_sorts_and_resize_values_are_rejected() {
+            let mut duplicate = sample_columns();
+            duplicate[1].id = duplicate[0].id.clone();
+            assert!(VirtualTableModel::try_new(duplicate, 1).is_err());
+
+            let mut invalid = sample_columns();
+            invalid[0].min_width = 500.0;
+            invalid[0].max_width = 50.0;
+            assert!(VirtualTableModel::try_new(invalid, 1).is_err());
+
+            let mut table = VirtualTableModel::new(sample_columns(), 1);
+            assert!(table.resize_column("name", f32::NAN).is_err());
+            assert!(
+                table
+                    .try_set_sort(Some(TableSort {
+                        column_id: "missing".into(),
+                        direction: SortDirection::Ascending,
+                    }))
+                    .is_err()
+            );
+            assert!(table.sort().is_none());
+        }
+
+        #[test]
+        fn serialized_table_is_validated() {
+            let table = VirtualTableModel::new(sample_columns(), 10);
+            let mut value = serde_json::to_value(table).unwrap();
+            value["columns"][0]["min_width"] = serde_json::json!(900.0);
+            assert!(serde_json::from_value::<VirtualTableModel>(value).is_err());
         }
     }
 
@@ -886,6 +1243,43 @@ mod tests {
             assert!(tree.roots().is_empty());
             assert!(tree.flatten().is_empty());
             assert_eq!(tree.total_visible_count(), 0);
+        }
+
+        #[test]
+        fn excessive_or_inconsistent_tree_depth_is_rejected() {
+            let mut node = TreeNode {
+                data: 0,
+                children: Vec::new(),
+                expanded: true,
+                depth: MAX_TREE_DEPTH,
+            };
+            for depth in (0..MAX_TREE_DEPTH).rev() {
+                node = TreeNode {
+                    data: depth,
+                    children: vec![node],
+                    expanded: true,
+                    depth,
+                };
+            }
+            let mut tree = TreeModel::new();
+            assert!(tree.try_add_root(node).is_err());
+            assert!(tree.roots().is_empty());
+
+            assert!(
+                tree.try_add_root(TreeNode {
+                    data: 1,
+                    children: vec![TreeNode {
+                        data: 2,
+                        children: Vec::new(),
+                        expanded: false,
+                        depth: 7,
+                    }],
+                    expanded: true,
+                    depth: 0,
+                })
+                .is_err()
+            );
+            assert!(!tree.toggle_expanded(&vec![0; MAX_TREE_DEPTH + 1]));
         }
     }
 

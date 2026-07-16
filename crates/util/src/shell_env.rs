@@ -75,7 +75,13 @@ async fn capture_unix(
         }
     }
     // cd into the directory, triggering directory specific side-effects (asdf, direnv, etc)
-    command_string.push_str(&format!("cd '{}';", directory.display()));
+    let directory = directory
+        .to_str()
+        .context("login-shell directory is not valid UTF-8")?;
+    let directory = shell_kind
+        .try_quote(directory)
+        .context("login-shell directory contains a null byte")?;
+    command_string.push_str(&format!("cd {directory};"));
     if let Some(prefix) = shell_kind.command_prefix() {
         command_string.push(prefix);
     }

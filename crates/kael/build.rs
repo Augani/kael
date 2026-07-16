@@ -343,7 +343,11 @@ mod macos {
                 "macosx",
                 "metal",
                 "-gline-tables-only",
-                "-mmacosx-version-min=10.15.7",
+                // macOS 11+ so the shader library can use programmable blending
+                // (framebuffer fetch / `[[color(0)]]`) for destination-reading blend
+                // modes. The fetch pipeline is created with a runtime fallback, so GPUs
+                // without programmable blending (e.g. Intel Macs) keep working.
+                "-mmacosx-version-min=11.0",
                 "-MO",
                 "-c",
                 shader_path,

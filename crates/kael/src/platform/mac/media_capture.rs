@@ -26,6 +26,11 @@ use std::{
 
 use super::dispatcher::dispatch_sys::{DISPATCH_QUEUE_PRIORITY_HIGH, dispatch_get_global_queue};
 
+const MAX_CAPTURE_DIMENSION: usize = 16_384;
+const MAX_CAPTURE_FRAME_BYTES: usize = 256 * 1024 * 1024;
+const MAX_CAPTURE_DEVICES: usize = 1_024;
+const MAX_CAPTURE_DEVICE_TEXT_BYTES: usize = 4_096;
+
 #[link(name = "AVFoundation", kind = "framework")]
 unsafe extern "C" {
     static AVMediaTypeAudio: *mut AnyObject;
@@ -65,6 +70,76 @@ unsafe fn release_obj(object: *mut AnyObject) {
     }
 }
 
+struct PixelBufferBaseAddressLock(CVImageBufferRef);
+
+impl Drop for PixelBufferBaseAddressLock {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CVPixelBufferUnlockBaseAddress(self.0, 0);
+        }
+    }
+}
+
+unsafe fn copy_bgra_pixel_buffer(pixel_buffer: CVImageBufferRef) -> Result<(u32, u32, Vec<u8>)> {
+    if unsafe { CVPixelBufferLockBaseAddress(pixel_buffer, 0) } != 0 {
+        return Err(anyhow!("failed to lock camera pixel buffer"));
+    }
+    let _lock = PixelBufferBaseAddressLock(pixel_buffer);
+
+    if unsafe { CVPixelBufferGetPixelFormatType(pixel_buffer) } != kCVPixelFormatType_32BGRA {
+        return Err(anyhow!("camera pixel buffer is not BGRA"));
+    }
+
+    let width = unsafe { CVPixelBufferGetWidth(pixel_buffer) };
+    let height = unsafe { CVPixelBufferGetHeight(pixel_buffer) };
+    if width == 0 || height == 0 || width > MAX_CAPTURE_DIMENSION || height > MAX_CAPTURE_DIMENSION
+    {
+        return Err(anyhow!("camera pixel buffer dimensions are invalid"));
+    }
+
+    let packed_stride = width
+        .checked_mul(4)
+        .ok_or_else(|| anyhow!("camera pixel row size overflowed"))?;
+    let frame_bytes = packed_stride
+        .checked_mul(height)
+        .filter(|bytes| *bytes <= MAX_CAPTURE_FRAME_BYTES)
+        .ok_or_else(|| anyhow!("camera pixel buffer is too large"))?;
+    let source_stride = unsafe { CVPixelBufferGetBytesPerRow(pixel_buffer) };
+    if source_stride < packed_stride {
+        return Err(anyhow!("camera pixel buffer row is shorter than its width"));
+    }
+    source_stride
+        .checked_mul(height)
+        .ok_or_else(|| anyhow!("camera source buffer size overflowed"))?;
+
+    let base_address = unsafe { CVPixelBufferGetBaseAddress(pixel_buffer) }.cast::<u8>();
+    if base_address.is_null() {
+        return Err(anyhow!("camera pixel buffer has no base address"));
+    }
+
+    let mut data = Vec::new();
+    data.try_reserve_exact(frame_bytes)
+        .map_err(|_| anyhow!("camera frame allocation failed"))?;
+    data.resize(frame_bytes, 0);
+    for row in 0..height {
+        let source_offset = row
+            .checked_mul(source_stride)
+            .ok_or_else(|| anyhow!("camera source row offset overflowed"))?;
+        let target_offset = row
+            .checked_mul(packed_stride)
+            .ok_or_else(|| anyhow!("camera target row offset overflowed"))?;
+        unsafe {
+            ptr::copy_nonoverlapping(
+                base_address.add(source_offset),
+                data.as_mut_ptr().add(target_offset),
+                packed_stride,
+            );
+        }
+    }
+
+    Ok((width as u32, height as u32, data))
+}
+
 #[derive(Default)]
 struct VideoOutputDelegateIvars {
     state: Cell<*mut c_void>,
@@ -102,38 +177,10 @@ define_class!(
                 };
 
                 let pixel_buffer = image_buffer.as_concrete_TypeRef();
-                if CVPixelBufferLockBaseAddress(pixel_buffer, 0) != 0 {
+                let Ok((width, height, data)) = copy_bgra_pixel_buffer(pixel_buffer) else {
                     state.dropped.fetch_add(1, Ordering::Relaxed);
                     return;
-                }
-
-                let pixel_format = CVPixelBufferGetPixelFormatType(pixel_buffer);
-                if pixel_format != kCVPixelFormatType_32BGRA {
-                    let _ = CVPixelBufferUnlockBaseAddress(pixel_buffer, 0);
-                    state.dropped.fetch_add(1, Ordering::Relaxed);
-                    return;
-                }
-
-                let width = CVPixelBufferGetWidth(pixel_buffer) as u32;
-                let height = CVPixelBufferGetHeight(pixel_buffer) as u32;
-                let bytes_per_row = CVPixelBufferGetBytesPerRow(pixel_buffer);
-                let base_address = CVPixelBufferGetBaseAddress(pixel_buffer) as *const u8;
-                if base_address.is_null() {
-                    let _ = CVPixelBufferUnlockBaseAddress(pixel_buffer, 0);
-                    state.dropped.fetch_add(1, Ordering::Relaxed);
-                    return;
-                }
-
-                let expected_bytes_per_row = width as usize * 4;
-                let mut data = vec![0u8; expected_bytes_per_row * height as usize];
-                for row in 0..height as usize {
-                    let source = base_address.add(row * bytes_per_row);
-                    let target = &mut data
-                        [row * expected_bytes_per_row..(row + 1) * expected_bytes_per_row];
-                    ptr::copy_nonoverlapping(source, target.as_mut_ptr(), expected_bytes_per_row);
-                }
-
-                let _ = CVPixelBufferUnlockBaseAddress(pixel_buffer, 0);
+                };
 
                 let timestamp_ms = sample_buffer
                     .sample_timing_info(0)
@@ -145,13 +192,20 @@ define_class!(
                     })
                     .unwrap_or_default();
 
-                (state.callback)(crate::media_capture::CaptureFrame::Video {
-                    width,
-                    height,
-                    format: PixelFormat::Bgra32,
-                    data: Arc::new(data),
-                    timestamp_ms,
-                });
+                crate::platform::catch_platform_callback(
+                    "macOS",
+                    "camera frame",
+                    (),
+                    || {
+                        (state.callback)(crate::media_capture::CaptureFrame::Video {
+                            width,
+                            height,
+                            format: PixelFormat::Bgra32,
+                            data: Arc::new(data),
+                            timestamp_ms,
+                        });
+                    },
+                );
                 state
                     .latency_ms
                     .store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
@@ -265,6 +319,12 @@ impl CaptureSession for MacCameraCaptureSession {
             let session: *mut AnyObject = msg_send![lookup_class(c"AVCaptureSession"), new];
             let video_output: *mut AnyObject =
                 msg_send![lookup_class(c"AVCaptureVideoDataOutput"), new];
+            if session.is_null() || video_output.is_null() {
+                release_obj(video_output);
+                release_obj(session);
+                self.state = CaptureSessionState::Error;
+                anyhow::bail!("AVFoundation failed to allocate camera capture objects");
+            }
 
             let delegate_state = Box::new(VideoOutputState {
                 callback,
@@ -503,8 +563,8 @@ fn enumerate_devices(
         }
 
         let count: usize = msg_send![devices, count];
-        let mut result = Vec::with_capacity(count);
-        for index in 0..count {
+        let mut result = Vec::with_capacity(count.min(MAX_CAPTURE_DEVICES));
+        for index in 0..count.min(MAX_CAPTURE_DEVICES) {
             let device: *mut AnyObject = msg_send![devices, objectAtIndex: index];
             if device.is_null() {
                 continue;
@@ -514,9 +574,17 @@ fn enumerate_devices(
             let localized_name: *mut AnyObject = msg_send![device, localizedName];
             let connected: bool = msg_send![device, isConnected];
 
+            let id = ns_string_to_str(unique_id);
+            let name = ns_string_to_str(localized_name);
+            if id.is_empty()
+                || id.len() > MAX_CAPTURE_DEVICE_TEXT_BYTES
+                || name.len() > MAX_CAPTURE_DEVICE_TEXT_BYTES
+            {
+                continue;
+            }
             result.push(CaptureDeviceInfo {
-                id: ns_string_to_str(unique_id),
-                name: ns_string_to_str(localized_name),
+                id,
+                name,
                 kind,
                 is_available: connected,
             });
@@ -536,7 +604,7 @@ unsafe fn create_camera_input(device_id: &str) -> Result<*mut AnyObject> {
 
         let count: usize = msg_send![devices, count];
         let mut selected_device: *mut AnyObject = ptr::null_mut();
-        for index in 0..count {
+        for index in 0..count.min(MAX_CAPTURE_DEVICES) {
             let candidate: *mut AnyObject = msg_send![devices, objectAtIndex: index];
             if candidate.is_null() {
                 continue;
@@ -576,6 +644,9 @@ unsafe fn create_camera_input(device_id: &str) -> Result<*mut AnyObject> {
 
 unsafe fn configure_video_output(video_output: *mut AnyObject) -> Result<()> {
     unsafe {
+        if video_output.is_null() || kCVPixelBufferPixelFormatTypeKey.is_null() {
+            anyhow::bail!("AVFoundation video output is unavailable");
+        }
         let pixel_format: *mut AnyObject = msg_send![
             lookup_class(c"NSNumber"),
             numberWithUnsignedInt: kCVPixelFormatType_32BGRA
@@ -586,6 +657,9 @@ unsafe fn configure_video_output(video_output: *mut AnyObject) -> Result<()> {
             dictionaryWithObject: pixel_format,
             forKey: key_ptr
         ];
+        if pixel_format.is_null() || settings.is_null() {
+            anyhow::bail!("AVFoundation failed to create video output settings");
+        }
         let _: () = msg_send![video_output, setVideoSettings: settings];
         let _: () = msg_send![video_output, setAlwaysDiscardsLateVideoFrames: true];
     }
@@ -596,6 +670,23 @@ fn cmtime_to_millis(value: i64, timescale: i32) -> u64 {
     if timescale <= 0 || value <= 0 {
         0
     } else {
-        ((value as i128 * 1_000) / timescale as i128) as u64
+        ((value as i128 * 1_000) / timescale as i128).min(u64::MAX as i128) as u64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cmtime_to_millis;
+
+    #[test]
+    fn media_timestamps_saturate_instead_of_wrapping() {
+        assert_eq!(cmtime_to_millis(i64::MAX, 1), u64::MAX);
+        assert_eq!(cmtime_to_millis(5, 2), 2_500);
+    }
+
+    #[test]
+    fn invalid_media_times_are_zero() {
+        assert_eq!(cmtime_to_millis(-1, 1), 0);
+        assert_eq!(cmtime_to_millis(1, 0), 0);
     }
 }

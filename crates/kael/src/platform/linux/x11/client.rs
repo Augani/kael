@@ -7,9 +7,7 @@ use calloop::{
 };
 use collections::HashMap;
 use core::str;
-use http_client::Url;
 use log::Level;
-use smallvec::SmallVec;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashSet},
@@ -339,7 +337,14 @@ impl X11Client {
                         // events have higher priority and runnables are only worked off after the event
                         // callbacks.
                         handle.insert_idle(|_| {
-                            runnable.run();
+                            crate::platform::catch_platform_callback(
+                                "Linux",
+                                "foreground task",
+                                (),
+                                || {
+                                    runnable.run();
+                                },
+                            );
                         });
                     }
                 }
@@ -381,9 +386,9 @@ impl X11Client {
             || "XInput XiQueryVersion failed",
             xcb_connection.xinput_xi_query_version(2, 1),
         )?;
-        assert!(
+        anyhow::ensure!(
             xinput_version.major_version >= 2,
-            "XInput version >= 2 required."
+            "XInput version >= 2 is required"
         );
 
         let pointer_device_states =
@@ -425,7 +430,10 @@ impl X11Client {
             xcb_connection
                 .xkb_use_extension(XKB_X11_MIN_MAJOR_XKB_VERSION, XKB_X11_MIN_MINOR_XKB_VERSION),
         )?;
-        assert!(xkb.supported);
+        anyhow::ensure!(
+            xkb.supported,
+            "the X server rejected the required XKB extension"
+        );
 
         let events = xkb::EventType::STATE_NOTIFY
             | xkb::EventType::MAP_NOTIFY
@@ -739,7 +747,7 @@ impl X11Client {
             let mut callback = state.common.callbacks.network_status_change.take();
             drop(state);
             if let Some(ref mut cb) = callback {
-                cb(status);
+                super::super::catch_platform_callback("network change", (), || cb(status));
             }
             self.0.borrow_mut().common.callbacks.network_status_change = callback;
         }
@@ -750,7 +758,7 @@ impl X11Client {
         let mut callback = state.common.callbacks.system_power.take();
         drop(state);
         if let Some(ref mut cb) = callback {
-            cb(event);
+            super::super::catch_platform_callback("system power", (), || cb(event));
         }
         self.0.borrow_mut().common.callbacks.system_power = callback;
     }
@@ -951,15 +959,18 @@ impl X11Client {
                     return Some(());
                 };
                 if let Ok(file_list) = str::from_utf8(&reply.value) {
-                    let paths: SmallVec<[_; 2]> = file_list
-                        .lines()
-                        .filter_map(|path| Url::parse(path).log_err())
-                        .filter_map(|url| url.to_file_path().log_err())
-                        .collect();
-                    let input = PlatformInput::FileDrop(FileDropEvent::Entered {
-                        position: state.xdnd_state.position,
-                        paths: crate::ExternalPaths(paths),
-                    });
+                    let data = crate::ExternalDropData::from_uri_list(file_list);
+                    let input = if data.has_urls() || data.has_text() {
+                        PlatformInput::FileDrop(FileDropEvent::DataEntered {
+                            position: state.xdnd_state.position,
+                            data,
+                        })
+                    } else {
+                        PlatformInput::FileDrop(FileDropEvent::Entered {
+                            position: state.xdnd_state.position,
+                            paths: data.paths().clone(),
+                        })
+                    };
                     drop(state);
                     window.handle_input(input);
                     self.0.borrow_mut().xdnd_state.retrieved = true;
@@ -1082,10 +1093,13 @@ impl X11Client {
                     {
                         state.global_hotkey.mark_pressed(hotkey_id);
                         let mut callback = state.common.callbacks.global_hotkey.take();
+                        drop(state);
                         if let Some(ref mut cb) = callback {
-                            cb(hotkey_id);
+                            super::super::catch_platform_callback("global hotkey down", (), || {
+                                cb(hotkey_id)
+                            });
                         }
-                        state.common.callbacks.global_hotkey = callback;
+                        self.0.borrow_mut().common.callbacks.global_hotkey = callback;
                         return Some(());
                     }
                 }
@@ -1098,10 +1112,13 @@ impl X11Client {
                     let keysym = state.xkb.key_get_one_sym(code);
                     if let Some(media_event) = crate::platform::linux::keysym_to_media_key(keysym) {
                         let mut callback = state.common.callbacks.media_key.take();
+                        drop(state);
                         if let Some(ref mut cb) = callback {
-                            cb(media_event);
+                            super::super::catch_platform_callback("media key", (), || {
+                                cb(media_event)
+                            });
                         }
-                        state.common.callbacks.media_key = callback;
+                        self.0.borrow_mut().common.callbacks.media_key = callback;
                         return Some(());
                     }
                 }
@@ -1180,12 +1197,17 @@ impl X11Client {
                             state.global_hotkey.mark_released(id);
                         }
                         let mut callback = state.common.callbacks.global_hotkey_up.take();
+                        drop(state);
                         if let Some(ref mut cb) = callback {
                             for id in released_ids {
-                                cb(id);
+                                super::super::catch_platform_callback(
+                                    "global hotkey up",
+                                    (),
+                                    || cb(id),
+                                );
                             }
                         }
-                        state.common.callbacks.global_hotkey_up = callback;
+                        self.0.borrow_mut().common.callbacks.global_hotkey_up = callback;
                         return Some(());
                     }
                 }
@@ -1530,7 +1552,7 @@ impl X11Client {
             state.keyboard_layout = LinuxKeyboardLayout::new(layout_name.to_string().into());
             if let Some(mut callback) = state.common.callbacks.keyboard_layout_change.take() {
                 drop(state);
-                callback();
+                super::super::catch_platform_callback("keyboard layout change", (), &mut callback);
                 state = self.0.borrow_mut();
                 state.common.callbacks.keyboard_layout_change = Some(callback);
             }
@@ -1741,6 +1763,20 @@ impl LinuxClient for X11Client {
             .context("X11: Failed to write to clipboard (clipboard)")
             .log_with_level(log::Level::Debug);
         state.clipboard_item.replace(item);
+    }
+
+    fn clear_clipboard(&self) {
+        let mut state = self.0.borrow_mut();
+        state.clipboard_item.take();
+        state
+            .clipboard
+            .set_text(
+                std::borrow::Cow::Borrowed(""),
+                clipboard::ClipboardKind::Clipboard,
+                clipboard::WaitConfig::None,
+            )
+            .context("X11: Failed to clear clipboard")
+            .log_with_level(log::Level::Debug);
     }
 
     fn read_from_primary(&self) -> Option<crate::ClipboardItem> {
@@ -2050,7 +2086,12 @@ impl X11ClientState {
                 window_ref.refresh_state = Some(RefreshState::Hidden { refresh_rate });
             }
             (true, Some(RefreshState::Hidden { refresh_rate })) => {
-                let event_loop_token = self.start_refresh_loop(x_window, refresh_rate);
+                let Some(event_loop_token) = self.start_refresh_loop(x_window, refresh_rate) else {
+                    if let Some(window_ref) = self.windows.get_mut(&x_window) {
+                        window_ref.refresh_state = Some(RefreshState::Hidden { refresh_rate });
+                    }
+                    return;
+                };
                 let Some(window_ref) = self.windows.get_mut(&x_window) else {
                     return;
                 };
@@ -2096,7 +2137,9 @@ impl X11ClientState {
                     }
                 };
 
-                let event_loop_token = self.start_refresh_loop(x_window, refresh_rate);
+                let Some(event_loop_token) = self.start_refresh_loop(x_window, refresh_rate) else {
+                    return;
+                };
                 let Some(window_ref) = self.windows.get_mut(&x_window) else {
                     return;
                 };
@@ -2113,7 +2156,12 @@ impl X11ClientState {
         &self,
         x_window: xproto::Window,
         refresh_rate: Duration,
-    ) -> RegistrationToken {
+    ) -> Option<RegistrationToken> {
+        let refresh_rate = if refresh_rate.is_zero() {
+            Duration::from_micros(1_000_000 / 60)
+        } else {
+            refresh_rate
+        };
         self.loop_handle
             .insert_source(calloop::timer::Timer::immediate(), {
                 move |mut instant, (), client| {
@@ -2136,13 +2184,17 @@ impl X11ClientState {
 
                     // Take into account that some frames have been skipped
                     let now = Instant::now();
-                    while instant < now {
-                        instant += refresh_rate;
+                    if instant < now {
+                        instant = now;
                     }
+                    instant += refresh_rate;
                     calloop::timer::TimeoutAction::ToInstant(instant)
                 }
             })
-            .expect("Failed to initialize window refresh timer")
+            .map_err(|error| {
+                log::error!("failed to initialize X11 window refresh timer: {error:?}");
+            })
+            .ok()
     }
 
     fn get_cursor_icon(&mut self, style: CursorStyle) -> Option<xproto::Cursor> {
@@ -2591,18 +2643,22 @@ fn get_scale_factor(
                 if valid_scale_factor(scale) {
                     DpiMode::Scale(scale)
                 } else {
-                    panic!(
-                        "`{}` must be a positive normal number or `randr`. Got `{}`",
-                        GPUI_X11_SCALE_FACTOR_ENV, var
+                    log::warn!(
+                        "ignoring invalid {} value {:?}; expected a positive normal number or `randr`",
+                        GPUI_X11_SCALE_FACTOR_ENV,
+                        var
                     );
+                    DpiMode::NotSet
                 }
             } else if var.is_empty() {
                 DpiMode::NotSet
             } else {
-                panic!(
-                    "`{}` must be a positive number or `randr`. Got `{}`",
-                    GPUI_X11_SCALE_FACTOR_ENV, var
+                log::warn!(
+                    "ignoring invalid {} value {:?}; expected a positive number or `randr`",
+                    GPUI_X11_SCALE_FACTOR_ENV,
+                    var
                 );
+                DpiMode::NotSet
             }
         })
         .unwrap_or(DpiMode::NotSet);

@@ -185,7 +185,7 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|cx| KeyboardShortcutsDemo::new(cx)),
+            |_window, cx| cx.new(KeyboardShortcutsDemo::new),
         )
         .unwrap();
     });

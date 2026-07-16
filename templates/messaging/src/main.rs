@@ -1,11 +1,16 @@
 //! Messaging app template: conversation list, chat thread, and composer —
 //! a Slack/Discord-style layout built entirely on kael_ui.
 
+use kael::{AccessibilityAction, AccessibilityAttributes, AccessibilityRole, AccessibilityState};
 use kael_ui::components::icon_source::IconSource;
 use kael_ui::components::input::{Input, InputState};
 use kael_ui::components::scrollable::scrollable_vertical;
 use kael_ui::prelude::*;
-use std::path::PathBuf;
+use std::io::Read as _;
+use std::path::{Component, Path, PathBuf};
+
+const MAX_ASSET_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_ASSET_LIST_ENTRIES: usize = 4096;
 
 struct Assets {
     base: PathBuf,
@@ -13,24 +18,69 @@ struct Assets {
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {
-        std::fs::read(self.base.join(path))
-            .map(|data| Some(std::borrow::Cow::Owned(data)))
-            .map_err(|err| err.into())
+        let path = self.resolve(path)?;
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Ok(None);
+        }
+        if metadata.len() > MAX_ASSET_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "asset exceeds the 16 MiB limit",
+            )
+            .into());
+        }
+        let mut data = Vec::with_capacity(metadata.len() as usize);
+        std::fs::File::open(path)?
+            .take(MAX_ASSET_BYTES + 1)
+            .read_to_end(&mut data)?;
+        if data.len() as u64 > MAX_ASSET_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "asset grew beyond the 16 MiB limit while reading",
+            )
+            .into());
+        }
+        Ok(Some(std::borrow::Cow::Owned(data)))
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
-        std::fs::read_dir(self.base.join(path))
-            .map(|entries| {
-                entries
-                    .filter_map(|entry| {
-                        entry
-                            .ok()
-                            .and_then(|entry| entry.file_name().into_string().ok())
-                            .map(SharedString::from)
-                    })
-                    .collect()
+        let path = self.resolve(path)?;
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Ok(Vec::new());
+        }
+        std::fs::read_dir(path)?
+            .take(MAX_ASSET_LIST_ENTRIES)
+            .map(|entry| {
+                let name = entry?.file_name().into_string().map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "asset name is not valid UTF-8",
+                    )
+                })?;
+                Ok(SharedString::from(name))
             })
-            .map_err(|err| err.into())
+            .collect()
+    }
+}
+
+impl Assets {
+    fn resolve(&self, path: &str) -> Result<PathBuf> {
+        let relative = Path::new(path);
+        if relative.as_os_str().is_empty()
+            || relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "asset path must be a non-empty relative path",
+            )
+            .into());
+        }
+        Ok(self.base.join(relative))
     }
 }
 
@@ -49,7 +99,7 @@ struct Conversation {
 struct Message {
     from_me: bool,
     author: &'static str,
-    body: &'static str,
+    body: String,
     time: &'static str,
 }
 
@@ -103,38 +153,43 @@ fn thread() -> Vec<Message> {
         Message {
             from_me: false,
             author: "Maya Chen",
-            body: "Morning! I pushed the new theme tokens to the design branch.",
+            body: "Morning! I pushed the new theme tokens to the design branch.".to_string(),
             time: "9:41 AM",
         },
         Message {
             from_me: false,
             author: "Maya Chen",
-            body: "The custom brand theme support means we can finally match the marketing site.",
+            body: "The custom brand theme support means we can finally match the marketing site."
+                .to_string(),
             time: "9:41 AM",
         },
         Message {
             from_me: true,
             author: "You",
-            body: "Just saw it — Theme::custom with struct update syntax is exactly what we needed.",
+            body:
+                "Just saw it — Theme::custom with struct update syntax is exactly what we needed."
+                    .to_string(),
             time: "9:44 AM",
         },
         Message {
             from_me: false,
             author: "Maya Chen",
-            body: "And install_theme refreshing every window makes the theme picker feel instant. 🚀",
+            body:
+                "And install_theme refreshing every window makes the theme picker feel instant. 🚀"
+                    .to_string(),
             time: "9:45 AM",
         },
         Message {
             from_me: true,
             author: "You",
-            body: "Shipping it in the next release. Can you drop the palette in here?",
+            body: "Shipping it in the next release. Can you drop the palette in here?".to_string(),
             time: "9:47 AM",
         },
     ]
 }
 
-fn main() {
-    Application::new()
+fn main() -> Result<()> {
+    Application::try_new()?
         .with_assets(Assets {
             base: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../crates/kael_ui"),
         })
@@ -143,7 +198,7 @@ fn main() {
             kael_ui::set_icon_base_path("assets/icons");
             install_theme(cx, Theme::dark());
 
-            cx.open_window(
+            if let Err(error) = cx.open_window(
                 WindowOptions {
                     titlebar: Some(TitlebarOptions {
                         title: Some("Pulse — Messaging".into()),
@@ -156,16 +211,21 @@ fn main() {
                     ..Default::default()
                 },
                 |_, cx| cx.new(MessagingApp::new),
-            )
-            .unwrap();
+            ) {
+                eprintln!("failed to open the messaging window: {error}");
+                cx.quit();
+                return;
+            }
             cx.activate(true);
         });
+    Ok(())
 }
 
 struct MessagingApp {
     composer: Entity<InputState>,
     search: Entity<InputState>,
     selected: usize,
+    sent_messages: Vec<String>,
 }
 
 impl MessagingApp {
@@ -174,6 +234,7 @@ impl MessagingApp {
             composer: cx.new(|cx| InputState::new(cx).placeholder("Message Maya Chen…")),
             search: cx.new(|cx| InputState::new(cx).placeholder("Search")),
             selected: 1,
+            sent_messages: Vec::new(),
         }
     }
 
@@ -185,8 +246,23 @@ impl MessagingApp {
     ) -> impl IntoElement {
         let selected = self.selected == convo.id;
         let id = convo.id;
+        let keyboard_id = convo.id;
+        let accessibility_state = if selected {
+            AccessibilityState::SELECTED
+        } else {
+            AccessibilityState::NONE
+        };
         div()
             .id(ElementId::Integer(convo.id as u64))
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Button)
+                    .label(format!("Open conversation with {}", convo.name))
+                    .states(accessibility_state)
+                    .actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]),
+            )
+            .focusable()
+            .tab_index(0)
+            .tab_stop(true)
             .flex()
             .items_center()
             .gap(px(10.0))
@@ -199,9 +275,20 @@ impl MessagingApp {
                 style.background = Some(tokens.muted.opacity(0.5).into());
                 style
             })
+            .focus_visible(|style| style.inset_ring(tokens.ring, px(2.0)))
             .on_click(cx.listener(move |view, _, _, cx| {
                 view.selected = id;
                 cx.notify();
+            }))
+            .on_key_down(cx.listener(move |view, event: &KeyDownEvent, window, cx| {
+                if !event.keystroke.modifiers.modified()
+                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                {
+                    view.selected = keyboard_id;
+                    cx.notify();
+                    cx.stop_propagation();
+                    window.prevent_default();
+                }
             }))
             .child(Avatar::new().name(convo.name).size(AvatarSize::Md))
             .child(
@@ -268,7 +355,7 @@ impl MessagingApp {
             .px(px(14.0))
             .py(px(10.0))
             .text_size(px(13.5))
-            .child(msg.body);
+            .child(msg.body.clone());
 
         let bubble = if msg.from_me {
             bubble
@@ -348,10 +435,15 @@ impl Render for MessagingApp {
                                 Button::new("compose", "")
                                     .variant(ButtonVariant::Ghost)
                                     .size(ButtonSize::Icon)
+                                    .tooltip("Compose message")
                                     .icon(IconSource::Named("square-pen".to_string())),
                             ),
                     )
-                    .child(Input::new(&self.search).w_full()),
+                    .child(
+                        Input::new(&self.search)
+                            .aria_label("Search conversations")
+                            .w_full(),
+                    ),
             )
             .child(
                 div().flex_1().min_h(px(0.0)).child(scrollable_vertical(
@@ -400,23 +492,33 @@ impl Render for MessagingApp {
                         Button::new("call", "")
                             .variant(ButtonVariant::Ghost)
                             .size(ButtonSize::Icon)
+                            .tooltip("Start audio call")
                             .icon(IconSource::Named("phone".to_string())),
                     )
                     .child(
                         Button::new("video", "")
                             .variant(ButtonVariant::Ghost)
                             .size(ButtonSize::Icon)
+                            .tooltip("Start video call")
                             .icon(IconSource::Named("video".to_string())),
                     )
                     .child(
                         Button::new("info", "")
                             .variant(ButtonVariant::Ghost)
                             .size(ButtonSize::Icon)
+                            .tooltip("Conversation details")
                             .icon(IconSource::Named("info".to_string())),
                     ),
             );
 
-        let messages: Vec<_> = thread()
+        let mut thread = thread();
+        thread.extend(self.sent_messages.iter().cloned().map(|body| Message {
+            from_me: true,
+            author: "You",
+            body,
+            time: "Now",
+        }));
+        let messages: Vec<_> = thread
             .iter()
             .map(|m| self.message_bubble(m, &tokens).into_any_element())
             .collect();
@@ -431,13 +533,26 @@ impl Render for MessagingApp {
                 Button::new("attach", "")
                     .variant(ButtonVariant::Ghost)
                     .size(ButtonSize::Icon)
+                    .tooltip("Attach a file")
                     .icon(IconSource::Named("paperclip".to_string())),
             )
-            .child(div().flex_1().child(Input::new(&self.composer).w_full()))
+            .child(
+                div().flex_1().child(
+                    Input::new(&self.composer)
+                        .aria_label("Message composer")
+                        .w_full(),
+                ),
+            )
             .child(
                 Button::new("send", "Send")
                     .icon(IconSource::Named("send".to_string()))
-                    .on_click(cx.listener(|_, _, _, cx| {
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        let message = view.composer.read(cx).content().trim().to_string();
+                        if message.is_empty() {
+                            return;
+                        }
+                        view.sent_messages.push(message);
+                        view.composer.update(cx, |input, cx| input.clear(cx));
                         cx.notify();
                     })),
             );
@@ -466,5 +581,24 @@ impl Render for MessagingApp {
             .text_color(tokens.foreground)
             .child(sidebar)
             .child(chat)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn asset_paths_are_confined_to_the_asset_root() {
+        let assets = Assets {
+            base: PathBuf::from("/tmp/assets"),
+        };
+        assert_eq!(
+            assets.resolve("icons/send.svg").unwrap(),
+            PathBuf::from("/tmp/assets/icons/send.svg")
+        );
+        assert!(assets.resolve("../secret").is_err());
+        assert!(assets.resolve("/etc/passwd").is_err());
+        assert!(assets.resolve("").is_err());
     }
 }

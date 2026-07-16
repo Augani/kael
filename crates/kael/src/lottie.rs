@@ -9,12 +9,20 @@ use rasterlottie::{RenderConfig, Renderer, Rgba8};
 use smallvec::SmallVec;
 use std::{
     fs, io,
+    io::Read as _,
     path::{Path, PathBuf},
     str,
     sync::Arc,
     time::{Duration, Instant},
 };
 use thiserror::Error;
+
+const MAX_LOTTIE_SOURCE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_LOTTIE_DIMENSION: u32 = 8_192;
+const MAX_LOTTIE_FRAME_BYTES: usize = 256 * 1024 * 1024;
+const MAX_LOTTIE_FRAMES: usize = 100_000;
+const MAX_LOTTIE_FPS: f32 = 1_000.0;
+const MAX_LOTTIE_RENDER_BATCH: usize = 256;
 
 /// A type alias to the resource loader that the `lottie()` element uses.
 pub type LottieResourceLoader = AssetLogger<LottieAssetLoader>;
@@ -118,7 +126,7 @@ pub enum LottieError {
     #[error("asset error: {0}")]
     Asset(SharedString),
     /// The requested URI returned an error status.
-    #[error("unexpected http status for {uri}: {status}, body: {body}")]
+    #[error("unexpected HTTP status while loading Lottie asset: {status}")]
     BadStatus {
         /// The requested URI.
         uri: SharedUri,
@@ -143,6 +151,42 @@ impl LottieSource {
     /// Construct an in-memory source from compile-time bytes.
     pub fn from_static_bytes(bytes: &'static [u8]) -> Self {
         Self::Bytes(Arc::<[u8]>::from(bytes))
+    }
+
+    /// Returns the high-level source class without exposing paths, URLs, or bytes.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Resource(Resource::Uri(_)) => "uri",
+            Self::Resource(Resource::Path(_)) => "path",
+            Self::Resource(Resource::Embedded(_)) => "embedded",
+            Self::Bytes(_) => "bytes",
+            Self::Animation(_) => "animation",
+        }
+    }
+
+    /// Returns true when the source carries in-memory bytes.
+    pub fn has_bytes(&self) -> bool {
+        matches!(self, Self::Bytes(_))
+    }
+
+    /// Returns the in-memory byte length when this source is byte-backed.
+    pub fn byte_len(&self) -> Option<usize> {
+        match self {
+            Self::Bytes(bytes) => Some(bytes.len()),
+            _ => None,
+        }
+    }
+
+    /// Returns a content-safe summary of this Lottie source.
+    pub fn to_text(&self) -> String {
+        format!(
+            "lottie source: kind {}, bytes {}, decoded {}",
+            self.kind(),
+            self.byte_len()
+                .map(|len| len.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            matches!(self, Self::Animation(_))
+        )
     }
 
     pub(crate) fn use_animation(
@@ -224,6 +268,18 @@ impl LottieAnimation {
         Duration::from_secs_f32(self.data.total_frames as f32 / self.data.fps.max(1.0))
     }
 
+    /// Returns a content-safe summary of parsed animation metadata.
+    pub fn to_text(&self) -> String {
+        format!(
+            "lottie animation: frames {}, fps {:.1}, size {}x{}, duration_ms {}",
+            self.total_frames(),
+            self.fps(),
+            self.size().width.0.round() as i32,
+            self.size().height.0.round() as i32,
+            self.duration().as_millis()
+        )
+    }
+
     /// Returns a pre-rendered first frame at the animation's native size.
     pub fn poster_frame(&self) -> Arc<RenderImage> {
         self.data.poster_frame.clone()
@@ -242,6 +298,13 @@ impl LottieAnimation {
         render_size: Size<DevicePixels>,
         frames: &[usize],
     ) -> Result<LottieRenderBatch, LottieError> {
+        validate_render_size(render_size)?;
+        if frames.len() > MAX_LOTTIE_RENDER_BATCH {
+            return Err(anyhow::anyhow!(
+                "Lottie render batch cannot exceed {MAX_LOTTIE_RENDER_BATCH} frames"
+            )
+            .into());
+        }
         let animation = parse_animation(&self.data.bytes)?;
         let prepared = Renderer::target_corpus().prepare(&animation)?;
         let scale = render_scale(self.data.native_pixel_size, render_size);
@@ -263,17 +326,16 @@ impl LottieAnimation {
     }
 
     fn build(bytes: Arc<[u8]>) -> Result<Self, LottieError> {
+        validate_lottie_bytes(&bytes)?;
         let animation = parse_animation(&bytes)?;
+        validate_animation_metadata(&animation)?;
         let native_pixel_size = size(
-            DevicePixels(animation.width.max(1) as i32),
-            DevicePixels(animation.height.max(1) as i32),
+            DevicePixels(animation.width as i32),
+            DevicePixels(animation.height as i32),
         );
-        let native_size = size(
-            px(animation.width.max(1) as f32),
-            px(animation.height.max(1) as f32),
-        );
-        let fps = animation.frame_rate.max(1.0);
-        let total_frames = animation.duration_frames().ceil().max(1.0) as usize;
+        let native_size = size(px(animation.width as f32), px(animation.height as f32));
+        let fps = animation.frame_rate;
+        let total_frames = animation.duration_frames().ceil() as usize;
         let in_point = animation.in_point;
         let prepared = Renderer::target_corpus().prepare(&animation)?;
         let poster_frame =
@@ -354,6 +416,18 @@ impl LottiePlayer {
         self.current_frame
     }
 
+    /// Returns a content-safe summary of playback state.
+    pub fn to_text(&self) -> String {
+        format!(
+            "lottie player: state {}, loop {}, current_frame {}, frames {}, animating {}",
+            self.state.to_text(),
+            self.loop_mode.to_text(),
+            self.current_frame(),
+            self.animation.total_frames(),
+            self.is_animating()
+        )
+    }
+
     /// Update the player using the provided timestamp and return the active frame index.
     pub fn update(&mut self, now: Instant) -> usize {
         let step = self.elapsed_at(now).as_secs_f32() * self.animation.fps();
@@ -379,13 +453,14 @@ impl LottiePlayer {
     }
 
     pub(crate) fn upcoming_frames(&self, now: Instant, count: usize) -> Vec<usize> {
+        let count = count.clamp(1, MAX_LOTTIE_RENDER_BATCH);
         let base_step = (self.elapsed_at(now).as_secs_f32() * self.animation.fps())
             .floor()
             .max(0.0) as usize;
-        let mut frames = Vec::with_capacity(count.max(1));
+        let mut frames = Vec::with_capacity(count);
 
-        for offset in 0..count.max(1) {
-            let frame = self.frame_for_step(base_step + offset);
+        for offset in 0..count {
+            let frame = self.frame_for_step(base_step.saturating_add(offset));
             if !frames.contains(&frame) {
                 frames.push(frame);
             }
@@ -403,7 +478,7 @@ impl LottiePlayer {
             return;
         }
 
-        self.started_at = Some(now - self.elapsed_before_pause);
+        self.started_at = Some(now.checked_sub(self.elapsed_before_pause).unwrap_or(now));
         self.state = PlaybackState::Playing;
     }
 
@@ -422,7 +497,7 @@ impl LottiePlayer {
         self.current_frame = clamped;
         self.elapsed_before_pause = Duration::from_secs_f32(clamped as f32 / self.animation.fps());
         if self.state == PlaybackState::Playing {
-            self.started_at = Some(now - self.elapsed_before_pause);
+            self.started_at = Some(now.checked_sub(self.elapsed_before_pause).unwrap_or(now));
         }
     }
 
@@ -458,6 +533,28 @@ impl LottiePlayer {
     }
 }
 
+impl PlaybackState {
+    /// Returns a stable lowercase label for this playback state.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Playing => "playing",
+            Self::Paused => "paused",
+            Self::Stopped => "stopped",
+        }
+    }
+}
+
+impl LoopMode {
+    /// Returns a stable lowercase label for this loop mode.
+    pub fn to_text(self) -> &'static str {
+        match self {
+            Self::Once => "once",
+            Self::Loop => "loop",
+            Self::PingPong => "ping-pong",
+        }
+    }
+}
+
 impl Asset for LottieAssetLoader {
     type Source = LottieAssetSource;
     type Output = Result<Arc<LottieAnimation>, LottieError>;
@@ -472,38 +569,44 @@ impl Asset for LottieAssetLoader {
         async move {
             let bytes = match source {
                 LottieAssetSource::Resource(resource) => match resource {
-                    Resource::Path(path) => fs::read(path.as_ref())?,
+                    Resource::Path(path) => read_lottie_file(path.as_ref())?,
                     Resource::Uri(uri) => {
                         let mut response = client
                             .get(uri.as_ref(), ().into(), true)
                             .await
-                            .with_context(|| format!("loading lottie asset from {uri:?}"))?;
-                        let mut body = Vec::new();
-                        response.body_mut().read_to_end(&mut body).await?;
+                            .context("loading Lottie asset")?;
                         if !response.status().is_success() {
-                            let mut body_text = String::from_utf8_lossy(&body).into_owned();
-                            let first_line = body_text.lines().next().unwrap_or("").trim_end();
-                            body_text.truncate(first_line.len());
                             return Err(LottieError::BadStatus {
                                 uri,
                                 status: response.status(),
-                                body: body_text,
+                                body: String::new(),
                             });
                         }
-                        body
+                        let mut body = Vec::new();
+                        response
+                            .body_mut()
+                            .take((MAX_LOTTIE_SOURCE_BYTES + 1) as u64)
+                            .read_to_end(&mut body)
+                            .await?;
+                        if body.len() > MAX_LOTTIE_SOURCE_BYTES {
+                            return Err(anyhow::anyhow!(
+                                "Lottie source cannot exceed {MAX_LOTTIE_SOURCE_BYTES} bytes"
+                            )
+                            .into());
+                        }
+                        Arc::<[u8]>::from(body)
                     }
                     Resource::Embedded(path) => {
                         let data = asset_source.load(&path).ok().flatten();
                         if let Some(data) = data {
-                            data.to_vec()
+                            validate_lottie_bytes(&data)?;
+                            Arc::<[u8]>::from(data)
                         } else {
-                            return Err(LottieError::Asset(
-                                format!("Embedded resource not found: {path}").into(),
-                            ));
+                            return Err(LottieError::Asset("embedded resource not found".into()));
                         }
                     }
                 },
-                LottieAssetSource::Bytes(bytes) => bytes.as_ref().to_vec(),
+                LottieAssetSource::Bytes(bytes) => bytes,
             };
 
             Ok(Arc::new(LottieAnimation::from_bytes(bytes)?))
@@ -620,6 +723,7 @@ impl From<rasterlottie::RasterlottieError> for LottieError {
 }
 
 fn parse_animation(bytes: &[u8]) -> Result<rasterlottie::Animation, LottieError> {
+    validate_lottie_bytes(bytes)?;
     if is_dotlottie(bytes) {
         Ok(rasterlottie::Animation::from_dotlottie_bytes(bytes)?)
     } else {
@@ -631,6 +735,10 @@ fn parse_animation(bytes: &[u8]) -> Result<rasterlottie::Animation, LottieError>
 fn raster_frame_to_image(
     frame: rasterlottie::RasterFrame,
 ) -> Result<Arc<RenderImage>, LottieError> {
+    let expected_len = checked_frame_len(frame.width, frame.height)?;
+    if frame.pixels.len() != expected_len {
+        return Err(LottieError::InvalidFrameBuffer);
+    }
     let mut pixels = frame.pixels;
     for pixel in pixels.chunks_exact_mut(4) {
         pixel.swap(0, 2);
@@ -643,6 +751,96 @@ fn raster_frame_to_image(
         Frame::new(buffer),
         1,
     ))))
+}
+
+fn validate_lottie_bytes(bytes: &[u8]) -> Result<(), LottieError> {
+    if bytes.is_empty() {
+        return Err(anyhow::anyhow!("Lottie source cannot be empty").into());
+    }
+    if bytes.len() > MAX_LOTTIE_SOURCE_BYTES {
+        return Err(
+            anyhow::anyhow!("Lottie source cannot exceed {MAX_LOTTIE_SOURCE_BYTES} bytes").into(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_animation_metadata(animation: &rasterlottie::Animation) -> Result<(), LottieError> {
+    if animation.width == 0
+        || animation.height == 0
+        || animation.width > MAX_LOTTIE_DIMENSION
+        || animation.height > MAX_LOTTIE_DIMENSION
+    {
+        return Err(anyhow::anyhow!(
+            "Lottie dimensions must be between 1 and {MAX_LOTTIE_DIMENSION} pixels"
+        )
+        .into());
+    }
+    checked_frame_len(animation.width, animation.height)?;
+    if !animation.frame_rate.is_finite()
+        || animation.frame_rate <= 0.0
+        || animation.frame_rate > MAX_LOTTIE_FPS
+    {
+        return Err(anyhow::anyhow!(
+            "Lottie frame rate must be finite, positive, and at most {MAX_LOTTIE_FPS}"
+        )
+        .into());
+    }
+    let duration_frames = animation.duration_frames();
+    if !duration_frames.is_finite()
+        || duration_frames <= 0.0
+        || duration_frames.ceil() > MAX_LOTTIE_FRAMES as f32
+        || !animation.in_point.is_finite()
+    {
+        return Err(anyhow::anyhow!("Lottie timeline metadata is invalid or too large").into());
+    }
+    Ok(())
+}
+
+fn validate_render_size(render_size: Size<DevicePixels>) -> Result<(), LottieError> {
+    if render_size.width.0 <= 0 || render_size.height.0 <= 0 {
+        return Err(anyhow::anyhow!("Lottie render dimensions must be positive").into());
+    }
+    checked_frame_len(render_size.width.0 as u32, render_size.height.0 as u32)?;
+    Ok(())
+}
+
+fn checked_frame_len(width: u32, height: u32) -> Result<usize, LottieError> {
+    let byte_len = usize::try_from(width)
+        .ok()
+        .and_then(|width| {
+            usize::try_from(height)
+                .ok()
+                .and_then(|height| width.checked_mul(height))
+        })
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| anyhow::anyhow!("Lottie frame dimensions overflowed"))?;
+    if byte_len == 0 || byte_len > MAX_LOTTIE_FRAME_BYTES {
+        return Err(
+            anyhow::anyhow!("Lottie frame cannot exceed {MAX_LOTTIE_FRAME_BYTES} bytes").into(),
+        );
+    }
+    Ok(byte_len)
+}
+
+fn read_lottie_file(path: &Path) -> Result<Arc<[u8]>, LottieError> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > MAX_LOTTIE_SOURCE_BYTES as u64 {
+        return Err(anyhow::anyhow!("Lottie source must be a bounded regular file").into());
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take((MAX_LOTTIE_SOURCE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    validate_lottie_bytes(&bytes)?;
+    Ok(Arc::<[u8]>::from(bytes))
 }
 
 fn render_scale(native_size: Size<DevicePixels>, render_size: Size<DevicePixels>) -> f32 {
@@ -730,5 +928,126 @@ mod tests {
                 size(DevicePixels(128), DevicePixels(64))
             );
         }
+    }
+
+    #[test]
+    fn source_and_animation_summaries_do_not_leak_locations_or_bytes() {
+        let uri = LottieSource::from("https://cdn.example.com/private/spinner.json");
+        assert_eq!(uri.kind(), "uri");
+        assert_eq!(
+            uri.to_text(),
+            "lottie source: kind uri, bytes none, decoded false"
+        );
+        assert!(!uri.to_text().contains("cdn.example.com"));
+
+        let embedded = LottieSource::from(Resource::Embedded("private-spinner.json".into()));
+        assert_eq!(embedded.kind(), "embedded");
+        assert!(!embedded.to_text().contains("private-spinner"));
+
+        let path = LottieSource::from(PathBuf::from("/tmp/secret-animation.json"));
+        assert_eq!(path.kind(), "path");
+        assert!(!path.to_text().contains("secret-animation"));
+
+        let bytes = LottieSource::from(vec![1, 2, 3, 4]);
+        assert_eq!(bytes.kind(), "bytes");
+        assert!(bytes.has_bytes());
+        assert_eq!(bytes.byte_len(), Some(4));
+        assert_eq!(
+            bytes.to_text(),
+            "lottie source: kind bytes, bytes 4, decoded false"
+        );
+
+        let animation = Arc::new(LottieAnimation::from_json_str(SIMPLE_LOTTIE).unwrap());
+        let decoded = LottieSource::from(animation.clone());
+        assert_eq!(decoded.kind(), "animation");
+        assert_eq!(
+            decoded.to_text(),
+            "lottie source: kind animation, bytes none, decoded true"
+        );
+        assert_eq!(
+            animation.to_text(),
+            "lottie animation: frames 30, fps 30.0, size 64x32, duration_ms 1000"
+        );
+    }
+
+    #[test]
+    fn player_summary_reports_state_without_animation_content() {
+        let animation = Arc::new(LottieAnimation::from_json_str(SIMPLE_LOTTIE).unwrap());
+        let mut player = LottiePlayer::new(animation);
+        let start = Instant::now();
+
+        assert_eq!(PlaybackState::Stopped.to_text(), "stopped");
+        assert_eq!(LoopMode::PingPong.to_text(), "ping-pong");
+        assert_eq!(
+            player.to_text(),
+            "lottie player: state stopped, loop once, current_frame 0, frames 30, animating false"
+        );
+
+        player.set_loop_mode(LoopMode::Loop);
+        player.play_at(start);
+
+        assert_eq!(
+            player.to_text(),
+            "lottie player: state playing, loop loop, current_frame 0, frames 30, animating true"
+        );
+        assert!(!player.to_text().contains("5.7.6"));
+    }
+
+    #[test]
+    fn rejects_unbounded_sources_metadata_and_render_batches() {
+        assert!(LottieAnimation::from_bytes(Vec::<u8>::new()).is_err());
+        assert!(LottieAnimation::from_bytes(vec![b' '; MAX_LOTTIE_SOURCE_BYTES + 1]).is_err());
+
+        for invalid in [
+            SIMPLE_LOTTIE.replace("\"w\":64", "\"w\":0"),
+            SIMPLE_LOTTIE.replace("\"fr\":30", "\"fr\":0"),
+            SIMPLE_LOTTIE.replace("\"op\":30", "\"op\":100001"),
+        ] {
+            assert!(LottieAnimation::from_json_str(&invalid).is_err());
+        }
+
+        let animation = LottieAnimation::from_json_str(SIMPLE_LOTTIE).unwrap();
+        assert!(
+            animation
+                .render_batch(
+                    size(DevicePixels(64), DevicePixels(32)),
+                    &vec![0; MAX_LOTTIE_RENDER_BATCH + 1],
+                )
+                .is_err()
+        );
+        assert!(
+            animation
+                .render_batch(size(DevicePixels(-1), DevicePixels(32)), &[0])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn playback_arithmetic_contains_extreme_elapsed_time() {
+        let animation = Arc::new(LottieAnimation::from_json_str(SIMPLE_LOTTIE).unwrap());
+        let mut player = LottiePlayer::new(animation);
+        let now = Instant::now();
+        player.elapsed_before_pause = Duration::MAX;
+        player.state = PlaybackState::Paused;
+        player.play_at(now);
+        assert_eq!(player.started_at, Some(now));
+
+        player.set_loop_mode(LoopMode::Loop);
+        let upcoming = player.upcoming_frames(now, usize::MAX);
+        assert!(!upcoming.is_empty());
+        assert!(upcoming.len() <= player.animation.total_frames());
+    }
+
+    #[test]
+    fn http_status_display_redacts_location_and_body() {
+        let error = LottieError::BadStatus {
+            uri: "https://example.com/private/account.json".into(),
+            status: http_client::StatusCode::BAD_REQUEST,
+            body: "private response body".into(),
+        };
+        let text = error.to_string();
+        assert!(!text.contains("example.com"));
+        assert!(!text.contains("private"));
+        assert!(text.contains("400"));
     }
 }

@@ -1,4 +1,4 @@
-// Feature: platform-parity-electron-features, Property 8/9: File watcher dispatch and depth limits
+// Feature: platform-parity-browser-runtime-features, Property 8/9: File watcher dispatch and depth limits
 
 use std::path::{Path, PathBuf};
 

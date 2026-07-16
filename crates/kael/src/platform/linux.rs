@@ -52,6 +52,14 @@ pub(crate) use x11::*;
 #[cfg(any(feature = "wayland", feature = "x11"))]
 pub(crate) use xdg_desktop_portal::XdgDesktopPortalCaptureBackend;
 
+pub(crate) fn catch_platform_callback<T>(
+    name: &'static str,
+    fallback: T,
+    callback: impl FnOnce() -> T,
+) -> T {
+    crate::platform::catch_platform_callback("Linux", name, fallback, callback)
+}
+
 #[cfg(all(feature = "screen-capture", any(feature = "wayland", feature = "x11")))]
 pub(crate) type PlatformScreenCaptureFrame = scap::frame::Frame;
 #[cfg(not(all(feature = "screen-capture", any(feature = "wayland", feature = "x11"))))]

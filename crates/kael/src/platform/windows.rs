@@ -56,6 +56,14 @@ pub(crate) use wrapper::*;
 
 pub(crate) use windows::Win32::Foundation::HWND;
 
+pub(crate) fn catch_platform_callback<T>(
+    name: &'static str,
+    fallback: T,
+    callback: impl FnOnce() -> T,
+) -> T {
+    crate::platform::catch_platform_callback("Windows", name, fallback, callback)
+}
+
 #[cfg(feature = "screen-capture")]
 pub(crate) type PlatformScreenCaptureFrame = scap::frame::Frame;
 #[cfg(not(feature = "screen-capture"))]

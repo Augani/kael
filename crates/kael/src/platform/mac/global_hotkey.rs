@@ -4,6 +4,9 @@ use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
 use std::collections::HashMap;
 
 pub(crate) fn keystroke_matches_event(keystroke: &Keystroke, event: *mut AnyObject) -> bool {
+    if event.is_null() {
+        return false;
+    }
     let event: &NSEvent = unsafe { &*(event as *const NSEvent) };
     if event.r#type() != NSEventType::KeyDown {
         return false;
@@ -12,6 +15,9 @@ pub(crate) fn keystroke_matches_event(keystroke: &Keystroke, event: *mut AnyObje
 }
 
 pub(crate) fn is_hotkey_released(keystroke: &Keystroke, event: *mut AnyObject) -> bool {
+    if event.is_null() {
+        return false;
+    }
     let event: &NSEvent = unsafe { &*(event as *const NSEvent) };
     match event.r#type() {
         NSEventType::KeyUp => key_matches_ignoring_modifiers(keystroke, event),
@@ -24,13 +30,7 @@ fn key_matches_ignoring_modifiers(keystroke: &Keystroke, event: &NSEvent) -> boo
     let Some(chars_ignoring) = event.charactersIgnoringModifiers() else {
         return false;
     };
-    let chars_str = chars_ignoring.UTF8String();
-    if chars_str.is_null() {
-        return false;
-    }
-    let chars = unsafe { std::ffi::CStr::from_ptr(chars_str) }
-        .to_str()
-        .unwrap_or("");
+    let chars = chars_ignoring.to_string();
     let event_key = chars.to_lowercase();
     let target_key = keystroke.key.to_lowercase();
     event_key == target_key || normalize_key_name(&event_key) == target_key
@@ -67,13 +67,7 @@ fn matches_modifiers_and_key(keystroke: &Keystroke, event: &NSEvent) -> bool {
     let Some(chars_ignoring) = event.charactersIgnoringModifiers() else {
         return false;
     };
-    let chars_str = chars_ignoring.UTF8String();
-    if chars_str.is_null() {
-        return false;
-    }
-    let chars = unsafe { std::ffi::CStr::from_ptr(chars_str) }
-        .to_str()
-        .unwrap_or("");
+    let chars = chars_ignoring.to_string();
 
     let event_key = chars.to_lowercase();
     let target_key = keystroke.key.to_lowercase();

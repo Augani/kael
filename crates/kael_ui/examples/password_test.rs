@@ -114,7 +114,7 @@ fn main() {
                     }),
                     ..Default::default()
                 },
-                |_window, cx| cx.new(|cx| PasswordTestApp::new(cx)),
+                |_window, cx| cx.new(PasswordTestApp::new),
             )
             .unwrap();
         });

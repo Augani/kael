@@ -1,8 +1,12 @@
 /// Status bar for displaying contextual information items in a bottom bar,
 /// typically used by large applications such as IDEs and editors.
 use anyhow::{Result, anyhow};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use std::collections::HashMap;
+
+const MAX_STATUS_ITEMS: usize = 4_096;
+const MAX_STATUS_ID_BYTES: usize = 128;
+const MAX_STATUS_TEXT_BYTES: usize = 4_096;
 
 /// Unique identifier for a status bar item.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -13,6 +17,33 @@ impl StatusItemId {
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
+
+    /// Creates an identifier after validating its bounded single-line token.
+    pub fn new_checked(id: impl Into<String>) -> Result<Self> {
+        let id = Self(id.into());
+        validate_status_id(&id)?;
+        Ok(id)
+    }
+}
+
+fn validate_status_id(id: &StatusItemId) -> Result<()> {
+    anyhow::ensure!(
+        !id.0.trim().is_empty(),
+        "status item identifier cannot be empty"
+    );
+    anyhow::ensure!(
+        id.0 == id.0.trim(),
+        "status item identifier cannot have surrounding whitespace"
+    );
+    anyhow::ensure!(
+        id.0.len() <= MAX_STATUS_ID_BYTES,
+        "status item identifier cannot exceed {MAX_STATUS_ID_BYTES} bytes"
+    );
+    anyhow::ensure!(
+        !id.0.chars().any(char::is_control),
+        "status item identifier cannot contain control characters"
+    );
+    Ok(())
 }
 
 impl std::fmt::Display for StatusItemId {
@@ -51,11 +82,40 @@ pub struct StatusItem {
 }
 
 /// Manages a collection of [`StatusItem`]s for a status bar.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 pub struct StatusBar {
     items: Vec<StatusItem>,
     #[serde(skip)]
     index: HashMap<StatusItemId, usize>,
+}
+
+impl std::fmt::Debug for StatusBar {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StatusBar")
+            .field("item_count", &self.items.len())
+            .finish()
+    }
+}
+
+impl<'de> Deserialize<'de> for StatusBar {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct SerializedStatusBar {
+            items: Vec<StatusItem>,
+        }
+
+        let serialized = SerializedStatusBar::deserialize(deserializer)?;
+        let mut bar = Self {
+            items: serialized.items,
+            index: HashMap::new(),
+        };
+        bar.rebuild_index_checked().map_err(D::Error::custom)?;
+        Ok(bar)
+    }
 }
 
 impl StatusBar {
@@ -70,28 +130,40 @@ impl StatusBar {
     /// Adds an item to the status bar. If an item with the same id already
     /// exists, it is replaced.
     pub fn add_item(&mut self, item: StatusItem) {
+        let _ = self.add_item_checked(item);
+    }
+
+    /// Adds or replaces a validated item while enforcing bounded retention.
+    pub fn add_item_checked(&mut self, item: StatusItem) -> Result<()> {
+        validate_status_item(&item)?;
         if let Some(&idx) = self.index.get(&item.id) {
             self.items[idx] = item;
         } else {
+            anyhow::ensure!(
+                self.items.len() < MAX_STATUS_ITEMS,
+                "status bar cannot exceed {MAX_STATUS_ITEMS} items"
+            );
             let idx = self.items.len();
             self.index.insert(item.id.clone(), idx);
             self.items.push(item);
         }
+        Ok(())
     }
 
     /// Removes an item from the status bar by its id. No-op if the id does
     /// not exist.
     pub fn remove_item(&mut self, id: &StatusItemId) {
         if let Some(idx) = self.index.remove(id) {
-            self.items.swap_remove(idx);
-            if idx < self.items.len() {
-                self.index.insert(self.items[idx].id.clone(), idx);
+            self.items.remove(idx);
+            for (next_idx, item) in self.items.iter().enumerate().skip(idx) {
+                self.index.insert(item.id.clone(), next_idx);
             }
         }
     }
 
     /// Updates the display text of the item with the given id.
     pub fn update_text(&mut self, id: &StatusItemId, text: String) -> Result<()> {
+        validate_status_text(&text, "status item text")?;
         let item = self.get_mut(id)?;
         item.text = text;
         Ok(())
@@ -99,6 +171,9 @@ impl StatusBar {
 
     /// Updates the tooltip of the item with the given id.
     pub fn update_tooltip(&mut self, id: &StatusItemId, tooltip: Option<String>) -> Result<()> {
+        if let Some(tooltip) = &tooltip {
+            validate_status_text(tooltip, "status item tooltip")?;
+        }
         let item = self.get_mut(id)?;
         item.tooltip = tooltip;
         Ok(())
@@ -123,6 +198,17 @@ impl StatusBar {
         matched
     }
 
+    /// Returns visible items for one alignment in deterministic priority order.
+    pub fn visible_items(&self, alignment: StatusItemAlignment) -> Vec<&StatusItem> {
+        let mut matched = self
+            .items
+            .iter()
+            .filter(|item| item.visible && item.alignment == alignment)
+            .collect::<Vec<_>>();
+        matched.sort_by_key(|item| std::cmp::Reverse(item.priority));
+        matched
+    }
+
     /// Returns a slice of all items in insertion order.
     pub fn all_items(&self) -> &[StatusItem] {
         &self.items
@@ -130,25 +216,74 @@ impl StatusBar {
 
     /// Returns a reference to the item with the given id, if it exists.
     pub fn get(&self, id: &StatusItemId) -> Option<&StatusItem> {
-        self.index.get(id).map(|&idx| &self.items[idx])
+        self.index.get(id).and_then(|&idx| self.items.get(idx))
     }
 
     /// Rebuilds the internal lookup index from the items list. Call this
     /// after deserializing a `StatusBar` to restore O(1) lookups by id.
     pub fn rebuild_index(&mut self) {
-        self.index.clear();
+        let _ = self.rebuild_index_checked();
+    }
+
+    /// Rebuilds the index while validating persisted items and duplicates.
+    pub fn rebuild_index_checked(&mut self) -> Result<()> {
+        anyhow::ensure!(
+            self.items.len() <= MAX_STATUS_ITEMS,
+            "status bar cannot exceed {MAX_STATUS_ITEMS} items"
+        );
+        let mut next_index = HashMap::with_capacity(self.items.len());
         for (idx, item) in self.items.iter().enumerate() {
-            self.index.insert(item.id.clone(), idx);
+            validate_status_item(item)?;
+            anyhow::ensure!(
+                next_index.insert(item.id.clone(), idx).is_none(),
+                "status bar contains duplicate item identifiers"
+            );
         }
+        self.index = next_index;
+        Ok(())
+    }
+
+    /// Returns the number of registered status items.
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    /// Returns whether no status items are registered.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
     }
 
     fn get_mut(&mut self, id: &StatusItemId) -> Result<&mut StatusItem> {
         let idx = *self
             .index
             .get(id)
-            .ok_or_else(|| anyhow!("status item not found: {}", id))?;
-        Ok(&mut self.items[idx])
+            .ok_or_else(|| anyhow!("status item not found"))?;
+        self.items
+            .get_mut(idx)
+            .ok_or_else(|| anyhow!("status item index is stale"))
     }
+}
+
+fn validate_status_text(text: &str, field: &str) -> Result<()> {
+    anyhow::ensure!(!text.trim().is_empty(), "{field} cannot be empty");
+    anyhow::ensure!(
+        text.len() <= MAX_STATUS_TEXT_BYTES,
+        "{field} cannot exceed {MAX_STATUS_TEXT_BYTES} bytes"
+    );
+    anyhow::ensure!(
+        !text.chars().any(char::is_control),
+        "{field} cannot contain control characters"
+    );
+    Ok(())
+}
+
+fn validate_status_item(item: &StatusItem) -> Result<()> {
+    validate_status_id(&item.id)?;
+    validate_status_text(&item.text, "status item text")?;
+    if let Some(tooltip) = &item.tooltip {
+        validate_status_text(tooltip, "status item tooltip")?;
+    }
+    Ok(())
 }
 
 impl Default for StatusBar {
@@ -392,5 +527,89 @@ mod tests {
         assert_eq!(items[0].id, StatusItemId::new("pos"));
         assert_eq!(items[1].id, StatusItemId::new("zero"));
         assert_eq!(items[2].id, StatusItemId::new("neg"));
+    }
+
+    #[test]
+    fn checked_items_validate_identity_text_and_capacity_inputs() {
+        assert!(StatusItemId::new_checked("").is_err());
+        assert!(StatusItemId::new_checked(" bad").is_err());
+        assert!(StatusItemId::new_checked("bad\nid").is_err());
+
+        let mut bar = StatusBar::new();
+        let mut invalid = make_item("valid", StatusItemAlignment::Left, 0);
+        invalid.text = "bad\ntext".into();
+        assert!(bar.add_item_checked(invalid).is_err());
+        assert!(bar.is_empty());
+
+        bar.add_item_checked(make_item("valid", StatusItemAlignment::Left, 0))
+            .unwrap();
+        assert!(
+            bar.update_tooltip(
+                &StatusItemId::new("valid"),
+                Some("x".repeat(MAX_STATUS_TEXT_BYTES + 1)),
+            )
+            .is_err()
+        );
+        assert_eq!(bar.len(), 1);
+    }
+
+    #[test]
+    fn visible_items_hide_invisible_entries_and_preserve_tie_order() {
+        let mut bar = StatusBar::new();
+        bar.add_item(make_item("first", StatusItemAlignment::Left, 5));
+        bar.add_item(make_item("hidden", StatusItemAlignment::Left, 10));
+        bar.add_item(make_item("second", StatusItemAlignment::Left, 5));
+        bar.set_visible(&StatusItemId::new("hidden"), false)
+            .unwrap();
+
+        let visible = bar.visible_items(StatusItemAlignment::Left);
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].id, StatusItemId::new("first"));
+        assert_eq!(visible[1].id, StatusItemId::new("second"));
+
+        bar.remove_item(&StatusItemId::new("first"));
+        assert_eq!(bar.all_items()[0].id, StatusItemId::new("hidden"));
+        assert_eq!(bar.all_items()[1].id, StatusItemId::new("second"));
+    }
+
+    #[test]
+    fn deserialization_rebuilds_index_and_rejects_duplicates() {
+        let json = r#"{
+            "items": [{
+                "id":"one",
+                "text":"One",
+                "tooltip":null,
+                "alignment":"Left",
+                "priority":0,
+                "visible":true
+            }]
+        }"#;
+        let restored: StatusBar = serde_json::from_str(json).unwrap();
+        assert!(restored.get(&StatusItemId::new("one")).is_some());
+
+        let duplicate = json.replace(
+            "]",
+            ",{
+            \"id\":\"one\",\"text\":\"Duplicate\",\"tooltip\":null,
+            \"alignment\":\"Right\",\"priority\":1,\"visible\":true
+        }]",
+        );
+        assert!(serde_json::from_str::<StatusBar>(&duplicate).is_err());
+    }
+
+    #[test]
+    fn status_bar_debug_redacts_item_content() {
+        let mut bar = StatusBar::new();
+        bar.add_item(StatusItem {
+            id: StatusItemId::new("private-id"),
+            text: "private branch and path".into(),
+            tooltip: Some("private tooltip".into()),
+            alignment: StatusItemAlignment::Left,
+            priority: 0,
+            visible: true,
+        });
+        let debug = format!("{bar:?}");
+        assert_eq!(debug, "StatusBar { item_count: 1 }");
+        assert!(!debug.contains("private"));
     }
 }

@@ -77,6 +77,7 @@ actions!(
 
 type ChangeListener = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
 type SubmitListener = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
+type FocusListener = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
 type Mask = Rc<dyn InputMask>;
 
 #[derive(Clone)]
@@ -124,6 +125,79 @@ pub struct TextInputRenderState {
 }
 
 impl TextInputRenderState {
+    /// Length of the underlying field value in UTF-8 bytes.
+    pub fn value_len_bytes(&self) -> usize {
+        self.value.len()
+    }
+
+    /// Length of the currently displayed text in UTF-8 bytes.
+    pub fn display_text_len_bytes(&self) -> usize {
+        self.display_text.len()
+    }
+
+    /// Length of the configured placeholder text in UTF-8 bytes.
+    pub fn placeholder_len_bytes(&self) -> usize {
+        self.placeholder
+            .as_ref()
+            .map(|placeholder| placeholder.len())
+            .unwrap_or(0)
+    }
+
+    /// Whether a placeholder is configured.
+    pub fn has_placeholder(&self) -> bool {
+        self.placeholder.is_some()
+    }
+
+    /// Whether the underlying field value is empty.
+    pub fn is_empty(&self) -> bool {
+        self.value.is_empty()
+    }
+
+    /// Whether the displayed text differs from the value while not showing a placeholder.
+    pub fn is_masked_display(&self) -> bool {
+        !self.showing_placeholder && self.value != self.display_text
+    }
+
+    /// Number of shaped render lines currently visible to the renderer.
+    pub fn line_count(&self) -> usize {
+        self.lines.len()
+    }
+
+    /// Number of selection rectangles currently visible to the renderer.
+    pub fn selection_rect_count(&self) -> usize {
+        self.selection_bounds.len()
+    }
+
+    /// Whether a non-empty selection is currently visible.
+    pub fn has_selection(&self) -> bool {
+        !self.selection_bounds.is_empty()
+    }
+
+    /// Whether a caret rectangle is currently visible.
+    pub fn has_cursor(&self) -> bool {
+        self.cursor_bounds.is_some()
+    }
+
+    /// Content-safe summary for custom renderers, tests, and agent traces.
+    pub fn to_text(&self) -> String {
+        format!(
+            "text input render: value-bytes {}, display-bytes {}, placeholder {}, placeholder-bytes {}, showing-placeholder {}, focused {}, hovered {}, multiline {}, lines {}, selection-rects {}, selection {}, cursor {}, masked-display {}",
+            self.value_len_bytes(),
+            self.display_text_len_bytes(),
+            self.has_placeholder(),
+            self.placeholder_len_bytes(),
+            self.showing_placeholder,
+            self.focused,
+            self.hovered,
+            self.multi_line,
+            self.line_count(),
+            self.selection_rect_count(),
+            self.has_selection(),
+            self.has_cursor(),
+            self.is_masked_display()
+        )
+    }
+
     /// Paint the shaped text lines using the current window text style.
     pub fn paint_text(&self, window: &mut Window, cx: &mut App) {
         let text_align = window.text_style().text_align;
@@ -373,6 +447,8 @@ pub struct TextInput {
     mask: Option<Mask>,
     on_change: Option<ChangeListener>,
     on_submit: Option<SubmitListener>,
+    on_focus: Option<FocusListener>,
+    on_blur: Option<FocusListener>,
     custom_renderer: Option<TextInputCustomRenderer>,
     source_location: &'static core::panic::Location<'static>,
 }
@@ -390,6 +466,8 @@ impl TextInput {
             mask: None,
             on_change: None,
             on_submit: None,
+            on_focus: None,
+            on_blur: None,
             custom_renderer: None,
             source_location: core::panic::Location::caller(),
         }
@@ -440,6 +518,24 @@ impl TextInput {
         listener: impl Fn(SharedString, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_submit = Some(Rc::new(listener));
+        self
+    }
+
+    /// Register a callback invoked when the field receives keyboard focus.
+    pub fn on_focus(
+        mut self,
+        listener: impl Fn(SharedString, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_focus = Some(Rc::new(listener));
+        self
+    }
+
+    /// Register a callback invoked when the field loses keyboard focus.
+    pub fn on_blur(
+        mut self,
+        listener: impl Fn(SharedString, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_blur = Some(Rc::new(listener));
         self
     }
 
@@ -516,10 +612,10 @@ impl TextInput {
     ) -> Entity<TextInputState> {
         let current_view = window.current_view();
         let undo_manager = window.undo_manager();
-        let state =
+        let (state, is_new) =
             window.with_element_state(global_id, |state: Option<Entity<TextInputState>>, _| {
                 if let Some(state) = state {
-                    (state.clone(), state)
+                    ((state.clone(), false), state)
                 } else {
                     let state = cx.new(|cx| {
                         let focus_handle = cx.focus_handle();
@@ -534,9 +630,34 @@ impl TextInput {
                         cx.notify(current_view);
                     })
                     .detach();
-                    (state.clone(), state)
+                    ((state.clone(), true), state)
                 }
             });
+
+        if is_new {
+            let focus_handle = state.read(cx).focus_handle.clone();
+            let weak_state = state.downgrade();
+            window
+                .on_focus_in(&focus_handle, cx, move |window, cx| {
+                    let _ = weak_state.update(cx, |state, cx| {
+                        if let Some(listener) = state.on_focus.clone() {
+                            listener(state.content.clone(), window, cx);
+                        }
+                    });
+                })
+                .detach();
+
+            let weak_state = state.downgrade();
+            window
+                .on_focus_out(&focus_handle, cx, move |_, window, cx| {
+                    let _ = weak_state.update(cx, |state, cx| {
+                        if let Some(listener) = state.on_blur.clone() {
+                            listener(state.content.clone(), window, cx);
+                        }
+                    });
+                })
+                .detach();
+        }
 
         let text = self.text.clone();
         let placeholder = self.placeholder.clone();
@@ -546,6 +667,8 @@ impl TextInput {
         let mask = self.mask.clone();
         let on_change = self.on_change.clone();
         let on_submit = self.on_submit.clone();
+        let on_focus = self.on_focus.clone();
+        let on_blur = self.on_blur.clone();
         state.update(cx, |state, _| {
             state.sync_from_props(
                 text,
@@ -556,6 +679,8 @@ impl TextInput {
                 mask,
                 on_change,
                 on_submit,
+                on_focus,
+                on_blur,
             );
         });
         state
@@ -1142,9 +1267,10 @@ impl Element for TextInput {
             if let Some(placeholder) = accessibility_placeholder {
                 node.placeholder = Some(placeholder);
             }
+            node.id = window.next_anonymous_accessibility_id();
             node
         };
-        window.register_accessibility_node(node);
+        window.register_accessibility_node_at(node, bounds);
 
         state.update(cx, |input, _| {
             input.last_layout = Some(prepaint.layout.clone());
@@ -1169,6 +1295,8 @@ struct TextInputState {
     history: TextInputHistory,
     on_change: Option<ChangeListener>,
     on_submit: Option<SubmitListener>,
+    on_focus: Option<FocusListener>,
+    on_blur: Option<FocusListener>,
 }
 
 impl TextInputState {
@@ -1190,6 +1318,8 @@ impl TextInputState {
             history,
             on_change: None,
             on_submit: None,
+            on_focus: None,
+            on_blur: None,
         }
     }
 
@@ -1203,6 +1333,8 @@ impl TextInputState {
         mask: Option<Mask>,
         on_change: Option<ChangeListener>,
         on_submit: Option<SubmitListener>,
+        on_focus: Option<FocusListener>,
+        on_blur: Option<FocusListener>,
     ) {
         if self.content != text {
             self.content = text;
@@ -1225,6 +1357,8 @@ impl TextInputState {
         self.mask = mask;
         self.on_change = on_change;
         self.on_submit = on_submit;
+        self.on_focus = on_focus;
+        self.on_blur = on_blur;
     }
 
     fn target_vertical_scroll(&self, layout: &TextInputLayout) -> Pixels {
@@ -2285,9 +2419,18 @@ mod tests {
     struct CapturedTextInputRenderState {
         value: SharedString,
         display_text: SharedString,
+        summary: String,
+        value_len_bytes: usize,
+        display_text_len_bytes: usize,
+        placeholder_len_bytes: usize,
+        has_placeholder: bool,
+        is_empty: bool,
+        is_masked_display: bool,
+        line_count: usize,
         showing_placeholder: bool,
         focused: bool,
         has_cursor: bool,
+        has_selection: bool,
         selection_count: usize,
     }
 
@@ -2357,10 +2500,19 @@ mod tests {
                     captured.borrow_mut().push(CapturedTextInputRenderState {
                         value: state.value.clone(),
                         display_text: state.display_text.clone(),
+                        summary: state.to_text(),
+                        value_len_bytes: state.value_len_bytes(),
+                        display_text_len_bytes: state.display_text_len_bytes(),
+                        placeholder_len_bytes: state.placeholder_len_bytes(),
+                        has_placeholder: state.has_placeholder(),
+                        is_empty: state.is_empty(),
+                        is_masked_display: state.is_masked_display(),
+                        line_count: state.line_count(),
                         showing_placeholder: state.showing_placeholder,
                         focused: state.focused,
-                        has_cursor: state.cursor_bounds.is_some(),
-                        selection_count: state.selection_bounds.len(),
+                        has_cursor: state.has_cursor(),
+                        has_selection: state.has_selection(),
+                        selection_count: state.selection_rect_count(),
                     });
 
                     window.paint_quad(fill(
@@ -2453,6 +2605,42 @@ mod tests {
 
         assert_eq!(content, "12");
         assert_eq!(cursor, 2);
+    }
+
+    #[test]
+    fn text_input_render_state_summary_detects_masked_display_without_content() {
+        let state = TextInputRenderState {
+            value: "secret".into(),
+            display_text: "••••••".into(),
+            placeholder: Some("Password".into()),
+            showing_placeholder: false,
+            focused: true,
+            hovered: true,
+            multi_line: false,
+            outer_bounds: Bounds::default(),
+            field_bounds: Bounds::default(),
+            text_bounds: Bounds::default(),
+            line_height: px(16.),
+            lines: Vec::new(),
+            selection_bounds: Vec::new(),
+            cursor_bounds: Some(Bounds::default()),
+        };
+
+        assert_eq!(state.value_len_bytes(), 6);
+        assert_eq!(state.display_text_len_bytes(), 18);
+        assert_eq!(state.placeholder_len_bytes(), 8);
+        assert!(state.has_placeholder());
+        assert!(!state.is_empty());
+        assert!(state.is_masked_display());
+        assert_eq!(state.line_count(), 0);
+        assert!(!state.has_selection());
+        assert!(state.has_cursor());
+        assert_eq!(
+            state.to_text(),
+            "text input render: value-bytes 6, display-bytes 18, placeholder true, placeholder-bytes 8, showing-placeholder false, focused true, hovered true, multiline false, lines 0, selection-rects 0, selection false, cursor true, masked-display true"
+        );
+        assert!(!state.to_text().contains("secret"));
+        assert!(!state.to_text().contains("Password"));
     }
 
     #[test]
@@ -2669,10 +2857,23 @@ mod tests {
         let initial = latest_render_state(&captured);
         assert_eq!(initial.value, SharedString::default());
         assert_eq!(initial.display_text, SharedString::from("Type here"));
+        assert_eq!(initial.value_len_bytes, 0);
+        assert_eq!(initial.display_text_len_bytes, 9);
+        assert_eq!(initial.placeholder_len_bytes, 9);
+        assert!(initial.has_placeholder);
+        assert!(initial.is_empty);
+        assert!(!initial.is_masked_display);
+        assert_eq!(initial.line_count, 1);
         assert!(initial.showing_placeholder);
         assert!(!initial.focused);
         assert!(!initial.has_cursor);
+        assert!(!initial.has_selection);
         assert_eq!(initial.selection_count, 0);
+        assert_eq!(
+            initial.summary,
+            "text input render: value-bytes 0, display-bytes 9, placeholder true, placeholder-bytes 9, showing-placeholder true, focused false, hovered true, multiline false, lines 1, selection-rects 0, selection false, cursor false, masked-display false"
+        );
+        assert!(!initial.summary.contains("Type here"));
 
         window.simulate_keystrokes("tab");
         window.update(|window, cx| {
@@ -2693,9 +2894,17 @@ mod tests {
         let typed = latest_render_state(&captured);
         assert_eq!(typed.value, SharedString::from("hi"));
         assert_eq!(typed.display_text, SharedString::from("hi"));
+        assert_eq!(typed.value_len_bytes, 2);
+        assert_eq!(typed.display_text_len_bytes, 2);
+        assert!(!typed.is_empty);
         assert!(!typed.showing_placeholder);
         assert!(typed.focused);
         assert!(typed.has_cursor);
+        assert_eq!(
+            typed.summary,
+            "text input render: value-bytes 2, display-bytes 2, placeholder true, placeholder-bytes 9, showing-placeholder false, focused true, hovered true, multiline false, lines 1, selection-rects 0, selection false, cursor true, masked-display false"
+        );
+        assert!(!typed.summary.contains("hi"));
 
         window.simulate_keystrokes("secondary-a");
         window.update(|window, cx| {
@@ -2707,7 +2916,9 @@ mod tests {
         assert!(!selected.showing_placeholder);
         assert!(selected.focused);
         assert!(!selected.has_cursor);
+        assert!(selected.has_selection);
         assert!(selected.selection_count > 0);
+        assert!(!selected.summary.contains("hi"));
     }
 
     #[test]

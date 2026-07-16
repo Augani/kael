@@ -65,7 +65,15 @@ fn on_battery_power() -> Option<bool> {
 }
 
 fn read_trimmed(path: impl AsRef<Path>) -> Option<String> {
-    fs::read_to_string(path)
+    use std::io::Read as _;
+
+    let mut file = fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    file.by_ref().take(4_097).read_to_end(&mut bytes).ok()?;
+    if bytes.len() > 4_096 {
+        return None;
+    }
+    String::from_utf8(bytes)
         .ok()
         .map(|value| value.trim().to_string())
 }
@@ -204,40 +212,39 @@ pub(crate) fn start_system_power_monitor(
     tx: calloop::channel::Sender<SystemPowerEvent>,
 ) -> Option<SystemPowerMonitorHandle> {
     let stop = Arc::new(AtomicBool::new(false));
-    let mut pids = Vec::new();
+    let mut children = Vec::new();
 
-    if let Some(pid) = spawn_logind_monitor(tx.clone(), stop.clone()) {
-        pids.push(pid);
+    if let Some(child) = spawn_logind_monitor(tx.clone(), stop.clone()) {
+        children.push(child);
     }
 
-    if let Some(pid) = spawn_screensaver_monitor(tx.clone(), stop.clone()) {
-        pids.push(pid);
+    if let Some(child) = spawn_screensaver_monitor(tx.clone(), stop.clone()) {
+        children.push(child);
     }
 
-    if let Some(pid) = spawn_upower_monitor(tx, stop.clone()) {
-        pids.push(pid);
+    if let Some(child) = spawn_upower_monitor(tx, stop.clone()) {
+        children.push(child);
     }
 
-    if pids.is_empty() {
+    if children.is_empty() {
         None
     } else {
-        Some(SystemPowerMonitorHandle { pids, stop })
+        Some(SystemPowerMonitorHandle { children, stop })
     }
 }
 
 /// Handle that keeps Linux system-power monitors alive.
 pub(crate) struct SystemPowerMonitorHandle {
-    pids: Vec<u32>,
+    children: Vec<std::process::Child>,
     stop: Arc<AtomicBool>,
 }
 
 impl Drop for SystemPowerMonitorHandle {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        for pid in &self.pids {
-            unsafe {
-                libc::kill(*pid as i32, libc::SIGTERM);
-            }
+        for child in &mut self.children {
+            let _ = child.kill();
+            let _ = child.wait();
         }
     }
 }
@@ -245,9 +252,9 @@ impl Drop for SystemPowerMonitorHandle {
 fn spawn_logind_monitor(
     tx: calloop::channel::Sender<SystemPowerEvent>,
     stop: Arc<AtomicBool>,
-) -> Option<u32> {
+) -> Option<std::process::Child> {
     #[allow(clippy::disallowed_methods)]
-    let child = std::process::Command::new("dbus-monitor")
+    let mut child = std::process::Command::new("dbus-monitor")
         .args([
             "--system",
             "type='signal',sender='org.freedesktop.login1',interface='org.freedesktop.login1.Manager',member='PrepareForSleep'",
@@ -259,10 +266,9 @@ fn spawn_logind_monitor(
         .spawn()
         .ok()?;
 
-    let pid = child.id();
-    let stdout = child.stdout?;
+    let stdout = child.stdout.take()?;
 
-    std::thread::Builder::new()
+    let thread = std::thread::Builder::new()
         .name("power-logind-monitor".into())
         .spawn(move || {
             let reader = BufReader::new(stdout);
@@ -303,18 +309,22 @@ fn spawn_logind_monitor(
                     }
                 }
             }
-        })
-        .ok()?;
+        });
+    if thread.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    }
 
-    Some(pid)
+    Some(child)
 }
 
 fn spawn_screensaver_monitor(
     tx: calloop::channel::Sender<SystemPowerEvent>,
     stop: Arc<AtomicBool>,
-) -> Option<u32> {
+) -> Option<std::process::Child> {
     #[allow(clippy::disallowed_methods)]
-    let child = std::process::Command::new("dbus-monitor")
+    let mut child = std::process::Command::new("dbus-monitor")
         .args([
             "--session",
             "type='signal',interface='org.freedesktop.ScreenSaver',member='ActiveChanged'",
@@ -325,10 +335,9 @@ fn spawn_screensaver_monitor(
         .spawn()
         .ok()?;
 
-    let pid = child.id();
-    let stdout = child.stdout?;
+    let stdout = child.stdout.take()?;
 
-    std::thread::Builder::new()
+    let thread = std::thread::Builder::new()
         .name("power-screensaver-monitor".into())
         .spawn(move || {
             let reader = BufReader::new(stdout);
@@ -361,18 +370,22 @@ fn spawn_screensaver_monitor(
                     }
                 }
             }
-        })
-        .ok()?;
+        });
+    if thread.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    }
 
-    Some(pid)
+    Some(child)
 }
 
 fn spawn_upower_monitor(
     tx: calloop::channel::Sender<SystemPowerEvent>,
     stop: Arc<AtomicBool>,
-) -> Option<u32> {
+) -> Option<std::process::Child> {
     #[allow(clippy::disallowed_methods)]
-    let child = std::process::Command::new("dbus-monitor")
+    let mut child = std::process::Command::new("dbus-monitor")
         .args([
             "--system",
             "type='signal',sender='org.freedesktop.UPower',path='/org/freedesktop/UPower/devices/DisplayDevice',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'",
@@ -383,10 +396,9 @@ fn spawn_upower_monitor(
         .spawn()
         .ok()?;
 
-    let pid = child.id();
-    let stdout = child.stdout?;
+    let stdout = child.stdout.take()?;
 
-    std::thread::Builder::new()
+    let thread = std::thread::Builder::new()
         .name("power-upower-monitor".into())
         .spawn(move || {
             let reader = BufReader::new(stdout);
@@ -401,10 +413,14 @@ fn spawn_upower_monitor(
                     let _ = tx.send(SystemPowerEvent::PowerModeChanged);
                 }
             }
-        })
-        .ok()?;
+        });
+    if thread.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    }
 
-    Some(pid)
+    Some(child)
 }
 
 #[derive(Clone, Copy)]

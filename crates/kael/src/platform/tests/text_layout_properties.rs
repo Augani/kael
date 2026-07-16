@@ -1,4 +1,4 @@
-// Feature: platform-parity-electron-features, Property 5: Text layout produces valid metrics
+// Feature: platform-parity-browser-runtime-features, Property 5: Text layout produces valid metrics
 
 use proptest::prelude::*;
 

@@ -6,9 +6,22 @@ use objc2_foundation::NSString;
 
 const NS_ALERT_FIRST_BUTTON_RETURN: NSModalResponse = 1000;
 
+fn dialog_response_index(response: NSModalResponse, button_count: usize) -> usize {
+    let button_count = button_count.max(1);
+    response
+        .checked_sub(NS_ALERT_FIRST_BUTTON_RETURN)
+        .and_then(|index| usize::try_from(index).ok())
+        .filter(|index| *index < button_count)
+        .unwrap_or_default()
+}
+
 pub fn show_dialog(options: DialogOptions) -> oneshot::Receiver<usize> {
     let (tx, rx) = oneshot::channel();
-    let mtm = MainThreadMarker::new().expect("show_dialog must be called on the main thread");
+    let Some(mtm) = MainThreadMarker::new() else {
+        log::error!("show_dialog called off the macOS main thread; selecting the first answer");
+        tx.send(0).ok();
+        return rx;
+    };
     let alert = NSAlert::new(mtm);
 
     let style = match options.kind {
@@ -39,8 +52,23 @@ pub fn show_dialog(options: DialogOptions) -> oneshot::Receiver<usize> {
     }
 
     let response = alert.runModal();
-    let index = (response - NS_ALERT_FIRST_BUTTON_RETURN) as usize;
+    let index = dialog_response_index(response, options.buttons.len());
     tx.send(index).ok();
 
     rx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dialog_responses_are_bounded_to_available_buttons() {
+        assert_eq!(dialog_response_index(1000, 3), 0);
+        assert_eq!(dialog_response_index(1002, 3), 2);
+        assert_eq!(dialog_response_index(999, 3), 0);
+        assert_eq!(dialog_response_index(1003, 3), 0);
+        assert_eq!(dialog_response_index(isize::MAX, 3), 0);
+        assert_eq!(dialog_response_index(1000, 0), 0);
+    }
 }

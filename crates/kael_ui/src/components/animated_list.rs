@@ -45,6 +45,11 @@ impl AnimatedListState {
     }
 
     pub fn set_keys(&mut self, new_keys: Vec<SharedString>, cx: &mut Context<Self>) {
+        let mut seen = HashSet::new();
+        let new_keys = new_keys
+            .into_iter()
+            .filter(|key| seen.insert(key.clone()))
+            .collect::<Vec<_>>();
         let entering: HashSet<SharedString> = {
             let old_set: HashSet<&SharedString> = self.keys.iter().collect();
             new_keys
@@ -62,35 +67,50 @@ impl AnimatedListState {
                 .collect()
         };
 
-        if entering.is_empty() && exiting.is_empty() {
-            self.keys = new_keys;
+        if entering.is_empty() && exiting.is_empty() && self.keys == new_keys {
             return;
         }
 
-        self.version += 1;
-        let new_set: HashSet<&SharedString> = new_keys.iter().collect();
+        self.version = self.version.wrapping_add(1);
 
-        let mut new_phases: Vec<(SharedString, ItemPhase)> = Vec::new();
-
-        for (key, _phase) in &self.phases {
-            if exiting.contains(key) {
-                new_phases.push((key.clone(), ItemPhase::Exiting));
-            } else if new_set.contains(key) {
-                new_phases.push((key.clone(), ItemPhase::Present));
-            }
+        if cx.reduce_motion() {
+            self.keys = new_keys.clone();
+            self.phases = new_keys
+                .into_iter()
+                .map(|key| (key, ItemPhase::Present))
+                .collect();
+            cx.notify();
+            return;
         }
 
-        for key in &new_keys {
-            if entering.contains(key) {
-                let insert_pos = new_phases
-                    .iter()
-                    .position(|(k, _)| {
-                        let key_idx = new_keys.iter().position(|nk| nk == key).unwrap_or(0);
-                        let k_idx = new_keys.iter().position(|nk| nk == k).unwrap_or(0);
-                        k_idx > key_idx
-                    })
-                    .unwrap_or(new_phases.len());
-                new_phases.insert(insert_pos, (key.clone(), ItemPhase::Entering));
+        let new_set: HashSet<&SharedString> = new_keys.iter().collect();
+        let previous_phases = self
+            .phases
+            .iter()
+            .cloned()
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut new_phases = new_keys
+            .iter()
+            .map(|key| {
+                let phase = if entering.contains(key) {
+                    ItemPhase::Entering
+                } else {
+                    previous_phases
+                        .get(key)
+                        .filter(|phase| **phase != ItemPhase::Exiting)
+                        .cloned()
+                        .unwrap_or(ItemPhase::Present)
+                };
+                (key.clone(), phase)
+            })
+            .collect::<Vec<_>>();
+
+        for (old_index, (key, _)) in self.phases.iter().enumerate() {
+            if !new_set.contains(key) {
+                new_phases.insert(
+                    old_index.min(new_phases.len()),
+                    (key.clone(), ItemPhase::Exiting),
+                );
             }
         }
 
@@ -104,12 +124,13 @@ impl AnimatedListState {
 
         if has_exiting {
             let unmount_after = exit_dur + EXIT_GRACE;
+            let exiting = exiting.clone();
             cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(unmount_after).await;
                 _ = this.update(cx, |state, cx| {
-                    state
-                        .phases
-                        .retain(|(_, phase)| *phase != ItemPhase::Exiting);
+                    state.phases.retain(|(key, phase)| {
+                        *phase != ItemPhase::Exiting || !exiting.contains(key)
+                    });
                     cx.notify();
                 });
             })
@@ -118,11 +139,12 @@ impl AnimatedListState {
 
         let enter_dur = self.enter_duration;
         if has_entering {
+            let entering = entering.clone();
             cx.spawn(async move |this, cx| {
                 cx.background_executor().timer(enter_dur).await;
                 _ = this.update(cx, |state, cx| {
-                    for (_, phase) in &mut state.phases {
-                        if *phase == ItemPhase::Entering {
+                    for (key, phase) in &mut state.phases {
+                        if *phase == ItemPhase::Entering && entering.contains(key) {
                             *phase = ItemPhase::Present;
                         }
                     }
@@ -244,5 +266,70 @@ impl RenderOnce for AnimatedList {
                 el.style().refine(&user_style);
                 el
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn keyed_items_follow_reorders_without_becoming_stale() {
+        let mut cx = kael::TestAppContext::single();
+        let state = cx.new(AnimatedListState::new);
+        let visible = cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.set_keys(vec!["a".into(), "b".into(), "c".into()], cx);
+                state.set_keys(vec!["c".into(), "a".into(), "b".into()], cx);
+            });
+            state
+                .read(cx)
+                .visible_keys()
+                .into_iter()
+                .map(|(key, _, _)| key)
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            visible,
+            vec![
+                SharedString::from("c"),
+                SharedString::from("a"),
+                SharedString::from("b")
+            ]
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn duplicate_keys_are_normalized_at_the_state_boundary() {
+        let mut cx = kael::TestAppContext::single();
+        let state = cx.new(AnimatedListState::new);
+        let visible_count = cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.set_keys(vec!["a".into(), "a".into(), "b".into()], cx);
+            });
+            state.read(cx).visible_keys().len()
+        });
+
+        assert_eq!(visible_count, 2);
+    }
+
+    #[::core::prelude::v1::test]
+    fn reduced_motion_applies_key_changes_without_transient_phases() {
+        let mut cx = kael::TestAppContext::single();
+        cx.set_reduce_motion(true);
+        let state = cx.new(AnimatedListState::new);
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.set_keys(vec!["a".into(), "b".into()], cx);
+                state.set_keys(vec!["b".into(), "c".into()], cx);
+            });
+
+            let visible = state.read(cx).visible_keys();
+            assert_eq!(visible.len(), 2);
+            assert!(visible
+                .iter()
+                .all(|(_, entering, exiting)| { !entering && !exiting }));
+        });
     }
 }

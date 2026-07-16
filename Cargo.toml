@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/kael",
+    "crates/kael-cli",
     "crates/kael-media",
     "crates/kael-macros",
     "crates/kael_storage",
@@ -46,3 +47,36 @@ authors = ["Augustus Otu"]
 license = "Apache-2.0"
 repository = "https://github.com/Augani/kael"
 homepage = "https://augani.github.io/kael/"
+
+[workspace.dependencies]
+anyhow = "1.0.86"
+futures = "0.3"
+log = "0.4.16"
+serde = "1.0.221"
+serde_json = "1.0.144"
+smallvec = "1.6"
+smol = "2.0"
+thiserror = "2.0.12"
+unicode-segmentation = "1.10"
+windows = "0.62"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+declare_interior_mutable_const = "deny"
+disallowed_methods = "deny"
+large_enum_variant = "allow"
+let_underscore_future = "allow"
+nonminimal_bool = "allow"
+redundant_clone = "deny"
+single_range_in_vec_init = "allow"
+todo = "deny"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[workspace.lints.clippy.style]
+level = "allow"
+priority = -1
+
+[workspace.lints.rust.unexpected_cfgs]
+level = "allow"
+priority = 0

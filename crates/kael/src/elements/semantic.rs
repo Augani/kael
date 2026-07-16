@@ -108,6 +108,43 @@ impl MenuEntry {
         }
     }
 
+    /// Returns true when the menu item has a configured label.
+    pub fn has_label(&self) -> bool {
+        self.label.is_some()
+    }
+
+    /// Byte length of the configured label, without exposing the label text.
+    pub fn label_len_bytes(&self) -> usize {
+        self.label.as_ref().map_or(0, |label| label.len())
+    }
+
+    /// Returns true when activation is disabled.
+    pub fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
+    /// Returns true when the menu item has an activation callback.
+    pub fn has_click_handler(&self) -> bool {
+        self.on_click.is_some()
+    }
+
+    /// Number of caller-provided child elements.
+    pub fn child_count(&self) -> usize {
+        self.children.len()
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "semantic_menu_item(has_label={}, label_len_bytes={}, disabled={}, has_click_handler={}, child_count={})",
+            self.has_label(),
+            self.label_len_bytes(),
+            self.is_disabled(),
+            self.has_click_handler(),
+            self.child_count()
+        )
+    }
+
     /// Set the visible label for the menu item.
     pub fn label(mut self, label: impl Into<SharedString>) -> Self {
         self.label = Some(label.into());
@@ -213,6 +250,68 @@ impl Link {
             on_click: None,
             children: Vec::new(),
         }
+    }
+
+    /// Returns true when the link has a configured label.
+    pub fn has_label(&self) -> bool {
+        self.label.is_some()
+    }
+
+    /// Byte length of the configured label, without exposing the label text.
+    pub fn label_len_bytes(&self) -> usize {
+        self.label.as_ref().map_or(0, |label| label.len())
+    }
+
+    /// Returns true when the link has a configured URL.
+    pub fn has_url(&self) -> bool {
+        self.url.is_some()
+    }
+
+    /// Byte length of the configured URL, without exposing the URL.
+    pub fn url_len_bytes(&self) -> usize {
+        self.url.as_ref().map_or(0, |url| url.len())
+    }
+
+    /// Returns true when activation is disabled.
+    pub fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
+    /// Returns true when the link has a caller-provided activation callback.
+    pub fn has_click_handler(&self) -> bool {
+        self.on_click.is_some()
+    }
+
+    /// Stable activation mode key.
+    pub fn activation_mode(&self) -> &'static str {
+        if self.disabled {
+            "disabled"
+        } else if self.on_click.is_some() {
+            "callback"
+        } else if self.url.is_some() {
+            "url"
+        } else {
+            "none"
+        }
+    }
+
+    /// Number of caller-provided child elements.
+    pub fn child_count(&self) -> usize {
+        self.children.len()
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "semantic_link(has_label={}, label_len_bytes={}, has_url={}, url_len_bytes={}, disabled={}, activation_mode={}, child_count={})",
+            self.has_label(),
+            self.label_len_bytes(),
+            self.has_url(),
+            self.url_len_bytes(),
+            self.is_disabled(),
+            self.activation_mode(),
+            self.child_count()
+        )
     }
 
     /// Set the visible label for the link.
@@ -336,6 +435,70 @@ impl TreeItem {
             on_click: None,
             children: Vec::new(),
         }
+    }
+
+    /// Returns true when the tree item has a configured label.
+    pub fn has_label(&self) -> bool {
+        self.label.is_some()
+    }
+
+    /// Byte length of the configured label, without exposing the label text.
+    pub fn label_len_bytes(&self) -> usize {
+        self.label.as_ref().map_or(0, |label| label.len())
+    }
+
+    /// Returns true when the tree item is selected.
+    pub fn is_selected(&self) -> bool {
+        self.selected
+    }
+
+    /// Stable expansion state key.
+    pub fn expansion_state(&self) -> &'static str {
+        match self.expanded {
+            Some(true) => "expanded",
+            Some(false) => "collapsed",
+            None => "none",
+        }
+    }
+
+    /// Returns true when activation is disabled.
+    pub fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
+    /// Returns true when the tree item has an activation callback.
+    pub fn has_click_handler(&self) -> bool {
+        self.on_click.is_some()
+    }
+
+    /// Stable activation mode key.
+    pub fn activation_mode(&self) -> &'static str {
+        if self.disabled {
+            "disabled"
+        } else if self.on_click.is_some() {
+            "callback"
+        } else {
+            "none"
+        }
+    }
+
+    /// Number of caller-provided child elements.
+    pub fn child_count(&self) -> usize {
+        self.children.len()
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "semantic_tree_item(has_label={}, label_len_bytes={}, selected={}, expansion_state={}, disabled={}, activation_mode={}, child_count={})",
+            self.has_label(),
+            self.label_len_bytes(),
+            self.is_selected(),
+            self.expansion_state(),
+            self.is_disabled(),
+            self.activation_mode(),
+            self.child_count()
+        )
     }
 
     /// Set the visible label for the tree item.
@@ -801,5 +964,45 @@ mod tests {
             window.draw(cx).clear();
             assert_eq!(view.read(cx).activations, 2);
         });
+    }
+
+    #[test]
+    fn semantic_primitive_summary_is_content_safe() {
+        let menu = menu_item("copy")
+            .label("Secret menu label")
+            .on_click(|_, _, _| {});
+        assert!(menu.has_label());
+        assert_eq!(menu.label_len_bytes(), "Secret menu label".len());
+        assert!(menu.has_click_handler());
+        assert_eq!(menu.child_count(), 0);
+        let menu_summary = menu.to_text();
+        assert!(menu_summary.contains("semantic_menu_item"));
+        assert!(menu_summary.contains("has_click_handler=true"));
+        assert!(!menu_summary.contains("Secret menu label"));
+
+        let link = link("docs")
+            .label("Private docs")
+            .url("https://example.com/private");
+        assert!(link.has_label());
+        assert!(link.has_url());
+        assert_eq!(link.activation_mode(), "url");
+        let link_summary = link.to_text();
+        assert!(link_summary.contains("activation_mode=url"));
+        assert!(!link_summary.contains("Private docs"));
+        assert!(!link_summary.contains("https://example.com/private"));
+
+        let tree = tree_item("secret-node")
+            .label("Secret tree node")
+            .selected(true)
+            .expanded(false)
+            .disabled();
+        assert!(tree.is_selected());
+        assert_eq!(tree.expansion_state(), "collapsed");
+        assert_eq!(tree.activation_mode(), "disabled");
+        let tree_summary = tree.to_text();
+        assert!(tree_summary.contains("semantic_tree_item"));
+        assert!(tree_summary.contains("expansion_state=collapsed"));
+        assert!(!tree_summary.contains("Secret tree node"));
+        assert!(!tree_summary.contains("secret-node"));
     }
 }

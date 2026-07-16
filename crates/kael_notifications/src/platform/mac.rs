@@ -13,8 +13,8 @@ pub(crate) struct PlatformBackend;
 
 pub(crate) const SUPPORT: PlatformNotificationSupport = PlatformNotificationSupport {
     delivery_backend: "notify-rust+mac-notification-sys",
-    action_backend: "planned-unusernotificationcenter",
-    push_backend: "planned-apns",
+    action_backend: "not-implemented",
+    push_backend: "not-implemented",
 };
 
 impl NotificationBackend for PlatformBackend {

@@ -267,7 +267,7 @@ impl TimelineClip {
 
     /// The exclusive end of the clip on the track.
     pub fn track_end(&self) -> u64 {
-        self.track_offset + self.duration()
+        self.track_offset.saturating_add(self.duration())
     }
 
     /// Whether the clip is visible at the given track (timeline) frame.
@@ -366,11 +366,22 @@ impl TimelineTrack {
     pub fn ripple_trim_out(&mut self, id: &str, delta: i64) -> Result<(), TimelineEditError> {
         let index = self.clip_index(id)?;
         let pivot = self.clips[index].track_offset;
-        self.trim_out(id, delta)?;
-        for (i, clip) in self.clips.iter_mut().enumerate() {
-            if i != index && clip.track_offset > pivot {
-                clip.track_offset = offset_by(clip.track_offset, delta)?;
-            }
+        let new_end = offset_by(self.clips[index].end_frame, delta)?;
+        if new_end <= self.clips[index].start_frame {
+            return Err(TimelineEditError::InvalidDuration);
+        }
+        let shifted: Vec<(usize, u64)> = self
+            .clips
+            .iter()
+            .enumerate()
+            .filter(|(clip_index, clip)| *clip_index != index && clip.track_offset > pivot)
+            .map(|(clip_index, clip)| {
+                offset_by(clip.track_offset, delta).map(|offset| (clip_index, offset))
+            })
+            .collect::<Result<_, _>>()?;
+        self.clips[index].end_frame = new_end;
+        for (clip_index, offset) in shifted {
+            self.clips[clip_index].track_offset = offset;
         }
         Ok(())
     }
@@ -378,14 +389,24 @@ impl TimelineTrack {
     /// Remove a clip and shift all later clips left to close the gap.
     pub fn ripple_delete(&mut self, id: &str) -> Result<TimelineClip, TimelineEditError> {
         let index = self.clip_index(id)?;
-        let removed = self.clips.remove(index);
-        let shift = removed.duration() as i64;
-        for clip in self.clips.iter_mut() {
-            if clip.track_offset > removed.track_offset {
-                clip.track_offset = offset_by(clip.track_offset, -shift)?;
-            }
+        let shift = self.clips[index].duration();
+        let pivot = self.clips[index].track_offset;
+        let shifted: Vec<(usize, u64)> = self
+            .clips
+            .iter()
+            .enumerate()
+            .filter(|(clip_index, clip)| *clip_index != index && clip.track_offset > pivot)
+            .map(|(clip_index, clip)| {
+                clip.track_offset
+                    .checked_sub(shift)
+                    .map(|offset| (clip_index, offset))
+                    .ok_or(TimelineEditError::OutOfBounds)
+            })
+            .collect::<Result<_, _>>()?;
+        for (clip_index, offset) in shifted {
+            self.clips[clip_index].track_offset = offset;
         }
-        Ok(removed)
+        Ok(self.clips.remove(index))
     }
 
     /// Remove the clip with the given id, leaving a gap where it was — the non-rippling
@@ -518,28 +539,46 @@ impl TimelineTrack {
 
     /// Insert `clip` at its `track_offset`, rippling clips at or after that
     /// position right by the clip's duration (no overwrite).
-    pub fn insert_clip(&mut self, clip: TimelineClip) {
+    pub fn insert_clip(&mut self, clip: TimelineClip) -> Result<(), TimelineEditError> {
         let at = clip.track_offset;
         let shift = clip.duration();
-        for existing in &mut self.clips {
-            if existing.track_offset >= at {
-                existing.track_offset += shift;
-            }
+        at.checked_add(shift)
+            .ok_or(TimelineEditError::OutOfBounds)?;
+        let shifted: Vec<(usize, u64)> = self
+            .clips
+            .iter()
+            .enumerate()
+            .filter(|(_, existing)| existing.track_offset >= at)
+            .map(|(index, existing)| {
+                existing
+                    .track_offset
+                    .checked_add(shift)
+                    .map(|offset| (index, offset))
+                    .ok_or(TimelineEditError::OutOfBounds)
+            })
+            .collect::<Result<_, _>>()?;
+        for (index, offset) in shifted {
+            self.clips[index].track_offset = offset;
         }
         self.clips.push(clip);
+        Ok(())
     }
 
     /// Place `clip` at its track span, overwriting overlapping content: clips it
     /// fully covers are removed, partially-overlapped clips are trimmed, and a
     /// clip it lands inside is split around it.
-    pub fn overwrite_clip(&mut self, clip: TimelineClip) {
-        let (start, end) = (clip.track_offset, clip.track_end());
+    pub fn overwrite_clip(&mut self, clip: TimelineClip) -> Result<(), TimelineEditError> {
+        let start = clip.track_offset;
+        let end = start
+            .checked_add(clip.duration())
+            .ok_or(TimelineEditError::OutOfBounds)?;
         let mut next = Vec::new();
         for existing in std::mem::take(&mut self.clips) {
             next.extend(subtract_track_range(&existing, start, end));
         }
         next.push(clip);
         self.clips = next;
+        Ok(())
     }
 
     /// Empty ranges between consecutive clips, in track order.
@@ -600,7 +639,7 @@ impl Timeline {
 
     /// Total duration in milliseconds derived from frame count and rate.
     pub fn total_duration_ms(&self) -> u64 {
-        if self.frame_rate <= 0.0 {
+        if !self.frame_rate.is_finite() || self.frame_rate <= 0.0 {
             return 0;
         }
         ((self.duration_frames as f64 / self.frame_rate) * 1000.0) as u64
@@ -646,7 +685,11 @@ impl Timeline {
         if self.frame_rate <= 0.0 || !self.frame_rate.is_finite() {
             return None;
         }
-        Some(Timecode::from_frame(frame, self.frame_rate.round() as u32))
+        let fps = self.frame_rate.round();
+        if !(1.0..=f64::from(u32::MAX)).contains(&fps) {
+            return None;
+        }
+        Some(Timecode::from_frame(frame, fps as u32))
     }
 
     /// Resolve, for each track, the source frame that must be decoded to present
@@ -668,20 +711,25 @@ impl Timeline {
                 // Keyframed effects are authored against clip-local time, so resolve the
                 // animation at this frame's offset within the clip before compositing.
                 let clip_local = frame.saturating_sub(clip.track_offset);
-                let time_ms = if self.frame_rate > 0.0 {
+                let time_ms = if self.frame_rate.is_finite() && self.frame_rate > 0.0 {
                     (clip_local as f64 / self.frame_rate * 1000.0) as u64
                 } else {
                     0
                 };
+                let opacity = clip
+                    .opacity_curve
+                    .as_ref()
+                    .map_or(clip.opacity, |curve| curve.sample(time_ms));
                 requests.push(TrackFrameRequest {
                     track_id: track.id.clone(),
                     clip_id: clip.id.clone(),
                     source: clip.source.clone(),
                     source_frame,
-                    opacity: clip
-                        .opacity_curve
-                        .as_ref()
-                        .map_or(clip.opacity, |curve| curve.sample(time_ms)),
+                    opacity: if opacity.is_finite() {
+                        opacity.clamp(0.0, 1.0)
+                    } else {
+                        1.0
+                    },
                     blend_mode: clip.blend_mode,
                     effects: clip.effects.resolve(time_ms),
                     transform: clip
@@ -771,18 +819,47 @@ impl Timeline {
     /// Ripple-insert `frames` of empty space at `at_frame` across every track: every
     /// clip that begins at or after `at_frame` shifts later by `frames`, keeping all
     /// tracks in sync. Recomputes the timeline duration.
-    pub fn ripple_insert_gap(&mut self, at_frame: u64, frames: u64) {
+    pub fn ripple_insert_gap(
+        &mut self,
+        at_frame: u64,
+        frames: u64,
+    ) -> Result<(), TimelineEditError> {
         if frames == 0 {
-            return;
+            return Ok(());
         }
-        for track in &mut self.tracks {
-            for clip in &mut track.clips {
-                if clip.track_offset >= at_frame {
-                    clip.track_offset += frames;
+        let shifted: Vec<Vec<Option<u64>>> = self
+            .tracks
+            .iter()
+            .map(|track| {
+                track
+                    .clips
+                    .iter()
+                    .map(|clip| {
+                        (clip.track_offset >= at_frame)
+                            .then(|| clip.track_offset.checked_add(frames))
+                            .flatten()
+                    })
+                    .collect()
+            })
+            .collect();
+        if self.tracks.iter().zip(&shifted).any(|(track, offsets)| {
+            track
+                .clips
+                .iter()
+                .zip(offsets)
+                .any(|(clip, offset)| clip.track_offset >= at_frame && offset.is_none())
+        }) {
+            return Err(TimelineEditError::OutOfBounds);
+        }
+        for (track, offsets) in self.tracks.iter_mut().zip(shifted) {
+            for (clip, offset) in track.clips.iter_mut().zip(offsets) {
+                if let Some(offset) = offset {
+                    clip.track_offset = offset;
                 }
             }
         }
         self.recompute_duration();
+        Ok(())
     }
 
     /// Insert `clip` on track `track_index` at its `track_offset` as a synchronized
@@ -799,10 +876,21 @@ impl Timeline {
             return Err(TimelineEditError::OutOfBounds);
         }
         let at = clip.track_offset;
+        let shift = clip.duration();
+        at.checked_add(shift)
+            .ok_or(TimelineEditError::OutOfBounds)?;
+        if self
+            .tracks
+            .iter()
+            .flat_map(|track| &track.clips)
+            .any(|clip| clip.track_offset >= at && clip.track_offset.checked_add(shift).is_none())
+        {
+            return Err(TimelineEditError::OutOfBounds);
+        }
         for track in &mut self.tracks {
             track.split_at(at);
         }
-        self.ripple_insert_gap(at, clip.duration());
+        self.ripple_insert_gap(at, shift)?;
         self.tracks[track_index].clips.push(clip);
         self.recompute_duration();
         Ok(())
@@ -853,7 +941,7 @@ impl Timeline {
             source_in,
             source_out,
             timeline_in,
-        ));
+        ))?;
         self.recompute_duration();
         Ok(())
     }
@@ -862,11 +950,17 @@ impl Timeline {
     /// every clip that begins at or after the end of the gap shifts earlier by
     /// `frames`. The caller is responsible for the span being an actual gap (no clip
     /// straddles it). Recomputes the timeline duration.
-    pub fn ripple_close_gap(&mut self, at_frame: u64, frames: u64) {
+    pub fn ripple_close_gap(
+        &mut self,
+        at_frame: u64,
+        frames: u64,
+    ) -> Result<(), TimelineEditError> {
         if frames == 0 {
-            return;
+            return Ok(());
         }
-        let gap_end = at_frame + frames;
+        let gap_end = at_frame
+            .checked_add(frames)
+            .ok_or(TimelineEditError::OutOfBounds)?;
         for track in &mut self.tracks {
             for clip in &mut track.clips {
                 if clip.track_offset >= gap_end {
@@ -875,6 +969,7 @@ impl Timeline {
             }
         }
         self.recompute_duration();
+        Ok(())
     }
 
     /// Ripple-delete the time range `[start, start + length)` from every track — the
@@ -882,11 +977,17 @@ impl Timeline {
     /// Clips straddling either boundary are split, clips fully inside the range are removed,
     /// and everything after the range ripples left by `length` so all tracks stay in sync. A
     /// zero `length` is a no-op.
-    pub fn ripple_delete_range(&mut self, start: u64, length: u64) {
+    pub fn ripple_delete_range(
+        &mut self,
+        start: u64,
+        length: u64,
+    ) -> Result<(), TimelineEditError> {
         if length == 0 {
-            return;
+            return Ok(());
         }
-        let end = start + length;
+        let end = start
+            .checked_add(length)
+            .ok_or(TimelineEditError::OutOfBounds)?;
         for track in &mut self.tracks {
             track.split_at(start);
             track.split_at(end);
@@ -894,8 +995,9 @@ impl Timeline {
                 .clips
                 .retain(|clip| !(clip.track_offset >= start && clip.track_end() <= end));
         }
-        self.ripple_close_gap(start, length);
+        self.ripple_close_gap(start, length)?;
         self.recompute_duration();
+        Ok(())
     }
 }
 
@@ -950,10 +1052,10 @@ impl ThumbnailCache {
     /// Retrieve cached thumbnail bytes by key.
     pub fn get(&mut self, key: &str) -> Option<&Vec<u8>> {
         if self.store.contains_key(key) {
-            self.hits += 1;
+            self.hits = self.hits.saturating_add(1);
             self.store.get(key)
         } else {
-            self.misses += 1;
+            self.misses = self.misses.saturating_add(1);
             None
         }
     }
@@ -1033,7 +1135,7 @@ impl ExportConfig {
             anyhow::bail!("height must be greater than zero");
         }
         if let Some(fr) = self.frame_rate
-            && fr <= 0.0
+            && (!fr.is_finite() || fr <= 0.0)
         {
             anyhow::bail!("frame_rate must be positive");
         }
@@ -1376,7 +1478,7 @@ mod tests {
             frame_rate: 30.0,
             duration_frames: 100,
         };
-        tl.ripple_insert_gap(60, 10);
+        tl.ripple_insert_gap(60, 10).unwrap();
         // Clip a (offset 50, before 60) stays; clip b (offset 80, after) shifts +10.
         assert_eq!(tl.tracks[0].clips[0].track_offset, 50);
         assert_eq!(tl.tracks[1].clips[0].track_offset, 90);
@@ -1541,7 +1643,7 @@ mod tests {
             frame_rate: 30.0,
             duration_frames: 40,
         };
-        tl.ripple_delete_range(10, 20);
+        tl.ripple_delete_range(10, 20).unwrap();
 
         for track in &tl.tracks {
             assert_eq!(track.clips.len(), 2, "the mid clip is removed");
@@ -1565,7 +1667,7 @@ mod tests {
             duration_frames: 40,
         };
         // Remove the middle [10,30): the clip is split at both edges; the inner part goes.
-        tl.ripple_delete_range(10, 20);
+        tl.ripple_delete_range(10, 20).unwrap();
         // Left part [0,10) stays; right part [30,40) ripples to [10,20).
         let offsets: Vec<(u64, u64)> = tl.tracks[0]
             .clips
@@ -1589,7 +1691,7 @@ mod tests {
             frame_rate: 30.0,
             duration_frames: 30,
         };
-        tl.ripple_delete_range(5, 0);
+        tl.ripple_delete_range(5, 0).unwrap();
         assert_eq!(tl.tracks[0].clips.len(), 1);
         assert_eq!(tl.tracks[0].clips[0].track_offset, 10);
     }
@@ -1606,7 +1708,7 @@ mod tests {
             duration_frames: 60,
         };
         // Gap [20,40) is empty; close it.
-        tl.ripple_close_gap(20, 20);
+        tl.ripple_close_gap(20, 20).unwrap();
         assert_eq!(tl.tracks[0].clips[0].track_offset, 0);
         assert_eq!(tl.tracks[0].clips[1].track_offset, 20);
         assert_eq!(tl.duration_frames, 40);
@@ -1787,6 +1889,9 @@ mod tests {
             audio_sample_rate: None,
         };
         assert!(cfg.validate().is_err());
+        let mut non_finite = cfg;
+        non_finite.frame_rate = Some(f64::NAN);
+        assert!(non_finite.validate().is_err());
     }
 
     #[test]
@@ -1813,6 +1918,57 @@ mod tests {
         };
         let _ = tl.clips_at_frame(u64::MAX);
         let _ = tl.clips_at_frame(0);
+        assert_eq!(tl.tracks[0].clips[0].track_end(), u64::MAX);
+        assert!(tl.timecode_at(0).is_some());
+    }
+
+    #[test]
+    fn timeline_edits_reject_overflow_without_partial_mutation() {
+        let mut track = edit_track(vec![sample_clip("a", 0, 50, 0), sample_clip("b", 0, 50, 5)]);
+        let before = track.clips.clone();
+        assert_eq!(
+            track.ripple_trim_out("a", -10),
+            Err(TimelineEditError::OutOfBounds)
+        );
+        assert_eq!(track.clips[0].end_frame, before[0].end_frame);
+        assert_eq!(track.clips[1].track_offset, before[1].track_offset);
+
+        let mut overflowing = edit_track(vec![sample_clip("late", 0, 1, u64::MAX)]);
+        assert_eq!(
+            overflowing.insert_clip(sample_clip("new", 0, 1, 0)),
+            Err(TimelineEditError::OutOfBounds)
+        );
+        assert_eq!(overflowing.clips.len(), 1);
+
+        let mut timeline = Timeline {
+            tracks: vec![overflowing],
+            frame_rate: 30.0,
+            duration_frames: u64::MAX,
+        };
+        assert_eq!(
+            timeline.ripple_insert_gap(0, 1),
+            Err(TimelineEditError::OutOfBounds)
+        );
+        assert_eq!(timeline.tracks[0].clips[0].track_offset, u64::MAX);
+        assert_eq!(
+            timeline.ripple_close_gap(u64::MAX, 1),
+            Err(TimelineEditError::OutOfBounds)
+        );
+        assert_eq!(
+            timeline.ripple_delete_range(u64::MAX, 1),
+            Err(TimelineEditError::OutOfBounds)
+        );
+    }
+
+    #[test]
+    fn ripple_delete_supports_durations_larger_than_i64() {
+        let duration = i64::MAX as u64 + 1;
+        let mut track = edit_track(vec![
+            sample_clip("huge", 0, duration, 0),
+            sample_clip("later", 0, 1, duration),
+        ]);
+        track.ripple_delete("huge").unwrap();
+        assert_eq!(track.clips[0].track_offset, 0);
     }
 
     #[test]
@@ -2006,7 +2162,7 @@ mod tests {
             sample_clip("a", 0, 50, 0),
             sample_clip("b", 0, 50, 50),
         ]);
-        track.insert_clip(sample_clip("c", 0, 20, 50));
+        track.insert_clip(sample_clip("c", 0, 20, 50)).unwrap();
         let b = track.clips.iter().find(|clip| clip.id == "b").unwrap();
         assert_eq!(b.track_offset, 70);
         let a = track.clips.iter().find(|clip| clip.id == "a").unwrap();
@@ -2018,7 +2174,9 @@ mod tests {
     #[test]
     fn overwrite_clip_splits_covered_clip() {
         let mut track = edit_track(vec![sample_clip("a", 0, 100, 0)]);
-        track.overwrite_clip(sample_clip("c", 200, 220, 20));
+        track
+            .overwrite_clip(sample_clip("c", 200, 220, 20))
+            .unwrap();
         assert!(!track.has_overlap());
         let left = track.clips.iter().find(|clip| clip.id == "a").unwrap();
         assert_eq!((left.track_offset, left.track_end()), (0, 20));
@@ -2037,7 +2195,7 @@ mod tests {
             sample_clip("b", 0, 50, 50),
         ]);
         // covers all of `a` from 40 and all of `b` up to 60.
-        track.overwrite_clip(sample_clip("c", 0, 20, 40));
+        track.overwrite_clip(sample_clip("c", 0, 20, 40)).unwrap();
         assert!(!track.has_overlap());
         let a = track.clips.iter().find(|clip| clip.id == "a").unwrap();
         assert_eq!(a.track_end(), 40);

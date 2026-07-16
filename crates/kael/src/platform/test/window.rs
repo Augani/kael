@@ -30,7 +30,10 @@ pub(crate) struct TestWindowState {
     moved_callback: Option<Box<dyn FnMut()>>,
     input_handler: Option<PlatformInputHandler>,
     is_fullscreen: bool,
+    pub(crate) opacity: f32,
+    pub(crate) always_on_top: bool,
     pub(crate) frame_polling_active: bool,
+    pub(crate) close_requested: bool,
     pub(crate) accessibility_tree: Option<crate::AccessibilityTree>,
 }
 
@@ -78,7 +81,10 @@ impl TestWindow {
             moved_callback: None,
             input_handler: None,
             is_fullscreen: false,
+            opacity: 1.0,
+            always_on_top: false,
             frame_polling_active: false,
+            close_requested: false,
             accessibility_tree: None,
         })))
     }
@@ -224,6 +230,14 @@ impl PlatformWindow for TestWindow {
 
     fn set_background_appearance(&self, _background: WindowBackgroundAppearance) {}
 
+    fn set_opacity(&self, opacity: f32) {
+        self.0.lock().opacity = opacity;
+    }
+
+    fn set_always_on_top(&self, always_on_top: bool) {
+        self.0.lock().always_on_top = always_on_top;
+    }
+
     fn set_edited(&mut self, edited: bool) {
         self.0.lock().edited = edited;
     }
@@ -249,6 +263,18 @@ impl PlatformWindow for TestWindow {
 
     fn set_frame_polling(&self, active: bool) {
         self.0.lock().frame_polling_active = active;
+    }
+
+    fn close(&self) {
+        let mut state = self.0.lock();
+        let should_close = if let Some(callback) = state.should_close_handler.as_mut() {
+            callback()
+        } else {
+            true
+        };
+        if should_close {
+            state.close_requested = true;
+        }
     }
 
     fn on_input(&self, callback: Box<dyn FnMut(crate::PlatformInput) -> DispatchEventResult>) {
@@ -308,8 +334,12 @@ impl PlatformWindow for TestWindow {
         None
     }
 
-    fn update_accessibility_tree(&mut self, tree: &crate::AccessibilityTree) {
+    fn update_accessibility_tree(
+        &mut self,
+        tree: &crate::AccessibilityTree,
+    ) -> Vec<crate::AccessibilityActionRequest> {
         self.0.lock().accessibility_tree = Some(tree.clone());
+        Vec::new()
     }
 }
 
@@ -380,7 +410,9 @@ impl PlatformAtlas for TestAtlas {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Empty, RequestFrameOptions, TestAppContext, VisualContext};
+    use crate::{
+        Empty, RequestFrameOptions, TestAppContext, VisualContext, WindowInteractionCommand,
+    };
     use raw_window_handle::{HandleError, HasDisplayHandle, HasWindowHandle};
 
     #[kael::test]
@@ -400,6 +432,23 @@ mod tests {
         test_window.run_request_frame(RequestFrameOptions::default());
 
         assert!(!test_window.0.lock().frame_polling_active);
+    }
+
+    #[kael::test]
+    fn checked_window_close_command_reaches_test_window(cx: &mut TestAppContext) {
+        let (_view, cx) = cx.add_window_view(|_, _| Empty);
+        let handle = cx.window_handle();
+        let test_window = cx.test_window(handle);
+
+        cx.update(|window, _| {
+            window
+                .perform_window_interaction_checked(WindowInteractionCommand::close(
+                    "User clicked close",
+                ))
+                .unwrap();
+        });
+
+        assert!(test_window.0.lock().close_requested);
     }
 
     #[kael::test]

@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
     rc::{Rc, Weak},
     str::FromStr,
-    sync::{Arc, Once},
+    sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -21,7 +21,7 @@ use windows::{
     Win32::{
         Foundation::*,
         Graphics::Gdi::*,
-        System::{Com::*, LibraryLoader::*, Ole::*, SystemServices::*},
+        System::{Com::*, LibraryLoader::*, Memory::*, Ole::*, SystemServices::*},
         UI::{Controls::*, HiDpi::*, Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
     },
     core::*,
@@ -32,6 +32,18 @@ use crate::webview::{PlatformWebView, PlatformWebViewCommand};
 use crate::*;
 
 use super::webview::WindowsWebViewHost;
+
+const MAX_NATIVE_TEXT_BYTES: usize = 16 * 1024 * 1024;
+
+struct GlobalMemoryLock(HGLOBAL);
+
+impl Drop for GlobalMemoryLock {
+    fn drop(&mut self) {
+        unsafe {
+            GlobalUnlock(self.0).log_err();
+        }
+    }
+}
 
 pub(crate) struct WindowsWindow(pub Rc<WindowsWindowInner>);
 
@@ -59,6 +71,7 @@ pub struct WindowsWindowState {
     pub system_settings: WindowsSystemSettings,
     pub current_cursor: Option<HCURSOR>,
     pub nc_button_pressed: Option<u32>,
+    pub window_opacity: f32,
 
     pub display: WindowsDisplay,
     fullscreen: Option<StyleAndBounds>,
@@ -125,6 +138,7 @@ impl WindowsWindowState {
         let click_state = ClickState::new();
         let system_settings = WindowsSystemSettings::new(display);
         let nc_button_pressed = None;
+        let window_opacity = 1.0;
         let fullscreen = None;
         let initial_placement = None;
 
@@ -149,6 +163,7 @@ impl WindowsWindowState {
             system_settings,
             current_cursor,
             nc_button_pressed,
+            window_opacity,
             display,
             fullscreen,
             initial_placement,
@@ -385,7 +400,7 @@ impl WindowsWindow {
             tab_manager_state,
             owner_window,
         } = creation_info;
-        register_window_class(icon);
+        register_window_class(icon)?;
         let hide_title_bar = params
             .titlebar
             .as_ref()
@@ -433,12 +448,13 @@ impl WindowsWindow {
             dwexstyle |= WS_EX_NOREDIRECTIONBITMAP;
         }
 
-        let hinstance = get_module_handle();
+        let hinstance = get_module_handle()?;
         let display = if let Some(display_id) = params.display_id {
-            // if we obtain a display_id, then this ID must be valid.
-            WindowsDisplay::new(display_id).unwrap()
+            WindowsDisplay::new(display_id)
+                .ok_or_else(|| anyhow::anyhow!("requested display is unavailable"))?
         } else {
-            WindowsDisplay::primary_monitor().unwrap()
+            WindowsDisplay::primary_monitor()
+                .ok_or_else(|| anyhow::anyhow!("primary display is unavailable"))?
         };
         let appearance = system_appearance().unwrap_or_default();
         let mut context = WindowCreateContext {
@@ -479,7 +495,9 @@ impl WindowsWindow {
 
         // Failure to create a `WindowsWindowState` can cause window creation to fail,
         // so check the inner result first.
-        let this = context.inner.take().unwrap()?;
+        let this = context.inner.take().ok_or_else(|| {
+            anyhow::anyhow!("native window creation did not initialize its state")
+        })??;
         let hwnd = creation_result?;
         if let Some(owner_window) = owner_window {
             unsafe { set_window_long(hwnd, GWLP_HWNDPARENT, owner_window.0 as isize) };
@@ -640,6 +658,15 @@ impl PlatformWindow for WindowsWindow {
         detail: Option<&str>,
         answers: &[PromptButton],
     ) -> Option<Receiver<usize>> {
+        const MAX_NATIVE_PROMPT_BUTTONS: usize = 64;
+        if answers.is_empty() || answers.len() > MAX_NATIVE_PROMPT_BUTTONS {
+            log::warn!(
+                "using the framework prompt renderer for an unsupported native button count: {}",
+                answers.len()
+            );
+            return None;
+        }
+
         let (done_tx, done_rx) = oneshot::channel();
         let msg = msg.to_string();
         let detail_string = detail.map(|detail| detail.to_string());
@@ -680,12 +707,13 @@ impl PlatformWindow for WindowsWindow {
                     let mut button_id_map = Vec::with_capacity(answers.len());
                     let mut buttons = Vec::new();
                     let mut btn_encoded = Vec::new();
+                    let cancel_index = answers.iter().position(PromptButton::is_cancel);
                     for (index, btn) in answers.iter().enumerate() {
                         let encoded = HSTRING::from(btn.label().as_ref());
-                        let button_id = if btn.is_cancel() {
+                        let button_id = if Some(index) == cancel_index {
                             IDCANCEL.0
                         } else {
-                            index as i32 - 100
+                            1_000 + index as i32
                         };
                         button_id_map.push(button_id);
                         buttons.push(TASKDIALOG_BUTTON {
@@ -699,14 +727,22 @@ impl PlatformWindow for WindowsWindow {
 
                     config.pfCallback = None;
                     let mut res = std::mem::zeroed();
-                    let _ = TaskDialogIndirect(&config, Some(&mut res), None, None)
-                        .context("unable to create task dialog")
-                        .log_err();
-
-                    let clicked = button_id_map
-                        .iter()
-                        .position(|&button_id| button_id == res)
-                        .unwrap();
+                    let result = TaskDialogIndirect(&config, Some(&mut res), None, None)
+                        .context("unable to create task dialog");
+                    let fallback = cancel_index.unwrap_or_default();
+                    let clicked = result
+                        .log_err()
+                        .and_then(|_| {
+                            button_id_map
+                                .iter()
+                                .position(|&button_id| button_id == res)
+                        })
+                        .unwrap_or_else(|| {
+                            log::warn!(
+                                "native prompt produced no valid response; selecting fallback answer {fallback}"
+                            );
+                            fallback
+                        });
                     let _ = done_tx.send(clicked);
                 }
             })
@@ -805,6 +841,61 @@ impl PlatformWindow for WindowsWindow {
         }
     }
 
+    fn set_opacity(&self, opacity: f32) {
+        let hwnd = self.0.hwnd;
+        self.0.state.borrow_mut().window_opacity = opacity;
+        let alpha = (opacity.clamp(0.0, 1.0) * u8::MAX as f32).round() as u8;
+
+        unsafe {
+            let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+            if ex_style & WS_EX_LAYERED.0 as i32 == 0 {
+                let _ = SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED.0 as i32);
+                let _ = SetWindowPos(
+                    hwnd,
+                    None,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+                );
+            }
+            SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA).log_err();
+        }
+    }
+
+    fn set_always_on_top(&self, always_on_top: bool) {
+        let insert_after = if always_on_top {
+            Some(HWND_TOPMOST)
+        } else {
+            Some(HWND_NOTOPMOST)
+        };
+        unsafe {
+            SetWindowPos(
+                self.0.hwnd,
+                insert_after,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+            .log_err();
+        }
+    }
+
+    fn close(&self) {
+        unsafe {
+            PostMessageW(
+                Some(self.0.hwnd),
+                WM_CLOSE,
+                WPARAM::default(),
+                LPARAM::default(),
+            )
+            .log_err();
+        }
+    }
+
     fn minimize(&self) {
         unsafe { ShowWindowAsync(self.0.hwnd, SW_MINIMIZE).ok().log_err() };
     }
@@ -883,6 +974,14 @@ impl PlatformWindow for WindowsWindow {
         self.0.state.borrow_mut().renderer.draw(scene).log_err();
     }
 
+    fn set_atlas_byte_budget(&self, budget: Option<u64>) {
+        self.0
+            .state
+            .borrow_mut()
+            .renderer
+            .set_atlas_byte_budget(budget);
+    }
+
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
         self.0.state.borrow().renderer.sprite_atlas()
     }
@@ -921,7 +1020,11 @@ impl PlatformWindow for WindowsWindow {
             let new_style = if passthrough {
                 ex_style | (WS_EX_TRANSPARENT.0 as i32) | (WS_EX_LAYERED.0 as i32)
             } else {
-                ex_style & !(WS_EX_TRANSPARENT.0 as i32) & !(WS_EX_LAYERED.0 as i32)
+                let mut style = ex_style & !(WS_EX_TRANSPARENT.0 as i32);
+                if self.0.state.borrow().window_opacity >= 1.0 {
+                    style &= !(WS_EX_LAYERED.0 as i32);
+                }
+                style
             };
             if new_style != ex_style {
                 let _ = SetWindowLongW(self.0.hwnd, GWL_EXSTYLE, new_style);
@@ -1049,7 +1152,10 @@ impl PlatformWindow for WindowsWindow {
         self.0.tab_manager.tabbed_windows()
     }
 
-    fn update_accessibility_tree(&mut self, tree: &crate::AccessibilityTree) {
+    fn update_accessibility_tree(
+        &mut self,
+        tree: &crate::AccessibilityTree,
+    ) -> Vec<crate::AccessibilityActionRequest> {
         use super::accessibility::{AccessibleElementInfo, AccessibleRole};
         let provider = &self.0.uia_provider;
         provider.clear_elements();
@@ -1063,13 +1169,27 @@ impl PlatformWindow for WindowsWindow {
                 info = info.with_name(label.clone());
             }
             if let Some(ref value) = node.value {
-                info = info.with_value(match value {
-                    crate::AccessibilityValue::Text(text) => text.clone(),
-                    crate::AccessibilityValue::Number(n) => n.to_string(),
-                    crate::AccessibilityValue::Range { current, .. } => current.to_string(),
-                    crate::AccessibilityValue::Toggle(v) => v.to_string(),
-                });
+                info = match value {
+                    crate::AccessibilityValue::Text(text) => {
+                        info.with_text_value(text.clone()).with_value(text.clone())
+                    }
+                    crate::AccessibilityValue::Number(n) => info.with_value(n.to_string()),
+                    crate::AccessibilityValue::Range {
+                        current,
+                        min,
+                        max,
+                        step,
+                    } => info
+                        .with_range_value(*current, *min, *max, *step)
+                        .with_value(current.to_string()),
+                    crate::AccessibilityValue::Toggle(value) => {
+                        info.with_toggle_value(*value).with_value(value.to_string())
+                    }
+                };
             }
+            info = info
+                .with_node_id(node.id)
+                .with_actions(node.actions.clone());
             info.element_id = node.id.0 as u32;
             provider.update_element(info);
         }
@@ -1078,6 +1198,7 @@ impl PlatformWindow for WindowsWindow {
         } else {
             provider.set_focused_element(None);
         }
+        provider.drain_actions()
     }
 }
 
@@ -1089,7 +1210,9 @@ impl WindowsDragDropHandler {
         let mut lock = self.0.state.borrow_mut();
         if let Some(mut func) = lock.callbacks.input.take() {
             drop(lock);
-            func(input);
+            super::catch_platform_callback("drag-and-drop input", (), || {
+                let _ = func(input);
+            });
             self.0.state.borrow_mut().callbacks.input = Some(func);
         }
     }
@@ -1106,43 +1229,20 @@ impl IDropTarget_Impl for WindowsDragDropHandler_Impl {
     ) -> windows::core::Result<()> {
         unsafe {
             let idata_obj = pdataobj.ok()?;
-            let config = FORMATETC {
-                cfFormat: CF_HDROP.0,
-                ptd: std::ptr::null_mut() as _,
-                dwAspect: DVASPECT_CONTENT.0,
-                lindex: -1,
-                tymed: TYMED_HGLOBAL.0 as _,
-            };
             let cursor_position = POINT { x: pt.x, y: pt.y };
-            if idata_obj.QueryGetData(&config as _) == S_OK {
+            if let Some(data) = external_drop_data_from_data_object(&idata_obj) {
                 *pdweffect = DROPEFFECT_COPY;
-                let Some(mut idata) = idata_obj.GetData(&config as _).log_err() else {
-                    return Ok(());
-                };
-                if idata.u.hGlobal.is_invalid() {
-                    return Ok(());
-                }
-                let hdrop = idata.u.hGlobal.0 as *mut HDROP;
-                let mut paths = SmallVec::<[PathBuf; 2]>::new();
-                with_file_names(*hdrop, |file_name| {
-                    if let Some(path) = PathBuf::from_str(&file_name).log_err() {
-                        paths.push(path);
-                    }
-                });
-                ReleaseStgMedium(&mut idata);
                 let mut cursor_position = cursor_position;
                 ScreenToClient(self.0.hwnd, &mut cursor_position)
                     .ok()
                     .log_err();
                 let scale_factor = self.0.state.borrow().scale_factor;
-                let input = PlatformInput::FileDrop(FileDropEvent::Entered {
-                    position: logical_point(
-                        cursor_position.x as f32,
-                        cursor_position.y as f32,
-                        scale_factor,
-                    ),
-                    paths: ExternalPaths(paths),
-                });
+                let position = logical_point(
+                    cursor_position.x as f32,
+                    cursor_position.y as f32,
+                    scale_factor,
+                );
+                let input = file_drop_entered_event(position, data);
                 self.handle_drag_drop(input);
             } else {
                 *pdweffect = DROPEFFECT_NONE;
@@ -1225,6 +1325,100 @@ impl IDropTarget_Impl for WindowsDragDropHandler_Impl {
         self.handle_drag_drop(input);
 
         Ok(())
+    }
+}
+
+fn external_drop_data_from_data_object(idata_obj: &IDataObject) -> Option<ExternalDropData> {
+    let mut paths = SmallVec::<[PathBuf; 2]>::new();
+
+    if let Some(mut idata) = data_object_get_hglobal(idata_obj, CF_HDROP.0) {
+        let hglobal = unsafe { idata.u.hGlobal };
+        if !hglobal.is_invalid() {
+            let hdrop = hglobal.0 as *mut HDROP;
+            unsafe {
+                with_file_names(*hdrop, |file_name| {
+                    if let Some(path) = PathBuf::from_str(&file_name).log_err() {
+                        paths.push(path);
+                    }
+                });
+            }
+        }
+        unsafe {
+            ReleaseStgMedium(&mut idata);
+        }
+    }
+
+    let text = data_object_unicode_text(idata_obj);
+    let mut data = ExternalDropData::from_paths(paths);
+    if let Some(text) = text {
+        let parsed_text = ExternalDropData::from_plain_text(text.clone());
+        data = data
+            .with_text(text)
+            .with_urls(parsed_text.urls().iter().cloned());
+    }
+
+    if data.has_paths() || data.has_text() || data.has_urls() {
+        Some(data)
+    } else {
+        None
+    }
+}
+
+fn data_object_get_hglobal(idata_obj: &IDataObject, clipboard_format: u16) -> Option<STGMEDIUM> {
+    let config = FORMATETC {
+        cfFormat: clipboard_format,
+        ptd: std::ptr::null_mut() as _,
+        dwAspect: DVASPECT_CONTENT.0,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as _,
+    };
+    unsafe {
+        if idata_obj.QueryGetData(&config as _) != S_OK {
+            return None;
+        }
+        idata_obj.GetData(&config as _).log_err()
+    }
+}
+
+fn data_object_unicode_text(idata_obj: &IDataObject) -> Option<String> {
+    let mut idata = data_object_get_hglobal(idata_obj, CF_UNICODETEXT.0)?;
+    let hglobal = unsafe { idata.u.hGlobal };
+    let text = if hglobal.is_invalid() {
+        None
+    } else {
+        unsafe { hglobal_utf16_string(hglobal) }
+    };
+    unsafe {
+        ReleaseStgMedium(&mut idata);
+    }
+    text.filter(|text| !text.is_empty())
+}
+
+unsafe fn hglobal_utf16_string(hglobal: HGLOBAL) -> Option<String> {
+    let ptr = unsafe { GlobalLock(hglobal) } as *const u16;
+    if ptr.is_null() {
+        return None;
+    }
+    let _lock = GlobalMemoryLock(hglobal);
+    let byte_len = unsafe { GlobalSize(hglobal) };
+    if byte_len == 0 || byte_len > MAX_NATIVE_TEXT_BYTES {
+        log::warn!("rejecting invalid or oversized Windows global-memory text ({byte_len} bytes)");
+        return None;
+    }
+    let units = byte_len / std::mem::size_of::<u16>();
+    let allocation = unsafe { std::slice::from_raw_parts(ptr, units) };
+    let len = allocation.iter().position(|unit| *unit == 0)?;
+    String::from_utf16(&allocation[..len]).ok()
+}
+
+fn file_drop_entered_event(position: Point<Pixels>, data: ExternalDropData) -> PlatformInput {
+    if data.has_urls() || data.has_text() {
+        PlatformInput::FileDrop(FileDropEvent::DataEntered { position, data })
+    } else {
+        PlatformInput::FileDrop(FileDropEvent::Entered {
+            position,
+            paths: data.paths().clone(),
+        })
     }
 }
 
@@ -1365,20 +1559,29 @@ enum WindowOpenState {
 
 const WINDOW_CLASS_NAME: PCWSTR = w!("Kael::Window");
 
-fn register_window_class(icon_handle: HICON) {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(window_procedure),
-            hIcon: icon_handle,
-            lpszClassName: PCWSTR(WINDOW_CLASS_NAME.as_ptr()),
-            style: CS_HREDRAW | CS_VREDRAW,
-            hInstance: get_module_handle().into(),
-            hbrBackground: unsafe { CreateSolidBrush(COLORREF(0x00000000)) },
-            ..Default::default()
-        };
-        unsafe { RegisterClassW(&wc) };
-    });
+fn register_window_class(icon_handle: HICON) -> Result<()> {
+    static REGISTRATION: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+    REGISTRATION
+        .get_or_init(|| {
+            let hinstance = get_module_handle().map_err(|error| error.to_string())?;
+            let wc = WNDCLASSW {
+                lpfnWndProc: Some(window_procedure),
+                hIcon: icon_handle,
+                lpszClassName: PCWSTR(WINDOW_CLASS_NAME.as_ptr()),
+                style: CS_HREDRAW | CS_VREDRAW,
+                hInstance: hinstance.into(),
+                hbrBackground: unsafe { CreateSolidBrush(COLORREF(0x00000000)) },
+                ..Default::default()
+            };
+            let atom = unsafe { RegisterClassW(&wc) };
+            if atom == 0 {
+                return Err(windows::core::Error::from_thread().to_string());
+            }
+            Ok(())
+        })
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("unable to register window class: {error}"))
+        .copied()
 }
 
 unsafe extern "system" fn window_procedure(
@@ -1387,10 +1590,36 @@ unsafe extern "system" fn window_procedure(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        window_procedure_impl(hwnd, msg, wparam, lparam)
+    })) {
+        Ok(result) => result,
+        Err(_) => {
+            log::error!("window procedure panicked; containing panic at the Windows ABI boundary");
+            if msg == WM_NCDESTROY {
+                let ptr = unsafe { get_window_long(hwnd, GWLP_USERDATA) }
+                    as *mut Weak<WindowsWindowInner>;
+                if !ptr.is_null() {
+                    unsafe { set_window_long(hwnd, GWLP_USERDATA, 0) };
+                    unsafe { drop(Box::from_raw(ptr)) };
+                }
+            }
+            LRESULT(0)
+        }
+    }
+}
+
+unsafe fn window_procedure_impl(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == WM_NCCREATE {
         let window_params = lparam.0 as *const CREATESTRUCTW;
+        if window_params.is_null() {
+            return LRESULT(0);
+        }
         let window_params = unsafe { &*window_params };
         let window_creation_context = window_params.lpCreateParams as *mut WindowCreateContext;
+        if window_creation_context.is_null() {
+            return LRESULT(0);
+        }
         let window_creation_context = unsafe { &mut *window_creation_context };
         return match WindowsWindowInner::new(window_creation_context, hwnd, window_params) {
             Ok(window_state) => {
@@ -1439,7 +1668,7 @@ pub(crate) fn window_from_hwnd(hwnd: HWND) -> Option<Rc<WindowsWindowInner>> {
     }
 }
 
-fn get_module_handle() -> HMODULE {
+fn get_module_handle() -> Result<HMODULE> {
     unsafe {
         let mut h_module = std::mem::zeroed();
         GetModuleHandleExW(
@@ -1447,9 +1676,9 @@ fn get_module_handle() -> HMODULE {
             windows::core::w!("ZedModule"),
             &mut h_module,
         )
-        .expect("Unable to get module handle"); // this should never fail
+        .context("unable to get module handle")?;
 
-        h_module
+        Ok(h_module)
     }
 }
 

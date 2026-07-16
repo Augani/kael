@@ -118,6 +118,31 @@ pub struct CheckboxRenderState {
     pub disabled: bool,
 }
 
+impl CheckboxRenderState {
+    /// Returns true when the checkbox has a visible label.
+    pub fn has_label(&self) -> bool {
+        self.label.is_some()
+    }
+
+    /// Length of the configured label in bytes, without exposing label text.
+    pub fn label_len_bytes(&self) -> usize {
+        self.label.as_ref().map_or(0, |label| label.len())
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "checkbox_render_state(checked={}, indeterminate={}, has_label={}, label_len_bytes={}, focused={}, disabled={})",
+            self.checked,
+            self.indeterminate,
+            self.has_label(),
+            self.label_len_bytes(),
+            self.focused,
+            self.disabled
+        )
+    }
+}
+
 type CheckboxCustomRenderer = Rc<dyn Fn(CheckboxRenderState, &Window, &App) -> AnyElement>;
 
 /// Construct a controlled checkbox form control.
@@ -655,5 +680,29 @@ mod tests {
                 .debug_bounds("checkbox-custom-checked-determinate-focused-with-label")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn checkbox_render_state_summary_is_content_safe() {
+        let state = CheckboxRenderState {
+            checked: true,
+            indeterminate: false,
+            label: Some(SharedString::from("Enable Secret Mode")),
+            focused: true,
+            disabled: false,
+        };
+
+        assert!(state.has_label());
+        assert_eq!(state.label_len_bytes(), "Enable Secret Mode".len());
+
+        let summary = state.to_text();
+        assert!(summary.contains("checked=true"));
+        assert!(summary.contains("indeterminate=false"));
+        assert!(summary.contains("has_label=true"));
+        assert!(summary.contains("label_len_bytes=18"));
+        assert!(summary.contains("focused=true"));
+        assert!(summary.contains("disabled=false"));
+        assert!(!summary.contains("Enable"));
+        assert!(!summary.contains("Secret"));
     }
 }

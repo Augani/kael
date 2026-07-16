@@ -1,0 +1,41 @@
+use kael_ui::prelude::*;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    Application::try_new()?.run(|cx| {
+        kael_ui::init(cx);
+        install_theme(cx, Theme::tokyo_night());
+
+        if let Err(error) = cx.open_window(
+            WindowOptions {
+                titlebar: Some(TitlebarOptions {
+                    title: Some("{{name}}".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            |_, cx| cx.new(|_| HelloView),
+        ) {
+            eprintln!("failed to open the application window: {error}");
+            cx.quit();
+            return;
+        }
+        cx.activate(true);
+    });
+    Ok(())
+}
+
+struct HelloView;
+
+impl Render for HelloView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(16.0))
+            .child(div().text_size(px(28.0)).child("Hello, Kael!"))
+            .child(Button::new("get-started", "Get started"))
+    }
+}

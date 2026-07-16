@@ -116,6 +116,49 @@ impl<D> RecyclingList<D>
 where
     D: ListDelegate,
 {
+    /// Number of items reported by the delegate.
+    pub fn item_count(&self) -> usize {
+        self.delegate.item_count()
+    }
+
+    /// Returns true when the delegate reports no items.
+    pub fn is_empty(&self) -> bool {
+        self.item_count() == 0
+    }
+
+    /// Stable text key for the list sizing behavior.
+    pub fn sizing_behavior_key(&self) -> &'static str {
+        self.sizing_behavior.to_text()
+    }
+
+    /// Stable text key for the list alignment.
+    pub fn alignment_key(&self) -> &'static str {
+        self.alignment.to_text()
+    }
+
+    /// Coarse overdraw class for content-safe diagnostics.
+    pub fn overdraw_class(&self) -> &'static str {
+        if self.overdraw == px(0.) {
+            "none"
+        } else if self.overdraw == px(DEFAULT_OVERDRAW_PX) {
+            "default"
+        } else {
+            "custom"
+        }
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "recycling_list(item_count={}, empty={}, sizing={}, alignment={}, overdraw_class={})",
+            self.item_count(),
+            self.is_empty(),
+            self.sizing_behavior_key(),
+            self.alignment_key(),
+            self.overdraw_class()
+        )
+    }
+
     /// Set the sizing behavior for the list.
     pub fn with_sizing_behavior(mut self, behavior: ListSizingBehavior) -> Self {
         self.sizing_behavior = behavior;
@@ -334,8 +377,9 @@ where
 mod tests {
     use super::{ListDelegate, recycling_list};
     use crate::{
-        AppContext, Context, Element, IntoElement, ParentElement, Render, ScrollDelta,
-        ScrollWheelEvent, Styled, TestAppContext, Window, div, point, px, size,
+        AppContext, Context, Element, IntoElement, ListAlignment, ListSizingBehavior,
+        ParentElement, Render, ScrollDelta, ScrollWheelEvent, Styled, TestAppContext, Window, div,
+        point, px, size,
     };
     use std::{
         any::TypeId,
@@ -370,6 +414,30 @@ mod tests {
                 .child(format!("Item {ix}"))
                 .into_any()
         }
+    }
+
+    #[test]
+    fn recycling_list_summary_is_content_safe() {
+        let delegate = TestDelegate {
+            rendered: Rc::new(RefCell::new(Vec::new())),
+        };
+        let list = recycling_list("recycling-list-summary", delegate)
+            .with_sizing_behavior(ListSizingBehavior::Infer)
+            .with_alignment(ListAlignment::Bottom)
+            .with_overdraw(px(0.));
+
+        assert_eq!(list.item_count(), 100);
+        assert!(!list.is_empty());
+        assert_eq!(list.sizing_behavior_key(), "infer");
+        assert_eq!(list.alignment_key(), "bottom");
+        assert_eq!(list.overdraw_class(), "none");
+
+        let summary = list.to_text();
+        assert!(summary.contains("recycling_list(item_count=100"));
+        assert!(summary.contains("sizing=infer"));
+        assert!(summary.contains("alignment=bottom"));
+        assert!(summary.contains("overdraw_class=none"));
+        assert!(!summary.contains("Item "));
     }
 
     #[kael::test]

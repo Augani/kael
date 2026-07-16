@@ -1,9 +1,10 @@
-use crate::theme::Theme;
+use crate::{
+    charts::{finite_or_zero, format_axis_value},
+    theme::Theme,
+};
 use kael::{prelude::FluentBuilder as _, *};
 
-const CHART_COLORS: [u32; 8] = [
-    0x3b82f6, 0x22c55e, 0xf59e0b, 0xef4444, 0x8b5cf6, 0x06b6d4, 0xf97316, 0xec4899,
-];
+const CHART_COLORS: [u32; 8] = crate::astryx::CHART_PALETTE;
 
 fn get_chart_color(index: usize) -> Hsla {
     rgb(CHART_COLORS[index % CHART_COLORS.len()]).into()
@@ -18,7 +19,11 @@ pub struct LineChartPoint {
 
 impl LineChartPoint {
     pub fn new(x: f64, y: f64) -> Self {
-        Self { x, y, label: None }
+        Self {
+            x: finite_or_zero(x),
+            y: finite_or_zero(y),
+            label: None,
+        }
     }
 
     pub fn label(mut self, label: impl Into<SharedString>) -> Self {
@@ -127,6 +132,49 @@ impl DataRange {
     }
 }
 
+fn line_chart_summary(series: &[LineChartSeries]) -> String {
+    const MAX_POINTS: usize = 12;
+    let point_count = series
+        .iter()
+        .map(|series| series.points.len())
+        .sum::<usize>();
+    if point_count == 0 {
+        return "Line chart. No data".to_string();
+    }
+
+    let mut summary = format!(
+        "Line chart with {} series and {point_count} points. ",
+        series.len()
+    );
+    let mut shown = 0;
+    for series in series {
+        for point in &series.points {
+            if shown == MAX_POINTS {
+                break;
+            }
+            if shown > 0 {
+                summary.push_str(", ");
+            }
+            summary.push_str(series.name.as_ref());
+            summary.push(' ');
+            if let Some(label) = &point.label {
+                summary.push_str(label.as_ref());
+            } else {
+                summary.push_str(&format!("x {:.2}", point.x));
+            }
+            summary.push_str(&format!(": {:.2}", point.y));
+            shown += 1;
+        }
+        if shown == MAX_POINTS {
+            break;
+        }
+    }
+    if point_count > shown {
+        summary.push_str(&format!(", and {} more", point_count - shown));
+    }
+    summary
+}
+
 #[derive(IntoElement)]
 pub struct LineChart {
     series: Vec<LineChartSeries>,
@@ -138,6 +186,7 @@ pub struct LineChart {
     y_max: Option<f64>,
     smooth: bool,
     show_legend: bool,
+    chart_height: Pixels,
     style: StyleRefinement,
 }
 
@@ -153,6 +202,7 @@ impl LineChart {
             y_max: None,
             smooth: false,
             show_legend: true,
+            chart_height: px(240.0),
             style: StyleRefinement::default(),
         }
     }
@@ -182,8 +232,10 @@ impl LineChart {
     }
 
     pub fn y_range(mut self, min: f64, max: f64) -> Self {
-        self.y_min = Some(min);
-        self.y_max = Some(max);
+        let min = finite_or_zero(min);
+        let max = finite_or_zero(max);
+        self.y_min = Some(min.min(max));
+        self.y_max = Some(max.max(min) + if min == max { 1.0 } else { 0.0 });
         self
     }
 
@@ -196,21 +248,22 @@ impl LineChart {
         self.show_legend = show;
         self
     }
+
+    pub fn chart_height(mut self, height: impl Into<Pixels>) -> Self {
+        let height = height.into();
+        let value = f32::from(height);
+        self.chart_height = if value.is_finite() && value > 0.0 {
+            height
+        } else {
+            px(240.0)
+        };
+        self
+    }
 }
 
 impl Styled for LineChart {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.style
-    }
-}
-
-fn format_y_value(value: f64) -> String {
-    if value.abs() >= 1000.0 {
-        format!("{:.0}k", value / 1000.0)
-    } else if value.abs() >= 1.0 {
-        format!("{:.0}", value)
-    } else {
-        format!("{:.2}", value)
     }
 }
 
@@ -240,6 +293,7 @@ impl RenderOnce for LineChart {
         let y_min = self.y_min;
         let y_max = self.y_max;
         let x_axis_labels = self.x_axis_labels.clone();
+        let chart_height = self.chart_height;
 
         let grid_color = theme.tokens.border;
         let text_color = theme.tokens.muted_foreground;
@@ -250,6 +304,11 @@ impl RenderOnce for LineChart {
         let padding_bottom: f32 = if show_x_axis { 40.0 } else { 10.0 };
 
         let series_for_legend = series.clone();
+        let point_count = series
+            .iter()
+            .map(|series| series.points.len())
+            .sum::<usize>();
+        let description = line_chart_summary(&series);
 
         let data_range = DataRange::from_series(&series, y_min, y_max);
 
@@ -258,7 +317,7 @@ impl RenderOnce for LineChart {
                 .map(|i| {
                     let normalized = i as f64 / 5.0;
                     let value = data_range.y_value_at(normalized);
-                    format_y_value(value)
+                    format_axis_value(value)
                 })
                 .collect()
         } else {
@@ -279,9 +338,16 @@ impl RenderOnce for LineChart {
         };
 
         div()
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Image)
+                    .label("Line chart")
+                    .description(description),
+            )
             .flex()
             .flex_col()
-            .size_full()
+            .w_full()
+            .min_w(px(0.0))
+            .min_h(chart_height)
             .map(|this| {
                 let mut d = this;
                 d.style().refine(&user_style);
@@ -289,8 +355,10 @@ impl RenderOnce for LineChart {
             })
             .child(
                 div()
-                    .flex_1()
-                    .min_h(px(200.0))
+                    .flex_none()
+                    .w_full()
+                    .h(chart_height)
+                    .min_w(px(0.0))
                     .relative()
                     .child(
                         canvas_with_prepaint(
@@ -425,42 +493,59 @@ impl RenderOnce for LineChart {
                                 }
                             },
                         )
-                        .size_full(),
+                        .absolute()
+                        .inset_0(),
                     )
+                    .when(point_count == 0, |this| {
+                        this.child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_sm()
+                                .text_color(text_color)
+                                .child("No data"),
+                        )
+                    })
                     .when(show_y_axis, |this| {
-                        this.children(y_labels.iter().enumerate().map(|(i, label)| {
-                            let top_percent = (i as f32 / 5.0) * 100.0;
+                        this.child(
                             div()
                                 .absolute()
                                 .left(px(4.0))
-                                .top(relative(top_percent / 100.0))
-                                .mt(px(padding_top - 6.0))
-                                .text_size(px(11.0))
-                                .text_color(text_color)
-                                .child(label.clone())
-                        }))
+                                .top(px(padding_top - 6.0))
+                                .bottom(px(padding_bottom - 6.0))
+                                .flex()
+                                .flex_col()
+                                .justify_between()
+                                .children(y_labels.iter().map(|label| {
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(text_color)
+                                        .child(label.clone())
+                                })),
+                        )
                     })
                     .when(show_x_axis && !x_axis_labels.is_empty(), |this| {
                         let num_labels = x_axis_labels.len();
-                        this.children(x_axis_labels.iter().enumerate().map(|(i, label)| {
-                            let left_percent = if num_labels == 1 {
-                                50.0
-                            } else {
-                                (i as f32 / (num_labels - 1) as f32) * 100.0
-                            };
-                            let chart_width_percent =
-                                (100.0 - padding_left / 4.0 - padding_right / 4.0) / 100.0;
-                            let adjusted_left =
-                                padding_left / 4.0 + left_percent * chart_width_percent;
+                        this.child(
                             div()
                                 .absolute()
+                                .left(px(padding_left))
+                                .right(px(padding_right))
                                 .bottom(px(8.0))
-                                .left(relative(adjusted_left / 100.0))
-                                .ml(px(-15.0))
-                                .text_size(px(11.0))
-                                .text_color(text_color)
-                                .child(label.clone())
-                        }))
+                                .flex()
+                                .items_center()
+                                .when(num_labels == 1, |this| this.justify_center())
+                                .when(num_labels > 1, |this| this.justify_between())
+                                .children(x_axis_labels.iter().map(|label| {
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(text_color)
+                                        .child(label.clone())
+                                })),
+                        )
                     }),
             )
             .when(self.show_legend && series_for_legend.len() > 1, |this| {
@@ -482,5 +567,43 @@ impl RenderOnce for LineChart {
                         })),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn chart_height_is_definite_and_rejects_invalid_values() {
+        let series = LineChartSeries::new(
+            "Series",
+            vec![LineChartPoint::new(0.0, 1.0), LineChartPoint::new(1.0, 2.0)],
+        );
+        assert_eq!(LineChart::single(series.clone()).chart_height, px(240.0));
+        assert_eq!(
+            LineChart::single(series.clone())
+                .chart_height(px(320.0))
+                .chart_height,
+            px(320.0)
+        );
+        assert_eq!(
+            LineChart::single(series)
+                .chart_height(px(f32::NAN))
+                .chart_height,
+            px(240.0)
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn accessible_summary_includes_labels_and_bounds_detail() {
+        let points = (0..15)
+            .map(|index| LineChartPoint::new(index as f64, index as f64).label(format!("P{index}")))
+            .collect();
+        let summary = line_chart_summary(&[LineChartSeries::new("Revenue", points)]);
+        assert!(summary.contains("Revenue P0: 0.00"));
+        assert!(summary.contains("and 3 more"));
+        assert!(!summary.contains("Revenue P12"));
+        assert_eq!(line_chart_summary(&[]), "Line chart. No data");
     }
 }

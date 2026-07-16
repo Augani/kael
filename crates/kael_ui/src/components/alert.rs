@@ -1,31 +1,48 @@
+use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::icon::Icon;
+use crate::components::icon_button::IconButton;
 use crate::components::icon_source::IconSource;
 use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
-use std::rc::Rc;
+use std::{panic::Location, rc::Rc};
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+/// A custom color set for [`AlertVariant::Custom`], giving an alert any look without forking.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct AlertColors {
+    /// Background fill.
+    pub background: Hsla,
+    /// Accent color used for the border and icon.
+    pub accent: Hsla,
+    /// Title and description text color.
+    pub foreground: Hsla,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Default)]
 pub enum AlertVariant {
     #[default]
     Info,
     Success,
     Warning,
     Error,
+    /// An app-defined color set — build any look without forking the component.
+    Custom(AlertColors),
 }
 
 impl AlertVariant {
     fn default_icon(&self) -> &'static str {
         match self {
             AlertVariant::Info => "info",
-            AlertVariant::Success => "check-circle",
-            AlertVariant::Warning => "alert-triangle",
-            AlertVariant::Error => "alert-circle",
+            AlertVariant::Success => "circle-check",
+            AlertVariant::Warning => "triangle-alert",
+            AlertVariant::Error => "circle-alert",
+            AlertVariant::Custom(_) => "info",
         }
     }
 }
 
 #[derive(IntoElement)]
 pub struct Alert {
+    id: ElementId,
     variant: AlertVariant,
     title: Option<SharedString>,
     description: Option<SharedString>,
@@ -38,8 +55,19 @@ pub struct Alert {
 }
 
 impl Alert {
+    #[track_caller]
     pub fn new() -> Self {
+        let caller = Location::caller();
         Self {
+            id: ElementId::Name(
+                format!(
+                    "alert:{}:{}:{}",
+                    caller.file(),
+                    caller.line(),
+                    caller.column()
+                )
+                .into(),
+            ),
             variant: AlertVariant::default(),
             title: None,
             description: None,
@@ -52,24 +80,39 @@ impl Alert {
         }
     }
 
+    #[track_caller]
     pub fn info() -> Self {
         Self::new().variant(AlertVariant::Info)
     }
 
+    #[track_caller]
     pub fn success() -> Self {
         Self::new().variant(AlertVariant::Success)
     }
 
+    #[track_caller]
     pub fn warning() -> Self {
         Self::new().variant(AlertVariant::Warning)
     }
 
+    #[track_caller]
     pub fn error() -> Self {
         Self::new().variant(AlertVariant::Error)
     }
 
     pub fn variant(mut self, variant: AlertVariant) -> Self {
         self.variant = variant;
+        self
+    }
+
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
+    }
+
+    /// Use a fully custom color set, setting the variant to [`AlertVariant::Custom`].
+    pub fn colors(mut self, colors: AlertColors) -> Self {
+        self.variant = AlertVariant::Custom(colors);
         self
     }
 
@@ -114,25 +157,17 @@ impl Alert {
     }
 
     fn get_colors(&self, theme: &crate::theme::Theme) -> (Hsla, Hsla, Hsla) {
+        let dark = theme.tokens.background.l < 0.5;
+        let hue = |h: crate::astryx::Hue| {
+            let c = h.colors(dark);
+            (c.background, c.border, c.text)
+        };
         match self.variant {
-            AlertVariant::Info => (
-                theme.tokens.primary.opacity(0.1),
-                theme.tokens.primary,
-                theme.tokens.primary,
-            ),
-            AlertVariant::Success => {
-                let success_color: Hsla = rgb(0x22c55e).into();
-                (success_color.opacity(0.1), success_color, success_color)
-            }
-            AlertVariant::Warning => {
-                let warning_color: Hsla = rgb(0xf59e0b).into();
-                (warning_color.opacity(0.1), warning_color, warning_color)
-            }
-            AlertVariant::Error => (
-                theme.tokens.destructive.opacity(0.1),
-                theme.tokens.destructive,
-                theme.tokens.destructive,
-            ),
+            AlertVariant::Info => hue(crate::astryx::Hue::Blue),
+            AlertVariant::Success => hue(crate::astryx::Hue::Green),
+            AlertVariant::Warning => hue(crate::astryx::Hue::Yellow),
+            AlertVariant::Error => hue(crate::astryx::Hue::Red),
+            AlertVariant::Custom(colors) => (colors.background, colors.accent, colors.foreground),
         }
     }
 }
@@ -150,9 +185,9 @@ impl Styled for Alert {
 }
 
 impl RenderOnce for Alert {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = Theme::of(cx);
-        let (bg_color, border_color, accent_color) = self.get_colors(theme);
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx).clone();
+        let (bg_color, border_color, accent_color) = self.get_colors(&theme);
         let user_style = self.style;
 
         let icon_source = self
@@ -160,8 +195,36 @@ impl RenderOnce for Alert {
             .unwrap_or_else(|| IconSource::Named(self.variant.default_icon().into()));
 
         let has_content = self.title.is_some() || self.description.is_some();
+        let alert_id = self.id.clone();
+        let visibility = window.use_keyed_state(
+            ElementId::NamedChild(Box::new(alert_id.clone()), "visibility".into()),
+            cx,
+            |_, _| true,
+        );
+        if !*visibility.read(cx) {
+            return div().into_any_element();
+        }
+        let accessibility_label = self
+            .title
+            .as_ref()
+            .or(self.description.as_ref())
+            .map_or_else(|| "Alert".to_string(), ToString::to_string);
+        let accessibility =
+            AccessibilityAttributes::new(AccessibilityRole::Alert).label(accessibility_label);
+        let accessibility = if let Some(description) = self.description.as_ref() {
+            accessibility.description(description.to_string())
+        } else {
+            accessibility
+        };
+        let description_color = if matches!(self.variant, AlertVariant::Custom(_)) {
+            accent_color
+        } else {
+            theme.tokens.muted_foreground
+        };
 
         div()
+            .id(alert_id.clone())
+            .accessibility(accessibility)
             .flex()
             .w_full()
             .p(px(16.0))
@@ -184,38 +247,44 @@ impl RenderOnce for Alert {
                         .flex()
                         .flex_col()
                         .flex_1()
+                        .min_w(px(0.0))
                         .gap(px(4.0))
                         .when_some(self.title.clone(), |this, title| {
                             this.child(
                                 div()
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme.tokens.foreground)
-                                    .child(title),
+                                    .text_color(accent_color)
+                                    .whitespace_normal()
+                                    .child(StyledText::new(title).accessibility_hidden(true)),
                             )
                         })
                         .when_some(self.description.clone(), |this, desc| {
                             this.child(
                                 div()
                                     .text_sm()
-                                    .text_color(theme.tokens.muted_foreground)
-                                    .child(desc),
+                                    .text_color(description_color)
+                                    .whitespace_normal()
+                                    .child(StyledText::new(desc).accessibility_hidden(true)),
                             )
                         })
                         .when_some(self.action.clone(), |this, (label, handler)| {
                             this.child(
-                                div().mt(px(8.0)).child(
-                                    div()
-                                        .id("alert-action")
-                                        .text_sm()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(accent_color)
-                                        .cursor(CursorStyle::PointingHand)
-                                        .hover(|style| style.opacity(0.8))
-                                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                div().mt(px(8.0)).flex().items_start().child(
+                                    Button::new(
+                                        ElementId::NamedChild(
+                                            Box::new(alert_id.clone()),
+                                            "action".into(),
+                                        ),
+                                        label,
+                                    )
+                                    .variant(ButtonVariant::Ghost)
+                                    .size(ButtonSize::Sm)
+                                    .on_click(
+                                        move |_, window, cx| {
                                             (handler)(window, cx);
-                                        })
-                                        .child(label),
+                                        },
+                                    ),
                                 ),
                             )
                         }),
@@ -223,24 +292,26 @@ impl RenderOnce for Alert {
             })
             .when(self.dismissible, |this| {
                 let dismiss_handler = self.on_dismiss.clone();
+                let visibility = visibility.clone();
                 this.child(
-                    div()
-                        .flex_shrink_0()
-                        .id("alert-dismiss")
-                        .cursor(CursorStyle::PointingHand)
-                        .rounded(theme.tokens.radius_sm)
-                        .p(px(4.0))
-                        .hover(|style| style.bg(theme.tokens.muted.opacity(0.5)))
-                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    IconButton::new("x")
+                        .id(ElementId::NamedChild(
+                            Box::new(alert_id.clone()),
+                            "dismiss".into(),
+                        ))
+                        .label("Dismiss alert")
+                        .variant(ButtonVariant::Ghost)
+                        .size(px(32.0))
+                        .icon_size(px(16.0))
+                        .on_click(move |_, window, cx| {
+                            visibility.update(cx, |visible, cx| {
+                                *visible = false;
+                                cx.notify();
+                            });
                             if let Some(ref handler) = dismiss_handler {
                                 (handler)(window, cx);
                             }
-                        })
-                        .child(
-                            Icon::new("x")
-                                .size(px(16.0))
-                                .color(theme.tokens.muted_foreground),
-                        ),
+                        }),
                 )
             })
             .map(|this| {
@@ -248,9 +319,25 @@ impl RenderOnce for Alert {
                 div.style().refine(&user_style);
                 div
             })
+            .into_any_element()
     }
 }
 
 pub fn alert() -> Alert {
     Alert::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Alert, AlertColors, AlertVariant};
+
+    #[test]
+    fn colors_sets_custom_alert_variant() {
+        let alert = Alert::new().colors(AlertColors {
+            background: kael::black(),
+            accent: kael::white(),
+            foreground: kael::white(),
+        });
+        assert!(matches!(alert.variant, AlertVariant::Custom(_)));
+    }
 }

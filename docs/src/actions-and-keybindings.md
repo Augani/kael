@@ -35,6 +35,29 @@ Application::new().run(|cx: &mut App| {
 
 Keystroke syntax uses `cmd` / `ctrl` / `alt` / `shift` modifiers joined with `-`, and a space separates multi-key sequences (e.g. `"cmd-k cmd-s"`). Use `cmd` on macOS and `ctrl` on Windows/Linux.
 
+## Command Registry
+
+Use `CommandRegistry` when the same app command should be available from a
+command palette, menu, toolbar, or agent action list:
+
+```rust
+use kael::app_runtime::CommandRegistry;
+
+let mut commands = CommandRegistry::new();
+commands.register_action_checked("editor.save", "Save", || {
+    // persist the active document
+})?;
+
+commands.execute("editor.save")?;
+```
+
+Prefer `register_checked(...)` and `register_action_checked(...)` for generated
+app chrome. Checked registration rejects empty, padded, overly long, or
+non-portable command IDs, rejects empty/padded/control-character/overly long
+names, and catches duplicate IDs before menus or command palettes become
+ambiguous. Raw `register(...)` and `register_action(...)` remain available when
+an app intentionally wants replacement semantics.
+
 ## Handling actions
 
 In `render`, mark the element that owns a focus context with `track_focus`, then register handlers with `on_action(cx.listener(...))`. Handlers take `&mut self`, a reference to the action, the window, and the context:

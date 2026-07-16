@@ -15,7 +15,7 @@ struct NumberInputDemo {
 
 impl NumberInputDemo {
     fn new(cx: &mut Context<Self>) -> Self {
-        let basic = cx.new(|cx| NumberInputState::new(cx));
+        let basic = cx.new(NumberInputState::new);
         let with_range = cx.new(|cx| {
             let mut state = NumberInputState::with_value(cx, 5.0);
             state.set_min(Some(0.0), cx);
@@ -24,8 +24,8 @@ impl NumberInputDemo {
         });
         let decimal = cx.new(|cx| {
             let mut state = NumberInputState::with_value(cx, 0.5);
-            state.set_step(0.1);
-            state.set_precision(1);
+            state.set_step(0.1, cx);
+            state.set_precision(1, cx);
             state.set_min(Some(0.0), cx);
             state.set_max(Some(1.0), cx);
             state
@@ -265,7 +265,7 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_, cx| cx.new(|cx| NumberInputDemo::new(cx)),
+            |_, cx| cx.new(NumberInputDemo::new),
         )
         .unwrap();
 

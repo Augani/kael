@@ -22,7 +22,7 @@ impl DeviceEnumerator for WindowsMicrophoneBackend {
                 id: "mic-0".to_string(),
                 name: "Default Microphone".to_string(),
                 kind: CaptureDeviceKind::Microphone,
-                is_available: true,
+                is_available: false,
             }]),
             _ => Ok(vec![]),
         }
@@ -44,7 +44,6 @@ impl CaptureBackend for WindowsMicrophoneBackend {
 }
 
 struct WindowsMicrophoneSession {
-    config: CaptureConfig,
     state: CaptureSessionState,
     dropped: AtomicU64,
     latency_ms: AtomicU64,
@@ -52,9 +51,8 @@ struct WindowsMicrophoneSession {
 }
 
 impl WindowsMicrophoneSession {
-    fn new(config: CaptureConfig) -> Self {
+    fn new(_config: CaptureConfig) -> Self {
         Self {
-            config,
             state: CaptureSessionState::Idle,
             dropped: AtomicU64::new(0),
             latency_ms: AtomicU64::new(0),
@@ -65,20 +63,26 @@ impl WindowsMicrophoneSession {
 
 impl CaptureSession for WindowsMicrophoneSession {
     fn start(&mut self, config: CaptureConfig, callback: FrameCallback) -> Result<()> {
-        self.config = config;
-        self.state = CaptureSessionState::Starting;
-        self.callback = Some(callback);
+        let _ = (config, callback);
+        self.state = CaptureSessionState::Idle;
+        self.callback = None;
         Err(anyhow!(
             "Windows microphone capture requires MediaCapture runtime initialization"
         ))
     }
 
     fn pause(&mut self) -> Result<()> {
+        if self.state != CaptureSessionState::Running {
+            return Err(anyhow!("microphone session is not running"));
+        }
         self.state = CaptureSessionState::Paused;
         Ok(())
     }
 
     fn resume(&mut self) -> Result<()> {
+        if self.state != CaptureSessionState::Paused {
+            return Err(anyhow!("microphone session is not paused"));
+        }
         self.state = CaptureSessionState::Running;
         Ok(())
     }
@@ -106,7 +110,7 @@ pub fn microphone_status() -> PermissionStatus {
     let capture = match MediaCapture::new() {
         Ok(capture) => capture,
         Err(_) => {
-            return PermissionStatus::Granted;
+            return PermissionStatus::NotDetermined;
         }
     };
 
@@ -119,7 +123,7 @@ pub fn microphone_status() -> PermissionStatus {
             if err.code().0 as u32 == 0x80070005 {
                 PermissionStatus::Denied
             } else {
-                PermissionStatus::Granted
+                PermissionStatus::NotDetermined
             }
         }
     }

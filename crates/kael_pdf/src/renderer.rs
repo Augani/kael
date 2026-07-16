@@ -1,9 +1,9 @@
-//! Raster page preview generation.
+//! Schematic raster page preview generation.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use image::{ImageBuffer, Rgba, RgbaImage};
 
 use crate::{
@@ -21,12 +21,19 @@ pub struct RenderedPage {
 
 impl RenderedPage {
     /// Creates a raster page from raw RGBA pixels.
-    pub fn new(width: u32, height: u32, pixels: impl Into<Arc<[u8]>>) -> Self {
-        Self {
+    pub fn new(width: u32, height: u32, pixels: impl Into<Arc<[u8]>>) -> Result<Self> {
+        let expected_len = rgba_buffer_len(width, height)?;
+        let pixels = pixels.into();
+        anyhow::ensure!(
+            pixels.len() == expected_len,
+            "rendered page has {} RGBA bytes; expected {expected_len}",
+            pixels.len()
+        );
+        Ok(Self {
             width,
             height,
-            pixels: pixels.into(),
-        }
+            pixels,
+        })
     }
 
     /// Returns the rendered width in pixels.
@@ -56,7 +63,7 @@ impl PageRenderCache {
     pub fn new(max_pages: usize) -> Self {
         Self {
             max_pages,
-            pages: VecDeque::with_capacity(max_pages),
+            pages: VecDeque::new(),
         }
     }
 
@@ -71,6 +78,9 @@ impl PageRenderCache {
     /// Inserts or replaces the rendered page for `page_index`, evicting the oldest entry when full.
     pub fn insert(&mut self, page_index: usize, page: RenderedPage) {
         self.pages.retain(|(idx, _)| *idx != page_index);
+        if self.max_pages == 0 {
+            return;
+        }
         if self.pages.len() >= self.max_pages {
             self.pages.pop_front();
         }
@@ -94,7 +104,14 @@ pub(crate) fn render_page_preview(
     annotations: &[PageAnnotation],
     scale: f32,
 ) -> Result<RenderedPage> {
-    let scale = scale.clamp(0.25, 4.0);
+    let scale = normalize_scale(scale)?;
+    anyhow::ensure!(
+        page_size.width.is_finite()
+            && page_size.height.is_finite()
+            && page_size.width > 0.0
+            && page_size.height > 0.0,
+        "PDF page size must contain finite positive dimensions"
+    );
     let width = (page_size.width * scale).round().clamp(1.0, 4096.0) as u32;
     let height = (page_size.height * scale).round().clamp(1.0, 4096.0) as u32;
     let mut image = ImageBuffer::from_pixel(width, height, Rgba([255, 255, 255, 255]));
@@ -105,7 +122,33 @@ pub(crate) fn render_page_preview(
         draw_annotation(&mut image, page_size, annotation, scale);
     }
 
-    Ok(RenderedPage::new(width, height, image.into_raw()))
+    RenderedPage::new(width, height, image.into_raw())
+}
+
+pub(crate) fn normalize_scale(scale: f32) -> Result<f32> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(anyhow!(
+            "PDF render scale must be finite and greater than zero"
+        ));
+    }
+    Ok((scale.clamp(0.25, 4.0) * 1_000.0).round() / 1_000.0)
+}
+
+fn rgba_buffer_len(width: u32, height: u32) -> Result<usize> {
+    const MAX_RENDER_DIMENSION: u32 = 4_096;
+    anyhow::ensure!(
+        width > 0 && height > 0,
+        "rendered page dimensions must be greater than zero"
+    );
+    anyhow::ensure!(
+        width <= MAX_RENDER_DIMENSION && height <= MAX_RENDER_DIMENSION,
+        "rendered page dimensions exceed the {MAX_RENDER_DIMENSION} pixel limit"
+    );
+    let pixels = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|count| count.checked_mul(4))
+        .ok_or_else(|| anyhow!("rendered page RGBA byte length overflow"))?;
+    usize::try_from(pixels).map_err(|_| anyhow!("rendered page is too large for this platform"))
 }
 
 fn draw_border(image: &mut RgbaImage, color: Rgba<u8>) {
@@ -301,7 +344,7 @@ mod tests {
         for i in 0..4 {
             cache.insert(
                 i,
-                RenderedPage::new(100, 100, Arc::<[u8]>::from(vec![0u8; 40000])),
+                RenderedPage::new(100, 100, Arc::<[u8]>::from(vec![0u8; 40000])).unwrap(),
             );
         }
         assert!(cache.get(0).is_none());
@@ -314,11 +357,11 @@ mod tests {
         let mut cache = PageRenderCache::new(3);
         cache.insert(
             0,
-            RenderedPage::new(100, 100, Arc::<[u8]>::from(vec![1u8; 40000])),
+            RenderedPage::new(100, 100, Arc::<[u8]>::from(vec![1u8; 40000])).unwrap(),
         );
         cache.insert(
             0,
-            RenderedPage::new(200, 200, Arc::<[u8]>::from(vec![2u8; 160000])),
+            RenderedPage::new(200, 200, Arc::<[u8]>::from(vec![2u8; 160000])).unwrap(),
         );
         assert_eq!(cache.len(), 1);
         assert_eq!(cache.get(0).unwrap().width(), 200);
@@ -329,5 +372,27 @@ mod tests {
         let cache = PageRenderCache::new(5);
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn zero_capacity_cache_never_retains_pages() {
+        let mut cache = PageRenderCache::new(0);
+        cache.insert(
+            0,
+            RenderedPage::new(1, 1, Arc::<[u8]>::from([0, 0, 0, 0])).unwrap(),
+        );
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn rendered_pages_validate_dimensions_and_rgba_length() {
+        assert!(RenderedPage::new(0, 1, Arc::<[u8]>::from([])).is_err());
+        assert!(RenderedPage::new(1, 1, Arc::<[u8]>::from([0, 0, 0])).is_err());
+        assert!(RenderedPage::new(4_097, 1, Arc::<[u8]>::from([])).is_err());
+        assert!(normalize_scale(f32::NAN).is_err());
+        assert!(normalize_scale(f32::INFINITY).is_err());
+        assert!(normalize_scale(0.0).is_err());
+        assert_eq!(normalize_scale(0.1).unwrap(), 0.25);
+        assert_eq!(normalize_scale(9.0).unwrap(), 4.0);
     }
 }

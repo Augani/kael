@@ -11,30 +11,52 @@ pub enum SpinnerSize {
 }
 
 impl SpinnerSize {
-    fn to_pixels(self) -> Pixels {
+    fn frame_pixels(self) -> Pixels {
         match self {
-            SpinnerSize::Xs => px(16.0),
-            SpinnerSize::Sm => px(20.0),
-            SpinnerSize::Md => px(24.0),
-            SpinnerSize::Lg => px(32.0),
-            SpinnerSize::Xl => px(48.0),
+            SpinnerSize::Xs | SpinnerSize::Sm => px(14.0),
+            SpinnerSize::Md => px(20.0),
+            SpinnerSize::Lg => px(24.0),
+            SpinnerSize::Xl => px(36.0),
+        }
+    }
+
+    fn stroke_width(self) -> Pixels {
+        match self {
+            SpinnerSize::Xs | SpinnerSize::Sm => px(2.0),
+            SpinnerSize::Md | SpinnerSize::Lg => px(3.0),
+            SpinnerSize::Xl => px(4.0),
         }
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum SpinnerVariant {
     Default,
     Primary,
     Secondary,
     Muted,
+    /// An app-defined spinner color.
+    Custom(Hsla),
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub enum SpinnerShade {
+    #[default]
+    Default,
+    OnMedia,
+    Subtle,
+    Inherit,
 }
 
 #[derive(IntoElement)]
 pub struct Spinner {
     size: SpinnerSize,
     variant: SpinnerVariant,
+    shade: SpinnerShade,
     label: Option<SharedString>,
+    accessibility_label: SharedString,
+    decorative: bool,
+    animation_repeat: Repeat,
     style: StyleRefinement,
 }
 
@@ -43,7 +65,11 @@ impl Spinner {
         Self {
             size: SpinnerSize::Md,
             variant: SpinnerVariant::Default,
+            shade: SpinnerShade::Default,
             label: None,
+            accessibility_label: "Loading".into(),
+            decorative: false,
+            animation_repeat: Repeat::Forever,
             style: StyleRefinement::default(),
         }
     }
@@ -58,8 +84,52 @@ impl Spinner {
         self
     }
 
+    pub fn shade(mut self, shade: SpinnerShade) -> Self {
+        self.shade = shade;
+        self
+    }
+
+    /// Use a fully custom spinner color, setting the variant to [`SpinnerVariant::Custom`].
+    pub fn color(mut self, color: impl Into<Hsla>) -> Self {
+        self.variant = SpinnerVariant::Custom(color.into());
+        self
+    }
+
     pub fn label(mut self, label: impl Into<SharedString>) -> Self {
-        self.label = Some(label.into());
+        let label = label.into();
+        if label.trim().is_empty() {
+            self.accessibility_label = "Loading".into();
+            self.label = None;
+        } else {
+            self.accessibility_label = label.clone();
+            self.label = Some(label);
+        }
+        self
+    }
+
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        let label = label.into();
+        self.accessibility_label = if label.trim().is_empty() {
+            "Loading".into()
+        } else {
+            label
+        };
+        self
+    }
+
+    /// Hide the spinner from assistive technology when a semantic parent
+    /// already communicates the loading state.
+    pub fn decorative(mut self, decorative: bool) -> Self {
+        self.decorative = decorative;
+        self
+    }
+
+    /// Limit the spinner to a finite number of rotations.
+    ///
+    /// This is useful for previews and low-attention surfaces. Loading indicators
+    /// remain continuous by default.
+    pub fn animation_cycles(mut self, cycles: u32) -> Self {
+        self.animation_repeat = Repeat::Count(cycles.max(1));
         self
     }
 }
@@ -77,28 +147,64 @@ impl Styled for Spinner {
 }
 
 impl RenderOnce for Spinner {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = &Theme::of(cx).tokens;
-        let muted = tokens.muted;
         let muted_foreground = tokens.muted_foreground;
         let font_family = tokens.font_family.clone();
         let user_style = self.style;
-        let size_px = self.size.to_pixels();
-        let stroke_width = size_px * 0.15;
+        let frame_size = self.size.frame_pixels();
+        let stroke_width = self.size.stroke_width();
+        let inner_size = frame_size - stroke_width * 2.0;
+        let animation_repeat = self.animation_repeat;
 
-        let color = match self.variant {
-            SpinnerVariant::Default => tokens.foreground,
-            SpinnerVariant::Primary => tokens.primary,
-            SpinnerVariant::Secondary => tokens.secondary,
-            SpinnerVariant::Muted => tokens.muted_foreground,
+        let active_color = match self.shade {
+            SpinnerShade::OnMedia => white(),
+            SpinnerShade::Subtle => tokens.muted_foreground,
+            SpinnerShade::Inherit => tokens.foreground,
+            SpinnerShade::Default => match self.variant {
+                SpinnerVariant::Default | SpinnerVariant::Primary => tokens.primary,
+                // Kept for API compatibility; ASTRYX exposes shade rather than
+                // secondary/muted color variants for Spinner.
+                SpinnerVariant::Secondary => tokens.muted_foreground,
+                SpinnerVariant::Muted => tokens.muted_foreground,
+                SpinnerVariant::Custom(color) => color,
+            },
+        };
+        let track_color = match self.shade {
+            SpinnerShade::OnMedia => white().opacity(0.3),
+            SpinnerShade::Inherit => active_color.opacity(0.3),
+            SpinnerShade::Default | SpinnerShade::Subtle => match self.variant {
+                SpinnerVariant::Custom(_) => active_color.opacity(0.3),
+                SpinnerVariant::Default
+                | SpinnerVariant::Primary
+                | SpinnerVariant::Secondary
+                | SpinnerVariant::Muted => tokens.input,
+            },
+        };
+        let spinner_bg = conic_gradient(
+            0.5,
+            0.5,
+            270.0,
+            &[
+                linear_color_stop(active_color, 0.0),
+                linear_color_stop(active_color, 0.75),
+                linear_color_stop(track_color, 0.75),
+                linear_color_stop(track_color, 1.0),
+            ],
+        );
+
+        let accessibility = if self.decorative {
+            AccessibilityAttributes::new(AccessibilityRole::Group)
+                .states(AccessibilityState::HIDDEN)
+        } else {
+            AccessibilityAttributes::new(AccessibilityRole::ProgressBar)
+                .label(self.accessibility_label.to_string())
+                .value(AccessibilityValue::Text("Loading".into()))
+                .busy(true)
         };
 
-        let center = size_px * 0.5;
-        let path_radius = (size_px - stroke_width) * 0.5;
-        let dot_size = stroke_width * 1.2;
-        let dot_offset = dot_size * 0.5;
-
         div()
+            .accessibility(accessibility)
             .flex()
             .flex_col()
             .items_center()
@@ -107,46 +213,84 @@ impl RenderOnce for Spinner {
                 this.style().refine(&user_style);
                 this
             })
-            .child(
-                div()
-                    .size(size_px)
+            .child({
+                let spinner = div()
+                    .size(frame_size)
                     .relative()
+                    .overflow_hidden()
+                    .rounded_full()
+                    .bg(spinner_bg)
                     .child(
                         div()
                             .absolute()
-                            .inset_0()
-                            .border(stroke_width)
-                            .border_color(muted)
-                            .rounded(px(9999.0)),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .size(dot_size)
-                            .rounded(px(9999.0))
-                            .bg(color)
-                            .with_animation(
-                                "spinner-orbit",
-                                Animation::new(std::time::Duration::from_millis(700))
-                                    .repeat_forever()
-                                    .with_easing(crate::animations::easings::linear),
-                                move |dot, delta| {
-                                    let angle = delta * std::f32::consts::TAU;
-                                    let x = center + path_radius * angle.cos() - dot_offset;
-                                    let y = center + path_radius * angle.sin() - dot_offset;
-                                    dot.left(x).top(y)
-                                },
-                            ),
-                    ),
-            )
+                            .left(stroke_width)
+                            .top(stroke_width)
+                            .size(inner_size)
+                            .rounded_full()
+                            .bg(match self.shade {
+                                SpinnerShade::OnMedia => kael::transparent_black(),
+                                _ => tokens.background,
+                            }),
+                    );
+
+                if window.animations_enabled() {
+                    spinner
+                        .with_animation(
+                            "spinner-rotation",
+                            Animation::new(std::time::Duration::from_millis(730))
+                                .repeat(animation_repeat)
+                                .with_easing(crate::animations::easings::linear),
+                            |el, delta| el.rotate(delta * 360.0),
+                        )
+                        .into_any_element()
+                } else {
+                    spinner.into_any_element()
+                }
+            })
             .when_some(self.label, |d, label| {
                 d.child(
                     div()
-                        .text_size(px(12.0))
-                        .text_color(muted_foreground)
+                        .text_size(px(14.0))
+                        .line_height(px(20.0))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(if self.shade == SpinnerShade::Subtle {
+                            muted_foreground
+                        } else {
+                            tokens.foreground
+                        })
                         .font_family(font_family.clone())
-                        .child(label),
+                        .child(StyledText::new(label).accessibility_hidden(true)),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn empty_labels_keep_a_meaningful_accessible_default() {
+        let spinner = Spinner::new().label(" ").accessibility_label("");
+        assert!(spinner.label.is_none());
+        assert_eq!(spinner.accessibility_label.as_ref(), "Loading");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Spinner, SpinnerVariant};
+    use kael::Repeat;
+
+    #[test]
+    fn color_sets_custom_spinner_variant() {
+        let spinner = Spinner::new().color(kael::black());
+        assert!(matches!(spinner.variant, SpinnerVariant::Custom(_)));
+    }
+
+    #[test]
+    fn preview_cycles_are_finite_and_nonzero() {
+        let spinner = Spinner::new().animation_cycles(0);
+        assert_eq!(spinner.animation_repeat, Repeat::Count(1));
     }
 }

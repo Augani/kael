@@ -83,6 +83,9 @@ pub struct MentionInputState {
     pub dropdown_filter: String,
     pub dropdown_index: usize,
     trigger_start: Option<usize>,
+    on_change_callback: Option<Rc<dyn Fn(&str, &mut App)>>,
+    on_mention_callback: Option<Rc<dyn Fn(&MentionItem, &mut App)>>,
+    on_enter_callback: Option<Rc<dyn Fn(&str, &mut App)>>,
 }
 
 impl EventEmitter<MentionInputEvent> for MentionInputState {}
@@ -106,7 +109,35 @@ impl MentionInputState {
             dropdown_filter: String::new(),
             dropdown_index: 0,
             trigger_start: None,
+            on_change_callback: None,
+            on_mention_callback: None,
+            on_enter_callback: None,
         }
+    }
+
+    fn emit_mention_event(&self, event: MentionInputEvent, cx: &mut Context<Self>) {
+        match &event {
+            MentionInputEvent::Change => {
+                if let Some(callback) = self.on_change_callback.clone() {
+                    let content = self.content.clone();
+                    cx.defer(move |cx| callback(&content, cx));
+                }
+            }
+            MentionInputEvent::MentionSelected(item) => {
+                if let Some(callback) = self.on_mention_callback.clone() {
+                    let item = item.clone();
+                    cx.defer(move |cx| callback(&item, cx));
+                }
+            }
+            MentionInputEvent::Enter => {
+                if let Some(callback) = self.on_enter_callback.clone() {
+                    let content = self.content.clone();
+                    cx.defer(move |cx| callback(&content, cx));
+                }
+            }
+            MentionInputEvent::Focus | MentionInputEvent::Blur => {}
+        }
+        cx.emit(event);
     }
 
     pub fn content(&self) -> &str {
@@ -126,7 +157,7 @@ impl MentionInputState {
         self.content = value.into();
         self.mentions.clear();
         self.selected_range = self.content.len()..self.content.len();
-        cx.emit(MentionInputEvent::Change);
+        self.emit_mention_event(MentionInputEvent::Change, cx);
         cx.notify();
     }
 
@@ -135,7 +166,7 @@ impl MentionInputState {
         self.mentions.clear();
         self.selected_range = 0..0;
         self.close_dropdown(cx);
-        cx.emit(MentionInputEvent::Change);
+        self.emit_mention_event(MentionInputEvent::Change, cx);
         cx.notify();
     }
 
@@ -177,8 +208,8 @@ impl MentionInputState {
             trigger_start + mention_text.len()..trigger_start + mention_text.len();
         self.close_dropdown(cx);
 
-        cx.emit(MentionInputEvent::MentionSelected(item));
-        cx.emit(MentionInputEvent::Change);
+        self.emit_mention_event(MentionInputEvent::MentionSelected(item), cx);
+        self.emit_mention_event(MentionInputEvent::Change, cx);
         cx.notify();
     }
 
@@ -471,16 +502,20 @@ impl MentionInputState {
 
     pub fn mention_enter(&mut self, _: &MentionEnter, _: &mut Window, cx: &mut Context<Self>) {
         if !self.dropdown_open {
-            cx.emit(MentionInputEvent::Enter);
+            self.emit_mention_event(MentionInputEvent::Enter, cx);
         }
     }
 
     fn on_mouse_down(
         &mut self,
         event: &MouseDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.disabled {
+            return;
+        }
+        window.focus(&self.focus_handle);
         self.is_selecting = true;
         let click_index = self.index_for_mouse_position(event.position);
         if event.modifiers.shift {
@@ -547,6 +582,9 @@ impl EntityInputHandler for MentionInputState {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.disabled {
+            return;
+        }
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
@@ -564,7 +602,7 @@ impl EntityInputHandler for MentionInputState {
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
 
         self.check_for_trigger(cx);
-        cx.emit(MentionInputEvent::Change);
+        self.emit_mention_event(MentionInputEvent::Change, cx);
         cx.notify();
     }
 
@@ -576,6 +614,9 @@ impl EntityInputHandler for MentionInputState {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.disabled {
+            return;
+        }
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
@@ -657,7 +698,6 @@ pub struct MentionInput {
     on_mention: Option<Rc<dyn Fn(&MentionItem, &mut App)>>,
     on_enter: Option<Rc<dyn Fn(&str, &mut App)>>,
 
-    bounds: Bounds<Pixels>,
     style: StyleRefinement,
 }
 
@@ -673,7 +713,6 @@ impl MentionInput {
             on_change: None,
             on_mention: None,
             on_enter: None,
-            bounds: Bounds::default(),
             style: StyleRefinement::default(),
         }
     }
@@ -747,53 +786,27 @@ impl RenderOnce for MentionInput {
         let dropdown_open = state.dropdown_open;
         let dropdown_filter = state.dropdown_filter.clone();
         let dropdown_index = state.dropdown_index;
-        let _content = state.content.clone();
+        let content = state.content.clone();
         let mentions = state.mentions.clone();
-        let _selected_range = state.selected_range.clone();
         let placeholder = self.placeholder.clone();
         let focus_handle = state.focus_handle(cx);
+        let root_id: ElementId = ("mention-input", self.state.entity_id()).into();
+        let dropdown_id = root_id.clone();
 
         self.state.update(cx, |s, _| {
             s.trigger_char = self.trigger_char;
             s.placeholder = self.placeholder.clone();
             s.disabled = self.disabled;
+            s.on_change_callback = self.on_change.clone();
+            s.on_mention_callback = self.on_mention.clone();
+            s.on_enter_callback = self.on_enter.clone();
         });
 
         let user_style = self.style.clone();
         let filtered = self.filtered_items(&dropdown_filter);
         let filtered_count = filtered.len();
 
-        let on_change = self.on_change.clone();
-        let on_mention = self.on_mention.clone();
-        let on_enter = self.on_enter.clone();
         let items_for_confirm = self.items.clone();
-
-        cx.subscribe(
-            &state_entity,
-            move |_emitter, event: &MentionInputEvent, cx| match event {
-                MentionInputEvent::Change => {
-                    if let Some(ref callback) = on_change {
-                        let content = _emitter.read(cx).content.clone();
-                        callback(&content, cx);
-                    }
-                }
-                MentionInputEvent::MentionSelected(item) => {
-                    if let Some(ref callback) = on_mention {
-                        callback(item, cx);
-                    }
-                }
-                MentionInputEvent::Enter => {
-                    if let Some(ref callback) = on_enter {
-                        let content = _emitter.read(cx).content.clone();
-                        callback(&content, cx);
-                    }
-                }
-                _ => {}
-            },
-        )
-        .detach();
-
-        let _bounds = self.bounds;
 
         let text_element = MentionTextElement {
             input: self.state.clone(),
@@ -802,6 +815,28 @@ impl RenderOnce for MentionInput {
         };
 
         div()
+            .id(root_id.clone())
+            .accessibility({
+                let attributes = AccessibilityAttributes::text_input(
+                    placeholder.to_string(),
+                    content.to_string(),
+                )
+                .states(if self.disabled {
+                    AccessibilityState::DISABLED
+                } else if is_focused {
+                    AccessibilityState::FOCUSED
+                } else {
+                    AccessibilityState::NONE
+                });
+                if self.disabled {
+                    attributes
+                } else {
+                    attributes.actions(vec![
+                        AccessibilityAction::Focus,
+                        AccessibilityAction::SetValue,
+                    ])
+                }
+            })
             .relative()
             .w_full()
             .key_context("MentionInput")
@@ -902,12 +937,12 @@ impl RenderOnce for MentionInput {
             })
             .child(
                 div()
-                    .id("mention-input-container")
+                    .id(ElementId::NamedChild(Box::new(root_id), "container".into()))
                     .flex()
                     .items_center()
-                    .h(px(40.0))
+                    .h(px(32.0))
                     .px(px(12.0))
-                    .bg(theme.tokens.background)
+                    .bg(theme.tokens.card)
                     .border_1()
                     .border_color(if is_focused {
                         theme.tokens.ring
@@ -920,23 +955,25 @@ impl RenderOnce for MentionInput {
                         this.hover(|style| style.border_color(theme.tokens.ring))
                     })
                     .when(self.disabled, |this| this.opacity(0.5))
-                    .on_mouse_down(MouseButton::Left, {
-                        let state = state_entity.clone();
-                        move |event, window, cx| {
-                            state.update(cx, |s, cx| s.on_mouse_down(event, window, cx));
-                        }
-                    })
-                    .on_mouse_up(MouseButton::Left, {
-                        let state = state_entity.clone();
-                        move |event, window, cx| {
-                            state.update(cx, |s, cx| s.on_mouse_up(event, window, cx));
-                        }
-                    })
-                    .on_mouse_move({
-                        let state = state_entity.clone();
-                        move |event, window, cx| {
-                            state.update(cx, |s, cx| s.on_mouse_move(event, window, cx));
-                        }
+                    .when(!self.disabled, |this| {
+                        this.on_mouse_down(MouseButton::Left, {
+                            let state = state_entity.clone();
+                            move |event, window, cx| {
+                                state.update(cx, |s, cx| s.on_mouse_down(event, window, cx));
+                            }
+                        })
+                        .on_mouse_up(MouseButton::Left, {
+                            let state = state_entity.clone();
+                            move |event, window, cx| {
+                                state.update(cx, |s, cx| s.on_mouse_up(event, window, cx));
+                            }
+                        })
+                        .on_mouse_move({
+                            let state = state_entity.clone();
+                            move |event, window, cx| {
+                                state.update(cx, |s, cx| s.on_mouse_move(event, window, cx));
+                            }
+                        })
                     })
                     .child(
                         div()
@@ -997,10 +1034,10 @@ impl RenderOnce for MentionInput {
                                                                     state_for_select.clone();
 
                                                                 div()
-                                                                .id(SharedString::from(format!(
-                                                                    "mention-item-{}",
-                                                                    idx
-                                                                )))
+                                                                .id(ElementId::NamedChild(
+                                                                    Box::new(dropdown_id.clone()),
+                                                                    format!("item-{}", idx).into(),
+                                                                ))
                                                                 .flex()
                                                                 .items_center()
                                                                 .gap(px(8.0))

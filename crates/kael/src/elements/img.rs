@@ -180,6 +180,39 @@ impl StyledImage for Stateful<Img> {
     }
 }
 
+impl ImageStyle {
+    /// Returns true when grayscale rendering is enabled.
+    pub fn is_grayscale(&self) -> bool {
+        self.grayscale
+    }
+
+    /// Stable text key for the configured object fit.
+    pub fn object_fit_key(&self) -> &'static str {
+        object_fit_key(&self.object_fit)
+    }
+
+    /// Returns true when a custom loading element is configured.
+    pub fn has_loading(&self) -> bool {
+        self.loading.is_some()
+    }
+
+    /// Returns true when a fallback element is configured.
+    pub fn has_fallback(&self) -> bool {
+        self.fallback.is_some()
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "image_style(grayscale={}, object_fit={}, has_loading={}, has_fallback={})",
+            self.is_grayscale(),
+            self.object_fit_key(),
+            self.has_loading(),
+            self.has_fallback()
+        )
+    }
+}
+
 /// An image element.
 pub struct Img {
     interactivity: Interactivity,
@@ -207,6 +240,37 @@ impl Img {
             "avif", "jpg", "jpeg", "png", "gif", "webp", "tif", "tiff", "tga", "dds", "bmp", "ico",
             "hdr", "exr", "pbm", "pam", "ppm", "pgm", "ff", "farbfeld", "qoi", "svg",
         ]
+    }
+
+    /// Stable text key for the source kind.
+    pub fn source_kind(&self) -> &'static str {
+        self.source.kind()
+    }
+
+    /// Returns true when the image source points at a resource path, URI, or embedded asset.
+    pub fn has_resource_source(&self) -> bool {
+        self.source.is_resource()
+    }
+
+    /// Returns true when an explicit image cache is bound to this element.
+    pub fn has_image_cache(&self) -> bool {
+        self.image_cache.is_some()
+    }
+
+    /// Stable text key for the configured object fit.
+    pub fn object_fit_key(&self) -> &'static str {
+        self.style.object_fit_key()
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "img(source={}, {}, style={}, has_image_cache={})",
+            self.source_kind(),
+            self.source.to_text(),
+            self.style.to_text(),
+            self.has_image_cache()
+        )
     }
 
     /// Sets the image cache for the current node.
@@ -507,6 +571,46 @@ impl IntoElement for Img {
 impl StatefulInteractiveElement for Img {}
 
 impl ImageSource {
+    /// Stable text key for the source kind.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Resource(resource) => resource_kind(resource),
+            Self::Render(_) => "render",
+            Self::Image(_) => "image",
+            Self::Custom(_) => "custom",
+        }
+    }
+
+    /// Returns true when this source points at a resource path, URI, or embedded asset.
+    pub fn is_resource(&self) -> bool {
+        matches!(self, Self::Resource(_))
+    }
+
+    /// Returns true when this source uses a caller-provided loader.
+    pub fn is_custom(&self) -> bool {
+        matches!(self, Self::Custom(_))
+    }
+
+    /// Byte length of a resource identifier without exposing it.
+    pub fn resource_len_bytes(&self) -> Option<usize> {
+        match self {
+            Self::Resource(resource) => Some(resource_len_bytes(resource)),
+            _ => None,
+        }
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        let resource_len = self
+            .resource_len_bytes()
+            .map_or_else(|| "none".to_string(), |len| len.to_string());
+        format!(
+            "image_source(kind={}, resource_len_bytes={})",
+            self.kind(),
+            resource_len
+        )
+    }
+
     pub(crate) fn use_data(
         &self,
         cache: Option<AnyImageCache>,
@@ -556,6 +660,90 @@ impl ImageSource {
             ImageSource::Custom(_) | ImageSource::Render(_) => {}
             ImageSource::Image(data) => cx.remove_asset::<AssetLogger<ImageDecoder>>(data),
         }
+    }
+}
+
+fn object_fit_key(object_fit: &ObjectFit) -> &'static str {
+    match object_fit {
+        ObjectFit::Fill => "fill",
+        ObjectFit::Contain => "contain",
+        ObjectFit::Cover => "cover",
+        ObjectFit::ScaleDown => "scale-down",
+        ObjectFit::None => "none",
+    }
+}
+
+fn resource_kind(resource: &Resource) -> &'static str {
+    match resource {
+        Resource::Uri(_) => "uri",
+        Resource::Embedded(_) => "embedded",
+        Resource::Path(_) => "path",
+    }
+}
+
+fn resource_len_bytes(resource: &Resource) -> usize {
+    match resource {
+        Resource::Uri(uri) => uri.len(),
+        Resource::Embedded(path) => path.len(),
+        Resource::Path(path) => path.to_string_lossy().len(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ImageSource, StyledImage, img};
+    use crate::{IntoElement, ObjectFit, div};
+    use std::path::PathBuf;
+
+    #[test]
+    fn image_summary_is_content_safe() {
+        let source = ImageSource::from("https://cdn.example.com/private/poster.png");
+        assert_eq!(source.kind(), "uri");
+        assert!(source.is_resource());
+        assert_eq!(
+            source.resource_len_bytes(),
+            Some("https://cdn.example.com/private/poster.png".len())
+        );
+        let source_summary = source.to_text();
+        assert!(source_summary.contains("kind=uri"));
+        assert!(!source_summary.contains("cdn.example.com"));
+        assert!(!source_summary.contains("poster.png"));
+
+        let image = img(source)
+            .grayscale(true)
+            .object_fit(ObjectFit::Cover)
+            .with_loading(|| div().into_any_element())
+            .with_fallback(|| div().into_any_element());
+
+        assert_eq!(image.source_kind(), "uri");
+        assert!(image.has_resource_source());
+        assert!(!image.has_image_cache());
+        assert_eq!(image.object_fit_key(), "cover");
+        assert!(image.style.is_grayscale());
+        assert!(image.style.has_loading());
+        assert!(image.style.has_fallback());
+
+        let summary = image.to_text();
+        assert!(summary.contains("img(source=uri"));
+        assert!(summary.contains("object_fit=cover"));
+        assert!(summary.contains("has_loading=true"));
+        assert!(!summary.contains("cdn.example.com"));
+        assert!(!summary.contains("poster.png"));
+    }
+
+    #[test]
+    fn image_path_summary_is_content_safe() {
+        let source = ImageSource::from(PathBuf::from("/private/assets/secret.png"));
+        assert_eq!(source.kind(), "path");
+        assert_eq!(
+            source.resource_len_bytes(),
+            Some("/private/assets/secret.png".len())
+        );
+
+        let summary = source.to_text();
+        assert!(summary.contains("kind=path"));
+        assert!(!summary.contains("/private"));
+        assert!(!summary.contains("secret.png"));
     }
 }
 

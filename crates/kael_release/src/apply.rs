@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
+use sha2::{Digest as _, Sha256};
 
 /// Compares two dotted `major.minor.patch` versions, returning whether
 /// `candidate` is strictly newer than `current`.
@@ -23,10 +24,19 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
 }
 
 fn parse_triplet(version: &str) -> Option<(u64, u64, u64)> {
-    let mut parts = version.trim().split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next()?.parse().ok()?;
-    let patch = parts.next()?.parse().ok()?;
+    fn component(part: &str) -> Option<u64> {
+        if part.is_empty()
+            || !part.bytes().all(|byte| byte.is_ascii_digit())
+            || (part.len() > 1 && part.starts_with('0'))
+        {
+            return None;
+        }
+        part.parse().ok()
+    }
+    let mut parts = version.split('.');
+    let major = component(parts.next()?)?;
+    let minor = component(parts.next()?)?;
+    let patch = component(parts.next()?)?;
     if parts.next().is_some() {
         return None;
     }
@@ -38,15 +48,15 @@ fn parse_triplet(version: &str) -> Option<(u64, u64, u64)> {
 /// The token is sanitized to a single, safe path component so a hostile feed
 /// version or URL cannot escape `base` via traversal or separators.
 pub fn staging_dir(base: &Path, token: &str) -> PathBuf {
-    base.join(format!("kael_update_{}", sanitize_component(token)))
+    base.join(format!("kael_update_{}", safe_component(token)))
 }
 
 /// Computes the staging path for a downloaded artifact file inside `dir`.
 pub fn staging_path(dir: &Path, file_name: &str) -> PathBuf {
-    dir.join(sanitize_component(file_name))
+    dir.join(safe_component(file_name))
 }
 
-fn sanitize_component(raw: &str) -> String {
+fn safe_component(raw: &str) -> String {
     let candidate = raw
         .rsplit(['/', '\\'])
         .next()
@@ -54,15 +64,16 @@ fn sanitize_component(raw: &str) -> String {
         .split(['?', '#'])
         .next()
         .unwrap_or("");
-    let cleaned: String = candidate
+    let mut cleaned: String = candidate
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        .take(80)
         .collect();
     if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
-        "staged".to_string()
-    } else {
-        cleaned
+        cleaned = "staged".to_string();
     }
+    let digest = Sha256::digest(raw.as_bytes());
+    format!("{cleaned}-{}", hex::encode(&digest[..8]))
 }
 
 /// The state of an atomic swap, advanced by [`atomic_swap_with_rollback`].
@@ -158,6 +169,7 @@ pub fn atomic_swap_with_rollback(
     backend: &dyn InstallerBackend,
     plan: &SwapPlan,
 ) -> Result<RollbackState> {
+    validate_swap_plan(plan)?;
     let mut state = RollbackState::Idle;
 
     backend.backup(&plan.live, &plan.backup)?;
@@ -176,10 +188,25 @@ pub fn atomic_swap_with_rollback(
     }
     state = state.swapped()?;
 
-    backend.discard_backup(&plan.backup)?;
+    if let Err(cleanup_err) = backend.discard_backup(&plan.backup) {
+        bail!(
+            "update was installed at {} but backup cleanup failed ({cleanup_err}); do not retry the swap automatically",
+            plan.live.display()
+        );
+    }
     state = state.committed()?;
 
     Ok(state)
+}
+
+fn validate_swap_plan(plan: &SwapPlan) -> Result<()> {
+    if plan.live == plan.staged || plan.live == plan.backup || plan.staged == plan.backup {
+        bail!("live, staged, and backup paths must be distinct");
+    }
+    if plan.live.parent() != plan.backup.parent() {
+        bail!("live and backup paths must share a parent for an atomic rename");
+    }
+    Ok(())
 }
 
 /// The real, on-disk [`InstallerBackend`] using atomic `rename` where possible.
@@ -189,7 +216,10 @@ pub struct FsInstaller;
 impl InstallerBackend for FsInstaller {
     fn backup(&self, from: &Path, to: &Path) -> Result<()> {
         if to.exists() {
-            remove_path(to)?;
+            bail!(
+                "refusing to overwrite existing update backup: {}",
+                to.display()
+            );
         }
         std::fs::rename(from, to).map_err(|e| {
             anyhow::anyhow!(
@@ -211,6 +241,9 @@ impl InstallerBackend for FsInstaller {
     }
 
     fn restore(&self, from: &Path, to: &Path) -> Result<()> {
+        if !from.exists() {
+            bail!("cannot restore missing update backup: {}", from.display());
+        }
         if to.exists() {
             remove_path(to)?;
         }
@@ -244,26 +277,31 @@ fn remove_path(path: &Path) -> Result<()> {
 
 /// Verifies the code signature of a macOS bundle via `codesign --verify`.
 ///
-/// Returns an error if `codesign` reports the bundle as invalid. On non-macOS
-/// targets this is a no-op that returns `Ok(())`.
+/// Returns an error if `codesign` reports the bundle as invalid or if called on
+/// a platform that cannot perform macOS code-signature verification.
 pub fn verify_codesign(_bundle: &Path) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
-        let output = std::process::Command::new("codesign")
+        if !_bundle.is_dir() {
+            bail!("bundle is not a directory: {}", _bundle.display());
+        }
+        let status = std::process::Command::new("codesign")
             .args(["--verify", "--deep", "--strict"])
             .arg(_bundle)
-            .output()
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
             .map_err(|e| anyhow::anyhow!("failed to run codesign: {e}"))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!(
-                "codesign verification failed for {}: {}",
-                _bundle.display(),
-                stderr.trim()
-            );
+        if !status.success() {
+            bail!("codesign verification failed for {}", _bundle.display());
         }
+        Ok(())
     }
-    Ok(())
+    #[cfg(not(target_os = "macos"))]
+    {
+        bail!("macOS code-signature verification is unavailable on this platform")
+    }
 }
 
 #[cfg(test)]
@@ -315,6 +353,22 @@ mod tests {
     }
 
     #[test]
+    fn staging_paths_do_not_collide_after_sanitization() {
+        let base = Path::new("/tmp/base");
+        assert_ne!(staging_dir(base, "a/b"), staging_dir(base, "b"));
+        assert_ne!(staging_path(base, "a?x"), staging_path(base, "a#x"));
+    }
+
+    #[test]
+    fn rejects_aliasing_swap_paths() {
+        let backend = MockBackend::default();
+        let mut alias = plan();
+        alias.backup = alias.live.clone();
+        assert!(atomic_swap_with_rollback(&backend, &alias).is_err());
+        assert!(backend.calls.borrow().is_empty());
+    }
+
+    #[test]
     fn rollback_state_machine_rejects_out_of_order() {
         assert!(RollbackState::Idle.swapped().is_err());
         assert!(RollbackState::Idle.committed().is_err());
@@ -331,6 +385,7 @@ mod tests {
     struct MockBackend {
         fail_swap: bool,
         fail_restore: bool,
+        fail_discard: bool,
         calls: RefCell<Vec<&'static str>>,
     }
 
@@ -355,6 +410,9 @@ mod tests {
         }
         fn discard_backup(&self, _path: &Path) -> Result<()> {
             self.calls.borrow_mut().push("discard_backup");
+            if self.fail_discard {
+                bail!("discard failed");
+            }
             Ok(())
         }
     }
@@ -404,6 +462,17 @@ mod tests {
     }
 
     #[test]
+    fn atomic_swap_distinguishes_cleanup_failure_from_swap_failure() {
+        let backend = MockBackend {
+            fail_discard: true,
+            ..Default::default()
+        };
+        let error = atomic_swap_with_rollback(&backend, &plan()).unwrap_err();
+        assert!(error.to_string().contains("update was installed"));
+        assert!(error.to_string().contains("do not retry"));
+    }
+
+    #[test]
     fn fs_installer_swaps_a_real_directory_with_rollback() {
         let tmp = tempfile::tempdir().unwrap();
         let live = tmp.path().join("Kael.app");
@@ -450,5 +519,19 @@ mod tests {
         assert!(result.is_err());
         // Original content must be restored after the failed swap.
         assert_eq!(std::fs::read(live.join("marker")).unwrap(), b"old");
+    }
+
+    #[test]
+    fn fs_installer_preserves_preexisting_backup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let live = tmp.path().join("Kael.app");
+        let backup = tmp.path().join("Kael.app.backup");
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::create_dir_all(&backup).unwrap();
+        std::fs::write(backup.join("marker"), b"recovery").unwrap();
+
+        assert!(FsInstaller.backup(&live, &backup).is_err());
+        assert_eq!(std::fs::read(backup.join("marker")).unwrap(), b"recovery");
+        assert!(live.exists());
     }
 }

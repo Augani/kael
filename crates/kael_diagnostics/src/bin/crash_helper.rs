@@ -1,51 +1,42 @@
-//! Test helper that installs native crash handlers and then triggers a real
-//! native crash on demand. Driven by the `native_crash` integration test.
-//!
-//! Usage: `crash_helper <reports_dir> <mode>` where mode is `segv` or `abort`.
+use std::io::Write as _;
 
-use std::{io::Write as _, path::PathBuf};
-
+use anyhow::{Result, bail};
 use kael_diagnostics::{BreadcrumbBuffer, CrashReporter};
 
-fn main() {
-    let mut args = std::env::args().skip(1);
-    let reports_dir = PathBuf::from(args.next().expect("reports_dir argument required"));
-    let mode = args.next().unwrap_or_else(|| "segv".to_string());
+#[cfg(unix)]
+fn main() -> Result<()> {
+    let mut arguments = std::env::args_os().skip(1);
+    let reports_dir = arguments
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("missing reports directory"))?;
+    let mode = arguments
+        .next()
+        .and_then(|value| value.into_string().ok())
+        .ok_or_else(|| anyhow::anyhow!("missing crash mode"))?;
+    if arguments.next().is_some() {
+        bail!("unexpected crash-helper arguments");
+    }
 
-    std::fs::create_dir_all(&reports_dir).expect("failed to create reports dir");
-
-    let mut reporter =
-        CrashReporter::new("dev.kael.crash-helper", BreadcrumbBuffer::new(8)).expect("reporter");
-    reporter.set_release("test-release");
-    reporter.set_environment("test");
-    reporter
-        .set_reports_dir(&reports_dir)
-        .expect("set reports dir");
-
-    let session_id = reporter.session_id().to_string();
-    println!("{session_id}");
-    std::io::stdout().flush().ok();
-
-    reporter.install_native().expect("install native handlers");
+    let mut reporter = CrashReporter::new(
+        "dev.kael.diagnostics.crash-helper",
+        BreadcrumbBuffer::new(8),
+    )?;
+    reporter.set_reports_dir(reports_dir)?;
+    reporter.install_native()?;
+    println!("{}", reporter.session_id());
+    std::io::stdout().flush()?;
 
     match mode.as_str() {
-        "segv" => trigger_segv(),
-        "abort" => trigger_abort(),
-        other => panic!("unknown crash mode: {other}"),
+        "segv" => unsafe {
+            libc::raise(libc::SIGSEGV);
+        },
+        "abort" => std::process::abort(),
+        _ => bail!("unsupported crash mode {mode}"),
     }
+    unreachable!("crash signal unexpectedly returned")
 }
 
-#[inline(never)]
-fn trigger_segv() {
-    // SAFETY: intentionally dereferences a null pointer to provoke a real
-    // SIGSEGV for the crash-capture integration test.
-    unsafe {
-        let pointer = std::ptr::null_mut::<u8>();
-        std::ptr::write_volatile(pointer, 42);
-    }
-    std::process::exit(0);
-}
-
-fn trigger_abort() {
-    std::process::abort();
+#[cfg(not(unix))]
+fn main() -> Result<()> {
+    bail!("the crash helper is only available on Unix targets")
 }

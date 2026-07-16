@@ -67,6 +67,43 @@ use kael::*;
 use smallvec::SmallVec;
 use std::time::Duration;
 
+/// Returns a stagger delay without overflowing for unusually large item counts.
+pub(crate) fn stagger_delay(stagger: Duration, index: usize) -> Duration {
+    let multiplier = u32::try_from(index).unwrap_or(u32::MAX);
+    stagger.saturating_mul(multiplier)
+}
+
+/// Maps progress across a delayed animation to progress across its active phase.
+///
+/// `delta` is normalized over `delay + active_duration`. A zero-duration active
+/// phase stays at its initial value until the delay completes, then resolves to
+/// its final value. This avoids the `0 / 0` boundary that would otherwise leave
+/// animated content with NaN opacity, size, or position.
+pub(crate) fn delayed_animation_progress(
+    delta: f32,
+    delay: Duration,
+    active_duration: Duration,
+) -> f32 {
+    if !delta.is_finite() {
+        return 0.0;
+    }
+
+    let delta = delta.clamp(0.0, 1.0);
+    let delay_seconds = delay.as_secs_f64();
+    let active_seconds = active_duration.as_secs_f64();
+    let total_seconds = delay_seconds + active_seconds;
+
+    if total_seconds <= f64::EPSILON {
+        return 1.0;
+    }
+    if active_seconds <= f64::EPSILON {
+        return if delta >= 1.0 { 1.0 } else { 0.0 };
+    }
+
+    let delay_fraction = delay_seconds / total_seconds;
+    (((delta as f64 - delay_fraction) / (1.0 - delay_fraction)).clamp(0.0, 1.0)) as f32
+}
+
 /// Standard animation durations following modern UI guidelines
 pub mod durations {
     use std::time::Duration;
@@ -646,8 +683,9 @@ pub fn lerp_shadows(from: &[BoxShadow], to: &[BoxShadow], t: f32) -> SmallVec<[B
 
 #[cfg(test)]
 mod easing_delegate_tests {
-    use super::easings;
+    use super::{delayed_animation_progress, easings, stagger_delay};
     use kael::Easing;
+    use std::time::Duration;
 
     fn sweep(delegate: impl Fn(f32) -> f32, easing: Easing) {
         for step in 0..=100 {
@@ -684,5 +722,37 @@ mod easing_delegate_tests {
         sweep(easings::ease_out_elastic, Easing::EaseOutElastic);
         sweep(easings::elastic, Easing::Elastic);
         sweep(easings::steps(4), Easing::Steps(4));
+    }
+
+    #[test]
+    fn delayed_progress_handles_zero_durations_without_nan() {
+        let zero = Duration::ZERO;
+        assert_eq!(delayed_animation_progress(0.0, zero, zero), 1.0);
+        assert_eq!(delayed_animation_progress(1.0, zero, zero), 1.0);
+
+        let delay = Duration::from_millis(100);
+        assert_eq!(delayed_animation_progress(0.999, delay, zero), 0.0);
+        assert_eq!(delayed_animation_progress(1.0, delay, zero), 1.0);
+    }
+
+    #[test]
+    fn delayed_progress_is_finite_clamped_and_uses_only_the_active_phase() {
+        let delay = Duration::from_millis(100);
+        let duration = Duration::from_millis(300);
+
+        assert_eq!(delayed_animation_progress(-1.0, delay, duration), 0.0);
+        assert_eq!(delayed_animation_progress(0.25, delay, duration), 0.0);
+        assert!((delayed_animation_progress(0.625, delay, duration) - 0.5).abs() < f32::EPSILON);
+        assert_eq!(delayed_animation_progress(2.0, delay, duration), 1.0);
+        assert_eq!(delayed_animation_progress(f32::NAN, delay, duration), 0.0);
+    }
+
+    #[test]
+    fn stagger_delay_multiplies_without_panicking() {
+        assert_eq!(
+            stagger_delay(Duration::from_millis(50), 3),
+            Duration::from_millis(150)
+        );
+        assert_eq!(stagger_delay(Duration::MAX, usize::MAX), Duration::MAX);
     }
 }

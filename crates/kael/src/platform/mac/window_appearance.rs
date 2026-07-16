@@ -7,17 +7,22 @@ type id = *mut AnyObject;
 
 impl WindowAppearance {
     pub(crate) unsafe fn from_native(appearance: id) -> Self {
+        if appearance.is_null() {
+            log::error!("macOS returned no effective window appearance");
+            return Self::Light;
+        }
         let appearance: &NSAppearance = unsafe { &*(appearance as *const NSAppearance) };
-        let name = appearance.name().to_string();
+        let native_name = appearance.name();
+        if native_name.length() > 256 {
+            return Self::Light;
+        }
+        let name = native_name.to_string();
         match name.as_str() {
             "NSAppearanceNameVibrantLight" => Self::VibrantLight,
             "NSAppearanceNameVibrantDark" => Self::VibrantDark,
             "NSAppearanceNameAqua" => Self::Light,
             "NSAppearanceNameDarkAqua" => Self::Dark,
-            other => {
-                println!("unknown appearance: {other}");
-                Self::Light
-            }
+            _ => Self::Light,
         }
     }
 }

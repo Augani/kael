@@ -31,7 +31,7 @@ impl Render for ProgressDemo {
 
         // Animate the growing circle progress using frame counter
         self.frame_counter += 1;
-        if self.frame_counter % 10 == 0 {
+        if self.frame_counter.is_multiple_of(10) {
             // Update every 10 frames for slower animation
             self.growing_circle_progress += 0.005; // Slow increment
             if self.growing_circle_progress > 1.0 {

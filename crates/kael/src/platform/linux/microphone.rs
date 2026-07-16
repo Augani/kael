@@ -142,9 +142,11 @@ pub fn microphone_status() -> PermissionStatus {
 #[allow(dead_code)]
 pub fn request_microphone_permission(callback: Box<dyn FnOnce(bool) + Send>) {
     let status = microphone_status();
-    match status {
-        PermissionStatus::Granted => callback(true),
-        PermissionStatus::Denied | PermissionStatus::Restricted => callback(false),
-        PermissionStatus::NotDetermined => callback(true),
-    }
+    let granted = matches!(
+        status,
+        PermissionStatus::Granted | PermissionStatus::NotDetermined
+    );
+    crate::platform::catch_platform_callback("Linux", "microphone permission", (), || {
+        callback(granted)
+    });
 }

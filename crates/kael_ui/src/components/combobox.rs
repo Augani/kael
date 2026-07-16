@@ -9,7 +9,7 @@
 //! - Clear button to reset selection
 //! - Full Styled trait support for customization
 
-use crate::components::icon::Icon;
+use crate::components::{icon::Icon, input::InputSize};
 use crate::theme::Theme;
 use kael::{prelude::*, *};
 
@@ -70,13 +70,42 @@ impl<T: Clone + 'static> ComboboxState<T> {
         self.focused_index = None;
     }
 
-    pub fn select_item(&mut self, item: T, multi_select: bool) {
+    pub fn select_item(&mut self, item: T, multi_select: bool)
+    where
+        T: PartialEq,
+    {
+        self.select_item_by(item, multi_select, PartialEq::eq);
+    }
+
+    /// Select or toggle an item using a caller-provided equality predicate.
+    ///
+    /// This is useful for model types that intentionally do not implement
+    /// [`PartialEq`]. Most callers should use [`Self::select_item_eq`].
+    pub fn select_item_by(&mut self, item: T, multi_select: bool, equals: impl Fn(&T, &T) -> bool) {
         if multi_select {
-            self.selected.push(item);
+            if let Some(index) = self
+                .selected
+                .iter()
+                .position(|selected| equals(selected, &item))
+            {
+                self.selected.remove(index);
+            } else {
+                self.selected.push(item);
+            }
         } else {
             self.selected = vec![item];
             self.is_open = false;
+            self.search_text.clear();
+            self.focused_index = None;
         }
+    }
+
+    /// Select or toggle an item using [`PartialEq`].
+    pub fn select_item_eq(&mut self, item: T, multi_select: bool)
+    where
+        T: PartialEq,
+    {
+        self.select_item_by(item, multi_select, PartialEq::eq);
     }
 
     pub fn clear(&mut self) {
@@ -107,6 +136,7 @@ pub struct Combobox<T: Clone + 'static> {
     disabled: bool,
     clearable: bool,
     multi_select: bool,
+    size: InputSize,
     max_height: Pixels,
 
     filter_fn: Box<dyn Fn(&T, &str) -> bool>,
@@ -121,7 +151,7 @@ pub struct Combobox<T: Clone + 'static> {
     style: StyleRefinement,
 }
 
-impl<T: Clone + 'static> Combobox<T> {
+impl<T: Clone + PartialEq + 'static> Combobox<T> {
     /// Create a new combobox with items and state entity
     pub fn new(items: Vec<T>, state: &Entity<ComboboxState<T>>, cx: &mut Context<Self>) -> Self {
         Self {
@@ -132,6 +162,7 @@ impl<T: Clone + 'static> Combobox<T> {
             disabled: false,
             clearable: true,
             multi_select: false,
+            size: InputSize::default(),
             max_height: px(300.0),
             filter_fn: Box::new(|_, _| true),
             render_item: Box::new(|_| "Item".into()),
@@ -164,6 +195,12 @@ impl<T: Clone + 'static> Combobox<T> {
     /// Enable multiple selection mode
     pub fn multi_select(mut self, multi_select: bool) -> Self {
         self.multi_select = multi_select;
+        self
+    }
+
+    /// Set the control size using the Astryx input height scale.
+    pub fn size(mut self, size: InputSize) -> Self {
+        self.size = size;
         self
     }
 
@@ -245,11 +282,12 @@ impl<T: Clone + 'static> Combobox<T> {
     /// Toggle dropdown open/close
     fn toggle_dropdown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.disabled {
+            let has_items = !self.filtered_items(cx).is_empty();
             self.state.update(cx, |state, cx| {
                 state.toggle_open();
                 if state.is_open {
                     window.focus(&self.focus_handle);
-                    state.focused_index = Some(0);
+                    state.focused_index = has_items.then_some(0);
                 }
                 cx.notify(); // Trigger re-render
             });
@@ -382,6 +420,8 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
         let search_text = state.search_text.clone();
         let focused_idx = state.focused_index;
         let has_selection = !state.selected.is_empty();
+        let entity_id = cx.entity().entity_id().as_u64();
+        let is_focused = self.focus_handle.is_focused(_window);
 
         let display_text: SharedString = if !search_text.is_empty() {
             search_text.clone().into()
@@ -399,19 +439,64 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
 
         let bounds = self.bounds;
         let is_searching = !search_text.is_empty();
+        let hover_ring = crate::astryx::input_hover_ring(theme.tokens.input);
+        let focus_ring = crate::astryx::focus_ring(theme.tokens.primary);
+        let (height, padding_x, text_size, icon_size) = match self.size {
+            InputSize::Sm => (px(28.0), px(8.0), px(14.0), px(16.0)),
+            InputSize::Md => (px(32.0), px(8.0), px(14.0), px(16.0)),
+            InputSize::Lg => (px(36.0), px(8.0), px(14.0), px(16.0)),
+        };
+        let item_padding_y = match self.size {
+            InputSize::Sm => px(4.0),
+            InputSize::Md => px(6.0),
+            InputSize::Lg => px(8.0),
+        };
+
+        let mut accessibility_state = if is_open {
+            AccessibilityState::EXPANDED
+        } else {
+            AccessibilityState::COLLAPSED
+        };
+        if self.disabled {
+            accessibility_state |= AccessibilityState::DISABLED;
+        }
+        if is_focused {
+            accessibility_state |= AccessibilityState::FOCUSED;
+        }
+        let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::ComboBox)
+            .label("Combobox")
+            .placeholder(self.placeholder.to_string())
+            .states(accessibility_state);
+        if has_selection || is_searching {
+            accessibility = accessibility.value(AccessibilityValue::Text(display_text.to_string()));
+        }
+        if !self.disabled {
+            accessibility = accessibility.actions(vec![
+                AccessibilityAction::Focus,
+                AccessibilityAction::Click,
+                if is_open {
+                    AccessibilityAction::Collapse
+                } else {
+                    AccessibilityAction::Expand
+                },
+            ]);
+        }
 
         let trigger = div()
-            .id("combobox-trigger")
+            .id(("combobox-trigger", entity_id))
             .relative()
+            .track_focus(&self.focus_handle.clone().tab_index(0).tab_stop(true))
+            .accessibility(accessibility)
             .flex()
             .items_center()
             .justify_between()
-            .h(px(40.0))
-            .px(px(12.0))
-            .bg(theme.tokens.background)
+            .gap(px(8.0))
+            .h(height)
+            .px(padding_x)
+            .bg(theme.tokens.card)
             .border_1()
             .border_color(if is_open {
-                theme.tokens.ring
+                theme.tokens.primary
             } else {
                 theme.tokens.input
             })
@@ -421,7 +506,7 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
             } else {
                 theme.tokens.muted_foreground
             })
-            .text_size(px(14.0))
+            .text_size(text_size)
             .font_family(theme.tokens.font_family.clone())
             .cursor(if self.disabled {
                 CursorStyle::Arrow
@@ -429,10 +514,17 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                 CursorStyle::PointingHand
             })
             .transition(theme.tokens.transition_fast)
+            .shadow(smallvec::smallvec![crate::astryx::focus_ring(
+                kael::transparent_black()
+            )])
+            .when(is_open && !self.disabled, |div| {
+                div.shadow(smallvec::smallvec![focus_ring])
+            })
             .when(!self.disabled, |div: Stateful<Div>| {
-                div.hover(|mut style| {
-                    style.border_color = Some(theme.tokens.ring);
+                div.hover(move |style| {
                     style
+                        .border_color(theme.tokens.input)
+                        .shadow(smallvec::smallvec![hover_ring])
                 })
             })
             .on_mouse_down(
@@ -449,7 +541,7 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                     }
                 }),
             )
-            .child(div().flex_1().child(display_text))
+            .child(div().flex_1().min_w(px(0.0)).child(display_text))
             .child(
                 div()
                     .flex()
@@ -460,39 +552,52 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                         |this_div| {
                             this_div.child(
                                 div()
-                                    .w(px(20.0))
-                                    .h(px(20.0))
+                                    .size(px(24.0))
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .rounded(px(10.0))
+                                    .rounded(theme.tokens.radius_sm)
                                     .cursor(CursorStyle::PointingHand)
-                                    .hover(|mut style| {
-                                        style.background = Some(theme.tokens.muted.into());
-                                        style
+                                    .hover(|style| {
+                                        style.bg(crate::astryx::overlay_hover(
+                                            theme.tokens.background.l < 0.5,
+                                        ))
                                     })
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|this, _event, window, cx| {
                                             this.clear_selection(window, cx);
+                                            cx.stop_propagation();
                                         }),
+                                    )
+                                    .accessibility(
+                                        AccessibilityAttributes::new(AccessibilityRole::Button)
+                                            .label("Clear selection")
+                                            .actions(vec![AccessibilityAction::Click]),
                                     )
                                     .child(
                                         Icon::new("x")
-                                            .size(px(14.0))
+                                            .size(icon_size)
                                             .color(theme.tokens.muted_foreground),
                                     ),
                             )
                         },
                     )
                     .child(
-                        Icon::new(if is_open {
-                            "chevron-up"
-                        } else {
-                            "chevron-down"
-                        })
-                        .size(px(14.0))
-                        .color(theme.tokens.muted_foreground),
+                        div()
+                            .size(px(24.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                Icon::new(if is_open {
+                                    "chevron-up"
+                                } else {
+                                    "chevron-down"
+                                })
+                                .size(icon_size)
+                                .color(theme.tokens.muted_foreground),
+                            ),
                     ),
             )
             .child({
@@ -526,17 +631,22 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                     if event.keystroke.key == "backspace" {
                         this.state.update(cx, |state, cx| {
                             state.search_text.pop();
-                            cx.notify();  // Trigger re-render
+                            state.focused_index = None;
+                            cx.notify(); // Trigger re-render
                         });
                         cx.emit(ComboboxEvent::Search);
+                        if let Some(ref callback) = this.on_search {
+                            let search = this.state.read(cx).search_text.clone();
+                            callback(&search, cx);
+                        }
                     } else if event.keystroke.key.len() == 1
                         && !event.keystroke.modifiers.control
                         && !event.keystroke.modifiers.platform
                         && !event.keystroke.modifiers.alt {
                         this.state.update(cx, |state, cx| {
                             state.search_text.push_str(&event.keystroke.key);
-                            state.focused_index = Some(0);
-                            cx.notify();  // Trigger re-render
+                            state.focused_index = None;
+                            cx.notify(); // Trigger re-render
                         });
                         cx.emit(ComboboxEvent::Search);
 
@@ -567,16 +677,22 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                                             .occlude()
                                             .mt(DROPDOWN_MARGIN)
                                             .bg(theme.tokens.popover)
-                                            .border_2()
-                                            .border_color(theme.tokens.ring)
-                                            .rounded(theme.tokens.radius_md)
-                                            .shadow_xl()
+                                            .border_1()
+                                            .border_color(theme.tokens.border)
+                                            .rounded(theme.tokens.radius_lg)
+                                            .shadow(theme.tokens.shadow_lg.to_vec())
                                             .overflow_hidden()
                                             .child({
                                                 let filtered = self.filtered_items(cx);
 
                                                 div()
-                                                    .id("combobox-dropdown-list")
+                                                    .id(("combobox-dropdown-list", entity_id))
+                                                    .accessibility(
+                                                        AccessibilityAttributes::new(
+                                                            AccessibilityRole::List,
+                                                        )
+                                                        .label("Options"),
+                                                    )
                                                     .max_h(self.max_height)
                                                     .overflow_y_scroll()
                                                     .py(px(4.0))
@@ -600,41 +716,70 @@ impl<T: Clone + PartialEq + 'static> Render for Combobox<T> {
                                                                 let is_focused = focused_idx == Some(display_idx);
                                                                 let is_selected = state.is_selected(item);
                                                                 let item_text = (self.render_item)(item);
+                                                                let mut item_state = AccessibilityState::NONE;
+                                                                if is_selected {
+                                                                    item_state |= AccessibilityState::SELECTED;
+                                                                }
+                                                                if is_focused {
+                                                                    item_state |= AccessibilityState::FOCUSED;
+                                                                }
 
                                                                 div()
+                                                                    .id(ElementId::NamedInteger(
+                                                                        format!("combobox-option-{entity_id}").into(),
+                                                                        display_idx as u64,
+                                                                    ))
+                                                                    .accessibility(
+                                                                        AccessibilityAttributes::new(AccessibilityRole::ListItem)
+                                                                            .label(item_text.to_string())
+                                                                            .states(item_state)
+                                                                            .actions(vec![AccessibilityAction::Click]),
+                                                                    )
                                                                     .px(px(12.0))
-                                                                    .py(px(8.0))
+                                                                    .py(item_padding_y)
                                                                     .flex()
                                                                     .items_center()
                                                                     .justify_between()
-                                                                    .text_color(if is_selected {
-                                                                        theme.tokens.primary
-                                                                    } else {
-                                                                        theme.tokens.popover_foreground
-                                                                    })
+                                                                    .gap(px(8.0))
+                                                                    .rounded(theme.tokens.radius_md)
+                                                                    .text_color(theme.tokens.popover_foreground)
                                                                     .bg(if is_focused {
-                                                                        theme.tokens.accent
+                                                                        crate::astryx::overlay_hover(theme.tokens.background.l < 0.5)
+                                                                    } else if is_selected {
+                                                                        theme.tokens.primary.opacity(0.12)
                                                                     } else {
                                                                         kael::transparent_black()
                                                                     })
-                                                                    .hover(|mut style| {
-                                                                        style.background = Some(theme.tokens.accent.into());
-                                                                        style
+                                                                    .hover(|style| {
+                                                                        style.bg(crate::astryx::overlay_hover(
+                                                                            theme.tokens.background.l < 0.5,
+                                                                        ))
                                                                     })
                                                                     .cursor(CursorStyle::PointingHand)
-                                                                    .text_size(px(14.0))
+                                                                    .text_size(text_size)
+                                                                    .when(is_selected, |this| {
+                                                                        this.font_weight(FontWeight::MEDIUM)
+                                                                    })
                                                                     .font_family(theme.tokens.font_family.clone())
                                                                     .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
                                                                         this.select_item(display_idx, window, cx);
                                                                     }))
-                                                                    .child(item_text)
-                                                                    .when(is_selected, |div| {
-                                                                        div.child(
-                                                                            Icon::new("check")
-                                                                                .size(px(14.0))
-                                                                                .color(theme.tokens.primary)
-                                                                        )
-                                                                    })
+                                                                    .child(div().flex_1().min_w(px(0.0)).child(item_text))
+                                                                    .child(
+                                                                        div()
+                                                                            .size(px(16.0))
+                                                                            .flex()
+                                                                            .items_center()
+                                                                            .justify_center()
+                                                                            .flex_shrink_0()
+                                                                            .when(is_selected, |slot| {
+                                                                                slot.child(
+                                                                                    Icon::new("check")
+                                                                                        .size(px(16.0))
+                                                                                        .color(theme.tokens.primary)
+                                                                                )
+                                                                            })
+                                                                    )
                                                             })
                                                         )
                                                     })
@@ -674,3 +819,35 @@ impl<T: Clone + 'static> Focusable for Combobox<T> {
 }
 
 impl<T: Clone + 'static> EventEmitter<ComboboxEvent> for Combobox<T> {}
+
+#[cfg(test)]
+mod tests {
+    use super::ComboboxState;
+
+    #[test]
+    fn multi_select_toggles_equal_items_without_duplicates() {
+        let mut state = ComboboxState::new();
+        state.select_item_eq("alpha", true);
+        state.select_item_eq("alpha", true);
+        assert!(state.selected.is_empty());
+
+        state.select_item_eq("alpha", true);
+        state.select_item_eq("beta", true);
+        assert_eq!(state.selected, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn single_select_commits_and_resets_transient_search_state() {
+        let mut state = ComboboxState::new();
+        state.is_open = true;
+        state.search_text = "alp".to_owned();
+        state.focused_index = Some(2);
+
+        state.select_item_eq("alpha", false);
+
+        assert_eq!(state.selected, vec!["alpha"]);
+        assert!(!state.is_open);
+        assert!(state.search_text.is_empty());
+        assert_eq!(state.focused_index, None);
+    }
+}

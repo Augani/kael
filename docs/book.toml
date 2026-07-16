@@ -1,7 +1,7 @@
 [book]
 title = "Kael Documentation"
 authors = ["Augustus Otu"]
-description = "GPU-accelerated UI framework for native desktop apps — the Electron replacement"
+description = "GPU-accelerated UI framework for native desktop apps — the browser-runtime stack replacement"
 src = "src"
 language = "en"
 

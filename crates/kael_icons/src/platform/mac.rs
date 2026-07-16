@@ -1,1 +1,1 @@
-pub(crate) const HAS_NATIVE_BRIDGE: bool = true;
+pub(crate) const HAS_NATIVE_BRIDGE: bool = false;

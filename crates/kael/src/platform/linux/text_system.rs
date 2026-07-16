@@ -4,7 +4,7 @@ use crate::{
     SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ShapedGlyph, ShapedRun, SharedString, Size, point,
     size,
 };
-use anyhow::{Context as _, Ok, Result};
+use anyhow::{Context as _, Result};
 use collections::HashMap;
 use cosmic_text::{
     Attrs, AttrsList, CacheKey, Family, Font as CosmicTextFont, FontFeatures as CosmicFontFeatures,
@@ -19,13 +19,45 @@ use pathfinder_geometry::{
 };
 use smallvec::SmallVec;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::{borrow::Cow, sync::Arc};
+use std::{
+    borrow::Cow,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 /// Scale factor applied to emoji glyphs relative to the surrounding text size.
 /// A value of 1.0 means emoji are rendered at exactly the font size.
 /// Values between 1.0 and 1.2 are typical for matching emoji visual weight to text.
 /// We use 1.1 as a balanced default that ensures emoji are legible without being oversized.
 const EMOJI_SIZE_SCALE: f32 = 1.1;
+
+fn fallback_font_metrics() -> FontMetrics {
+    FontMetrics {
+        units_per_em: 1_000,
+        ascent: 800.0,
+        descent: -200.0,
+        line_gap: 0.0,
+        underline_position: -100.0,
+        underline_thickness: 50.0,
+        cap_height: 700.0,
+        x_height: 500.0,
+        bounding_box: Bounds {
+            origin: point(0.0, -200.0),
+            size: size(1_000.0, 1_000.0),
+        },
+    }
+}
+
+fn empty_line_layout(text: &str, font_size: Pixels) -> LineLayout {
+    LineLayout {
+        font_size,
+        width: Pixels::default(),
+        ascent: Pixels::default(),
+        descent: Pixels::default(),
+        runs: Vec::new(),
+        len: text.len(),
+    }
+}
 
 pub(crate) struct CosmicTextSystem {
     state: Arc<RwLock<CosmicTextSystemState>>,
@@ -89,11 +121,12 @@ impl CosmicTextSystem {
 
         let result = Self {
             state: state.clone(),
-            fonts_loaded,
+            fonts_loaded: fonts_loaded.clone(),
         };
 
         // Load system fonts on a background thread to avoid UI stalls during fc-list enumeration
-        std::thread::Builder::new()
+        let load_failed = fonts_loaded.clone();
+        if let Err(error) = std::thread::Builder::new()
             .name("font-loader".into())
             .spawn(move || {
                 // Load all system fonts (this calls fc-list / fontconfig which can be slow)
@@ -106,7 +139,10 @@ impl CosmicTextSystem {
 
                 fonts_loaded_clone.store(true, Ordering::Release);
             })
-            .expect("failed to spawn font-loader thread");
+        {
+            log::error!("failed to spawn Linux font-loader thread: {error}");
+            load_failed.store(true, Ordering::Release);
+        }
 
         result
     }
@@ -116,8 +152,12 @@ impl CosmicTextSystem {
     /// is only needed for the first font query.
     fn ensure_fonts_loaded(&self) {
         if !self.fonts_loaded.load(Ordering::Acquire) {
-            // Spin-wait with yield - the font loading thread should complete quickly
+            let deadline = Instant::now() + Duration::from_secs(5);
             while !self.fonts_loaded.load(Ordering::Acquire) {
+                if Instant::now() >= deadline {
+                    log::error!("timed out waiting for Linux system fonts to load");
+                    break;
+                }
                 std::thread::yield_now();
             }
         }
@@ -155,32 +195,45 @@ impl PlatformTextSystem for CosmicTextSystem {
         let mut state = self.state.write();
         let key = FontKey::new(font.family.clone(), font.features.clone());
         let candidates = if let Some(font_ids) = state.font_ids_by_family_cache.get(&key) {
-            font_ids.as_slice()
+            font_ids.clone()
         } else {
             let font_ids = state.load_family(&font.family, &font.features)?;
-            state.font_ids_by_family_cache.insert(key.clone(), font_ids);
-            state.font_ids_by_family_cache[&key].as_ref()
+            state
+                .font_ids_by_family_cache
+                .insert(key.clone(), font_ids.clone());
+            font_ids
         };
 
-        let candidate_properties = candidates
+        let candidate_records = candidates
             .iter()
-            .map(|font_id| {
-                let database_id = state.loaded_font(*font_id).font.id();
-                let face_info = state.font_system.db().face(database_id).expect("");
-                face_info_into_properties(face_info)
+            .filter_map(|font_id| {
+                let database_id = state.loaded_font(*font_id)?.font.id();
+                let face_info = state.font_system.db().face(database_id)?;
+                Some((*font_id, face_info_into_properties(face_info)))
             })
+            .collect::<SmallVec<[_; 4]>>();
+        anyhow::ensure!(
+            !candidate_records.is_empty(),
+            "requested font family contains no usable faces"
+        );
+        let candidate_properties = candidate_records
+            .iter()
+            .map(|(_, properties)| *properties)
             .collect::<SmallVec<[_; 4]>>();
 
         let ix =
             font_kit::matching::find_best_match(&candidate_properties, &font_into_properties(font))
                 .context("requested font family contains no font matching the other parameters")?;
 
-        Ok(candidates[ix])
+        Ok(candidate_records[ix].0)
     }
 
     fn font_metrics(&self, font_id: FontId) -> FontMetrics {
         let lock = self.state.read();
-        let loaded_font = lock.loaded_font(font_id);
+        let Some(loaded_font) = lock.loaded_font(font_id) else {
+            log::error!("unknown Linux font id {}", font_id.0);
+            return fallback_font_metrics();
+        };
         let swash_font = loaded_font.font.as_swash();
         let metrics = swash_font.metrics(&[]);
 
@@ -208,7 +261,9 @@ impl PlatformTextSystem for CosmicTextSystem {
 
     fn typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Bounds<f32>> {
         let lock = self.state.read();
-        let loaded_font = lock.loaded_font(font_id);
+        let loaded_font = lock
+            .loaded_font(font_id)
+            .ok_or_else(|| anyhow::anyhow!("unknown Linux font id {}", font_id.0))?;
         let swash_font = loaded_font.font.as_swash();
         let glyph_metrics = swash_font.glyph_metrics(&[]);
         let glyph_id_u16 = glyph_id.0 as u16;
@@ -269,8 +324,8 @@ impl PlatformTextSystem for CosmicTextSystem {
 }
 
 impl CosmicTextSystemState {
-    fn loaded_font(&self, font_id: FontId) -> &LoadedFont {
-        &self.loaded_fonts[font_id.0]
+    fn loaded_font(&self, font_id: FontId) -> Option<&LoadedFont> {
+        self.loaded_fonts.get(font_id.0)
     }
 
     #[profiling::function]
@@ -340,7 +395,12 @@ impl CosmicTextSystemState {
     }
 
     fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Size<f32>> {
-        let glyph_metrics = self.loaded_font(font_id).font.as_swash().glyph_metrics(&[]);
+        let glyph_metrics = self
+            .loaded_font(font_id)
+            .ok_or_else(|| anyhow::anyhow!("unknown Linux font id {}", font_id.0))?
+            .font
+            .as_swash()
+            .glyph_metrics(&[]);
         Ok(Size {
             width: glyph_metrics.advance_width(glyph_id.0 as u16),
             height: glyph_metrics.advance_height(glyph_id.0 as u16),
@@ -348,7 +408,7 @@ impl CosmicTextSystemState {
     }
 
     fn glyph_for_char(&self, font_id: FontId, ch: char) -> Option<GlyphId> {
-        let glyph_id = self.loaded_font(font_id).font.as_swash().charmap().map(ch);
+        let glyph_id = self.loaded_font(font_id)?.font.as_swash().charmap().map(ch);
         if glyph_id == 0 {
             None
         } else {
@@ -357,9 +417,17 @@ impl CosmicTextSystemState {
     }
 
     fn raster_bounds(&mut self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
-        let font = &self.loaded_fonts[params.font_id.0].font;
-        let is_emoji = self.loaded_fonts[params.font_id.0].is_known_emoji_font;
-        let font_weight = self.loaded_fonts[params.font_id.0].weight;
+        anyhow::ensure!(
+            params.scale_factor.is_finite() && params.scale_factor > 0.0,
+            "glyph scale factor must be finite and positive"
+        );
+        let loaded_font = self
+            .loaded_fonts
+            .get(params.font_id.0)
+            .ok_or_else(|| anyhow::anyhow!("unknown Linux font id {}", params.font_id.0))?;
+        let font = &loaded_font.font;
+        let is_emoji = loaded_font.is_known_emoji_font;
+        let font_weight = loaded_font.weight;
         // Apply emoji size scaling to ensure emoji glyphs are sized correctly
         // relative to surrounding text (1.0-1.2x the font size per design spec).
         let effective_font_size = if is_emoji {
@@ -399,13 +467,22 @@ impl CosmicTextSystemState {
         params: &RenderGlyphParams,
         glyph_bounds: Bounds<DevicePixels>,
     ) -> Result<(Size<DevicePixels>, Vec<u8>)> {
-        if glyph_bounds.size.width.0 == 0 || glyph_bounds.size.height.0 == 0 {
+        if glyph_bounds.size.width.0 <= 0 || glyph_bounds.size.height.0 <= 0 {
             anyhow::bail!("glyph bounds are empty");
         } else {
             let bitmap_size = glyph_bounds.size;
-            let font = &self.loaded_fonts[params.font_id.0].font;
-            let is_emoji = self.loaded_fonts[params.font_id.0].is_known_emoji_font;
-            let font_weight = self.loaded_fonts[params.font_id.0].weight;
+            anyhow::ensure!(
+                bitmap_size.width.0 <= crate::MAX_ATLAS_TEXTURE_DIMENSION as i32
+                    && bitmap_size.height.0 <= crate::MAX_ATLAS_TEXTURE_DIMENSION as i32,
+                "glyph bitmap exceeds safe texture dimensions"
+            );
+            let loaded_font = self
+                .loaded_fonts
+                .get(params.font_id.0)
+                .ok_or_else(|| anyhow::anyhow!("unknown Linux font id {}", params.font_id.0))?;
+            let font = &loaded_font.font;
+            let is_emoji = loaded_font.is_known_emoji_font;
+            let font_weight = loaded_font.weight;
             // Apply emoji size scaling consistent with raster_bounds
             let effective_font_size = if is_emoji {
                 params.font_size * EMOJI_SIZE_SCALE
@@ -452,19 +529,26 @@ impl CosmicTextSystemState {
     /// `LoadedFont.features`, as it will have an arbitrarily chosen or empty value. The only
     /// current use of this field is for the *input* of `layout_line`, and so it's fine to use
     /// `font_id_for_cosmic_id` when computing the *output* of `layout_line`.
-    fn font_id_for_cosmic_id(&mut self, id: cosmic_text::fontdb::ID) -> FontId {
+    fn font_id_for_cosmic_id(&mut self, id: cosmic_text::fontdb::ID) -> Result<FontId> {
         if let Some(ix) = self
             .loaded_fonts
             .iter()
             .position(|loaded_font| loaded_font.font.id() == id)
         {
-            FontId(ix)
+            Ok(FontId(ix))
         } else {
             let (face_weight, face_post_script_name) = {
-                let face = self.font_system.db().face(id).unwrap();
+                let face = self
+                    .font_system
+                    .db()
+                    .face(id)
+                    .ok_or_else(|| anyhow::anyhow!("fallback font face disappeared"))?;
                 (face.weight, face.post_script_name.clone())
             };
-            let font = self.font_system.get_font(id, face_weight).unwrap();
+            let font = self
+                .font_system
+                .get_font(id, face_weight)
+                .context("failed to load fallback font")?;
 
             let font_id = FontId(self.loaded_fonts.len());
             self.loaded_fonts.push(LoadedFont {
@@ -474,29 +558,46 @@ impl CosmicTextSystemState {
                 weight: face_weight,
             });
 
-            font_id
+            Ok(font_id)
         }
     }
 
     #[profiling::function]
     fn layout_line(&mut self, text: &str, font_size: Pixels, font_runs: &[FontRun]) -> LineLayout {
         let mut attrs_list = AttrsList::new(&Attrs::new());
-        let mut offs = 0;
+        let mut offs: usize = 0;
         for run in font_runs {
-            let loaded_font = self.loaded_font(run.font_id);
-            let font = self.font_system.db().face(loaded_font.font.id()).unwrap();
+            let Some(loaded_font) = self.loaded_font(run.font_id) else {
+                log::error!("ignoring unknown Linux font id {}", run.font_id.0);
+                break;
+            };
+            let Some(font) = self.font_system.db().face(loaded_font.font.id()) else {
+                log::error!("Linux font face disappeared during layout");
+                break;
+            };
+            let Some(family) = font.families.first() else {
+                log::error!("Linux font face has no family name");
+                break;
+            };
+            let Some(end) = offs
+                .checked_add(run.len)
+                .filter(|end| *end <= text.len() && text.is_char_boundary(*end))
+            else {
+                log::error!("ignoring malformed Linux font run");
+                break;
+            };
 
             attrs_list.add_span(
-                offs..(offs + run.len),
+                offs..end,
                 &Attrs::new()
                     .metadata(run.font_id.0)
-                    .family(Family::Name(&font.families.first().unwrap().0))
+                    .family(Family::Name(&family.0))
                     .stretch(font.stretch)
                     .style(font.style)
                     .weight(font.weight)
                     .font_features(loaded_font.features.clone()),
             );
-            offs += run.len;
+            offs = end;
         }
 
         let line = ShapeLine::new(
@@ -518,16 +619,26 @@ impl CosmicTextSystemState {
             None,
             cosmic_text::Hinting::default(),
         );
-        let layout = layout_lines.first().unwrap();
+        let Some(layout) = layout_lines.first() else {
+            return empty_line_layout(text, font_size);
+        };
 
         let mut runs: Vec<ShapedRun> = Vec::new();
         for glyph in &layout.glyphs {
-            let mut font_id = FontId(glyph.metadata);
-            let mut loaded_font = self.loaded_font(font_id);
-            if loaded_font.font.id() != glyph.font_id {
-                font_id = self.font_id_for_cosmic_id(glyph.font_id);
-                loaded_font = self.loaded_font(font_id);
-            }
+            let requested_font_id = FontId(glyph.metadata);
+            let font_id = match self.loaded_font(requested_font_id) {
+                Some(loaded_font) if loaded_font.font.id() == glyph.font_id => requested_font_id,
+                _ => match self.font_id_for_cosmic_id(glyph.font_id) {
+                    Ok(font_id) => font_id,
+                    Err(error) => {
+                        log::error!("failed to resolve Linux fallback font: {error:#}");
+                        continue;
+                    }
+                },
+            };
+            let Some(loaded_font) = self.loaded_font(font_id) else {
+                continue;
+            };
             let is_emoji = loaded_font.is_known_emoji_font;
 
             // HACK: Prevent crash caused by variation selectors.
@@ -573,10 +684,27 @@ impl CosmicTextSystemState {
         features: &[FontFeature],
     ) -> LineLayout {
         let mut attrs_list = AttrsList::new(&Attrs::new());
-        let mut offs = 0;
+        let mut offs: usize = 0;
         for run in font_runs {
-            let loaded_font = self.loaded_font(run.font_id);
-            let font = self.font_system.db().face(loaded_font.font.id()).unwrap();
+            let Some(loaded_font) = self.loaded_font(run.font_id) else {
+                log::error!("ignoring unknown Linux font id {}", run.font_id.0);
+                break;
+            };
+            let Some(font) = self.font_system.db().face(loaded_font.font.id()) else {
+                log::error!("Linux font face disappeared during layout");
+                break;
+            };
+            let Some(family) = font.families.first() else {
+                log::error!("Linux font face has no family name");
+                break;
+            };
+            let Some(end) = offs
+                .checked_add(run.len)
+                .filter(|end| *end <= text.len() && text.is_char_boundary(*end))
+            else {
+                log::error!("ignoring malformed Linux font run");
+                break;
+            };
 
             // Merge per-font features with the extra features requested by the caller.
             // Invalid or unsupported tags are silently ignored per Req 29.4 —
@@ -588,16 +716,16 @@ impl CosmicTextSystemState {
             }
 
             attrs_list.add_span(
-                offs..(offs + run.len),
+                offs..end,
                 &Attrs::new()
                     .metadata(run.font_id.0)
-                    .family(Family::Name(&font.families.first().unwrap().0))
+                    .family(Family::Name(&family.0))
                     .stretch(font.stretch)
                     .style(font.style)
                     .weight(font.weight)
                     .font_features(merged),
             );
-            offs += run.len;
+            offs = end;
         }
 
         let line = ShapeLine::new(
@@ -619,16 +747,26 @@ impl CosmicTextSystemState {
             None,
             cosmic_text::Hinting::default(),
         );
-        let layout = layout_lines.first().unwrap();
+        let Some(layout) = layout_lines.first() else {
+            return empty_line_layout(text, font_size);
+        };
 
         let mut runs: Vec<ShapedRun> = Vec::new();
         for glyph in &layout.glyphs {
-            let mut font_id = FontId(glyph.metadata);
-            let mut loaded_font = self.loaded_font(font_id);
-            if loaded_font.font.id() != glyph.font_id {
-                font_id = self.font_id_for_cosmic_id(glyph.font_id);
-                loaded_font = self.loaded_font(font_id);
-            }
+            let requested_font_id = FontId(glyph.metadata);
+            let font_id = match self.loaded_font(requested_font_id) {
+                Some(loaded_font) if loaded_font.font.id() == glyph.font_id => requested_font_id,
+                _ => match self.font_id_for_cosmic_id(glyph.font_id) {
+                    Ok(font_id) => font_id,
+                    Err(error) => {
+                        log::error!("failed to resolve Linux fallback font: {error:#}");
+                        continue;
+                    }
+                },
+            };
+            let Some(loaded_font) = self.loaded_font(font_id) else {
+                continue;
+            };
             let is_emoji = loaded_font.is_known_emoji_font;
 
             if glyph.glyph_id == 3 && is_emoji {

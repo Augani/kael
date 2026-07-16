@@ -1,10 +1,11 @@
-use crate::theme::Theme;
+use crate::{
+    charts::{finite_or_zero, format_axis_value},
+    theme::Theme,
+};
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
-const CHART_COLORS: [u32; 8] = [
-    0x3b82f6, 0x22c55e, 0xf59e0b, 0xef4444, 0x8b5cf6, 0x06b6d4, 0xf97316, 0xec4899,
-];
+const CHART_COLORS: [u32; 8] = crate::astryx::CHART_PALETTE;
 
 fn default_color(index: usize) -> Hsla {
     rgb(CHART_COLORS[index % CHART_COLORS.len()]).into()
@@ -19,7 +20,11 @@ pub struct DataPoint {
 
 impl DataPoint {
     pub fn new(x: f64, y: f64) -> Self {
-        Self { x, y, label: None }
+        Self {
+            x: finite_or_zero(x),
+            y: finite_or_zero(y),
+            label: None,
+        }
     }
 
     pub fn xy(x: f64, y: f64) -> Self {
@@ -28,8 +33,8 @@ impl DataPoint {
 
     pub fn labeled(x: f64, y: f64, label: impl Into<SharedString>) -> Self {
         Self {
-            x,
-            y,
+            x: finite_or_zero(x),
+            y: finite_or_zero(y),
             label: Some(label.into()),
         }
     }
@@ -45,6 +50,18 @@ pub struct DataRange {
 
 impl DataRange {
     pub fn new(x_min: f64, x_max: f64, y_min: f64, y_max: f64) -> Self {
+        let x_min = finite_or_zero(x_min);
+        let x_max = finite_or_zero(x_max);
+        let y_min = finite_or_zero(y_min);
+        let y_max = finite_or_zero(y_max);
+        let (x_min, mut x_max) = (x_min.min(x_max), x_min.max(x_max));
+        let (y_min, mut y_max) = (y_min.min(y_max), y_min.max(y_max));
+        if (x_max - x_min).abs() < f64::EPSILON {
+            x_max = x_min + 1.0;
+        }
+        if (y_max - y_min).abs() < f64::EPSILON {
+            y_max = y_min + 1.0;
+        }
         Self {
             x_min,
             x_max,
@@ -96,6 +113,11 @@ impl DataRange {
     }
 
     pub fn with_padding(&self, padding: f64) -> Self {
+        let padding = if padding.is_finite() {
+            padding.max(0.0)
+        } else {
+            0.0
+        };
         let x_range = self.x_max - self.x_min;
         let y_range = self.y_max - self.y_min;
         Self::new(
@@ -117,11 +139,18 @@ pub struct ChartPadding {
 
 impl ChartPadding {
     pub fn new(left: f32, right: f32, top: f32, bottom: f32) -> Self {
+        let safe = |value: f32| {
+            if value.is_finite() {
+                value.max(0.0)
+            } else {
+                0.0
+            }
+        };
         Self {
-            left,
-            right,
-            top,
-            bottom,
+            left: safe(left),
+            right: safe(right),
+            top: safe(top),
+            bottom: safe(bottom),
         }
     }
 
@@ -258,13 +287,15 @@ impl Axis {
     }
 
     pub fn range(mut self, min: f64, max: f64) -> Self {
-        self.min = Some(min);
-        self.max = Some(max);
+        let min = finite_or_zero(min);
+        let max = finite_or_zero(max);
+        self.min = Some(min.min(max));
+        self.max = Some(max.max(min) + if min == max { 1.0 } else { 0.0 });
         self
     }
 
     pub fn tick_count(mut self, count: usize) -> Self {
-        self.tick_count = count;
+        self.tick_count = count.max(1);
         self
     }
 
@@ -291,12 +322,8 @@ impl Axis {
     fn format_value(&self, value: f64) -> String {
         if let Some(ref format) = self.tick_format {
             format(value)
-        } else if value.abs() >= 1000.0 {
-            format!("{:.0}k", value / 1000.0)
-        } else if value.abs() >= 1.0 {
-            format!("{:.0}", value)
         } else {
-            format!("{:.2}", value)
+            format_axis_value(value)
         }
     }
 }
@@ -473,7 +500,11 @@ impl Series {
     }
 
     pub fn stroke_width(mut self, width: f32) -> Self {
-        self.stroke_width = width;
+        self.stroke_width = if width.is_finite() {
+            width.max(0.5)
+        } else {
+            2.0
+        };
         self
     }
 
@@ -483,12 +514,20 @@ impl Series {
     }
 
     pub fn point_radius(mut self, radius: f32) -> Self {
-        self.point_radius = radius;
+        self.point_radius = if radius.is_finite() {
+            radius.max(1.0)
+        } else {
+            4.0
+        };
         self
     }
 
     pub fn fill_opacity(mut self, opacity: f32) -> Self {
-        self.fill_opacity = opacity.clamp(0.0, 1.0);
+        self.fill_opacity = if opacity.is_finite() {
+            opacity.clamp(0.0, 1.0)
+        } else {
+            0.2
+        };
         self
     }
 
@@ -498,13 +537,57 @@ impl Series {
     }
 
     pub fn bar_width(mut self, width: f32) -> Self {
-        self.bar_width = Some(width);
+        self.bar_width = Some(if width.is_finite() {
+            width.max(1.0)
+        } else {
+            8.0
+        });
         self
     }
 
     pub fn data_range(&self) -> DataRange {
         DataRange::from_points(&self.data)
     }
+}
+
+fn chart_summary(series: &[Series]) -> String {
+    const MAX_POINTS: usize = 12;
+    let point_count = series.iter().map(|series| series.data.len()).sum::<usize>();
+    if point_count == 0 {
+        return "Chart. No data".to_string();
+    }
+
+    let mut summary = format!(
+        "Chart with {} series and {point_count} points. ",
+        series.len()
+    );
+    let mut shown = 0;
+    for series in series {
+        for point in &series.data {
+            if shown == MAX_POINTS {
+                break;
+            }
+            if shown > 0 {
+                summary.push_str(", ");
+            }
+            summary.push_str(series.name.as_ref());
+            summary.push(' ');
+            if let Some(label) = &point.label {
+                summary.push_str(label.as_ref());
+            } else {
+                summary.push_str(&format!("x {:.2}", point.x));
+            }
+            summary.push_str(&format!(": {:.2}", point.y));
+            shown += 1;
+        }
+        if shown == MAX_POINTS {
+            break;
+        }
+    }
+    if point_count > shown {
+        summary.push_str(&format!(", and {} more", point_count - shown));
+    }
+    summary
 }
 
 struct HoveredPoint {
@@ -648,6 +731,7 @@ impl RenderOnce for Chart {
         let data_range = self.compute_data_range();
         let user_style = self.style;
         let series_for_legend = self.series.clone();
+        let description = chart_summary(&series_for_legend);
         let legend = self.legend.clone();
 
         let y_axis_clone = self.y_axis.clone();
@@ -680,6 +764,11 @@ impl RenderOnce for Chart {
         let tooltip_border = theme.tokens.border;
 
         div()
+            .accessibility(
+                AccessibilityAttributes::new(AccessibilityRole::Image)
+                    .label("Chart")
+                    .description(description),
+            )
             .flex()
             .flex_col()
             .size_full()
@@ -702,9 +791,11 @@ impl RenderOnce for Chart {
                             move |bounds, (state, range, _, hitbox), window, cx| {
                                 let hitbox_for_event = hitbox.clone();
                                 window.on_mouse_event(
-                                    move |_event: &MouseMoveEvent, _phase, window, cx| {
-                                        if hitbox_for_event.is_hovered(window) {
-                                            cx.refresh_windows();
+                                    move |_event: &MouseMoveEvent, phase, window, _cx| {
+                                        if phase == DispatchPhase::Bubble
+                                            && hitbox_for_event.is_hovered(window)
+                                        {
+                                            window.refresh();
                                         }
                                     },
                                 );
@@ -949,7 +1040,8 @@ impl RenderOnce for Chart {
                                 }
                             },
                         )
-                        .size_full(),
+                        .absolute()
+                        .inset_0(),
                     )
                     .when(show_y_axis, |this| {
                         this.children(y_labels.iter().enumerate().map(|(i, label)| {
@@ -986,5 +1078,37 @@ impl RenderOnce for Chart {
                         })),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn public_ranges_and_padding_are_always_finite_and_ordered() {
+        let range = DataRange::new(f64::NAN, -2.0, 4.0, 4.0);
+        assert!(range.x_max > range.x_min);
+        assert!(range.y_max > range.y_min);
+        assert!(range.normalize_x(0.0).is_finite());
+        assert!(range.normalize_y(4.0).is_finite());
+
+        let padding = ChartPadding::new(f32::NAN, -1.0, 8.0, f32::INFINITY);
+        assert_eq!(
+            (padding.left, padding.right, padding.top, padding.bottom),
+            (0.0, 0.0, 8.0, 0.0)
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn accessible_summary_includes_values_and_is_bounded() {
+        let points = (0..15)
+            .map(|index| DataPoint::labeled(index as f64, 7.0, format!("P{index}")))
+            .collect();
+        let summary = chart_summary(&[Series::line("Latency", points)]);
+        assert!(summary.contains("Latency P0: 7.00"));
+        assert!(summary.contains("and 3 more"));
+        assert!(!summary.contains("Latency P12"));
+        assert_eq!(chart_summary(&[]), "Chart. No data");
     }
 }

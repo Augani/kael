@@ -1,12 +1,14 @@
+use std::sync::Arc;
+
 use lyon::tessellation::StrokeOptions;
 pub use lyon::tessellation::{LineCap, LineJoin};
 use refineable::Refineable as _;
 
 use crate::{
     App, Background, Bounds, ContentMask, Corners, Element, ElementId, GlobalElementId, Hsla,
-    InspectorElementId, IntoElement, Path, PathBuilder, PathStyle, Pixels, Point, ShapedLine, Size,
-    Style, StyleRefinement, Styled, TransformationMatrix, Window, point, px, quad,
-    transparent_black,
+    InspectorElementId, IntoElement, Path, PathBuilder, PathStyle, Pixels, Point, Radians,
+    RenderImage, ShapedLine, Size, Style, StyleRefinement, Styled, TextAlign, TransformationMatrix,
+    Window, point, px, quad, size, transparent_black,
 };
 
 use super::canvas::CanvasConstructor;
@@ -32,6 +34,14 @@ enum DrawCommand {
         text: ShapedLine,
         origin: Point<Pixels>,
         color: Hsla,
+        state: DrawState,
+    },
+    Image {
+        data: Arc<RenderImage>,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        frame_index: usize,
+        grayscale: bool,
         state: DrawState,
     },
 }
@@ -71,11 +81,36 @@ pub fn stroke(width: Pixels, color: impl Into<Hsla>) -> Stroke {
     }
 }
 
+impl Stroke {
+    /// Set the line cap style (web canvas `lineCap`).
+    pub fn cap(mut self, cap: LineCap) -> Self {
+        self.cap = cap;
+        self
+    }
+
+    /// Set the line join style (web canvas `lineJoin`).
+    pub fn join(mut self, join: LineJoin) -> Self {
+        self.join = join;
+        self
+    }
+
+    /// Set a dash pattern with the given on/off segment lengths and offset along the
+    /// outline (web canvas `setLineDash` + `lineDashOffset`).
+    pub fn dashed(mut self, segments: impl Into<Vec<Pixels>>, offset: Pixels) -> Self {
+        self.dash = Some(StrokeDash {
+            segments: segments.into(),
+            offset,
+        });
+        self
+    }
+}
+
 /// Immediate-mode drawing context used by `canvas(size, draw)`.
 pub struct DrawContext {
     bounds: Bounds<Pixels>,
     canvas_origin: Point<Pixels>,
     current_state: DrawState,
+    state_stack: Vec<DrawState>,
     commands: Vec<DrawCommand>,
 }
 
@@ -89,6 +124,7 @@ impl DrawContext {
                 opacity: 1.0,
                 content_mask,
             },
+            state_stack: Vec::new(),
             commands: Vec::new(),
         }
     }
@@ -101,6 +137,102 @@ impl DrawContext {
     /// Returns the canvas-local size for the current draw pass.
     pub fn size(&self) -> Size<Pixels> {
         self.bounds.size
+    }
+
+    /// Number of queued draw commands that have not been flushed to the window.
+    pub fn command_count(&self) -> usize {
+        self.commands.len()
+    }
+
+    /// Whether there are no queued draw commands.
+    pub fn is_empty(&self) -> bool {
+        self.commands.is_empty()
+    }
+
+    /// Number of queued path commands.
+    pub fn path_count(&self) -> usize {
+        self.commands
+            .iter()
+            .filter(|command| matches!(command, DrawCommand::Path { .. }))
+            .count()
+    }
+
+    /// Number of queued quad commands.
+    pub fn quad_count(&self) -> usize {
+        self.commands
+            .iter()
+            .filter(|command| matches!(command, DrawCommand::Quad { .. }))
+            .count()
+    }
+
+    /// Number of queued filled quad commands.
+    pub fn filled_quad_count(&self) -> usize {
+        self.commands
+            .iter()
+            .filter(|command| {
+                matches!(
+                    command,
+                    DrawCommand::Quad { quad, .. } if quad.border_widths.top == px(0.)
+                        && quad.border_widths.right == px(0.)
+                        && quad.border_widths.bottom == px(0.)
+                        && quad.border_widths.left == px(0.)
+                )
+            })
+            .count()
+    }
+
+    /// Number of queued stroked quad commands.
+    pub fn stroked_quad_count(&self) -> usize {
+        self.commands
+            .iter()
+            .filter(|command| {
+                matches!(
+                    command,
+                    DrawCommand::Quad { quad, .. } if quad.border_widths.top != px(0.)
+                        || quad.border_widths.right != px(0.)
+                        || quad.border_widths.bottom != px(0.)
+                        || quad.border_widths.left != px(0.)
+                )
+            })
+            .count()
+    }
+
+    /// Number of queued text commands.
+    pub fn text_count(&self) -> usize {
+        self.commands
+            .iter()
+            .filter(|command| matches!(command, DrawCommand::Text { .. }))
+            .count()
+    }
+
+    /// Number of queued image commands.
+    pub fn image_count(&self) -> usize {
+        self.commands
+            .iter()
+            .filter(|command| matches!(command, DrawCommand::Image { .. }))
+            .count()
+    }
+
+    /// Number of saved drawing states waiting to be restored.
+    pub fn state_stack_depth(&self) -> usize {
+        self.state_stack.len()
+    }
+
+    /// Content-safe summary of queued canvas drawing work.
+    pub fn to_text(&self) -> String {
+        format!(
+            "canvas draw: {} commands, paths {}, quads {}, filled-quads {}, stroked-quads {}, text {}, images {}, saved-states {}, size {:.0}x{:.0}",
+            self.command_count(),
+            self.path_count(),
+            self.quad_count(),
+            self.filled_quad_count(),
+            self.stroked_quad_count(),
+            self.text_count(),
+            self.image_count(),
+            self.state_stack_depth(),
+            self.bounds.size.width.0,
+            self.bounds.size.height.0
+        )
     }
 
     /// Fill an existing path with the given background.
@@ -162,6 +294,34 @@ impl DrawContext {
         });
     }
 
+    /// Stroke the outline of an axis-aligned rectangle (web canvas `strokeRect`).
+    pub fn stroke_rect(&mut self, bounds: Bounds<Pixels>, stroke: Stroke) {
+        self.stroke_rounded_rect(bounds, px(0.), stroke);
+    }
+
+    /// Stroke the outline of a rounded rectangle.
+    pub fn stroke_rounded_rect(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        radii: impl Into<Corners<Pixels>>,
+        stroke: Stroke,
+    ) {
+        if stroke.width <= px(0.) {
+            return;
+        }
+        self.commands.push(DrawCommand::Quad {
+            quad: quad(
+                bounds,
+                radii,
+                transparent_black(),
+                stroke.width,
+                stroke.color,
+                crate::BorderStyle::Solid,
+            ),
+            state: self.current_state.clone(),
+        });
+    }
+
     /// Fill a circle.
     pub fn fill_circle(
         &mut self,
@@ -181,6 +341,45 @@ impl DrawContext {
     /// Stroke a circle.
     pub fn stroke_circle(&mut self, center: Point<Pixels>, radius: Pixels, stroke: Stroke) {
         if let Some(path) = build_circle_path(configure_stroke_builder(&stroke), center, radius) {
+            self.commands.push(DrawCommand::Path {
+                path,
+                fill: stroke.color.into(),
+                state: self.current_state.clone(),
+            });
+        }
+    }
+
+    /// Fill an ellipse centered at `center` with the given horizontal and vertical radii.
+    pub fn fill_ellipse(
+        &mut self,
+        center: Point<Pixels>,
+        radius_x: Pixels,
+        radius_y: Pixels,
+        fill: impl Into<Background>,
+    ) {
+        if let Some(path) = build_ellipse_path(PathBuilder::fill(), center, radius_x, radius_y) {
+            self.commands.push(DrawCommand::Path {
+                path,
+                fill: fill.into(),
+                state: self.current_state.clone(),
+            });
+        }
+    }
+
+    /// Stroke an ellipse centered at `center` with the given horizontal and vertical radii.
+    pub fn stroke_ellipse(
+        &mut self,
+        center: Point<Pixels>,
+        radius_x: Pixels,
+        radius_y: Pixels,
+        stroke: Stroke,
+    ) {
+        if let Some(path) = build_ellipse_path(
+            configure_stroke_builder(&stroke),
+            center,
+            radius_x,
+            radius_y,
+        ) {
             self.commands.push(DrawCommand::Path {
                 path,
                 fill: stroke.color.into(),
@@ -226,12 +425,123 @@ impl DrawContext {
         result
     }
 
+    /// Save the current drawing state (transform, opacity, clip) onto the state stack.
+    ///
+    /// Mirrors `CanvasRenderingContext2D.save()`. Pair every `save` with a matching
+    /// [`DrawContext::restore`]. This is the flat alternative to the scoped
+    /// [`DrawContext::with_transform`] / [`DrawContext::with_opacity`] / [`DrawContext::with_clip`]
+    /// helpers, for loops and recursion where closures are awkward.
+    pub fn save(&mut self) {
+        self.state_stack.push(self.current_state.clone());
+    }
+
+    /// Restore the most recently saved drawing state. No-op if the stack is empty.
+    ///
+    /// Mirrors `CanvasRenderingContext2D.restore()`.
+    pub fn restore(&mut self) {
+        if let Some(state) = self.state_stack.pop() {
+            self.current_state = state;
+        }
+    }
+
+    /// Translate the current transform by the given offset, in canvas-local pixels.
+    pub fn translate(&mut self, x: Pixels, y: Pixels) {
+        self.current_state.transform = self
+            .current_state
+            .transform
+            .compose(translation_matrix(point(x, y)));
+    }
+
+    /// Rotate the current transform clockwise by the given angle in radians.
+    pub fn rotate(&mut self, radians: f32) {
+        self.current_state.transform = self.current_state.transform.rotate(Radians(radians));
+    }
+
+    /// Scale the current transform by independent x and y factors.
+    pub fn scale(&mut self, x: f32, y: f32) {
+        self.current_state.transform = self.current_state.transform.scale(size(x, y));
+    }
+
+    /// Set the global drawing opacity applied to subsequent commands (clamped to `0.0..=1.0`).
+    ///
+    /// Mirrors `CanvasRenderingContext2D.globalAlpha`. Saved and restored by
+    /// [`DrawContext::save`] / [`DrawContext::restore`].
+    pub fn set_global_alpha(&mut self, alpha: f32) {
+        self.current_state.opacity = alpha.clamp(0.0, 1.0);
+    }
+
+    /// Restrict subsequent drawing to the given rectangle, intersected with any
+    /// existing clip. The flat counterpart to [`DrawContext::with_clip`].
+    pub fn clip_rect(&mut self, bounds: Bounds<Pixels>) {
+        let clip_bounds = transform_bounds(
+            bounds,
+            full_path_transform(self.canvas_origin, self.current_state.transform),
+        );
+        self.current_state.content_mask = self.current_state.content_mask.intersect(&ContentMask {
+            bounds: clip_bounds,
+        });
+    }
+
     /// Draw a shaped line of text at the given local origin.
     pub fn draw_text(&mut self, text: &ShapedLine, origin: Point<Pixels>, color: Hsla) {
         self.commands.push(DrawCommand::Text {
             text: text.clone(),
             origin,
             color,
+            state: self.current_state.clone(),
+        });
+    }
+
+    /// Draw a shaped line of text anchored horizontally at `origin` per `align`, mirroring
+    /// the web canvas `textAlign` (`origin.x` is the left/center/right anchor).
+    pub fn draw_text_aligned(
+        &mut self,
+        text: &ShapedLine,
+        origin: Point<Pixels>,
+        color: Hsla,
+        align: TextAlign,
+    ) {
+        let x = aligned_text_x(origin.x, text.layout.width, align);
+        self.draw_text(text, point(x, origin.y), color);
+    }
+
+    /// Draw an image filling the given rectangle, respecting the current transform,
+    /// clip, and opacity. Mirrors `CanvasRenderingContext2D.drawImage`.
+    pub fn draw_image(&mut self, image: Arc<RenderImage>, bounds: Bounds<Pixels>) {
+        self.draw_image_rounded(image, bounds, Corners::default());
+    }
+
+    /// Draw an image filling the given rectangle with rounded corners.
+    pub fn draw_image_rounded(
+        &mut self,
+        image: Arc<RenderImage>,
+        bounds: Bounds<Pixels>,
+        corner_radii: impl Into<Corners<Pixels>>,
+    ) {
+        self.commands.push(DrawCommand::Image {
+            data: image,
+            bounds,
+            corner_radii: corner_radii.into(),
+            frame_index: 0,
+            grayscale: false,
+            state: self.current_state.clone(),
+        });
+    }
+
+    /// Draw a single frame of a multi-frame image (e.g. an animated GIF), optionally desaturated.
+    pub fn draw_image_frame(
+        &mut self,
+        image: Arc<RenderImage>,
+        bounds: Bounds<Pixels>,
+        frame_index: usize,
+        grayscale: bool,
+    ) {
+        self.commands.push(DrawCommand::Image {
+            data: image,
+            bounds,
+            corner_radii: Corners::default(),
+            frame_index,
+            grayscale,
             state: self.current_state.clone(),
         });
     }
@@ -287,6 +597,28 @@ impl DrawContext {
                             color,
                             self.canvas_origin,
                             state.transform,
+                        );
+                    })
+                });
+            }
+            DrawCommand::Image {
+                data,
+                bounds,
+                corner_radii,
+                frame_index,
+                grayscale,
+                state,
+            } => {
+                let local_bounds = transform_bounds(bounds, state.transform);
+                let window_bounds = offset_bounds(local_bounds, self.canvas_origin);
+                window.with_content_mask(Some(state.content_mask), |window| {
+                    window.with_element_opacity(Some(state.opacity), |window| {
+                        let _ = window.paint_image(
+                            window_bounds,
+                            corner_radii,
+                            data,
+                            frame_index,
+                            grayscale,
                         );
                     })
                 });
@@ -412,6 +744,26 @@ fn build_circle_path(
     builder.build().ok()
 }
 
+fn build_ellipse_path(
+    mut builder: PathBuilder,
+    center: Point<Pixels>,
+    radius_x: Pixels,
+    radius_y: Pixels,
+) -> Option<Path<Pixels>> {
+    if radius_x <= px(0.) || radius_y <= px(0.) {
+        return None;
+    }
+
+    let right = point(center.x + radius_x, center.y);
+    let left = point(center.x - radius_x, center.y);
+    let radii = point(radius_x, radius_y);
+    builder.move_to(right);
+    builder.arc_to(radii, px(0.), true, true, left);
+    builder.arc_to(radii, px(0.), true, true, right);
+    builder.close();
+    builder.build().ok()
+}
+
 fn configure_stroke_builder(stroke: &Stroke) -> PathBuilder {
     let mut builder = PathBuilder::fill().with_style(PathStyle::Stroke(stroke_options(stroke)));
     if let Some(dash) = &stroke.dash {
@@ -475,6 +827,14 @@ fn translation_matrix(origin: Point<Pixels>) -> TransformationMatrix {
     TransformationMatrix {
         rotation_scale: [[1.0, 0.0], [0.0, 1.0]],
         translation: [origin.x.0, origin.y.0],
+    }
+}
+
+fn aligned_text_x(origin_x: Pixels, width: Pixels, align: TextAlign) -> Pixels {
+    match align {
+        TextAlign::Center => origin_x - width / 2.0,
+        TextAlign::Right => origin_x - width,
+        TextAlign::Left => origin_x,
     }
 }
 
@@ -544,6 +904,136 @@ mod tests {
     use crate::{Bounds, PathBuilder, point, px, size};
 
     #[test]
+    fn save_restore_round_trips_transform_and_alpha() {
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(100.)));
+        let mask = crate::ContentMask { bounds };
+        let mut cx = super::DrawContext::new(bounds, mask);
+
+        cx.translate(px(10.), px(20.));
+        cx.set_global_alpha(0.5);
+        cx.save();
+        assert_eq!(cx.state_stack_depth(), 1);
+        cx.translate(px(5.), px(5.));
+        cx.set_global_alpha(0.25);
+        assert_eq!(cx.current_state.transform.translation, [15.0, 25.0]);
+        assert_eq!(cx.current_state.opacity, 0.25);
+
+        cx.restore();
+        assert_eq!(cx.state_stack_depth(), 0);
+        assert_eq!(cx.current_state.transform.translation, [10.0, 20.0]);
+        assert_eq!(cx.current_state.opacity, 0.5);
+
+        cx.restore();
+        assert_eq!(cx.current_state.transform.translation, [10.0, 20.0]);
+    }
+
+    #[test]
+    fn draw_image_records_command_with_state() {
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.)));
+        let mask = crate::ContentMask { bounds };
+        let mut cx = super::DrawContext::new(bounds, mask);
+
+        let buffer = image::ImageBuffer::from_pixel(1, 1, image::Rgba([10u8, 20, 30, 255]));
+        let img = std::sync::Arc::new(crate::RenderImage::new(vec![image::Frame::new(buffer)]));
+
+        cx.translate(px(4.), px(6.));
+        cx.draw_image(
+            img,
+            Bounds::new(point(px(0.), px(0.)), size(px(8.), px(8.))),
+        );
+
+        assert_eq!(cx.commands.len(), 1);
+        assert_eq!(cx.command_count(), 1);
+        assert_eq!(cx.image_count(), 1);
+        assert_eq!(cx.path_count(), 0);
+        assert_eq!(
+            cx.to_text(),
+            "canvas draw: 1 commands, paths 0, quads 0, filled-quads 0, stroked-quads 0, text 0, images 1, saved-states 0, size 10x10"
+        );
+        match &cx.commands[0] {
+            super::DrawCommand::Image {
+                state, bounds: b, ..
+            } => {
+                assert_eq!(state.transform.translation, [4.0, 6.0]);
+                assert_eq!(b.size.width.0, 8.0);
+            }
+            _ => panic!("expected an image command"),
+        }
+    }
+
+    #[test]
+    fn aligned_text_x_offsets_by_alignment() {
+        use super::aligned_text_x;
+        use crate::TextAlign;
+
+        assert_eq!(aligned_text_x(px(100.), px(40.), TextAlign::Left), px(100.));
+        assert_eq!(
+            aligned_text_x(px(100.), px(40.), TextAlign::Center),
+            px(80.)
+        );
+        assert_eq!(aligned_text_x(px(100.), px(40.), TextAlign::Right), px(60.));
+    }
+
+    #[test]
+    fn stroke_rect_records_quad_command_and_skips_zero_width() {
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(100.)));
+        let mut cx = super::DrawContext::new(bounds, crate::ContentMask { bounds });
+
+        assert!(cx.is_empty());
+        assert_eq!(
+            cx.to_text(),
+            "canvas draw: 0 commands, paths 0, quads 0, filled-quads 0, stroked-quads 0, text 0, images 0, saved-states 0, size 100x100"
+        );
+
+        cx.fill_rect(
+            Bounds::new(point(px(0.), px(0.)), size(px(20.), px(20.))),
+            crate::white(),
+        );
+        assert_eq!(cx.command_count(), 1);
+        assert_eq!(cx.quad_count(), 1);
+        assert_eq!(cx.filled_quad_count(), 1);
+        assert_eq!(cx.stroked_quad_count(), 0);
+
+        cx.stroke_rect(
+            Bounds::new(point(px(10.), px(10.)), size(px(50.), px(40.))),
+            stroke(px(2.), crate::black()),
+        );
+        assert_eq!(cx.commands.len(), 2);
+        assert!(matches!(cx.commands[1], super::DrawCommand::Quad { .. }));
+        assert_eq!(cx.command_count(), 2);
+        assert_eq!(cx.quad_count(), 2);
+        assert_eq!(cx.filled_quad_count(), 1);
+        assert_eq!(cx.stroked_quad_count(), 1);
+
+        cx.stroke_rect(
+            Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.))),
+            stroke(px(0.), crate::black()),
+        );
+        assert_eq!(cx.commands.len(), 2);
+        assert_eq!(
+            cx.to_text(),
+            "canvas draw: 2 commands, paths 0, quads 2, filled-quads 1, stroked-quads 1, text 0, images 0, saved-states 0, size 100x100"
+        );
+    }
+
+    #[test]
+    fn fill_ellipse_records_path_command() {
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(100.), px(100.)));
+        let mut cx = super::DrawContext::new(bounds, crate::ContentMask { bounds });
+
+        cx.fill_ellipse(point(px(50.), px(50.)), px(30.), px(20.), crate::black());
+        assert_eq!(cx.commands.len(), 1);
+        assert!(matches!(cx.commands[0], super::DrawCommand::Path { .. }));
+        assert_eq!(cx.command_count(), 1);
+        assert_eq!(cx.path_count(), 1);
+        assert_eq!(cx.quad_count(), 0);
+        assert!(!cx.is_empty());
+
+        cx.fill_ellipse(point(px(50.), px(50.)), px(0.), px(20.), crate::black());
+        assert_eq!(cx.commands.len(), 1);
+    }
+
+    #[test]
     fn transformed_bounds_cover_all_corners() {
         let bounds = Bounds::new(point(px(0.), px(0.)), size(px(10.), px(20.)));
         let rotated =
@@ -570,5 +1060,21 @@ mod tests {
         let stroked =
             super::stroke_existing_path(&path, &stroke).expect("stroke should tessellate");
         assert!(!stroked.vertices.is_empty());
+    }
+
+    #[test]
+    fn stroke_builders_set_cap_join_and_dash() {
+        use super::{LineCap, LineJoin};
+
+        let s = stroke(px(2.), crate::black())
+            .cap(LineCap::Round)
+            .join(LineJoin::Bevel)
+            .dashed(vec![px(4.), px(2.)], px(1.));
+
+        assert!(matches!(s.cap, LineCap::Round));
+        assert!(matches!(s.join, LineJoin::Bevel));
+        let dash = s.dash.expect("dash should be set");
+        assert_eq!(dash.segments.len(), 2);
+        assert_eq!(dash.offset, px(1.));
     }
 }

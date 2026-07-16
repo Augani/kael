@@ -1,6 +1,6 @@
 use super::{BoolExt, MacDisplay, NSRange, NSRangeExt, NSStringExt, ns_string, renderer};
 use crate::{
-    AnyWindowHandle, AsyncWindowContext, Bounds, Capslock, DisplayLink, Edges, ExternalPaths,
+    AnyWindowHandle, AsyncWindowContext, Bounds, Capslock, DisplayLink, Edges, ExternalDropData,
     FileDropEvent, ForegroundExecutor, KeyDownEvent, Keystroke, Modifiers, ModifiersChangedEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformAtlas,
     PlatformDisplay, PlatformInput, PlatformWindow, Point, PromptButton, PromptLevel, RenderImage,
@@ -13,8 +13,12 @@ use crate::{
     print::{PlatformPrintJob, PlatformPrintPage, PrintCommand, PrintImageFit},
     px, size,
     webview::{
-        NavigationPolicy, PlatformWebView, PlatformWebViewCommand, WebViewMessageHandler,
-        WebViewNavigationHandler,
+        NavigationPolicy, PlatformWebView, PlatformWebViewCommand, WebViewCookie,
+        WebViewDocumentTitleChangedHandler, WebViewDownloadCompleted,
+        WebViewDownloadCompletedHandler, WebViewDownloadPolicy, WebViewDownloadStartedHandler,
+        WebViewDragDropEvent, WebViewDragDropHandler, WebViewDragDropPolicy, WebViewMessageHandler,
+        WebViewNavigationHandler, WebViewNewWindowHandler, WebViewNewWindowPolicy,
+        WebViewPageLoadEvent, WebViewPageLoadHandler,
     },
 };
 use block2::{Block, RcBlock};
@@ -27,7 +31,8 @@ use objc2::runtime::{AnyClass, AnyObject, AnyProtocol, Bool, ClassBuilder, Sel};
 use objc2::{msg_send, sel};
 use objc2_app_kit::*;
 use objc2_foundation::{
-    NSInteger, NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSRect, NSSize, NSUInteger,
+    NSInteger, NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSRect, NSSize, NSString,
+    NSUInteger,
 };
 use parking_lot::Mutex;
 use raw_window_handle as rwh;
@@ -51,6 +56,7 @@ const WINDOW_STATE_IVAR: &str = "windowState";
 const WEBVIEW_STATE_IVAR: &str = "webViewState";
 const PRINT_VIEW_STATE_IVAR: &str = "printViewState";
 const WEBVIEW_MESSAGE_HANDLER_NAME: &str = "gpui";
+const WEBVIEW_CLIPBOARD_BRIDGE_KIND: &str = "__kaelClipboard";
 
 #[allow(non_camel_case_types)]
 type id = *mut AnyObject;
@@ -61,16 +67,26 @@ type Method0<R> = extern "C" fn(id, Sel) -> R;
 type Method1<A, R> = extern "C" fn(id, Sel, A) -> R;
 type Method2<A, B, R> = extern "C" fn(id, Sel, A, B) -> R;
 type Method3<A, B, C, R> = extern "C" fn(id, Sel, A, B, C) -> R;
+type Method4<A, B, C, D, R> = extern "C" fn(id, Sel, A, B, C, D) -> R;
+
+fn catch_platform_callback<T>(name: &'static str, fallback: T, callback: impl FnOnce() -> T) -> T {
+    crate::platform::catch_platform_callback("macOS", name, fallback, callback)
+}
 
 const YES: Bool = Bool::YES;
 const NO: Bool = Bool::NO;
 #[allow(non_upper_case_globals)]
 const nil: id = ptr::null_mut();
+const NS_KEY_VALUE_OBSERVING_OPTION_NEW: NSUInteger = 1;
+const WK_MEDIA_PLAYBACK_TYPE_NONE: NSUInteger = 0;
+const WK_MEDIA_PLAYBACK_TYPE_ALL: NSUInteger = NSUInteger::MAX;
+const NS_ALERT_FIRST_BUTTON_RETURN: NSInteger = 1_000;
 
 static mut WINDOW_CLASS: *const Class = ptr::null();
 static mut PANEL_CLASS: *const Class = ptr::null();
 static mut VIEW_CLASS: *const Class = ptr::null();
 static mut BLURRED_VIEW_CLASS: *const Class = ptr::null();
+static mut WEBVIEW_CLASS: *const Class = ptr::null();
 static mut WEBVIEW_DELEGATE_CLASS: *const Class = ptr::null();
 static mut PRINT_VIEW_CLASS: *const Class = ptr::null();
 
@@ -79,6 +95,7 @@ unsafe fn lookup_class(name: &CStr) -> &'static AnyClass {
 }
 
 unsafe fn ivar_ptr<T: objc2::encode::Encode>(object: id, name: &str) -> *mut T {
+    assert!(!object.is_null(), "cannot access `{name}` on a null object");
     let name = CString::new(name).expect("ivar names cannot contain nul bytes");
     let object = unsafe { &*object };
     let ivar = object
@@ -288,6 +305,12 @@ const WKNavigationActionPolicyCancel: NSInteger = 0;
 #[allow(non_upper_case_globals)]
 const WKNavigationActionPolicyAllow: NSInteger = 1;
 #[allow(non_upper_case_globals)]
+const WKNavigationActionPolicyDownload: NSInteger = 2;
+#[allow(non_upper_case_globals)]
+const WKNavigationResponsePolicyAllow: NSInteger = 1;
+#[allow(non_upper_case_globals)]
+const WKNavigationResponsePolicyDownload: NSInteger = 2;
+#[allow(non_upper_case_globals)]
 const WKUserScriptInjectionTimeAtDocumentStart: NSInteger = 0;
 #[allow(non_upper_case_globals)]
 const WKUserScriptInjectionTimeAtDocumentEnd: NSInteger = 1;
@@ -451,6 +474,31 @@ unsafe fn build_classes() {
                 decl.register()
             }
         };
+        WEBVIEW_CLASS = {
+            let mut decl = ClassBuilder::new(c"GPUIWebView", lookup_class(c"WKWebView")).unwrap();
+            decl.add_ivar::<*mut c_void>(c"webViewState");
+            {
+                let webview_dragging_entered =
+                    webview_dragging_entered as Method1<id, NSDragOperation>;
+                let webview_dragging_updated =
+                    webview_dragging_updated as Method1<id, NSDragOperation>;
+                let webview_dragging_exited = webview_dragging_exited as Method1<id, ()>;
+                let webview_dragging_ended = webview_dragging_ended as Method1<id, ()>;
+                let webview_perform_drag_operation =
+                    webview_perform_drag_operation as Method1<id, BOOL>;
+                let webview_key_down = webview_key_down as Method1<id, ()>;
+                let webview_magnify = webview_magnify as Method1<id, ()>;
+
+                decl.add_method(sel!(keyDown:), webview_key_down);
+                decl.add_method(sel!(magnifyWithEvent:), webview_magnify);
+                decl.add_method(sel!(draggingEntered:), webview_dragging_entered);
+                decl.add_method(sel!(draggingUpdated:), webview_dragging_updated);
+                decl.add_method(sel!(draggingExited:), webview_dragging_exited);
+                decl.add_method(sel!(draggingEnded:), webview_dragging_ended);
+                decl.add_method(sel!(performDragOperation:), webview_perform_drag_operation);
+                decl.register()
+            }
+        };
         WEBVIEW_DELEGATE_CLASS = {
             let mut decl =
                 ClassBuilder::new(c"GPUIWebViewDelegate", lookup_class(c"NSObject")).unwrap();
@@ -461,9 +509,37 @@ unsafe fn build_classes() {
                     webview_did_receive_script_message as Method2<id, id, ()>;
                 let webview_decide_policy_for_navigation_action =
                     webview_decide_policy_for_navigation_action as Method3<id, id, id, ()>;
+                let webview_decide_policy_for_navigation_response =
+                    webview_decide_policy_for_navigation_response as Method3<id, id, id, ()>;
+                let webview_navigation_action_did_become_download =
+                    webview_navigation_action_did_become_download as Method3<id, id, id, ()>;
+                let webview_navigation_response_did_become_download =
+                    webview_navigation_response_did_become_download as Method3<id, id, id, ()>;
+                let webview_create_webview_with_configuration =
+                    webview_create_webview_with_configuration as Method4<id, id, id, id, id>;
+                let webview_did_close = webview_did_close as Method1<id, ()>;
+                let webview_download_decide_destination =
+                    webview_download_decide_destination as Method4<id, id, id, id, ()>;
+                let webview_download_did_finish = webview_download_did_finish as Method1<id, ()>;
+                let webview_download_did_fail =
+                    webview_download_did_fail as Method3<id, id, id, ()>;
+                let webview_download_did_receive_final_url =
+                    webview_download_did_receive_final_url as Method2<id, id, ()>;
+                let webview_did_start_provisional_navigation =
+                    webview_did_start_provisional_navigation as Method2<id, id, ()>;
+                let webview_did_finish_navigation =
+                    webview_did_finish_navigation as Method2<id, id, ()>;
+                let webview_observe_value_for_key_path =
+                    webview_observe_value_for_key_path as Method4<id, id, id, *mut c_void, ()>;
 
                 decl.add_method(sel!(dealloc), dealloc_webview_delegate);
                 if let Some(protocol) = AnyProtocol::get(c"WKNavigationDelegate") {
+                    decl.add_protocol(protocol);
+                }
+                if let Some(protocol) = AnyProtocol::get(c"WKDownloadDelegate") {
+                    decl.add_protocol(protocol);
+                }
+                if let Some(protocol) = AnyProtocol::get(c"WKUIDelegate") {
                     decl.add_protocol(protocol);
                 }
                 if let Some(protocol) = AnyProtocol::get(c"WKScriptMessageHandler") {
@@ -476,6 +552,48 @@ unsafe fn build_classes() {
                 decl.add_method(
                     sel!(webView:decidePolicyForNavigationAction:decisionHandler:),
                     webview_decide_policy_for_navigation_action,
+                );
+                decl.add_method(
+                    sel!(webView:decidePolicyForNavigationResponse:decisionHandler:),
+                    webview_decide_policy_for_navigation_response,
+                );
+                decl.add_method(
+                    sel!(webView:navigationAction:didBecomeDownload:),
+                    webview_navigation_action_did_become_download,
+                );
+                decl.add_method(
+                    sel!(webView:navigationResponse:didBecomeDownload:),
+                    webview_navigation_response_did_become_download,
+                );
+                decl.add_method(
+                    sel!(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:),
+                    webview_create_webview_with_configuration,
+                );
+                decl.add_method(sel!(webViewDidClose:), webview_did_close);
+                decl.add_method(
+                    sel!(download:decideDestinationUsingResponse:suggestedFilename:completionHandler:),
+                    webview_download_decide_destination,
+                );
+                decl.add_method(sel!(downloadDidFinish:), webview_download_did_finish);
+                decl.add_method(
+                    sel!(download:didFailWithError:resumeData:),
+                    webview_download_did_fail,
+                );
+                decl.add_method(
+                    sel!(download:didReceiveFinalURL:),
+                    webview_download_did_receive_final_url,
+                );
+                decl.add_method(
+                    sel!(webView:didStartProvisionalNavigation:),
+                    webview_did_start_provisional_navigation,
+                );
+                decl.add_method(
+                    sel!(webView:didFinishNavigation:),
+                    webview_did_finish_navigation,
+                );
+                decl.add_method(
+                    sel!(observeValueForKeyPath:ofObject:change:context:),
+                    webview_observe_value_for_key_path,
                 );
                 decl.register()
             }
@@ -514,11 +632,26 @@ pub(crate) fn convert_mouse_position(position: NSPoint, window_height: Pixels) -
 fn webview_command_id(command: &PlatformWebViewCommand) -> SharedString {
     match command {
         PlatformWebViewCommand::Navigate { id, .. }
+        | PlatformWebViewCommand::NavigateWithHeaders { id, .. }
+        | PlatformWebViewCommand::LoadHtml { id, .. }
         | PlatformWebViewCommand::EvaluateJavaScript { id, .. }
+        | PlatformWebViewCommand::EvaluateJavaScriptWithResult { id, .. }
         | PlatformWebViewCommand::PostMessage { id, .. }
         | PlatformWebViewCommand::Reload { id }
         | PlatformWebViewCommand::GoBack { id }
-        | PlatformWebViewCommand::GoForward { id } => id.clone(),
+        | PlatformWebViewCommand::GoForward { id }
+        | PlatformWebViewCommand::OpenDevTools { id }
+        | PlatformWebViewCommand::CloseDevTools { id }
+        | PlatformWebViewCommand::IsDevToolsOpen { id, .. }
+        | PlatformWebViewCommand::Print { id }
+        | PlatformWebViewCommand::SetZoomFactor { id, .. }
+        | PlatformWebViewCommand::Focus { id }
+        | PlatformWebViewCommand::FocusParent { id }
+        | PlatformWebViewCommand::ClearBrowsingData { id }
+        | PlatformWebViewCommand::ReadUrl { id, .. }
+        | PlatformWebViewCommand::ReadCookies { id, .. }
+        | PlatformWebViewCommand::SetCookie { id, .. }
+        | PlatformWebViewCommand::DeleteCookie { id, .. } => id.clone(),
     }
 }
 
@@ -569,6 +702,92 @@ fn webview_css_script(css: &str) -> String {
     format!(
         "(() => {{ const mount = () => {{ if (!document.head) {{ return; }} const style = document.createElement('style'); style.setAttribute('data-gpui-webview-style', 'true'); style.textContent = {}; document.head.appendChild(style); }}; if (document.head) {{ mount(); }} else {{ document.addEventListener('DOMContentLoaded', mount, {{ once: true }}); }} }})();",
         json_string_literal(css)
+    )
+}
+
+fn webview_clipboard_script() -> String {
+    format!(
+        "(() => {{
+            if (!window.webkit || !window.webkit.messageHandlers || !window.webkit.messageHandlers.{WEBVIEW_MESSAGE_HANDLER_NAME}) {{ return; }}
+            const handler = window.webkit.messageHandlers.{WEBVIEW_MESSAGE_HANDLER_NAME};
+            const pending = new Map();
+            let nextId = 1;
+            const send = (op, value) => new Promise((resolve, reject) => {{
+                const id = String(nextId++);
+                pending.set(id, {{ resolve, reject }});
+                handler.postMessage({{ __kaelClipboard: true, id, op, value }});
+            }});
+            const bridge = {{
+                readText: () => send('readText'),
+                writeText: value => send('writeText', String(value ?? '')),
+            }};
+            const makeTextItem = text => {{
+                const blob = typeof Blob === 'function' ? new Blob([text], {{ type: 'text/plain' }}) : null;
+                if (typeof ClipboardItem === 'function' && blob) {{
+                    return new ClipboardItem({{ 'text/plain': blob }});
+                }}
+                return {{
+                    types: ['text/plain'],
+                    getType(type) {{
+                        if (type !== 'text/plain' || !blob) {{ return Promise.reject(new DOMException('Clipboard type unavailable', 'NotFoundError')); }}
+                        return Promise.resolve(blob);
+                    }}
+                }};
+            }};
+            bridge.read = () => bridge.readText().then(text => [makeTextItem(text)]);
+            bridge.write = async items => {{
+                for (const item of Array.from(items || [])) {{
+                    if (!item || !Array.from(item.types || []).includes('text/plain')) {{ continue; }}
+                    const value = await item.getType('text/plain');
+                    const text = typeof value === 'string' ? value : await value.text();
+                    await bridge.writeText(text);
+                    return;
+                }}
+                throw new DOMException('Only text/plain clipboard items are supported', 'NotAllowedError');
+            }};
+            const selectedText = () => {{
+                const active = document.activeElement;
+                if (active && typeof active.value === 'string' && typeof active.selectionStart === 'number' && typeof active.selectionEnd === 'number') {{
+                    return active.value.slice(active.selectionStart, active.selectionEnd);
+                }}
+                const selection = window.getSelection && window.getSelection();
+                return selection ? String(selection) : '';
+            }};
+            Object.defineProperty(window, '__kaelClipboardBridge', {{
+                configurable: true,
+                value: {{
+                    resolve(id, ok, value) {{
+                        const entry = pending.get(String(id));
+                        if (!entry) {{ return; }}
+                        pending.delete(String(id));
+                        if (ok) {{
+                            entry.resolve(value ?? '');
+                        }} else {{
+                            entry.reject(new DOMException(value || 'Clipboard request failed', 'NotAllowedError'));
+                        }}
+                    }}
+                }}
+            }});
+            try {{
+                Object.defineProperty(navigator, 'clipboard', {{ configurable: true, value: bridge }});
+            }} catch (_) {{
+                if (!navigator.clipboard) {{ navigator.clipboard = bridge; }}
+            }}
+            const originalExecCommand = document.execCommand && document.execCommand.bind(document);
+            if (originalExecCommand) {{
+                document.execCommand = function(command, showUI, value) {{
+                    const normalized = String(command || '').toLowerCase();
+                    if (normalized === 'copy' || normalized === 'cut') {{
+                        bridge.writeText(selectedText());
+                        if (normalized === 'cut') {{
+                            originalExecCommand('delete', false, null);
+                        }}
+                        return true;
+                    }}
+                    return originalExecCommand(command, showUI, value);
+                }};
+            }}
+        }})();"
     )
 }
 
@@ -689,6 +908,65 @@ unsafe fn ns_color(color: Rgba) -> id {
             blue: color.b as f64,
             alpha: color.a as f64
         ]
+    }
+}
+
+fn apply_webview_background_color(webview: id, background_color: Option<Rgba>) {
+    unsafe {
+        let (opaque, color): (BOOL, id) = if let Some(color) = background_color {
+            (Bool::new(color.a >= 1.0), ns_color(color))
+        } else {
+            (
+                YES,
+                msg_send![
+                    lookup_class(c"NSColor"),
+                    colorWithSRGBRed: 1.0f64,
+                    green: 1.0f64,
+                    blue: 1.0f64,
+                    alpha: 1.0f64
+                ],
+            )
+        };
+
+        let _: () = msg_send![webview, setOpaque: opaque];
+        let _: () = msg_send![webview, setBackgroundColor: color];
+
+        let scroll_view: id = msg_send![webview, scrollView];
+        if !scroll_view.is_null() {
+            if opaque.as_bool() {
+                let _: () = msg_send![scroll_view, setDrawsBackground: YES];
+                let _: () = msg_send![scroll_view, setBackgroundColor: color];
+            } else {
+                let clear_color: id = msg_send![lookup_class(c"NSColor"), clearColor];
+                let _: () = msg_send![scroll_view, setDrawsBackground: NO];
+                let _: () = msg_send![scroll_view, setBackgroundColor: clear_color];
+            }
+        }
+    }
+}
+
+fn set_webview_inspectable(webview: id, inspectable: bool) -> bool {
+    unsafe {
+        if webview.is_null() {
+            return false;
+        }
+        let responds: BOOL = msg_send![webview, respondsToSelector: sel!(setInspectable:)];
+        if responds.as_bool() {
+            let _: () = msg_send![webview, setInspectable: Bool::new(inspectable)];
+            true
+        } else {
+            false
+        }
+    }
+}
+
+unsafe fn register_dragged_types(target: id) {
+    unsafe {
+        let dragged_types: id = msg_send![lookup_class(c"NSMutableArray"), array];
+        let () = msg_send![dragged_types, addObject: NSPasteboardTypeFileURL];
+        let () = msg_send![dragged_types, addObject: NSPasteboardTypeURL];
+        let () = msg_send![dragged_types, addObject: NSPasteboardTypeString];
+        let () = msg_send![target, registerForDraggedTypes: dragged_types];
     }
 }
 
@@ -1025,10 +1303,671 @@ unsafe fn webview_message_value(body: id) -> serde_json::Value {
     }
 }
 
+fn ns_error_message(error: id) -> String {
+    unsafe {
+        if error.is_null() {
+            return "WebView JavaScript evaluation failed".into();
+        }
+
+        let localized_description: id = msg_send![error, localizedDescription];
+        if !localized_description.is_null() {
+            return localized_description.to_str().to_string();
+        }
+
+        let description: id = msg_send![error, description];
+        if !description.is_null() {
+            return description.to_str().to_string();
+        }
+    }
+
+    "WebView JavaScript evaluation failed".into()
+}
+
+fn mac_webview_url(webview: id) -> SharedString {
+    unsafe {
+        if webview.is_null() {
+            return SharedString::default();
+        }
+
+        let url: id = msg_send![webview, URL];
+        let url = ns_url_absolute_string(url);
+        if !url.is_empty() {
+            return url;
+        }
+    }
+
+    SharedString::default()
+}
+
+fn ns_url_absolute_string(url: id) -> SharedString {
+    unsafe {
+        if url.is_null() {
+            return SharedString::default();
+        }
+        let absolute_string: id = msg_send![url, absoluteString];
+        if absolute_string.is_null() {
+            SharedString::default()
+        } else {
+            absolute_string.to_str().to_string().into()
+        }
+    }
+}
+
+fn ns_url_path(url: id) -> Option<PathBuf> {
+    unsafe {
+        if url.is_null() {
+            return None;
+        }
+        let path: id = msg_send![url, path];
+        if path.is_null() {
+            None
+        } else {
+            Some(PathBuf::from(path.to_str().to_string()))
+        }
+    }
+}
+
+fn ns_request_url_string(request: id) -> SharedString {
+    unsafe {
+        if request.is_null() {
+            return SharedString::default();
+        }
+        let url: id = msg_send![request, URL];
+        ns_url_absolute_string(url)
+    }
+}
+
+fn ns_response_url_string(response: id) -> SharedString {
+    unsafe {
+        if response.is_null() {
+            return SharedString::default();
+        }
+        let url: id = msg_send![response, URL];
+        ns_url_absolute_string(url)
+    }
+}
+
+fn default_download_path(suggested_filename: &str) -> PathBuf {
+    let sanitized = sanitize_download_filename(suggested_filename);
+    let downloads_dir = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join("Downloads"))
+        .unwrap_or_else(std::env::temp_dir);
+    downloads_dir.join(sanitized)
+}
+
+fn sanitize_download_filename(suggested_filename: &str) -> String {
+    let sanitized = suggested_filename
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' => '_',
+            ch if ch.is_control() => '_',
+            ch => ch,
+        })
+        .collect::<String>();
+    let sanitized = sanitized.trim();
+    if sanitized.is_empty() {
+        "download.bin".into()
+    } else {
+        sanitized.into()
+    }
+}
+
+fn mac_webview_title(webview: id) -> SharedString {
+    unsafe {
+        if webview.is_null() {
+            return SharedString::default();
+        }
+
+        let title: id = msg_send![webview, title];
+        if !title.is_null() {
+            return title.to_str().to_string().into();
+        }
+    }
+
+    SharedString::default()
+}
+
+#[derive(Clone)]
+struct WebViewCookieUrlFilter {
+    host: String,
+    path: String,
+    secure: bool,
+}
+
+impl WebViewCookieUrlFilter {
+    fn parse(url: &str) -> Option<Self> {
+        let scheme_end = url.find("://")?;
+        let scheme = &url[..scheme_end];
+        let rest = &url[scheme_end + 3..];
+        let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        let authority = &rest[..authority_end];
+        if authority.is_empty() {
+            return None;
+        }
+        let host_port = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host);
+        let host = if host_port.starts_with('[') {
+            host_port
+                .find(']')
+                .map(|end| &host_port[1..end])
+                .unwrap_or(host_port)
+        } else {
+            host_port
+                .split_once(':')
+                .map_or(host_port, |(host, _)| host)
+        };
+        if host.is_empty() {
+            return None;
+        }
+
+        let path = if let Some(path_start) = rest.find('/') {
+            let path = &rest[path_start..];
+            let path_end = path.find(['?', '#']).unwrap_or(path.len());
+            &path[..path_end]
+        } else {
+            "/"
+        };
+
+        Some(Self {
+            host: host.to_ascii_lowercase(),
+            path: if path.is_empty() { "/" } else { path }.to_string(),
+            secure: scheme.eq_ignore_ascii_case("https"),
+        })
+    }
+
+    fn matches(&self, cookie: &WebViewCookie) -> bool {
+        if cookie.secure && !self.secure {
+            return false;
+        }
+
+        if let Some(domain) = cookie.domain.as_ref() {
+            let domain = domain.as_ref().trim_start_matches('.').to_ascii_lowercase();
+            if !domain.is_empty()
+                && self.host != domain
+                && !self.host.ends_with(&format!(".{domain}"))
+            {
+                return false;
+            }
+        }
+
+        if let Some(path) = cookie.path.as_ref() {
+            let path = path.as_ref();
+            if !path.is_empty() && !self.path.starts_with(path) {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
+unsafe fn mac_webview_cookies_from_array(
+    cookies: id,
+    filter: Option<&WebViewCookieUrlFilter>,
+) -> Vec<WebViewCookie> {
+    if cookies.is_null() {
+        return Vec::new();
+    }
+
+    let count: NSUInteger = unsafe { msg_send![cookies, count] };
+    let mut result = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let cookie: id = unsafe { msg_send![cookies, objectAtIndex: index] };
+        if cookie.is_null() {
+            continue;
+        }
+        let cookie = unsafe { mac_webview_cookie_from_ns(cookie) };
+        if filter.is_none_or(|filter| filter.matches(&cookie)) {
+            result.push(cookie);
+        }
+    }
+    result
+}
+
+unsafe fn mac_webview_cookie_from_ns(cookie: id) -> WebViewCookie {
+    let name: id = unsafe { msg_send![cookie, name] };
+    let value: id = unsafe { msg_send![cookie, value] };
+    let domain: id = unsafe { msg_send![cookie, domain] };
+    let path: id = unsafe { msg_send![cookie, path] };
+    let secure: BOOL = unsafe { msg_send![cookie, isSecure] };
+    let http_only: BOOL = unsafe { msg_send![cookie, isHTTPOnly] };
+
+    WebViewCookie {
+        name: ns_string_to_shared_string(name),
+        value: ns_string_to_shared_string(value),
+        domain: ns_optional_shared_string(domain),
+        path: ns_optional_shared_string(path),
+        secure: secure.as_bool(),
+        http_only: http_only.as_bool(),
+    }
+}
+
+fn mac_webview_cookie_to_ns(cookie: WebViewCookie, origin_url: Option<&str>) -> Option<id> {
+    let domain = cookie.domain.as_ref().map(|domain| domain.as_ref());
+    let origin_url = origin_url.filter(|url| !url.is_empty());
+    if domain.is_none() && origin_url.is_none() {
+        return None;
+    }
+
+    unsafe {
+        let properties: id = msg_send![lookup_class(c"NSMutableDictionary"), dictionary];
+        let _: () = msg_send![
+            properties,
+            setObject: ns_string(cookie.name.as_ref()),
+            forKey: ns_string("Name")
+        ];
+        let _: () = msg_send![
+            properties,
+            setObject: ns_string(cookie.value.as_ref()),
+            forKey: ns_string("Value")
+        ];
+        if let Some(domain) = domain {
+            let _: () = msg_send![
+                properties,
+                setObject: ns_string(domain),
+                forKey: ns_string("Domain")
+            ];
+        } else if let Some(origin_url) = origin_url {
+            let _: () = msg_send![
+                properties,
+                setObject: ns_string(origin_url),
+                forKey: ns_string("OriginURL")
+            ];
+        }
+        if let Some(path) = cookie.path.as_ref() {
+            let _: () = msg_send![
+                properties,
+                setObject: ns_string(path.as_ref()),
+                forKey: ns_string("Path")
+            ];
+        } else {
+            let _: () = msg_send![
+                properties,
+                setObject: ns_string("/"),
+                forKey: ns_string("Path")
+            ];
+        }
+        if cookie.secure {
+            let _: () = msg_send![
+                properties,
+                setObject: ns_string("TRUE"),
+                forKey: ns_string("Secure")
+            ];
+        }
+
+        let cookie: id = msg_send![lookup_class(c"NSHTTPCookie"), cookieWithProperties: properties];
+        if cookie.is_null() { None } else { Some(cookie) }
+    }
+}
+
+fn ns_string_to_shared_string(value: id) -> SharedString {
+    if value.is_null() {
+        SharedString::default()
+    } else {
+        unsafe { value.to_str().to_string().into() }
+    }
+}
+
+fn ns_optional_shared_string(value: id) -> Option<SharedString> {
+    if value.is_null() {
+        return None;
+    }
+    let value = unsafe { value.to_str() };
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string().into())
+    }
+}
+
+fn alert_response_index(response: NSInteger, button_order: &[usize]) -> Option<usize> {
+    let ordinal = response.checked_sub(NS_ALERT_FIRST_BUTTON_RETURN)?;
+    let ordinal = usize::try_from(ordinal).ok()?;
+    button_order.get(ordinal).copied()
+}
+
 unsafe fn call_navigation_decision_handler(decision_handler: id, policy: NSInteger) {
+    if decision_handler.is_null() {
+        log::error!("WebKit provided no navigation decision handler");
+        return;
+    }
     unsafe {
         let decision_handler = &*(decision_handler as *const Block<dyn Fn(NSInteger)>);
         decision_handler.call((policy,));
+    }
+}
+
+unsafe fn call_download_destination_handler(decision_handler: id, destination: id) {
+    if decision_handler.is_null() {
+        log::error!("WebKit provided no download destination handler");
+        return;
+    }
+    unsafe {
+        let decision_handler = &*(decision_handler as *const Block<dyn Fn(id)>);
+        decision_handler.call((destination,));
+    }
+}
+
+fn resolve_mac_download_started(
+    url: SharedString,
+    suggested_path: PathBuf,
+    state: &MacWebViewDelegateState,
+) -> Option<PathBuf> {
+    let Some(handler) = state.download_started_handler.clone() else {
+        return Some(suggested_path);
+    };
+
+    let mut async_window = state.async_window.clone();
+    match catch_platform_callback(
+        "webview download started",
+        WebViewDownloadPolicy::Deny,
+        || {
+            async_window
+                .update(|window, cx| handler(url, Some(suggested_path.clone()), window, cx))
+                .unwrap_or(WebViewDownloadPolicy::Deny)
+        },
+    ) {
+        WebViewDownloadPolicy::Allow => Some(suggested_path),
+        WebViewDownloadPolicy::Deny => None,
+        WebViewDownloadPolicy::SaveTo(destination) => {
+            if destination.is_absolute() {
+                Some(destination)
+            } else {
+                log::warn!(
+                    "WebView download destination must be absolute: {}",
+                    destination.display()
+                );
+                None
+            }
+        }
+    }
+}
+
+fn dispatch_mac_download_completed(
+    state: &MacWebViewDelegateState,
+    download_state: MacWebViewDownloadState,
+    success: bool,
+) {
+    let Some(handler) = state.download_completed_handler.clone() else {
+        return;
+    };
+    let event = WebViewDownloadCompleted {
+        url: download_state.url,
+        path: download_state.path,
+        success,
+    };
+    let mut async_window = state.async_window.clone();
+    catch_platform_callback("webview download completed", (), || {
+        let _ = async_window.update(|window, cx| handler(event, window, cx));
+    });
+}
+
+fn register_mac_download(delegate: id, download: id, url: SharedString) {
+    let Some(state) = (unsafe { get_webview_delegate_state(delegate) }) else {
+        return;
+    };
+    unsafe {
+        let _: () = msg_send![download, setDelegate: delegate];
+    }
+    state.downloads.insert(
+        download as usize,
+        MacWebViewDownloadState { url, path: None },
+    );
+}
+
+enum MacWebViewDragEvent {
+    Enter,
+    Over,
+    Drop,
+    Leave,
+}
+
+fn dispatch_mac_webview_drag_drop(
+    webview: id,
+    dragging_info: id,
+    event: MacWebViewDragEvent,
+) -> Option<WebViewDragDropPolicy> {
+    let Some(state) = (unsafe { get_webview_delegate_state(webview) }) else {
+        return None;
+    };
+    let Some(handler) = state.drag_drop_handler.clone() else {
+        return None;
+    };
+
+    let position = webview_drag_position(webview, dragging_info);
+    let event = match event {
+        MacWebViewDragEvent::Enter => WebViewDragDropEvent::Enter {
+            paths: webview_drag_paths(dragging_info),
+            position,
+        },
+        MacWebViewDragEvent::Over => WebViewDragDropEvent::Over { position },
+        MacWebViewDragEvent::Drop => WebViewDragDropEvent::Drop {
+            paths: webview_drag_paths(dragging_info),
+            position,
+        },
+        MacWebViewDragEvent::Leave => WebViewDragDropEvent::Leave,
+    };
+
+    let mut async_window = state.async_window.clone();
+    Some(catch_platform_callback(
+        "webview drag-and-drop",
+        WebViewDragDropPolicy::BlockBrowserDefault,
+        || {
+            async_window
+                .update(|window, cx| handler(event, window, cx))
+                .unwrap_or(WebViewDragDropPolicy::BlockBrowserDefault)
+        },
+    ))
+}
+
+fn webview_drag_paths(dragging_info: id) -> Vec<PathBuf> {
+    external_drop_data_from_event(dragging_info)
+        .map(|data| data.paths().paths().to_vec())
+        .unwrap_or_default()
+}
+
+fn webview_drag_position(webview: id, dragging_info: id) -> (i32, i32) {
+    unsafe {
+        let window_point: NSPoint = msg_send![dragging_info, draggingLocation];
+        let local_point: NSPoint = msg_send![webview, convertPoint: window_point, fromView: nil];
+        let bounds: NSRect = msg_send![webview, bounds];
+        let window: id = msg_send![webview, window];
+        let scale = if window.is_null() {
+            1.0
+        } else {
+            let scale: f64 = msg_send![window, backingScaleFactor];
+            scale
+        };
+        (
+            (local_point.x * scale).round() as i32,
+            ((bounds.size.height - local_point.y) * scale).round() as i32,
+        )
+    }
+}
+
+fn mac_webview_zoom_key(event: id) -> Option<MacWebViewZoomKey> {
+    if event.is_null() {
+        return None;
+    }
+    let event = unsafe { &*(event as *const NSEvent) };
+    let modifiers = event.modifierFlags();
+    if !modifiers.contains(NSEventModifierFlags::Command)
+        || modifiers.contains(NSEventModifierFlags::Control)
+        || modifiers.contains(NSEventModifierFlags::Option)
+    {
+        return None;
+    }
+
+    let chars = event.charactersIgnoringModifiers()?;
+    let chars = chars.to_string();
+
+    match chars.as_str() {
+        "=" | "+" => Some(MacWebViewZoomKey::In),
+        "-" => Some(MacWebViewZoomKey::Out),
+        "0" => Some(MacWebViewZoomKey::Reset),
+        _ => None,
+    }
+}
+
+enum MacWebViewZoomKey {
+    In,
+    Out,
+    Reset,
+}
+
+fn apply_mac_webview_zoom_key(webview: id, key: MacWebViewZoomKey) {
+    let current: f64 = unsafe { msg_send![webview, pageZoom] };
+    let current = if current.is_finite() && current > 0.0 {
+        current
+    } else {
+        1.0
+    };
+    let next = match key {
+        MacWebViewZoomKey::In => current * 1.1,
+        MacWebViewZoomKey::Out => current / 1.1,
+        MacWebViewZoomKey::Reset => 1.0,
+    }
+    .clamp(0.25, 5.0);
+
+    unsafe {
+        let _: () = msg_send![webview, setPageZoom: next];
+    }
+}
+
+fn apply_mac_webview_magnification(webview: id, event: id) {
+    if webview.is_null() || event.is_null() {
+        return;
+    }
+    let event = unsafe { &*(event as *const NSEvent) };
+    let delta = event.magnification();
+    if !delta.is_finite() || delta.abs() <= f64::EPSILON {
+        return;
+    }
+
+    let current: f64 = unsafe { msg_send![webview, pageZoom] };
+    let current = if current.is_finite() && current > 0.0 {
+        current
+    } else {
+        1.0
+    };
+    let next = (current * (1.0 + delta).max(0.1)).clamp(0.25, 5.0);
+
+    unsafe {
+        let _: () = msg_send![webview, setPageZoom: next];
+    }
+}
+
+fn handle_mac_webview_clipboard_message(
+    state: &MacWebViewDelegateState,
+    script_message: id,
+    payload: &serde_json::Value,
+) -> bool {
+    if !state.clipboard_access
+        || payload
+            .get(WEBVIEW_CLIPBOARD_BRIDGE_KIND)
+            .and_then(|value| value.as_bool())
+            != Some(true)
+    {
+        return false;
+    }
+
+    let webview = mac_webview_from_script_message(script_message);
+    if webview.is_null() {
+        log::warn!("WebView clipboard request could not resolve its source WebView");
+        return true;
+    }
+
+    let id = payload
+        .get("id")
+        .and_then(|id| id.as_str())
+        .unwrap_or_default();
+    let result = match payload.get("op").and_then(|op| op.as_str()) {
+        Some("readText") => Ok(mac_clipboard_read_text()),
+        Some("writeText") => {
+            let value = payload
+                .get("value")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            if mac_clipboard_write_text(value) {
+                Ok(String::new())
+            } else {
+                Err("Clipboard write failed".to_string())
+            }
+        }
+        _ => Err("Unsupported clipboard operation".to_string()),
+    };
+
+    resolve_mac_webview_clipboard_request(webview, id, result);
+    true
+}
+
+fn mac_webview_from_script_message(message: id) -> id {
+    unsafe {
+        let responds_to_webview: BOOL = msg_send![message, respondsToSelector: sel!(webView)];
+        if responds_to_webview.as_bool() {
+            let webview: id = msg_send![message, webView];
+            if !webview.is_null() {
+                return webview;
+            }
+        }
+
+        let frame_info: id = msg_send![message, frameInfo];
+        if frame_info.is_null() {
+            return nil;
+        }
+        msg_send![frame_info, webView]
+    }
+}
+
+fn mac_clipboard_read_text() -> String {
+    unsafe {
+        let pasteboard: id = msg_send![lookup_class(c"NSPasteboard"), generalPasteboard];
+        if pasteboard.is_null() {
+            return String::new();
+        }
+        let value: id = msg_send![pasteboard, stringForType: NSPasteboardTypeString];
+        if value.is_null() {
+            String::new()
+        } else {
+            value.to_str().to_string()
+        }
+    }
+}
+
+fn mac_clipboard_write_text(value: &str) -> bool {
+    unsafe {
+        let pasteboard: id = msg_send![lookup_class(c"NSPasteboard"), generalPasteboard];
+        if pasteboard.is_null() {
+            return false;
+        }
+        let _: NSInteger = msg_send![pasteboard, clearContents];
+        let ok: BOOL = msg_send![
+            pasteboard,
+            setString: ns_string(value),
+            forType: NSPasteboardTypeString
+        ];
+        ok.as_bool()
+    }
+}
+
+fn resolve_mac_webview_clipboard_request(webview: id, id: &str, result: Result<String, String>) {
+    let (ok, value) = match result {
+        Ok(value) => ("true", value),
+        Err(error) => ("false", error),
+    };
+    let script = format!(
+        "window.__kaelClipboardBridge && window.__kaelClipboardBridge.resolve({}, {ok}, {});",
+        json_string_literal(id),
+        json_string_literal(&value)
+    );
+    unsafe {
+        let _: () = msg_send![
+            webview,
+            evaluateJavaScript: ns_string(&script),
+            completionHandler: nil
+        ];
     }
 }
 
@@ -1153,6 +2092,22 @@ struct MacWebViewDelegateState {
     async_window: AsyncWindowContext,
     message_handler: Option<WebViewMessageHandler>,
     navigation_handler: Option<WebViewNavigationHandler>,
+    new_window_handler: Option<WebViewNewWindowHandler>,
+    download_started_handler: Option<WebViewDownloadStartedHandler>,
+    download_completed_handler: Option<WebViewDownloadCompletedHandler>,
+    document_title_changed_handler: Option<WebViewDocumentTitleChangedHandler>,
+    page_load_handler: Option<WebViewPageLoadHandler>,
+    drag_drop_handler: Option<WebViewDragDropHandler>,
+    zoom_hotkeys_enabled: bool,
+    clipboard_access: bool,
+    downloads: HashMap<usize, MacWebViewDownloadState>,
+    pending_allowed_popups: HashSet<SharedString>,
+}
+
+#[derive(Clone)]
+struct MacWebViewDownloadState {
+    url: SharedString,
+    path: Option<PathBuf>,
 }
 
 struct MacPrintViewState {
@@ -1165,12 +2120,22 @@ struct MacWebViewHost {
     webview: id,
     controller: id,
     delegate: id,
+    native_window: id,
+    native_view: id,
     state: Box<MacWebViewDelegateState>,
     declared_url: SharedString,
+    declared_html: Option<SharedString>,
     user_agent: Option<SharedString>,
     storage_key: Option<SharedString>,
+    javascript_disabled: bool,
+    media_autoplay: Option<bool>,
+    background_color: Option<Rgba>,
+    devtools: bool,
+    clipboard_access: bool,
     injected_css: Vec<SharedString>,
     injected_javascript: Vec<SharedString>,
+    focused: Option<bool>,
+    observing_title: bool,
     visible: bool,
 }
 
@@ -1316,10 +2281,11 @@ impl MacWindowState {
             let webview_id = webview.id.clone();
             active_ids.insert(webview_id.clone());
 
-            let needs_rebuild = self
-                .webviews
-                .get(&webview_id)
-                .is_some_and(|host| host.storage_key != webview.storage_key);
+            let needs_rebuild = self.webviews.get(&webview_id).is_some_and(|host| {
+                host.storage_key != webview.storage_key
+                    || host.javascript_disabled != webview.javascript_disabled
+                    || host.media_autoplay != webview.media_autoplay
+            });
             if needs_rebuild {
                 self.webviews.remove(&webview_id);
             }
@@ -1394,6 +2360,11 @@ impl MacWindowState {
 
 impl MacWebViewHost {
     unsafe fn new(webview: &PlatformWebView, native_window: id, native_view: id) -> Self {
+        if let Some(general_autofill) = webview.general_autofill {
+            log::warn!(
+                "WebView general autofill override {general_autofill} is not supported by Kael's macOS WebView backend"
+            );
+        }
         let content_view = unsafe { native_window.contentView() };
         let frame = unsafe {
             ns_rect_from_bounds(webview.bounds, px(content_view.bounds().size.height as f32))
@@ -1401,6 +2372,28 @@ impl MacWebViewHost {
 
         let config: id = unsafe { msg_send![lookup_class(c"WKWebViewConfiguration"), alloc] };
         let config: id = unsafe { msg_send![config, init] };
+        if let Some(autoplay) = webview.media_autoplay {
+            let media_policy = if autoplay {
+                WK_MEDIA_PLAYBACK_TYPE_NONE
+            } else {
+                WK_MEDIA_PLAYBACK_TYPE_ALL
+            };
+            let _: () = unsafe {
+                msg_send![
+                    config,
+                    setMediaTypesRequiringUserActionForPlayback: media_policy
+                ]
+            };
+        }
+        let preferences: id = unsafe { msg_send![config, preferences] };
+        if !preferences.is_null() {
+            let _: () = unsafe {
+                msg_send![
+                    preferences,
+                    setJavaScriptEnabled: Bool::new(!webview.javascript_disabled)
+                ]
+            };
+        }
         let controller: id = unsafe { msg_send![lookup_class(c"WKUserContentController"), alloc] };
         let controller: id = unsafe { msg_send![controller, init] };
         let data_store: id = unsafe {
@@ -1417,6 +2410,16 @@ impl MacWebViewHost {
             async_window: webview.async_window.clone(),
             message_handler: webview.message_handler.clone(),
             navigation_handler: webview.navigation_handler.clone(),
+            new_window_handler: webview.new_window_handler.clone(),
+            download_started_handler: webview.download_started_handler.clone(),
+            download_completed_handler: webview.download_completed_handler.clone(),
+            document_title_changed_handler: webview.document_title_changed_handler.clone(),
+            page_load_handler: webview.page_load_handler.clone(),
+            drag_drop_handler: webview.drag_drop_handler.clone(),
+            zoom_hotkeys_enabled: webview.zoom_hotkeys_enabled,
+            clipboard_access: webview.clipboard_access,
+            downloads: HashMap::default(),
+            pending_allowed_popups: HashSet::default(),
         });
 
         let delegate: id = unsafe { msg_send![WEBVIEW_DELEGATE_CLASS, alloc] };
@@ -1436,10 +2439,25 @@ impl MacWebViewHost {
             ]
         };
 
-        let webview_view: id = unsafe { msg_send![lookup_class(c"WKWebView"), alloc] };
+        let webview_view: id = unsafe { msg_send![WEBVIEW_CLASS, alloc] };
         let webview_view: id =
             unsafe { msg_send![webview_view, initWithFrame: frame, configuration: config] };
+        unsafe {
+            store_ivar(
+                webview_view,
+                WEBVIEW_STATE_IVAR,
+                state.as_mut() as *mut MacWebViewDelegateState as *mut c_void,
+            );
+            register_dragged_types(webview_view);
+        }
+        if webview.devtools && !set_webview_inspectable(webview_view, true) {
+            log::warn!(
+                "WebView devtools requested, but this macOS WebView backend does not expose WKWebView inspectability"
+            );
+        }
+        apply_webview_background_color(webview_view, webview.background_color);
         let _: () = unsafe { msg_send![webview_view, setNavigationDelegate: delegate] };
+        let _: () = unsafe { msg_send![webview_view, setUIDelegate: delegate] };
         let _: () = unsafe { msg_send![webview_view, setHidden: Bool::new(!webview.visible)] };
         let _: () = unsafe {
             msg_send![
@@ -1454,22 +2472,42 @@ impl MacWebViewHost {
             webview: unsafe { webview_view.autorelease() },
             controller: unsafe { controller.autorelease() },
             delegate: unsafe { delegate.autorelease() },
+            native_window,
+            native_view,
             state,
             declared_url: SharedString::default(),
+            declared_html: None,
             user_agent: None,
             storage_key: webview.storage_key.clone(),
+            javascript_disabled: webview.javascript_disabled,
+            media_autoplay: webview.media_autoplay,
+            background_color: webview.background_color,
+            devtools: webview.devtools,
+            clipboard_access: false,
             injected_css: Vec::new(),
             injected_javascript: Vec::new(),
+            focused: None,
+            observing_title: false,
             visible: webview.visible,
         };
         host.sync(webview, native_window, native_view);
         host
     }
 
-    fn sync(&mut self, webview: &PlatformWebView, native_window: id, _native_view: id) {
+    fn sync(&mut self, webview: &PlatformWebView, native_window: id, native_view: id) {
+        self.native_window = native_window;
+        self.native_view = native_view;
         self.state.async_window = webview.async_window.clone();
         self.state.message_handler = webview.message_handler.clone();
         self.state.navigation_handler = webview.navigation_handler.clone();
+        self.state.new_window_handler = webview.new_window_handler.clone();
+        self.state.download_started_handler = webview.download_started_handler.clone();
+        self.state.download_completed_handler = webview.download_completed_handler.clone();
+        self.state.document_title_changed_handler = webview.document_title_changed_handler.clone();
+        self.state.page_load_handler = webview.page_load_handler.clone();
+        self.state.drag_drop_handler = webview.drag_drop_handler.clone();
+        self.state.zoom_hotkeys_enabled = webview.zoom_hotkeys_enabled;
+        self.state.clipboard_access = webview.clipboard_access;
 
         unsafe {
             let content_height = px(native_window.contentView().bounds().size.height as f32);
@@ -1483,6 +2521,29 @@ impl MacWebViewHost {
             }
             self.visible = webview.visible;
         }
+
+        if self.background_color != webview.background_color {
+            apply_webview_background_color(self.webview, webview.background_color);
+            self.background_color = webview.background_color;
+        }
+
+        if self.devtools != webview.devtools {
+            if !set_webview_inspectable(self.webview, webview.devtools) && webview.devtools {
+                log::warn!(
+                    "WebView devtools requested, but this macOS WebView backend does not expose WKWebView inspectability"
+                );
+            }
+            self.devtools = webview.devtools;
+        }
+
+        if self.focused != webview.focused {
+            if webview.focused == Some(true) {
+                self.focus();
+            }
+            self.focused = webview.focused;
+        }
+
+        self.sync_title_observer(webview.document_title_changed_handler.is_some());
 
         let scripts_changed = self.sync_user_scripts(webview);
         let user_agent_changed = if self.user_agent != webview.user_agent {
@@ -1502,9 +2563,16 @@ impl MacWebViewHost {
             false
         };
 
-        if self.declared_url != webview.url {
-            self.load_url(webview.url.as_ref());
+        if !webview.url.as_ref().is_empty() && self.declared_url != webview.url {
+            self.load_url_with_headers(webview.url.as_ref(), webview.request_headers.as_ref());
             self.declared_url = webview.url.clone();
+            self.declared_html = None;
+        } else if webview.url.as_ref().is_empty() && self.declared_html != webview.html {
+            if let Some(html) = webview.html.as_ref() {
+                self.load_html(html.as_ref());
+            }
+            self.declared_url = SharedString::default();
+            self.declared_html = webview.html.clone();
         } else if (scripts_changed || user_agent_changed) && !self.declared_url.as_ref().is_empty()
         {
             self.reload();
@@ -1513,6 +2581,7 @@ impl MacWebViewHost {
 
     fn sync_user_scripts(&mut self, webview: &PlatformWebView) -> bool {
         if self.storage_key == webview.storage_key
+            && self.clipboard_access == webview.clipboard_access
             && self.injected_css == webview.injected_css
             && self.injected_javascript == webview.injected_javascript
         {
@@ -1529,6 +2598,16 @@ impl MacWebViewHost {
                 &webview_bridge_script(webview.storage_key.as_ref()),
                 WKUserScriptInjectionTimeAtDocumentStart,
             );
+        }
+
+        if webview.clipboard_access {
+            unsafe {
+                add_webview_user_script(
+                    self.controller,
+                    &webview_clipboard_script(),
+                    WKUserScriptInjectionTimeAtDocumentStart,
+                );
+            }
         }
 
         for css in &webview.injected_css {
@@ -1552,16 +2631,61 @@ impl MacWebViewHost {
         }
 
         self.storage_key = webview.storage_key.clone();
+        self.clipboard_access = webview.clipboard_access;
         self.injected_css = webview.injected_css.clone();
         self.injected_javascript = webview.injected_javascript.clone();
         true
     }
 
+    fn sync_title_observer(&mut self, should_observe: bool) {
+        if self.observing_title == should_observe {
+            return;
+        }
+
+        unsafe {
+            if should_observe {
+                let _: () = msg_send![
+                    self.webview,
+                    addObserver: self.delegate,
+                    forKeyPath: ns_string("title"),
+                    options: NS_KEY_VALUE_OBSERVING_OPTION_NEW,
+                    context: ptr::null_mut::<c_void>()
+                ];
+            } else {
+                let _: () = msg_send![
+                    self.webview,
+                    removeObserver: self.delegate,
+                    forKeyPath: ns_string("title")
+                ];
+            }
+        }
+        self.observing_title = should_observe;
+    }
+
     fn apply_command(&mut self, command: PlatformWebViewCommand) {
         match command {
-            PlatformWebViewCommand::Navigate { url, .. } => self.load_url(url.as_ref()),
+            PlatformWebViewCommand::Navigate { url, .. } => {
+                self.load_url(url.as_ref());
+                self.declared_url = url;
+                self.declared_html = None;
+            }
+            PlatformWebViewCommand::NavigateWithHeaders { url, headers, .. } => {
+                self.load_url_with_headers(url.as_ref(), Some(&headers));
+                self.declared_url = url;
+                self.declared_html = None;
+            }
+            PlatformWebViewCommand::LoadHtml { html, .. } => {
+                self.load_html(html.as_ref());
+                self.declared_url = SharedString::default();
+                self.declared_html = Some(html);
+            }
             PlatformWebViewCommand::EvaluateJavaScript { script, .. } => {
                 self.evaluate_javascript(script.as_ref())
+            }
+            PlatformWebViewCommand::EvaluateJavaScriptWithResult {
+                script, callback, ..
+            } => {
+                self.evaluate_javascript_with_result(script.as_ref(), callback);
             }
             PlatformWebViewCommand::PostMessage { message, .. } => {
                 let payload = serde_json::to_string(&message).unwrap_or_else(|_| "null".into());
@@ -1577,10 +2701,61 @@ impl MacWebViewHost {
             PlatformWebViewCommand::GoForward { .. } => unsafe {
                 let _: () = msg_send![self.webview, goForward];
             },
+            PlatformWebViewCommand::OpenDevTools { .. } => {
+                if set_webview_inspectable(self.webview, true) {
+                    self.devtools = true;
+                    log::warn!(
+                        "WebView devtools were made inspectable on macOS; open the inspector from Safari/Web Inspector because WKWebView does not expose a public open-inspector API"
+                    );
+                } else {
+                    log::warn!("WebView devtools are not supported by this macOS WebView backend");
+                }
+            }
+            PlatformWebViewCommand::CloseDevTools { .. } => {
+                log::warn!(
+                    "Closing WebView devtools is not supported by Kael's macOS WebView backend; WKWebView does not expose a public close-inspector API"
+                );
+            }
+            PlatformWebViewCommand::IsDevToolsOpen { callback, .. } => {
+                log::warn!(
+                    "WebView devtools open-state is not supported by Kael's macOS WebView backend; WKWebView does not expose a public inspector-state API"
+                );
+                callback(Err(
+                    "WebView devtools open-state is not supported by Kael's macOS WebView backend"
+                        .into(),
+                ));
+            }
+            PlatformWebViewCommand::Print { .. } => self.print(),
+            PlatformWebViewCommand::SetZoomFactor { factor, .. } => self.set_zoom_factor(factor),
+            PlatformWebViewCommand::Focus { .. } => self.focus(),
+            PlatformWebViewCommand::FocusParent { .. } => self.focus_parent(),
+            PlatformWebViewCommand::ClearBrowsingData { .. } => {
+                self.clear_browsing_data();
+            }
+            PlatformWebViewCommand::ReadUrl { callback, .. } => {
+                callback(Ok(self.current_url()));
+            }
+            PlatformWebViewCommand::ReadCookies { url, callback, .. } => {
+                self.read_cookies(url, callback);
+            }
+            PlatformWebViewCommand::SetCookie {
+                cookie, callback, ..
+            } => {
+                self.set_cookie(cookie, callback);
+            }
+            PlatformWebViewCommand::DeleteCookie {
+                cookie, callback, ..
+            } => {
+                self.delete_cookie(cookie, callback);
+            }
         }
     }
 
     fn load_url(&mut self, url: &str) {
+        self.load_url_with_headers(url, None);
+    }
+
+    fn load_url_with_headers(&mut self, url: &str, headers: Option<&http_client::http::HeaderMap>) {
         if url.is_empty() {
             return;
         }
@@ -1590,8 +2765,140 @@ impl MacWebViewHost {
             if url.is_null() {
                 return;
             }
-            let request: id = msg_send![lookup_class(c"NSURLRequest"), requestWithURL: url];
+            let request: id = msg_send![lookup_class(c"NSMutableURLRequest"), requestWithURL: url];
+            if let Some(headers) = headers {
+                for (name, value) in headers {
+                    match value.to_str() {
+                        Ok(value) => {
+                            let _: () = msg_send![
+                                request,
+                                setValue: ns_string(value),
+                                forHTTPHeaderField: ns_string(name.as_str())
+                            ];
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "Skipping non-UTF-8 WebView request header {}: {error}",
+                                name.as_str()
+                            );
+                        }
+                    }
+                }
+            }
             let _: () = msg_send![self.webview, loadRequest: request];
+        }
+    }
+
+    fn load_html(&mut self, html: &str) {
+        unsafe {
+            let _: () = msg_send![
+                self.webview,
+                loadHTMLString: ns_string(html),
+                baseURL: nil
+            ];
+        }
+    }
+
+    fn current_url(&self) -> SharedString {
+        let url = mac_webview_url(self.webview);
+        if !url.as_ref().is_empty() {
+            return url;
+        }
+
+        self.declared_url.clone()
+    }
+
+    fn cookie_store(&self) -> id {
+        unsafe {
+            let config: id = msg_send![self.webview, configuration];
+            if config.is_null() {
+                return nil;
+            }
+            let data_store: id = msg_send![config, websiteDataStore];
+            if data_store.is_null() {
+                return nil;
+            }
+            msg_send![data_store, httpCookieStore]
+        }
+    }
+
+    fn read_cookies(
+        &self,
+        url: Option<SharedString>,
+        callback: crate::webview::WebViewCookieCallback,
+    ) {
+        let cookie_store = self.cookie_store();
+        if cookie_store.is_null() {
+            callback(Err("WebView cookie store is unavailable".into()));
+            return;
+        }
+
+        let filter = url
+            .as_ref()
+            .and_then(|url| WebViewCookieUrlFilter::parse(url.as_ref()));
+        let block = RcBlock::new(move |cookies: id| {
+            let cookies = unsafe { mac_webview_cookies_from_array(cookies, filter.as_ref()) };
+            callback(Ok(cookies));
+        });
+
+        unsafe {
+            let _: () = msg_send![cookie_store, getAllCookies: &*block];
+        }
+    }
+
+    fn set_cookie(
+        &self,
+        cookie: WebViewCookie,
+        callback: crate::webview::WebViewCookieMutationCallback,
+    ) {
+        let cookie_store = self.cookie_store();
+        if cookie_store.is_null() {
+            callback(Err("WebView cookie store is unavailable".into()));
+            return;
+        }
+        let current_url = self.current_url();
+        let Some(cookie) = mac_webview_cookie_to_ns(cookie, Some(current_url.as_ref())) else {
+            callback(Err(
+                "WebView cookie mutation requires a domain or committed WebView URL".into(),
+            ));
+            return;
+        };
+
+        let block = RcBlock::new(move || callback(Ok(())));
+        unsafe {
+            let _: () = msg_send![
+                cookie_store,
+                setCookie: cookie,
+                completionHandler: &*block
+            ];
+        }
+    }
+
+    fn delete_cookie(
+        &self,
+        cookie: WebViewCookie,
+        callback: crate::webview::WebViewCookieMutationCallback,
+    ) {
+        let cookie_store = self.cookie_store();
+        if cookie_store.is_null() {
+            callback(Err("WebView cookie store is unavailable".into()));
+            return;
+        }
+        let current_url = self.current_url();
+        let Some(cookie) = mac_webview_cookie_to_ns(cookie, Some(current_url.as_ref())) else {
+            callback(Err(
+                "WebView cookie mutation requires a domain or committed WebView URL".into(),
+            ));
+            return;
+        };
+
+        let block = RcBlock::new(move || callback(Ok(())));
+        unsafe {
+            let _: () = msg_send![
+                cookie_store,
+                deleteCookie: cookie,
+                completionHandler: &*block
+            ];
         }
     }
 
@@ -1605,6 +2912,116 @@ impl MacWebViewHost {
         }
     }
 
+    fn evaluate_javascript_with_result(
+        &mut self,
+        script: &str,
+        callback: crate::webview::WebViewJavaScriptResultCallback,
+    ) {
+        let script = serde_json::to_string(script).unwrap_or_else(|_| "\"\"".into());
+        let script = format!(
+            "(() => {{ const value = (0, eval)({script}); const serialized = JSON.stringify(value); return serialized === undefined ? 'null' : serialized; }})()"
+        );
+        let callback_for_block = callback.clone();
+        let block = RcBlock::new(move |result: id, error: id| {
+            if !error.is_null() {
+                callback_for_block(Err(ns_error_message(error).into()));
+            } else if result.is_null() {
+                callback_for_block(Ok("null".into()));
+            } else {
+                callback_for_block(Ok(unsafe { result.to_str() }.to_string().into()));
+            }
+        });
+
+        unsafe {
+            let _: () = msg_send![
+                self.webview,
+                evaluateJavaScript: ns_string(&script),
+                completionHandler: &*block
+            ];
+        }
+    }
+
+    fn clear_browsing_data(&mut self) {
+        unsafe {
+            let config: id = msg_send![self.webview, configuration];
+            if config.is_null() {
+                return;
+            }
+
+            let store: id = msg_send![config, websiteDataStore];
+            if store.is_null() {
+                return;
+            }
+
+            let data_types: id =
+                msg_send![lookup_class(c"WKWebsiteDataStore"), allWebsiteDataTypes];
+            let since: id =
+                msg_send![lookup_class(c"NSDate"), dateWithTimeIntervalSince1970: 0.0f64];
+            let block = RcBlock::new(|| {});
+            let _: () = msg_send![
+                store,
+                removeDataOfTypes: data_types,
+                modifiedSince: since,
+                completionHandler: &*block
+            ];
+        }
+    }
+
+    fn focus(&mut self) {
+        unsafe {
+            let _: () = msg_send![self.native_window, makeFirstResponder: self.webview];
+        }
+    }
+
+    fn focus_parent(&mut self) {
+        unsafe {
+            let _: () = msg_send![self.native_window, makeFirstResponder: self.native_view];
+        }
+    }
+
+    fn print(&mut self) {
+        unsafe {
+            let print_info: id = {
+                let shared: id = msg_send![lookup_class(c"NSPrintInfo"), sharedPrintInfo];
+                msg_send![shared, copy]
+            };
+            let operation: id = msg_send![
+                lookup_class(c"NSPrintOperation"),
+                printOperationWithView: self.webview,
+                printInfo: print_info
+            ];
+            if operation.is_null() {
+                log::warn!("WebView print operation could not be created");
+                return;
+            }
+
+            let _: () = msg_send![operation, setShowsPrintPanel: YES];
+            let _: () = msg_send![operation, setShowsProgressPanel: YES];
+            let _: () = msg_send![operation, setCanSpawnSeparateThread: NO];
+            let success: BOOL = msg_send![
+                operation,
+                runOperationModalForWindow: self.native_window,
+                delegate: nil,
+                didRunSelector: ptr::null::<c_void>(),
+                contextInfo: ptr::null_mut::<c_void>()
+            ];
+            if success != YES {
+                log::warn!("WebView print operation failed or was cancelled");
+            }
+        }
+    }
+
+    fn set_zoom_factor(&mut self, factor: f64) {
+        let factor = if factor.is_finite() {
+            factor.clamp(0.25, 5.0)
+        } else {
+            1.0
+        };
+        unsafe {
+            let _: () = msg_send![self.webview, setPageZoom: factor];
+        }
+    }
+
     fn reload(&mut self) {
         unsafe {
             let _: () = msg_send![self.webview, reload];
@@ -1615,6 +3032,14 @@ impl MacWebViewHost {
 impl Drop for MacWebViewHost {
     fn drop(&mut self) {
         unsafe {
+            if self.observing_title && !self.webview.is_null() && !self.delegate.is_null() {
+                let _: () = msg_send![
+                    self.webview,
+                    removeObserver: self.delegate,
+                    forKeyPath: ns_string("title")
+                ];
+                self.observing_title = false;
+            }
             if !self.delegate.is_null() {
                 store_ivar(self.delegate, WEBVIEW_STATE_IVAR, ptr::null_mut::<c_void>());
             }
@@ -1656,7 +3081,7 @@ impl MacWindow {
         }: WindowParams,
         executor: ForegroundExecutor,
         renderer_context: renderer::Context,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         unsafe {
             let allows_automatic_window_tabbing = tabbing_identifier.is_some();
             if allows_automatic_window_tabbing {
@@ -1734,15 +3159,11 @@ impl MacWindow {
                 defer: NO,
                 screen: target_screen
             ];
-            assert!(!native_window.is_null());
-            let dragged_types: id = msg_send![
-                lookup_class(c"NSArray"),
-                arrayWithObject: NSPasteboardTypeFileURL
-            ];
-            let () = msg_send![
-                native_window,
-                registerForDraggedTypes: dragged_types
-            ];
+            anyhow::ensure!(
+                !native_window.is_null(),
+                "AppKit failed to create a native window"
+            );
+            register_dragged_types(native_window);
             let () = msg_send![
                 native_window,
                 setReleasedWhenClosed: NO
@@ -1751,23 +3172,24 @@ impl MacWindow {
             let content_view = native_window.contentView();
             let native_view: id = msg_send![VIEW_CLASS, alloc];
             let native_view = native_view.initWithFrame_(content_view.bounds());
-            assert!(!native_view.is_null());
+            let native_view_ptr = NonNull::new(native_view)
+                .ok_or_else(|| anyhow::anyhow!("AppKit failed to create a native view"))?;
 
             let mut window = Self(Arc::new(Mutex::new(MacWindowState {
                 handle,
                 executor,
                 native_window,
-                native_view: NonNull::new_unchecked(native_view),
+                native_view: native_view_ptr,
                 blurred_view: None,
                 display_link: None,
                 frame_polling_active: false,
-                renderer: renderer::new_renderer(
+                renderer: renderer::try_new_renderer(
                     renderer_context,
                     native_window as *mut _,
                     native_view as *mut _,
                     bounds.size.map(|pixels| pixels.0),
                     false,
-                ),
+                )?,
                 request_frame_callback: None,
                 event_callback: None,
                 activate_callback: None,
@@ -1965,7 +3387,7 @@ impl MacWindow {
             let _: () = msg_send![native_window, setFrameTopLeftPoint: window_rect.origin];
             window.0.lock().move_traffic_light();
 
-            window
+            Ok(window)
         }
     }
 
@@ -2019,13 +3441,13 @@ impl MacWindow {
             };
 
             let value_str = if !value.is_null() {
-                let value_ptr: *const i8 = msg_send![value, UTF8String];
-                CStr::from_ptr(value_ptr).to_string_lossy()
+                let value = &*(value as *const NSString);
+                value.to_string()
             } else {
-                "".into()
+                String::new()
             };
 
-            match value_str.as_ref() {
+            match value_str.as_str() {
                 "manual" => Some(UserTabbingPreference::Never),
                 "always" => Some(UserTabbingPreference::Always),
                 _ => Some(UserTabbingPreference::InFullScreen),
@@ -2273,6 +3695,7 @@ impl PlatformWindow for MacWindow {
                 let _: () = msg_send![alert, setInformativeText: ns_string(detail)];
             }
 
+            let mut button_order = Vec::with_capacity(answers.len());
             for (ix, answer) in answers
                 .iter()
                 .enumerate()
@@ -2280,6 +3703,7 @@ impl PlatformWindow for MacWindow {
             {
                 let button: id = msg_send![alert, addButtonWithTitle: ns_string(answer.label())];
                 let _: () = msg_send![button, setTag: ix as NSInteger];
+                button_order.push(ix);
 
                 if answer.is_cancel() {
                     // Bind Escape Key to Cancel Button
@@ -2292,13 +3716,23 @@ impl PlatformWindow for MacWindow {
             if let Some((ix, answer)) = latest_non_cancel_label {
                 let button: id = msg_send![alert, addButtonWithTitle: ns_string(answer.label())];
                 let _: () = msg_send![button, setTag: ix as NSInteger];
+                button_order.push(ix);
             }
+
+            let fallback_answer = answers
+                .iter()
+                .position(PromptButton::is_cancel)
+                .unwrap_or(0);
 
             let (done_tx, done_rx) = oneshot::channel();
             let done_tx = Cell::new(Some(done_tx));
             let block = RcBlock::new(move |answer: NSInteger| {
                 if let Some(done_tx) = done_tx.take() {
-                    let _ = done_tx.send(answer.try_into().unwrap());
+                    let answer = alert_response_index(answer, &button_order).unwrap_or_else(|| {
+                        log::error!("macOS returned invalid alert response {answer}");
+                        fallback_answer
+                    });
+                    let _ = done_tx.send(answer);
                 }
             });
             let native_window = self.0.lock().native_window;
@@ -2418,6 +3852,24 @@ impl PlatformWindow for MacWindow {
         }
     }
 
+    fn set_opacity(&self, opacity: f32) {
+        unsafe {
+            let window = self.0.lock().native_window;
+            let _: () = msg_send![window, setAlphaValue: opacity as f64];
+        }
+    }
+
+    fn set_always_on_top(&self, always_on_top: bool) {
+        let level = if always_on_top {
+            NSPopUpWindowLevel
+        } else {
+            NSNormalWindowLevel
+        };
+        unsafe {
+            self.0.lock().native_window.setLevel_(level);
+        }
+    }
+
     fn set_frame_polling(&self, active: bool) {
         let mut this = self.0.as_ref().lock();
         let was_active = this.frame_polling_active;
@@ -2451,6 +3903,13 @@ impl PlatformWindow for MacWindow {
                 }
             })
             .detach();
+    }
+
+    fn close(&self) {
+        let window = self.0.lock().native_window;
+        unsafe {
+            let _: () = msg_send![window, performClose: nil];
+        }
     }
 
     fn minimize(&self) {
@@ -2652,6 +4111,10 @@ impl PlatformWindow for MacWindow {
         }
     }
 
+    fn set_atlas_byte_budget(&self, budget: Option<u64>) {
+        self.0.lock().renderer.set_atlas_byte_budget(budget);
+    }
+
     fn titlebar_double_click(&self) {
         let window = self.0.lock().native_window;
         perform_titlebar_double_click_action(window)
@@ -2707,18 +4170,13 @@ impl PlatformWindow for MacWindow {
         }
     }
 
-    fn update_accessibility_tree(&mut self, tree: &crate::AccessibilityTree) {
+    fn update_accessibility_tree(
+        &mut self,
+        tree: &crate::AccessibilityTree,
+    ) -> Vec<crate::AccessibilityActionRequest> {
         let mut this = self.0.lock();
         this.accessibility_provider.update_tree(tree);
-        let actions = this.accessibility_provider.drain_actions();
-        drop(this);
-        for (target, action) in actions {
-            log::debug!(
-                "AccessKit action request: {:?} on node {}",
-                action,
-                target.0
-            );
-        }
+        this.accessibility_provider.drain_actions(tree)
     }
 }
 
@@ -2870,22 +4328,397 @@ extern "C" fn webview_did_receive_script_message(this: id, _: Sel, _: id, messag
     let Some(state) = (unsafe { get_webview_delegate_state(this) }) else {
         return;
     };
+    let body: id = unsafe { msg_send![message, body] };
+    let payload = unsafe { webview_message_value(body) };
+    if handle_mac_webview_clipboard_message(state, message, &payload) {
+        return;
+    }
+
     let Some(handler) = state.message_handler.clone() else {
         return;
     };
 
-    let body: id = unsafe { msg_send![message, body] };
-    let payload = unsafe { webview_message_value(body) };
     let mut async_window = state.async_window.clone();
-    let _ = async_window.update(|window, cx| {
-        handler(payload, window, cx);
+    catch_platform_callback("webview message", (), || {
+        let _ = async_window.update(|window, cx| {
+            handler(payload, window, cx);
+        });
     });
+}
+
+extern "C" fn webview_did_start_provisional_navigation(this: id, _: Sel, webview: id, _: id) {
+    emit_webview_page_load(this, webview, WebViewPageLoadEvent::Started);
+}
+
+extern "C" fn webview_did_finish_navigation(this: id, _: Sel, webview: id, _: id) {
+    emit_webview_page_load(this, webview, WebViewPageLoadEvent::Finished);
+}
+
+extern "C" fn webview_decide_policy_for_navigation_response(
+    _: id,
+    _: Sel,
+    _: id,
+    navigation_response: id,
+    decision_handler: id,
+) {
+    let can_show_mime_type: BOOL = unsafe { msg_send![navigation_response, canShowMIMEType] };
+    unsafe {
+        call_navigation_decision_handler(
+            decision_handler,
+            if can_show_mime_type.as_bool() {
+                WKNavigationResponsePolicyAllow
+            } else {
+                WKNavigationResponsePolicyDownload
+            },
+        );
+    }
+}
+
+extern "C" fn webview_navigation_action_did_become_download(
+    this: id,
+    _: Sel,
+    _: id,
+    navigation_action: id,
+    download: id,
+) {
+    let request: id = unsafe { msg_send![navigation_action, request] };
+    let url = ns_request_url_string(request);
+    register_mac_download(this, download, url);
+}
+
+extern "C" fn webview_navigation_response_did_become_download(
+    this: id,
+    _: Sel,
+    _: id,
+    navigation_response: id,
+    download: id,
+) {
+    let response: id = unsafe { msg_send![navigation_response, response] };
+    let url = ns_response_url_string(response);
+    register_mac_download(this, download, url);
+}
+
+extern "C" fn webview_create_webview_with_configuration(
+    this: id,
+    _: Sel,
+    webview: id,
+    configuration: id,
+    navigation_action: id,
+    _: id,
+) -> id {
+    let Some(state) = (unsafe { get_webview_delegate_state(this) }) else {
+        return nil;
+    };
+
+    let request: id = unsafe { msg_send![navigation_action, request] };
+    let url = ns_request_url_string(request);
+    let allow_popup = state.pending_allowed_popups.remove(&url)
+        || resolve_mac_new_window_policy(url.as_ref(), state) == WebViewNewWindowPolicy::Allow;
+    if !allow_popup {
+        return nil;
+    }
+
+    unsafe {
+        let frame: NSRect = msg_send![webview, frame];
+        let popup: id = msg_send![WEBVIEW_CLASS, alloc];
+        let popup: id = msg_send![popup, initWithFrame: frame, configuration: configuration];
+        store_ivar(
+            popup,
+            WEBVIEW_STATE_IVAR,
+            state as *mut MacWebViewDelegateState as *mut c_void,
+        );
+        let _: () = msg_send![popup, setNavigationDelegate: this];
+        let _: () = msg_send![popup, setUIDelegate: this];
+        let _: () = msg_send![popup, setAutoresizingMask: NSViewWidthSizable | NSViewHeightSizable];
+        register_dragged_types(popup);
+        let superview: id = msg_send![webview, superview];
+        if !superview.is_null() {
+            let _: () = msg_send![
+                superview,
+                addSubview: popup,
+                positioned: NSWindowOrderingMode::Above,
+                relativeTo: webview
+            ];
+        }
+        popup.autorelease()
+    }
+}
+
+extern "C" fn webview_did_close(_: id, _: Sel, webview: id) {
+    unsafe {
+        webview.removeFromSuperview();
+    }
+}
+
+extern "C" fn webview_key_down(this: id, _: Sel, event: id) {
+    let zoom_key = (unsafe { get_webview_delegate_state(this) })
+        .filter(|state| state.zoom_hotkeys_enabled)
+        .and_then(|_| mac_webview_zoom_key(event));
+
+    if let Some(zoom_key) = zoom_key {
+        apply_mac_webview_zoom_key(this, zoom_key);
+    } else {
+        unsafe {
+            let _: () = msg_send![super(this, lookup_class(c"WKWebView")), keyDown: event];
+        }
+    }
+}
+
+extern "C" fn webview_magnify(this: id, _: Sel, event: id) {
+    if (unsafe { get_webview_delegate_state(this) }).is_some_and(|state| state.zoom_hotkeys_enabled)
+    {
+        apply_mac_webview_magnification(this, event);
+    } else {
+        unsafe {
+            let _: () = msg_send![super(this, lookup_class(c"WKWebView")), magnifyWithEvent: event];
+        }
+    }
+}
+
+extern "C" fn webview_dragging_entered(this: id, _: Sel, dragging_info: id) -> NSDragOperation {
+    let Some(policy) =
+        dispatch_mac_webview_drag_drop(this, dragging_info, MacWebViewDragEvent::Enter)
+    else {
+        return unsafe {
+            msg_send![super(this, lookup_class(c"WKWebView")), draggingEntered: dragging_info]
+        };
+    };
+
+    if policy == WebViewDragDropPolicy::BlockBrowserDefault {
+        NSDragOperationNone
+    } else {
+        unsafe {
+            msg_send![super(this, lookup_class(c"WKWebView")), draggingEntered: dragging_info]
+        }
+    }
+}
+
+extern "C" fn webview_dragging_updated(this: id, _: Sel, dragging_info: id) -> NSDragOperation {
+    let Some(policy) =
+        dispatch_mac_webview_drag_drop(this, dragging_info, MacWebViewDragEvent::Over)
+    else {
+        return unsafe {
+            msg_send![super(this, lookup_class(c"WKWebView")), draggingUpdated: dragging_info]
+        };
+    };
+
+    if policy == WebViewDragDropPolicy::BlockBrowserDefault {
+        NSDragOperationNone
+    } else {
+        unsafe {
+            msg_send![super(this, lookup_class(c"WKWebView")), draggingUpdated: dragging_info]
+        }
+    }
+}
+
+extern "C" fn webview_dragging_exited(this: id, _: Sel, dragging_info: id) {
+    let _ = dispatch_mac_webview_drag_drop(this, dragging_info, MacWebViewDragEvent::Leave);
+    unsafe {
+        let _: () =
+            msg_send![super(this, lookup_class(c"WKWebView")), draggingExited: dragging_info];
+    }
+}
+
+extern "C" fn webview_dragging_ended(this: id, _: Sel, dragging_info: id) {
+    let _ = dispatch_mac_webview_drag_drop(this, dragging_info, MacWebViewDragEvent::Leave);
+    unsafe {
+        let _: () =
+            msg_send![super(this, lookup_class(c"WKWebView")), draggingEnded: dragging_info];
+    }
+}
+
+extern "C" fn webview_perform_drag_operation(this: id, _: Sel, dragging_info: id) -> BOOL {
+    let Some(policy) =
+        dispatch_mac_webview_drag_drop(this, dragging_info, MacWebViewDragEvent::Drop)
+    else {
+        return unsafe {
+            msg_send![super(this, lookup_class(c"WKWebView")), performDragOperation: dragging_info]
+        };
+    };
+
+    if policy == WebViewDragDropPolicy::BlockBrowserDefault {
+        YES
+    } else {
+        unsafe {
+            msg_send![super(this, lookup_class(c"WKWebView")), performDragOperation: dragging_info]
+        }
+    }
+}
+
+extern "C" fn webview_download_decide_destination(
+    this: id,
+    _: Sel,
+    download: id,
+    response: id,
+    suggested_filename: id,
+    completion_handler: id,
+) {
+    let Some(state) = (unsafe { get_webview_delegate_state(this) }) else {
+        unsafe {
+            call_download_destination_handler(completion_handler, nil);
+        }
+        return;
+    };
+
+    let download_id = download as usize;
+    let response_url = ns_response_url_string(response);
+    let suggested_filename = if suggested_filename.is_null() {
+        "download.bin"
+    } else {
+        unsafe { suggested_filename.to_str() }
+    };
+    let suggested_path = default_download_path(suggested_filename);
+    let url = state
+        .downloads
+        .get(&download_id)
+        .map(|download| download.url.clone())
+        .filter(|url| !url.is_empty())
+        .unwrap_or(response_url);
+
+    let Some(destination) = resolve_mac_download_started(url.clone(), suggested_path, state) else {
+        state.downloads.remove(&download_id);
+        unsafe {
+            call_download_destination_handler(completion_handler, nil);
+        }
+        return;
+    };
+
+    state.downloads.insert(
+        download_id,
+        MacWebViewDownloadState {
+            url,
+            path: Some(destination.clone()),
+        },
+    );
+
+    unsafe {
+        let destination_url: id = msg_send![lookup_class(c"NSURL"), fileURLWithPath: ns_string(&destination.to_string_lossy())];
+        call_download_destination_handler(completion_handler, destination_url);
+    }
+}
+
+extern "C" fn webview_download_did_finish(this: id, _: Sel, download: id) {
+    let Some(state) = (unsafe { get_webview_delegate_state(this) }) else {
+        return;
+    };
+    if let Some(download_state) = state.downloads.remove(&(download as usize)) {
+        dispatch_mac_download_completed(state, download_state, true);
+    }
+}
+
+extern "C" fn webview_download_did_fail(this: id, _: Sel, download: id, error: id, _: id) {
+    if !error.is_null() {
+        log::warn!("WebView download failed: {}", ns_error_message(error));
+    }
+    let Some(state) = (unsafe { get_webview_delegate_state(this) }) else {
+        return;
+    };
+    if let Some(download_state) = state.downloads.remove(&(download as usize)) {
+        dispatch_mac_download_completed(state, download_state, false);
+    }
+}
+
+extern "C" fn webview_download_did_receive_final_url(this: id, _: Sel, download: id, url: id) {
+    let Some(state) = (unsafe { get_webview_delegate_state(this) }) else {
+        return;
+    };
+    if let Some(download_state) = state.downloads.get_mut(&(download as usize)) {
+        if let Some(path) = ns_url_path(url) {
+            download_state.path = Some(path);
+        }
+    }
+}
+
+extern "C" fn webview_observe_value_for_key_path(
+    this: id,
+    _: Sel,
+    key_path: id,
+    object: id,
+    _: id,
+    _: *mut c_void,
+) {
+    if key_path.is_null() || unsafe { key_path.to_str() } != "title" {
+        return;
+    }
+    emit_webview_document_title_changed(this, object);
+}
+
+fn emit_webview_page_load(delegate: id, webview: id, event: WebViewPageLoadEvent) {
+    let Some(state) = (unsafe { get_webview_delegate_state(delegate) }) else {
+        return;
+    };
+    let Some(handler) = state.page_load_handler.clone() else {
+        return;
+    };
+
+    let url = mac_webview_url(webview);
+    let mut async_window = state.async_window.clone();
+    catch_platform_callback("webview page load", (), || {
+        let _ = async_window.update(|window, cx| {
+            handler(event, url, window, cx);
+        });
+    });
+}
+
+fn emit_webview_document_title_changed(delegate: id, webview: id) {
+    let Some(state) = (unsafe { get_webview_delegate_state(delegate) }) else {
+        return;
+    };
+    let Some(handler) = state.document_title_changed_handler.clone() else {
+        return;
+    };
+
+    let title = mac_webview_title(webview);
+    let mut async_window = state.async_window.clone();
+    catch_platform_callback("webview title change", (), || {
+        let _ = async_window.update(|window, cx| {
+            handler(title, window, cx);
+        });
+    });
+}
+
+fn resolve_mac_new_window_policy(
+    url: &str,
+    state: &MacWebViewDelegateState,
+) -> WebViewNewWindowPolicy {
+    if let Some(handler) = state.new_window_handler.clone() {
+        let mut async_window = state.async_window.clone();
+        return catch_platform_callback(
+            "webview new-window policy",
+            WebViewNewWindowPolicy::Deny,
+            || {
+                async_window
+                    .update(|window, cx| handler(url.to_string().into(), window, cx))
+                    .unwrap_or(WebViewNewWindowPolicy::Deny)
+            },
+        );
+    }
+
+    if let Some(handler) = state.navigation_handler.clone() {
+        let mut async_window = state.async_window.clone();
+        return if catch_platform_callback(
+            "webview navigation policy",
+            NavigationPolicy::Deny,
+            || {
+                async_window
+                    .update(|window, cx| handler(url.to_string().into(), window, cx))
+                    .unwrap_or(NavigationPolicy::Deny)
+            },
+        ) == NavigationPolicy::Allow
+        {
+            WebViewNewWindowPolicy::NavigateCurrent
+        } else {
+            WebViewNewWindowPolicy::Deny
+        };
+    }
+
+    WebViewNewWindowPolicy::NavigateCurrent
 }
 
 extern "C" fn webview_decide_policy_for_navigation_action(
     this: id,
     _: Sel,
-    _: id,
+    webview: id,
     navigation_action: id,
     decision_handler: id,
 ) {
@@ -2897,38 +4730,61 @@ extern "C" fn webview_decide_policy_for_navigation_action(
     };
 
     let request: id = unsafe { msg_send![navigation_action, request] };
-    let url: id = unsafe { msg_send![request, URL] };
-    let url_string = if url.is_null() {
-        String::new()
-    } else {
-        let absolute_string: id = unsafe { msg_send![url, absoluteString] };
-        if absolute_string.is_null() {
-            String::new()
-        } else {
-            unsafe { absolute_string.to_str().to_string() }
-        }
-    };
-    let target_frame: id = unsafe { msg_send![navigation_action, targetFrame] };
+    let url_string = ns_request_url_string(request);
+    let should_perform_download: BOOL =
+        unsafe { msg_send![navigation_action, shouldPerformDownload] };
 
-    let default_policy = if target_frame.is_null() {
-        NavigationPolicy::Deny
-    } else {
-        NavigationPolicy::Allow
-    };
-
+    let default_policy = NavigationPolicy::Allow;
     let policy = if let Some(handler) = state.navigation_handler.clone() {
         let mut async_window = state.async_window.clone();
-        async_window
-            .update(|window, cx| handler(url_string.clone().into(), window, cx))
-            .unwrap_or(default_policy)
+        catch_platform_callback("webview navigation policy", NavigationPolicy::Deny, || {
+            async_window
+                .update(|window, cx| handler(url_string.clone(), window, cx))
+                .unwrap_or(default_policy)
+        })
     } else {
         default_policy
     };
 
+    if should_perform_download.as_bool() {
+        unsafe {
+            call_navigation_decision_handler(
+                decision_handler,
+                if policy == NavigationPolicy::Allow {
+                    WKNavigationActionPolicyDownload
+                } else {
+                    WKNavigationActionPolicyCancel
+                },
+            );
+        }
+        return;
+    }
+
+    let target_frame: id = unsafe { msg_send![navigation_action, targetFrame] };
+
+    if target_frame.is_null() {
+        let policy = resolve_mac_new_window_policy(url_string.as_ref(), state);
+        if policy == WebViewNewWindowPolicy::NavigateCurrent {
+            unsafe {
+                let _: () = msg_send![webview, loadRequest: request];
+            }
+        } else if policy == WebViewNewWindowPolicy::Allow {
+            state.pending_allowed_popups.insert(url_string);
+            unsafe {
+                call_navigation_decision_handler(decision_handler, WKNavigationActionPolicyAllow);
+            }
+            return;
+        }
+        unsafe {
+            call_navigation_decision_handler(decision_handler, WKNavigationActionPolicyCancel);
+        }
+        return;
+    }
+
     unsafe {
         call_navigation_decision_handler(
             decision_handler,
-            if policy == NavigationPolicy::Allow && !target_frame.is_null() {
+            if policy == NavigationPolicy::Allow {
                 WKNavigationActionPolicyAllow
             } else {
                 WKNavigationActionPolicyCancel
@@ -2988,7 +4844,7 @@ extern "C" fn handle_key_event(this: id, native_event: id, key_equivalent: bool)
     let run_callback = |event: PlatformInput| -> BOOL {
         let mut callback = window_state.as_ref().lock().event_callback.take();
         let handled: BOOL = if let Some(callback) = callback.as_mut() {
-            Bool::new(!callback(event).propagate)
+            catch_platform_callback("input event", NO, || Bool::new(!callback(event).propagate))
         } else {
             NO
         };
@@ -3231,7 +5087,9 @@ extern "C" fn handle_view_event(this: id, _: Sel, native_event: id) {
 
         if let Some(mut callback) = lock.event_callback.take() {
             drop(lock);
-            callback(event);
+            catch_platform_callback("input event", (), || {
+                callback(event);
+            });
             window_state.lock().event_callback = Some(callback);
         }
     }
@@ -3303,7 +5161,7 @@ extern "C" fn window_did_move(this: id, _: Sel, _: id) {
     let mut lock = window_state.as_ref().lock();
     if let Some(mut callback) = lock.moved_callback.take() {
         drop(lock);
-        callback();
+        catch_platform_callback("window moved", (), &mut callback);
         window_state.lock().moved_callback = Some(callback);
     }
 }
@@ -3356,7 +5214,7 @@ extern "C" fn window_did_change_key_status(this: id, selector: Sel, _: id) {
                 lock.renderer.set_presents_with_transaction(true);
                 lock.stop_display_link();
                 drop(lock);
-                callback(Default::default());
+                catch_platform_callback("frame request", (), || callback(Default::default()));
 
                 let mut lock = window_state.lock();
                 lock.request_frame_callback = Some(callback);
@@ -3378,7 +5236,7 @@ extern "C" fn window_did_change_key_status(this: id, selector: Sel, _: id) {
 
             if let Some(mut callback) = lock.activate_callback.take() {
                 drop(lock);
-                callback(is_active);
+                catch_platform_callback("window activation", (), || callback(is_active));
                 window_state.lock().activate_callback = Some(callback);
             };
         })
@@ -3390,7 +5248,7 @@ extern "C" fn window_should_close(this: id, _: Sel, _: id) -> BOOL {
     let mut lock = window_state.as_ref().lock();
     if let Some(mut callback) = lock.should_close_callback.take() {
         drop(lock);
-        let should_close = callback();
+        let should_close = catch_platform_callback("window should-close", false, &mut callback);
         window_state.lock().should_close_callback = Some(callback);
         Bool::new(should_close)
     } else {
@@ -3407,7 +5265,7 @@ extern "C" fn close_window(this: id, _: Sel) {
         };
 
         if let Some(callback) = close_callback {
-            callback();
+            catch_platform_callback("window close", (), callback);
         }
 
         let _: () = msg_send![super(this, lookup_class(c"NSWindow")), close];
@@ -3441,7 +5299,7 @@ extern "C" fn view_did_change_backing_properties(this: id, _: Sel) {
         let content_size = lock.content_size();
         let scale_factor = lock.scale_factor();
         drop(lock);
-        callback(content_size, scale_factor);
+        catch_platform_callback("window resize", (), || callback(content_size, scale_factor));
         window_state.as_ref().lock().resize_callback = Some(callback);
     };
 }
@@ -3472,7 +5330,7 @@ extern "C" fn set_frame_size(this: id, _: Sel, size: NSSize) {
         let content_size = lock.content_size();
         let scale_factor = lock.scale_factor();
         drop(lock);
-        callback(content_size, scale_factor);
+        catch_platform_callback("window resize", (), || callback(content_size, scale_factor));
         window_state.lock().resize_callback = Some(callback);
     };
 }
@@ -3485,7 +5343,7 @@ extern "C" fn display_layer(this: id, _: Sel, _: id) {
         lock.renderer.set_presents_with_transaction(true);
         lock.stop_display_link();
         drop(lock);
-        callback(Default::default());
+        catch_platform_callback("frame request", (), || callback(Default::default()));
 
         let mut lock = window_state.lock();
         lock.request_frame_callback = Some(callback);
@@ -3502,7 +5360,7 @@ unsafe extern "C" fn step(view: *mut c_void) {
 
     if let Some(mut callback) = lock.request_frame_callback.take() {
         drop(lock);
-        callback(Default::default());
+        catch_platform_callback("frame request", (), || callback(Default::default()));
         window_state.lock().request_frame_callback = Some(callback);
     }
 }
@@ -3654,11 +5512,13 @@ extern "C" fn do_command_by_selector(this: id, _: Sel, _: Sel) {
     drop(lock);
 
     if let Some((keystroke, mut callback)) = keystroke.zip(event_callback.as_mut()) {
-        let handled = (callback)(PlatformInput::KeyDown(KeyDownEvent {
-            keystroke,
-            is_held: false,
-        }));
-        state.as_ref().lock().do_command_handled = Some(!handled.propagate);
+        let handled = catch_platform_callback("command key", None, || {
+            Some((callback)(PlatformInput::KeyDown(KeyDownEvent {
+                keystroke,
+                is_held: false,
+            })))
+        });
+        state.as_ref().lock().do_command_handled = handled.map(|handled| !handled.propagate);
     }
 
     state.as_ref().lock().event_callback = event_callback;
@@ -3670,7 +5530,7 @@ extern "C" fn view_did_change_effective_appearance(this: id, _: Sel) {
         let mut lock = state.as_ref().lock();
         if let Some(mut callback) = lock.appearance_changed_callback.take() {
             drop(lock);
-            callback();
+            catch_platform_callback("appearance changed", (), &mut callback);
             state.lock().appearance_changed_callback = Some(callback);
         }
     }
@@ -3704,10 +5564,8 @@ fn screen_point_to_gpui_point(this: id, position: NSPoint) -> Point<Pixels> {
 extern "C" fn dragging_entered(this: id, _: Sel, dragging_info: id) -> NSDragOperation {
     let window_state = unsafe { get_window_state(this) };
     let position = drag_event_position(&window_state, dragging_info);
-    let paths = external_paths_from_event(dragging_info);
-    if let Some(event) =
-        paths.map(|paths| PlatformInput::FileDrop(FileDropEvent::Entered { position, paths }))
-        && send_new_event(&window_state, event)
+    if let Some(data) = external_drop_data_from_event(dragging_info)
+        && send_new_event(&window_state, file_drop_entered_event(position, data))
     {
         window_state.lock().external_files_dragged = true;
         return NSDragOperationCopy;
@@ -3747,8 +5605,10 @@ extern "C" fn perform_drag_operation(this: id, _: Sel, dragging_info: id) -> BOO
     .to_objc()
 }
 
-fn external_paths_from_event(dragging_info: id) -> Option<ExternalPaths> {
-    let mut paths = SmallVec::new();
+fn external_drop_data_from_event(dragging_info: id) -> Option<ExternalDropData> {
+    let mut paths = SmallVec::<[PathBuf; 2]>::new();
+    let mut urls = Vec::new();
+    let mut text_values = Vec::new();
     let pasteboard: id = unsafe { msg_send![dragging_info, draggingPasteboard] };
     let pasteboard_items: id = unsafe { msg_send![pasteboard, pasteboardItems] };
     if pasteboard_items.is_null() {
@@ -3758,26 +5618,66 @@ fn external_paths_from_event(dragging_info: id) -> Option<ExternalPaths> {
     for index in 0..count {
         let item: id = unsafe { msg_send![pasteboard_items, objectAtIndex: index] };
         let file_url: id = unsafe { msg_send![item, stringForType: NSPasteboardTypeFileURL] };
-        if file_url.is_null() {
-            continue;
+        let mut item_has_file_url = false;
+        if !file_url.is_null() {
+            let url: id = unsafe { msg_send![lookup_class(c"NSURL"), URLWithString: file_url] };
+            if !url.is_null() {
+                let is_file_url: BOOL = unsafe { msg_send![url, isFileURL] };
+                if is_file_url == YES {
+                    item_has_file_url = true;
+                    let path: id = unsafe { msg_send![url, path] };
+                    if !path.is_null() {
+                        paths.push(PathBuf::from(unsafe { path.to_str() }.to_string()));
+                    }
+                }
+            }
         }
 
-        let url: id = unsafe { msg_send![lookup_class(c"NSURL"), URLWithString: file_url] };
-        if url.is_null() {
-            continue;
+        let url_value = pasteboard_item_string(item, unsafe { NSPasteboardTypeURL });
+        if let Some(url_value) = url_value {
+            urls.push(url_value);
         }
 
-        let is_file_url: BOOL = unsafe { msg_send![url, isFileURL] };
-        if is_file_url != YES {
-            continue;
-        }
-
-        let path: id = unsafe { msg_send![url, path] };
-        if !path.is_null() {
-            paths.push(PathBuf::from(unsafe { path.to_str() }.to_string()));
+        if !item_has_file_url {
+            let string_value = pasteboard_item_string(item, unsafe { NSPasteboardTypeString });
+            if let Some(string_value) = string_value
+                && !string_value.is_empty()
+            {
+                text_values.push(string_value);
+            }
         }
     }
-    Some(ExternalPaths(paths))
+    urls.sort();
+    urls.dedup();
+    let mut data = ExternalDropData::from_paths(paths).with_urls(urls);
+    if !text_values.is_empty() {
+        text_values.dedup();
+        data = data.with_text(text_values.join("\n"));
+    }
+    if data.has_paths() || data.has_urls() || data.has_text() {
+        Some(data)
+    } else {
+        None
+    }
+}
+
+fn pasteboard_item_string(item: id, pasteboard_type: &'static NSPasteboardType) -> Option<String> {
+    let value: id = unsafe { msg_send![item, stringForType: pasteboard_type] };
+    if value.is_null() {
+        return None;
+    }
+    Some(unsafe { value.to_str() }.to_string())
+}
+
+fn file_drop_entered_event(position: Point<Pixels>, data: ExternalDropData) -> PlatformInput {
+    if data.has_urls() || data.has_text() {
+        PlatformInput::FileDrop(FileDropEvent::DataEntered { position, data })
+    } else {
+        PlatformInput::FileDrop(FileDropEvent::Entered {
+            position,
+            paths: data.paths().clone(),
+        })
+    }
 }
 
 extern "C" fn conclude_drag_operation(this: id, _: Sel, _: id) {
@@ -3800,7 +5700,9 @@ async fn synthetic_drag(
             if lock.synthetic_drag_counter == drag_id {
                 if let Some(mut callback) = lock.event_callback.take() {
                     drop(lock);
-                    callback(PlatformInput::MouseMove(event.clone()));
+                    catch_platform_callback("synthetic drag", (), || {
+                        callback(PlatformInput::MouseMove(event.clone()));
+                    });
                     window_state.lock().event_callback = Some(callback);
                 }
             } else {
@@ -3813,7 +5715,9 @@ async fn synthetic_drag(
 fn send_new_event(window_state_lock: &Mutex<MacWindowState>, e: PlatformInput) -> bool {
     let window_state = window_state_lock.lock().event_callback.take();
     if let Some(mut callback) = window_state {
-        callback(e);
+        catch_platform_callback("input event", (), || {
+            callback(e);
+        });
         window_state_lock.lock().event_callback = Some(callback);
         true
     } else {
@@ -4002,7 +5906,7 @@ extern "C" fn move_tab_to_new_window(this: id, _: Sel, _: id) {
         let mut lock = window_state.as_ref().lock();
         if let Some(mut callback) = lock.move_tab_to_new_window_callback.take() {
             drop(lock);
-            callback();
+            catch_platform_callback("move tab to new window", (), &mut callback);
             window_state.lock().move_tab_to_new_window_callback = Some(callback);
         }
     }
@@ -4016,7 +5920,7 @@ extern "C" fn merge_all_windows(this: id, _: Sel, _: id) {
         let mut lock = window_state.as_ref().lock();
         if let Some(mut callback) = lock.merge_all_windows_callback.take() {
             drop(lock);
-            callback();
+            catch_platform_callback("merge windows", (), &mut callback);
             window_state.lock().merge_all_windows_callback = Some(callback);
         }
     }
@@ -4027,7 +5931,7 @@ extern "C" fn select_next_tab(this: id, _sel: Sel, _id: id) {
     let mut lock = window_state.as_ref().lock();
     if let Some(mut callback) = lock.select_next_tab_callback.take() {
         drop(lock);
-        callback();
+        catch_platform_callback("select next tab", (), &mut callback);
         window_state.lock().select_next_tab_callback = Some(callback);
     }
 }
@@ -4037,7 +5941,7 @@ extern "C" fn select_previous_tab(this: id, _sel: Sel, _id: id) {
     let mut lock = window_state.as_ref().lock();
     if let Some(mut callback) = lock.select_previous_tab_callback.take() {
         drop(lock);
-        callback();
+        catch_platform_callback("select previous tab", (), &mut callback);
         window_state.lock().select_previous_tab_callback = Some(callback);
     }
 }
@@ -4052,8 +5956,48 @@ extern "C" fn toggle_tab_bar(this: id, _sel: Sel, _id: id) {
 
         if let Some(mut callback) = lock.toggle_tab_bar_callback.take() {
             drop(lock);
-            callback();
+            catch_platform_callback("toggle tab bar", (), &mut callback);
             window_state.lock().toggle_tab_bar_callback = Some(callback);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn platform_callback_panics_are_contained_with_the_requested_fallback() {
+        let value = catch_platform_callback("test", 41, || panic!("callback failure"));
+        assert_eq!(value, 41);
+
+        let value = catch_platform_callback("test", 0, || 42);
+        assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn native_alert_responses_map_back_to_original_answer_indices() {
+        let button_order = [0, 2, 1];
+        assert_eq!(alert_response_index(1_000, &button_order), Some(0));
+        assert_eq!(alert_response_index(1_001, &button_order), Some(2));
+        assert_eq!(alert_response_index(1_002, &button_order), Some(1));
+        assert_eq!(alert_response_index(999, &button_order), None);
+        assert_eq!(alert_response_index(1_003, &button_order), None);
+    }
+
+    #[test]
+    fn webview_clipboard_script_exposes_text_clipboard_bridge() {
+        let script = webview_clipboard_script();
+
+        assert!(script.contains("navigator, 'clipboard'"));
+        assert!(script.contains("readText: () => send('readText')"));
+        assert!(script.contains("writeText: value => send('writeText'"));
+        assert!(script.contains("bridge.read = () => bridge.readText()"));
+        assert!(script.contains("bridge.write = async items"));
+        assert!(script.contains("Only text/plain clipboard items are supported"));
+        assert!(script.contains("document.execCommand = function"));
+        assert!(script.contains("normalized === 'copy' || normalized === 'cut'"));
+        assert!(script.contains("__kaelClipboard"));
+        assert!(script.contains("__kaelClipboardBridge"));
     }
 }

@@ -6,12 +6,13 @@ alternatives, and is honest about what is missing. Kael is pre-1.0 (currently
 `0.3.x`); treat it accordingly.
 
 Kael is a fork of [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui).
-It targets native desktop apps (macOS, Windows, Linux) written in Rust, rendered
-on the GPU with no webview.
+It targets native desktop apps (macOS, Windows, Linux) written in Rust and
+rendered on the GPU. Kael is native-first, but it also provides explicit WebView
+islands for workflows where web compatibility is the product requirement.
 
 ## How it compares
 
-| | **Kael** | **Electron** | **Tauri** | **egui** | **Iced** |
+| | **Kael** | **browser-runtime stack** | **Tauri** | **egui** | **Iced** |
 |---|---|---|---|---|---|
 | Architecture | Native GPU retained-mode | Chromium + Node webview | OS webview + Rust core | Immediate-mode GPU | Native retained-mode (Elm-style) |
 | Render path | Metal / DX11 / Vulkan | Blink compositor | System WebView2/WKWebView/WebKitGTK | wgpu/glow | wgpu/tiny-skia |
@@ -22,7 +23,7 @@ on the GPU with no webview.
 | Memory at idle | Low (no browser) | High (full Chromium) | Low–moderate (shares OS webview) | Low | Low |
 | Bundled runtime | None | Ships Chromium + Node | None (uses OS webview) | None | None |
 | Accessibility | Native per platform (see below) | Chromium a11y (mature) | OS webview a11y (mature) | Limited / partial | AccessKit-based |
-| Packaging / updater | Built in (see below) | Mature (electron-builder, Squirrel) | Built in (bundler + updater) | Bring your own | Bring your own |
+| Packaging / updater | Built in (see below) | Mature (browser-runtime-builder, Squirrel) | Built in (bundler + updater) | Bring your own | Bring your own |
 | Web deployment | No | No (desktop) | No (desktop) | Yes (wasm) | Yes (wasm) |
 | Maturity / ecosystem | Pre-1.0, small | Very mature, huge | Mature, large | Mature, focused | Mature, focused |
 
@@ -33,13 +34,14 @@ runtime.
 
 ## What the architecture buys you
 
-Kael draws every widget itself on the GPU. There is no HTML, CSS, DOM, or
-JavaScript bridge — layout is flexbox via Taffy, and the whole UI is one Rust
-crate. Compared to Electron you drop the bundled browser (smaller binaries,
-lower idle memory, no IPC hop between a JS UI and a native core). Compared to
-Tauri you also drop the dependency on whatever webview the user's OS ships,
-which removes a class of per-platform rendering and a11y inconsistencies — at
-the cost of reimplementing what the browser gave you for free.
+Kael draws native widgets itself on the GPU. The primary UI path has no HTML,
+CSS, DOM, or JavaScript bridge — layout is flexbox/grid via Taffy, and the app
+UI can live in one Rust crate. Compared to browser-runtime stack you drop the bundled browser
+(smaller binaries, lower idle memory, no IPC hop between a JS UI and a native
+core). Compared to Tauri you do not have to build the whole app in the user's
+system webview. The tradeoff is real: browser features such as mature media
+playback, DOM APIs, CSS edge cases, and the npm UI ecosystem must be replaced
+with native Kael APIs or isolated in explicit WebView surfaces.
 
 Versus immediate-mode toolkits like egui, Kael is retained-mode with a reactive
 `Entity<T>` state system, so it only re-renders what changed rather than
@@ -73,19 +75,33 @@ installing. This is closer to Tauri's batteries-included story than to egui/Iced
 
 Be aware of the gaps before committing:
 
-- **No touch / pen input** — mouse and keyboard only.
+- **Touch / pen input is not Chromium-complete yet** — pointer, scroll, and
+  magnify gestures exist, and `CapabilityReport` now separates
+  `PrecisionPointerInput`, `GestureInput`, `TouchInput`, and `PenInput`, but
+  direct touch contact streams and pen pressure/tilt metadata still need
+  backend work.
 - **No URL routing** — navigation is an in-app stack, not URL-addressable.
 - **No web deployment** — desktop only; there is no wasm/browser target. If you
   need the same UI on the web, egui or Iced (or a webview stack) fit better.
+- **No full browser-platform parity** — native Kael UI is not a DOM/CSS/JS
+  runtime. Use WebView islands for web-shaped requirements while native
+  equivalents mature.
+- **Media is still bridging the gap** — audio/video primitives,
+  `VideoController`, and `VideoPlayer::source(...)` exist, including parsed and
+  rendered WebVTT/SRT text tracks with built-in caption selection.
+  `VideoPlayer::url(...)` defaults to automatic native-vs-WebView routing for
+  browser-media manifests, but hardware decode, richer native streaming,
+  native audio/video stream selection, and full browser-media parity are still
+  roadmap work.
 - **Pre-1.0 API** — expect breaking changes between minor versions.
 - **Smaller ecosystem** — fewer third-party widgets, examples, and answers than
-  Electron or Tauri. You will occasionally be the first to hit something.
+  browser-runtime stack or Tauri. You will occasionally be the first to hit something.
 
 ## When to pick Kael
 
 Reach for Kael when you want native GPU performance and a single Rust codebase
 for a desktop app — IDEs, editors, dashboards, design and media tools — and you
-are comfortable on a pre-1.0 framework. Reach for Electron or Tauri when you
-need web-tech UI, a large ecosystem, or web + desktop from one codebase; reach
-for egui when an immediate-mode tool UI is enough; reach for Iced when you want
-a mature, native, Elm-style Rust toolkit.
+are comfortable on a pre-1.0 framework. Reach for browser-runtime stack or Tauri when you
+need the full web platform as your default UI runtime, a large ecosystem, or one
+codebase for web and desktop; reach for egui when an immediate-mode tool UI is
+enough; reach for Iced when you want a mature, native, Elm-style Rust toolkit.

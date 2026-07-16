@@ -58,7 +58,7 @@ fn main() {
                     })),
                     ..Default::default()
                 },
-                |_, cx| cx.new(|cx| NotificationCenterDemo::new(cx)),
+                |_, cx| cx.new(NotificationCenterDemo::new),
             )
             .unwrap();
         });
@@ -72,7 +72,7 @@ struct NotificationCenterDemo {
 
 impl NotificationCenterDemo {
     fn new(cx: &mut Context<Self>) -> Self {
-        let notification_state = cx.new(|cx| NotificationCenterState::new(cx));
+        let notification_state = cx.new(NotificationCenterState::new);
 
         notification_state.update(cx, |state, cx| {
             state.add(

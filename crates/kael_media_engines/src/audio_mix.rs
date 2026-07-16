@@ -10,6 +10,8 @@ use std::ops::Range;
 
 use crate::media::{Timeline, TrackType};
 
+const MAX_MIX_SAMPLES: usize = 32 * 1024 * 1024;
+
 /// Supplies decoded mono samples for an audio clip's source frame.
 pub trait AudioProvider {
     /// Return `samples_per_frame` mono samples for `source` at `source_frame` — the
@@ -35,16 +37,25 @@ pub fn mix_range(
     provider: &dyn AudioProvider,
 ) -> Option<Vec<f32>> {
     let fps = timeline.frame_rate;
-    if fps <= 0.0 {
+    if !fps.is_finite() || fps <= 0.0 {
         return None;
     }
     let samples_per_frame = sample_rate as f64 / fps;
     if samples_per_frame <= 0.0 || samples_per_frame.fract().abs() > 1e-9 {
         return None;
     }
+    if samples_per_frame > usize::MAX as f64 {
+        return None;
+    }
     let spf = samples_per_frame as usize;
-    let frame_count = range.end.saturating_sub(range.start) as usize;
-    let mut output = vec![0.0f32; frame_count * spf];
+    let frame_count = usize::try_from(range.end.saturating_sub(range.start)).ok()?;
+    let output_len = frame_count.checked_mul(spf)?;
+    if output_len > MAX_MIX_SAMPLES {
+        return None;
+    }
+    let mut output = Vec::new();
+    output.try_reserve_exact(output_len).ok()?;
+    output.resize(output_len, 0.0f32);
 
     for (index, frame) in range.enumerate() {
         let base = index * spf;
@@ -60,8 +71,18 @@ pub fn mix_range(
                 continue;
             };
             if let Some(samples) = provider.samples(&clip.source, source_frame, spf) {
+                let gain = if track.gain.is_finite() {
+                    track.gain
+                } else {
+                    0.0
+                };
                 for (offset, sample) in samples.iter().take(spf).enumerate() {
-                    output[base + offset] += *sample * track.gain;
+                    if sample.is_finite() {
+                        let sum =
+                            f64::from(output[base + offset]) + f64::from(*sample) * f64::from(gain);
+                        output[base + offset] =
+                            sum.clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32;
+                    }
                 }
             }
         }
@@ -113,11 +134,21 @@ impl AudioProvider for WavAudioProvider {
         source_frame: u64,
         samples_per_frame: usize,
     ) -> Option<Vec<f32>> {
+        if samples_per_frame > MAX_MIX_SAMPLES {
+            return None;
+        }
         let mono = self.sources.get(source)?;
-        let start = source_frame as usize * samples_per_frame;
-        let mut window = vec![0.0f32; samples_per_frame];
+        let start = usize::try_from(source_frame)
+            .ok()
+            .and_then(|frame| frame.checked_mul(samples_per_frame));
+        let mut window = Vec::new();
+        window.try_reserve_exact(samples_per_frame).ok()?;
+        window.resize(samples_per_frame, 0.0f32);
+        let Some(start) = start else {
+            return Some(window);
+        };
         for (offset, slot) in window.iter_mut().enumerate() {
-            if let Some(&sample) = mono.get(start + offset) {
+            if let Some(&sample) = start.checked_add(offset).and_then(|index| mono.get(index)) {
                 *slot = sample;
             }
         }
@@ -139,6 +170,7 @@ pub enum PanLaw {
 /// Left/right gains for `pan` in `-1..=1` (-1 hard left, 0 center, +1 hard right) under
 /// the given [`PanLaw`]. Pan is clamped to the valid range.
 pub fn pan_gains(pan: f32, law: PanLaw) -> (f32, f32) {
+    let pan = if pan.is_finite() { pan } else { 0.0 };
     let position = (pan.clamp(-1.0, 1.0) + 1.0) / 2.0; // 0 = left, 1 = right
     let (linear_left, linear_right) = (1.0 - position, position);
     let angle = position * std::f32::consts::FRAC_PI_2;
@@ -160,7 +192,7 @@ pub const SILENCE_DBFS: f32 = -120.0;
 /// clamp to [`SILENCE_DBFS`].
 pub fn linear_to_dbfs(linear: f32) -> f32 {
     let magnitude = linear.abs();
-    if magnitude <= 1e-6 {
+    if !magnitude.is_finite() || magnitude <= 1e-6 {
         SILENCE_DBFS
     } else {
         20.0 * magnitude.log10()
@@ -169,7 +201,16 @@ pub fn linear_to_dbfs(linear: f32) -> f32 {
 
 /// Convert dBFS to a linear amplitude.
 pub fn dbfs_to_linear(dbfs: f32) -> f32 {
-    10f32.powf(dbfs / 20.0)
+    if dbfs.is_nan() {
+        1.0
+    } else {
+        let linear = 10f32.powf(dbfs / 20.0);
+        if linear.is_infinite() && linear.is_sign_positive() {
+            f32::MAX
+        } else {
+            linear
+        }
+    }
 }
 
 /// Peak and RMS level of a sample buffer, in dBFS.
@@ -189,11 +230,22 @@ pub fn meter(samples: &[f32]) -> LevelMeter {
             rms_dbfs: SILENCE_DBFS,
         };
     }
-    let peak = samples.iter().fold(0.0f32, |max, &s| max.max(s.abs()));
-    let mean_square = samples.iter().map(|&s| s * s).sum::<f32>() / samples.len() as f32;
+    let peak = samples.iter().fold(0.0f32, |max, &sample| {
+        if sample.is_finite() {
+            max.max(sample.abs())
+        } else {
+            max
+        }
+    });
+    let mean_square = samples
+        .iter()
+        .filter(|sample| sample.is_finite())
+        .map(|&sample| f64::from(sample).powi(2))
+        .sum::<f64>()
+        / samples.len() as f64;
     LevelMeter {
         peak_dbfs: linear_to_dbfs(peak),
-        rms_dbfs: linear_to_dbfs(mean_square.sqrt()),
+        rms_dbfs: linear_to_dbfs(mean_square.sqrt() as f32),
     }
 }
 
@@ -205,6 +257,9 @@ pub fn apply_fade_in(buffer: &mut [f32], samples: usize) {
         return;
     }
     for (index, sample) in buffer.iter_mut().take(count).enumerate() {
+        if !sample.is_finite() {
+            *sample = 0.0;
+        }
         *sample *= index as f32 / (count - 1) as f32;
     }
 }
@@ -218,6 +273,9 @@ pub fn apply_fade_out(buffer: &mut [f32], samples: usize) {
         return;
     }
     for offset in 0..count {
+        if !buffer[length - 1 - offset].is_finite() {
+            buffer[length - 1 - offset] = 0.0;
+        }
         buffer[length - 1 - offset] *= offset as f32 / (count - 1) as f32;
     }
 }
@@ -235,15 +293,27 @@ pub fn crossfade(outgoing: &[f32], incoming: &[f32]) -> Vec<f32> {
             index as f32 / (length - 1) as f32
         };
         let angle = t * std::f32::consts::FRAC_PI_2;
-        output.push(outgoing[index] * angle.cos() + incoming[index] * angle.sin());
+        let outgoing = if outgoing[index].is_finite() {
+            outgoing[index]
+        } else {
+            0.0
+        };
+        let incoming = if incoming[index].is_finite() {
+            incoming[index]
+        } else {
+            0.0
+        };
+        output.push(outgoing * angle.cos() + incoming * angle.sin());
     }
     output
 }
 
 /// Scale every sample in `buffer` by `gain` in place.
 pub fn apply_gain(buffer: &mut [f32], gain: f32) {
+    let gain = if gain.is_finite() { gain } else { 1.0 };
     for sample in buffer.iter_mut() {
-        *sample *= gain;
+        let scaled = f64::from(if sample.is_finite() { *sample } else { 0.0 }) * f64::from(gain);
+        *sample = scaled.clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32;
     }
 }
 
@@ -251,29 +321,38 @@ pub fn apply_gain(buffer: &mut [f32], gain: f32) {
 /// Returns `1.0` for silence (nothing to normalize). Combine with [`apply_gain`] to
 /// peak-normalize a buffer.
 pub fn peak_normalize_gain(samples: &[f32], target_dbfs: f32) -> f32 {
+    if !target_dbfs.is_finite() {
+        return 1.0;
+    }
     let peak = samples
         .iter()
+        .filter(|sample| sample.is_finite())
         .fold(0.0f32, |max, &sample| max.max(sample.abs()));
     if peak <= 0.0 {
         return 1.0;
     }
-    dbfs_to_linear(target_dbfs) / peak
+    (f64::from(dbfs_to_linear(target_dbfs)) / f64::from(peak)).clamp(0.0, f64::from(f32::MAX))
+        as f32
 }
 
 /// The linear gain that scales `samples` so their RMS level reaches `target_dbfs`.
 /// Returns `1.0` for silence. Combine with [`apply_gain`] to loudness-normalize a buffer to
 /// a target RMS (a simpler stand-in for full BS.1770 LUFS normalization).
 pub fn rms_normalize_gain(samples: &[f32], target_dbfs: f32) -> f32 {
-    if samples.is_empty() {
+    if samples.is_empty() || !target_dbfs.is_finite() {
         return 1.0;
     }
-    let mean_square =
-        samples.iter().map(|&sample| sample * sample).sum::<f32>() / samples.len() as f32;
+    let mean_square = samples
+        .iter()
+        .filter(|sample| sample.is_finite())
+        .map(|&sample| f64::from(sample).powi(2))
+        .sum::<f64>()
+        / samples.len() as f64;
     let rms = mean_square.sqrt();
-    if rms <= 0.0 {
+    if !rms.is_finite() || rms <= 0.0 {
         return 1.0;
     }
-    dbfs_to_linear(target_dbfs) / rms
+    (f64::from(dbfs_to_linear(target_dbfs)) / rms).clamp(0.0, f64::from(f32::MAX)) as f32
 }
 
 struct Biquad {
@@ -290,7 +369,11 @@ impl Biquad {
         input
             .iter()
             .map(|&sample| {
-                let x0 = sample as f64;
+                let x0 = if sample.is_finite() {
+                    f64::from(sample)
+                } else {
+                    0.0
+                };
                 let y0 = self.b0 * x0 + self.b1 * x1 + self.b2 * x2 - self.a1 * y1 - self.a2 * y2;
                 x2 = x1;
                 x1 = x0;
@@ -354,7 +437,7 @@ pub fn momentary_lufs(samples: &[f32], sample_rate: u32) -> f32 {
     let weighted = hpf.process(&shelf.process(samples));
     let mean_square =
         weighted.iter().map(|&s| (s as f64).powi(2)).sum::<f64>() / weighted.len() as f64;
-    if mean_square <= 0.0 {
+    if !mean_square.is_finite() || mean_square <= 0.0 {
         return SILENCE_DBFS;
     }
     (-0.691 + 10.0 * mean_square.log10()) as f32
@@ -370,7 +453,12 @@ pub fn integrated_lufs(samples: &[f32], sample_rate: u32) -> f32 {
     if sample_rate == 0 {
         return SILENCE_DBFS;
     }
-    let block = (sample_rate as usize * 4) / 10;
+    let Some(block) = (sample_rate as usize)
+        .checked_mul(4)
+        .map(|value| value / 10)
+    else {
+        return SILENCE_DBFS;
+    };
     let hop = (sample_rate as usize) / 10;
     if block == 0 || hop == 0 || samples.len() < block {
         return SILENCE_DBFS;
@@ -379,21 +467,27 @@ pub fn integrated_lufs(samples: &[f32], sample_rate: u32) -> f32 {
     let weighted = hpf.process(&shelf.process(samples));
 
     let mut block_power: Vec<f64> = Vec::new();
-    let mut start = 0;
-    while start + block <= weighted.len() {
+    let mut start: usize = 0;
+    while start
+        .checked_add(block)
+        .is_some_and(|end| end <= weighted.len())
+    {
         let mean_square = weighted[start..start + block]
             .iter()
             .map(|&s| (s as f64).powi(2))
             .sum::<f64>()
             / block as f64;
         block_power.push(mean_square);
-        start += hop;
+        let Some(next) = start.checked_add(hop) else {
+            break;
+        };
+        start = next;
     }
 
     let loudness = |mean_square: f64| -0.691 + 10.0 * mean_square.log10();
     let absolute: Vec<f64> = block_power
         .into_iter()
-        .filter(|&ms| ms > 0.0 && loudness(ms) >= -70.0)
+        .filter(|&ms| ms.is_finite() && ms > 0.0 && loudness(ms) >= -70.0)
         .collect();
     if absolute.is_empty() {
         return SILENCE_DBFS;
@@ -416,6 +510,9 @@ pub fn integrated_lufs(samples: &[f32], sample_rate: u32) -> f32 {
 /// `target - current` dB in linear form. Returns `1.0` when the input is silent or too short
 /// to measure. Pair with [`apply_gain`] to loudness-normalize a buffer.
 pub fn lufs_normalize_gain(samples: &[f32], target_lufs: f32, sample_rate: u32) -> f32 {
+    if !target_lufs.is_finite() {
+        return 1.0;
+    }
     let current = integrated_lufs(samples, sample_rate);
     if current <= SILENCE_DBFS {
         return 1.0;
@@ -452,17 +549,28 @@ pub fn resample_lanczos(input: &[f32], from_rate: u32, to_rate: u32, half_window
     if from_rate == to_rate {
         return input.to_vec();
     }
-    let lobes = half_window.max(1) as i64;
+    let lobes = i64::from(half_window.max(1));
+    let sampled_lobes = lobes.min(i64::try_from(input.len()).unwrap_or(i64::MAX));
     let lobes_f = lobes as f64;
     let ratio = from_rate as f64 / to_rate as f64;
-    let out_len = ((input.len() as f64) * to_rate as f64 / from_rate as f64).round() as usize;
-    let mut output = Vec::with_capacity(out_len);
+    let numerator = (input.len() as u128) * u128::from(to_rate);
+    let out_len = (numerator + u128::from(from_rate / 2)) / u128::from(from_rate);
+    let Ok(out_len) = usize::try_from(out_len) else {
+        return Vec::new();
+    };
+    if out_len > MAX_MIX_SAMPLES {
+        return Vec::new();
+    }
+    let mut output = Vec::new();
+    if output.try_reserve_exact(out_len).is_err() {
+        return Vec::new();
+    }
     for i in 0..out_len {
         let center = i as f64 * ratio;
         let base = center.floor() as i64;
         let mut sum = 0.0f64;
         let mut weight_sum = 0.0f64;
-        for n in (base - lobes + 1)..=(base + lobes) {
+        for n in (base - sampled_lobes + 1)..=(base + sampled_lobes) {
             if n < 0 || n as usize >= input.len() {
                 continue;
             }
@@ -656,9 +764,14 @@ mod tests {
         let (left, right) = pan_gains(0.0, PanLaw::Linear);
         assert!(close(left, 0.5) && close(right, 0.5));
         let (left, right) = pan_gains(0.0, PanLaw::ConstantPower);
-        assert!(close(left, 0.70711) && close(right, 0.70711));
+        assert!(
+            close(left, std::f32::consts::FRAC_1_SQRT_2)
+                && close(right, std::f32::consts::FRAC_1_SQRT_2)
+        );
         let (left, right) = pan_gains(0.0, PanLaw::Minus4_5dB);
-        assert!(close(left, (0.5_f32 * 0.70711).sqrt()) && close(left, right));
+        assert!(
+            close(left, (0.5_f32 * std::f32::consts::FRAC_1_SQRT_2).sqrt()) && close(left, right)
+        );
 
         // Hard left / right.
         let (left, right) = pan_gains(-1.0, PanLaw::ConstantPower);
@@ -894,5 +1007,60 @@ mod tests {
                 input[k]
             );
         }
+    }
+
+    #[test]
+    fn mix_rejects_non_finite_rates_and_unbounded_ranges() {
+        let mut timeline = Timeline {
+            tracks: Vec::new(),
+            frame_rate: f64::NAN,
+            duration_frames: 0,
+        };
+        assert!(mix_range(&timeline, 0..1, 48_000, &ConstProvider { value: 1.0 }).is_none());
+
+        timeline.frame_rate = 1.0;
+        assert!(mix_range(&timeline, 0..u64::MAX, 1, &ConstProvider { value: 1.0 }).is_none());
+    }
+
+    #[test]
+    fn non_finite_audio_controls_do_not_poison_results() {
+        assert_eq!(pan_gains(f32::NAN, PanLaw::Linear), (0.5, 0.5));
+        assert_eq!(linear_to_dbfs(f32::NAN), SILENCE_DBFS);
+        assert_eq!(meter(&[f32::NAN]).peak_dbfs, SILENCE_DBFS);
+        assert_eq!(peak_normalize_gain(&[1.0], f32::NAN), 1.0);
+        assert_eq!(rms_normalize_gain(&[1.0], f32::INFINITY), 1.0);
+        assert_eq!(momentary_lufs(&[f32::NAN; 16], 48_000), SILENCE_DBFS);
+    }
+
+    #[test]
+    fn extreme_lanczos_window_is_bounded_by_available_input() {
+        let input = [0.25, 0.5, 0.75];
+        let output = resample_lanczos(&input, 3, 6, u32::MAX);
+        assert_eq!(output.len(), 6);
+        assert!(output.iter().all(|sample| sample.is_finite()));
+    }
+
+    #[test]
+    fn non_finite_audio_does_not_poison_mix_or_dsp() {
+        let tl = timeline(
+            vec![track(TrackType::Audio, vec![clip("a", 0, 1, 0)])],
+            48_000.0,
+        );
+        let mixed = mix_range(&tl, 0..1, 48_000, &ConstProvider { value: f32::NAN }).unwrap();
+        assert_eq!(mixed, vec![0.0]);
+
+        let mut buffer = [f32::NAN, f32::INFINITY, 0.5];
+        apply_gain(&mut buffer, f32::NAN);
+        assert!(buffer.iter().all(|sample| sample.is_finite()));
+        assert_eq!(peak_normalize_gain(&buffer, f32::MAX), f32::MAX);
+        assert_eq!(rms_normalize_gain(&buffer, f32::MAX), f32::MAX);
+        assert_eq!(lufs_normalize_gain(&buffer, f32::NAN, 48_000), 1.0);
+    }
+
+    #[test]
+    fn wav_provider_rejects_unbounded_windows() {
+        let mut provider = WavAudioProvider::new();
+        provider.sources.insert("audio".into(), vec![0.0]);
+        assert!(provider.samples("audio", 0, MAX_MIX_SAMPLES + 1).is_none());
     }
 }

@@ -1,8 +1,9 @@
 //! Persistent version storage for documents.
 
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use anyhow::{Context as _, Result, anyhow};
@@ -10,6 +11,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::autosave;
+
+const MAX_VERSION_METADATA_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_VERSION_METADATA_ENTRIES: usize = 10_000;
 
 /// A stored document version.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,13 +75,30 @@ impl VersionStore {
             return Ok(Vec::new());
         }
 
+        let metadata = std::fs::metadata(&metadata_path).with_context(|| {
+            format!(
+                "failed to inspect document version metadata at {}",
+                metadata_path.display()
+            )
+        })?;
+        anyhow::ensure!(
+            metadata.len() <= MAX_VERSION_METADATA_BYTES,
+            "document version metadata exceeds the {MAX_VERSION_METADATA_BYTES} byte limit"
+        );
         let json = std::fs::read(&metadata_path).with_context(|| {
             format!(
                 "failed to read document version metadata from {}",
                 metadata_path.display()
             )
         })?;
-        serde_json::from_slice(&json).context("failed to deserialize document version metadata")
+        anyhow::ensure!(
+            u64::try_from(json.len()).unwrap_or(u64::MAX) <= MAX_VERSION_METADATA_BYTES,
+            "document version metadata exceeds the {MAX_VERSION_METADATA_BYTES} byte limit"
+        );
+        let versions: Vec<DocumentVersion> = serde_json::from_slice(&json)
+            .context("failed to deserialize document version metadata")?;
+        validate_versions(&versions)?;
+        Ok(versions)
     }
 
     pub(crate) fn record(&self, document_key: &str, bytes: &[u8]) -> Result<DocumentVersion> {
@@ -89,21 +110,24 @@ impl VersionStore {
             )
         })?;
 
+        let mut versions = VecDeque::from(self.load(document_key)?);
         let digest = digest_hex(bytes);
         let blob_path = document_dir.join(format!("{digest}.bin"));
-        if !blob_path.exists() {
-            std::fs::write(&blob_path, bytes).with_context(|| {
-                format!(
-                    "failed to write document version blob {}",
-                    blob_path.display()
-                )
-            })?;
-        }
+        autosave::write_bytes_atomically(&blob_path, bytes).with_context(|| {
+            format!(
+                "failed to write document version blob {}",
+                blob_path.display()
+            )
+        })?;
 
-        let mut versions = VecDeque::from(self.load(document_key)?);
+        if let Some(existing) = versions.back()
+            && existing.digest == digest
+        {
+            return Ok(existing.clone());
+        }
         let timestamp = now_unix_millis();
         let version = DocumentVersion {
-            id: format!("{}-{}", timestamp, short_hash(&digest)),
+            id: next_version_id(timestamp, &digest, &versions),
             created_at_millis: timestamp,
             digest,
             size_bytes: bytes.len(),
@@ -129,30 +153,45 @@ impl VersionStore {
 
     pub(crate) fn read(&self, document_key: &str, version: &DocumentVersion) -> Result<Vec<u8>> {
         let versions = self.load(document_key)?;
-        if !versions.iter().any(|candidate| candidate.id == version.id) {
-            return Err(anyhow!("unknown document version {}", version.id));
-        }
+        let stored = versions
+            .iter()
+            .find(|candidate| candidate.id == version.id)
+            .ok_or_else(|| anyhow!("unknown document version {}", version.id))?;
 
         let blob_path = self
             .document_dir(document_key)
-            .join(format!("{}.bin", version.digest));
+            .join(format!("{}.bin", stored.digest));
+        let metadata = std::fs::metadata(&blob_path).with_context(|| {
+            format!(
+                "failed to inspect document version blob {}",
+                blob_path.display()
+            )
+        })?;
+        autosave::ensure_size(metadata.len())?;
         let bytes = std::fs::read(&blob_path).with_context(|| {
             format!(
                 "failed to read document version blob {}",
                 blob_path.display()
             )
         })?;
+        autosave::ensure_size(u64::try_from(bytes.len()).unwrap_or(u64::MAX))?;
         let actual_digest = digest_hex(&bytes);
-        if actual_digest != version.digest {
+        if actual_digest != stored.digest {
             return Err(anyhow!(
                 "document version digest mismatch for {}",
-                version.id
+                stored.id
             ));
         }
+        anyhow::ensure!(
+            bytes.len() == stored.size_bytes,
+            "document version size mismatch for {}",
+            stored.id
+        );
         Ok(bytes)
     }
 
     fn persist_versions(&self, document_key: &str, versions: &[DocumentVersion]) -> Result<()> {
+        validate_versions(versions)?;
         let metadata_path = self.metadata_path(document_key);
         if let Some(parent) = metadata_path.parent() {
             std::fs::create_dir_all(parent).with_context(|| {
@@ -162,6 +201,10 @@ impl VersionStore {
 
         let json = serde_json::to_vec(versions)
             .context("failed to serialize document version metadata")?;
+        anyhow::ensure!(
+            u64::try_from(json.len()).unwrap_or(u64::MAX) <= MAX_VERSION_METADATA_BYTES,
+            "document version metadata exceeds the {MAX_VERSION_METADATA_BYTES} byte limit"
+        );
         autosave::write_bytes_atomically(&metadata_path, &json)
     }
 
@@ -191,7 +234,60 @@ fn now_unix_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() as u64
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn next_version_id(timestamp: u64, digest: &str, versions: &VecDeque<DocumentVersion>) -> String {
+    static NEXT_VERSION_ID: AtomicU64 = AtomicU64::new(0);
+
+    loop {
+        let sequence = NEXT_VERSION_ID.fetch_add(1, Ordering::Relaxed);
+        let id = format!("{timestamp}-{}-{sequence}", short_hash(digest));
+        if versions.iter().all(|version| version.id != id) {
+            return id;
+        }
+    }
+}
+
+fn validate_versions(versions: &[DocumentVersion]) -> Result<()> {
+    anyhow::ensure!(
+        versions.len() <= MAX_VERSION_METADATA_ENTRIES,
+        "document version metadata contains more than {MAX_VERSION_METADATA_ENTRIES} entries"
+    );
+    let mut ids = HashSet::with_capacity(versions.len());
+    let mut previous_timestamp = None;
+    for version in versions {
+        anyhow::ensure!(
+            !version.id.is_empty() && version.id.len() <= 256,
+            "document version has an invalid id"
+        );
+        anyhow::ensure!(
+            ids.insert(version.id.as_str()),
+            "duplicate document version id"
+        );
+        anyhow::ensure!(
+            version.digest.len() == 64
+                && version
+                    .digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
+            "document version has an invalid SHA-256 digest"
+        );
+        anyhow::ensure!(
+            u64::try_from(version.size_bytes).unwrap_or(u64::MAX) <= autosave::MAX_DOCUMENT_BYTES,
+            "document version exceeds the document size limit"
+        );
+        if let Some(previous) = previous_timestamp {
+            anyhow::ensure!(
+                version.created_at_millis >= previous,
+                "document versions are not ordered by creation time"
+            );
+        }
+        previous_timestamp = Some(version.created_at_millis);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -242,5 +338,53 @@ mod tests {
 
         let versions = store.load("doc").unwrap();
         assert!(versions.len() <= 3);
+    }
+
+    #[test]
+    fn repeated_content_is_deduplicated_and_repairs_its_blob() {
+        let tmp = TempDir::new().unwrap();
+        let store = VersionStore::new_in(tmp.path(), 4).unwrap();
+        let first = store.record("doc", b"same").unwrap();
+        let blob_path = store
+            .document_dir("doc")
+            .join(format!("{}.bin", first.digest));
+        std::fs::write(&blob_path, b"corrupt").unwrap();
+
+        let second = store.record("doc", b"same").unwrap();
+        assert_eq!(first, second);
+        assert_eq!(store.load("doc").unwrap().len(), 1);
+        assert_eq!(store.read("doc", &second).unwrap(), b"same");
+    }
+
+    #[test]
+    fn reads_use_trusted_metadata_instead_of_caller_supplied_paths() {
+        let tmp = TempDir::new().unwrap();
+        let store = VersionStore::new_in(tmp.path(), 4).unwrap();
+        let mut forged = store.record("doc", b"trusted").unwrap();
+        forged.digest = "../../outside".to_string();
+        forged.size_bytes = usize::MAX;
+
+        assert_eq!(store.read("doc", &forged).unwrap(), b"trusted");
+    }
+
+    #[test]
+    fn rejects_untrusted_version_metadata_before_using_blob_paths() {
+        let tmp = TempDir::new().unwrap();
+        let store = VersionStore::new_in(tmp.path(), 4).unwrap();
+        let document_dir = store.document_dir("doc");
+        std::fs::create_dir_all(&document_dir).unwrap();
+        let malicious = vec![DocumentVersion {
+            id: "malicious".into(),
+            created_at_millis: 1,
+            digest: "../../outside".into(),
+            size_bytes: 1,
+        }];
+        std::fs::write(
+            document_dir.join("versions.json"),
+            serde_json::to_vec(&malicious).unwrap(),
+        )
+        .unwrap();
+
+        assert!(store.load("doc").is_err());
     }
 }

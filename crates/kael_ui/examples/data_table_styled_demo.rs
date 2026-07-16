@@ -139,7 +139,7 @@ impl DataTableStyledDemo {
     }
 
     fn generate_data(count: usize) -> Vec<Product> {
-        let names = vec![
+        let names = [
             "Wireless Mouse",
             "Mechanical Keyboard",
             "USB-C Hub",
@@ -149,7 +149,7 @@ impl DataTableStyledDemo {
             "Headphones",
             "Desk Lamp",
         ];
-        let categories = vec!["Electronics", "Accessories", "Peripherals", "Office"];
+        let categories = ["Electronics", "Accessories", "Peripherals", "Office"];
 
         (0..count)
             .map(|i| {

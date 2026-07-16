@@ -2,6 +2,9 @@ use crate::theme::Theme;
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
+const GAUGE_START_ANGLE: f32 = std::f32::consts::PI;
+const GAUGE_END_ANGLE: f32 = std::f32::consts::TAU;
+
 #[derive(Copy, Clone, Default, PartialEq, Eq)]
 pub enum GaugeSize {
     Sm,
@@ -40,7 +43,7 @@ struct PaintData {
 
 #[derive(IntoElement)]
 pub struct Gauge {
-    _id: SharedString,
+    id: SharedString,
     value: f32,
     label: Option<SharedString>,
     format_fn: Option<Rc<dyn Fn(f32) -> String>>,
@@ -53,7 +56,7 @@ pub struct Gauge {
 impl Gauge {
     pub fn new(id: impl Into<SharedString>) -> Self {
         Self {
-            _id: id.into(),
+            id: id.into(),
             value: 0.0,
             label: None,
             format_fn: None,
@@ -65,7 +68,11 @@ impl Gauge {
     }
 
     pub fn value(mut self, value: f32) -> Self {
-        self.value = value.clamp(0.0, 1.0);
+        self.value = if value.is_finite() {
+            value.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         self
     }
 
@@ -106,6 +113,7 @@ impl RenderOnce for Gauge {
         let theme = Theme::of(cx);
         let user_style = self.style;
         let (width, height) = self.size.dimensions();
+        let aspect_ratio = width / height;
         let stroke = self.size.stroke_width();
 
         let gauge_color = self.color.unwrap_or_else(|| rgb(0x3b82f6).into());
@@ -119,6 +127,7 @@ impl RenderOnce for Gauge {
 
         let text_color = theme.tokens.foreground;
         let label_color = theme.tokens.muted_foreground;
+        let accessible_label = self.label.clone().unwrap_or_else(|| "Gauge".into());
 
         let paint_data = PaintData {
             value: self.value,
@@ -128,10 +137,20 @@ impl RenderOnce for Gauge {
         };
 
         div()
+            .id(self.id)
+            .accessibility(AccessibilityAttributes::progress_bar(
+                accessible_label.as_ref(),
+                self.value as f64,
+                0.0,
+                1.0,
+            ))
             .flex()
             .flex_col()
             .items_center()
             .gap(px(4.0))
+            .w_full()
+            .max_w(px(width))
+            .min_w(px(0.0))
             .map(|this| {
                 let mut d = this;
                 d.style().refine(&user_style);
@@ -139,9 +158,10 @@ impl RenderOnce for Gauge {
             })
             .child(
                 div()
-                    .w(px(width))
-                    .h(px(height))
+                    .w_full()
+                    .aspect_ratio(aspect_ratio)
                     .relative()
+                    .overflow_hidden()
                     .child(
                         canvas_with_prepaint(
                             move |_bounds, _window, _cx| paint_data,
@@ -161,8 +181,11 @@ impl RenderOnce for Gauge {
                                 let center_y = bounds.bottom() - px(data.stroke_width * 0.5);
 
                                 let segments = 60_usize;
-                                let start_angle: f32 = std::f32::consts::PI;
-                                let end_angle: f32 = 0.0;
+                                // Screen-space Y grows downward, so the upper semicircle runs
+                                // from PI to TAU. PI to zero would draw below the canvas and make
+                                // larger gauges escape their layout bounds.
+                                let start_angle = GAUGE_START_ANGLE;
+                                let end_angle = GAUGE_END_ANGLE;
 
                                 {
                                     let mut builder = PathBuilder::stroke(px(data.stroke_width));
@@ -209,7 +232,8 @@ impl RenderOnce for Gauge {
                                 }
                             },
                         )
-                        .size_full(),
+                        .absolute()
+                        .inset_0(),
                     )
                     .child(
                         div()
@@ -231,5 +255,24 @@ impl RenderOnce for Gauge {
             .when_some(self.label, |this, lbl| {
                 this.child(div().text_sm().text_color(label_color).child(lbl))
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn values_are_finite_and_bounded() {
+        assert_eq!(Gauge::new("low").value(-1.0).value, 0.0);
+        assert_eq!(Gauge::new("high").value(2.0).value, 1.0);
+        assert_eq!(Gauge::new("nan").value(f32::NAN).value, 0.0);
+    }
+
+    #[::core::prelude::v1::test]
+    fn semicircle_uses_the_upper_screen_space_arc() {
+        assert_eq!(GAUGE_START_ANGLE, std::f32::consts::PI);
+        assert_eq!(GAUGE_END_ANGLE, std::f32::consts::TAU);
+        const { assert!(GAUGE_END_ANGLE > GAUGE_START_ANGLE) };
     }
 }

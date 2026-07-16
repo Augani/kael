@@ -29,7 +29,7 @@ impl RetryPolicy {
 
     /// Set the backoff multiplication factor.
     pub fn with_backoff(mut self, factor: f64) -> Self {
-        self.backoff_factor = factor;
+        self.backoff_factor = finite_non_negative(factor, 1.0);
         self
     }
 
@@ -47,16 +47,36 @@ impl RetryPolicy {
 
     /// Set the symmetric jitter ratio applied to the computed delay.
     pub fn with_jitter(mut self, ratio: f64) -> Self {
-        self.jitter_ratio = ratio.clamp(0.0, 1.0);
+        self.jitter_ratio = if ratio.is_finite() {
+            ratio.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         self
     }
 
     /// Calculate the delay duration for a given attempt number (0-indexed).
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
-        let delay_ms = self.base_delay_ms as f64 * self.backoff_factor.powi(attempt as i32);
-        let capped_ms = delay_ms.min(self.max_delay_ms as f64);
-        let jittered_ms = if self.jitter_ratio > 0.0 {
-            let jitter = fastrand::f64() * (self.jitter_ratio * 2.0) - self.jitter_ratio;
+        if self.base_delay_ms == 0 || self.max_delay_ms == 0 {
+            return Duration::ZERO;
+        }
+
+        // The fields are public and may have been modified without the builder,
+        // so contain invalid floating-point values again at the use boundary.
+        let factor = finite_non_negative(self.backoff_factor, 1.0);
+        let exponential = self.base_delay_ms as f64 * factor.powf(f64::from(attempt));
+        let capped_ms = if exponential.is_finite() {
+            exponential.min(self.max_delay_ms as f64)
+        } else {
+            self.max_delay_ms as f64
+        };
+        let jitter_ratio = if self.jitter_ratio.is_finite() {
+            self.jitter_ratio.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let jittered_ms = if jitter_ratio > 0.0 {
+            let jitter = fastrand::f64() * (jitter_ratio * 2.0) - jitter_ratio;
             (capped_ms * (1.0 + jitter)).clamp(0.0, self.max_delay_ms as f64)
         } else {
             capped_ms
@@ -72,6 +92,14 @@ impl RetryPolicy {
             return false;
         }
         matches!(status, 408 | 429 | 500..=599)
+    }
+}
+
+fn finite_non_negative(value: f64, fallback: f64) -> f64 {
+    if value.is_finite() && value >= 0.0 {
+        value
+    } else {
+        fallback
     }
 }
 
@@ -184,5 +212,36 @@ mod tests {
     fn test_zero_retries_never_retries() {
         let policy = RetryPolicy::new(0);
         assert!(!policy.should_retry(0, 500));
+    }
+
+    #[test]
+    fn invalid_float_configuration_is_contained() {
+        let policy = RetryPolicy::new(3)
+            .with_base_delay(250)
+            .with_max_delay(1_000)
+            .with_backoff(f64::NAN)
+            .with_jitter(f64::INFINITY);
+        assert_eq!(policy.delay_for_attempt(2), Duration::from_millis(250));
+
+        let mut directly_mutated = policy;
+        directly_mutated.backoff_factor = f64::INFINITY;
+        directly_mutated.jitter_ratio = f64::NAN;
+        assert_eq!(
+            directly_mutated.delay_for_attempt(u32::MAX),
+            Duration::from_millis(250)
+        );
+    }
+
+    #[test]
+    fn huge_attempts_saturate_at_the_delay_cap() {
+        let policy = RetryPolicy::new(3)
+            .with_base_delay(1)
+            .with_max_delay(1234)
+            .with_backoff(2.0)
+            .with_jitter(0.0);
+        assert_eq!(
+            policy.delay_for_attempt(u32::MAX),
+            Duration::from_millis(1234)
+        );
     }
 }

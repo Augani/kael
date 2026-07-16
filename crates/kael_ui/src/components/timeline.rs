@@ -17,9 +17,9 @@ impl TimelineItemVariant {
     fn default_icon(&self) -> &'static str {
         match self {
             TimelineItemVariant::Default => "circle",
-            TimelineItemVariant::Success => "check-circle",
+            TimelineItemVariant::Success => "circle-check",
             TimelineItemVariant::Warning => "alert-triangle",
-            TimelineItemVariant::Error => "alert-circle",
+            TimelineItemVariant::Error => "circle-alert",
             TimelineItemVariant::Info => "info",
         }
     }
@@ -216,8 +216,8 @@ impl TimelineItem {
     fn get_color(&self, theme: &crate::theme::Theme) -> Hsla {
         match self.variant {
             TimelineItemVariant::Default => theme.tokens.muted_foreground,
-            TimelineItemVariant::Success => rgb(0x22c55e).into(),
-            TimelineItemVariant::Warning => rgb(0xf59e0b).into(),
+            TimelineItemVariant::Success => theme.tokens.success,
+            TimelineItemVariant::Warning => theme.tokens.warning,
             TimelineItemVariant::Error => theme.tokens.destructive,
             TimelineItemVariant::Info => theme.tokens.primary,
         }
@@ -239,6 +239,24 @@ pub struct Timeline {
 }
 
 impl Timeline {
+    fn item_accessibility(item: &TimelineItem) -> AccessibilityAttributes {
+        let mut details = Vec::new();
+        if let Some(timestamp) = &item.timestamp {
+            details.push(timestamp.to_string());
+        }
+        if let Some(description) = &item.description {
+            details.push(description.to_string());
+        }
+
+        let attributes =
+            AccessibilityAttributes::new(AccessibilityRole::ListItem).label(item.title.to_string());
+        if details.is_empty() {
+            attributes
+        } else {
+            attributes.description(details.join(". "))
+        }
+    }
+
     pub fn new(items: Vec<TimelineItem>) -> Self {
         Self {
             items,
@@ -462,6 +480,38 @@ impl Timeline {
         Some(connector)
     }
 
+    fn render_horizontal_connector(
+        &self,
+        theme: &crate::theme::Theme,
+        length: Pixels,
+    ) -> Option<AnyElement> {
+        let color = self.connector_color.unwrap_or(theme.tokens.border);
+        let width = self.size.connector_width();
+
+        match self.connector_style {
+            TimelineConnectorStyle::Solid => {
+                Some(div().h(width).w(length).bg(color).into_any_element())
+            }
+            TimelineConnectorStyle::Dashed => {
+                let num_dashes = ((length / px(8.0)) as usize).max(1);
+                Some(
+                    div()
+                        .h(width)
+                        .w(length)
+                        .flex()
+                        .gap(px(4.0))
+                        .overflow_hidden()
+                        .children(
+                            (0..num_dashes)
+                                .map(|_| div().h(width).w(px(4.0)).bg(color).into_any_element()),
+                        )
+                        .into_any_element(),
+                )
+            }
+            TimelineConnectorStyle::None => None,
+        }
+    }
+
     fn render_content(
         &self,
         item: &TimelineItem,
@@ -528,6 +578,7 @@ impl Timeline {
         let content = self.render_content(item, theme, false);
 
         div()
+            .accessibility(Self::item_accessibility(item))
             .flex()
             .gap(self.size.spacing())
             .child(
@@ -567,6 +618,7 @@ impl Timeline {
         let content = self.render_content(item, theme, true);
 
         div()
+            .accessibility(Self::item_accessibility(item))
             .flex()
             .flex_row_reverse()
             .gap(self.size.spacing())
@@ -616,6 +668,7 @@ impl Timeline {
         };
 
         div()
+            .accessibility(Self::item_accessibility(item))
             .flex()
             .w_full()
             .child(
@@ -690,23 +743,17 @@ impl Timeline {
             });
 
         let connector = if !is_last {
-            self.render_connector(theme, self.size.item_gap()).map(|_| {
-                div()
-                    .h(self.size.connector_width())
-                    .w(self.size.item_gap())
-                    .bg(self.connector_color.unwrap_or(theme.tokens.border))
-                    .into_any_element()
-            })
+            self.render_horizontal_connector(theme, self.size.item_gap())
         } else {
             None
         };
 
         div()
+            .accessibility(Self::item_accessibility(item))
             .flex()
             .flex_col()
             .items_center()
             .gap(self.size.spacing())
-            .child(content)
             .child(
                 div()
                     .flex()
@@ -714,6 +761,7 @@ impl Timeline {
                     .child(indicator)
                     .when_some(connector, |d, c| d.child(c)),
             )
+            .child(content)
             .into_any_element()
     }
 }
@@ -737,6 +785,7 @@ impl RenderOnce for Timeline {
         };
 
         container
+            .accessibility(AccessibilityAttributes::new(AccessibilityRole::List).label("Timeline"))
             .children(items.iter().enumerate().map(|(i, item)| {
                 let is_last = i == items_len - 1;
 

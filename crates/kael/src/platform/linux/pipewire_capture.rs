@@ -20,13 +20,13 @@ impl DeviceEnumerator for PipeWireCaptureBackend {
                 id: "screen-0".to_string(),
                 name: "PipeWire Screen".to_string(),
                 kind: CaptureDeviceKind::Screen,
-                is_available: true,
+                is_available: false,
             }]),
             CaptureDeviceKind::Camera => Ok(vec![CaptureDeviceInfo {
                 id: "camera-0".to_string(),
                 name: "PipeWire Camera".to_string(),
                 kind: CaptureDeviceKind::Camera,
-                is_available: true,
+                is_available: false,
             }]),
             _ => Ok(vec![]),
         }
@@ -48,7 +48,6 @@ impl CaptureBackend for PipeWireCaptureBackend {
 }
 
 struct PipeWireCaptureSession {
-    config: CaptureConfig,
     state: CaptureSessionState,
     dropped: AtomicU64,
     latency_ms: AtomicU64,
@@ -56,9 +55,8 @@ struct PipeWireCaptureSession {
 }
 
 impl PipeWireCaptureSession {
-    fn new(config: CaptureConfig) -> Self {
+    fn new(_config: CaptureConfig) -> Self {
         Self {
-            config,
             state: CaptureSessionState::Idle,
             dropped: AtomicU64::new(0),
             latency_ms: AtomicU64::new(0),
@@ -69,18 +67,24 @@ impl PipeWireCaptureSession {
 
 impl CaptureSession for PipeWireCaptureSession {
     fn start(&mut self, config: CaptureConfig, callback: FrameCallback) -> Result<()> {
-        self.config = config;
-        self.state = CaptureSessionState::Starting;
-        self.callback = Some(callback);
+        let _ = (config, callback);
+        self.state = CaptureSessionState::Idle;
+        self.callback = None;
         Err(anyhow!("PipeWire capture requires runtime initialization"))
     }
 
     fn pause(&mut self) -> Result<()> {
+        if self.state != CaptureSessionState::Running {
+            return Err(anyhow!("PipeWire capture session is not running"));
+        }
         self.state = CaptureSessionState::Paused;
         Ok(())
     }
 
     fn resume(&mut self) -> Result<()> {
+        if self.state != CaptureSessionState::Paused {
+            return Err(anyhow!("PipeWire capture session is not paused"));
+        }
         self.state = CaptureSessionState::Running;
         Ok(())
     }

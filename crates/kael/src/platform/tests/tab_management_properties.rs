@@ -1,4 +1,4 @@
-// Feature: platform-parity-electron-features, Property 2: Tab management invariants
+// Feature: platform-parity-browser-runtime-features, Property 2: Tab management invariants
 
 use proptest::prelude::*;
 

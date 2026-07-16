@@ -71,6 +71,20 @@ pub trait StyledExt: Styled + Sized {
         };
         self.shadow(smallvec::smallvec![shadow])
     }
+
+    /// Astryx-style 2px inset focus/selection ring drawn inside the element so
+    /// it never shifts layout. Pass the resting border to keep a 1px hairline
+    /// when unfocused.
+    fn inset_ring(self, color: Hsla, width: Pixels) -> Self {
+        let shadow = BoxShadow {
+            offset: point(px(0.0), px(0.0)),
+            blur_radius: px(0.0),
+            spread_radius: width,
+            inset: true,
+            color,
+        };
+        self.shadow(smallvec::smallvec![shadow])
+    }
 }
 
 impl<T: Styled + Sized> StyledExt for T {}

@@ -30,18 +30,14 @@ use unsupported as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
-/// Returns whether the active target has a native icon bridge planned.
+/// Returns whether the active target currently has an implemented native icon bridge.
 pub const fn has_native_bridge() -> bool {
     imp::HAS_NATIVE_BRIDGE
 }
 
 /// Returns whether native icon lookup is available on this platform.
 pub fn is_native_icon_available() -> bool {
-    cfg!(any(
-        target_os = "macos",
-        target_os = "windows",
-        target_os = "linux"
-    ))
+    has_native_bridge()
 }
 
 #[cfg(test)]
@@ -50,10 +46,6 @@ mod tests {
 
     #[test]
     fn platform_icon_availability_compiles() {
-        let available = is_native_icon_available();
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-        assert!(available);
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-        let _ = available;
+        assert_eq!(is_native_icon_available(), has_native_bridge());
     }
 }

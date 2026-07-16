@@ -2,6 +2,13 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Component, Path};
+
+const MAX_SHORT_TEXT_BYTES: usize = 255;
+const MAX_DESCRIPTION_BYTES: usize = 16 * 1024;
+const MAX_ICON_PATHS: usize = 32;
+const MAX_ICON_PATH_BYTES: usize = 4096;
+const MAX_ENTITLEMENTS: usize = 128;
 
 /// Application metadata required for packaging and distribution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,17 +34,35 @@ pub struct AppMetadata {
 impl AppMetadata {
     /// Validates all metadata fields.
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.name.is_empty() {
-            anyhow::bail!("app name must not be empty");
+        if !valid_short_text(&self.name)
+            || !self
+                .name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            anyhow::bail!("app name must be a bounded ASCII package name");
         }
-        if self.display_name.is_empty() {
+        if !valid_short_text(&self.display_name) {
             anyhow::bail!("display name must not be empty");
         }
-        if self.description.is_empty() {
+        if self.description.trim().is_empty()
+            || self.description.len() > MAX_DESCRIPTION_BYTES
+            || self.description.contains('\0')
+        {
             anyhow::bail!("description must not be empty");
         }
-        if self.author.is_empty() {
+        if !valid_short_text(&self.author) {
             anyhow::bail!("author must not be empty");
+        }
+        if self.entitlements.len() > MAX_ENTITLEMENTS
+            || self.entitlements.iter().any(|entitlement| {
+                !valid_short_text(entitlement)
+                    || !entitlement.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_')
+                    })
+            })
+        {
+            anyhow::bail!("entitlements contain invalid or excessive entries");
         }
 
         Self::validate_version_str(&self.version)?;
@@ -48,19 +73,31 @@ impl AppMetadata {
 
     /// Validates that icon paths are non-empty and have valid extensions.
     pub fn validate_icon_paths(&self) -> anyhow::Result<()> {
-        if self.icon_paths.is_empty() {
+        if self.icon_paths.is_empty() || self.icon_paths.len() > MAX_ICON_PATHS {
             anyhow::bail!("at least one icon path is required");
         }
 
         let valid_extensions = ["png", "icns", "ico", "svg"];
         for (label, path) in &self.icon_paths {
-            if path.is_empty() {
+            if !valid_icon_label(label) {
+                anyhow::bail!("icon size label '{}' is invalid", label);
+            }
+            if path.is_empty() || path.len() > MAX_ICON_PATH_BYTES {
                 anyhow::bail!("icon path for '{}' must not be empty", label);
             }
-
-            let has_valid_ext = valid_extensions
-                .iter()
-                .any(|ext| path.ends_with(&format!(".{ext}")));
+            let icon_path = Path::new(path);
+            if path.contains(['\\', ':'])
+                || icon_path.is_absolute()
+                || icon_path
+                    .components()
+                    .any(|component| !matches!(component, Component::Normal(_)))
+            {
+                anyhow::bail!("icon path '{}' must be a relative normalized path", path);
+            }
+            let has_valid_ext = icon_path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| valid_extensions.contains(&extension));
             if !has_valid_ext {
                 anyhow::bail!(
                     "icon path '{}' for '{}' must have a valid extension ({:?})",
@@ -80,24 +117,27 @@ impl AppMetadata {
     }
 
     fn validate_version_str(version: &str) -> anyhow::Result<()> {
-        let parts: Vec<&str> = version.split('.').collect();
-        if parts.len() != 3 {
-            anyhow::bail!("version '{}' must be in MAJOR.MINOR.PATCH format", version);
-        }
-        for part in &parts {
-            if part.parse::<u64>().is_err() {
-                anyhow::bail!(
-                    "version component '{}' in '{}' must be a non-negative integer",
-                    part,
-                    version
-                );
+        let mut parts = version.split('.');
+        for _ in 0..3 {
+            let Some(part) = parts.next() else {
+                anyhow::bail!("version '{}' must be in MAJOR.MINOR.PATCH format", version);
+            };
+            if part.is_empty()
+                || !part.bytes().all(|byte| byte.is_ascii_digit())
+                || (part.len() > 1 && part.starts_with('0'))
+                || part.parse::<u64>().is_err()
+            {
+                anyhow::bail!("version component '{}' in '{}' is invalid", part, version);
             }
+        }
+        if parts.next().is_some() {
+            anyhow::bail!("version '{}' must be in MAJOR.MINOR.PATCH format", version);
         }
         Ok(())
     }
 
     fn validate_identifier_str(identifier: &str) -> anyhow::Result<()> {
-        if identifier.is_empty() {
+        if identifier.is_empty() || identifier.len() > MAX_SHORT_TEXT_BYTES {
             anyhow::bail!("identifier must not be empty");
         }
 
@@ -113,16 +153,37 @@ impl AppMetadata {
             if part.is_empty() {
                 anyhow::bail!("identifier '{}' contains empty segment", identifier);
             }
-            if !part
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-            {
+            if !part.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
                 anyhow::bail!("identifier segment '{}' contains invalid characters", part);
+            }
+            if !part
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            {
+                anyhow::bail!(
+                    "identifier segment '{}' must start with a letter or digit",
+                    part
+                );
             }
         }
 
         Ok(())
     }
+}
+
+fn valid_short_text(value: &str) -> bool {
+    !value.trim().is_empty() && value.len() <= MAX_SHORT_TEXT_BYTES && !value.contains('\0')
+}
+
+fn valid_icon_label(label: &str) -> bool {
+    let Some((width, height)) = label.split_once('x') else {
+        return false;
+    };
+    let (Ok(width), Ok(height)) = (width.parse::<u32>(), height.parse::<u32>()) else {
+        return false;
+    };
+    width > 0 && height > 0 && width <= 8192 && height <= 8192
 }
 
 #[cfg(test)]
@@ -224,6 +285,23 @@ mod tests {
         assert!(AppMetadata::validate_version("1.2.3").is_ok());
         assert!(AppMetadata::validate_version("0.0.0").is_ok());
         assert!(AppMetadata::validate_version("1.2").is_err());
+        assert!(AppMetadata::validate_version("01.2.3").is_err());
+        assert!(AppMetadata::validate_version("١.2.3").is_err());
+    }
+
+    #[test]
+    fn validate_icon_paths_rejects_traversal_and_bad_labels() {
+        let mut metadata = valid_metadata();
+        metadata.icon_paths.clear();
+        metadata
+            .icon_paths
+            .insert("128x128".to_string(), "../secret.png".to_string());
+        assert!(metadata.validate_icon_paths().is_err());
+        metadata.icon_paths.clear();
+        metadata
+            .icon_paths
+            .insert("huge".to_string(), "icons/icon.png".to_string());
+        assert!(metadata.validate_icon_paths().is_err());
     }
 
     #[test]

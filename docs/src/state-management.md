@@ -117,6 +117,60 @@ cx.update_global::<Settings, _>(|settings, _| settings.telemetry = true);
 React to changes with `cx.observe_global::<Settings>(...)`. The kael_ui theme is
 a global: read it with `Theme::of(cx)` (see [Theming](theming.md)).
 
+## Persistent Settings
+
+Use `SettingsStore` for typed JSON preferences, workspace defaults, account
+state, and feature flags that need to survive app restarts:
+
+```rust
+use kael::app_runtime::SettingsStore;
+use serde::{Deserialize, Serialize};
+
+#[derive(Default, Serialize, Deserialize)]
+struct AppSettings {
+    theme: String,
+    telemetry: bool,
+}
+
+let settings_path = app_data_dir.join("settings.json");
+let mut settings = SettingsStore::<AppSettings>::builder(&settings_path)
+    .load_checked()?;
+
+settings.update(|data| {
+    data.theme = "dark".into();
+})?;
+```
+
+Prefer `SettingsStore::new_checked(path)` and
+`SettingsStore::builder(path).migration(...).load_checked()` for generated app
+preferences. The checked path rejects empty paths, control-character paths,
+directory targets, invalid parents, zero-version migrations, and duplicate
+migration target versions before the app starts reading or atomically writing
+settings. Raw `new(...)`, `load(...)`, and builder `.load()` remain available
+when an app owns filesystem validation.
+
+## Undo & Redo
+
+Use `UndoRedoManager` for editor, canvas, form-builder, and design-tool history:
+
+```rust
+use kael::app_runtime::UndoRedoManager;
+
+let mut history = UndoRedoManager::new(100);
+
+history.begin_transaction_checked("move selected layers")?;
+history.push(move_layer_change);
+history.push(update_bounds_change);
+history.end_transaction_checked()?;
+```
+
+Prefer `begin_transaction_checked(...)` and `end_transaction_checked()` for
+generated workflows. Checked transactions reject nested begins, missing ends,
+empty/padded/control-character/overly long descriptions, and expose
+`has_open_transaction()` for cleanup and diagnostics. Raw `begin_transaction(...)`
+and `end_transaction()` remain available for hand-written code that wants assert
+semantics.
+
 ## Structuring a larger app
 
 - **One entity per unit of independent change.** A chat app wants

@@ -75,6 +75,18 @@ pub struct ImageCacheElement {
     children: SmallVec<[AnyElement; 2]>,
 }
 
+impl ImageCacheElement {
+    /// Number of child elements covered by this image cache scope.
+    pub fn child_count(&self) -> usize {
+        self.children.len()
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!("image_cache_element(child_count={})", self.child_count())
+    }
+}
+
 impl ParentElement for ImageCacheElement {
     fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
         self.children.extend(elements)
@@ -185,6 +197,35 @@ impl std::fmt::Debug for ImageCacheItem {
 }
 
 impl ImageCacheItem {
+    /// Stable status key for diagnostics and generated tests.
+    pub fn status_key(&self) -> &'static str {
+        match self {
+            Self::Loading(_) => "loading",
+            Self::Loaded(Ok(_)) => "loaded",
+            Self::Loaded(Err(_)) => "error",
+        }
+    }
+
+    /// Returns true when the image is still loading.
+    pub fn is_loading(&self) -> bool {
+        matches!(self, Self::Loading(_))
+    }
+
+    /// Returns true when the image has loaded successfully.
+    pub fn is_loaded(&self) -> bool {
+        matches!(self, Self::Loaded(Ok(_)))
+    }
+
+    /// Returns true when loading resolved to an error.
+    pub fn is_error(&self) -> bool {
+        matches!(self, Self::Loaded(Err(_)))
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!("image_cache_item(status={})", self.status_key())
+    }
+
     /// Attempt to get the image from the cache item.
     pub fn get(&mut self) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
         match self {
@@ -224,7 +265,11 @@ impl<T: ImageCache> ImageCacheProvider for Entity<T> {
     }
 }
 
-/// An implementation of ImageCache, that uses an LRU caching strategy to unload images when the cache is full
+/// An [`ImageCache`] that retains every decoded image for the lifetime of the cache
+/// (no eviction). Images are released together when the cache entity is dropped or
+/// [`RetainAllImageCache::clear`] is called. Use this when the working set of images is
+/// bounded; for unbounded or churning image sets, scope the cache to a smaller subtree
+/// (a shorter-lived element id) so it is dropped and reclaimed more often.
 pub struct RetainAllImageCache(HashMap<u64, ImageCacheItem>);
 
 impl fmt::Debug for RetainAllImageCache {
@@ -313,6 +358,39 @@ impl RetainAllImageCache {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Number of entries that are still loading.
+    pub fn loading_count(&self) -> usize {
+        self.0.values().filter(|item| item.is_loading()).count()
+    }
+
+    /// Number of entries that have loaded successfully.
+    pub fn loaded_count(&self) -> usize {
+        self.0.values().filter(|item| item.is_loaded()).count()
+    }
+
+    /// Number of entries that resolved to an error.
+    pub fn error_count(&self) -> usize {
+        self.0.values().filter(|item| item.is_error()).count()
+    }
+
+    /// Stable policy key.
+    pub fn policy_key(&self) -> &'static str {
+        "retain_all"
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "retain_all_image_cache(policy={}, entry_count={}, loading_count={}, loaded_count={}, error_count={}, empty={})",
+            self.policy_key(),
+            self.len(),
+            self.loading_count(),
+            self.loaded_count(),
+            self.error_count(),
+            self.is_empty()
+        )
+    }
 }
 
 impl ImageCache for RetainAllImageCache {
@@ -336,6 +414,21 @@ pub struct RetainAllImageCacheProvider {
     id: ElementId,
 }
 
+impl RetainAllImageCacheProvider {
+    /// Stable policy key.
+    pub fn policy_key(&self) -> &'static str {
+        "retain_all"
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "retain_all_image_cache_provider(policy={})",
+            self.policy_key()
+        )
+    }
+}
+
 impl ImageCacheProvider for RetainAllImageCacheProvider {
     fn provide(&mut self, window: &mut Window, cx: &mut App) -> AnyImageCache {
         window
@@ -349,5 +442,425 @@ impl ImageCacheProvider for RetainAllImageCacheProvider {
                 )
             })
             .into()
+    }
+}
+
+struct LruImageEntry {
+    item: ImageCacheItem,
+    last_used: u64,
+}
+
+/// Choose which cache keys to evict to bring a cache of `len` entries down to
+/// `max_images`, least-recently-used first. Only loaded entries are evictable; entries
+/// still loading are never selected (so in-flight work is preserved), which means the
+/// cap may be transiently exceeded when many loads are concurrently in flight.
+fn select_lru_victims(
+    entries: impl Iterator<Item = (u64, bool, u64)>,
+    len: usize,
+    max_images: usize,
+) -> Vec<u64> {
+    if len <= max_images {
+        return Vec::new();
+    }
+    let mut loaded: Vec<(u64, u64)> = entries
+        .filter_map(|(key, is_loaded, last_used)| is_loaded.then_some((key, last_used)))
+        .collect();
+    loaded.sort_by_key(|(_, last_used)| *last_used);
+    let evictable = (len - max_images).min(loaded.len());
+    loaded
+        .into_iter()
+        .take(evictable)
+        .map(|(key, _)| key)
+        .collect()
+}
+
+/// An [`ImageCache`] that retains at most `max_images` decoded images, evicting the
+/// least-recently-used entries (releasing their GPU textures via `drop_image`) once the
+/// cap is exceeded. Use this for churning or unbounded image working sets — an infinite
+/// feed, gallery, or map — where [`RetainAllImageCache`] would grow without bound.
+///
+/// Still-loading entries are never evicted; the cap is enforced over decoded images, so a
+/// burst of concurrent loads may transiently exceed `max_images` until they resolve and
+/// the least-recently-used ones are shed.
+pub struct LruImageCache {
+    items: HashMap<u64, LruImageEntry>,
+    tick: u64,
+    max_images: usize,
+}
+
+impl fmt::Debug for LruImageCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LruImageCache")
+            .field("num_images", &self.items.len())
+            .field("max_images", &self.max_images)
+            .finish()
+    }
+}
+
+impl LruImageCache {
+    /// Create a new bounded image cache holding at most `max_images` decoded images
+    /// (clamped to at least 1).
+    pub fn new(max_images: usize, cx: &mut App) -> Entity<Self> {
+        let e = cx.new(|_cx| LruImageCache {
+            items: HashMap::new(),
+            tick: 0,
+            max_images: max_images.max(1),
+        });
+        cx.observe_release(&e, |image_cache, cx| {
+            for (_, mut entry) in std::mem::replace(&mut image_cache.items, HashMap::new()) {
+                if let Some(Ok(image)) = entry.item.get() {
+                    cx.drop_image(image, None);
+                }
+            }
+        })
+        .detach();
+        e
+    }
+
+    fn next_tick(&mut self) -> u64 {
+        self.tick += 1;
+        self.tick
+    }
+
+    /// Load an image from the given source, marking it most-recently-used.
+    ///
+    /// Returns `None` if the image is loading.
+    pub fn load(
+        &mut self,
+        source: &Resource,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
+        let hash = hash(source);
+        let tick = self.next_tick();
+
+        if let Some(entry) = self.items.get_mut(&hash) {
+            entry.last_used = tick;
+            return entry.item.get();
+        }
+
+        let fut = AssetLogger::<ImageAssetLoader>::load(source.clone(), cx);
+        let task = cx.background_executor().spawn(fut).shared();
+        self.items.insert(
+            hash,
+            LruImageEntry {
+                item: ImageCacheItem::Loading(task.clone()),
+                last_used: tick,
+            },
+        );
+
+        let entity = window.current_view();
+        window
+            .spawn(cx, {
+                async move |cx| {
+                    _ = task.await;
+                    cx.on_next_frame(move |_, cx| {
+                        cx.notify(entity);
+                    });
+                }
+            })
+            .detach();
+
+        self.evict_over_cap(window, cx);
+
+        None
+    }
+
+    fn evict_over_cap(&mut self, window: &mut Window, cx: &mut App) {
+        let victims = select_lru_victims(
+            self.items.iter().map(|(key, entry)| {
+                (
+                    *key,
+                    matches!(entry.item, ImageCacheItem::Loaded(_)),
+                    entry.last_used,
+                )
+            }),
+            self.items.len(),
+            self.max_images,
+        );
+        for key in victims {
+            if let Some(mut entry) = self.items.remove(&key)
+                && let Some(Ok(image)) = entry.item.get()
+            {
+                cx.drop_image(image, Some(window));
+            }
+        }
+    }
+
+    /// Clear the image cache, releasing every retained image.
+    pub fn clear(&mut self, window: &mut Window, cx: &mut App) {
+        for (_, mut entry) in std::mem::replace(&mut self.items, HashMap::new()) {
+            if let Some(Ok(image)) = entry.item.get() {
+                cx.drop_image(image, Some(window));
+            }
+        }
+    }
+
+    /// Remove a single image from the cache by its source.
+    pub fn remove(&mut self, source: &Resource, window: &mut Window, cx: &mut App) {
+        let hash = hash(source);
+        if let Some(mut entry) = self.items.remove(&hash)
+            && let Some(Ok(image)) = entry.item.get()
+        {
+            cx.drop_image(image, Some(window));
+        }
+    }
+
+    /// The maximum number of decoded images this cache retains.
+    pub fn capacity(&self) -> usize {
+        self.max_images
+    }
+
+    /// The number of entries (loaded or loading) currently held.
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    /// Returns true if the cache holds no entries.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    /// Number of entries that are still loading.
+    pub fn loading_count(&self) -> usize {
+        self.items
+            .values()
+            .filter(|entry| entry.item.is_loading())
+            .count()
+    }
+
+    /// Number of entries that have loaded successfully.
+    pub fn loaded_count(&self) -> usize {
+        self.items
+            .values()
+            .filter(|entry| entry.item.is_loaded())
+            .count()
+    }
+
+    /// Number of entries that resolved to an error.
+    pub fn error_count(&self) -> usize {
+        self.items
+            .values()
+            .filter(|entry| entry.item.is_error())
+            .count()
+    }
+
+    /// Stable policy key.
+    pub fn policy_key(&self) -> &'static str {
+        "lru"
+    }
+
+    /// Coarse capacity class for content-safe diagnostics.
+    pub fn capacity_class(&self) -> &'static str {
+        capacity_class(self.max_images)
+    }
+
+    /// Returns true when the cache is at or above its configured capacity.
+    pub fn is_at_capacity(&self) -> bool {
+        self.len() >= self.max_images
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "lru_image_cache(policy={}, entry_count={}, loading_count={}, loaded_count={}, error_count={}, capacity={}, capacity_class={}, at_capacity={}, empty={})",
+            self.policy_key(),
+            self.len(),
+            self.loading_count(),
+            self.loaded_count(),
+            self.error_count(),
+            self.capacity(),
+            self.capacity_class(),
+            self.is_at_capacity(),
+            self.is_empty()
+        )
+    }
+}
+
+impl ImageCache for LruImageCache {
+    fn load(
+        &mut self,
+        resource: &Resource,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
+        LruImageCache::load(self, resource, window, cx)
+    }
+}
+
+/// Constructs a bounded LRU image cache (holding at most `max_images` decoded images)
+/// keyed to the element state for the given ID.
+pub fn lru(id: impl Into<ElementId>, max_images: usize) -> LruImageCacheProvider {
+    LruImageCacheProvider {
+        id: id.into(),
+        max_images,
+    }
+}
+
+/// A provider struct for creating a bounded LRU image cache inline.
+pub struct LruImageCacheProvider {
+    id: ElementId,
+    max_images: usize,
+}
+
+impl LruImageCacheProvider {
+    /// The configured image capacity, clamped to at least 1.
+    pub fn capacity(&self) -> usize {
+        self.max_images.max(1)
+    }
+
+    /// Stable policy key.
+    pub fn policy_key(&self) -> &'static str {
+        "lru"
+    }
+
+    /// Coarse capacity class for content-safe diagnostics.
+    pub fn capacity_class(&self) -> &'static str {
+        capacity_class(self.capacity())
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "lru_image_cache_provider(policy={}, capacity={}, capacity_class={})",
+            self.policy_key(),
+            self.capacity(),
+            self.capacity_class()
+        )
+    }
+}
+
+impl ImageCacheProvider for LruImageCacheProvider {
+    fn provide(&mut self, window: &mut Window, cx: &mut App) -> AnyImageCache {
+        let max_images = self.max_images;
+        window
+            .with_global_id(self.id.clone(), |global_id, window| {
+                window.with_element_state::<Entity<LruImageCache>, _>(
+                    global_id,
+                    |cache, _window| {
+                        let mut cache = cache.unwrap_or_else(|| LruImageCache::new(max_images, cx));
+                        (cache.clone(), cache)
+                    },
+                )
+            })
+            .into()
+    }
+}
+
+fn capacity_class(capacity: usize) -> &'static str {
+    match capacity {
+        0 | 1 => "single",
+        2..=16 => "small",
+        17..=128 => "medium",
+        _ => "large",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ImageCacheElement, ImageCacheItem, LruImageCache, RetainAllImageCache, capacity_class, lru,
+        retain_all, select_lru_victims,
+    };
+    use crate::{IntoElement, div};
+    use smallvec::SmallVec;
+    use std::{collections::HashMap, sync::Arc};
+
+    #[test]
+    fn lru_victims_within_cap_is_a_noop() {
+        let entries = [(1u64, true, 1u64), (2, true, 2)];
+        assert!(select_lru_victims(entries.into_iter(), 2, 2).is_empty());
+    }
+
+    #[test]
+    fn lru_victims_evicts_least_recently_used_first() {
+        // Three loaded entries, cap of two → the oldest (lowest last_used) is shed.
+        let entries = [(10u64, true, 1u64), (20, true, 3), (30, true, 2)];
+        assert_eq!(select_lru_victims(entries.into_iter(), 3, 2), vec![10]);
+    }
+
+    #[test]
+    fn lru_victims_never_evicts_loading_entries() {
+        // Two loading + one loaded, cap of one: only the loaded entry is evictable, so the
+        // cap is held by shedding it and the in-flight loads are preserved.
+        let entries = [(1u64, false, 5u64), (2, false, 6), (3, true, 7)];
+        assert_eq!(select_lru_victims(entries.into_iter(), 3, 1), vec![3]);
+    }
+
+    #[test]
+    fn lru_victims_sheds_multiple_when_far_over_cap() {
+        let entries = [(1u64, true, 1u64), (2, true, 2), (3, true, 3), (4, true, 4)];
+        let mut victims = select_lru_victims(entries.into_iter(), 4, 2);
+        victims.sort_unstable();
+        assert_eq!(victims, vec![1, 2]);
+    }
+
+    #[test]
+    fn image_cache_summary_is_content_safe() {
+        let error = ImageCacheItem::Loaded(Err(crate::ImageCacheError::Other(Arc::new(
+            anyhow::anyhow!("secret resource failed"),
+        ))));
+        assert_eq!(error.status_key(), "error");
+        assert!(error.is_error());
+        assert_eq!(error.to_text(), "image_cache_item(status=error)");
+        assert!(!error.to_text().contains("secret resource"));
+
+        let retain_all_cache = RetainAllImageCache(HashMap::from([(42, error)]));
+        assert_eq!(retain_all_cache.policy_key(), "retain_all");
+        assert_eq!(retain_all_cache.len(), 1);
+        assert_eq!(retain_all_cache.error_count(), 1);
+        let retain_all_summary = retain_all_cache.to_text();
+        assert!(retain_all_summary.contains("policy=retain_all"));
+        assert!(retain_all_summary.contains("error_count=1"));
+        assert!(!retain_all_summary.contains("42"));
+        assert!(!retain_all_summary.contains("secret resource"));
+
+        let lru_cache = LruImageCache {
+            items: HashMap::new(),
+            tick: 99,
+            max_images: 12,
+        };
+        assert_eq!(lru_cache.policy_key(), "lru");
+        assert_eq!(lru_cache.capacity_class(), "small");
+        assert!(!lru_cache.is_at_capacity());
+        let lru_summary = lru_cache.to_text();
+        assert!(lru_summary.contains("capacity=12"));
+        assert!(lru_summary.contains("capacity_class=small"));
+        assert!(!lru_summary.contains("99"));
+    }
+
+    #[test]
+    fn image_cache_provider_summary_is_content_safe() {
+        let retain_all_provider = retain_all("private-gallery-cache");
+        assert_eq!(retain_all_provider.policy_key(), "retain_all");
+        let retain_all_summary = retain_all_provider.to_text();
+        assert!(retain_all_summary.contains("policy=retain_all"));
+        assert!(!retain_all_summary.contains("private-gallery-cache"));
+
+        let lru_provider = lru("private-feed-cache", 0);
+        assert_eq!(lru_provider.capacity(), 1);
+        assert_eq!(lru_provider.capacity_class(), "single");
+        let lru_summary = lru_provider.to_text();
+        assert!(lru_summary.contains("capacity=1"));
+        assert!(!lru_summary.contains("private-feed-cache"));
+
+        assert_eq!(capacity_class(1), "single");
+        assert_eq!(capacity_class(16), "small");
+        assert_eq!(capacity_class(128), "medium");
+        assert_eq!(capacity_class(129), "large");
+    }
+
+    #[test]
+    fn image_cache_element_summary_is_content_safe() {
+        let mut element = ImageCacheElement {
+            image_cache_provider: Box::new(retain_all("private-cache")),
+            style: Default::default(),
+            children: SmallVec::new(),
+        };
+        element.children.push(div().into_any_element());
+        assert_eq!(element.child_count(), 1);
+        let summary = element.to_text();
+        assert_eq!(summary, "image_cache_element(child_count=1)");
+        assert!(!summary.contains("private-cache"));
     }
 }

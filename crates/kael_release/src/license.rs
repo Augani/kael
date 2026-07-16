@@ -66,9 +66,13 @@ impl LicenseReport {
             "LGPL-3.0-or-later",
             "MPL-2.0",
         ];
-        self.dependencies
-            .iter()
-            .any(|dep| COPYLEFT_LICENSES.contains(&dep.license.as_str()))
+        self.dependencies.iter().any(|dep| {
+            dep.license
+                .split(|character: char| {
+                    !(character.is_ascii_alphanumeric() || matches!(character, '.' | '-'))
+                })
+                .any(|identifier| COPYLEFT_LICENSES.contains(&identifier))
+        })
     }
 
     /// Returns a summary mapping license identifiers to their dependency count.
@@ -180,6 +184,15 @@ mod tests {
         let mut report = LicenseReport::new(1000);
         report.add(mit_dep());
         assert!(!report.has_copyleft());
+    }
+
+    #[test]
+    fn detects_copyleft_inside_spdx_expression() {
+        let mut report = LicenseReport::new(1000);
+        let mut dependency = mit_dep();
+        dependency.license = "MIT OR GPL-3.0-only".to_string();
+        report.add(dependency);
+        assert!(report.has_copyleft());
     }
 
     #[test]

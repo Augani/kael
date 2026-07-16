@@ -89,36 +89,39 @@ impl FrameCache {
 
     /// Fraction of lookups that hit, in `0.0..=1.0`.
     pub fn hit_rate(&self) -> f64 {
-        let total = self.stats.hits + self.stats.misses;
-        if total == 0 {
+        if self.stats.hits == 0 && self.stats.misses == 0 {
             0.0
         } else {
-            self.stats.hits as f64 / total as f64
+            self.stats.hits as f64 / (self.stats.hits as f64 + self.stats.misses as f64)
         }
     }
 
     /// Insert a frame, evicting least-recently-used frames to stay within budget.
     /// Returns `false` (and does not insert) if the frame alone exceeds the budget.
     pub fn insert(&mut self, key: FrameKey, data: Arc<[u8]>) -> bool {
-        let bytes = data.len() as u64;
+        let Ok(bytes) = u64::try_from(data.len()) else {
+            return false;
+        };
         if bytes > self.budget_bytes {
             return false;
         }
         if let Some(previous) = self.entries.remove(&key) {
-            self.used_bytes -= previous.data.len() as u64;
+            self.used_bytes = self
+                .used_bytes
+                .saturating_sub(u64::try_from(previous.data.len()).unwrap_or(u64::MAX));
         }
-        while self.used_bytes + bytes > self.budget_bytes {
+        while self.used_bytes > self.budget_bytes.saturating_sub(bytes) {
             if !self.evict_one() {
-                break;
+                return false;
             }
         }
-        self.tick += 1;
-        self.used_bytes += bytes;
+        let tick = self.advance_tick();
+        self.used_bytes = self.used_bytes.saturating_add(bytes);
         self.entries.insert(
             key,
             Entry {
                 data,
-                last_used: self.tick,
+                last_used: tick,
             },
         );
         true
@@ -126,14 +129,13 @@ impl FrameCache {
 
     /// Look up a frame, marking it most-recently-used and updating statistics.
     pub fn get(&mut self, key: &FrameKey) -> Option<Arc<[u8]>> {
-        self.tick += 1;
-        let tick = self.tick;
+        let tick = self.advance_tick();
         if let Some(entry) = self.entries.get_mut(key) {
             entry.last_used = tick;
-            self.stats.hits += 1;
+            self.stats.hits = self.stats.hits.saturating_add(1);
             Some(entry.data.clone())
         } else {
-            self.stats.misses += 1;
+            self.stats.misses = self.stats.misses.saturating_add(1);
             None
         }
     }
@@ -152,12 +154,33 @@ impl FrameCache {
             .map(|(key, _)| *key);
         if let Some(key) = lru {
             if let Some(entry) = self.entries.remove(&key) {
-                self.used_bytes -= entry.data.len() as u64;
-                self.stats.evictions += 1;
+                self.used_bytes = self
+                    .used_bytes
+                    .saturating_sub(u64::try_from(entry.data.len()).unwrap_or(u64::MAX));
+                self.stats.evictions = self.stats.evictions.saturating_add(1);
                 return true;
             }
         }
         false
+    }
+
+    fn advance_tick(&mut self) -> u64 {
+        if self.tick == u64::MAX {
+            let mut by_age: Vec<_> = self
+                .entries
+                .iter()
+                .map(|(key, entry)| (*key, entry.last_used))
+                .collect();
+            by_age.sort_unstable_by_key(|(_, last_used)| *last_used);
+            for (index, (key, _)) in by_age.into_iter().enumerate() {
+                if let Some(entry) = self.entries.get_mut(&key) {
+                    entry.last_used = u64::try_from(index).unwrap_or(u64::MAX - 1) + 1;
+                }
+            }
+            self.tick = u64::try_from(self.entries.len()).unwrap_or(u64::MAX - 1);
+        }
+        self.tick = self.tick.saturating_add(1);
+        self.tick
     }
 }
 
@@ -225,5 +248,37 @@ mod tests {
         assert!(cache.is_empty());
         assert_eq!(cache.used_bytes(), 0);
         assert_eq!(cache.stats().hits, 1);
+    }
+
+    #[test]
+    fn counter_saturation_preserves_lru_order() {
+        let mut cache = FrameCache::new(2);
+        let old = FrameKey::new(1, 0);
+        let recent = FrameKey::new(1, 1);
+        cache.insert(old, frame(1));
+        cache.insert(recent, frame(1));
+        cache.tick = u64::MAX;
+
+        assert!(cache.get(&recent).is_some());
+        cache.insert(FrameKey::new(1, 2), frame(1));
+
+        assert!(cache.get(&old).is_none());
+        assert!(cache.get(&recent).is_some());
+    }
+
+    #[test]
+    fn saturated_statistics_still_have_a_finite_hit_rate() {
+        let cache = FrameCache {
+            budget_bytes: 0,
+            used_bytes: 0,
+            tick: 0,
+            entries: HashMap::new(),
+            stats: FrameCacheStats {
+                hits: u64::MAX,
+                misses: u64::MAX,
+                evictions: 0,
+            },
+        };
+        assert_eq!(cache.hit_rate(), 0.5);
     }
 }

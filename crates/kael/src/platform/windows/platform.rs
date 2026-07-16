@@ -36,6 +36,18 @@ use crate::platform::tab_manager::{TabManagerState, WindowTabManager};
 use crate::*;
 use std::sync::Mutex;
 
+const MAX_CREDENTIAL_BLOB_BYTES: usize = 256 * 1024;
+
+struct CredentialAllocation(*mut CREDENTIALW);
+
+impl Drop for CredentialAllocation {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { CredFree(self.0.cast()) };
+        }
+    }
+}
+
 pub(crate) struct WindowsPlatform {
     inner: Rc<WindowsPlatformInner>,
     raw_window_handles: Arc<RwLock<SmallVec<[SafeHwnd; 4]>>>,
@@ -169,7 +181,10 @@ impl WindowsPlatform {
                 Some(&context as *const _ as *const _),
             )
         };
-        let inner = context.inner.take().unwrap()?;
+        let inner = context
+            .inner
+            .take()
+            .ok_or_else(|| anyhow!("platform window creation did not initialize its state"))??;
         let handle = result?;
 
         unsafe {
@@ -303,7 +318,7 @@ impl WindowsPlatform {
         let validation_number = self.inner.validation_number;
         let all_windows = Arc::downgrade(&self.raw_window_handles);
         let text_system = Arc::downgrade(&self.text_system);
-        std::thread::Builder::new()
+        if let Err(error) = std::thread::Builder::new()
             .name("VSyncProvider".to_owned())
             .spawn(move || {
                 let mut vsync_provider = VSyncProvider::new();
@@ -328,7 +343,9 @@ impl WindowsPlatform {
                     }
                 }
             })
-            .unwrap();
+        {
+            log::error!("failed to start Windows vsync provider: {error}");
+        }
     }
 }
 
@@ -366,7 +383,7 @@ impl Platform for WindowsPlatform {
     }
 
     fn run(&self, on_finish_launching: Box<dyn 'static + FnOnce()>) {
-        on_finish_launching();
+        super::catch_platform_callback("finish launching", (), on_finish_launching);
         self.begin_vsync_thread();
 
         let mut msg = MSG::default();
@@ -377,7 +394,7 @@ impl Platform for WindowsPlatform {
         }
 
         if let Some(ref mut callback) = self.inner.state.borrow_mut().callbacks.quit {
-            callback();
+            super::catch_platform_callback("application quit", (), callback);
         }
     }
 
@@ -595,6 +612,10 @@ impl Platform for WindowsPlatform {
             .detach();
     }
 
+    fn move_path_to_trash(&self, path: &Path) -> Result<()> {
+        move_path_to_recycle_bin(path)
+    }
+
     fn on_quit(&self, callback: Box<dyn FnMut()>) {
         self.inner.state.borrow_mut().callbacks.quit = Some(callback);
     }
@@ -615,10 +636,20 @@ impl Platform for WindowsPlatform {
         self.set_dock_menus(menus);
     }
 
+    fn dock_menu_action_count(&self) -> Option<usize> {
+        Some(self.inner.state.borrow().jump_list.dock_menus.len())
+    }
+
     fn add_recent_document(&self, path: &Path) {
         let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
         unsafe {
             SHAddToRecentDocs(SHARD_PATHW.0 as u32, Some(wide_path.as_ptr() as *const _));
+        }
+    }
+
+    fn clear_recent_documents(&self) {
+        unsafe {
+            SHAddToRecentDocs(SHARD_PATHW.0 as u32, None);
         }
     }
 
@@ -727,6 +758,10 @@ impl Platform for WindowsPlatform {
         write_to_clipboard(item);
     }
 
+    fn clear_clipboard(&self) {
+        clear_clipboard();
+    }
+
     fn read_from_clipboard(&self) -> Option<ClipboardItem> {
         read_from_clipboard()
     }
@@ -774,15 +809,25 @@ impl Platform for WindowsPlatform {
             if credentials.is_null() {
                 Ok(None)
             } else {
-                let username: String = unsafe { (*credentials).UserName.to_string()? };
-                let credential_blob = unsafe {
-                    std::slice::from_raw_parts(
-                        (*credentials).CredentialBlob,
-                        (*credentials).CredentialBlobSize as usize,
-                    )
+                let credentials = CredentialAllocation(credentials);
+                let credential = unsafe { &*credentials.0 };
+                let username: String = unsafe { credential.UserName.to_string()? };
+                let blob_size = credential.CredentialBlobSize as usize;
+                anyhow::ensure!(
+                    blob_size <= MAX_CREDENTIAL_BLOB_BYTES,
+                    "credential blob exceeds {MAX_CREDENTIAL_BLOB_BYTES} bytes"
+                );
+                let password = if blob_size == 0 {
+                    Vec::new()
+                } else {
+                    anyhow::ensure!(
+                        !credential.CredentialBlob.is_null(),
+                        "credential blob pointer is null"
+                    );
+                    unsafe {
+                        std::slice::from_raw_parts(credential.CredentialBlob, blob_size).to_vec()
+                    }
                 };
-                let password = credential_blob.to_vec();
-                unsafe { CredFree(credentials as *const _ as _) };
                 Ok(Some((username, password)))
             }
         })
@@ -1262,21 +1307,29 @@ impl Platform for WindowsPlatform {
         // during initialization. We call it synchronously since the trait callback
         // is not Send.
         let status = super::microphone::microphone_status();
-        callback(status == PermissionStatus::Granted);
+        super::catch_platform_callback("microphone permission", (), || {
+            callback(status == PermissionStatus::Granted)
+        });
     }
 }
 
 impl WindowsPlatformInner {
     fn new(context: &mut PlatformWindowCreateContext) -> Result<Rc<Self>> {
-        let state = RefCell::new(WindowsPlatformState::new(
-            context.directx_devices.take().unwrap(),
-        ));
+        let directx_devices = context
+            .directx_devices
+            .take()
+            .ok_or_else(|| anyhow!("platform window DirectX state is missing"))?;
+        let main_receiver = context
+            .main_receiver
+            .take()
+            .ok_or_else(|| anyhow!("platform window task receiver is missing"))?;
+        let state = RefCell::new(WindowsPlatformState::new(directx_devices));
         Ok(Rc::new(Self {
             state,
             raw_window_handles: context.raw_window_handles.clone(),
             keep_alive_without_windows: AtomicBool::new(false),
             validation_number: context.validation_number,
-            main_receiver: context.main_receiver.take().unwrap(),
+            main_receiver,
         }))
     }
 
@@ -1328,7 +1381,10 @@ impl WindowsPlatformInner {
             WM_GPUI_DOCK_MENU_ACTION => self.handle_dock_action_event(lparam.0 as _),
             WM_GPUI_KEYBOARD_LAYOUT_CHANGED => self.handle_keyboard_layout_change(),
             WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
-            _ => unreachable!(),
+            _ => {
+                log::warn!("ignoring unknown internal Windows platform message: {message}");
+                None
+            }
         }
     }
 
@@ -1338,10 +1394,13 @@ impl WindowsPlatformInner {
             return false;
         };
         let mut lock = all_windows.write();
-        let index = lock
+        let Some(index) = lock
             .iter()
             .position(|handle| handle.as_raw() == target_window)
-            .unwrap();
+        else {
+            log::warn!("ignoring close notification for an unknown Windows window");
+            return false;
+        };
         lock.remove(index);
 
         lock.is_empty() && !self.keep_alive_without_windows.load(Ordering::Acquire)
@@ -1350,7 +1409,9 @@ impl WindowsPlatformInner {
     #[inline]
     fn run_foreground_task(&self) -> Option<isize> {
         for runnable in self.main_receiver.drain() {
-            runnable.run();
+            super::catch_platform_callback("foreground task", (), || {
+                runnable.run();
+            });
         }
         Some(0)
     }
@@ -1369,7 +1430,7 @@ impl WindowsPlatformInner {
             return Some(1);
         };
         drop(lock);
-        callback(&*action);
+        super::catch_platform_callback("dock menu action", (), || callback(&*action));
         self.state.borrow_mut().callbacks.app_menu_action = Some(callback);
         Some(0)
     }
@@ -1381,7 +1442,7 @@ impl WindowsPlatformInner {
             .callbacks
             .keyboard_layout_change
             .take()?;
-        callback();
+        super::catch_platform_callback("keyboard layout change", (), &mut callback);
         self.state.borrow_mut().callbacks.keyboard_layout_change = Some(callback);
         Some(0)
     }
@@ -1412,7 +1473,7 @@ impl WindowsPlatformInner {
             }
             let mut callback = self.state.borrow_mut().callbacks.tray_icon_event.take();
             if let Some(ref mut cb) = callback {
-                cb(event);
+                super::catch_platform_callback("tray icon", (), || cb(event));
             }
             self.state.borrow_mut().callbacks.tray_icon_event = callback;
         }
@@ -1433,7 +1494,7 @@ impl WindowsPlatformInner {
         };
         let mut callback = self.state.borrow_mut().callbacks.tray_menu_action.take();
         if let Some(ref mut cb) = callback {
-            cb(item_id);
+            super::catch_platform_callback("tray menu", (), || cb(item_id));
         }
         self.state.borrow_mut().callbacks.tray_menu_action = callback;
         Some(0)
@@ -1444,7 +1505,7 @@ impl WindowsPlatformInner {
         self.state.borrow_mut().pressed_hotkeys.insert(hotkey_id);
         let mut callback = self.state.borrow_mut().callbacks.global_hotkey.take();
         if let Some(ref mut cb) = callback {
-            cb(hotkey_id);
+            super::catch_platform_callback("global hotkey down", (), || cb(hotkey_id));
         }
         self.state.borrow_mut().callbacks.global_hotkey = callback;
         Some(0)
@@ -1473,7 +1534,7 @@ impl WindowsPlatformInner {
         let mut callback = self.state.borrow_mut().callbacks.global_hotkey_up.take();
         if let Some(ref mut cb) = callback {
             for hotkey_id in released_ids {
-                cb(hotkey_id);
+                super::catch_platform_callback("global hotkey up", (), || cb(hotkey_id));
             }
         }
         self.state.borrow_mut().callbacks.global_hotkey_up = callback;
@@ -1481,6 +1542,9 @@ impl WindowsPlatformInner {
     }
 
     fn handle_device_lost(&self, lparam: LPARAM) -> Option<isize> {
+        if lparam.0 == 0 {
+            return None;
+        }
         let mut lock = self.state.borrow_mut();
         let directx_devices = lparam.0 as *const DirectXDevices;
         let directx_devices = unsafe { &*directx_devices };
@@ -1508,7 +1572,7 @@ impl WindowsPlatformInner {
             let mut callback = lock.callbacks.system_power.take();
             drop(lock);
             if let Some(ref mut cb) = callback {
-                cb(event);
+                super::catch_platform_callback("system power", (), || cb(event));
             }
             self.state.borrow_mut().callbacks.system_power = callback;
         }
@@ -1529,7 +1593,7 @@ impl WindowsPlatformInner {
             let mut callback = lock.callbacks.system_power.take();
             drop(lock);
             if let Some(ref mut cb) = callback {
-                cb(event);
+                super::catch_platform_callback("session power", (), || cb(event));
             }
             self.state.borrow_mut().callbacks.system_power = callback;
         }
@@ -1542,7 +1606,7 @@ impl WindowsPlatformInner {
         let mut callback = lock.callbacks.network_status_change.take();
         drop(lock);
         if let Some(ref mut cb) = callback {
-            cb(status);
+            super::catch_platform_callback("network change", (), || cb(status));
         }
         self.state.borrow_mut().callbacks.network_status_change = callback;
         Some(0)
@@ -1573,7 +1637,7 @@ impl WindowsPlatformInner {
         let mut callback = lock.callbacks.media_key.take();
         drop(lock);
         if let Some(ref mut cb) = callback {
-            cb(event);
+            super::catch_platform_callback("media key", (), || cb(event));
         }
         self.state.borrow_mut().callbacks.media_key = callback;
         Some(0)
@@ -1597,7 +1661,7 @@ impl WindowsPlatformInner {
         let mut callback = lock.callbacks.context_menu.take();
         drop(lock);
         if let Some(ref mut cb) = callback {
-            cb(item_id);
+            super::catch_platform_callback("context menu", (), || cb(item_id));
         }
         self.state.borrow_mut().callbacks.context_menu = callback;
         Some(0)
@@ -1618,7 +1682,7 @@ impl WindowsPlatformInner {
             let mut callback = lock.callbacks.notification_action.take();
             drop(lock);
             if let Some(ref mut cb) = callback {
-                cb(action_id);
+                super::catch_platform_callback("notification action", (), || cb(action_id));
             }
             self.state.borrow_mut().callbacks.notification_action = callback;
         }
@@ -1698,6 +1762,31 @@ fn open_target(target: impl AsRef<OsStr>) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+fn move_path_to_recycle_bin(target: &Path) -> Result<()> {
+    let operation = if target.is_dir() {
+        "DeleteDirectory"
+    } else {
+        "DeleteFile"
+    };
+    let script = format!(
+        "Add-Type -AssemblyName Microsoft.VisualBasic; \
+         [Microsoft.VisualBasic.FileIO.FileSystem]::{operation}(\
+         $args[0], \
+         [Microsoft.VisualBasic.FileIO.UIOption]::OnlyErrorDialogs, \
+         [Microsoft.VisualBasic.FileIO.RecycleOption]::SendToRecycleBin)"
+    );
+    let status = std::process::Command::new("powershell.exe")
+        .arg("-NoProfile")
+        .arg("-NonInteractive")
+        .arg("-Command")
+        .arg(script)
+        .arg(target)
+        .status()
+        .context("invoking PowerShell recycle-bin command")?;
+    anyhow::ensure!(status.success(), "Recycle Bin command failed with {status}");
+    Ok(())
 }
 
 fn open_target_in_explorer(target: &Path) -> Result<()> {
@@ -1927,7 +2016,10 @@ fn handle_gpu_device_lost(
 /// The `lparam` carries a `*mut (u32, &mut Vec<HWND>)` where the `u32` is the
 /// current process ID and the `Vec<HWND>` collects the windows that were minimized.
 unsafe extern "system" fn enum_minimize_foreign_windows(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    unsafe {
+    if lparam.0 == 0 {
+        return BOOL(0);
+    }
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         let data = &mut *(lparam.0 as *mut (u32, &mut Vec<HWND>));
         let (current_pid, ref mut minimized) = *data;
 
@@ -1941,6 +2033,12 @@ unsafe extern "system" fn enum_minimize_foreign_windows(hwnd: HWND, lparam: LPAR
         }
 
         BOOL(1)
+    })) {
+        Ok(result) => result,
+        Err(_) => {
+            log::error!("foreign-window enumeration panicked at the Windows ABI boundary");
+            BOOL(0)
+        }
     }
 }
 
@@ -1961,10 +2059,38 @@ unsafe extern "system" fn window_procedure(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        window_procedure_impl(hwnd, msg, wparam, lparam)
+    })) {
+        Ok(result) => result,
+        Err(_) => {
+            log::error!(
+                "platform window procedure panicked; containing panic at the Windows ABI boundary"
+            );
+            if msg == WM_NCDESTROY {
+                let ptr = unsafe { get_window_long(hwnd, GWLP_USERDATA) }
+                    as *mut Weak<WindowsPlatformInner>;
+                if !ptr.is_null() {
+                    unsafe { set_window_long(hwnd, GWLP_USERDATA, 0) };
+                    unsafe { drop(Box::from_raw(ptr)) };
+                }
+            }
+            LRESULT(0)
+        }
+    }
+}
+
+unsafe fn window_procedure_impl(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == WM_NCCREATE {
         let params = lparam.0 as *const CREATESTRUCTW;
+        if params.is_null() {
+            return LRESULT(0);
+        }
         let params = unsafe { &*params };
         let creation_context = params.lpCreateParams as *mut PlatformWindowCreateContext;
+        if creation_context.is_null() {
+            return LRESULT(0);
+        }
         let creation_context = unsafe { &mut *creation_context };
         return match WindowsPlatformInner::new(creation_context) {
             Ok(inner) => {

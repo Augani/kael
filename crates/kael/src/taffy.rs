@@ -5,7 +5,7 @@ use crate::{
 use collections::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use stacksafe::{StackSafe, stacksafe};
-use std::{fmt::Debug, ops::Range};
+use std::{fmt::Debug, mem, ops::Range, time::Instant};
 use taffy::{
     TaffyTree,
     geometry::{Point as TaffyPoint, Rect as TaffyRect, Size as TaffySize},
@@ -31,6 +31,13 @@ pub struct TaffyLayoutEngine {
     taffy: TaffyTree<NodeContext>,
     absolute_layout_bounds: FxHashMap<LayoutId, Bounds<Pixels>>,
     computed_layouts: FxHashSet<LayoutId>,
+    layout_order: FxHashMap<LayoutId, usize>,
+    previous_layout_bounds: Vec<Option<Bounds<Pixels>>>,
+    current_layout_bounds: Vec<Option<Bounds<Pixels>>>,
+    previous_root_available_space: Option<Size<AvailableSpace>>,
+    current_root_available_space: Option<Size<AvailableSpace>>,
+    reuse_previous_layout_requested: bool,
+    reusing_previous_layout: bool,
 }
 
 const EXPECT_MESSAGE: &str = "we should avoid taffy layout errors by construction if possible";
@@ -43,13 +50,42 @@ impl TaffyLayoutEngine {
             taffy,
             absolute_layout_bounds: FxHashMap::default(),
             computed_layouts: FxHashSet::default(),
+            layout_order: FxHashMap::default(),
+            previous_layout_bounds: Vec::new(),
+            current_layout_bounds: Vec::new(),
+            previous_root_available_space: None,
+            current_root_available_space: None,
+            reuse_previous_layout_requested: false,
+            reusing_previous_layout: false,
         }
+    }
+
+    pub fn begin_frame(&mut self, reuse_previous_layout: bool) {
+        self.reuse_previous_layout_requested = reuse_previous_layout;
+        self.reusing_previous_layout = false;
+        self.current_root_available_space = None;
     }
 
     pub fn clear(&mut self) {
         self.taffy.clear();
         self.absolute_layout_bounds.clear();
         self.computed_layouts.clear();
+        self.layout_order.clear();
+        self.previous_layout_bounds = mem::take(&mut self.current_layout_bounds);
+        self.previous_root_available_space = self.current_root_available_space.take();
+        self.reuse_previous_layout_requested = false;
+        self.reusing_previous_layout = false;
+    }
+
+    pub fn is_reusing_previous_layout(&self) -> bool {
+        self.reusing_previous_layout
+    }
+
+    fn track_layout_id(&mut self, layout_id: LayoutId) -> LayoutId {
+        let order = self.current_layout_bounds.len();
+        self.layout_order.insert(layout_id, order);
+        self.current_layout_bounds.push(None);
+        layout_id
     }
 
     pub fn request_layout(
@@ -61,7 +97,7 @@ impl TaffyLayoutEngine {
     ) -> LayoutId {
         let taffy_style = style.to_taffy(rem_size, scale_factor);
 
-        if children.is_empty() {
+        let layout_id = if children.is_empty() {
             self.taffy
                 .new_leaf(taffy_style)
                 .expect(EXPECT_MESSAGE)
@@ -74,7 +110,9 @@ impl TaffyLayoutEngine {
                 })
                 .expect(EXPECT_MESSAGE)
                 .into()
-        }
+        };
+
+        self.track_layout_id(layout_id)
     }
 
     pub fn request_measured_layout(
@@ -92,7 +130,8 @@ impl TaffyLayoutEngine {
     ) -> LayoutId {
         let taffy_style = style.to_taffy(rem_size, scale_factor);
 
-        self.taffy
+        let layout_id = self
+            .taffy
             .new_leaf_with_context(
                 taffy_style,
                 NodeContext {
@@ -100,7 +139,9 @@ impl TaffyLayoutEngine {
                 },
             )
             .expect(EXPECT_MESSAGE)
-            .into()
+            .into();
+
+        self.track_layout_id(layout_id)
     }
 
     // Used to understand performance
@@ -153,6 +194,20 @@ impl TaffyLayoutEngine {
         window: &mut Window,
         cx: &mut App,
     ) {
+        self.current_root_available_space = Some(available_space);
+        if self.reuse_previous_layout_requested
+            && self.previous_root_available_space == Some(available_space)
+            && self.previous_layout_bounds.len() >= self.current_layout_bounds.len()
+            && self.previous_layout_bounds[..self.current_layout_bounds.len()]
+                .iter()
+                .all(Option::is_some)
+        {
+            self.reusing_previous_layout = true;
+            return;
+        }
+
+        self.reusing_previous_layout = false;
+
         // Leaving this here until we have a better instrumentation approach.
         // println!("Laying out {} children", self.count_all_children(id)?);
         // println!("Max layout depth: {}", self.max_depth(0, id)?);
@@ -220,8 +275,10 @@ impl TaffyLayoutEngine {
                         untransform(available_space.height),
                     );
 
+                    let measure_started_at = Instant::now();
                     let a: Size<Pixels> =
                         (node_context.measure)(known_dimensions, available_space, window, cx);
+                    window.record_layout_measure_duration(measure_started_at.elapsed());
                     size(a.width.0 * scale_factor, a.height.0 * scale_factor).into()
                 },
             )
@@ -231,6 +288,20 @@ impl TaffyLayoutEngine {
     pub fn layout_bounds(&mut self, id: LayoutId, scale_factor: f32) -> Bounds<Pixels> {
         if let Some(layout) = self.absolute_layout_bounds.get(&id).cloned() {
             return layout;
+        }
+
+        if self.reusing_previous_layout
+            && let Some(order) = self.layout_order.get(&id).copied()
+            && let Some(bounds) = self
+                .previous_layout_bounds
+                .get(order)
+                .and_then(|bounds| *bounds)
+        {
+            self.absolute_layout_bounds.insert(id, bounds);
+            if let Some(slot) = self.current_layout_bounds.get_mut(order) {
+                *slot = Some(bounds);
+            }
+            return bounds;
         }
 
         let layout = self.taffy.layout(id.into()).expect(EXPECT_MESSAGE);
@@ -250,6 +321,11 @@ impl TaffyLayoutEngine {
             bounds.origin += parent_bounds.origin;
         }
         self.absolute_layout_bounds.insert(id, bounds);
+        if let Some(order) = self.layout_order.get(&id).copied()
+            && let Some(slot) = self.current_layout_bounds.get_mut(order)
+        {
+            *slot = Some(bounds);
+        }
 
         bounds
     }
@@ -284,7 +360,9 @@ trait ToTaffy<Output> {
 
 impl ToTaffy<taffy::style::Style> for Style {
     fn to_taffy(&self, rem_size: Pixels, scale_factor: f32) -> taffy::style::Style {
-        use taffy::style_helpers::{fr, length, minmax, repeat};
+        use taffy::style_helpers::{
+            TaffyAuto, TaffyMaxContent, TaffyMinContent, fr, length, minmax, percent, repeat,
+        };
 
         fn to_grid_line(
             placement: &Range<crate::GridPlacement>,
@@ -301,6 +379,111 @@ impl ToTaffy<taffy::style::Style> for Style {
             // grid-template-columns: repeat(<number>, minmax(0, 1fr));
             unit.map(|count| vec![repeat(count, vec![minmax(length(0.0), fr(1.0))])])
                 .unwrap_or_default()
+        }
+
+        fn grid_min_fn(
+            min: &crate::GridTrackMin,
+            rem_size: Pixels,
+            scale_factor: f32,
+        ) -> taffy::style::MinTrackSizingFunction {
+            match min {
+                crate::GridTrackMin::Auto => taffy::style::MinTrackSizingFunction::AUTO,
+                crate::GridTrackMin::MinContent => {
+                    taffy::style::MinTrackSizingFunction::MIN_CONTENT
+                }
+                crate::GridTrackMin::MaxContent => {
+                    taffy::style::MinTrackSizingFunction::MAX_CONTENT
+                }
+                crate::GridTrackMin::Fixed(value) => {
+                    let pixels: f32 = value.to_taffy(rem_size, scale_factor);
+                    length(pixels)
+                }
+                crate::GridTrackMin::Fraction(fraction) => percent(*fraction),
+            }
+        }
+
+        fn grid_max_fn(
+            max: &crate::GridTrackMax,
+            rem_size: Pixels,
+            scale_factor: f32,
+        ) -> taffy::style::MaxTrackSizingFunction {
+            match max {
+                crate::GridTrackMax::Auto => taffy::style::MaxTrackSizingFunction::AUTO,
+                crate::GridTrackMax::MinContent => {
+                    taffy::style::MaxTrackSizingFunction::MIN_CONTENT
+                }
+                crate::GridTrackMax::MaxContent => {
+                    taffy::style::MaxTrackSizingFunction::MAX_CONTENT
+                }
+                crate::GridTrackMax::Fr(flex) => fr(*flex),
+                crate::GridTrackMax::Fixed(value) => {
+                    let pixels: f32 = value.to_taffy(rem_size, scale_factor);
+                    length(pixels)
+                }
+                crate::GridTrackMax::Fraction(fraction) => percent(*fraction),
+            }
+        }
+
+        fn grid_track_sizing(
+            track: &crate::GridTrack,
+            rem_size: Pixels,
+            scale_factor: f32,
+        ) -> taffy::style::TrackSizingFunction {
+            match track {
+                crate::GridTrack::Auto | crate::GridTrack::Repeat(..) => {
+                    taffy::style::TrackSizingFunction::AUTO
+                }
+                crate::GridTrack::MinContent => taffy::style::TrackSizingFunction::MIN_CONTENT,
+                crate::GridTrack::MaxContent => taffy::style::TrackSizingFunction::MAX_CONTENT,
+                crate::GridTrack::Fr(flex) => fr(*flex),
+                crate::GridTrack::Fixed(value) => {
+                    let pixels: f32 = value.to_taffy(rem_size, scale_factor);
+                    length(pixels)
+                }
+                crate::GridTrack::Fraction(fraction) => percent(*fraction),
+                crate::GridTrack::MinMax(min, max) => minmax(
+                    grid_min_fn(min, rem_size, scale_factor),
+                    grid_max_fn(max, rem_size, scale_factor),
+                ),
+            }
+        }
+
+        fn grid_track_component<T: taffy::style::CheapCloneStr>(
+            track: &crate::GridTrack,
+            rem_size: Pixels,
+            scale_factor: f32,
+        ) -> taffy::GridTemplateComponent<T> {
+            match track {
+                crate::GridTrack::Repeat(count, tracks) => repeat(
+                    *count,
+                    tracks
+                        .iter()
+                        .filter(|inner| !matches!(inner, crate::GridTrack::Repeat(..)))
+                        .map(|inner| grid_track_sizing(inner, rem_size, scale_factor))
+                        .collect(),
+                ),
+                other => taffy::GridTemplateComponent::Single(grid_track_sizing(
+                    other,
+                    rem_size,
+                    scale_factor,
+                )),
+            }
+        }
+
+        fn to_grid_template<T: taffy::style::CheapCloneStr>(
+            explicit: &[crate::GridTrack],
+            uniform: &Option<u16>,
+            rem_size: Pixels,
+            scale_factor: f32,
+        ) -> Vec<taffy::GridTemplateComponent<T>> {
+            if explicit.is_empty() {
+                to_grid_repeat(uniform)
+            } else {
+                explicit
+                    .iter()
+                    .map(|track| grid_track_component(track, rem_size, scale_factor))
+                    .collect()
+            }
         }
 
         taffy::style::Style {
@@ -320,14 +503,27 @@ impl ToTaffy<taffy::style::Style> for Style {
             align_self: self.align_self.map(|x| x.into()),
             align_content: self.align_content.map(|x| x.into()),
             justify_content: self.justify_content.map(|x| x.into()),
+            justify_items: self.justify_items.map(|x| x.into()),
+            justify_self: self.justify_self.map(|x| x.into()),
             gap: self.gap.to_taffy(rem_size, scale_factor),
             flex_direction: self.flex_direction.into(),
             flex_wrap: self.flex_wrap.into(),
             flex_basis: self.flex_basis.to_taffy(rem_size, scale_factor),
             flex_grow: self.flex_grow,
             flex_shrink: self.flex_shrink,
-            grid_template_rows: to_grid_repeat(&self.grid_rows),
-            grid_template_columns: to_grid_repeat(&self.grid_cols),
+            grid_template_rows: to_grid_template(
+                &self.grid_template_rows,
+                &self.grid_rows,
+                rem_size,
+                scale_factor,
+            ),
+            grid_template_columns: to_grid_template(
+                &self.grid_template_columns,
+                &self.grid_cols,
+                rem_size,
+                scale_factor,
+            ),
+            grid_auto_flow: self.grid_auto_flow.map(Into::into).unwrap_or_default(),
             grid_row: self
                 .grid_location
                 .as_ref()
@@ -594,5 +790,33 @@ impl From<Size<Pixels>> for Size<AvailableSpace> {
             width: AvailableSpace::Definite(size.width),
             height: AvailableSpace::Definite(size.height),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ToTaffy;
+    use crate::{AlignItems, Style, px};
+
+    #[test]
+    fn justify_items_and_self_map_to_taffy_grid_alignment() {
+        let style = Style {
+            justify_items: Some(AlignItems::Center),
+            justify_self: Some(AlignItems::End),
+            ..Style::default()
+        };
+        let taffy_style: taffy::style::Style = style.to_taffy(px(16.0), 1.0);
+        assert_eq!(
+            taffy_style.justify_items,
+            Some(taffy::style::AlignItems::Center)
+        );
+        assert_eq!(taffy_style.justify_self, Some(taffy::style::AlignSelf::End));
+    }
+
+    #[test]
+    fn justify_items_defaults_to_none() {
+        let taffy_style: taffy::style::Style = Style::default().to_taffy(px(16.0), 1.0);
+        assert_eq!(taffy_style.justify_items, None);
+        assert_eq!(taffy_style.justify_self, None);
     }
 }

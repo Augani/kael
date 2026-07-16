@@ -62,15 +62,16 @@ impl<V: Clone> MemoryCache<V> {
 
     /// Retrieves a cached value by key, updating its access recency.
     pub fn get(&mut self, key: &str) -> Option<V> {
-        if let Some(entry) = self.entries.get_mut(key) {
-            self.eviction_order.remove(&entry.eviction);
-            self.access_counter += 1;
-            entry.eviction.access_order = self.access_counter;
+        if let Some(previous_eviction) = self.entries.get(key).map(|entry| entry.eviction.clone()) {
+            self.eviction_order.remove(&previous_eviction);
+            let access_order = self.next_access_order();
+            let entry = self.entries.get_mut(key)?;
+            entry.eviction.access_order = access_order;
             self.eviction_order.insert(entry.eviction.clone());
-            self.hits += 1;
+            self.hits = self.hits.saturating_add(1);
             Some(entry.value.clone())
         } else {
-            self.misses += 1;
+            self.misses = self.misses.saturating_add(1);
             None
         }
     }
@@ -83,12 +84,14 @@ impl<V: Clone> MemoryCache<V> {
         }
 
         if self.entries.contains_key(&key) {
-            self.access_counter += 1;
-            let entry = self.entries.get_mut(&key).expect("key confirmed present");
+            let access_order = self.next_access_order();
+            let Some(entry) = self.entries.get_mut(&key) else {
+                return;
+            };
             self.eviction_order.remove(&entry.eviction);
             entry.value = value;
             entry.eviction.priority = priority;
-            entry.eviction.access_order = self.access_counter;
+            entry.eviction.access_order = access_order;
             self.eviction_order.insert(entry.eviction.clone());
             return;
         }
@@ -97,8 +100,8 @@ impl<V: Clone> MemoryCache<V> {
             self.evict_one();
         }
 
-        self.access_counter += 1;
-        let eviction = EvictionKey::new(key.clone(), priority, self.access_counter);
+        let access_order = self.next_access_order();
+        let eviction = EvictionKey::new(key.clone(), priority, access_order);
         self.entries.insert(
             key,
             Entry {
@@ -146,6 +149,40 @@ impl<V: Clone> MemoryCache<V> {
     fn evict_one(&mut self) {
         if let Some(victim) = self.eviction_order.pop_first() {
             self.entries.remove(victim.key.as_str());
+        }
+    }
+
+    fn next_access_order(&mut self) -> u64 {
+        if self.access_counter == u64::MAX {
+            let keys = self
+                .eviction_order
+                .iter()
+                .map(|entry| entry.key.clone())
+                .collect::<Vec<_>>();
+            self.eviction_order.clear();
+            for (index, key) in keys.into_iter().enumerate() {
+                if let Some(entry) = self.entries.get_mut(&key) {
+                    entry.eviction.access_order = u64::try_from(index)
+                        .unwrap_or(u64::MAX - 1)
+                        .saturating_add(1);
+                    self.eviction_order.insert(entry.eviction.clone());
+                }
+            }
+            self.access_counter = u64::try_from(self.entries.len()).unwrap_or(u64::MAX - 1);
+        }
+        self.access_counter = self.access_counter.saturating_add(1);
+        self.access_counter
+    }
+
+    pub(crate) fn remove_matching(&mut self, predicate: impl Fn(&str) -> bool) {
+        let keys = self
+            .entries
+            .keys()
+            .filter(|key| predicate(key))
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in keys {
+            self.remove(&key);
         }
     }
 }
@@ -257,5 +294,18 @@ mod tests {
 
         assert!(cache.is_empty());
         assert_eq!(cache.get("a"), None);
+    }
+
+    #[test]
+    fn counters_and_access_order_do_not_overflow() {
+        let mut cache = MemoryCache::new(2);
+        cache.insert("a".into(), 1, CachePriority::Normal);
+        cache.insert("b".into(), 2, CachePriority::Normal);
+        cache.access_counter = u64::MAX;
+        cache.hits = u64::MAX;
+        assert_eq!(cache.get("a"), Some(1));
+        assert_eq!(cache.hits(), u64::MAX);
+        cache.insert("c".into(), 3, CachePriority::Normal);
+        assert_eq!(cache.get("b"), None);
     }
 }

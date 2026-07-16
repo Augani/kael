@@ -123,7 +123,10 @@ impl TaskLabel {
     /// Construct a new task label.
     pub fn new() -> Self {
         static NEXT_TASK_LABEL: AtomicUsize = AtomicUsize::new(1);
-        Self(NEXT_TASK_LABEL.fetch_add(1, SeqCst).try_into().unwrap())
+        let label = NEXT_TASK_LABEL
+            .fetch_update(SeqCst, SeqCst, |current| current.checked_add(1))
+            .expect("task label space exhausted");
+        Self(NonZeroUsize::new(label).expect("task label generator produced zero"))
     }
 }
 

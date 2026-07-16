@@ -43,6 +43,16 @@ impl Default for ClipTransform {
 }
 
 impl ClipTransform {
+    fn sanitized(self) -> Self {
+        Self {
+            scale_x: finite_or(self.scale_x, 1.0),
+            scale_y: finite_or(self.scale_y, 1.0),
+            center_x: finite_or(self.center_x, 0.5),
+            center_y: finite_or(self.center_y, 0.5),
+            rotation: finite_or(self.rotation, 0.0),
+        }
+    }
+
     /// Whether this transform leaves the image unchanged (fills the frame, centered, unrotated).
     pub fn is_identity(&self) -> bool {
         self.scale_x == 1.0
@@ -67,22 +77,23 @@ impl ClipTransform {
     /// Apply the transform to `source`: rotate the content about its center, then scale and
     /// position it into its box (the rest transparent). The identity returns an unchanged copy.
     pub fn apply(&self, source: &Image) -> Image {
-        if self.is_identity() {
+        let transform = self.sanitized();
+        if transform.is_identity() {
             return source.clone();
         }
         let (width, height) = (source.width, source.height);
 
         let mut rotated = Image::new(width, height);
-        if self.rotation != 0.0 {
-            rotate(self.rotation)(&[source], &mut rotated);
+        if transform.rotation != 0.0 {
+            rotate(transform.rotation)(&[source], &mut rotated);
         } else {
             rotated.pixels.clone_from(&source.pixels);
         }
 
-        if self.box_is_identity() {
+        if transform.box_is_identity() {
             return rotated;
         }
-        let (dst_x, dst_y, dst_width, dst_height) = self.dst_rect(width, height);
+        let (dst_x, dst_y, dst_width, dst_height) = transform.dst_rect(width, height);
         let mut output = Image::new(width, height);
         place(dst_x, dst_y, dst_width, dst_height)(&[&rotated], &mut output);
         output
@@ -104,13 +115,14 @@ impl ClipTransform {
 
     /// A stable hash of the transform's parameters, for render-graph cache keys.
     pub fn param_hash(self) -> u64 {
+        let transform = self.sanitized();
         let mut hash = 0xcbf2_9ce4_8422_2325u64;
         for value in [
-            self.scale_x,
-            self.scale_y,
-            self.center_x,
-            self.center_y,
-            self.rotation,
+            transform.scale_x,
+            transform.scale_y,
+            transform.center_x,
+            transform.center_y,
+            transform.rotation,
         ] {
             for byte in value.to_bits().to_le_bytes() {
                 hash ^= byte as u64;
@@ -119,6 +131,10 @@ impl ClipTransform {
         }
         hash
     }
+}
+
+fn finite_or(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() { value } else { fallback }
 }
 
 /// A [`ClipTransform`] whose parameters are [`Automation`] curves rather than constants — a
@@ -175,6 +191,24 @@ mod tests {
         assert_eq!(
             ClipTransform::default().apply(&source).pixels,
             source.pixels
+        );
+    }
+
+    #[test]
+    fn non_finite_transform_parameters_fall_back_to_identity_values() {
+        let source = Image::filled(2, 2, [0.2, 0.4, 0.6, 1.0]);
+        let transform = ClipTransform {
+            scale_x: f32::NAN,
+            scale_y: f32::INFINITY,
+            center_x: f32::NEG_INFINITY,
+            center_y: f32::NAN,
+            rotation: f32::INFINITY,
+        };
+
+        assert_eq!(transform.apply(&source), source);
+        assert_eq!(
+            transform.param_hash(),
+            ClipTransform::default().param_hash()
         );
     }
 

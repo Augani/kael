@@ -156,9 +156,18 @@ code_font_family = "JetBrains Mono"
         assert_eq!(tokens.radius_lg, px(11.0));
         assert_eq!(tokens.radius_xl, px(15.0));
 
-        assert_eq!(tokens.shadow_sm.as_slice(), &[core.shadows.sm.clone()]);
-        assert_eq!(tokens.shadow_md.as_slice(), &[core.shadows.md.clone()]);
-        assert_eq!(tokens.shadow_lg.as_slice(), &[core.shadows.lg.clone()]);
+        assert_eq!(
+            tokens.shadow_sm.as_slice(),
+            std::slice::from_ref(&core.shadows.sm)
+        );
+        assert_eq!(
+            tokens.shadow_md.as_slice(),
+            std::slice::from_ref(&core.shadows.md)
+        );
+        assert_eq!(
+            tokens.shadow_lg.as_slice(),
+            std::slice::from_ref(&core.shadows.lg)
+        );
 
         assert_eq!(tokens.font_family.as_ref(), "Inter");
         assert_eq!(tokens.font_mono.as_ref(), "JetBrains Mono");

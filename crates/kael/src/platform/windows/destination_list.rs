@@ -150,7 +150,7 @@ fn add_recent_folders(
                     .join("\n"),
             );
             // simulate folder icon
-            // https://github.com/microsoft/vscode/blob/7a5dc239516a8953105da34f84bae152421a8886/src/vs/platform/workspaces/electron-main/workspacesHistoryMainService.ts#L380
+            // Keep Jump List path normalization compatible with common Windows workspace shortcuts.
             let icon = HSTRING::from("explorer.exe");
 
             let display = folder_path

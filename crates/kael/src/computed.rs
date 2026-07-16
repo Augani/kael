@@ -1,7 +1,10 @@
-use crate::{App, AppContext, Context, Entity, EntityId, Subscription};
+use crate::{App, AppContext, Context, Entity, EntityId, Result, Subscription};
+use anyhow::anyhow;
 use collections::FxHashSet;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
+
+const MAX_COMPUTED_DEPENDENCIES: usize = 4_096;
 
 /// Records the entities read during a [`Computed`] recomputation.
 ///
@@ -13,6 +16,7 @@ use std::rc::Rc;
 pub struct Tracker<'a> {
     app: &'a mut App,
     dependencies: FxHashSet<EntityId>,
+    dependency_overflowed: bool,
 }
 
 impl<'a> Tracker<'a> {
@@ -20,25 +24,56 @@ impl<'a> Tracker<'a> {
         Self {
             app,
             dependencies: FxHashSet::default(),
+            dependency_overflowed: false,
         }
     }
 
     /// Reads an entity and records it as a dependency of the current
     /// computation.
     pub fn read<'b, T: 'static>(&'b mut self, entity: &Entity<T>) -> &'b T {
-        self.dependencies.insert(entity.entity_id());
+        self.record_dependency(entity.entity_id());
         entity.read(self.app)
+    }
+
+    /// Reads an entity and rejects computations that exceed the dependency cap.
+    pub fn try_read<'b, T: 'static>(&'b mut self, entity: &Entity<T>) -> Result<&'b T> {
+        anyhow::ensure!(
+            self.record_dependency(entity.entity_id()),
+            "computed dependency limit exceeded"
+        );
+        Ok(entity.read(self.app))
     }
 
     /// Records `entity` as a dependency without reading it, for cases where the
     /// computation depends on a notify but not the current value.
     pub fn observe<T: 'static>(&mut self, entity: &Entity<T>) {
-        self.dependencies.insert(entity.entity_id());
+        self.record_dependency(entity.entity_id());
+    }
+
+    /// Records a dependency and reports when the computation exceeds its cap.
+    pub fn try_observe<T: 'static>(&mut self, entity: &Entity<T>) -> Result<()> {
+        anyhow::ensure!(
+            self.record_dependency(entity.entity_id()),
+            "computed dependency limit exceeded"
+        );
+        Ok(())
     }
 
     /// The underlying app context.
     pub fn app(&mut self) -> &mut App {
         self.app
+    }
+
+    fn record_dependency(&mut self, entity_id: EntityId) -> bool {
+        if self.dependencies.contains(&entity_id) {
+            return true;
+        }
+        if self.dependencies.len() >= MAX_COMPUTED_DEPENDENCIES {
+            self.dependency_overflowed = true;
+            return false;
+        }
+        self.dependencies.insert(entity_id);
+        true
     }
 }
 
@@ -66,6 +101,8 @@ pub struct ComputedState<T: 'static> {
     compute: ComputeFn<T>,
     cached: Option<T>,
     dirty: bool,
+    computing: bool,
+    dependency_overflowed: bool,
     dependencies: FxHashSet<EntityId>,
     subscriptions: Vec<Subscription>,
 }
@@ -79,6 +116,11 @@ impl<T: 'static> ComputedState<T> {
     /// Returns the entity ids the most recent computation depended upon.
     pub fn dependencies(&self) -> &FxHashSet<EntityId> {
         &self.dependencies
+    }
+
+    /// Whether the latest legacy computation exceeded the dependency cap.
+    pub fn dependency_overflowed(&self) -> bool {
+        self.dependency_overflowed
     }
 }
 
@@ -115,6 +157,8 @@ impl<T: 'static> Computed<T> {
             compute,
             cached: None,
             dirty: true,
+            computing: false,
+            dependency_overflowed: false,
             dependencies: FxHashSet::default(),
             subscriptions: Vec::new(),
         });
@@ -135,24 +179,43 @@ impl<T: 'static> Computed<T> {
     /// Recomputes the value if stale, then returns a reference to the cached
     /// result.
     pub fn read<'a>(&self, cx: &'a mut App) -> &'a T {
-        self.recompute_if_dirty(cx);
+        self.try_read(cx)
+            .expect("computed value recomputation failed")
+    }
+
+    /// Recomputes if stale and reports callback failures or dependency cycles.
+    pub fn try_read<'a>(&self, cx: &'a mut App) -> Result<&'a T> {
+        self.recompute_if_dirty(cx)?;
         self.state
             .read(cx)
             .cached
             .as_ref()
-            .expect("computed value was populated by recompute_if_dirty")
+            .ok_or_else(|| anyhow!("computed value is unavailable"))
     }
 
-    fn recompute_if_dirty(&self, cx: &mut App) {
-        let needs_recompute = self.state.read(cx).is_dirty();
+    fn recompute_if_dirty(&self, cx: &mut App) -> Result<()> {
+        let state = self.state.read(cx);
+        let needs_recompute = state.is_dirty();
+        anyhow::ensure!(!state.computing, "computed dependency cycle detected");
         if !needs_recompute {
-            return;
+            return Ok(());
         }
 
-        let compute = self.state.read(cx).compute.clone();
+        let compute = state.compute.clone();
+        self.state.update(cx, |state, _| state.computing = true);
         let mut tracker = Tracker::new(cx);
-        let value = compute(&mut tracker);
+        let value = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            compute(&mut tracker)
+        })) {
+            Ok(value) => value,
+            Err(_) => {
+                drop(tracker);
+                self.state.update(cx, |state, _| state.computing = false);
+                return Err(anyhow!("computed callback panicked"));
+            }
+        };
         let dependencies = tracker.dependencies;
+        let dependency_overflowed = tracker.dependency_overflowed;
 
         let weak = self.state.downgrade();
         let subscriptions = dependencies
@@ -180,10 +243,13 @@ impl<T: 'static> Computed<T> {
 
         self.state.update(cx, |state, _| {
             state.cached = Some(value);
-            state.dirty = false;
+            state.dirty = dependency_overflowed;
+            state.computing = false;
+            state.dependency_overflowed = dependency_overflowed;
             state.dependencies = dependencies;
             state.subscriptions = subscriptions;
         });
+        Ok(())
     }
 }
 
@@ -191,6 +257,11 @@ impl<T: Clone + 'static> Computed<T> {
     /// Recomputes if stale, then returns a clone of the cached value.
     pub fn get(&self, cx: &mut App) -> T {
         self.read(cx).clone()
+    }
+
+    /// Recomputes if stale and returns a cloned value through the checked path.
+    pub fn try_get(&self, cx: &mut App) -> Result<T> {
+        self.try_read(cx).cloned()
     }
 }
 
@@ -225,7 +296,7 @@ impl<T: 'static> AppContextExt for Context<'_, T> {
 mod tests {
     use super::*;
     use crate::TestAppContext;
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
     struct Counter(usize);
@@ -372,5 +443,78 @@ mod tests {
         });
 
         assert_eq!(cx.update(|cx| computed.get(cx)), 103);
+    }
+
+    #[kael::test]
+    fn computed_contains_callback_panics_and_recovers(cx: &mut TestAppContext) {
+        let calls = Rc::new(Cell::new(0));
+        let computed = cx.update(|cx| {
+            let calls = calls.clone();
+            Computed::new(cx, move |_| {
+                let call = calls.get();
+                calls.set(call + 1);
+                assert!(call > 0, "private computed panic");
+                7
+            })
+        });
+
+        assert_eq!(
+            cx.update(|cx| computed.try_get(cx).unwrap_err().to_string()),
+            "computed callback panicked"
+        );
+        assert_eq!(cx.update(|cx| computed.try_get(cx).unwrap()), 7);
+        assert_eq!(calls.get(), 2);
+    }
+
+    #[kael::test]
+    fn computed_detects_recursive_reads_without_recursing(cx: &mut TestAppContext) {
+        let slot = Rc::new(RefCell::new(None::<Computed<usize>>));
+        let cycle_detected = Rc::new(Cell::new(false));
+        let computed = cx.update(|cx| {
+            let slot = slot.clone();
+            let cycle_detected = cycle_detected.clone();
+            Computed::new(cx, move |tracker| {
+                let recursive = slot
+                    .borrow()
+                    .as_ref()
+                    .expect("computed installed before first lazy read")
+                    .try_get(tracker.app());
+                cycle_detected.set(recursive.is_err());
+                11
+            })
+        });
+        *slot.borrow_mut() = Some(computed.clone());
+
+        assert_eq!(cx.update(|cx| computed.try_get(cx).unwrap()), 11);
+        assert!(cycle_detected.get());
+    }
+
+    #[kael::test]
+    fn computed_bounds_legacy_dependency_tracking(cx: &mut TestAppContext) {
+        let sources = (0..=MAX_COMPUTED_DEPENDENCIES)
+            .map(|_| cx.new(|_| ()))
+            .collect::<Vec<_>>();
+        let runs = Rc::new(Cell::new(0));
+        let computed = cx.update(|cx| {
+            let runs = runs.clone();
+            Computed::new(cx, move |tracker| {
+                runs.set(runs.get() + 1);
+                for source in &sources {
+                    tracker.observe(source);
+                }
+                5
+            })
+        });
+
+        assert_eq!(cx.update(|cx| computed.get(cx)), 5);
+        cx.read(|cx| {
+            let state = computed.entity();
+            let state = state.read(cx);
+            assert!(state.dependency_overflowed());
+            assert_eq!(state.dependencies().len(), MAX_COMPUTED_DEPENDENCIES);
+            assert!(state.is_dirty());
+        });
+        assert_eq!(cx.update(|cx| computed.get(cx)), 5);
+        assert_eq!(runs.get(), 2);
     }
 }

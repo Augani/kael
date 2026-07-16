@@ -11,6 +11,7 @@ pub(crate) struct X11Display {
     bounds: Bounds<Pixels>,
     uuid: Uuid,
     refresh_rate: Option<f32>,
+    scale_factor: f32,
 }
 
 impl X11Display {
@@ -36,6 +37,7 @@ impl X11Display {
             },
             uuid: Uuid::from_bytes([0; 16]),
             refresh_rate,
+            scale_factor,
         })
     }
 }
@@ -85,5 +87,9 @@ impl PlatformDisplay for X11Display {
 
     fn refresh_rate(&self) -> Option<f32> {
         self.refresh_rate
+    }
+
+    fn scale_factor(&self) -> f32 {
+        self.scale_factor
     }
 }

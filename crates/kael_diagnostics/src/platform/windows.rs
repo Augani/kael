@@ -1,1 +1,1 @@
-pub(crate) const BACKEND_NAME: &str = "seh";
+pub(crate) const BACKEND_NAME: &str = "unhandled-exception-filter";

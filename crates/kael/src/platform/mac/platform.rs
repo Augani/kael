@@ -51,6 +51,12 @@ use util::ResultExt;
 
 #[allow(non_upper_case_globals)]
 const NSUTF8StringEncoding: NSUInteger = 4;
+const MAX_CLIPBOARD_DATA_BYTES: usize = 256 * 1024 * 1024;
+const MAX_NATIVE_STRING_BYTES: usize = 1024 * 1024;
+
+fn catch_platform_callback<T>(name: &'static str, fallback: T, callback: impl FnOnce() -> T) -> T {
+    crate::platform::catch_platform_callback("macOS", name, fallback, callback)
+}
 
 #[link(name = "AppKit", kind = "framework")]
 unsafe extern "C" {
@@ -71,6 +77,27 @@ fn ns_string(string: &str) -> Retained<NSString> {
 
 fn ns_string_object(string: &Retained<NSString>) -> *mut AnyObject {
     (&**string as *const NSString).cast_mut().cast()
+}
+
+unsafe fn bounded_ns_string(value: *mut AnyObject) -> Option<String> {
+    if value.is_null() {
+        return None;
+    }
+    let len: usize = unsafe { msg_send![value, lengthOfBytesUsingEncoding: NSUTF8StringEncoding] };
+    if len > MAX_NATIVE_STRING_BYTES {
+        log::warn!("rejecting oversized macOS native string ({len} bytes)");
+        return None;
+    }
+    if len == 0 {
+        return Some(String::new());
+    }
+    let bytes: *const u8 = unsafe { msg_send![value, UTF8String] };
+    if bytes.is_null() {
+        return None;
+    }
+    std::str::from_utf8(unsafe { slice::from_raw_parts(bytes, len) })
+        .ok()
+        .map(str::to_owned)
 }
 
 unsafe fn ns_data_with_bytes(bytes: *const c_void, len: usize) -> *mut AnyObject {
@@ -173,7 +200,7 @@ define_class!(
                 let platform = self.mac_platform();
                 let callback = platform.0.lock().finish_launching.take();
                 if let Some(callback) = callback {
-                    callback();
+                    catch_platform_callback("finish launching", (), callback);
                 }
 
                 let keep_alive = platform.0.lock().keep_alive_without_windows;
@@ -195,7 +222,7 @@ define_class!(
             let mut lock = platform.0.lock();
             if let Some(mut callback) = lock.reopen.take() {
                 drop(lock);
-                callback();
+                catch_platform_callback("application reopen", (), &mut callback);
                 platform.0.lock().reopen.get_or_insert(callback);
             }
         }
@@ -206,7 +233,7 @@ define_class!(
             let mut lock = platform.0.lock();
             if let Some(mut callback) = lock.quit.take() {
                 drop(lock);
-                callback();
+                catch_platform_callback("application quit", (), &mut callback);
                 platform.0.lock().quit.get_or_insert(callback);
             }
         }
@@ -224,11 +251,9 @@ define_class!(
                 if represented.is_null() {
                     return;
                 }
-                let len: usize =
-                    msg_send![represented, lengthOfBytesUsingEncoding: NSUTF8StringEncoding];
-                let bytes: *const u8 = msg_send![represented, UTF8String];
-                let id_str = std::str::from_utf8(slice::from_raw_parts(bytes, len)).unwrap_or("");
-                let shared_id: SharedString = id_str.to_string().into();
+                let Some(shared_id) = bounded_ns_string(represented).map(SharedString::from) else {
+                    return;
+                };
 
                 let platform_ptr = platform as *const MacPlatform;
 
@@ -245,12 +270,20 @@ define_class!(
                 }));
 
                 unsafe extern "C" fn invoke(ctx_ptr: *mut c_void) {
+                    if ctx_ptr.is_null() {
+                        log::error!("received a null macOS tray action context");
+                        return;
+                    }
                     let ctx = unsafe { Box::from_raw(ctx_ptr as *mut TrayActionCtx) };
+                    if ctx.platform.is_null() {
+                        log::error!("received a null macOS tray platform context");
+                        return;
+                    }
                     let platform = unsafe { &*ctx.platform };
                     let mut lock = platform.0.lock();
                     if let Some(mut callback) = lock.tray_menu_callback.take() {
                         drop(lock);
-                        callback(ctx.id);
+                        catch_platform_callback("tray menu", (), || callback(ctx.id));
                         platform.0.lock().tray_menu_callback = Some(callback);
                     }
                 }
@@ -267,11 +300,17 @@ define_class!(
             use super::dispatcher::{dispatch_get_main_queue, dispatch_sys::dispatch_async_f};
 
             unsafe extern "C" fn invoke(ctx_ptr: *mut c_void) {
+                if ctx_ptr.is_null() {
+                    log::error!("received a null macOS tray platform context");
+                    return;
+                }
                 let platform = unsafe { &*(ctx_ptr as *const MacPlatform) };
                 let mut lock = platform.0.lock();
                 if let Some(mut callback) = lock.tray_icon_callback.take() {
                     drop(lock);
-                    callback(TrayIconEvent::LeftClick);
+                    catch_platform_callback("tray icon", (), || {
+                        callback(TrayIconEvent::LeftClick)
+                    });
                     platform.0.lock().tray_icon_callback = Some(callback);
                 }
             }
@@ -327,7 +366,11 @@ define_class!(
                     if let Some(action) = lock.menu_actions.get(index) {
                         let action = action.boxed_clone();
                         drop(lock);
-                        result = callback(action.as_ref());
+                        result = catch_platform_callback(
+                            "menu command validation",
+                            false,
+                            || callback(action.as_ref()),
+                        );
                     }
                     platform
                         .0
@@ -345,7 +388,7 @@ define_class!(
             let mut lock = platform.0.lock();
             if let Some(mut callback) = lock.will_open_menu.take() {
                 drop(lock);
-                callback();
+                catch_platform_callback("menu open", (), &mut callback);
                 platform.0.lock().will_open_menu.get_or_insert(callback);
             }
         }
@@ -359,20 +402,17 @@ define_class!(
 
         #[unsafe(method(application:openURLs:))]
         fn open_urls(&self, _app: *mut AnyObject, urls: *mut AnyObject) {
+            if urls.is_null() {
+                log::warn!("ignoring a null macOS open-URLs collection");
+                return;
+            }
             let urls = unsafe {
                 let count: usize = msg_send![urls, count];
                 (0..count)
                     .filter_map(|i| {
                         let url: *mut AnyObject = msg_send![urls, objectAtIndex: i];
                         let absolute_string: *mut AnyObject = msg_send![url, absoluteString];
-                        let string_ptr: *const c_char = msg_send![absolute_string, UTF8String];
-                        match CStr::from_ptr(string_ptr).to_str() {
-                            Ok(string) => Some(string.to_string()),
-                            Err(err) => {
-                                log::error!("error converting path to string: {}", err);
-                                None
-                            }
-                        }
+                        bounded_ns_string(absolute_string)
                     })
                     .collect::<Vec<_>>()
             };
@@ -381,7 +421,7 @@ define_class!(
             let mut lock = platform.0.lock();
             if let Some(mut callback) = lock.open_urls.take() {
                 drop(lock);
-                callback(urls);
+                catch_platform_callback("open URLs", (), || callback(urls));
                 platform.0.lock().open_urls.get_or_insert(callback);
             }
         }
@@ -394,7 +434,7 @@ define_class!(
             lock.keyboard_mapper = Rc::new(MacKeyboardMapper::new(keyboard_layout.id()));
             if let Some(mut callback) = lock.on_keyboard_layout_change.take() {
                 drop(lock);
-                callback();
+                catch_platform_callback("keyboard layout change", (), &mut callback);
                 platform
                     .0
                     .lock()
@@ -412,25 +452,29 @@ define_class!(
 
         #[unsafe(method(handleSystemPowerEvent:))]
         fn handle_system_power_event(&self, notification: *mut AnyObject) {
+            if notification.is_null() {
+                log::warn!("ignoring a null macOS power notification");
+                return;
+            }
             unsafe {
                 let name: *mut AnyObject = msg_send![notification, name];
-                let name_str: *const c_char = msg_send![name, UTF8String];
-                let name_cstr = CStr::from_ptr(name_str);
-                let name_bytes = name_cstr.to_bytes();
+                let Some(name) = bounded_ns_string(name) else {
+                    return;
+                };
 
-                let event = match name_bytes {
-                    b"NSWorkspaceWillSleepNotification" => crate::SystemPowerEvent::Suspend,
-                    b"NSWorkspaceDidWakeNotification" => crate::SystemPowerEvent::Resume,
-                    b"NSProcessInfoPowerStateDidChangeNotification" => {
+                let event = match name.as_str() {
+                    "NSWorkspaceWillSleepNotification" => crate::SystemPowerEvent::Suspend,
+                    "NSWorkspaceDidWakeNotification" => crate::SystemPowerEvent::Resume,
+                    "NSProcessInfoPowerStateDidChangeNotification" => {
                         crate::SystemPowerEvent::PowerModeChanged
                     }
-                    b"NSWorkspaceSessionDidResignActiveNotification" => {
+                    "NSWorkspaceSessionDidResignActiveNotification" => {
                         crate::SystemPowerEvent::LockScreen
                     }
-                    b"NSWorkspaceSessionDidBecomeActiveNotification" => {
+                    "NSWorkspaceSessionDidBecomeActiveNotification" => {
                         crate::SystemPowerEvent::UnlockScreen
                     }
-                    b"NSWorkspaceWillPowerOffNotification" => crate::SystemPowerEvent::Shutdown,
+                    "NSWorkspaceWillPowerOffNotification" => crate::SystemPowerEvent::Shutdown,
                     _ => return,
                 };
 
@@ -438,7 +482,7 @@ define_class!(
                 let mut lock = platform.0.lock();
                 if let Some(mut callback) = lock.system_power_callback.take() {
                     drop(lock);
-                    callback(event);
+                    catch_platform_callback("system power", (), || callback(event));
                     platform.0.lock().system_power_callback = Some(callback);
                 }
             }
@@ -452,16 +496,14 @@ define_class!(
                 if represented.is_null() {
                     return;
                 }
-                let len: usize =
-                    msg_send![represented, lengthOfBytesUsingEncoding: NSUTF8StringEncoding];
-                let bytes: *const u8 = msg_send![represented, UTF8String];
-                let id_str = std::str::from_utf8(slice::from_raw_parts(bytes, len)).unwrap_or("");
-                let shared_id: SharedString = id_str.to_string().into();
+                let Some(shared_id) = bounded_ns_string(represented).map(SharedString::from) else {
+                    return;
+                };
 
                 let mut lock = platform.0.lock();
                 if let Some(mut callback) = lock.context_menu_callback.take() {
                     drop(lock);
-                    callback(shared_id);
+                    catch_platform_callback("context menu", (), || callback(shared_id));
                     platform.0.lock().context_menu_callback = Some(callback);
                 }
             }
@@ -487,7 +529,7 @@ impl GPUIApplicationDelegate {
                 if let Some(action) = lock.menu_actions.get(index) {
                     let action = action.boxed_clone();
                     drop(lock);
-                    callback(&*action);
+                    catch_platform_callback("menu command", (), || callback(&*action));
                 }
                 platform.0.lock().menu_command.get_or_insert(callback);
             }
@@ -507,6 +549,50 @@ impl GPUIApplicationDelegate {
 #[derive(Debug, Default)]
 struct GPUINotificationDelegateIvars {
     platform: Cell<*mut c_void>,
+}
+
+#[repr(C)]
+struct NotificationCompletionBlock {
+    isa: *const c_void,
+    flags: i32,
+    reserved: i32,
+    invoke: Option<unsafe extern "C" fn(*const NotificationCompletionBlock)>,
+}
+
+#[repr(C)]
+struct NotificationPresentationCompletionBlock {
+    isa: *const c_void,
+    flags: i32,
+    reserved: i32,
+    invoke: Option<unsafe extern "C" fn(*const NotificationPresentationCompletionBlock, u64)>,
+}
+
+unsafe fn complete_notification_response(completion_handler: *mut AnyObject) {
+    let Some(block) =
+        (unsafe { (completion_handler as *const NotificationCompletionBlock).as_ref() })
+    else {
+        log::error!("received a null macOS notification completion handler");
+        return;
+    };
+    if let Some(invoke) = block.invoke {
+        unsafe { invoke(block) };
+    } else {
+        log::error!("macOS notification completion handler has no invoke function");
+    }
+}
+
+unsafe fn complete_notification_presentation(completion_handler: *mut AnyObject, options: u64) {
+    let Some(block) = (unsafe {
+        (completion_handler as *const NotificationPresentationCompletionBlock).as_ref()
+    }) else {
+        log::error!("received a null macOS notification presentation handler");
+        return;
+    };
+    if let Some(invoke) = block.invoke {
+        unsafe { invoke(block, options) };
+    } else {
+        log::error!("macOS notification presentation handler has no invoke function");
+    }
 }
 
 define_class!(
@@ -531,11 +617,10 @@ define_class!(
                     let platform = &*(platform_ptr as *const MacPlatform);
 
                     let action_id: *mut AnyObject = msg_send![response, actionIdentifier];
-                    let len: usize =
-                        msg_send![action_id, lengthOfBytesUsingEncoding: NSUTF8StringEncoding];
-                    let bytes: *const u8 = msg_send![action_id, UTF8String];
-                    let action_str =
-                        std::str::from_utf8(slice::from_raw_parts(bytes, len)).unwrap_or("");
+                    let Some(action_str) = bounded_ns_string(action_id) else {
+                        complete_notification_response(completion_handler);
+                        return;
+                    };
 
                     let default_action_id = "com.apple.UNNotificationDefaultActionIdentifier";
                     let dismiss_action_id = "com.apple.UNNotificationDismissActionIdentifier";
@@ -543,21 +628,15 @@ define_class!(
                         let mut lock = platform.0.lock();
                         if let Some(mut callback) = lock.notification_action_callback.take() {
                             drop(lock);
-                            callback(action_str.to_string());
+                            catch_platform_callback("notification action", (), || {
+                                callback(action_str)
+                            });
                             platform.0.lock().notification_action_callback = Some(callback);
                         }
                     }
                 }
 
-                #[repr(C)]
-                struct BlockLiteral {
-                    isa: *const c_void,
-                    flags: i32,
-                    reserved: i32,
-                    invoke: unsafe extern "C" fn(*const BlockLiteral),
-                }
-                let block_ptr = completion_handler as *const BlockLiteral;
-                ((*block_ptr).invoke)(block_ptr);
+                complete_notification_response(completion_handler);
             }
         }
 
@@ -569,16 +648,8 @@ define_class!(
             completion_handler: *mut AnyObject,
         ) {
             unsafe {
-                #[repr(C)]
-                struct BlockLiteral {
-                    isa: *const c_void,
-                    flags: i32,
-                    reserved: i32,
-                    invoke: unsafe extern "C" fn(*const BlockLiteral, u64),
-                }
-                let block_ptr = completion_handler as *const BlockLiteral;
                 let options: u64 = 16 | 2;
-                ((*block_ptr).invoke)(block_ptr, options);
+                complete_notification_presentation(completion_handler, options);
             }
         }
     }
@@ -701,15 +772,28 @@ impl MacPlatform {
         &self,
         pasteboard: *mut AnyObject,
         kind: *mut AnyObject,
-    ) -> Option<&[u8]> {
+    ) -> Option<Vec<u8>> {
         unsafe {
             let data: *mut AnyObject = msg_send![pasteboard, dataForType: kind];
             if data.is_null() {
                 None
             } else {
-                let bytes: *const c_void = msg_send![data, bytes];
                 let length: usize = msg_send![data, length];
-                Some(slice::from_raw_parts(bytes.cast::<u8>(), length))
+                if length > MAX_CLIPBOARD_DATA_BYTES {
+                    log::warn!(
+                        "ignoring pasteboard payload larger than {MAX_CLIPBOARD_DATA_BYTES} bytes"
+                    );
+                    return None;
+                }
+                if length == 0 {
+                    return Some(Vec::new());
+                }
+                let bytes: *const c_void = msg_send![data, bytes];
+                if bytes.is_null() {
+                    log::warn!("ignoring pasteboard payload with a null data pointer");
+                    return None;
+                }
+                Some(slice::from_raw_parts(bytes.cast::<u8>(), length).to_vec())
             }
         }
     }
@@ -993,6 +1077,10 @@ impl Platform for MacPlatform {
     }
 
     fn run(&self, on_finish_launching: Box<dyn FnOnce()>) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            log::error!("MacPlatform::run ignored off the macOS main thread");
+            return;
+        };
         let mut state = self.0.lock();
         if state.headless {
             drop(state);
@@ -1004,7 +1092,6 @@ impl Platform for MacPlatform {
         }
 
         unsafe {
-            let mtm = MainThreadMarker::new().expect("MacPlatform::run must run on main thread");
             let app: *mut AnyObject = msg_send![GPUIApplication::class(), sharedApplication];
             let self_ptr = self as *const Self as *mut c_void;
             let app_delegate = GPUIApplicationDelegate::new(self_ptr, mtm);
@@ -1045,14 +1132,20 @@ impl Platform for MacPlatform {
         use std::os::unix::process::CommandExt as _;
 
         let app_pid = std::process::id().to_string();
-        let app_path = self
+        let bundled_app_path = self
             .app_path()
             .ok()
             // When the app is not bundled, `app_path` returns the
             // directory containing the executable. Disregard this
             // and get the path to the executable itself.
-            .and_then(|path| (path.extension()?.to_str()? == "app").then_some(path))
-            .unwrap_or_else(|| std::env::current_exe().unwrap());
+            .and_then(|path| (path.extension()?.to_str()? == "app").then_some(path));
+        let app_path = match bundled_app_path.or_else(|| std::env::current_exe().ok()) {
+            Some(path) => path,
+            None => {
+                log::error!("failed to resolve the executable path for restart");
+                return;
+            }
+        };
 
         // Wait until this process has exited and then re-open this path.
         let script = r#"
@@ -1178,7 +1271,7 @@ impl Platform for MacPlatform {
             options,
             self.foreground_executor(),
             renderer_context,
-        )))
+        )?))
     }
 
     fn window_appearance(&self) -> WindowAppearance {
@@ -1428,6 +1521,24 @@ impl Platform for MacPlatform {
             .detach();
     }
 
+    fn move_path_to_trash(&self, path: &Path) -> anyhow::Result<()> {
+        let status = Command::new("osascript")
+            .arg("-e")
+            .arg("on run argv")
+            .arg("-e")
+            .arg("tell application \"Finder\" to delete POSIX file (item 1 of argv)")
+            .arg("-e")
+            .arg("end run")
+            .arg(path)
+            .status()
+            .context("invoking osascript for Finder trash")?;
+        anyhow::ensure!(
+            status.success(),
+            "Finder trash command failed with {status}"
+        );
+        Ok(())
+    }
+
     fn on_quit(&self, callback: Box<dyn FnMut()>) {
         self.0.lock().quit = Some(callback);
     }
@@ -1464,7 +1575,7 @@ impl Platform for MacPlatform {
         unsafe {
             let bundle: *mut AnyObject = msg_send![lookup_class(c"NSBundle"), mainBundle];
             anyhow::ensure!(!bundle.is_null(), "app is not running inside a bundle");
-            Ok(path_from_objc(msg_send![bundle, bundlePath]))
+            path_from_objc(msg_send![bundle, bundlePath])
         }
     }
 
@@ -1510,6 +1621,16 @@ impl Platform for MacPlatform {
                     msg_send![lookup_class(c"NSURL"), fileURLWithPath: &*path];
                 let _: () = msg_send![document_controller, noteNewRecentDocumentURL:url];
             }
+        }
+    }
+
+    fn clear_recent_documents(&self) {
+        unsafe {
+            let document_controller: *mut AnyObject = msg_send![
+                lookup_class(c"NSDocumentController"),
+                sharedDocumentController
+            ];
+            let _: () = msg_send![document_controller, clearRecentDocuments:None::<&AnyObject>];
         }
     }
 
@@ -1592,6 +1713,10 @@ impl Platform for MacPlatform {
         }
     }
 
+    fn should_reduce_motion(&self) -> bool {
+        objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
+    }
+
     fn should_auto_hide_scrollbars(&self) -> bool {
         #[allow(non_upper_case_globals)]
         const NSScrollerStyleOverlay: NSInteger = 1;
@@ -1632,16 +1757,53 @@ impl Platform for MacPlatform {
                     let buf: *mut AnyObject = msg_send![buf_alloc, initWithString: &*empty];
 
                     for entry in item.entries {
-                        if let ClipboardEntry::String(ClipboardString { text, metadata: _ }) = entry
-                        {
-                            let text = ns_string(&text);
-                            let to_append_alloc: *mut AnyObject =
-                                msg_send![lookup_class(c"NSAttributedString"), alloc];
-                            let to_append: *mut AnyObject =
-                                msg_send![to_append_alloc, initWithString: &*text];
+                        let to_append: *mut AnyObject = match entry {
+                            ClipboardEntry::String(ClipboardString { text, metadata: _ }) => {
+                                let text = ns_string(&text);
+                                let allocation: *mut AnyObject =
+                                    msg_send![lookup_class(c"NSAttributedString"), alloc];
+                                msg_send![allocation, initWithString: &*text]
+                            }
+                            ClipboardEntry::Image(image) => {
+                                if image.bytes.is_empty()
+                                    || image.bytes.len() > MAX_CLIPBOARD_DATA_BYTES
+                                {
+                                    log::warn!("skipping invalid image in rich pasteboard item");
+                                    continue;
+                                }
+                                let bytes = ns_data_with_bytes(
+                                    image.bytes.as_ptr() as *const c_void,
+                                    image.bytes.len(),
+                                );
+                                let image_type: UTType = image.format.into();
+                                let allocation: *mut AnyObject =
+                                    msg_send![lookup_class(c"NSTextAttachment"), alloc];
+                                let attachment: *mut AnyObject = msg_send![
+                                    allocation,
+                                    initWithData: bytes,
+                                    ofType: image_type.inner()
+                                ];
+                                if attachment.is_null() {
+                                    log::warn!("failed to create rich pasteboard image attachment");
+                                    continue;
+                                }
+                                let attributed: *mut AnyObject = msg_send![
+                                    lookup_class(c"NSAttributedString"),
+                                    attributedStringWithAttachment: attachment
+                                ];
+                                let _: () = msg_send![attachment, release];
+                                if attributed.is_null() {
+                                    log::warn!("failed to encode rich pasteboard image attachment");
+                                    continue;
+                                }
+                                any_images = true;
+                                let _: *mut AnyObject = msg_send![attributed, retain];
+                                attributed
+                            }
+                        };
 
-                            let _: () = msg_send![buf, appendAttributedString: to_append];
-                        }
+                        let _: () = msg_send![buf, appendAttributedString: to_append];
+                        let _: () = msg_send![to_append, release];
                     }
 
                     buf
@@ -1687,7 +1849,15 @@ impl Platform for MacPlatform {
                     setString: plain_text,
                     forType: NSPasteboardTypeString
                 ];
+                let _: () = msg_send![attributed_string, release];
             }
+        }
+    }
+
+    fn clear_clipboard(&self) {
+        unsafe {
+            let state = self.0.lock();
+            let _: NSInteger = msg_send![state.pasteboard, clearContents];
         }
     }
 
@@ -1706,13 +1876,19 @@ impl Platform for MacPlatform {
                 if data.is_null() {
                     return None;
                 }
+                let length: usize = msg_send![data, length];
+                if length > MAX_CLIPBOARD_DATA_BYTES {
+                    log::warn!(
+                        "ignoring pasteboard text larger than {MAX_CLIPBOARD_DATA_BYTES} bytes"
+                    );
+                    return None;
+                }
                 let bytes: *const c_void = msg_send![data, bytes];
                 if bytes.is_null() {
                     // https://developer.apple.com/documentation/foundation/nsdata/1410616-bytes?language=objc
                     // "If the length of the NSData object is 0, this property returns nil."
                     return Some(self.read_string_from_clipboard(&state, &[]));
                 } else {
-                    let length: usize = msg_send![data, length];
                     let bytes = slice::from_raw_parts(bytes.cast::<u8>(), length);
 
                     return Some(self.read_string_from_clipboard(&state, bytes));
@@ -1887,6 +2063,10 @@ impl Platform for MacPlatform {
                 let mask: u64 = (1 << 10) | (1 << 11) | (1 << 12);
 
                 let global_block = RcBlock::new(move |event: *mut AnyObject| {
+                    if event.is_null() {
+                        log::error!("macOS global hotkey monitor returned a null event");
+                        return;
+                    }
                     let platform_state = &*(platform_ptr as *const Mutex<MacPlatformState>);
                     let event_ref = &*(event as *const NSEvent);
                     let event_type = event_ref.r#type();
@@ -1900,7 +2080,9 @@ impl Platform for MacPlatform {
                         lock.active_hotkey = Some(hotkey_id);
                         if let Some(mut callback) = lock.global_hotkey_callback.take() {
                             drop(lock);
-                            callback(hotkey_id);
+                            catch_platform_callback("global hotkey down", (), || {
+                                callback(hotkey_id)
+                            });
                             platform_state.lock().global_hotkey_callback = Some(callback);
                         }
                     } else if let Some(hotkey_id) =
@@ -1914,7 +2096,7 @@ impl Platform for MacPlatform {
                         lock.active_hotkey = None;
                         if let Some(mut callback) = lock.global_hotkey_up_callback.take() {
                             drop(lock);
-                            callback(hotkey_id);
+                            catch_platform_callback("global hotkey up", (), || callback(hotkey_id));
                             platform_state.lock().global_hotkey_up_callback = Some(callback);
                         }
                     }
@@ -1927,6 +2109,10 @@ impl Platform for MacPlatform {
                 std::mem::forget(global_block);
 
                 let local_block = RcBlock::new(move |event: *mut AnyObject| -> *mut AnyObject {
+                    if event.is_null() {
+                        log::error!("macOS local hotkey monitor returned a null event");
+                        return event;
+                    }
                     let platform_state = &*(platform_ptr as *const Mutex<MacPlatformState>);
                     let event_ref = &*(event as *const NSEvent);
                     let event_type = event_ref.r#type();
@@ -1940,7 +2126,9 @@ impl Platform for MacPlatform {
                         lock.active_hotkey = Some(hotkey_id);
                         if let Some(mut callback) = lock.global_hotkey_callback.take() {
                             drop(lock);
-                            callback(hotkey_id);
+                            catch_platform_callback("local hotkey down", (), || {
+                                callback(hotkey_id)
+                            });
                             platform_state.lock().global_hotkey_callback = Some(callback);
                         }
                     } else if let Some(hotkey_id) =
@@ -1954,7 +2142,7 @@ impl Platform for MacPlatform {
                         lock.active_hotkey = None;
                         if let Some(mut callback) = lock.global_hotkey_up_callback.take() {
                             drop(lock);
-                            callback(hotkey_id);
+                            catch_platform_callback("local hotkey up", (), || callback(hotkey_id));
                             platform_state.lock().global_hotkey_up_callback = Some(callback);
                         }
                     }
@@ -2221,13 +2409,21 @@ impl Platform for MacPlatform {
                 use super::dispatcher::{dispatch_get_main_queue, dispatch_sys::dispatch_async_f};
 
                 unsafe extern "C" fn invoke(ctx_ptr: *mut c_void) {
+                    if ctx_ptr.is_null() {
+                        log::error!("received a null macOS network callback context");
+                        return;
+                    }
                     let ctx = unsafe { Box::from_raw(ctx_ptr as *mut NetworkChangeCtx) };
+                    if ctx.platform.is_null() {
+                        log::error!("received a null macOS network platform context");
+                        return;
+                    }
                     let platform_state =
                         unsafe { &*(ctx.platform as *const Mutex<MacPlatformState>) };
                     let mut lock = platform_state.lock();
                     if let Some(mut callback) = lock.network_change_callback.take() {
                         drop(lock);
-                        callback(ctx.status);
+                        catch_platform_callback("network change", (), || callback(ctx.status));
                         platform_state.lock().network_change_callback = Some(callback);
                     }
                 }
@@ -2260,6 +2456,10 @@ impl Platform for MacPlatform {
             let mask: u64 = 1 << 14; // NSSystemDefinedMask
 
             let block = RcBlock::new(move |event: *mut AnyObject| {
+                if event.is_null() {
+                    log::error!("macOS media-key monitor returned a null event");
+                    return;
+                }
                 let subtype: i16 = msg_send![event, subtype];
                 if subtype != 8 {
                     return;
@@ -2287,7 +2487,7 @@ impl Platform for MacPlatform {
                 let mut lock = platform_state.lock();
                 if let Some(mut callback) = lock.media_key_callback.take() {
                     drop(lock);
-                    callback(media_event);
+                    catch_platform_callback("media key", (), || callback(media_event));
                     platform_state.lock().media_key_callback = Some(callback);
                 }
             });
@@ -2382,7 +2582,7 @@ impl MacPlatform {
                     ns_string_object(&state.text_hash_pasteboard_type),
                 )
                 .and_then(|hash_bytes| {
-                    let hash_bytes = hash_bytes.try_into().ok()?;
+                    let hash_bytes = hash_bytes.as_slice().try_into().ok()?;
                     let hash = u64::from_be_bytes(hash_bytes);
                     let metadata = self.read_from_pasteboard(
                         state.pasteboard,
@@ -2390,7 +2590,7 @@ impl MacPlatform {
                     )?;
 
                     if hash == ClipboardString::text_hash(&text) {
-                        String::from_utf8(metadata.to_vec()).ok()
+                        String::from_utf8(metadata).ok()
                     } else {
                         None
                     }
@@ -2463,6 +2663,19 @@ fn try_clipboard_image(pasteboard: *mut AnyObject, format: ImageFormat) -> Optio
             } else {
                 let bytes_ptr: *const c_void = msg_send![data, bytes];
                 let len: usize = msg_send![data, length];
+                if len > MAX_CLIPBOARD_DATA_BYTES {
+                    log::warn!(
+                        "ignoring pasteboard image larger than {MAX_CLIPBOARD_DATA_BYTES} bytes"
+                    );
+                    return None;
+                }
+                if len == 0 {
+                    return None;
+                }
+                if bytes_ptr.is_null() {
+                    log::warn!("ignoring pasteboard image with a null data pointer");
+                    return None;
+                }
                 let bytes = Vec::from(slice::from_raw_parts(bytes_ptr.cast::<u8>(), len));
                 let id = hash(&bytes);
 
@@ -2476,23 +2689,39 @@ fn try_clipboard_image(pasteboard: *mut AnyObject, format: ImageFormat) -> Optio
     }
 }
 
-unsafe fn path_from_objc(path: *mut AnyObject) -> PathBuf {
-    let len = msg_send![path, lengthOfBytesUsingEncoding: NSUTF8StringEncoding];
+unsafe fn path_from_objc(path: *mut AnyObject) -> Result<PathBuf> {
+    anyhow::ensure!(!path.is_null(), "native path object is missing");
+    let len: usize = msg_send![path, lengthOfBytesUsingEncoding: NSUTF8StringEncoding];
+    anyhow::ensure!(
+        len <= MAX_NATIVE_STRING_BYTES,
+        "native path exceeds {MAX_NATIVE_STRING_BYTES} bytes"
+    );
     let bytes: *const u8 = unsafe { msg_send![path, UTF8String] };
-    let path = str::from_utf8(unsafe { slice::from_raw_parts(bytes, len) }).unwrap();
-    PathBuf::from(path)
+    anyhow::ensure!(
+        !bytes.is_null(),
+        "native path is not representable as UTF-8"
+    );
+    let path = str::from_utf8(unsafe { slice::from_raw_parts(bytes, len) })
+        .context("native path contains invalid UTF-8")?;
+    Ok(PathBuf::from(path))
 }
 
 unsafe fn ns_url_to_path(url: *mut AnyObject) -> Result<PathBuf> {
+    anyhow::ensure!(!url.is_null(), "native URL object is missing");
     let path: *mut c_char = msg_send![url, fileSystemRepresentation];
-    let absolute_string: *mut AnyObject = msg_send![url, absoluteString];
-    let absolute_string_ptr: *const c_char = msg_send![absolute_string, UTF8String];
-    anyhow::ensure!(!path.is_null(), "url is not a file path: {}", unsafe {
-        CStr::from_ptr(absolute_string_ptr).to_string_lossy()
-    });
-    Ok(PathBuf::from(OsStr::from_bytes(unsafe {
-        CStr::from_ptr(path).to_bytes()
-    })))
+    if path.is_null() {
+        let absolute_string: *mut AnyObject = msg_send![url, absoluteString];
+        let description = unsafe { bounded_ns_string(absolute_string) }
+            .unwrap_or_else(|| "<unrepresentable URL>".to_owned());
+        anyhow::bail!("url is not a file path: {description}");
+    }
+    let len = unsafe { libc::strnlen(path, MAX_NATIVE_STRING_BYTES + 1) };
+    anyhow::ensure!(
+        len <= MAX_NATIVE_STRING_BYTES,
+        "native URL path exceeds {MAX_NATIVE_STRING_BYTES} bytes"
+    );
+    let bytes = unsafe { slice::from_raw_parts(path.cast::<u8>(), len) };
+    Ok(PathBuf::from(OsStr::from_bytes(bytes)))
 }
 
 #[link(name = "Carbon", kind = "framework")]
@@ -2566,10 +2795,9 @@ struct UTType(Retained<NSString>);
 impl UTType {
     pub fn png() -> Self {
         // https://developer.apple.com/documentation/uniformtypeidentifiers/uttype-swift.struct/png
-        Self(unsafe {
-            Retained::retain(NSPasteboardTypePNG.cast::<NSString>())
-                .expect("NSPasteboardTypePNG must be available")
-        })
+        unsafe { Retained::retain(NSPasteboardTypePNG.cast::<NSString>()) }
+            .map(Self)
+            .unwrap_or_else(|| Self(ns_string("public.png")))
     }
 
     pub fn jpeg() -> Self {
@@ -2599,10 +2827,9 @@ impl UTType {
 
     pub fn tiff() -> Self {
         // https://developer.apple.com/documentation/uniformtypeidentifiers/uttype-swift.struct/tiff
-        Self(unsafe {
-            Retained::retain(NSPasteboardTypeTIFF.cast::<NSString>())
-                .expect("NSPasteboardTypeTIFF must be available")
-        })
+        unsafe { Retained::retain(NSPasteboardTypeTIFF.cast::<NSString>()) }
+            .map(Self)
+            .unwrap_or_else(|| Self(ns_string("public.tiff")))
     }
 
     fn inner(&self) -> *mut AnyObject {
@@ -2612,9 +2839,17 @@ impl UTType {
 
 #[cfg(test)]
 mod tests {
-    use crate::ClipboardItem;
+    use std::io::Cursor;
+
+    use crate::{ClipboardEntry, ClipboardItem, ClipboardString, Image, ImageFormat};
 
     use super::*;
+
+    #[test]
+    fn platform_callback_panics_are_contained() {
+        let result = catch_platform_callback("test", 7, || panic!("callback panic"));
+        assert_eq!(result, 7);
+    }
 
     #[test]
     fn test_clipboard() {
@@ -2648,6 +2883,30 @@ mod tests {
             platform.read_from_clipboard(),
             Some(ClipboardItem::new_string(text_from_other_app.to_string()))
         );
+    }
+
+    #[test]
+    fn mixed_clipboard_entries_publish_rich_image_data() {
+        let _guard = crate::platform::mac::mac_appkit_test_lock().lock().unwrap();
+        let platform = build_platform();
+
+        let mut encoded = Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(1, 1)
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        platform.write_to_clipboard(ClipboardItem {
+            entries: vec![
+                ClipboardEntry::String(ClipboardString::new("caption".to_owned())),
+                ClipboardEntry::Image(Image::from_bytes(ImageFormat::Png, encoded.into_inner())),
+            ],
+        });
+
+        unsafe {
+            let pasteboard = platform.0.lock().pasteboard;
+            let types: *mut AnyObject = msg_send![pasteboard, types];
+            let contains_rtfd: Bool = msg_send![types, containsObject: NSPasteboardTypeRTFD];
+            assert!(contains_rtfd.as_bool());
+        }
     }
 
     fn build_platform() -> MacPlatform {

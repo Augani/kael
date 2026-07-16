@@ -1,9 +1,9 @@
 use crate::{
-    self as kael, AbsoluteLength, AlignContent, AlignItems, Background, BlendMode, BorderStyle,
-    CursorStyle, DefiniteLength, Display, Fill, FlexDirection, FlexWrap, Font, FontStyle,
-    FontWeight, GridPlacement, Hsla, JustifyContent, Length, Pixels, SharedString,
-    StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow, TextShadow, TextStyleRefinement,
-    UnderlineStyle, WhiteSpace, point, px, relative, rems,
+    self as kael, AbsoluteLength, AlignContent, AlignItems, AlignSelf, Background, BlendMode,
+    BorderStyle, CursorStyle, DefiniteLength, Display, Fill, FlexDirection, FlexWrap, Font,
+    FontStyle, FontWeight, GridAutoFlow, GridPlacement, GridTrack, Hsla, JustifyContent, Length,
+    Pixels, SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow, TextShadow,
+    TextStyleRefinement, UnderlineStyle, WhiteSpace, point, px, relative, rems,
 };
 pub use kael_macros::{
     border_style_methods, box_shadow_style_methods, cursor_style_methods, margin_style_methods,
@@ -200,6 +200,46 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Applies an inset (inner) shadow — useful for pressed, inset, or neumorphic surfaces.
+    fn shadow_inner(
+        mut self,
+        color: impl Into<Hsla>,
+        blur_radius: impl Into<Pixels>,
+        spread_radius: impl Into<Pixels>,
+    ) -> Self {
+        self.style().box_shadow = Some(smallvec::smallvec![crate::BoxShadow {
+            color: color.into(),
+            offset: point(px(0.), px(2.)),
+            blur_radius: blur_radius.into(),
+            spread_radius: spread_radius.into(),
+            inset: true,
+        }]);
+        self
+    }
+
+    /// Applies a soft, offset-free outer glow of the given color and radius.
+    fn glow(mut self, color: impl Into<Hsla>, radius: impl Into<Pixels>) -> Self {
+        self.style().box_shadow = Some(smallvec::smallvec![crate::BoxShadow {
+            color: color.into(),
+            offset: point(px(0.), px(0.)),
+            blur_radius: radius.into(),
+            spread_radius: px(0.),
+            inset: false,
+        }]);
+        self
+    }
+
+    /// Apply a reusable style preset built once as a [`StyleRefinement`]
+    /// (e.g. `StyleRefinement::default().bg(...).rounded(...)`) and shared across many
+    /// elements, so a custom look stays DRY instead of being re-typed per element.
+    ///
+    /// The preset's set properties are written onto this element; call it as a base
+    /// before any element-specific style methods, which then override the preset.
+    fn refine_style(mut self, preset: &StyleRefinement) -> Self {
+        refineable::Refineable::refine(self.style(), preset);
+        self
+    }
+
     /// Applies a text shadow with custom parameters.
     fn text_shadow(mut self, shadow: TextShadow) -> Self {
         self.text_style()
@@ -392,6 +432,12 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Stretches flex items across the container's cross axis.
+    fn items_stretch(mut self) -> Self {
+        self.style().align_items = Some(AlignItems::Stretch);
+        self
+    }
+
     /// Sets the element to align flex items along the baseline of the container's cross axis.
     /// [Docs](https://tailwindcss.com/docs/align-items#baseline)
     fn items_baseline(mut self) -> Self {
@@ -433,6 +479,38 @@ pub trait Styled: Sized {
     /// [Docs](https://tailwindcss.com/docs/justify-content#space-around)
     fn justify_around(mut self) -> Self {
         self.style().justify_content = Some(JustifyContent::SpaceAround);
+        self
+    }
+
+    /// Sets the element to distribute items so every gap, including the gaps at
+    /// the container edges, has the same size.
+    /// [Docs](https://tailwindcss.com/docs/justify-content#space-evenly)
+    fn justify_evenly(mut self) -> Self {
+        self.style().justify_content = Some(JustifyContent::SpaceEvenly);
+        self
+    }
+
+    /// Aligns this flex or grid item to the start of its container's cross axis.
+    fn self_start(mut self) -> Self {
+        self.style().align_self = Some(AlignSelf::Start);
+        self
+    }
+
+    /// Centers this flex or grid item on its container's cross axis.
+    fn self_center(mut self) -> Self {
+        self.style().align_self = Some(AlignSelf::Center);
+        self
+    }
+
+    /// Aligns this flex or grid item to the end of its container's cross axis.
+    fn self_end(mut self) -> Self {
+        self.style().align_self = Some(AlignSelf::End);
+        self
+    }
+
+    /// Stretches this flex or grid item across its container's cross axis.
+    fn self_stretch(mut self) -> Self {
+        self.style().align_self = Some(AlignSelf::Stretch);
         self
     }
 
@@ -985,6 +1063,117 @@ pub trait Styled: Sized {
         let grid_location = self.style().grid_location_mut();
         grid_location.row = GridPlacement::Line(1)..GridPlacement::Line(-1);
         self
+    }
+
+    /// Sets the preferred aspect ratio (width divided by height) for this element.
+    /// When one axis is definite and the other is automatic, the missing axis is
+    /// derived from this ratio.
+    /// [Docs](https://tailwindcss.com/docs/aspect-ratio)
+    fn aspect_ratio(mut self, ratio: f32) -> Self {
+        self.style().aspect_ratio = Some(ratio);
+        self
+    }
+
+    /// Sets a 1:1 (square) aspect ratio.
+    fn aspect_square(self) -> Self {
+        self.aspect_ratio(1.0)
+    }
+
+    /// Sets a 16:9 (widescreen video) aspect ratio.
+    fn aspect_video(self) -> Self {
+        self.aspect_ratio(16.0 / 9.0)
+    }
+
+    /// Sets explicit column tracks for a grid container (CSS `grid-template-columns`).
+    /// Takes precedence over [`Styled::grid_cols`] when non-empty.
+    fn grid_template_columns(mut self, tracks: impl Into<Vec<GridTrack>>) -> Self {
+        self.style().grid_template_columns = Some(tracks.into());
+        self
+    }
+
+    /// Sets explicit row tracks for a grid container (CSS `grid-template-rows`).
+    /// Takes precedence over [`Styled::grid_rows`] when non-empty.
+    fn grid_template_rows(mut self, tracks: impl Into<Vec<GridTrack>>) -> Self {
+        self.style().grid_template_rows = Some(tracks.into());
+        self
+    }
+
+    /// Sets the grid auto-placement flow (CSS `grid-auto-flow`).
+    fn grid_auto_flow(mut self, flow: GridAutoFlow) -> Self {
+        self.style().grid_auto_flow = Some(flow);
+        self
+    }
+
+    /// Flows grid auto-placed items into rows (CSS `grid-auto-flow: row`).
+    fn grid_flow_row(self) -> Self {
+        self.grid_auto_flow(GridAutoFlow::Row)
+    }
+
+    /// Flows grid auto-placed items into columns (CSS `grid-auto-flow: column`).
+    fn grid_flow_col(self) -> Self {
+        self.grid_auto_flow(GridAutoFlow::Column)
+    }
+
+    /// Flows grid auto-placed items into rows using the dense packing algorithm.
+    fn grid_flow_row_dense(self) -> Self {
+        self.grid_auto_flow(GridAutoFlow::RowDense)
+    }
+
+    /// Flows grid auto-placed items into columns using the dense packing algorithm.
+    fn grid_flow_col_dense(self) -> Self {
+        self.grid_auto_flow(GridAutoFlow::ColumnDense)
+    }
+
+    /// Aligns all grid items in the inline (row) axis within their grid areas (CSS `justify-items`).
+    fn justify_items(mut self, value: AlignItems) -> Self {
+        self.style().justify_items = Some(value);
+        self
+    }
+
+    /// Packs grid items toward the inline-axis start of their grid areas.
+    fn justify_items_start(self) -> Self {
+        self.justify_items(AlignItems::Start)
+    }
+
+    /// Centers grid items in the inline axis of their grid areas.
+    fn justify_items_center(self) -> Self {
+        self.justify_items(AlignItems::Center)
+    }
+
+    /// Packs grid items toward the inline-axis end of their grid areas.
+    fn justify_items_end(self) -> Self {
+        self.justify_items(AlignItems::End)
+    }
+
+    /// Stretches grid items to fill the inline axis of their grid areas.
+    fn justify_items_stretch(self) -> Self {
+        self.justify_items(AlignItems::Stretch)
+    }
+
+    /// Aligns this grid item in the inline (row) axis within its grid area (CSS `justify-self`).
+    fn justify_self(mut self, value: AlignItems) -> Self {
+        self.style().justify_self = Some(value);
+        self
+    }
+
+    /// Packs this grid item toward the inline-axis start of its grid area.
+    fn justify_self_start(self) -> Self {
+        self.justify_self(AlignItems::Start)
+    }
+
+    /// Centers this grid item in the inline axis of its grid area.
+    fn justify_self_center(self) -> Self {
+        self.justify_self(AlignItems::Center)
+    }
+
+    /// Packs this grid item toward the inline-axis end of its grid area.
+    fn justify_self_end(self) -> Self {
+        self.justify_self(AlignItems::End)
+    }
+
+    /// Stretches this grid item to fill the inline axis of its grid area.
+    fn justify_self_stretch(self) -> Self {
+        self.justify_self(AlignItems::Stretch)
     }
 
     /// Draws a debug border around this element.

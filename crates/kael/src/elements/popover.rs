@@ -14,6 +14,31 @@ type ChangeListener = Rc<dyn Fn(&bool, &mut Window, &mut App)>;
 pub struct PopoverAnchorRenderState {
     /// Whether the popover is currently open.
     pub open: bool,
+    /// Whether clicking outside the popup requests dismissal.
+    pub dismiss_on_click_outside: bool,
+    /// Whether pressing escape inside the popup requests dismissal.
+    pub dismiss_on_escape: bool,
+}
+
+impl PopoverAnchorRenderState {
+    /// Stable class describing which user gestures can dismiss the popover.
+    pub fn dismissal_mode(&self) -> &'static str {
+        match (self.dismiss_on_click_outside, self.dismiss_on_escape) {
+            (true, true) => "outside_and_escape",
+            (true, false) => "outside_only",
+            (false, true) => "escape_only",
+            (false, false) => "manual",
+        }
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "popover_anchor_render_state(open={}, dismissal_mode={})",
+            self.open,
+            self.dismissal_mode()
+        )
+    }
 }
 
 type PopoverAnchorRenderer = Rc<dyn Fn(PopoverAnchorRenderState, &Window, &App) -> AnyElement>;
@@ -27,6 +52,52 @@ pub struct PopoverPopupRenderState {
     pub width: Pixels,
     /// The current anchor bounds, when they have been measured.
     pub anchor_bounds: Option<Bounds<Pixels>>,
+    /// Whether the popup currently owns keyboard focus.
+    pub focused: bool,
+    /// Whether clicking outside the popup requests dismissal.
+    pub dismiss_on_click_outside: bool,
+    /// Whether pressing escape inside the popup requests dismissal.
+    pub dismiss_on_escape: bool,
+}
+
+impl PopoverPopupRenderState {
+    /// Returns true when anchor geometry has been measured.
+    pub fn has_anchor_bounds(&self) -> bool {
+        self.anchor_bounds.is_some()
+    }
+
+    /// Coarse width class for content-safe diagnostics.
+    pub fn width_class(&self) -> &'static str {
+        if self.width <= px(160.0) {
+            "minimum"
+        } else if self.width <= px(320.0) {
+            "medium"
+        } else {
+            "wide"
+        }
+    }
+
+    /// Stable class describing which user gestures can dismiss the popover.
+    pub fn dismissal_mode(&self) -> &'static str {
+        match (self.dismiss_on_click_outside, self.dismiss_on_escape) {
+            (true, true) => "outside_and_escape",
+            (true, false) => "outside_only",
+            (false, true) => "escape_only",
+            (false, false) => "manual",
+        }
+    }
+
+    /// Content-safe summary for logs, tests, and AI-agent diagnostics.
+    pub fn to_text(&self) -> String {
+        format!(
+            "popover_popup_render_state(open={}, focused={}, has_anchor_bounds={}, width_class={}, dismissal_mode={})",
+            self.open,
+            self.focused,
+            self.has_anchor_bounds(),
+            self.width_class(),
+            self.dismissal_mode()
+        )
+    }
 }
 
 type PopoverPopupRenderer = Rc<dyn Fn(PopoverPopupRenderState, &Window, &App) -> AnyElement>;
@@ -140,8 +211,13 @@ impl Popover {
         cx: &mut App,
         state: Entity<PopoverState>,
     ) -> AnyElement {
-        let render_state = PopoverAnchorRenderState {
-            open: state.read(cx).open,
+        let render_state = {
+            let state = state.read(cx);
+            PopoverAnchorRenderState {
+                open: state.open,
+                dismiss_on_click_outside: state.dismiss_on_click_outside,
+                dismiss_on_escape: state.dismiss_on_escape,
+            }
         };
 
         let mut anchor = div().id(self.element_id.clone());
@@ -470,6 +546,9 @@ impl Render for PopoverPopup {
                     open: true,
                     width: state.popup_width(),
                     anchor_bounds: state.trigger_bounds,
+                    focused: self.root_focus.is_focused(window),
+                    dismiss_on_click_outside: state.dismiss_on_click_outside,
+                    dismiss_on_escape: state.dismiss_on_escape,
                 },
                 state.popup_renderer.clone(),
                 state.dismiss_on_click_outside,
@@ -818,5 +897,46 @@ mod tests {
                 .debug_bounds("persistent-popover-panel-open")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn popover_render_state_summary_is_content_safe() {
+        let anchor = PopoverAnchorRenderState {
+            open: true,
+            dismiss_on_click_outside: false,
+            dismiss_on_escape: true,
+        };
+
+        assert_eq!(anchor.dismissal_mode(), "escape_only");
+        assert_eq!(
+            anchor.to_text(),
+            "popover_anchor_render_state(open=true, dismissal_mode=escape_only)"
+        );
+
+        let popup = PopoverPopupRenderState {
+            open: true,
+            width: px(280.0),
+            anchor_bounds: Some(Bounds::new(
+                point(px(12.0), px(34.0)),
+                crate::size(px(280.0), px(40.0)),
+            )),
+            focused: false,
+            dismiss_on_click_outside: true,
+            dismiss_on_escape: false,
+        };
+
+        assert!(popup.has_anchor_bounds());
+        assert_eq!(popup.width_class(), "medium");
+        assert_eq!(popup.dismissal_mode(), "outside_only");
+
+        let summary = popup.to_text();
+        assert!(summary.contains("open=true"));
+        assert!(summary.contains("focused=false"));
+        assert!(summary.contains("has_anchor_bounds=true"));
+        assert!(summary.contains("width_class=medium"));
+        assert!(summary.contains("dismissal_mode=outside_only"));
+        assert!(!summary.contains("280"));
+        assert!(!summary.contains("12"));
+        assert!(!summary.contains("34"));
     }
 }

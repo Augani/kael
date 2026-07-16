@@ -1,5 +1,7 @@
+use super::{finite_native_coordinate, finite_native_dimension};
 use crate::{Bounds, DisplayId, Pixels, PlatformDisplay, px, size};
 use anyhow::Result;
+use core_foundation::base::{CFRelease, CFTypeRef};
 use core_foundation::uuid::{CFUUIDGetUUIDBytes, CFUUIDRef};
 use core_graphics::display::{
     CGDirectDisplayID, CGDisplay, CGDisplayBounds, CGGetActiveDisplayList, CGMainDisplayID,
@@ -39,12 +41,12 @@ impl MacDisplay {
                 &mut display_count,
             );
 
-            if result == 0 {
+            if result == 0 && display_count as usize <= displays.capacity() {
                 displays.set_len(display_count as usize);
-                displays.into_iter().map(MacDisplay)
             } else {
-                panic!("Failed to get active display list. Result: {result}");
+                log::error!("failed to get a bounded active display list");
             }
+            displays.into_iter().map(MacDisplay)
         }
     }
 }
@@ -67,7 +69,7 @@ impl PlatformDisplay for MacDisplay {
         );
 
         let bytes = unsafe { CFUUIDGetUUIDBytes(cfuuid) };
-        Ok(Uuid::from_bytes([
+        let uuid = Uuid::from_bytes([
             bytes.byte0,
             bytes.byte1,
             bytes.byte2,
@@ -84,7 +86,9 @@ impl PlatformDisplay for MacDisplay {
             bytes.byte13,
             bytes.byte14,
             bytes.byte15,
-        ]))
+        ]);
+        unsafe { CFRelease(cfuuid as CFTypeRef) };
+        Ok(uuid)
     }
 
     fn bounds(&self) -> Bounds<Pixels> {
@@ -92,8 +96,14 @@ impl PlatformDisplay for MacDisplay {
             let cg = CGDisplayBounds(self.0);
 
             Bounds {
-                origin: crate::point(px(cg.origin.x as f32), px(cg.origin.y as f32)),
-                size: size(px(cg.size.width as f32), px(cg.size.height as f32)),
+                origin: crate::point(
+                    px(finite_native_coordinate(cg.origin.x)),
+                    px(finite_native_coordinate(cg.origin.y)),
+                ),
+                size: size(
+                    px(finite_native_dimension(cg.size.width)),
+                    px(finite_native_dimension(cg.size.height)),
+                ),
             }
         }
     }
@@ -102,6 +112,10 @@ impl PlatformDisplay for MacDisplay {
         // `CGDisplayModeGetRefreshRate` reports 0.0 for displays that do not advertise a
         // fixed rate (notably some built-in panels), so a zero is treated as "unknown".
         let rate = CGDisplay::new(self.0).display_mode()?.refresh_rate();
-        if rate > 0.0 { Some(rate as f32) } else { None }
+        if rate.is_finite() && rate > 0.0 && rate <= f32::MAX as f64 {
+            Some(rate as f32)
+        } else {
+            None
+        }
     }
 }

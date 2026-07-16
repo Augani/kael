@@ -1,12 +1,13 @@
 use crate::OsInfo;
-use objc2_foundation::{NSLocale, NSProcessInfo};
+use objc2_foundation::{NSLocale, NSProcessInfo, NSString};
 use std::ffi::CStr;
 
 pub fn get_os_info() -> OsInfo {
-    let version = NSProcessInfo::processInfo()
-        .operatingSystemVersionString()
-        .to_string();
-    let locale = NSLocale::currentLocale().localeIdentifier().to_string();
+    let version = bounded_string(
+        &NSProcessInfo::processInfo().operatingSystemVersionString(),
+        4_096,
+    );
+    let locale = bounded_string(&NSLocale::currentLocale().localeIdentifier(), 1_024);
 
     let mut hostname_buf = [0u8; 256];
     let hostname = unsafe {
@@ -30,5 +31,13 @@ pub fn get_os_info() -> OsInfo {
         arch: std::env::consts::ARCH.into(),
         locale: locale.into(),
         hostname: hostname.into(),
+    }
+}
+
+fn bounded_string(value: &NSString, max_utf16: usize) -> String {
+    if value.length() <= max_utf16 {
+        value.to_string()
+    } else {
+        String::new()
     }
 }

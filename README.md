@@ -1,10 +1,10 @@
 # Kael
 
-A high-performance, GPU-accelerated UI framework for building native desktop applications in Rust — IDEs, dashboards, design tools, messaging apps, trading platforms, media tools, and anything else that deserves native speed.
+A high-performance, GPU-accelerated UI framework for building native-first desktop applications in Rust — IDEs, dashboards, design tools, messaging apps, trading platforms, media tools, and anything else that deserves native speed without bundling a full browser for every window.
 
 > **Kael is a fork of [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui)** from [Zed Industries](https://zed.dev), previously distributed as the *adabraka GPUI fork* (`adabraka-gpui`) and since renamed to Kael — the same project, continued under a new name. It is an independent project and is not affiliated with or endorsed by Zed Industries.
 
-Where upstream GPUI prioritizes APIs that serve the Zed editor, Kael is the home for general-purpose features the wider community asks for: radial and conic gradients (shipped), webviews, form controls, rich text, Lottie animations, blur effects, gesture recognition, theming, a built-in component library — and a public render-target + custom shader API as the top of the GPU roadmap. See [VISION.md](VISION.md) for the project's direction.
+Where upstream GPUI prioritizes APIs that serve the Zed editor, Kael is the home for general-purpose features the wider community asks for: radial and conic gradients (shipped), webviews, form controls, rich text, Lottie animations, blur effects, gesture recognition, theming, a built-in component library — and a public render-target + custom shader API as the top of the GPU roadmap. See [VISION.md](VISION.md) for the project's direction and [`docs/src/native-capability-bridge.md`](docs/src/native-capability-bridge.md) for the current browser-runtime stack-gap roadmap.
 
 Kael targets macOS, Linux, and Windows with platform-native rendering backends (Metal, Vulkan/Blade, DirectX 11) and delivers 60fps with minimal CPU usage through dirty tracking and render-on-demand.
 
@@ -54,13 +54,17 @@ Kael targets macOS, Linux, and Windows with platform-native rendering backends (
 - See [`crates/kael_ui`](crates/kael_ui) — no extra component library needed
 
 **Platform Integration**
-- System tray with menus
-- Global hotkeys
-- Native file/save dialogs
-- Notifications
+- Native menu bars with `MenuBarBuilder` and `MenuBuilder`
+- System tray with `TrayMenuBuilder` menus
+- Global hotkeys with `GlobalHotkeyBuilder`
+- Native open/save dialogs with `OpenDialogBuilder` and `SaveDialogBuilder`
+- Deep-link routing with `DeepLinkRouterBuilder`
+- Clipboard text helpers plus rich `ClipboardItem` payloads
+- Shell helpers for URLs, files, and reveal-in-folder workflows
+- Notifications with `NotificationBuilder` convenience APIs and action callbacks
 - Printing
-- WebViews (macOS WKWebView, Windows WebView2, Linux WebKitGTK via wry)
-- Media playback (audio/video)
+- WebViews (macOS WKWebView, Windows WebView2, Linux WebKitGTK via wry) with `webview_controller(...)` handles for web-standard islands such as auth, maps, payments, docs, and advanced media
+- Media playback (`MediaSource`, `audio`, `video`, `VideoController`, audio playback-rate control, preload/ready-state/buffered-range events, rendered WebVTT/SRT text tracks, and attribute-style `VideoPlayer::url(...)` / `VideoPlayer::source(...)` wrappers with controls/autoplay configuration and automatic WebView fallback for browser-media manifests)
 - Screen and media capture
 - Overlay and click-through windows
 - Auto-launch, single instance, dock control
@@ -76,7 +80,7 @@ Kael targets macOS, Linux, and Windows with platform-native rendering backends (
 - Focus management and keyboard navigation
 - Action dispatch system with keybindings
 - Theme system with hot-reload from TOML/JSON
-- Extension host with WASM sandboxing
+- Extension host with external-process RPC and a WASM execution model under active development
 - Process isolation (worker children, extension children)
 - IPC transport layer
 - Session persistence
@@ -117,7 +121,7 @@ impl Render for Counter {
 
 fn main() {
     Application::new().run(|cx| {
-        cx.open_window(WindowOptions::default(), |_, cx| {
+        cx.open_window(WindowOptionsBuilder::new().title("Counter"), |_, cx| {
             cx.new(|_| Counter { count: 0 })
         })
         .unwrap();
@@ -164,6 +168,10 @@ cargo run -p workspace-app    # IDE shell: file tree, syntax-highlighted editor,
 | Linux (X11) | Blade (Vulkan) | Full support |
 | Linux (Wayland) | Blade (Vulkan) | Full support |
 | Windows | DirectX 11 | Full support |
+
+For OS integrations such as WebView, tray menus, notifications, hotkeys, and
+capture, query `CapabilityReport::current()` and gate hard requirements with
+`CapabilityCheck` so apps can choose clear setup or fallback paths per desktop.
 
 ## Project Structure
 

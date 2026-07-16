@@ -6,11 +6,14 @@ use crate::{
         LMGetKbdType, TISCopyCurrentKeyboardLayoutInputSource, TISGetInputSourceProperty,
         UCKeyTranslate, kTISPropertyUnicodeKeyLayoutData,
     },
-    point, px,
+    point, px, scroll_trace_enabled,
 };
-use core_foundation::data::{CFDataGetBytePtr, CFDataRef};
+use core_foundation::{
+    base::{CFRelease, CFTypeRef},
+    data::{CFDataGetBytePtr, CFDataRef},
+};
 use core_graphics::event::CGKeyCode;
-use objc2::{msg_send, runtime::AnyObject};
+use objc2::runtime::AnyObject;
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventPhase, NSEventType};
 use std::{borrow::Cow, ffi::c_void};
 
@@ -125,7 +128,7 @@ pub fn key_to_native(key: &str) -> Cow<'_, str> {
         "f35" => NSF35FunctionKey,
         _ => return Cow::Borrowed(key),
     };
-    Cow::Owned(String::from_utf16(&[code]).unwrap())
+    Cow::Owned(String::from_utf16_lossy(&[code]))
 }
 
 fn read_modifiers(native_event: &NSEvent) -> Modifiers {
@@ -150,6 +153,9 @@ impl PlatformInput {
         native_event: *mut AnyObject,
         window_height: Option<Pixels>,
     ) -> Option<Self> {
+        if native_event.is_null() {
+            return None;
+        }
         unsafe {
             let native_event = &*(native_event as *const NSEvent);
             let event_type = native_event.r#type();
@@ -275,6 +281,19 @@ impl PlatformInput {
                     } else {
                         ScrollDelta::Lines(raw_data)
                     };
+
+                    if scroll_trace_enabled() {
+                        eprintln!(
+                            "[kael-scroll:native] precise={} momentum={} phase={:?} momentum_phase={:?} raw=({:.2},{:.2}) delta={}",
+                            native_event.hasPreciseScrollingDeltas(),
+                            is_momentum,
+                            native_event.phase(),
+                            native_event.momentumPhase(),
+                            raw_data.x,
+                            raw_data.y,
+                            delta.trace_label(),
+                        );
+                    }
 
                     Self::ScrollWheel(ScrollWheelEvent {
                         position: point(
@@ -552,11 +571,15 @@ fn chars_for_modified_key(code: CGKeyCode, modifiers: u32) -> String {
     };
     if layout_data.is_null() {
         unsafe {
-            let _: () = msg_send![keyboard as *mut AnyObject, release];
+            CFRelease(keyboard as CFTypeRef);
         }
         return "".to_string();
     }
     let keyboard_layout = unsafe { CFDataGetBytePtr(layout_data) };
+    if keyboard_layout.is_null() {
+        unsafe { CFRelease(keyboard as CFTypeRef) };
+        return String::new();
+    }
 
     unsafe {
         UCKeyTranslate(
@@ -585,7 +608,7 @@ fn chars_for_modified_key(code: CGKeyCode, modifiers: u32) -> String {
                 &mut buffer as *mut u16,
             );
         }
-        let _: () = msg_send![keyboard as *mut AnyObject, release];
+        CFRelease(keyboard as CFTypeRef);
     }
-    String::from_utf16(&buffer[..buffer_size]).unwrap_or_default()
+    String::from_utf16(&buffer[..buffer_size.min(BUFFER_SIZE)]).unwrap_or_default()
 }

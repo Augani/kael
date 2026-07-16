@@ -17,6 +17,8 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use parking_lot::Mutex;
 
+const MAX_OFFLINE_SAMPLES: usize = 64 * 1024 * 1024;
+
 /// Identifier for a voice playing in a [`Mixer`].
 pub type VoiceId = u64;
 
@@ -66,7 +68,11 @@ impl AudioClock {
     }
 
     fn advance(&self, frames: u64) {
-        self.frames.fetch_add(frames, Ordering::AcqRel);
+        let _ = self
+            .frames
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                Some(current.saturating_add(frames))
+            });
     }
 }
 
@@ -105,8 +111,12 @@ impl BufferSource {
 
     fn next_frame(&mut self, channels: u16, frame: &mut [f32]) -> bool {
         let src_channels = self.source_channels as usize;
-        if self.cursor + src_channels > self.samples.len() {
-            if self.looping && !self.samples.is_empty() {
+        if self
+            .cursor
+            .checked_add(src_channels)
+            .is_none_or(|end| end > self.samples.len())
+        {
+            if self.looping && self.samples.len() >= src_channels {
                 self.cursor = 0;
             } else {
                 return false;
@@ -153,6 +163,16 @@ impl SineSource {
     /// Create an endless sine generator at `frequency` Hz for the given rate.
     pub fn new(frequency: f32, sample_rate: u32, amplitude: f32) -> Self {
         let sample_rate = sample_rate.max(1) as f32;
+        let frequency = if frequency.is_finite() {
+            frequency.max(0.0)
+        } else {
+            0.0
+        };
+        let amplitude = if amplitude.is_finite() {
+            amplitude
+        } else {
+            0.0
+        };
         Self {
             phase: 0.0,
             phase_increment: std::f32::consts::TAU * frequency / sample_rate,
@@ -178,10 +198,7 @@ impl SampleSource for SineSource {
         };
         for frame_index in 0..frames {
             let sample = self.amplitude * self.phase.sin();
-            self.phase += self.phase_increment;
-            if self.phase >= std::f32::consts::TAU {
-                self.phase -= std::f32::consts::TAU;
-            }
+            self.phase = (self.phase + self.phase_increment).rem_euclid(std::f32::consts::TAU);
             let start = frame_index * channels;
             for out_sample in out[start..start + channels].iter_mut() {
                 *out_sample = sample;
@@ -247,7 +264,7 @@ impl Mixer {
 
     /// Set the master gain applied to the summed mix.
     pub fn set_master_gain(&mut self, gain: f32) {
-        self.master_gain = gain.max(0.0);
+        self.master_gain = finite_gain(gain);
     }
 
     /// Insert a voice with an explicit id; replaces any existing voice with the
@@ -257,14 +274,14 @@ impl Mixer {
         self.voices.push(Voice {
             id,
             source,
-            gain: gain.max(0.0),
+            gain: finite_gain(gain),
         });
     }
 
     /// Set a voice's gain. Returns `false` if no such voice exists.
     pub fn set_voice_gain(&mut self, id: VoiceId, gain: f32) -> bool {
         if let Some(voice) = self.voices.iter_mut().find(|voice| voice.id == id) {
-            voice.gain = gain.max(0.0);
+            voice.gain = finite_gain(gain);
             true
         } else {
             false
@@ -307,11 +324,17 @@ impl Mixer {
             for sample in scratch[..needed].iter_mut() {
                 *sample = 0.0;
             }
-            let written_frames = voice.source.fill(&mut scratch[..needed], channels_u16);
-            let written = (written_frames * channels).min(needed);
+            let written_frames = voice
+                .source
+                .fill(&mut scratch[..needed], channels_u16)
+                .min(frames);
+            let written = written_frames.saturating_mul(channels).min(needed);
             let gain = voice.gain;
             for (out_sample, src) in out[..written].iter_mut().zip(&scratch[..written]) {
-                *out_sample += gain * *src;
+                if src.is_finite() {
+                    let sum = f64::from(*out_sample) + f64::from(gain) * f64::from(*src);
+                    *out_sample = sum.clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32;
+                }
             }
             written_frames >= frames
         });
@@ -321,11 +344,13 @@ impl Mixer {
         let master_gain = self.master_gain;
         if (master_gain - 1.0).abs() > f32::EPSILON {
             for sample in out[..needed].iter_mut() {
-                *sample *= master_gain;
+                let scaled = f64::from(*sample) * f64::from(master_gain);
+                *sample = scaled.clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32;
             }
         }
 
-        self.clock.advance(frames as u64);
+        self.clock
+            .advance(u64::try_from(frames).unwrap_or(u64::MAX));
     }
 
     /// Render mixed audio offline (faster than real time) into a new interleaved
@@ -334,8 +359,24 @@ impl Mixer {
     pub fn render_offline(&mut self, max_frames: usize, chunk_frames: usize) -> Vec<f32> {
         let channels = self.channels as usize;
         let chunk_frames = chunk_frames.max(1);
-        let mut output = Vec::with_capacity(max_frames.saturating_mul(channels));
-        let mut scratch = vec![0.0f32; chunk_frames * channels];
+        let Some(max_samples) = max_frames.checked_mul(channels) else {
+            return Vec::new();
+        };
+        let Some(chunk_samples) = chunk_frames.checked_mul(channels) else {
+            return Vec::new();
+        };
+        if max_samples > MAX_OFFLINE_SAMPLES || chunk_samples > MAX_OFFLINE_SAMPLES {
+            return Vec::new();
+        }
+        let mut output = Vec::new();
+        if output.try_reserve_exact(max_samples).is_err() {
+            return Vec::new();
+        }
+        let mut scratch = Vec::new();
+        if scratch.try_reserve_exact(chunk_samples).is_err() {
+            return Vec::new();
+        }
+        scratch.resize(chunk_samples, 0.0f32);
         let mut rendered = 0;
         while rendered < max_frames && self.active_voices() > 0 {
             let frames = chunk_frames.min(max_frames - rendered);
@@ -348,6 +389,10 @@ impl Mixer {
     }
 }
 
+fn finite_gain(gain: f32) -> f32 {
+    if gain.is_finite() { gain.max(0.0) } else { 0.0 }
+}
+
 /// Linearly resample interleaved `input` from `from_rate` to `to_rate`.
 ///
 /// This is the interim resampler for the audio spine; the production engine will
@@ -357,16 +402,30 @@ pub fn resample_linear(input: &[f32], channels: u16, from_rate: u32, to_rate: u3
     if input.is_empty() || from_rate == 0 || to_rate == 0 {
         return Vec::new();
     }
-    if from_rate == to_rate {
-        return input.to_vec();
-    }
     let in_frames = input.len() / channels;
     if in_frames == 0 {
         return Vec::new();
     }
+    if from_rate == to_rate {
+        return input[..in_frames * channels].to_vec();
+    }
+    let numerator = (in_frames as u128) * u128::from(to_rate);
+    let out_frames = (numerator + u128::from(from_rate / 2)) / u128::from(from_rate);
+    let Ok(out_frames) = usize::try_from(out_frames) else {
+        return Vec::new();
+    };
+    let Some(out_samples) = out_frames.checked_mul(channels) else {
+        return Vec::new();
+    };
+    if out_samples > MAX_OFFLINE_SAMPLES {
+        return Vec::new();
+    }
     let ratio = to_rate as f64 / from_rate as f64;
-    let out_frames = ((in_frames as f64) * ratio).round() as usize;
-    let mut out = vec![0.0f32; out_frames * channels];
+    let mut out = Vec::new();
+    if out.try_reserve_exact(out_samples).is_err() {
+        return Vec::new();
+    }
+    out.resize(out_samples, 0.0f32);
     for out_frame in 0..out_frames {
         let src_pos = out_frame as f64 / ratio;
         let lower = src_pos.floor() as usize;
@@ -488,12 +547,17 @@ impl AudioEngine {
     }
 
     /// Start playing `source` at `gain`, returning its voice id.
-    pub fn play_source(&self, source: Box<dyn SampleSource>, gain: f32) -> VoiceId {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+    pub fn play_source(&self, source: Box<dyn SampleSource>, gain: f32) -> Result<VoiceId> {
+        let id = self
+            .next_id
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .map_err(|_| anyhow::anyhow!("audio voice id space exhausted"))?;
         self.commands
             .lock()
             .push(MixerCommand::Add { id, source, gain });
-        id
+        Ok(id)
     }
 
     /// Stop the voice with the given id.
@@ -535,6 +599,15 @@ mod tests {
         mixer.process(&mut out);
         assert_eq!(clock.frames(), 512);
         assert!((clock.seconds() - 512.0 / 48_000.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn clock_saturates_at_the_full_frame_domain() {
+        let clock = AudioClock::new(48_000);
+        clock.frames.store(u64::MAX - 1, Ordering::Release);
+        clock.advance(10);
+        assert_eq!(clock.frames(), u64::MAX);
+        assert!(clock.duration() > Duration::ZERO);
     }
 
     #[test]
@@ -594,6 +667,14 @@ mod tests {
     }
 
     #[test]
+    fn looping_buffer_rejects_an_incomplete_source_frame() {
+        let mut source = BufferSource::new(vec![0.5], 2).looping(true);
+        let mut out = [0.0; 2];
+        assert_eq!(source.fill(&mut out, 2), 0);
+        assert_eq!(out, [0.0; 2]);
+    }
+
+    #[test]
     fn sine_source_is_bounded_and_varies() {
         let mut source = SineSource::new(440.0, 48_000, 0.8);
         let mut out = vec![0.0f32; 128];
@@ -624,6 +705,37 @@ mod tests {
     fn resample_is_identity_for_equal_rates() {
         let input = vec![0.1, 0.2, 0.3, 0.4];
         assert_eq!(resample_linear(&input, 2, 48_000, 48_000), input);
+        assert_eq!(
+            resample_linear(&[0.1, 0.2, 0.3], 2, 48_000, 48_000),
+            vec![0.1, 0.2]
+        );
+    }
+
+    #[test]
+    fn mixer_sanitizes_non_finite_sources_and_gains() {
+        struct BadSource;
+        impl SampleSource for BadSource {
+            fn fill(&mut self, out: &mut [f32], _channels: u16) -> usize {
+                out.fill(f32::NAN);
+                usize::MAX
+            }
+        }
+
+        let mut mixer = Mixer::new(48_000, 2);
+        mixer.set_master_gain(f32::NAN);
+        assert_eq!(mixer.master_gain(), 0.0);
+        mixer.insert_voice(1, Box::new(BadSource), f32::INFINITY);
+        let mut out = [1.0; 4];
+        mixer.process(&mut out);
+        assert_eq!(out, [0.0; 4]);
+    }
+
+    #[test]
+    fn offline_render_and_resample_reject_unbounded_outputs() {
+        let mut mixer = Mixer::new(48_000, 2);
+        mixer.insert_voice(1, Box::new(SineSource::new(440.0, 48_000, 0.5)), 1.0);
+        assert!(mixer.render_offline(usize::MAX, 64).is_empty());
+        assert!(resample_linear(&[0.0], 1, 1, u32::MAX).is_empty());
     }
 
     #[test]
@@ -635,7 +747,7 @@ mod tests {
         };
         let clock = engine.clock();
         let rate = engine.sample_rate();
-        engine.play_source(Box::new(SineSource::new(440.0, rate, 0.2)), 0.5);
+        let _ = engine.play_source(Box::new(SineSource::new(440.0, rate, 0.2)), 0.5);
         std::thread::sleep(Duration::from_millis(200));
         assert!(
             clock.frames() > 0,

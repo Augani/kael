@@ -10,12 +10,18 @@ use crate::{
 };
 
 pub(crate) async fn show(sheet: &ShareSheet) -> Result<ShareResult> {
-    let attachments = sheet.attachment_paths()?;
+    let sheet = sheet.clone();
+    smol::unblock(move || show_blocking(&sheet)).await
+}
 
-    if !sheet.is_excluded(ShareType::Mail) && launch_email(sheet, &attachments)? {
-        return Ok(ShareResult::Completed {
-            activity_type: ShareType::Mail.activity_name().to_string(),
-        });
+fn show_blocking(sheet: &ShareSheet) -> Result<ShareResult> {
+    if !sheet.is_excluded(ShareType::Mail) {
+        let attachments = sheet.attachment_paths()?;
+        if launch_email(sheet, &attachments)? {
+            return Ok(ShareResult::Completed {
+                activity_type: ShareType::Mail.activity_name().to_string(),
+            });
+        }
     }
 
     if !sheet.is_excluded(ShareType::Clipboard) {
@@ -26,12 +32,6 @@ pub(crate) async fn show(sheet: &ShareSheet) -> Result<ShareResult> {
                 });
             }
         }
-    }
-
-    if launch_open(sheet, &attachments)? {
-        return Ok(ShareResult::Completed {
-            activity_type: "open".to_string(),
-        });
     }
 
     Ok(ShareResult::Cancelled)
@@ -48,10 +48,12 @@ pub(crate) fn register_receiver(
 
 pub(crate) fn support() -> crate::PlatformShareSupport {
     crate::PlatformShareSupport {
-        mail: true,
+        mail: executable_in_path("xdg-email"),
         messages: false,
         airdrop: false,
-        clipboard: true,
+        clipboard: ["wl-copy", "xclip", "xsel"]
+            .into_iter()
+            .any(executable_in_path),
         social: false,
         print: false,
         receiver_registration: false,
@@ -69,28 +71,7 @@ fn launch_email(sheet: &ShareSheet, attachments: &[std::path::PathBuf]) -> Resul
     for attachment in attachments {
         command.arg("--attach").arg(attachment);
     }
-    if let Some(url) = sheet.all_urls().first() {
-        command.arg(url);
-    }
     spawn_command(command)
-}
-
-fn launch_open(sheet: &ShareSheet, attachments: &[std::path::PathBuf]) -> Result<bool> {
-    for url in sheet.all_urls() {
-        let mut command = Command::new("xdg-open");
-        command.arg(url);
-        if spawn_command(command)? {
-            return Ok(true);
-        }
-    }
-
-    if let Some(first_path) = attachments.first() {
-        let mut command = Command::new("xdg-open");
-        command.arg(first_path);
-        return spawn_command(command);
-    }
-
-    Ok(false)
 }
 
 fn copy_to_clipboard(text: &str) -> Result<bool> {
@@ -103,10 +84,13 @@ fn copy_to_clipboard(text: &str) -> Result<bool> {
         command.args(&args).stdin(Stdio::piped());
         match command.spawn() {
             Ok(mut child) => {
-                if let Some(stdin) = child.stdin.as_mut() {
+                if let Some(mut stdin) = child.stdin.take() {
                     stdin.write_all(text.as_bytes())?;
                 }
-                return Ok(true);
+                return child
+                    .wait()
+                    .map(|status| status.success())
+                    .map_err(Into::into);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error.into()),
@@ -117,9 +101,18 @@ fn copy_to_clipboard(text: &str) -> Result<bool> {
 }
 
 fn spawn_command(mut command: Command) -> Result<bool> {
-    match command.spawn() {
-        Ok(_) => Ok(true),
+    match command.status() {
+        Ok(status) => Ok(status.success()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error.into()),
     }
+}
+
+fn executable_in_path(program: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|directory| {
+            let path = directory.join(program);
+            path.is_file()
+        })
+    })
 }

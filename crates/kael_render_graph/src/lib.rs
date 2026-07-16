@@ -176,6 +176,7 @@ pub struct CompiledGraph {
     cache_keys: Vec<u64>,
     lifetimes: Vec<Option<ResourceLifetime>>,
     transient: Vec<bool>,
+    resource_kinds: Vec<ResourceKind>,
     barriers: Vec<Barrier>,
 }
 
@@ -187,14 +188,19 @@ impl RenderGraph {
 
     /// Declare a resource, returning its handle.
     pub fn add_resource(&mut self, desc: ResourceDesc) -> ResourceId {
-        let id = ResourceId(self.resources.len() as u32);
+        let id = ResourceId(
+            u32::try_from(self.resources.len())
+                .expect("render graph has more than u32::MAX resources"),
+        );
         self.resources.push(desc);
         id
     }
 
     /// Declare a pass, returning its handle.
     pub fn add_pass(&mut self, desc: PassDesc) -> PassId {
-        let id = PassId(self.passes.len() as u32);
+        let id = PassId(
+            u32::try_from(self.passes.len()).expect("render graph has more than u32::MAX passes"),
+        );
         self.passes.push(desc);
         id
     }
@@ -236,6 +242,22 @@ impl RenderGraph {
             }
         }
 
+        for (reader_index, pass) in self.passes.iter().enumerate() {
+            for &resource in &pass.reads {
+                let resource_index = resource.0 as usize;
+                if !self.resources[resource_index].imported
+                    && writer[resource_index]
+                        .is_none_or(|producer| producer.0 as usize == reader_index)
+                {
+                    bail!(
+                        "pass '{}' reads transient resource '{}' before any pass produces it",
+                        pass.name,
+                        self.resources[resource_index].name
+                    );
+                }
+            }
+        }
+
         let order = self.topological_order(&writer)?;
         let cache_keys = self.compute_cache_keys(&order, &writer);
         let lifetimes = self.compute_lifetimes(&order, resource_count);
@@ -247,7 +269,10 @@ impl RenderGraph {
 
         let mut barriers = Vec::new();
         for (reader_index, pass) in self.passes.iter().enumerate() {
-            for &resource in &pass.reads {
+            let mut reads = pass.reads.clone();
+            reads.sort_unstable();
+            reads.dedup();
+            for resource in reads {
                 if let Some(producer) = writer[resource.0 as usize] {
                     if producer.0 as usize != reader_index {
                         barriers.push(Barrier {
@@ -265,12 +290,18 @@ impl RenderGraph {
             .iter()
             .map(|resource| !resource.imported)
             .collect();
+        let resource_kinds = self
+            .resources
+            .iter()
+            .map(|resource| resource.kind)
+            .collect();
 
         Ok(CompiledGraph {
             order,
             cache_keys: keys_by_pass,
             lifetimes,
             transient,
+            resource_kinds,
             barriers,
         })
     }
@@ -281,7 +312,10 @@ impl RenderGraph {
         let mut edges: Vec<Vec<usize>> = vec![Vec::new(); pass_count];
 
         for (reader_index, pass) in self.passes.iter().enumerate() {
-            for &resource in &pass.reads {
+            let mut reads = pass.reads.clone();
+            reads.sort_unstable();
+            reads.dedup();
+            for resource in reads {
                 if let Some(producer) = writer[resource.0 as usize] {
                     let producer_index = producer.0 as usize;
                     if producer_index == reader_index {
@@ -321,16 +355,33 @@ impl RenderGraph {
         for &pass_id in order {
             let pass = &self.passes[pass_id.0 as usize];
             let mut key = FNV_OFFSET;
+            key = fnv_mix(key, pass_id.0 as u64);
             key = fnv_mix(key, pass.param_hash);
-            key = fnv_mix(key, pass.frame_pts.unwrap_or(i64::MIN) as u64);
+            match pass.frame_pts {
+                Some(pts) => {
+                    key = fnv_mix(key, 1);
+                    key = fnv_mix(key, pts as u64);
+                }
+                None => key = fnv_mix(key, 0),
+            }
 
-            let mut reads = pass.reads.clone();
-            reads.sort_unstable();
-            for resource in reads {
+            key = fnv_mix(key, pass.reads.len() as u64);
+            for &resource in &pass.reads {
                 key = fnv_mix(key, resource.0 as u64);
+                let desc = &self.resources[resource.0 as usize];
+                key = fnv_mix(key, resource_kind_tag(desc.kind));
+                key = fnv_mix(key, u64::from(desc.imported));
                 if let Some(producer) = writer[resource.0 as usize] {
                     key = fnv_mix(key, keys_by_pass[producer.0 as usize]);
                 }
+            }
+
+            key = fnv_mix(key, pass.writes.len() as u64);
+            for &resource in &pass.writes {
+                key = fnv_mix(key, resource.0 as u64);
+                let desc = &self.resources[resource.0 as usize];
+                key = fnv_mix(key, resource_kind_tag(desc.kind));
+                key = fnv_mix(key, u64::from(desc.imported));
             }
 
             keys_by_pass[pass_id.0 as usize] = key;
@@ -393,12 +444,22 @@ impl CompiledGraph {
     /// Resources whose lifetimes do not overlap `resource`'s and could therefore
     /// share its transient memory. Imported resources are not considered.
     pub fn non_overlapping(&self, resource: ResourceId) -> Vec<ResourceId> {
+        if !self
+            .transient
+            .get(resource.0 as usize)
+            .copied()
+            .unwrap_or(false)
+        {
+            return Vec::new();
+        }
         let Some(target) = self.lifetime(resource) else {
             return Vec::new();
         };
         self.lifetimes
             .iter()
-            .filter_map(|entry| *entry)
+            .enumerate()
+            .filter(|(index, _)| self.transient.get(*index).copied().unwrap_or(false))
+            .filter_map(|(_, entry)| *entry)
             .filter(|other| other.resource != resource)
             .filter(|other| {
                 other.last_pass_order < target.first_pass_order
@@ -446,20 +507,21 @@ impl CompiledGraph {
         items.sort_by_key(|lifetime| (lifetime.first_pass_order, lifetime.last_pass_order));
 
         let mut slot_of = vec![None; self.lifetimes.len()];
-        let mut slot_last_use: Vec<usize> = Vec::new();
+        let mut slots: Vec<(ResourceKind, usize)> = Vec::new();
 
         for lifetime in items {
-            let free_slot = slot_last_use
-                .iter()
-                .position(|&last| last < lifetime.first_pass_order);
+            let kind = self.resource_kinds[lifetime.resource.0 as usize];
+            let free_slot = slots.iter().position(|&(slot_kind, last)| {
+                slot_kind == kind && last < lifetime.first_pass_order
+            });
             let slot = match free_slot {
                 Some(slot) => {
-                    slot_last_use[slot] = lifetime.last_pass_order;
+                    slots[slot].1 = lifetime.last_pass_order;
                     slot
                 }
                 None => {
-                    slot_last_use.push(lifetime.last_pass_order);
-                    slot_last_use.len() - 1
+                    slots.push((kind, lifetime.last_pass_order));
+                    slots.len() - 1
                 }
             };
             slot_of[lifetime.resource.0 as usize] = Some(slot);
@@ -467,8 +529,15 @@ impl CompiledGraph {
 
         TransientAllocation {
             slot_of,
-            slot_count: slot_last_use.len(),
+            slot_count: slots.len(),
         }
+    }
+}
+
+const fn resource_kind_tag(kind: ResourceKind) -> u64 {
+    match kind {
+        ResourceKind::Texture => 0,
+        ResourceKind::Buffer => 1,
     }
 }
 
@@ -558,6 +627,25 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unproduced_transient_read() {
+        let mut graph = RenderGraph::new();
+        let transient = graph.add_resource(ResourceDesc::transient_texture("scratch"));
+        graph.add_pass(PassDesc::new("consumer").read(transient));
+
+        let error = graph.compile().unwrap_err().to_string();
+        assert!(error.contains("consumer"));
+        assert!(error.contains("scratch"));
+    }
+
+    #[test]
+    fn allows_imported_resource_without_writer() {
+        let mut graph = RenderGraph::new();
+        let imported = graph.add_resource(ResourceDesc::imported_texture("source"));
+        graph.add_pass(PassDesc::new("consumer").read(imported));
+        graph.compile().unwrap();
+    }
+
+    #[test]
     fn identical_graphs_produce_identical_keys() {
         let a = build_chain(100, 7).graph.compile().unwrap();
         let b = build_chain(100, 7).graph.compile().unwrap();
@@ -599,6 +687,66 @@ mod tests {
         let next = build_chain(101, 7).graph.compile().unwrap();
         // decode, effect, and present all change because the frame changed.
         assert_eq!(next.changed_passes(&base).len(), 3);
+    }
+
+    #[test]
+    fn absent_pts_does_not_collide_with_minimum_pts() {
+        let mut without_pts = RenderGraph::new();
+        let output = without_pts.add_resource(ResourceDesc::transient_texture("output"));
+        let pass = without_pts.add_pass(PassDesc::new("producer").write(output));
+
+        let mut with_pts = RenderGraph::new();
+        let output2 = with_pts.add_resource(ResourceDesc::transient_texture("output"));
+        with_pts.add_pass(PassDesc::new("producer").write(output2).frame_pts(i64::MIN));
+
+        assert_ne!(
+            without_pts.compile().unwrap().cache_key(pass),
+            with_pts.compile().unwrap().cache_key(pass)
+        );
+    }
+
+    #[test]
+    fn input_order_is_part_of_cache_topology() {
+        let make = |reverse: bool| {
+            let mut graph = RenderGraph::new();
+            let left = graph.add_resource(ResourceDesc::imported_texture("left"));
+            let right = graph.add_resource(ResourceDesc::imported_texture("right"));
+            let output = graph.add_resource(ResourceDesc::transient_texture("output"));
+            let pass = if reverse {
+                PassDesc::new("blend").read(right).read(left).write(output)
+            } else {
+                PassDesc::new("blend").read(left).read(right).write(output)
+            };
+            let pass = graph.add_pass(pass);
+            (graph, pass)
+        };
+        let (forward_graph, forward_pass) = make(false);
+        let (reverse_graph, reverse_pass) = make(true);
+
+        assert_ne!(
+            forward_graph.compile().unwrap().cache_key(forward_pass),
+            reverse_graph.compile().unwrap().cache_key(reverse_pass)
+        );
+    }
+
+    #[test]
+    fn output_topology_is_part_of_cache_key() {
+        let mut texture_graph = RenderGraph::new();
+        let texture = texture_graph.add_resource(ResourceDesc::transient_texture("output"));
+        let pass = texture_graph.add_pass(PassDesc::new("producer").write(texture));
+
+        let mut buffer_graph = RenderGraph::new();
+        let buffer = buffer_graph.add_resource(ResourceDesc {
+            name: "output".into(),
+            kind: ResourceKind::Buffer,
+            imported: false,
+        });
+        buffer_graph.add_pass(PassDesc::new("producer").write(buffer));
+
+        assert_ne!(
+            texture_graph.compile().unwrap().cache_key(pass),
+            buffer_graph.compile().unwrap().cache_key(pass)
+        );
     }
 
     #[test]
@@ -677,6 +825,21 @@ mod tests {
     }
 
     #[test]
+    fn imported_resources_are_not_alias_candidates() {
+        let mut graph = RenderGraph::new();
+        let imported = graph.add_resource(ResourceDesc::imported_texture("input"));
+        let first = graph.add_resource(ResourceDesc::transient_texture("first"));
+        let second = graph.add_resource(ResourceDesc::transient_texture("second"));
+        graph.add_pass(PassDesc::new("read input").read(imported).write(first));
+        graph.add_pass(PassDesc::new("read first").read(first));
+        graph.add_pass(PassDesc::new("write second").write(second));
+
+        let compiled = graph.compile().unwrap();
+        assert!(compiled.non_overlapping(imported).is_empty());
+        assert!(!compiled.non_overlapping(second).contains(&imported));
+    }
+
+    #[test]
     fn disjoint_transients_share_a_slot() {
         let mut graph = RenderGraph::new();
         let t1 = graph.add_resource(ResourceDesc::transient_texture("t1"));
@@ -698,6 +861,26 @@ mod tests {
         assert_ne!(
             allocation.slot_of[t1.0 as usize],
             allocation.slot_of[t2.0 as usize]
+        );
+    }
+
+    #[test]
+    fn incompatible_resource_kinds_do_not_share_a_slot() {
+        let mut graph = RenderGraph::new();
+        let texture = graph.add_resource(ResourceDesc::transient_texture("texture"));
+        let buffer = graph.add_resource(ResourceDesc {
+            name: "buffer".into(),
+            kind: ResourceKind::Buffer,
+            imported: false,
+        });
+        graph.add_pass(PassDesc::new("texture pass").write(texture));
+        graph.add_pass(PassDesc::new("buffer pass").write(buffer));
+
+        let allocation = graph.compile().unwrap().assign_transient_memory();
+        assert_eq!(allocation.slot_count, 2);
+        assert_ne!(
+            allocation.slot_of[texture.0 as usize],
+            allocation.slot_of[buffer.0 as usize]
         );
     }
 }
@@ -728,26 +911,63 @@ pub mod reference {
     impl Image {
         /// A transparent-black image.
         pub fn new(width: u32, height: u32) -> Self {
-            Self {
+            Self::try_new(width, height).expect("image dimensions exceed addressable memory")
+        }
+
+        /// Try to create a transparent-black image, returning an error when its
+        /// dimensions cannot be represented by the current platform.
+        pub fn try_new(width: u32, height: u32) -> Result<Self> {
+            let pixel_count = pixel_count(width, height)?;
+            Ok(Self {
                 width,
                 height,
-                pixels: vec![[0.0; 4]; (width * height) as usize],
-            }
+                pixels: allocate_pixels(pixel_count, [0.0; 4], width, height)?,
+            })
         }
 
         /// An image filled with a single color.
         pub fn filled(width: u32, height: u32, color: [f32; 4]) -> Self {
-            Self {
+            Self::try_filled(width, height, color)
+                .expect("image dimensions exceed addressable memory")
+        }
+
+        /// Try to create an image filled with `color`, returning an error when
+        /// its dimensions cannot be represented by the current platform.
+        pub fn try_filled(width: u32, height: u32, color: [f32; 4]) -> Result<Self> {
+            let pixel_count = pixel_count(width, height)?;
+            Ok(Self {
                 width,
                 height,
-                pixels: vec![color; (width * height) as usize],
-            }
+                pixels: allocate_pixels(pixel_count, color, width, height)?,
+            })
         }
 
         /// The pixel at `(x, y)`.
         pub fn pixel(&self, x: u32, y: u32) -> [f32; 4] {
             self.pixels[(y * self.width + x) as usize]
         }
+    }
+
+    fn pixel_count(width: u32, height: u32) -> Result<usize> {
+        let count = u64::from(width)
+            .checked_mul(u64::from(height))
+            .ok_or_else(|| anyhow!("image dimensions {width}x{height} overflow"))?;
+        usize::try_from(count)
+            .map_err(|_| anyhow!("image dimensions {width}x{height} exceed addressable memory"))
+    }
+
+    fn allocate_pixels(
+        pixel_count: usize,
+        color: [f32; 4],
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<[f32; 4]>> {
+        let mut pixels = Vec::new();
+        pixels.try_reserve_exact(pixel_count).map_err(|error| {
+            anyhow!("cannot allocate image storage for {width}x{height} pixels: {error}")
+        })?;
+        pixels.resize(pixel_count, color);
+        Ok(pixels)
     }
 
     /// A pass implementation: read `inputs` (in the pass's declared read order)
@@ -765,6 +985,7 @@ pub mod reference {
         imported: &HashMap<ResourceId, Image>,
         ops: &HashMap<PassId, PassOp<'ops>>,
     ) -> Result<HashMap<ResourceId, Image>> {
+        validate_imported_images(graph, width, height, imported)?;
         let mut images: HashMap<ResourceId, Image> = imported.clone();
 
         for &pass_id in compiled.execution_order() {
@@ -780,7 +1001,7 @@ pub mod reference {
                 inputs.push(image);
             }
 
-            let mut output = Image::new(width, height);
+            let mut output = Image::try_new(width, height)?;
             if let Some(op) = ops.get(&pass_id) {
                 op(&inputs, &mut output);
             }
@@ -811,6 +1032,7 @@ pub mod reference {
         ops: &HashMap<PassId, PassOp<'ops>>,
         cache: &mut HashMap<u64, Image>,
     ) -> Result<(HashMap<ResourceId, Image>, Vec<PassId>)> {
+        validate_imported_images(graph, width, height, imported)?;
         let mut images: HashMap<ResourceId, Image> = imported.clone();
         let mut executed = Vec::new();
 
@@ -833,7 +1055,7 @@ pub mod reference {
                     inputs.push(image);
                 }
 
-                let mut produced = Image::new(width, height);
+                let mut produced = Image::try_new(width, height)?;
                 if let Some(op) = ops.get(&pass_id) {
                     op(&inputs, &mut produced);
                 }
@@ -848,6 +1070,42 @@ pub mod reference {
         }
 
         Ok((images, executed))
+    }
+
+    fn validate_imported_images(
+        graph: &RenderGraph,
+        width: u32,
+        height: u32,
+        imported: &HashMap<ResourceId, Image>,
+    ) -> Result<()> {
+        let expected_pixels = pixel_count(width, height)?;
+        for (&resource, image) in imported {
+            let Some(desc) = graph.resources.get(resource.0 as usize) else {
+                return Err(anyhow!("imported image references unknown {resource:?}"));
+            };
+            if !desc.imported {
+                return Err(anyhow!(
+                    "resource '{}' is transient and cannot be supplied as an imported image",
+                    desc.name
+                ));
+            }
+            if image.width != width || image.height != height {
+                return Err(anyhow!(
+                    "imported image '{}' is {}x{}, expected {width}x{height}",
+                    desc.name,
+                    image.width,
+                    image.height
+                ));
+            }
+            if image.pixels.len() != expected_pixels {
+                return Err(anyhow!(
+                    "imported image '{}' has {} pixels, expected {expected_pixels}",
+                    desc.name,
+                    image.pixels.len()
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// A pass op that fills the output with a constant color.
@@ -1203,6 +1461,12 @@ pub mod reference {
         out
     }
 
+    fn bounded_radius(radius: u32, width: u32, height: u32) -> i32 {
+        radius
+            .min(width.max(height).saturating_sub(1))
+            .min(i32::MAX as u32) as i32
+    }
+
     /// A single-input op that bilinearly resizes `inputs[0]` to fill the output —
     /// image scaling for fit-to-frame and proxy/preview resolution changes.
     pub fn resample() -> PassOp<'static> {
@@ -1269,7 +1533,7 @@ pub mod reference {
             if source.width != output.width || source.height != output.height {
                 return;
             }
-            let radius = radius as i32;
+            let radius = bounded_radius(radius, source.width, source.height);
             let (width, height) = (output.width as i32, output.height as i32);
             for y in 0..height {
                 for x in 0..width {
@@ -1313,12 +1577,13 @@ pub mod reference {
             if source.width != output.width || source.height != output.height {
                 return;
             }
-            if sigma <= 0.0 || source.pixels.is_empty() {
+            if !sigma.is_finite() || sigma <= 0.0 || source.pixels.is_empty() {
                 output.pixels.copy_from_slice(&source.pixels);
                 return;
             }
 
-            let radius = (sigma * 3.0).ceil() as i32;
+            let max_radius = bounded_radius(u32::MAX, source.width, source.height);
+            let radius = ((f64::from(sigma) * 3.0).ceil().min(f64::from(max_radius))) as i32;
             let denom = 2.0 * sigma * sigma;
             let mut kernel = Vec::with_capacity((radius * 2 + 1) as usize);
             let mut total = 0.0f32;
@@ -1411,12 +1676,12 @@ pub mod reference {
                 return;
             }
             let length = (dx * dx + dy * dy).sqrt();
-            if radius == 0 || length == 0.0 {
+            if radius == 0 || !length.is_finite() || length <= f32::EPSILON {
                 output.pixels.copy_from_slice(&source.pixels);
                 return;
             }
             let (step_x, step_y) = (dx / length, dy / length);
-            let radius = radius as i32;
+            let radius = bounded_radius(radius, source.width, source.height);
             let tap_count = (radius * 2 + 1) as f32;
             let (width, height) = (output.width, output.height);
             for y in 0..height {
@@ -1646,10 +1911,10 @@ pub mod reference {
             let (width, height) = (source.width, source.height);
             let mut block_y = 0;
             while block_y < height {
+                let y_end = block_y.saturating_add(block_size).min(height);
                 let mut block_x = 0;
                 while block_x < width {
-                    let x_end = (block_x + block_size).min(width);
-                    let y_end = (block_y + block_size).min(height);
+                    let x_end = block_x.saturating_add(block_size).min(width);
                     let mut sum = [0.0f32; 4];
                     let mut count = 0.0f32;
                     for y in block_y..y_end {
@@ -1672,9 +1937,9 @@ pub mod reference {
                             output.pixels[(y * width + x) as usize] = average;
                         }
                     }
-                    block_x += block_size;
+                    block_x = x_end;
                 }
-                block_y += block_size;
+                block_y = y_end;
             }
         })
     }
@@ -1695,7 +1960,7 @@ pub mod reference {
                 output.pixels.copy_from_slice(&source.pixels);
                 return;
             }
-            let radius = radius as i32;
+            let radius = bounded_radius(radius, source.width, source.height);
             let (width, height) = (source.width as i32, source.height as i32);
             for y in 0..height {
                 for x in 0..width {
@@ -1734,7 +1999,7 @@ pub mod reference {
                 output.pixels.copy_from_slice(&source.pixels);
                 return;
             }
-            let radius = radius as i32;
+            let radius = bounded_radius(radius, source.width, source.height);
             let (width, height) = (source.width as i32, source.height as i32);
             for y in 0..height {
                 for x in 0..width {
@@ -2597,12 +2862,41 @@ pub mod reference {
         #[test]
         fn errors_on_unproduced_input() {
             let mut graph = RenderGraph::new();
-            let missing = graph.add_resource(ResourceDesc::transient_texture("missing"));
+            let missing = graph.add_resource(ResourceDesc::imported_texture("missing"));
             let out = graph.add_resource(ResourceDesc::transient_texture("out"));
             graph.add_pass(PassDesc::new("p").read(missing).write(out));
             let compiled = graph.compile().unwrap();
             let result = execute(&graph, &compiled, 1, 1, &HashMap::new(), &HashMap::new());
             assert!(result.is_err());
+        }
+
+        #[test]
+        fn rejects_malformed_or_mismatched_imported_images() {
+            let mut graph = RenderGraph::new();
+            let input = graph.add_resource(ResourceDesc::imported_texture("input"));
+            let output = graph.add_resource(ResourceDesc::transient_texture("output"));
+            graph.add_pass(PassDesc::new("copy").read(input).write(output));
+            let compiled = graph.compile().unwrap();
+
+            let mut imported = HashMap::new();
+            imported.insert(input, Image::new(2, 1));
+            assert!(execute(&graph, &compiled, 1, 1, &imported, &HashMap::new()).is_err());
+
+            imported.insert(
+                input,
+                Image {
+                    width: 1,
+                    height: 1,
+                    pixels: Vec::new(),
+                },
+            );
+            assert!(execute(&graph, &compiled, 1, 1, &imported, &HashMap::new()).is_err());
+        }
+
+        #[test]
+        fn oversized_images_fail_allocation_cleanly() {
+            assert!(Image::try_new(u32::MAX, u32::MAX).is_err());
+            assert!(Image::try_filled(u32::MAX, u32::MAX, [1.0; 4]).is_err());
         }
 
         #[test]
@@ -2819,6 +3113,25 @@ pub mod reference {
             let mut out = Image::new(2, 2);
             box_blur(0)(&[&source], &mut out);
             assert_eq!(out.pixels, source.pixels);
+        }
+
+        #[test]
+        fn extreme_filter_parameters_are_bounded() {
+            let source = Image::filled(1, 1, [0.25, 0.5, 0.75, 1.0]);
+            let filters = [
+                box_blur(u32::MAX),
+                directional_blur(1.0, 0.0, u32::MAX),
+                median_filter(u32::MAX),
+                dilate(u32::MAX),
+                erode(u32::MAX),
+                gaussian_blur(f32::NAN),
+            ];
+
+            for filter in filters {
+                let mut output = Image::new(1, 1);
+                filter(&[&source], &mut output);
+                assert_eq!(output, source);
+            }
         }
 
         #[test]

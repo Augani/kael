@@ -15,7 +15,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use anyhow::{Context as _, Result};
@@ -25,6 +25,10 @@ const META_SUFFIX: &str = ".crashmeta.json";
 const DUMP_SUFFIX: &str = ".crashdump";
 
 static INSTALLED: AtomicBool = AtomicBool::new(false);
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+const MAX_META_BYTES: u64 = 1024 * 1024;
+const MAX_DUMP_BYTES: u64 = 64 * 1024;
+const MAX_SESSION_ID_BYTES: usize = 128;
 
 /// Pre-crash context captured at [`install`] time and persisted alongside the
 /// dump so the next launch can reconstruct a full report without doing any work
@@ -126,10 +130,12 @@ pub fn new_session_id() -> String {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     let pid = std::process::id();
-    format!("{nanos:032x}-{pid:08x}")
+    let sequence = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
+    format!("{nanos:032x}-{pid:08x}-{sequence:016x}")
 }
 
 fn write_context(reports_dir: &Path, context: &NativeContext) -> Result<()> {
+    validate_session_id(&context.session_id)?;
     fs::create_dir_all(reports_dir).with_context(|| {
         format!(
             "failed to create native crash directory: {}",
@@ -139,8 +145,16 @@ fn write_context(reports_dir: &Path, context: &NativeContext) -> Result<()> {
     let path = meta_path(reports_dir, &context.session_id);
     let json = serde_json::to_string_pretty(context).context("failed to serialize crash meta")?;
     let temp = path.with_extension("json.tmp");
-    fs::write(&temp, json.as_bytes())
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .with_context(|| format!("failed to create crash meta: {}", temp.display()))?;
+    use std::io::Write as _;
+    file.write_all(json.as_bytes())
         .with_context(|| format!("failed to write crash meta: {}", temp.display()))?;
+    file.sync_all()
+        .with_context(|| format!("failed to sync crash meta: {}", temp.display()))?;
     fs::rename(&temp, &path).with_context(|| {
         format!(
             "failed to finalize crash meta from {} to {}",
@@ -189,28 +203,36 @@ pub fn signal_name(signal: i64) -> &'static str {
 /// this process. On unsupported targets this persists context but installs no
 /// handler, returning `true`.
 pub fn install(reports_dir: &Path, context: NativeContext) -> Result<bool> {
-    if INSTALLED.swap(true, Ordering::SeqCst) {
+    if INSTALLED
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
         return Ok(false);
     }
 
-    write_context(reports_dir, &context)?;
-    let dump = dump_path(reports_dir, &context.session_id);
+    let result = (|| {
+        write_context(reports_dir, &context)?;
+        let dump = dump_path(reports_dir, &context.session_id);
 
-    #[cfg(unix)]
-    {
-        imp::install_unix(&dump, &context.session_id)?;
-        Ok(true)
+        #[cfg(unix)]
+        {
+            imp::install_unix(&dump, &context.session_id)?;
+        }
+        #[cfg(windows)]
+        {
+            imp::install_windows(&dump, &context.session_id)?;
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = dump;
+        }
+        Ok::<(), anyhow::Error>(())
+    })();
+    if let Err(error) = result {
+        INSTALLED.store(false, Ordering::SeqCst);
+        return Err(error);
     }
-    #[cfg(windows)]
-    {
-        imp::install_windows(&dump, &context.session_id)?;
-        Ok(true)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = dump;
-        Ok(true)
-    }
+    Ok(true)
 }
 
 /// Decodes pending native crashes from `reports_dir`. Each session that has a
@@ -243,16 +265,33 @@ pub fn pending_crashes(reports_dir: &Path) -> Result<Vec<PendingNativeCrash>> {
             continue;
         }
 
+        let metadata = entry.metadata()?;
+        if !metadata.is_file() || metadata.len() > MAX_META_BYTES {
+            continue;
+        }
+        if validate_session_id(session_id).is_err() {
+            continue;
+        }
         let json = fs::read_to_string(&path)
             .with_context(|| format!("failed to read crash meta: {}", path.display()))?;
         let context: NativeContext = match serde_json::from_str(&json) {
             Ok(context) => context,
             Err(_) => continue,
         };
+        if context.session_id != session_id {
+            continue;
+        }
 
         let dump = dump_path(reports_dir, session_id);
-        let (signal, dump_path_out) = match fs::read(&dump) {
-            Ok(bytes) if !bytes.is_empty() => (decode_dump(&bytes), Some(dump)),
+        let (signal, dump_path_out) = match fs::metadata(&dump) {
+            Ok(metadata) if metadata.is_file() && metadata.len() <= MAX_DUMP_BYTES => {
+                let bytes = fs::read(&dump)?;
+                if bytes.is_empty() {
+                    (None, None)
+                } else {
+                    (decode_dump(&bytes), Some(dump))
+                }
+            }
             _ => (None, None),
         };
 
@@ -305,11 +344,23 @@ fn decode_dump(bytes: &[u8]) -> Option<NativeSignal> {
             }
             "code" => signal.code = parse_int(value),
             "address" => signal.fault_address = parse_uint(value),
-            "frame" => signal.frames.push(value.trim().to_string()),
+            "frame" if signal.frames.len() < 64 => signal.frames.push(value.trim().to_string()),
             _ => {}
         }
     }
     saw_signal.then_some(signal)
+}
+
+fn validate_session_id(session_id: &str) -> Result<()> {
+    if session_id.is_empty()
+        || session_id.len() > MAX_SESSION_ID_BYTES
+        || !session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(anyhow::anyhow!("invalid native crash session identifier"));
+    }
+    Ok(())
 }
 
 fn parse_int(value: &str) -> Option<i64> {
@@ -395,7 +446,7 @@ mod imp {
         // the fields we depend on before installing it.
         let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
         action.sa_sigaction = handler as *const () as usize;
-        action.sa_flags = libc::SA_SIGINFO | libc::SA_ONSTACK | libc::SA_RESETHAND;
+        action.sa_flags = libc::SA_SIGINFO | libc::SA_RESETHAND;
         // SAFETY: sigemptyset on a stack-allocated, owned set is well defined.
         unsafe {
             libc::sigemptyset(&mut action.sa_mask);
