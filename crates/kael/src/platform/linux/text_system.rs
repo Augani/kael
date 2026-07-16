@@ -218,7 +218,7 @@ impl PlatformTextSystem for CosmicTextSystem {
         );
         let candidate_properties = candidate_records
             .iter()
-            .map(|(_, properties)| properties.clone())
+            .map(|(_, properties)| *properties)
             .collect::<SmallVec<[_; 4]>>();
 
         let ix =

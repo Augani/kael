@@ -8254,6 +8254,7 @@ impl Element for WebView {
             injected_javascript: self.options.injected_javascript.clone(),
             request_headers: self.options.request_headers.clone(),
             javascript_disabled: self.options.javascript_disabled,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             general_autofill: self.options.general_autofill,
             background_color: self.options.background_color,
             devtools: self.options.devtools,

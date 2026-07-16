@@ -18,6 +18,7 @@ const MAX_BENCHMARK_JSON_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BENCHMARK_TEXT_CHARS: usize = 512;
 const MAX_SAMPLE_INTERACTIONS: usize = 256;
 const MAX_THRESHOLD_OVERRIDES: usize = 64;
+#[cfg(target_os = "macos")]
 const MAX_SYSCTL_STRING_BYTES: usize = 128 * 1024;
 
 // ---------------------------------------------------------------------------

@@ -199,6 +199,7 @@ pub(crate) struct PlatformWebView {
     pub(crate) injected_javascript: Vec<SharedString>,
     pub(crate) request_headers: Option<http_client::http::HeaderMap>,
     pub(crate) javascript_disabled: bool,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub(crate) general_autofill: Option<bool>,
     pub(crate) background_color: Option<Rgba>,
     pub(crate) devtools: bool,
