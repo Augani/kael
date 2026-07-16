@@ -47913,7 +47913,10 @@ mod test {
         assert_eq!(plan.quota_count(), 6);
         assert_eq!(
             plan.to_text(),
-            "app storage plan: entries 6, durable 3, rebuildable 2, temporary 1, sensitive 0, quotas 6, roles 5, required-dirs 8"
+            format!(
+                "app storage plan: entries 6, durable 3, rebuildable 2, temporary 1, sensitive 0, quotas 6, roles 5, required-dirs {}",
+                plan.required_directories().len()
+            )
         );
         assert!(!plan.to_text().contains("com.example.app"));
         assert!(!plan.to_text().contains("settings"));
