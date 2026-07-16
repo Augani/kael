@@ -25,7 +25,7 @@ fn read_os_version() -> String {
 fn read_hostname() -> String {
     read_small_utf8_file("/etc/hostname", 4 * 1024)
         .map(|s| s.trim().chars().take(255).collect())
-        .unwrap_or_else(|_| "unknown".to_string())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn read_locale() -> String {

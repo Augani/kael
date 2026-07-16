@@ -118,6 +118,7 @@ pub fn init(cx: &mut kael::App) {
     components::inline_edit::init(cx);
     components::mention_input::init_mention_input(cx);
     components::text_field::init(cx);
+    #[cfg(feature = "media")]
     components::video_player::init_video_player(cx);
     navigation::sidebar::init_sidebar(cx);
     navigation::tabs::init_tabs(cx);

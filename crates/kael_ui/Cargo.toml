@@ -24,7 +24,7 @@ path = "src/lib.rs"
 
 [dependencies]
 # Core framework
-kael = { path = "../kael", version = "0.3.0", features = ["media"] }
+kael = { path = "../kael", version = "0.3.0" }
 smallvec.workspace = true
 once_cell = "1.19"
 
@@ -83,6 +83,7 @@ rodio = { version = "0.19", optional = true }
 [features]
 default = ["http"]
 http = []
+media = ["kael/media"]
 markdown = ["pulldown-cmark"]
 html-render = ["html5ever", "markup5ever_rcdom"]
 audio = ["rodio"]
@@ -98,7 +99,7 @@ editor-languages = [
 ]
 
 [dev-dependencies]
-kael = { path = "../kael", version = "0.3.0", features = ["media", "runtime_shaders", "test-support"] }
+kael = { path = "../kael", version = "0.3.0", features = ["runtime_shaders", "test-support"] }
 
 [[example]]
 name = "markdown_demo"
@@ -109,3 +110,13 @@ required-features = ["markdown"]
 name = "html_demo"
 path = "examples/html_demo.rs"
 required-features = ["html-render"]
+
+[[example]]
+name = "astryx_showcase"
+path = "examples/astryx_showcase.rs"
+required-features = ["media"]
+
+[[example]]
+name = "video_player_demo"
+path = "examples/video_player_demo.rs"
+required-features = ["media"]

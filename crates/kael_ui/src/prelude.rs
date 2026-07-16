@@ -253,6 +253,7 @@ pub use crate::components::typeahead::{
     CreateStaticSourceOptions, SearchSource, SearchableItem, Typeahead, TypeaheadItem,
     TypeaheadItemProps, TypeaheadProps,
 };
+#[cfg(feature = "media")]
 pub use crate::components::video_player::{
     init_video_player, VideoCaptionStyle, VideoPlaybackSpeed, VideoPlaybackState, VideoPlayer,
     VideoPlayerRoute, VideoPlayerSize, VideoPlayerState, VideoPreload,

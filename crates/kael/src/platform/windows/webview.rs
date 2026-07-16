@@ -319,7 +319,7 @@ fn read_webview_cookies(
     } else {
         webview.cookies()
     }
-    .map_err(|error| error.to_string().into())?;
+    .map_err(|error| SharedString::from(error.to_string()))?;
 
     Ok(cookies.into_iter().map(webview_cookie_from_wry).collect())
 }

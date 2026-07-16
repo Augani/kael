@@ -18,7 +18,9 @@ use crate::{
     },
 };
 use anyhow::{Context as _, Result};
+#[cfg(feature = "wayland")]
 use gtk::prelude::*;
+#[cfg(feature = "x11")]
 use raw_window_handle as rwh;
 use std::{collections::HashSet, rc::Rc};
 use util::ResultExt;
@@ -338,6 +340,7 @@ impl LinuxWebViewHost {
     }
 
     fn apply(&mut self, _scale_factor: f32, parent_origin: Option<Point<Pixels>>) {
+        let _ = &parent_origin;
         match &self.backend {
             LinuxWebViewBackend::X11 => {
                 if self.bounds != self.desired.bounds {
@@ -543,7 +546,7 @@ fn read_webview_cookies(
     } else {
         webview.cookies()
     }
-    .map_err(|error| error.to_string().into())?;
+    .map_err(|error| SharedString::from(error.to_string()))?;
 
     Ok(cookies.into_iter().map(webview_cookie_from_wry).collect())
 }

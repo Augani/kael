@@ -40,7 +40,7 @@ struct GlobalMemoryLock(HGLOBAL);
 impl Drop for GlobalMemoryLock {
     fn drop(&mut self) {
         unsafe {
-            GlobalUnlock(self.0).ok().log_err();
+            GlobalUnlock(self.0).log_err();
         }
     }
 }
@@ -860,9 +860,7 @@ impl PlatformWindow for WindowsWindow {
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
                 );
             }
-            SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA)
-                .ok()
-                .log_err();
+            SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA).log_err();
         }
     }
 
@@ -882,7 +880,6 @@ impl PlatformWindow for WindowsWindow {
                 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             )
-            .ok()
             .log_err();
         }
     }
@@ -1172,26 +1169,23 @@ impl PlatformWindow for WindowsWindow {
                 info = info.with_name(label.clone());
             }
             if let Some(ref value) = node.value {
-                info = info.with_value(match value {
+                info = match value {
                     crate::AccessibilityValue::Text(text) => {
-                        info = info.with_text_value(text.clone());
-                        text.clone()
+                        info.with_text_value(text.clone()).with_value(text.clone())
                     }
-                    crate::AccessibilityValue::Number(n) => n.to_string(),
+                    crate::AccessibilityValue::Number(n) => info.with_value(n.to_string()),
                     crate::AccessibilityValue::Range {
                         current,
                         min,
                         max,
                         step,
-                    } => {
-                        info = info.with_range_value(*current, *min, *max, *step);
-                        current.to_string()
+                    } => info
+                        .with_range_value(*current, *min, *max, *step)
+                        .with_value(current.to_string()),
+                    crate::AccessibilityValue::Toggle(value) => {
+                        info.with_toggle_value(*value).with_value(value.to_string())
                     }
-                    crate::AccessibilityValue::Toggle(v) => v.to_string(),
-                });
-                if let crate::AccessibilityValue::Toggle(value) = value {
-                    info = info.with_toggle_value(*value);
-                }
+                };
             }
             info = info
                 .with_node_id(node.id)
@@ -1338,8 +1332,9 @@ fn external_drop_data_from_data_object(idata_obj: &IDataObject) -> Option<Extern
     let mut paths = SmallVec::<[PathBuf; 2]>::new();
 
     if let Some(mut idata) = data_object_get_hglobal(idata_obj, CF_HDROP.0) {
-        if !idata.u.hGlobal.is_invalid() {
-            let hdrop = idata.u.hGlobal.0 as *mut HDROP;
+        let hglobal = unsafe { idata.u.hGlobal };
+        if !hglobal.is_invalid() {
+            let hdrop = hglobal.0 as *mut HDROP;
             unsafe {
                 with_file_names(*hdrop, |file_name| {
                     if let Some(path) = PathBuf::from_str(&file_name).log_err() {
@@ -1387,10 +1382,11 @@ fn data_object_get_hglobal(idata_obj: &IDataObject, clipboard_format: u16) -> Op
 
 fn data_object_unicode_text(idata_obj: &IDataObject) -> Option<String> {
     let mut idata = data_object_get_hglobal(idata_obj, CF_UNICODETEXT.0)?;
-    let text = if idata.u.hGlobal.is_invalid() {
+    let hglobal = unsafe { idata.u.hGlobal };
+    let text = if hglobal.is_invalid() {
         None
     } else {
-        unsafe { hglobal_utf16_string(idata.u.hGlobal) }
+        unsafe { hglobal_utf16_string(hglobal) }
     };
     unsafe {
         ReleaseStgMedium(&mut idata);
@@ -1579,12 +1575,13 @@ fn register_window_class(icon_handle: HICON) -> Result<()> {
             };
             let atom = unsafe { RegisterClassW(&wc) };
             if atom == 0 {
-                return Err(windows::core::Error::from_win32().to_string());
+                return Err(windows::core::Error::from_thread().to_string());
             }
             Ok(())
         })
         .as_ref()
         .map_err(|error| anyhow::anyhow!("unable to register window class: {error}"))
+        .copied()
 }
 
 unsafe extern "system" fn window_procedure(

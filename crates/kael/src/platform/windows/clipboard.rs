@@ -101,9 +101,11 @@ pub(crate) fn write_to_clipboard(item: ClipboardItem) {
 }
 
 pub(crate) fn clear_clipboard() {
-    with_clipboard(|| unsafe {
-        EmptyClipboard()?;
-        Ok(())
+    with_clipboard(|| -> windows_core::Result<()> {
+        unsafe {
+            EmptyClipboard()?;
+            Ok(())
+        }
     });
 }
 

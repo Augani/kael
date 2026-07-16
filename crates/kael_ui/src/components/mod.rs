@@ -132,6 +132,7 @@ pub mod tokenizer;
 pub mod toolbar;
 pub mod top_nav;
 pub mod tree_list;
+#[cfg(feature = "media")]
 pub mod video_player;
 
 pub mod animated_collapsible;

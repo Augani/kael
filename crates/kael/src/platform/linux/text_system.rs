@@ -4,7 +4,7 @@ use crate::{
     SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ShapedGlyph, ShapedRun, SharedString, Size, point,
     size,
 };
-use anyhow::{Context as _, Ok, Result};
+use anyhow::{Context as _, Result};
 use collections::HashMap;
 use cosmic_text::{
     Attrs, AttrsList, CacheKey, Family, Font as CosmicTextFont, FontFeatures as CosmicFontFeatures,
@@ -121,7 +121,7 @@ impl CosmicTextSystem {
 
         let result = Self {
             state: state.clone(),
-            fonts_loaded,
+            fonts_loaded: fonts_loaded.clone(),
         };
 
         // Load system fonts on a background thread to avoid UI stalls during fc-list enumeration
@@ -565,7 +565,7 @@ impl CosmicTextSystemState {
     #[profiling::function]
     fn layout_line(&mut self, text: &str, font_size: Pixels, font_runs: &[FontRun]) -> LineLayout {
         let mut attrs_list = AttrsList::new(&Attrs::new());
-        let mut offs = 0;
+        let mut offs: usize = 0;
         for run in font_runs {
             let Some(loaded_font) = self.loaded_font(run.font_id) else {
                 log::error!("ignoring unknown Linux font id {}", run.font_id.0);
@@ -684,7 +684,7 @@ impl CosmicTextSystemState {
         features: &[FontFeature],
     ) -> LineLayout {
         let mut attrs_list = AttrsList::new(&Attrs::new());
-        let mut offs = 0;
+        let mut offs: usize = 0;
         for run in font_runs {
             let Some(loaded_font) = self.loaded_font(run.font_id) else {
                 log::error!("ignoring unknown Linux font id {}", run.font_id.0);

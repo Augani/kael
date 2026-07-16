@@ -121,17 +121,17 @@ impl Cursor {
                     continue;
                 }
                 if let Some(cursor) = theme.get_cursor(cursor_icon_name)
-                    && let Some(image) = cursor.first()
+                    && cursor.image_count() > 0
                 {
-                    buffer = image;
+                    buffer = &cursor[0];
                     break 'outer;
                 }
             }
 
             if let Some(cursor) = theme.get_cursor(DEFAULT_CURSOR_ICON_NAME)
-                && let Some(image) = cursor.first()
+                && cursor.image_count() > 0
             {
-                buffer = image;
+                buffer = &cursor[0];
                 log_cursor_icon_warning(anyhow!("wayland: using the default cursor icon"));
             } else {
                 log_cursor_icon_warning(anyhow!("wayland: default cursor icon is unavailable"));

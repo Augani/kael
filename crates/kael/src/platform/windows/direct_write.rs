@@ -1811,7 +1811,7 @@ impl IDWriteTextRenderer_Impl for TextRenderer_Impl {
 
         let mut cluster_analyzer = ClusterAnalyzer::new(cluster_map, glyph_count);
         let mut utf16_idx = desc.textPosition as usize;
-        let mut glyph_idx = 0;
+        let mut glyph_idx: usize = 0;
         let mut glyphs = Vec::with_capacity(glyph_count);
         for (cluster_utf16_len, cluster_glyph_count) in cluster_analyzer {
             context.index_converter.advance_to_utf16_ix(utf16_idx);

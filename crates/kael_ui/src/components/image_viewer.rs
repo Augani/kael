@@ -1,7 +1,9 @@
 //! ImageViewer/Lightbox component for displaying images in a fullscreen overlay.
 
 use kael::{prelude::FluentBuilder as _, *};
-use std::{rc::Rc, sync::Arc};
+use std::rc::Rc;
+#[cfg(feature = "media")]
+use std::sync::Arc;
 
 use crate::{
     components::{
@@ -496,6 +498,7 @@ impl Render for ImageViewer {
         let is_loading = state.is_loading();
         let show_thumbnails = self.show_thumbnails && state.show_thumbnails;
         let images = state.images.clone();
+        #[cfg(feature = "media")]
         let has_auto_play = self.has_auto_play;
 
         let viewer_entity = cx.entity().clone();
@@ -818,6 +821,7 @@ impl Render for ImageViewer {
                                     );
                                     image.into_any_element()
                                 }
+                                #[cfg(feature = "media")]
                                 LightboxMediaType::Video => {
                                     kael::video(Arc::<str>::from(image.src.as_ref()))
                                         .object_fit(match fit_mode {
@@ -831,6 +835,8 @@ impl Render for ImageViewer {
                                         })
                                         .into_any_element()
                                 }
+                                #[cfg(not(feature = "media"))]
+                                LightboxMediaType::Video => div().size_full().into_any_element(),
                             };
                         let pan_start_state = state_entity.clone();
                         let pan_move_state = state_entity.clone();

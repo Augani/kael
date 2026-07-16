@@ -246,33 +246,31 @@ impl Clipboard {
 
     fn send_internal(&self, fd: OwnedFd, bytes: Vec<u8>) {
         let mut written = 0;
-        self.loop_handle
-            .insert_source(
-                calloop::generic::Generic::new(
-                    File::from(fd),
-                    calloop::Interest::WRITE,
-                    calloop::Mode::Level,
-                ),
-                move |_, file, _| {
-                    let mut file = unsafe { file.get_mut() };
-                    loop {
-                        match file.write(&bytes[written..]) {
-                            Ok(0) => break Ok(PostAction::Remove),
-                            Ok(n) if written + n == bytes.len() => {
-                                written += n;
-                                break Ok(PostAction::Remove);
-                            }
-                            Ok(n) => written += n,
-                            Err(err) if err.kind() == ErrorKind::WouldBlock => {
-                                break Ok(PostAction::Continue);
-                            }
-                            Err(_) => break Ok(PostAction::Remove),
+        if let Err(error) = self.loop_handle.insert_source(
+            calloop::generic::Generic::new(
+                File::from(fd),
+                calloop::Interest::WRITE,
+                calloop::Mode::Level,
+            ),
+            move |_, file, _| {
+                let mut file = unsafe { file.get_mut() };
+                loop {
+                    match file.write(&bytes[written..]) {
+                        Ok(0) => break Ok(PostAction::Remove),
+                        Ok(n) if written + n == bytes.len() => {
+                            written += n;
+                            break Ok(PostAction::Remove);
                         }
+                        Ok(n) => written += n,
+                        Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                            break Ok(PostAction::Continue);
+                        }
+                        Err(_) => break Ok(PostAction::Remove),
                     }
-                },
-            )
-            .unwrap_or_else(|error| {
-                log::error!("failed to register Wayland clipboard writer: {error:?}");
-            });
+                }
+            },
+        ) {
+            log::error!("failed to register Wayland clipboard writer: {error:?}");
+        }
     }
 }

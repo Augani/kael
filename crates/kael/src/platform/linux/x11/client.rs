@@ -7,9 +7,7 @@ use calloop::{
 };
 use collections::HashMap;
 use core::str;
-use http_client::Url;
 use log::Level;
-use smallvec::SmallVec;
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashSet},

@@ -15,7 +15,7 @@ use crate::{
         EXTENSION_RPC_VERSION, ExtensionHandshake, ExtensionMessage, ExtensionNotification,
         ExtensionRequest, ExtensionResponse, ExtensionTransport,
     },
-    ipc_transport::{Transport, decode_exact_frame, encode_frame, try_ipc_socket_path},
+    ipc_transport::{Transport, decode_exact_frame, encode_frame},
     plugin::{
         ExecutionModel, ExtensionHost, ExtensionInfo, HOST_API_VERSION, PluginManifest,
         is_api_compatible,
@@ -24,6 +24,9 @@ use crate::{
     security::{PermissionBroker, PermissionResult},
     supervisor::ProcessSupervisor,
 };
+
+#[cfg(unix)]
+use crate::ipc_transport::try_ipc_socket_path;
 
 #[cfg(unix)]
 const EXTENSION_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(10);

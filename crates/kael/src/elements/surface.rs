@@ -24,9 +24,16 @@ impl From<CVPixelBuffer> for SurfaceSource {
 impl SurfaceSource {
     /// Stable text key for the source kind.
     pub fn kind(&self) -> &'static str {
-        match self {
-            #[cfg(target_os = "macos")]
-            Self::Surface(_) => "core_video_pixel_buffer",
+        #[cfg(target_os = "macos")]
+        {
+            match self {
+                Self::Surface(_) => "core_video_pixel_buffer",
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = self;
+            unreachable!("SurfaceSource has no variants on this platform")
         }
     }
 

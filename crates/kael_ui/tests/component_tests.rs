@@ -284,16 +284,19 @@ fn audio_player_routes_accessibility_slider_actions(cx: &mut TestAppContext) {
     });
 }
 
+#[cfg(feature = "media")]
 struct VideoPlayerSemanticsHarness {
     state: kael::Entity<VideoPlayerState>,
 }
 
+#[cfg(feature = "media")]
 impl Render for VideoPlayerSemanticsHarness {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         VideoPlayer::new(self.state.clone()).size(VideoPlayerSize::Sm)
     }
 }
 
+#[cfg(feature = "media")]
 #[kael::test]
 fn video_player_routes_accessibility_slider_actions(cx: &mut TestAppContext) {
     cx.update(|cx| {

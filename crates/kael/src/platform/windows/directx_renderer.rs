@@ -2114,7 +2114,7 @@ pub(crate) mod shader_resources {
                 log::error!("Shader compile error: {}", error_string);
                 return Err(anyhow::anyhow!("Compile error: {}", error_string));
             }
-            require_com_output(compile_blob, "D3DCompileFromFile")
+            super::require_com_output(compile_blob, "D3DCompileFromFile")
         }
     }
 

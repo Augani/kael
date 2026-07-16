@@ -122,7 +122,7 @@ fn read_bounded(path: &Path) -> Result<String> {
         .open(path)?;
     anyhow::ensure!(file.metadata()?.is_file(), "autostart entry is not a file");
     let mut bytes = Vec::new();
-    file.by_ref()
+    std::io::Read::by_ref(&mut file)
         .take(MAX_AUTOSTART_FILE_BYTES + 1)
         .read_to_end(&mut bytes)?;
     anyhow::ensure!(

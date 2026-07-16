@@ -33,6 +33,7 @@ impl LinuxGlobalHotkey {
     }
 }
 
+#[cfg(feature = "wayland")]
 pub(crate) use crate::platform::global_hotkey_portal as portal;
 
 #[cfg(feature = "x11")]
