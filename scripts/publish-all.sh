@@ -95,6 +95,14 @@ publish_crate() {
 }
 
 if [[ "$mode" == "execute" ]]; then
+  publish_ref="${KAEL_PUBLISH_REF:-}"
+  if [[ -z "$publish_ref" ]]; then
+    publish_ref="$(git symbolic-ref --quiet --short HEAD || true)"
+  fi
+  if [[ "$publish_ref" != "main" && "$publish_ref" != "refs/heads/main" ]]; then
+    echo "error: publishing is only allowed from main; got ${publish_ref:-detached HEAD}" >&2
+    exit 2
+  fi
   if [[ "${KAEL_PUBLISH_CONFIRM:-}" != "publish-kael-$package_version" ]]; then
     echo "error: set KAEL_PUBLISH_CONFIRM=publish-kael-$package_version to publish" >&2
     exit 2
