@@ -16,41 +16,30 @@ mode="${1:-default}"
 
 case "$mode" in
   default)
-    run cargo clippy -p kael --lib -- -D warnings
-    run cargo test -p kael --lib -- --test-threads=1
-    run cargo test -p kael --test worker_process
-    run cargo test -p kael --test extension_process
-    # Hardware-free engine crates: run their full unit suites on every OS so the
-    # cross-platform NLE-core / compositor logic is verified at runtime, not just
-    # cross-compiled.
-    run cargo clippy -p kael_engines -p kael_media_engines -p kael_render_graph --lib -- -D warnings
-    run cargo test -p kael_engines -p kael_media_engines -p kael_render_graph --lib
-    # Component library: lint, unit-test, and type-check every example + template
-    # so the UI surface stays green on all three platforms.
-    run cargo clippy -p kael_ui --lib -- -D warnings
-    run cargo test -p kael_ui --lib
-    run cargo check -p kael_ui --examples
-    run cargo check -p dashboard-app -p messaging-app -p workspace-app
+    # Lint and test every crate, target, optional battery, template, and the
+    # repository-only Astryx showcase. This is the workspace-wide quality gate.
+    run cargo clippy --workspace --all-targets --all-features -- -D warnings
+    run cargo test --workspace --all-targets --all-features
     run cargo check -p kael --lib --features "platform-foundation"
     run cargo check -p kael --lib --features "document"
     run cargo check -p kael --lib --features "pdf"
     run cargo check -p kael --lib --features "notifications-full"
     run cargo check -p kael --lib --features "share"
     run cargo check -p kael --lib --features "platform-foundation document pdf notifications-full share"
-    run cargo check -p kael --example platform_features --example daemon_app --example perf_bench --example capture_demo
+    run cargo check -p kael --bench framework
     run cargo run -p xtask -- dry-run
     ;;
   linux-x11)
     run cargo check -p kael --lib --no-default-features --features "font-kit x11"
     run cargo check -p kael --lib --no-default-features --features "font-kit x11 platform-foundation"
     run cargo check -p kael --lib --no-default-features --features "font-kit x11 platform-foundation document pdf notifications-full share"
-    run cargo check -p kael --example platform_features --example daemon_app --example perf_bench --example capture_demo --no-default-features --features "font-kit x11"
+    run cargo check -p kael --bench framework --no-default-features --features "font-kit x11"
     ;;
   linux-wayland)
     run cargo check -p kael --lib --no-default-features --features "font-kit wayland"
     run cargo check -p kael --lib --no-default-features --features "font-kit wayland platform-foundation"
     run cargo check -p kael --lib --no-default-features --features "font-kit wayland platform-foundation document pdf notifications-full share"
-    run cargo check -p kael --example platform_features --example daemon_app --example perf_bench --example capture_demo --no-default-features --features "font-kit wayland"
+    run cargo check -p kael --bench framework --no-default-features --features "font-kit wayland"
     ;;
   macos-blade)
     run cargo check -p kael --lib --no-default-features --features "font-kit macos-blade"

@@ -10,7 +10,7 @@ REGRESSION_THRESHOLD="${REGRESSION_THRESHOLD:-15.0}"
 
 mkdir -p "${OUTPUT_DIR}"
 
-echo "=== GPUI Benchmark Comparison ==="
+echo "=== Kael Benchmark Comparison ==="
 echo ""
 
 BASELINE_FILE="${BASELINE_DIR}/kael-messaging-baseline.json"
@@ -22,7 +22,7 @@ fi
 
 echo "Running benchmarks..."
 cd "${PROJECT_ROOT}"
-cargo run --example perf_bench -- --output "${OUTPUT_DIR}/current.json" --compare
+cargo bench -p kael --bench framework -- --output "${OUTPUT_DIR}/current.json" --compare
 
 echo ""
 echo "Comparison complete."

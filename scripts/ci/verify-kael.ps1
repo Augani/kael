@@ -61,31 +61,24 @@ function Show-DllAudit {
 switch ($Mode) {
     "default" {
         Show-DllAudit
-        Invoke-Step cargo clippy --package kael --lib '--' '-D' warnings
+        # Compile every crate, target, optional battery, template, and the
+        # repository-only Astryx showcase under the native Windows toolchain.
+        Invoke-Step cargo clippy --workspace --all-targets --all-features '--' '-D' warnings
         # The hosted Windows Server 2025 runner can fail during process load for
-        # GUI-linked GPUI test binaries before Rust's test harness starts. Keep
+        # GUI-linked Kael test binaries before Rust's test harness starts. Keep
         # Windows CI as a compile/link proof and run the test binaries on
         # macOS/Linux, where the headless runtime is stable in Actions.
-        Invoke-Step cargo test --package kael --lib --no-run
-        Invoke-Step cargo test --package kael --test worker_process --no-run
-        Invoke-Step cargo test --package kael --test extension_process --no-run
-        # The engine crates are pure libraries (no GUI/GPU linkage), so their unit
-        # suites run fully on Windows, verifying the cross-platform logic at runtime.
-        Invoke-Step cargo clippy --package kael_engines --package kael_media_engines --package kael_render_graph --lib '--' '-D' warnings
+        Invoke-Step cargo test --workspace --all-targets --all-features --no-run
+        # These engine crates are hardware-free, so their tests also execute on
+        # Windows rather than stopping at the compile/link proof.
         Invoke-Step cargo test --package kael_engines --package kael_media_engines --package kael_render_graph --lib
-        # Component library: lint, compile tests (compile-only on Windows,
-        # matching the kael policy above), and type-check examples + templates.
-        Invoke-Step cargo clippy --package kael_ui --lib '--' '-D' warnings
-        Invoke-Step cargo test --package kael_ui --lib --no-run
-        Invoke-Step cargo check --package kael_ui --examples
-        Invoke-Step cargo check --package dashboard-app --package messaging-app --package workspace-app
         Invoke-Step cargo check --package kael --lib --features 'platform-foundation'
         Invoke-Step cargo check --package kael --lib --features 'document'
         Invoke-Step cargo check --package kael --lib --features 'pdf'
         Invoke-Step cargo check --package kael --lib --features 'notifications-full'
         Invoke-Step cargo check --package kael --lib --features 'share'
         Invoke-Step cargo check --package kael --lib --features 'platform-foundation document pdf notifications-full share'
-        Invoke-Step cargo check --package kael --example platform_features --example daemon_app --example perf_bench --example capture_demo
+        Invoke-Step cargo check --package kael --bench framework
         Invoke-Step cargo run --package xtask '--' dry-run
     }
 }

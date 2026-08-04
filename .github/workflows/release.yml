@@ -1,180 +1,78 @@
-name: Release
+name: Publish crates
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the validated workspace to crates.io
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: publish-crates
+  cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
 jobs:
-  build-and-release:
-    name: Build and Release (${{ matrix.label }})
-    runs-on: ${{ matrix.os }}
+  preflight:
+    name: Release preflight
+    runs-on: ubuntu-latest
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            label: macOS
-          - os: windows-latest
-            label: Windows
-          - os: ubuntu-latest
-            label: Linux
-
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        shell: bash
         run: bash scripts/ci/install-linux-deps.sh
 
-      - name: Install toolchain
+      - name: Install Rust 1.97.1
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build release binary
-        shell: bash
-        run: cargo build --release -p dashboard-app
+      - name: Strict workspace lint
+        run: >-
+          cargo clippy --workspace --all-targets
+          --all-features
+          -- -D warnings
 
-      - name: Install WiX v4 (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: dotnet tool install --global wix --version 4.*
+      - name: Workspace tests
+        run: >-
+          cargo test --workspace --all-targets
+          --all-features
 
-      - name: Install appimagetool (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          curl -fsSL -o /usr/local/bin/appimagetool \
-            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
-          chmod +x /usr/local/bin/appimagetool
-          echo "APPIMAGE_EXTRACT_AND_RUN=1" >> "$GITHUB_ENV"
-
-      - name: Run xtask bundle
-        shell: bash
-        run: |
-          binary="target/release/dashboard-app"
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            binary="$binary.exe"
-          fi
-          cargo run -p xtask -- bundle --output dist --binary "$binary"
-
-      - name: Run xtask sign
-        if: env.SKIP_SIGN != 'true'
-        shell: bash
-        run: |
-          for artifact in dist/*; do
-            if [ -e "$artifact" ]; then
-              cargo run -p xtask -- sign --artifact "$artifact" || true
-            fi
-          done
-
-      - name: Run xtask notarize
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          for artifact in dist/*; do
-            if [ -e "$artifact" ]; then
-              cargo run -p xtask -- notarize --artifact "$artifact" || true
-            fi
-          done
-
-      - name: Archive bundle directories
-        shell: bash
-        run: |
-          # Update feeds need downloadable, checksummable files; .app and
-          # .AppDir bundles are directories, so compress them first.
-          for dir in dist/*/; do
-            [ -d "$dir" ] || continue
-            name=$(basename "$dir")
-            stem="${name%%.*}"
-            case "$RUNNER_OS" in
-              macOS)
-                ditto -c -k --sequesterRsrc --keepParent "dist/$name" "dist/$stem-macos.zip"
-                ;;
-              *)
-                tar -czf "dist/$stem-linux.tar.gz" -C dist "$name"
-                ;;
-            esac
-            rm -rf "dist/$name"
-          done
-
-      - name: Run xtask generate-update-metadata
-        shell: bash
-        env:
-          # Absent secret yields an empty string; the feed signer treats that as
-          # "no key" and emits an unsigned (dev) feed rather than failing.
-          KAEL_UPDATE_SIGNING_KEY: ${{ secrets.KAEL_UPDATE_SIGNING_KEY }}
-        run: |
-          artifact_args=()
-          while IFS= read -r -d '' artifact; do
-            artifact_args+=(--artifact "$artifact")
-          done < <(find dist -mindepth 1 -maxdepth 1 -type f ! -name update-feed.json -print0)
-          if [ "${#artifact_args[@]}" -gt 0 ]; then
-            cargo run -p xtask -- generate-update-metadata --output dist/update-feed.json "${artifact_args[@]}"
-          fi
-
-      - name: Verify signed update feed round-trips
-        if: ${{ secrets.KAEL_UPDATE_SIGNING_KEY != '' }}
-        shell: bash
-        env:
-          KAEL_UPDATE_SIGNING_KEY: ${{ secrets.KAEL_UPDATE_SIGNING_KEY }}
-        run: |
-          if [ ! -f dist/update-feed.json ]; then
-            echo "no update feed produced; skipping verification"
-            exit 0
-          fi
-          cargo run -p xtask -- verify-update-feed --feed dist/update-feed.json
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: release-${{ matrix.label }}
-          path: dist/**/*
+      - name: Package audit
+        run: bash scripts/publish-all.sh --preflight
 
   publish:
-    name: Publish Release
-    needs: build-and-release
+    name: Publish to crates.io
+    if: inputs.publish
+    needs: preflight
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    if: startsWith(github.ref, 'refs/tags/v')
-
+    timeout-minutes: 90
+    environment: crates-io
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v8
-        with:
-          path: artifacts
-          pattern: release-*
-          merge-multiple: true
+      - name: Install Linux dependencies
+        run: bash scripts/ci/install-linux-deps.sh
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/**/*
-          generate_release_notes: true
-
-      - name: Install toolchain
+      - name: Install Rust 1.97.1
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
 
-      - name: Publish with xtask
-        shell: bash
-        run: |
-          find artifacts -type f -print0 | while IFS= read -r -d '' file; do
-            cargo run -p xtask -- publish --artifact "$file" --tag ${{ github.ref_name }} --dry-run || true
-          done
+      - name: Publish in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          KAEL_PUBLISH_CONFIRM: publish-kael-0.3.0
+        run: bash scripts/publish-all.sh --execute

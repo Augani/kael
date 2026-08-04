@@ -18,7 +18,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  ZED_HEADLESS: 1
+  KAEL_HEADLESS: 1
 
 jobs:
   rustfmt:
@@ -26,17 +26,38 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.97.1
           components: rustfmt
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Check formatting
         run: cargo fmt --all --check
+
+  security:
+    name: Dependency security audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit --version 0.22.2
+
+      - name: Audit Cargo.lock
+        run: cargo audit
 
   verify:
     name: Verify (${{ matrix.label }})
@@ -54,7 +75,7 @@ jobs:
             label: Linux
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -64,6 +85,7 @@ jobs:
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.97.1
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
@@ -103,7 +125,7 @@ jobs:
           - linux-wayland
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         shell: bash
@@ -112,6 +134,7 @@ jobs:
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.97.1
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
@@ -133,7 +156,7 @@ jobs:
           - windows-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -142,6 +165,8 @@ jobs:
 
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
 
       - uses: Swatinem/rust-cache@v2
 
@@ -166,9 +191,9 @@ jobs:
         shell: bash
         run: |
           if [ "${{ steps.download-baseline.outputs.baseline_found }}" == "true" ]; then
-            cargo run --example perf_bench -- --output benchmark-results.json --compare
+            cargo bench -p kael --bench framework -- --output benchmark-results.json --compare
           else
-            cargo run --example perf_bench -- --output benchmark-results.json
+            cargo bench -p kael --bench framework -- --output benchmark-results.json
           fi
 
       - name: Upload benchmark results
@@ -177,28 +202,20 @@ jobs:
           name: benchmark-results-${{ matrix.os }}
           path: benchmark-results.json
 
-      - name: Check regressions
-        if: steps.download-baseline.outputs.baseline_found == 'true'
-        shell: bash
-        run: |
-          echo "Checking for regressions..."
-          cargo run --example perf_bench -- --output benchmark-results.json --compare || {
-            echo "::error::Benchmark regression detected"
-            exit 1
-          }
-
   template-check:
     name: Template Compile Check
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         run: bash scripts/ci/install-linux-deps.sh
 
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
 
       - uses: Swatinem/rust-cache@v2
 
@@ -210,13 +227,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         run: bash scripts/ci/install-linux-deps.sh
 
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
 
       - uses: Swatinem/rust-cache@v2
 
@@ -225,3 +244,6 @@ jobs:
 
       - name: Dry-run release pipeline
         run: cargo run -p xtask -- dry-run kael.dist.toml
+
+      - name: Audit publishable crate contents
+        run: bash scripts/publish-all.sh --preflight
