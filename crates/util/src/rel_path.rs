@@ -358,6 +358,9 @@ impl RelPathBuf {
             let mut filename = PathBuf::from(filename);
             filename.set_extension(extension);
             self.pop();
+            if !self.0.is_empty() {
+                self.0.push(SEPARATOR);
+            }
             self.0.push_str(filename.to_str().unwrap());
             true
         } else {
@@ -617,6 +620,21 @@ mod tests {
         assert_eq!(path.as_rel_path().as_unix_str(), "");
         path.pop();
         assert_eq!(path.as_rel_path().as_unix_str(), "");
+    }
+
+    #[test]
+    fn set_extension_preserves_parent_components() {
+        let mut nested = rel_path("a/b.txt").to_rel_path_buf();
+        assert!(nested.set_extension("rs"));
+        assert_eq!(nested.as_unix_str(), "a/b.rs");
+
+        let mut top_level = rel_path("b.txt").to_rel_path_buf();
+        assert!(top_level.set_extension("rs"));
+        assert_eq!(top_level.as_unix_str(), "b.rs");
+
+        let mut empty = RelPathBuf::new();
+        assert!(!empty.set_extension("rs"));
+        assert!(empty.is_empty());
     }
 
     #[test]
