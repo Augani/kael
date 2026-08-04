@@ -41,7 +41,9 @@ pub struct MarkdownInlineCode<'a>(pub &'a str);
 
 /// Implements `Display` to format markdown code blocks, wrapped in 3 or more backticks as needed.
 pub struct MarkdownCodeBlock<'a> {
+    /// Optional language tag written after the opening fence.
     pub tag: &'a str,
+    /// Code written inside the fenced block.
     pub text: &'a str,
 }
 

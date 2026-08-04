@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+/// Formats short durations as seconds and longer durations as a clock value.
 pub fn duration_alt_display(duration: Duration) -> String {
     if duration < Duration::from_secs(60) {
         format!("{}s", duration.as_secs())

@@ -36,6 +36,7 @@ pub fn home_dir() -> &'static PathBuf {
     })
 }
 
+/// Cross-platform extensions for path conversion and presentation.
 pub trait PathExt {
     /// Compacts a given file path by replacing the user's home directory
     /// prefix with a tilde (`~`).
@@ -50,6 +51,9 @@ pub trait PathExt {
     /// Returns a file's extension or, if the file is hidden, its name without the leading dot
     fn extension_or_hidden_file_name(&self) -> Option<&str>;
 
+    /// Decodes operating-system path bytes into this path-like type.
+    ///
+    /// Unix accepts arbitrary path bytes; Windows validates WTF-8 first.
     fn try_from_bytes<'a>(bytes: &'a [u8]) -> anyhow::Result<Self>
     where
         Self: From<&'a Path>,
@@ -185,10 +189,12 @@ impl<T: AsRef<Path>> PathExt for T {
     }
 }
 
+/// Returns whether `base` ends with `suffix` on a path-component boundary.
 pub fn path_ends_with(base: &Path, suffix: &Path) -> bool {
     strip_path_suffix(base, suffix).is_some()
 }
 
+/// Removes `suffix` from `base` when it matches on a component boundary.
 pub fn strip_path_suffix<'a>(base: &'a Path, suffix: &Path) -> Option<&'a Path> {
     if let Some(remainder) = base
         .as_os_str()
@@ -217,6 +223,7 @@ pub fn strip_path_suffix<'a>(base: &'a Path, suffix: &Path) -> Option<&'a Path> 
 pub struct SanitizedPath(Path);
 
 impl SanitizedPath {
+    /// Borrows a path with Windows extended-length prefixes removed.
     pub fn new<T: AsRef<Path> + ?Sized>(path: &T) -> &Self {
         #[cfg(not(target_os = "windows"))]
         return Self::unchecked_new(path.as_ref());
@@ -225,11 +232,13 @@ impl SanitizedPath {
         return Self::unchecked_new(dunce::simplified(path.as_ref()));
     }
 
+    /// Borrows a path without applying platform-specific sanitization.
     pub fn unchecked_new<T: AsRef<Path> + ?Sized>(path: &T) -> &Self {
         // safe because `Path` and `SanitizedPath` have the same repr and Drop impl
         unsafe { mem::transmute::<&Path, &Self>(path.as_ref()) }
     }
 
+    /// Converts an atomically reference-counted path into a sanitized path.
     pub fn from_arc(path: Arc<Path>) -> Arc<Self> {
         // safe because `Path` and `SanitizedPath` have the same repr and Drop impl
         #[cfg(not(target_os = "windows"))]
@@ -240,52 +249,64 @@ impl SanitizedPath {
         return Self::new(&path).into();
     }
 
+    /// Copies a path into atomically reference-counted sanitized storage.
     pub fn new_arc<T: AsRef<Path> + ?Sized>(path: &T) -> Arc<Self> {
         Self::new(path).into()
     }
 
+    /// Converts a sanitized allocation back to a standard path allocation.
     pub fn cast_arc(path: Arc<Self>) -> Arc<Path> {
         // safe because `Path` and `SanitizedPath` have the same repr and Drop impl
         unsafe { mem::transmute::<Arc<Self>, Arc<Path>>(path) }
     }
 
+    /// Views a sanitized path allocation as a standard path allocation.
     pub fn cast_arc_ref(path: &Arc<Self>) -> &Arc<Path> {
         // safe because `Path` and `SanitizedPath` have the same repr and Drop impl
         unsafe { mem::transmute::<&Arc<Self>, &Arc<Path>>(path) }
     }
 
+    /// Returns whether this path starts with `prefix`.
     pub fn starts_with(&self, prefix: &Self) -> bool {
         self.0.starts_with(&prefix.0)
     }
 
+    /// Borrows this value as a standard path.
     pub fn as_path(&self) -> &Path {
         &self.0
     }
 
+    /// Returns the final component, if any.
     pub fn file_name(&self) -> Option<&std::ffi::OsStr> {
         self.0.file_name()
     }
 
+    /// Returns the final component's extension, if any.
     pub fn extension(&self) -> Option<&std::ffi::OsStr> {
         self.0.extension()
     }
 
+    /// Appends `path` and returns an owned standard path.
     pub fn join<P: AsRef<Path>>(&self, path: P) -> PathBuf {
         self.0.join(path)
     }
 
+    /// Returns this path's parent, if any.
     pub fn parent(&self) -> Option<&Self> {
         self.0.parent().map(Self::unchecked_new)
     }
 
+    /// Removes `base` from this path.
     pub fn strip_prefix(&self, base: &Self) -> Result<&Path, StripPrefixError> {
         self.0.strip_prefix(base.as_path())
     }
 
+    /// Returns this path as UTF-8, if representable.
     pub fn to_str(&self) -> Option<&str> {
         self.0.to_str()
     }
 
+    /// Copies this path into an owned standard path buffer.
     pub fn to_path_buf(&self) -> PathBuf {
         self.0.to_path_buf()
     }
@@ -324,23 +345,29 @@ impl AsRef<Path> for SanitizedPath {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The separator and absolute-path rules used by a path string.
 pub enum PathStyle {
+    /// POSIX path syntax using `/` separators.
     Posix,
+    /// Windows path syntax using `\\` separators and drive prefixes.
     Windows,
 }
 
 impl PathStyle {
     #[cfg(target_os = "windows")]
+    /// Returns the host platform's path style.
     pub const fn local() -> Self {
         PathStyle::Windows
     }
 
     #[cfg(not(target_os = "windows"))]
+    /// Returns the host platform's path style.
     pub const fn local() -> Self {
         PathStyle::Posix
     }
 
     #[inline]
+    /// Returns this style's directory separator.
     pub fn separator(&self) -> &'static str {
         match self {
             PathStyle::Posix => "/",
@@ -348,10 +375,14 @@ impl PathStyle {
         }
     }
 
+    /// Returns whether this is Windows path syntax.
     pub fn is_windows(&self) -> bool {
         *self == PathStyle::Windows
     }
 
+    /// Joins two path strings according to this style.
+    ///
+    /// Returns `None` when either input is not UTF-8 or `right` is absolute.
     pub fn join(self, left: impl AsRef<Path>, right: impl AsRef<Path>) -> Option<String> {
         let right = right.as_ref().to_str()?;
         if is_absolute(right, self) {
@@ -372,6 +403,7 @@ impl PathStyle {
         }
     }
 
+    /// Splits a path-like string into its optional directory and file name.
     pub fn split(self, path_like: &str) -> (Option<&str>, &str) {
         let Some(pos) = path_like.rfind(self.separator()) else {
             return (None, path_like);
@@ -385,24 +417,29 @@ impl PathStyle {
 }
 
 #[derive(Debug, Clone)]
+/// An owned path string paired with the syntax used by a remote system.
 pub struct RemotePathBuf {
     style: PathStyle,
     string: String,
 }
 
 impl RemotePathBuf {
+    /// Creates a remote path from an owned string and its path style.
     pub fn new(string: String, style: PathStyle) -> Self {
         Self { style, string }
     }
 
+    /// Copies a remote path string and records its path style.
     pub fn from_str(path: &str, style: PathStyle) -> Self {
         Self::new(path.to_string(), style)
     }
 
+    /// Returns the syntax used by this path.
     pub fn path_style(&self) -> PathStyle {
         self.style
     }
 
+    /// Consumes the path and returns its wire representation.
     pub fn to_proto(self) -> String {
         self.string
     }
@@ -414,6 +451,7 @@ impl Display for RemotePathBuf {
     }
 }
 
+/// Returns whether `path_like` is absolute according to `path_style`.
 pub fn is_absolute(path_like: &str, path_style: PathStyle) -> bool {
     path_like.starts_with('/')
         || path_style == PathStyle::Windows
@@ -429,6 +467,7 @@ pub fn is_absolute(path_like: &str, path_style: PathStyle) -> bool {
 
 #[derive(Debug, PartialEq)]
 #[non_exhaustive]
+/// Lexical normalization would escape above the starting directory.
 pub struct NormalizeError;
 
 impl Error for NormalizeError {}
@@ -531,9 +570,12 @@ const ROW_COL_CAPTURE_REGEX: &str = r"(?xs)
 /// Matching values example: `te`, `test.rs:22`, `te:22:5`, `test.c(22)`, `test.c(22,5)`etc.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct PathWithPosition {
+    /// The parsed filesystem path.
     pub path: PathBuf,
+    /// The optional one-based row number.
     pub row: Option<u32>,
     // Absent if row is absent.
+    /// The optional one-based column number, present only when `row` is set.
     pub column: Option<u32>,
 }
 
@@ -708,6 +750,7 @@ impl PathWithPosition {
         }
     }
 
+    /// Transforms the path while preserving its row and column.
     pub fn map_path<E>(
         self,
         mapping: impl FnOnce(PathBuf) -> Result<PathBuf, E>,
@@ -719,6 +762,7 @@ impl PathWithPosition {
         })
     }
 
+    /// Formats the path and appends any row and column suffix.
     pub fn to_string(&self, path_to_string: impl Fn(&PathBuf) -> String) -> String {
         let path_string = path_to_string(&self.path);
         if let Some(row) = self.row {
@@ -734,6 +778,7 @@ impl PathWithPosition {
 }
 
 #[derive(Clone, Debug)]
+/// A compiled set of glob patterns for path matching.
 pub struct PathMatcher {
     sources: Vec<String>,
     glob: GlobSet,
@@ -755,6 +800,7 @@ impl PartialEq for PathMatcher {
 impl Eq for PathMatcher {}
 
 impl PathMatcher {
+    /// Compiles glob patterns using the supplied path style.
     pub fn new(
         globs: impl IntoIterator<Item = impl AsRef<str>>,
         path_style: PathStyle,
@@ -776,10 +822,12 @@ impl PathMatcher {
         })
     }
 
+    /// Returns the original glob pattern strings.
     pub fn sources(&self) -> &[String] {
         &self.sources
     }
 
+    /// Returns whether a path matches any configured pattern.
     pub fn is_match<P: AsRef<Path>>(&self, other: P) -> bool {
         let other_path = other.as_ref();
         self.sources.iter().any(|source| {
@@ -962,6 +1010,7 @@ fn natural_sort(a: &str, b: &str) -> Ordering {
         }
     }
 }
+/// Naturally orders normalized relative paths, grouping directories before files.
 pub fn compare_rel_paths(
     (path_a, a_is_file): (&RelPath, bool),
     (path_b, b_is_file): (&RelPath, bool),
@@ -1038,6 +1087,7 @@ pub fn compare_rel_paths(
     }
 }
 
+/// Naturally orders standard paths, grouping directories before files.
 pub fn compare_paths(
     (path_a, a_is_file): (&Path, bool),
     (path_b, b_is_file): (&Path, bool),

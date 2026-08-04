@@ -1,19 +1,30 @@
 use std::{borrow::Cow, fmt, path::Path, sync::LazyLock};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+/// A command-shell dialect supported by Kael's command helpers.
 pub enum ShellKind {
     #[default]
+    /// A POSIX-compatible shell such as `sh` or `bash`.
     Posix,
+    /// The C shell.
     Csh,
+    /// The TENEX C shell.
     Tcsh,
+    /// The Plan 9 `rc` shell.
     Rc,
+    /// The Fish shell.
     Fish,
+    /// Windows PowerShell or PowerShell Core.
     PowerShell,
+    /// Nushell.
     Nushell,
+    /// The Windows command prompt.
     Cmd,
+    /// Xonsh.
     Xonsh,
 }
 
+/// Returns the configured system shell, falling back to a platform default.
 pub fn get_system_shell() -> String {
     if cfg!(windows) {
         get_windows_system_shell()
@@ -22,6 +33,7 @@ pub fn get_system_shell() -> String {
     }
 }
 
+/// Returns the platform's default shell without consulting user configuration.
 pub fn get_default_system_shell() -> String {
     if cfg!(windows) {
         get_windows_system_shell()
@@ -39,6 +51,7 @@ pub fn get_default_system_shell_preferring_bash() -> String {
     }
 }
 
+/// Locates Git for Windows' bundled Bash executable, if installed.
 pub fn get_windows_git_bash() -> Option<String> {
     static GIT_BASH: LazyLock<Option<String>> = LazyLock::new(|| {
         // /path/to/git/cmd/git.exe/../../bin/bash.exe
@@ -54,6 +67,10 @@ pub fn get_windows_git_bash() -> Option<String> {
     (*GIT_BASH).clone()
 }
 
+/// Returns the preferred PowerShell executable on Windows.
+///
+/// The newest regular or preview installation is preferred over the legacy
+/// `powershell.exe` fallback.
 pub fn get_windows_system_shell() -> String {
     use std::path::PathBuf;
 
@@ -172,10 +189,15 @@ impl fmt::Display for ShellKind {
 }
 
 impl ShellKind {
+    /// Detects the dialect used by the configured system shell.
     pub fn system() -> Self {
         Self::new(&get_system_shell(), cfg!(windows))
     }
 
+    /// Infers a shell dialect from an executable path.
+    ///
+    /// Unknown programs fall back to PowerShell on Windows and POSIX syntax on
+    /// other platforms.
     pub fn new(program: impl AsRef<Path>, is_windows: bool) -> Self {
         let program = program.as_ref();
         let program = program
@@ -212,6 +234,7 @@ impl ShellKind {
         }
     }
 
+    /// Rewrites a POSIX-style environment-variable reference for this shell.
     pub fn to_shell_variable(self, input: &str) -> String {
         match self {
             Self::PowerShell => Self::to_powershell_variable(input),
@@ -340,6 +363,7 @@ impl ShellKind {
         }
     }
 
+    /// Builds the arguments required to execute `combined_command`.
     pub fn args_for_shell(&self, interactive: bool, combined_command: String) -> Vec<String> {
         match self {
             ShellKind::PowerShell => vec!["-C".to_owned(), combined_command],
@@ -358,6 +382,7 @@ impl ShellKind {
         }
     }
 
+    /// Returns the token used to invoke an executable explicitly, if needed.
     pub const fn command_prefix(&self) -> Option<char> {
         match self {
             ShellKind::PowerShell => Some('&'),
@@ -366,6 +391,7 @@ impl ShellKind {
         }
     }
 
+    /// Returns the separator for sequential commands in this shell.
     pub const fn sequential_commands_separator(&self) -> char {
         match self {
             ShellKind::Cmd => '&',
@@ -373,6 +399,9 @@ impl ShellKind {
         }
     }
 
+    /// Quotes one command argument using syntax accepted by this shell.
+    ///
+    /// Returns `None` when the argument cannot be represented safely.
     pub fn try_quote<'a>(&self, arg: &'a str) -> Option<Cow<'a, str>> {
         shlex::try_quote(arg).ok().map(|arg| match self {
             // If we are running in PowerShell, we want to take extra care when escaping strings.
@@ -383,6 +412,7 @@ impl ShellKind {
         })
     }
 
+    /// Returns the keyword used to source or activate a script.
     pub const fn activate_keyword(&self) -> &'static str {
         match self {
             ShellKind::Cmd => "",
@@ -396,6 +426,7 @@ impl ShellKind {
         }
     }
 
+    /// Returns the shell command that clears the terminal screen.
     pub const fn clear_screen_command(&self) -> &'static str {
         match self {
             ShellKind::Cmd => "cls",

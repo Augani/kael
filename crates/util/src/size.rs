@@ -1,3 +1,4 @@
+/// Formats a byte count using decimal units or binary IEC units.
 pub fn format_file_size(size: u64, use_decimal: bool) -> String {
     if use_decimal {
         if size < 1000 {

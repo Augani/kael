@@ -6,8 +6,11 @@ use std::{
     sync::Arc,
 };
 
+/// A value that is either borrowed or owned through an atomically reference-counted pointer.
 pub enum ArcCow<'a, T: ?Sized> {
+    /// A borrowed value.
     Borrowed(&'a T),
+    /// A shared owned value.
     Owned(Arc<T>),
 }
 
