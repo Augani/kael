@@ -6,8 +6,11 @@ use kael::{
 };
 use std::{hint::black_box, path::Path};
 
-const BASELINE_PATH: &str = "benchmarks/baselines/kael-messaging-baseline.json";
-const OUTPUT_PATH: &str = "benchmark-results.json";
+const BASELINE_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../benchmarks/baselines/kael-messaging-baseline.json"
+);
+const OUTPUT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../benchmark-results.json");
 const REGRESSION_THRESHOLD: f64 = 15.0;
 const FRAME_WIDTH: u32 = 512;
 const FRAME_HEIGHT: u32 = 288;
