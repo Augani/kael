@@ -105,7 +105,9 @@ fn bundle_macos(
 
     println!("macOS bundle created: {}", bundle_dir.display());
 
-    let mut artifacts = vec![bundle_dir.clone()];
+    let artifacts = vec![bundle_dir.clone()];
+    #[cfg(target_os = "macos")]
+    let mut artifacts = artifacts;
     #[cfg(target_os = "macos")]
     if !options.dry_run && binary.is_some() {
         let identity = config

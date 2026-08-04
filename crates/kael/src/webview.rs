@@ -44,7 +44,7 @@ pub enum WebViewDragDropPolicy {
 }
 
 impl WebViewDragDropPolicy {
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(all(feature = "webview", any(target_os = "linux", target_os = "windows")))]
     pub(crate) fn blocks_browser_default(self) -> bool {
         self == Self::BlockBrowserDefault
     }
@@ -187,6 +187,7 @@ pub(crate) type WebViewJavaScriptResultCallback =
     Arc<dyn Fn(Result<SharedString, SharedString>) + Send + Sync + 'static>;
 
 #[derive(Clone)]
+#[cfg_attr(not(feature = "webview"), allow(dead_code))]
 pub(crate) struct PlatformWebView {
     pub(crate) id: SharedString,
     pub(crate) bounds: Bounds<Pixels>,
@@ -219,6 +220,7 @@ pub(crate) struct PlatformWebView {
 }
 
 #[derive(Clone)]
+#[cfg_attr(not(feature = "webview"), allow(dead_code))]
 pub(crate) enum PlatformWebViewCommand {
     Navigate {
         id: SharedString,
@@ -302,7 +304,7 @@ pub(crate) enum PlatformWebViewCommand {
     },
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(all(feature = "webview", any(target_os = "linux", target_os = "windows")))]
 pub(crate) fn rgba_to_webview_color(color: Rgba) -> (u8, u8, u8, u8) {
     fn channel(value: f32) -> u8 {
         (value.clamp(0.0, 1.0) * 255.0).round() as u8
