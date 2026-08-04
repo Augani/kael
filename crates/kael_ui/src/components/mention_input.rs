@@ -1,6 +1,6 @@
 use crate::components::avatar::{Avatar, AvatarSize};
 use crate::components::scrollable::scrollable_vertical;
-use crate::theme::{use_theme, Theme};
+use crate::theme::{Theme, use_theme};
 use kael::{prelude::*, *};
 use std::ops::Range;
 use std::rc::Rc;
@@ -1316,10 +1316,10 @@ impl kael::Element for MentionTextElement {
             return;
         }
 
-        if focus_handle.is_focused(window) {
-            if let Some(cursor) = prepaint.cursor.take() {
-                window.paint_quad(cursor);
-            }
+        if focus_handle.is_focused(window)
+            && let Some(cursor) = prepaint.cursor.take()
+        {
+            window.paint_quad(cursor);
         }
 
         self.input.update(cx, |input, _cx| {

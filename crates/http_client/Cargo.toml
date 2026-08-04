@@ -35,7 +35,9 @@ features = [
 version = "2.1"
 
 [dependencies.async-tar]
-version = "0.1.0"
+version = "0.6.1"
+default-features = false
+features = ["runtime-tokio"]
 
 [dependencies.bytes]
 version = "1.0"
@@ -64,7 +66,7 @@ features = [
 version = "0.12.1"
 
 [dependencies.reqwest]
-version = "0.12.15-zed"
+version = "0.12.24"
 features = [
     "charset",
     "http2",
@@ -75,7 +77,6 @@ features = [
     "stream",
 ]
 default-features = false
-package = "zed-reqwest"
 
 [dependencies.serde]
 workspace = true
@@ -100,6 +101,10 @@ version = "3.20.0"
 [dependencies.tokio]
 version = "1.52.3"
 features = ["rt-multi-thread"]
+
+[dependencies.tokio-util]
+version = "0.7"
+features = ["compat"]
 
 [dependencies.url]
 version = "2.2"

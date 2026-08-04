@@ -405,10 +405,8 @@ impl RenderOnce for SVGRenderer {
                                 }
                             }
 
-                            if started {
-                                if let Ok(path) = builder.build() {
-                                    window.paint_path(path, stroke_color);
-                                }
+                            if started && let Ok(path) = builder.build() {
+                                window.paint_path(path, stroke_color);
                             }
                         }
 

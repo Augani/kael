@@ -60,10 +60,10 @@ impl TagInputState {
         if self.tags.iter().any(|t| t.as_ref() == tag) {
             return false;
         }
-        if let Some(max) = self.max_tags {
-            if self.tags.len() >= max {
-                return false;
-            }
+        if let Some(max) = self.max_tags
+            && self.tags.len() >= max
+        {
+            return false;
         }
         self.tags.push(tag.to_owned().into());
         cx.notify();
@@ -334,10 +334,10 @@ impl RenderOnce for TagInput {
                                             move |value, window, cx| {
                                                 state.update(cx, |state, cx| {
                                                     state.input_value = value.to_string();
-                                                    if state.commit_input(cx) {
-                                                        if let Some(handler) = on_change.as_ref() {
-                                                            handler(&state.tags, window, cx);
-                                                        }
+                                                    if state.commit_input(cx)
+                                                        && let Some(handler) = on_change.as_ref()
+                                                    {
+                                                        handler(&state.tags, window, cx);
                                                     }
                                                 });
                                             }

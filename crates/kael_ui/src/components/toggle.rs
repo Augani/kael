@@ -456,7 +456,7 @@ fn toggle_thumb(
     loading: bool,
     window: &mut Window,
     cx: &mut App,
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
     let toggle_state = window.use_keyed_state(id.clone(), cx, |_, _| checked);
 
     div()

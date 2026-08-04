@@ -161,6 +161,7 @@ impl RenderOnce for ExpandableCard {
             .clone();
         let focus_on_mouse = focus_handle.clone();
         let is_focused = focus_handle.is_focused(window);
+        let tracked_focus_handle = focus_handle.clone().tab_index(0).tab_stop(true);
         let theme = Theme::of(cx);
         let user_style = self.style;
         let state = self.state.read(cx);
@@ -193,7 +194,7 @@ impl RenderOnce for ExpandableCard {
                     .focused(is_focused)
                     .actions(vec![AccessibilityAction::Focus, AccessibilityAction::Click]),
             )
-            .track_focus(&focus_handle.tab_index(0).tab_stop(true))
+            .track_focus(&tracked_focus_handle)
             .bg(theme.tokens.card)
             .border_1()
             .border_color(theme.tokens.border)

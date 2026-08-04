@@ -11,18 +11,20 @@ pub struct MeteorState {
 
 impl MeteorState {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        cx.spawn(async move |this, cx| loop {
-            cx.background_executor()
-                .timer(Duration::from_millis(100))
-                .await;
-            let result = this.update(cx, |state, cx| {
-                if !state.paused && !cx.reduce_motion() {
-                    state.version = state.version.wrapping_add(1);
-                    cx.notify();
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+                let result = this.update(cx, |state, cx| {
+                    if !state.paused && !cx.reduce_motion() {
+                        state.version = state.version.wrapping_add(1);
+                        cx.notify();
+                    }
+                });
+                if result.is_err() {
+                    break;
                 }
-            });
-            if result.is_err() {
-                break;
             }
         })
         .detach();

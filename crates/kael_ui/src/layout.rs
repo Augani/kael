@@ -855,9 +855,9 @@ impl PhysicsScrollState {
         inner.animating = true;
         inner.last_tick = None;
         inner.generation += 1;
-        let gen = inner.generation;
+        let generation = inner.generation;
         drop(inner);
-        drive_physics_frame(self.clone(), handle.clone(), gen, window);
+        drive_physics_frame(self.clone(), handle.clone(), generation, window);
     }
 
     pub fn scroll_to_x_animated(&self, target: f32, handle: &ScrollHandle, window: &Window) {
@@ -878,9 +878,9 @@ impl PhysicsScrollState {
         inner.animating = true;
         inner.last_tick = None;
         inner.generation += 1;
-        let gen = inner.generation;
+        let generation = inner.generation;
         drop(inner);
-        drive_physics_frame(self.clone(), handle.clone(), gen, window);
+        drive_physics_frame(self.clone(), handle.clone(), generation, window);
     }
 
     pub fn handle_scroll_event(
@@ -898,7 +898,7 @@ impl PhysicsScrollState {
         let mut inner = self.inner.borrow_mut();
         inner.scroll_target = None;
         inner.generation += 1;
-        let gen = inner.generation;
+        let generation = inner.generation;
 
         let offset = handle.offset();
         inner.physics_y.set_position(-f32::from(offset.y));
@@ -917,7 +917,7 @@ impl PhysicsScrollState {
         inner.last_tick = None;
         drop(inner);
 
-        drive_physics_frame(self.clone(), handle.clone(), gen, window);
+        drive_physics_frame(self.clone(), handle.clone(), generation, window);
     }
 
     pub fn is_animating(&self) -> bool {
@@ -1236,14 +1236,12 @@ impl IntoElement for ScrollContainer {
                 });
             }
 
-            let wrapper = div()
+            div()
                 .id(ElementId::Name(format!("{}-wrapper", id_to_use).into()))
                 .relative()
                 .size_full()
                 .child(scrollable)
-                .child(scrollbar);
-
-            wrapper
+                .child(scrollbar)
         }
     }
 }

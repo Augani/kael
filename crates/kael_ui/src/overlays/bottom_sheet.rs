@@ -262,6 +262,7 @@ impl RenderOnce for BottomSheet {
             .use_keyed_state(sheet_id.clone(), cx, |_, cx| cx.focus_handle())
             .read(cx)
             .clone();
+        let tracked_focus_handle = focus_handle.clone().tab_index(0).tab_stop(true);
         if !focus_handle.contains_focused(window, cx) {
             window.focus(&focus_handle);
         }
@@ -289,7 +290,7 @@ impl RenderOnce for BottomSheet {
                     div()
                         .id(sheet_id.clone())
                         .accessibility(sheet_accessibility)
-                        .track_focus(&focus_handle.tab_index(0).tab_stop(true))
+                        .track_focus(&tracked_focus_handle)
                         .when(self.close_on_escape && on_close.is_some(), |panel| {
                             let on_close = on_close.clone();
                             panel.on_key_down(move |event: &KeyDownEvent, window, cx| {

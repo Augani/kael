@@ -2,6 +2,8 @@
 
 use std::sync::{Arc, Mutex};
 
+use ksni::blocking::TrayMethods as _;
+
 use crate::platform::TrayMenuItem;
 use crate::{Bounds, Pixels, SharedString, TrayIconEvent, point, px, size};
 
@@ -46,6 +48,10 @@ struct GpuiTray {
 }
 
 impl ksni::Tray for GpuiTray {
+    fn id(&self) -> String {
+        "kael".to_string()
+    }
+
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
         if self.icon_data.is_empty() {
             return vec![];
@@ -150,7 +156,7 @@ fn convert_menu_item(
 }
 
 pub struct LinuxTray {
-    handle: Option<ksni::Handle<GpuiTray>>,
+    handle: Option<ksni::blocking::Handle<GpuiTray>>,
     action_callback: TrayActionCallback,
     click_callback: TrayClickCallback,
     panel_mode: bool,
@@ -180,9 +186,10 @@ impl LinuxTray {
             click_callback: self.click_callback.clone(),
             last_click_position: self.last_click_position.clone(),
         };
-        let service = ksni::TrayService::new(tray);
-        self.handle = Some(service.handle());
-        service.spawn();
+        match tray.assume_sni_available(true).spawn() {
+            Ok(handle) => self.handle = Some(handle),
+            Err(error) => log::error!("failed to start Linux tray service: {error}"),
+        }
     }
 
     pub fn set_icon(&mut self, icon_data: Option<&[u8]>) {
@@ -255,7 +262,7 @@ impl LinuxTray {
 
     pub fn shutdown(&mut self) {
         if let Some(handle) = self.handle.take() {
-            handle.shutdown();
+            handle.shutdown().wait();
         }
     }
 }

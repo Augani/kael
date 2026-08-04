@@ -208,7 +208,7 @@ where
     F: Fn(&T, &T) -> Ordering,
 {
     if limit == 0 {
-        items.truncate(0);
+        items.clear();
     }
     if items.len() <= limit {
         items.sort_by(compare);
@@ -229,11 +229,11 @@ where
 ///
 /// This function checks if the current process is running with root privileges
 /// and terminates the program with an error message unless explicitly allowed via the
-/// `ZED_ALLOW_ROOT` environment variable.
+/// `KAEL_ALLOW_ROOT` environment variable.
 #[cfg(unix)]
 pub fn prevent_root_execution() {
     let is_root = nix::unistd::geteuid().is_root();
-    let allow_root = std::env::var("ZED_ALLOW_ROOT").is_ok_and(|val| val == "true");
+    let allow_root = std::env::var("KAEL_ALLOW_ROOT").is_ok_and(|val| val == "true");
 
     if is_root && !allow_root {
         eprintln!(
@@ -241,7 +241,7 @@ pub fn prevent_root_execution() {
 Error: Running Kael as root or via sudo is unsupported.
        Doing so (even once) may subtly break things for all subsequent non-root usage of Kael.
        It is untested and not recommended, don't complain when things break.
-       If you wish to proceed anyways, set `ZED_ALLOW_ROOT=true` in your environment."
+       If you wish to proceed anyways, set `KAEL_ALLOW_ROOT=true` in your environment."
         );
         std::process::exit(1);
     }
@@ -467,14 +467,14 @@ pub fn merge_non_null_json_value_into(source: serde_json::Value, target: &mut se
 }
 
 pub fn measure<R>(label: &str, f: impl FnOnce() -> R) -> R {
-    static ZED_MEASUREMENTS: OnceLock<bool> = OnceLock::new();
-    let zed_measurements = ZED_MEASUREMENTS.get_or_init(|| {
-        env::var("ZED_MEASUREMENTS")
+    static KAEL_MEASUREMENTS: OnceLock<bool> = OnceLock::new();
+    let kael_measurements = KAEL_MEASUREMENTS.get_or_init(|| {
+        env::var("KAEL_MEASUREMENTS")
             .map(|measurements| measurements == "1" || measurements == "true")
             .unwrap_or(false)
     });
 
-    if *zed_measurements {
+    if *kael_measurements {
         let start = Instant::now();
         let result = f();
         let elapsed = start.elapsed();

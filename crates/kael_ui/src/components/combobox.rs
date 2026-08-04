@@ -314,18 +314,18 @@ impl<T: Clone + PartialEq + 'static> Combobox<T> {
     /// Select an item
     fn select_item(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let filtered = self.filtered_items(cx);
-        if let Some(&(original_idx, _)) = filtered.get(index) {
-            if let Some(item) = self.items.get(original_idx).cloned() {
-                self.state.update(cx, |state, cx| {
-                    state.select_item(item.clone(), self.multi_select);
-                    cx.notify(); // Trigger re-render
-                });
+        if let Some(&(original_idx, _)) = filtered.get(index)
+            && let Some(item) = self.items.get(original_idx).cloned()
+        {
+            self.state.update(cx, |state, cx| {
+                state.select_item(item.clone(), self.multi_select);
+                cx.notify(); // Trigger re-render
+            });
 
-                cx.emit(ComboboxEvent::Change);
+            cx.emit(ComboboxEvent::Change);
 
-                if let Some(ref callback) = self.on_select {
-                    (callback)(&item, window, cx);
-                }
+            if let Some(ref callback) = self.on_select {
+                (callback)(&item, window, cx);
             }
         }
     }

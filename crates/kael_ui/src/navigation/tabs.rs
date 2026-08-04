@@ -200,10 +200,10 @@ impl<T: Clone + PartialEq + 'static> Tabs<T> {
         self.tabs = tabs;
         if self.tabs.is_empty() {
             self.selected_index = None;
-        } else if let Some(index) = self.selected_index {
-            if index >= self.tabs.len() {
-                self.selected_index = Some(self.tabs.len().saturating_sub(1));
-            }
+        } else if let Some(index) = self.selected_index
+            && index >= self.tabs.len()
+        {
+            self.selected_index = Some(self.tabs.len().saturating_sub(1));
         }
         self
     }
@@ -294,7 +294,7 @@ impl<T: Clone + PartialEq + 'static> Tabs<T> {
         theme: &crate::theme::Theme,
         on_change: Option<Arc<dyn Fn(&usize, &mut Window, &mut App) + Send + Sync + 'static>>,
         on_close: Option<Arc<dyn Fn(&T, &mut Window, &mut App) + Send + Sync + 'static>>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<T> {
         let can_select = !tab.disabled && on_change.is_some();
         let mut state = AccessibilityState::NONE;
         if is_active {

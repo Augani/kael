@@ -93,13 +93,13 @@ impl WorkerHost {
         #[cfg(not(target_os = "windows"))]
         {
             info = info.env(
-                "GPUI_WORKER_SOCKET",
+                "KAEL_WORKER_SOCKET",
                 socket_path.to_string_lossy().to_string(),
             );
         }
         #[cfg(target_os = "windows")]
         {
-            info = info.env("GPUI_WORKER_PIPE", format!("\\\\.\\pipe\\{}", pipe_name));
+            info = info.env("KAEL_WORKER_PIPE", format!("\\\\.\\pipe\\{}", pipe_name));
         }
 
         #[cfg(not(target_os = "windows"))]

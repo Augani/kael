@@ -263,8 +263,8 @@ fn rounded_div(value: i64, divisor: i64) -> i64 {
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        format_timestamp, relative_time, TimestampFormat, TimestampValue, DAY,
-        DEFAULT_AUTO_THRESHOLD,
+        DAY, DEFAULT_AUTO_THRESHOLD, TimestampFormat, TimestampValue, format_timestamp,
+        relative_time,
     };
 
     #[test]
@@ -276,14 +276,16 @@ mod tests {
     #[test]
     fn extreme_differences_do_not_overflow() {
         assert!(!relative_time(i64::MIN).is_empty());
-        assert!(!format_timestamp(
-            &TimestampValue::UnixSeconds(i64::MIN),
-            TimestampFormat::Auto,
-            DEFAULT_AUTO_THRESHOLD,
-            false,
-            i64::MAX,
-        )
-        .is_empty());
+        assert!(
+            !format_timestamp(
+                &TimestampValue::UnixSeconds(i64::MIN),
+                TimestampFormat::Auto,
+                DEFAULT_AUTO_THRESHOLD,
+                false,
+                i64::MAX,
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -354,19 +356,11 @@ fn pad2(value: i64) -> String {
 fn hour12(hour: i64) -> i64 {
     let hour = hour % 24;
     let h = hour % 12;
-    if h == 0 {
-        12
-    } else {
-        h
-    }
+    if h == 0 { 12 } else { h }
 }
 
 fn am_pm(hour: i64) -> &'static str {
-    if hour < 12 {
-        " AM"
-    } else {
-        " PM"
-    }
+    if hour < 12 { " AM" } else { " PM" }
 }
 
 fn month_name(month: u32) -> &'static str {

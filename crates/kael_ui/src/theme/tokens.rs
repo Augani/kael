@@ -1,5 +1,5 @@
 use kael::*;
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use std::time::Duration;
 
 use crate::fonts::{UI_FONT_FAMILY, UI_MONO_FONT_FAMILY};
@@ -1564,6 +1564,7 @@ impl ThemeTokens {
     /// (~10% navy), the 4 / 8 / 12 / 16 radius ladder (element = 8px), soft
     /// elevation shadows, and snappy motion.
     pub fn astryx() -> Self {
+        let base = Self::light();
         let sh = astryx_shadows(0.10, 0.10);
         Self {
             background: rgb(0xF1F4F7).into(),
@@ -1605,12 +1606,13 @@ impl ThemeTokens {
             transition_base: Duration::from_millis(220),
             transition_slow: Duration::from_millis(320),
 
-            ..Self::light()
+            ..base
         }
     }
 
     /// Astryx — dark mode (vivid `#2694FE` accent on near-black surfaces).
     pub fn astryx_dark() -> Self {
+        let base = Self::dark();
         let sh = astryx_shadows(0.22, 0.30);
         Self {
             background: rgb(0x111112).into(),
@@ -1652,7 +1654,7 @@ impl ThemeTokens {
             transition_base: Duration::from_millis(220),
             transition_slow: Duration::from_millis(320),
 
-            ..Self::dark()
+            ..base
         }
     }
 
@@ -1660,6 +1662,7 @@ impl ThemeTokens {
     /// component gallery: a near-black accent (`#262626`) on a pure neutral
     /// ramp, deep muted status colors, hairline borders and soft elevation.
     pub fn astryx_neutral() -> Self {
+        let base = Self::light();
         let sh = astryx_shadows(0.10, 0.10);
         Self {
             background: rgb(0xF1F1F1).into(),
@@ -1701,12 +1704,13 @@ impl ThemeTokens {
             transition_base: Duration::from_millis(200),
             transition_slow: Duration::from_millis(300),
 
-            ..Self::light()
+            ..base
         }
     }
 
     /// Astryx Neutral — grayscale spine, dark mode.
     pub fn astryx_neutral_dark() -> Self {
+        let base = Self::dark();
         let sh = astryx_shadows(0.30, 0.40);
         Self {
             background: rgb(0x1B1B1B).into(),
@@ -1748,7 +1752,7 @@ impl ThemeTokens {
             transition_base: Duration::from_millis(200),
             transition_slow: Duration::from_millis(300),
 
-            ..Self::dark()
+            ..base
         }
     }
 }

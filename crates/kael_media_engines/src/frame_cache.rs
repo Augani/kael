@@ -152,14 +152,14 @@ impl FrameCache {
             .iter()
             .min_by_key(|(_, entry)| entry.last_used)
             .map(|(key, _)| *key);
-        if let Some(key) = lru {
-            if let Some(entry) = self.entries.remove(&key) {
-                self.used_bytes = self
-                    .used_bytes
-                    .saturating_sub(u64::try_from(entry.data.len()).unwrap_or(u64::MAX));
-                self.stats.evictions = self.stats.evictions.saturating_add(1);
-                return true;
-            }
+        if let Some(key) = lru
+            && let Some(entry) = self.entries.remove(&key)
+        {
+            self.used_bytes = self
+                .used_bytes
+                .saturating_sub(u64::try_from(entry.data.len()).unwrap_or(u64::MAX));
+            self.stats.evictions = self.stats.evictions.saturating_add(1);
+            return true;
         }
         false
     }

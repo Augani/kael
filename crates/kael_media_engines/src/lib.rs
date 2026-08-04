@@ -4,8 +4,8 @@
 //!
 //! This crate is a **leaf domain stack**: it builds media-application capability
 //! (timelines, compositing, audio mixing, export) *on top of* the general-purpose
-//! framework, and nothing in the core `kael` crate depends on it. See the
-//! project's `VISION.md` for the layering rule that keeps it that way.
+//! framework, and nothing in the core `kael` crate depends on it. This keeps
+//! media-specific engines out of the general framework dependency graph.
 
 pub mod audio_mix;
 pub mod automation;

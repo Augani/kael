@@ -11,6 +11,7 @@ categories = ["os", "authentication"]
 authors.workspace = true
 repository.workspace = true
 license.workspace = true
+readme = "README.md"
 
 [lib]
 name = "kael_secrets"

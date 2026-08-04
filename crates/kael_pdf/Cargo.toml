@@ -27,7 +27,8 @@ default-features = false
 features = ["png"]
 
 [dependencies.lopdf]
-version = "0.35"
+version = "0.44"
+default-features = false
 
 [dependencies.parking_lot]
 version = "0.12.1"

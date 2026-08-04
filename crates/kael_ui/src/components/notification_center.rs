@@ -142,11 +142,11 @@ impl NotificationCenterState {
     }
 
     pub fn mark_read(&mut self, id: &ElementId, cx: &mut Context<Self>) {
-        if let Some(notification) = self.notifications.iter_mut().find(|n| &n.id == id) {
-            if !notification.read {
-                notification.read = true;
-                cx.notify();
-            }
+        if let Some(notification) = self.notifications.iter_mut().find(|n| &n.id == id)
+            && !notification.read
+        {
+            notification.read = true;
+            cx.notify();
         }
     }
 
@@ -790,7 +790,7 @@ impl RenderOnce for NotificationBell {
 mod tests {
     use super::{NotificationCenter, NotificationCenterState, NotificationVariant};
     use crate::theme::Theme;
-    use kael::{black, AppContext as _, TestAppContext};
+    use kael::{AppContext as _, TestAppContext, black};
 
     #[test]
     fn success_and_warning_route_through_semantic_tokens() {

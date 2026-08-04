@@ -3220,7 +3220,6 @@ impl MacWindow {
                 toggle_tab_bar_callback: None,
                 activated_least_once: false,
                 accessibility_provider: super::accessibility::MacAccessibilityProvider::new(
-                    "Kael",
                     native_view as *mut c_void,
                 ),
                 webviews: HashMap::default(),

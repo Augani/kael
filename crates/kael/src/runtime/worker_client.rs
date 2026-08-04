@@ -19,13 +19,13 @@ impl WorkerClient {
         #[cfg(not(target_os = "windows"))]
         {
             let socket_path =
-                std::env::var("GPUI_WORKER_SOCKET").context("GPUI_WORKER_SOCKET not set")?;
+                std::env::var("KAEL_WORKER_SOCKET").context("KAEL_WORKER_SOCKET not set")?;
             Self::connect(&socket_path)
         }
         #[cfg(target_os = "windows")]
         {
             let pipe_name =
-                std::env::var("GPUI_WORKER_PIPE").context("GPUI_WORKER_PIPE not set")?;
+                std::env::var("KAEL_WORKER_PIPE").context("KAEL_WORKER_PIPE not set")?;
             Self::connect(&pipe_name)
         }
     }

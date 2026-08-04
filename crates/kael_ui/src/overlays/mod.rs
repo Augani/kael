@@ -13,7 +13,7 @@ pub mod popover_menu;
 pub mod sheet;
 pub mod toast;
 
-pub use alert_dialog::{init_alert_dialog, AlertDialog};
+pub use alert_dialog::{AlertDialog, init_alert_dialog};
 pub use bottom_sheet::{BottomSheet, BottomSheetSize};
 pub use command_palette::{
     CloseCommand, Command, CommandPalette, CommandPaletteEmpty, CommandPaletteFooter,
@@ -25,11 +25,11 @@ pub use context_menu::{
     ContextMenuOption, ContextMenuProps, ContextMenuSection,
 };
 pub use dialog::{
-    init_dialog, Dialog, DialogHeader, DialogPosition, DialogPurpose, DialogSize, DialogVariant,
+    Dialog, DialogHeader, DialogPosition, DialogPurpose, DialogSize, DialogVariant, init_dialog,
 };
 pub use hover_card::{HoverCard, HoverCardAlignment, HoverCardPosition};
 pub use layer::{Layer, LayerPlacement};
 pub use overlay::{Overlay, OverlayTone};
 pub use popover::{Popover, PopoverContent};
 pub use popover_menu::{PopoverMenu, PopoverMenuItem};
-pub use sheet::{init_sheet, Sheet, SheetSide, SheetSize};
+pub use sheet::{Sheet, SheetSide, SheetSize, init_sheet};

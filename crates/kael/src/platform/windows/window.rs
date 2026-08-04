@@ -28,10 +28,12 @@ use windows::{
 };
 
 use crate::platform::tab_manager::{TabManagerState, WindowTabManager};
-use crate::webview::{PlatformWebView, PlatformWebViewCommand};
 use crate::*;
 
+#[cfg(feature = "webview")]
 use super::webview::WindowsWebViewHost;
+#[cfg(feature = "webview")]
+use crate::webview::{PlatformWebView, PlatformWebViewCommand};
 
 const MAX_NATIVE_TEXT_BYTES: usize = 16 * 1024 * 1024;
 
@@ -77,6 +79,7 @@ pub struct WindowsWindowState {
     fullscreen: Option<StyleAndBounds>,
     initial_placement: Option<WindowOpenStatus>,
     hwnd: HWND,
+    #[cfg(feature = "webview")]
     pub(crate) webviews: HashMap<SharedString, WindowsWebViewHost>,
 }
 
@@ -91,7 +94,7 @@ pub(crate) struct WindowsWindowInner {
     pub(crate) executor: ForegroundExecutor,
     pub(crate) windows_version: WindowsVersion,
     pub(crate) validation_number: usize,
-    pub(crate) main_receiver: flume::Receiver<Runnable>,
+    pub(crate) main_receiver: crossbeam_channel::Receiver<Runnable>,
     pub(crate) platform_window_handle: HWND,
     pub(crate) tab_manager: WindowTabManager,
     pub(crate) uia_provider: windows::core::ComObject<GpuiUiaProvider>,
@@ -168,6 +171,7 @@ impl WindowsWindowState {
             fullscreen,
             initial_placement,
             hwnd,
+            #[cfg(feature = "webview")]
             webviews: HashMap::default(),
         })
     }
@@ -372,7 +376,7 @@ struct WindowCreateContext {
     windows_version: WindowsVersion,
     drop_target_helper: IDropTargetHelper,
     validation_number: usize,
-    main_receiver: flume::Receiver<Runnable>,
+    main_receiver: crossbeam_channel::Receiver<Runnable>,
     platform_window_handle: HWND,
     appearance: WindowAppearance,
     disable_direct_composition: bool,
@@ -546,6 +550,7 @@ impl Drop for WindowsWindow {
     fn drop(&mut self) {
         // Clean up tab manager tracking for this window.
         self.0.tab_manager.remove_window();
+        #[cfg(feature = "webview")]
         self.0.state.borrow_mut().webviews.clear();
 
         // clone this `Rc` to prevent early release of the pointer
@@ -962,10 +967,12 @@ impl PlatformWindow for WindowsWindow {
         self.0.state.borrow_mut().callbacks.appearance_changed = Some(callback);
     }
 
+    #[cfg(feature = "webview")]
     fn sync_webviews(&mut self, webviews: &[PlatformWebView]) {
         super::webview::sync_webviews(&self.0, webviews);
     }
 
+    #[cfg(feature = "webview")]
     fn dispatch_webview_command(&mut self, command: PlatformWebViewCommand) -> anyhow::Result<()> {
         super::webview::dispatch_webview_command(&self.0, command)
     }

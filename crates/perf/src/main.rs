@@ -594,10 +594,10 @@ mod tests {
     fn metadata_parser_accepts_a_complete_version_zero_record() {
         let metadata = parse_mdata_stdout(
             "ignored harness output\n\
-             ZED_MDATA_version 0\n\
-             ZED_MDATA_iter_count 12\n\
-             ZED_MDATA_importance critical\n\
-             ZED_MDATA_weight 75\n",
+             KAEL_MDATA_version 0\n\
+             KAEL_MDATA_iter_count 12\n\
+             KAEL_MDATA_importance critical\n\
+             KAEL_MDATA_weight 75\n",
         )
         .unwrap();
 
@@ -610,10 +610,10 @@ mod tests {
     #[test]
     fn metadata_parser_rejects_ambiguous_or_unknown_fields() {
         for metadata in [
-            "ZED_MDATA_version 0\nZED_MDATA_version 0\n",
-            "ZED_MDATA_version 0 trailing\n",
-            "ZED_MDATA_version 0\nZED_MDATA_unknown 1\n",
-            "ZED_MDATA_version 0\nZED_MDATA_weight 0\n",
+            "KAEL_MDATA_version 0\nKAEL_MDATA_version 0\n",
+            "KAEL_MDATA_version 0 trailing\n",
+            "KAEL_MDATA_version 0\nKAEL_MDATA_unknown 1\n",
+            "KAEL_MDATA_version 0\nKAEL_MDATA_weight 0\n",
         ] {
             assert!(matches!(
                 parse_mdata_stdout(metadata),

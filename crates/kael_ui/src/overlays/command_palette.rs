@@ -11,7 +11,7 @@ use crate::{
     },
     theme::Theme,
 };
-use kael::{prelude::FluentBuilder as _, InteractiveElement, *};
+use kael::{InteractiveElement, prelude::FluentBuilder as _, *};
 use std::{panic::Location, rc::Rc};
 
 actions!(
@@ -536,15 +536,15 @@ impl CommandPaletteState {
     }
 
     pub fn execute(&mut self, index: usize, window: &mut Window, cx: &mut App) -> bool {
-        if let Some(command) = self.filtered_commands.get(index) {
-            if let Some(handler) = &command.on_select {
-                handler(window, cx);
-                self.recent_commands.push(command.id.clone());
-                if self.recent_commands.len() > 10 {
-                    self.recent_commands.remove(0);
-                }
-                return true;
+        if let Some(command) = self.filtered_commands.get(index)
+            && let Some(handler) = &command.on_select
+        {
+            handler(window, cx);
+            self.recent_commands.push(command.id.clone());
+            if self.recent_commands.len() > 10 {
+                self.recent_commands.remove(0);
             }
+            return true;
         }
         false
     }
@@ -896,7 +896,7 @@ fn render_command_item(
     selected: bool,
     overlay_hover: Hsla,
     cx: &App,
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
     let theme = Theme::of(cx);
     render_command_item_with_theme(command, selected, overlay_hover, theme)
 }
@@ -906,7 +906,7 @@ fn render_command_item_with_theme(
     selected: bool,
     overlay_hover: Hsla,
     theme: &Theme,
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
     let enabled = command.on_select.is_some();
     let item_id = ElementId::Name(format!("command-palette-item:{}", command.id).into());
     let mut state = AccessibilityState::NONE;

@@ -330,12 +330,10 @@ impl ScreenCaptureSource for MacScreenCaptureSource {
                                 Ok(Box::new(stream) as Box<dyn ScreenCaptureStream>)
                             } else {
                                 let message: *mut AnyObject =
-                                    unsafe { msg_send![error, localizedDescription] };
-                                let msg = unsafe { ns_string_to_str(message) };
-                                unsafe {
-                                    let _: () = msg_send![stream_owned, release];
-                                    release_stream_output(output_owned);
-                                }
+                                    msg_send![error, localizedDescription];
+                                let msg = ns_string_to_str(message);
+                                let _: () = msg_send![stream_owned, release];
+                                release_stream_output(output_owned);
                                 Err(anyhow!("failed to start screen capture stream {msg}"))
                             };
                             if let Some(tx) = tx.borrow_mut().take() {
@@ -383,10 +381,11 @@ impl Drop for MacScreenCaptureStream {
 
             let handler = RcBlock::new(move |error: *mut AnyObject| {
                 if !error.is_null() {
-                    let message: *mut AnyObject = unsafe { msg_send![error, localizedDescription] };
-                    log::error!("failed to stop screen capture stream {}", unsafe {
+                    let message: *mut AnyObject = msg_send![error, localizedDescription];
+                    log::error!(
+                        "failed to stop screen capture stream {}",
                         ns_string_to_str(message)
-                    });
+                    );
                 }
             });
             let _: () = msg_send![self.sc_stream, stopCaptureWithCompletionHandler: &*handler];
@@ -460,21 +459,17 @@ pub(crate) fn get_sources() -> oneshot::Receiver<Result<Vec<Rc<dyn ScreenCapture
                         };
 
                         let result = if error.is_null() && !shareable_content.is_null() {
-                            let displays: *mut AnyObject =
-                                unsafe { msg_send![shareable_content, displays] };
-                            let count: usize = unsafe { msg_send![displays, count] };
+                            let displays: *mut AnyObject = msg_send![shareable_content, displays];
+                            let count: usize = msg_send![displays, count];
                             let mut result = Vec::new();
                             for i in 0..count.min(256) {
-                                let display: *mut AnyObject =
-                                    unsafe { msg_send![displays, objectAtIndex: i] };
+                                let display: *mut AnyObject = msg_send![displays, objectAtIndex: i];
                                 if display.is_null() {
                                     continue;
                                 }
-                                let id: CGDirectDisplayID =
-                                    unsafe { msg_send![display, displayID] };
+                                let id: CGDirectDisplayID = msg_send![display, displayID];
                                 let meta = screen_id_to_label.get(&id).cloned();
-                                let retained: *mut AnyObject =
-                                    unsafe { msg_send![display, retain] };
+                                let retained: *mut AnyObject = msg_send![display, retain];
                                 if retained.is_null() {
                                     continue;
                                 }
@@ -486,11 +481,8 @@ pub(crate) fn get_sources() -> oneshot::Receiver<Result<Vec<Rc<dyn ScreenCapture
                             }
                             Ok(result)
                         } else {
-                            let msg: *mut AnyObject =
-                                unsafe { msg_send![error, localizedDescription] };
-                            Err(anyhow!("Screen share failed: {}", unsafe {
-                                ns_string_to_str(msg)
-                            }))
+                            let msg: *mut AnyObject = msg_send![error, localizedDescription];
+                            Err(anyhow!("Screen share failed: {}", ns_string_to_str(msg)))
                         };
                         tx.send(result).ok();
                     },

@@ -1,8 +1,8 @@
 //! QR code generator rendering as colored quads.
 
 use kael::{prelude::FluentBuilder as _, *};
-use qrcode::types::EcLevel;
 use qrcode::QrCode;
+use qrcode::types::EcLevel;
 
 use crate::theme::Theme;
 
@@ -207,7 +207,7 @@ impl RenderOnce for QRCodeComponent {
 
 #[cfg(test)]
 mod tests {
-    use super::{generate_modules, module_layout, QRCodeComponent};
+    use super::{QRCodeComponent, generate_modules, module_layout};
     use kael::px;
     use qrcode::types::EcLevel;
 

@@ -149,7 +149,7 @@ impl RenderOnce for GradientText {
 #[cfg(test)]
 mod tests {
     use super::sample_stops;
-    use kael::{hsla, Hsla};
+    use kael::{Hsla, hsla};
 
     fn close(a: Hsla, b: Hsla) -> bool {
         (a.h - b.h).abs() < 1e-4

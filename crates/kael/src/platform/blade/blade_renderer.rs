@@ -555,7 +555,7 @@ impl BladeRenderer {
             #[cfg(target_os = "linux")]
             if self.gpu.device_information().driver_name == "radv" {
                 log::error!(
-                    "there's a known bug with amdgpu/radv, try setting ZED_PATH_SAMPLE_COUNT=0 as a workaround"
+                    "there's a known bug with amdgpu/radv, try setting KAEL_PATH_SAMPLE_COUNT=0 as a workaround"
                 );
                 log::error!(
                     "if that helps you're running into a known amdgpu/radv rendering issue"
@@ -1666,15 +1666,15 @@ fn create_msaa_texture_if_needed(
 
 /// A set of parameters that can be set using a corresponding environment variable.
 struct RenderingParameters {
-    // Env var: ZED_PATH_SAMPLE_COUNT
+    // Env var: KAEL_PATH_SAMPLE_COUNT
     // workaround for known amdgpu/radv path rendering issue
     path_sample_count: u32,
 
-    // Env var: ZED_FONTS_GAMMA
+    // Env var: KAEL_FONTS_GAMMA
     // Allowed range [1.0, 2.2], other values are clipped
     // Default: 1.8
     gamma_ratios: [f32; 4],
-    // Env var: ZED_FONTS_GRAYSCALE_ENHANCED_CONTRAST
+    // Env var: KAEL_FONTS_GRAYSCALE_ENHANCED_CONTRAST
     // Allowed range: [0.0, ..), other values are clipped
     // Default: 1.0
     grayscale_enhanced_contrast: f32,
@@ -1684,7 +1684,7 @@ impl RenderingParameters {
     fn from_env(context: &BladeContext) -> Self {
         use std::env;
 
-        let path_sample_count = env::var("ZED_PATH_SAMPLE_COUNT")
+        let path_sample_count = env::var("KAEL_PATH_SAMPLE_COUNT")
             .ok()
             .and_then(|v| v.parse().ok())
             .or_else(|| {
@@ -1693,13 +1693,13 @@ impl RenderingParameters {
                     .find(|&n| (context.gpu.capabilities().sample_count_mask & n) != 0)
             })
             .unwrap_or(1);
-        let gamma = env::var("ZED_FONTS_GAMMA")
+        let gamma = env::var("KAEL_FONTS_GAMMA")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(1.8_f32)
             .clamp(1.0, 2.2);
         let gamma_ratios = Self::get_gamma_ratios(gamma);
-        let grayscale_enhanced_contrast = env::var("ZED_FONTS_GRAYSCALE_ENHANCED_CONTRAST")
+        let grayscale_enhanced_contrast = env::var("KAEL_FONTS_GRAYSCALE_ENHANCED_CONTRAST")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(1.0_f32)

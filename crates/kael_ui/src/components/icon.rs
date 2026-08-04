@@ -435,7 +435,7 @@ pub fn renderIconSlot(
 
 #[cfg(test)]
 mod tests {
-    use super::{default_icons, IconSource};
+    use super::{IconSource, default_icons};
 
     #[test]
     fn semantic_aliases_resolve_to_bundled_icon_names() {

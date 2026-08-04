@@ -285,7 +285,7 @@ impl RenderOnce for Chat {
     }
 }
 
-fn render_chat_message(message: ChatMessage, theme: &Theme) -> impl IntoElement {
+fn render_chat_message(message: ChatMessage, theme: &Theme) -> impl IntoElement + use<> {
     let is_user = message.role == ChatMessageRole::User;
     let is_system = message.role == ChatMessageRole::System;
     let accent = if is_user {

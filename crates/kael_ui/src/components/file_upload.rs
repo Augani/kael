@@ -472,18 +472,18 @@ fn validate_upload_path(
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_else(|| "Unknown file".to_string());
 
-    if let Some(filter) = file_types {
-        if !filter.matches(&path) {
-            let accepted = if filter.extensions.is_empty() {
-                "all files".to_string()
-            } else {
-                filter.extensions.join(", ")
-            };
-            return Err(FileUploadError {
-                file_name,
-                message: format!("File type not allowed. Accepted: {accepted}"),
-            });
-        }
+    if let Some(filter) = file_types
+        && !filter.matches(&path)
+    {
+        let accepted = if filter.extensions.is_empty() {
+            "all files".to_string()
+        } else {
+            filter.extensions.join(", ")
+        };
+        return Err(FileUploadError {
+            file_name,
+            message: format!("File type not allowed. Accepted: {accepted}"),
+        });
     }
 
     let metadata = std::fs::metadata(&path).map_err(|_| FileUploadError {
@@ -496,16 +496,16 @@ fn validate_upload_path(
             message: "Folders are not supported".to_string(),
         });
     }
-    if let Some(max_size) = max_file_size {
-        if metadata.len() > max_size {
-            return Err(FileUploadError {
-                file_name,
-                message: format!(
-                    "File exceeds maximum size of {:.1} MB",
-                    max_size as f64 / (1024.0 * 1024.0)
-                ),
-            });
-        }
+    if let Some(max_size) = max_file_size
+        && metadata.len() > max_size
+    {
+        return Err(FileUploadError {
+            file_name,
+            message: format!(
+                "File exceeds maximum size of {:.1} MB",
+                max_size as f64 / (1024.0 * 1024.0)
+            ),
+        });
     }
 
     Ok(SelectedFile::new(path))
@@ -567,10 +567,8 @@ fn accept_upload_paths(
             handler(error, window, cx);
         }
     }
-    if changed {
-        if let Some(handler) = on_files_changed {
-            handler(&files, window, cx);
-        }
+    if changed && let Some(handler) = on_files_changed {
+        handler(&files, window, cx);
     }
 }
 
@@ -1132,7 +1130,7 @@ impl RenderOnce for FileUpload {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_upload_path, FileTypeFilter};
+    use super::{FileTypeFilter, validate_upload_path};
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 

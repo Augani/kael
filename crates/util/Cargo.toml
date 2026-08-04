@@ -53,7 +53,7 @@ version = "1.0"
 workspace = true
 
 [dependencies.futures-lite]
-version = "1.13"
+version = "2.6"
 
 [dependencies.git2]
 version = "0.21"

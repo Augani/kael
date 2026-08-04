@@ -957,7 +957,7 @@ pub fn init_dialog(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kael::{div, px, TestAppContext};
+    use kael::{TestAppContext, div, px};
 
     #[::core::prelude::v1::test]
     fn dialog_position_and_header_summary_is_content_safe() {

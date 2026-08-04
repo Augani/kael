@@ -2508,6 +2508,7 @@ pub(crate) struct WindowInvalidator {
 }
 
 #[derive(Default)]
+#[cfg(any(feature = "inspector", debug_assertions))]
 struct DrawRootsTiming {
     layout_us: u64,
     view_render_us: u64,
@@ -2518,6 +2519,10 @@ struct DrawRootsTiming {
     layout_reused: bool,
     paint_us: u64,
 }
+
+#[derive(Default)]
+#[cfg(not(any(feature = "inspector", debug_assertions)))]
+struct DrawRootsTiming;
 
 impl WindowInvalidator {
     pub fn new() -> Self {
@@ -5077,7 +5082,10 @@ impl Window {
         if let Some(input_handler) = self.platform_window.take_input_handler() {
             self.rendered_frame.input_handlers.push(Some(input_handler));
         }
+        #[cfg(any(feature = "inspector", debug_assertions))]
         let draw_roots_timing = self.draw_roots(cx);
+        #[cfg(not(any(feature = "inspector", debug_assertions)))]
+        self.draw_roots(cx);
         self.dirty_views.clear();
         self.next_frame.window_active = self.active.get();
 
@@ -5244,10 +5252,12 @@ impl Window {
     }
 
     fn draw_roots(&mut self, cx: &mut App) -> DrawRootsTiming {
+        #[cfg(any(feature = "inspector", debug_assertions))]
         fn elapsed_us(start: Instant) -> u64 {
             start.elapsed().as_micros().min(u64::MAX as u128) as u64
         }
 
+        #[cfg(any(feature = "inspector", debug_assertions))]
         let layout_started_at = Instant::now();
         self.invalidator.set_phase(DrawPhase::Prepaint);
         self.tooltip_bounds.take();
@@ -5272,7 +5282,10 @@ impl Window {
 
         // Layout all root elements.
         let Some(root) = self.root.as_ref().cloned() else {
+            #[cfg(any(feature = "inspector", debug_assertions))]
             return DrawRootsTiming::default();
+            #[cfg(not(any(feature = "inspector", debug_assertions)))]
+            return DrawRootsTiming;
         };
         let mut root_element = root.into_any();
         root_element.prepaint_as_root(Point::default(), root_size.into(), self, cx);
@@ -5304,9 +5317,11 @@ impl Window {
         }
 
         self.mouse_hit_test = self.next_frame.hit_test(self.mouse_position);
+        #[cfg(any(feature = "inspector", debug_assertions))]
         let layout_us = elapsed_us(layout_started_at);
 
         // Now actually paint the elements.
+        #[cfg(any(feature = "inspector", debug_assertions))]
         let paint_started_at = Instant::now();
         self.invalidator.set_phase(DrawPhase::Paint);
         root_element.paint(self, cx);
@@ -5327,15 +5342,22 @@ impl Window {
         #[cfg(any(feature = "inspector", debug_assertions))]
         self.paint_inspector_hitbox(cx);
 
-        DrawRootsTiming {
-            layout_us,
-            view_render_us: self.frame_view_render_us,
-            taffy_compute_us: self.frame_taffy_compute_us,
-            layout_nodes: self.frame_layout_nodes,
-            layout_measure_count: self.frame_layout_measure_count,
-            layout_measure_us: self.frame_layout_measure_us,
-            layout_reused: self.layout_engine_mut().is_reusing_previous_layout(),
-            paint_us: elapsed_us(paint_started_at),
+        #[cfg(any(feature = "inspector", debug_assertions))]
+        {
+            DrawRootsTiming {
+                layout_us,
+                view_render_us: self.frame_view_render_us,
+                taffy_compute_us: self.frame_taffy_compute_us,
+                layout_nodes: self.frame_layout_nodes,
+                layout_measure_count: self.frame_layout_measure_count,
+                layout_measure_us: self.frame_layout_measure_us,
+                layout_reused: self.layout_engine_mut().is_reusing_previous_layout(),
+                paint_us: elapsed_us(paint_started_at),
+            }
+        }
+        #[cfg(not(any(feature = "inspector", debug_assertions)))]
+        {
+            DrawRootsTiming
         }
     }
 

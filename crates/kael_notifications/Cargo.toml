@@ -21,9 +21,6 @@ doctest = false
 [dependencies.anyhow]
 workspace = true
 
-[dependencies.notify-rust]
-version = "4.12.0"
-
 [dependencies.parking_lot]
 version = "0.12.1"
 
@@ -33,6 +30,22 @@ features = ["derive"]
 
 [dev-dependencies.futures]
 workspace = true
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.zbus]
+version = "5.18"
+default-features = false
+features = ["async-io", "blocking-api"]
+
+[target.'cfg(target_os = "macos")'.dependencies.mac-notification-sys]
+version = "0.6.15"
+
+[target.'cfg(target_os = "windows")'.dependencies.windows]
+workspace = true
+features = [
+    "Data_Xml_Dom",
+    "Foundation",
+    "UI_Notifications",
+]
 
 [lints]
 workspace = true

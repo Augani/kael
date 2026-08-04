@@ -255,15 +255,15 @@ impl CountdownState {
         let now = SystemTime::now();
 
         if self.count_up {
-            if let Some(start) = self.start_time {
-                if let Ok(elapsed) = now.duration_since(start) {
-                    return TimeUnits::from_duration(elapsed);
-                }
+            if let Some(start) = self.start_time
+                && let Ok(elapsed) = now.duration_since(start)
+            {
+                return TimeUnits::from_duration(elapsed);
             }
-        } else if let Some(target) = self.target_time {
-            if let Ok(remaining) = target.duration_since(now) {
-                return TimeUnits::from_duration(remaining);
-            }
+        } else if let Some(target) = self.target_time
+            && let Ok(remaining) = target.duration_since(now)
+        {
+            return TimeUnits::from_duration(remaining);
         }
 
         TimeUnits::zero()
@@ -284,15 +284,13 @@ impl CountdownState {
 
             _ = this.update(cx, |state, cx| {
                 if state.running && state.tick_generation == generation {
-                    if !state.count_up {
-                        if let Some(target) = state.target_time {
-                            if SystemTime::now() >= target {
-                                state.completed = true;
-                                state.running = false;
-                                state.completion_generation =
-                                    state.completion_generation.wrapping_add(1);
-                            }
-                        }
+                    if !state.count_up
+                        && let Some(target) = state.target_time
+                        && SystemTime::now() >= target
+                    {
+                        state.completed = true;
+                        state.running = false;
+                        state.completion_generation = state.completion_generation.wrapping_add(1);
                     }
 
                     if state.running {
@@ -392,7 +390,7 @@ impl Countdown {
         value: u64,
         label: &str,
         theme: &crate::theme::Theme,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let digit_text = if self.format.pad_zeros {
             format!("{:02}", value)
         } else {
@@ -458,21 +456,19 @@ impl RenderOnce for Countdown {
         };
         let user_style = self.style.clone();
 
-        if completed {
-            if let Some(ref handler) = self.on_complete {
-                let callback_state = window.use_keyed_state(
-                    ElementId::NamedChild(Box::new(self.id.clone()), "completion-callback".into()),
-                    cx,
-                    |_, _| 0_usize,
-                );
-                let last_generation = *callback_state.read(cx);
-                if completion_generation != 0 && completion_generation != last_generation {
-                    callback_state.update(cx, |last_generation, _| {
-                        *last_generation = completion_generation;
-                    });
-                    let handler = handler.clone();
-                    window.defer(cx, move |window, cx| handler(window, cx));
-                }
+        if completed && let Some(ref handler) = self.on_complete {
+            let callback_state = window.use_keyed_state(
+                ElementId::NamedChild(Box::new(self.id.clone()), "completion-callback".into()),
+                cx,
+                |_, _| 0_usize,
+            );
+            let last_generation = *callback_state.read(cx);
+            if completion_generation != 0 && completion_generation != last_generation {
+                callback_state.update(cx, |last_generation, _| {
+                    *last_generation = completion_generation;
+                });
+                let handler = handler.clone();
+                window.defer(cx, move |window, cx| handler(window, cx));
             }
         }
 
@@ -560,7 +556,7 @@ fn format_countdown_accessibility(units: &TimeUnits, count_up: bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_countdown_accessibility, TimeUnits};
+    use super::{TimeUnits, format_countdown_accessibility};
     use std::time::Duration;
 
     #[test]

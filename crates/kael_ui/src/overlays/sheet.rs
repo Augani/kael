@@ -502,7 +502,7 @@ impl Render for Sheet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kael::{div, px, TestAppContext};
+    use kael::{TestAppContext, div, px};
 
     #[::core::prelude::v1::test]
     fn sheet_summary_is_content_safe() {

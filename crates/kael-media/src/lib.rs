@@ -1,4 +1,4 @@
-//! Audio playback primitives for GPUI.
+//! Audio playback primitives for Kael.
 
 #![deny(missing_docs)]
 

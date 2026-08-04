@@ -4,7 +4,7 @@ use crate::{
     components::icon::Icon,
     components::icon_source::IconSource,
     styled_ext::StyledExt,
-    theme::{use_theme, Theme},
+    theme::{Theme, use_theme},
 };
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;

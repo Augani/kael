@@ -11,7 +11,7 @@ use crate::components::icon::Icon;
 use crate::components::input::InputSize;
 use crate::components::spinner::{Spinner, SpinnerSize};
 use crate::overlays::popover::{Popover, PopoverContent};
-use crate::theme::{use_theme, Theme};
+use crate::theme::{Theme, use_theme};
 
 type DateSelectHandler = Rc<dyn Fn(&DateValue, &mut Window, &mut App)>;
 type DateRangeSelectHandler = Rc<dyn Fn(&DateRange, &mut Window, &mut App)>;
@@ -805,10 +805,10 @@ impl RenderOnce for DatePicker {
                                     if let Some(handler) = on_select.as_ref() {
                                         handler(&today, window, cx);
                                     }
-                                    if let Some(range) = today_state.read(cx).selected_range {
-                                        if let Some(handler) = on_range_select.as_ref() {
-                                            handler(&range, window, cx);
-                                        }
+                                    if let Some(range) = today_state.read(cx).selected_range
+                                        && let Some(handler) = on_range_select.as_ref()
+                                    {
+                                        handler(&range, window, cx);
                                     }
                                 }
                             })
@@ -1083,12 +1083,10 @@ impl RenderOnce for DatePicker {
                                                         if let Some(range) = state_for_select
                                                             .read(app_cx)
                                                             .selected_range
-                                                        {
-                                                            if let Some(handler) =
+                                                            && let Some(handler) =
                                                                 on_range_select_for_date.as_ref()
-                                                            {
-                                                                handler(&range, window, app_cx);
-                                                            }
+                                                        {
+                                                            handler(&range, window, app_cx);
                                                         }
 
                                                         // Close the popover by emitting DismissEvent
@@ -1149,13 +1147,11 @@ impl RenderOnce for DatePicker {
                                                             if let Some(range) = state_today
                                                                 .read(app_cx)
                                                                 .selected_range
-                                                            {
-                                                                if let Some(handler) =
+                                                                && let Some(handler) =
                                                                     on_range_select_for_today
                                                                         .as_ref()
-                                                                {
-                                                                    handler(&range, window, app_cx);
-                                                                }
+                                                            {
+                                                                handler(&range, window, app_cx);
                                                             }
                                                             popover_for_today.update(
                                                                 app_cx,
@@ -1205,7 +1201,7 @@ impl RenderOnce for DatePicker {
 
 #[cfg(test)]
 mod tests {
-    use super::{date_is_disabled, DateFormat, DatePicker, DatePickerState, DateSelectionMode};
+    use super::{DateFormat, DatePicker, DatePickerState, DateSelectionMode, date_is_disabled};
     use crate::components::calendar::{CalendarLocale, DateRange, DateValue};
     use kael::{
         AccessibilityAction, AccessibilityRole, AccessibilityState, AppContext, Context, Entity,

@@ -645,7 +645,8 @@ impl RenderOnce for Input {
                 }
             }
 
-            if let Some(mut rules) = self.validation_rules.clone() {
+            let validation_rules = self.validation_rules.clone();
+            if let Some(mut rules) = validation_rules {
                 if let Some(ref custom_validator) = self.custom_validator {
                     let validator = custom_validator.clone();
                     rules.custom_validator =
@@ -1100,8 +1101,8 @@ impl RenderOnce for Input {
 mod typing_tests {
     use super::{Input, InputState};
     use kael::{
-        div, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled,
-        TestAppContext, Window,
+        AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, TestAppContext,
+        Window, div,
     };
 
     struct Host {

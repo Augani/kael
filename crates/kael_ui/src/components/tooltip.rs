@@ -347,11 +347,7 @@ impl Tooltip {
 
 impl From<bool> for TooltipHoverIndication {
     fn from(value: bool) -> Self {
-        if value {
-            Self::Always
-        } else {
-            Self::Never
-        }
+        if value { Self::Always } else { Self::Never }
     }
 }
 

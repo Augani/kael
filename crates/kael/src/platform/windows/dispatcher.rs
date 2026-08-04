@@ -4,7 +4,7 @@ use std::{
 };
 
 use async_task::Runnable;
-use flume::Sender;
+use crossbeam_channel::Sender;
 use parking::Parker;
 use parking_lot::Mutex;
 use util::ResultExt;

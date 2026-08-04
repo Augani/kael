@@ -277,11 +277,9 @@ impl<T: Clone + 'static> RenderOnce for SortableList<T> {
                         changed
                     });
 
-                    if changed {
-                        if let Some(ref callback) = on_reorder {
-                            let reordered_items = state_drop.read(cx).items.clone();
-                            callback(reordered_items, window, cx);
-                        }
+                    if changed && let Some(ref callback) = on_reorder {
+                        let reordered_items = state_drop.read(cx).items.clone();
+                        callback(reordered_items, window, cx);
                     }
                 })
                 .when(is_dragging, |d| d.opacity(0.5));

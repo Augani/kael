@@ -2,7 +2,7 @@ use crate::{
     components::{button::ButtonVariant, icon_button::IconButton},
     theme::use_theme,
 };
-use kael::{prelude::FluentBuilder as _, Animation, AnimationExt, *};
+use kael::{Animation, AnimationExt, prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -448,30 +448,30 @@ impl RenderOnce for Carousel {
                             "left" | "ArrowLeft" => {
                                 let previous = state.current_index;
                                 state.prev(infinite, cx);
-                                if state.current_index != previous {
-                                    if let Some(ref handler) = on_change_key {
-                                        handler(state.current_index, window, cx);
-                                    }
+                                if state.current_index != previous
+                                    && let Some(ref handler) = on_change_key
+                                {
+                                    handler(state.current_index, window, cx);
                                 }
                                 cx.stop_propagation();
                             }
                             "right" | "ArrowRight" => {
                                 let previous = state.current_index;
                                 state.next(infinite, cx);
-                                if state.current_index != previous {
-                                    if let Some(ref handler) = on_change_key {
-                                        handler(state.current_index, window, cx);
-                                    }
+                                if state.current_index != previous
+                                    && let Some(ref handler) = on_change_key
+                                {
+                                    handler(state.current_index, window, cx);
                                 }
                                 cx.stop_propagation();
                             }
                             "home" | "Home" => {
                                 let previous = state.current_index;
                                 state.go_to(0, infinite, cx);
-                                if state.current_index != previous {
-                                    if let Some(ref handler) = on_change_key {
-                                        handler(state.current_index, window, cx);
-                                    }
+                                if state.current_index != previous
+                                    && let Some(ref handler) = on_change_key
+                                {
+                                    handler(state.current_index, window, cx);
                                 }
                                 cx.stop_propagation();
                             }
@@ -479,10 +479,10 @@ impl RenderOnce for Carousel {
                                 let last = state.slide_count.saturating_sub(1);
                                 let previous = state.current_index;
                                 state.go_to(last, infinite, cx);
-                                if state.current_index != previous {
-                                    if let Some(ref handler) = on_change_key {
-                                        handler(state.current_index, window, cx);
-                                    }
+                                if state.current_index != previous
+                                    && let Some(ref handler) = on_change_key
+                                {
+                                    handler(state.current_index, window, cx);
                                 }
                                 cx.stop_propagation();
                             }
@@ -654,10 +654,10 @@ impl RenderOnce for Carousel {
                             window.listener_for(&state_prev, move |state, _, window, cx| {
                                 let previous = state.current_index;
                                 state.prev(infinite, cx);
-                                if state.current_index != previous {
-                                    if let Some(ref handler) = on_change_prev {
-                                        handler(state.current_index, window, cx);
-                                    }
+                                if state.current_index != previous
+                                    && let Some(ref handler) = on_change_prev
+                                {
+                                    handler(state.current_index, window, cx);
                                 }
                             }),
                         ),
@@ -684,10 +684,10 @@ impl RenderOnce for Carousel {
                             window.listener_for(&state_next, move |state, _, window, cx| {
                                 let previous = state.current_index;
                                 state.next(infinite, cx);
-                                if state.current_index != previous {
-                                    if let Some(ref handler) = on_change_next {
-                                        handler(state.current_index, window, cx);
-                                    }
+                                if state.current_index != previous
+                                    && let Some(ref handler) = on_change_next
+                                {
+                                    handler(state.current_index, window, cx);
                                 }
                             }),
                         ),
@@ -730,10 +730,10 @@ impl RenderOnce for Carousel {
                                     move |state, _, window, cx| {
                                         let previous = state.current_index;
                                         state.go_to(idx, infinite, cx);
-                                        if state.current_index != previous {
-                                            if let Some(ref handler) = on_change_dot {
-                                                handler(state.current_index, window, cx);
-                                            }
+                                        if state.current_index != previous
+                                            && let Some(ref handler) = on_change_dot
+                                        {
+                                            handler(state.current_index, window, cx);
                                         }
                                     },
                                 ))
@@ -746,9 +746,9 @@ impl RenderOnce for Carousel {
                                     .justify_center()
                                     .rounded_full()
                                     .when(button_state.focused, |this| {
-                                        this.shadow(smallvec::smallvec![dot_theme
-                                            .tokens
-                                            .focus_ring_light()])
+                                        this.shadow(smallvec::smallvec![
+                                            dot_theme.tokens.focus_ring_light()
+                                        ])
                                     })
                                     .hover(|style| style.bg(dot_theme.tokens.accent.opacity(0.5)))
                                     .child(

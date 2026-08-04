@@ -455,21 +455,17 @@ impl RenderOnce for TextField {
                     .on_action(move |_: &TextFieldBackspace, window, cx| {
                         let changed =
                             state_for_backspace.update(cx, |state, cx| state.delete_backward(cx));
-                        if changed {
-                            if let Some(handler) = on_change_for_backspace.as_ref() {
-                                let text = state_for_backspace.read(cx).text.clone();
-                                handler(&text, window, cx);
-                            }
+                        if changed && let Some(handler) = on_change_for_backspace.as_ref() {
+                            let text = state_for_backspace.read(cx).text.clone();
+                            handler(&text, window, cx);
                         }
                     })
                     .on_action(move |_: &TextFieldDelete, window, cx| {
                         let changed =
                             state_for_delete.update(cx, |state, cx| state.delete_forward(cx));
-                        if changed {
-                            if let Some(handler) = on_change_for_delete.as_ref() {
-                                let text = state_for_delete.read(cx).text.clone();
-                                handler(&text, window, cx);
-                            }
+                        if changed && let Some(handler) = on_change_for_delete.as_ref() {
+                            let text = state_for_delete.read(cx).text.clone();
+                            handler(&text, window, cx);
                         }
                     })
                     .on_action(move |_: &TextFieldLeft, _, cx| {

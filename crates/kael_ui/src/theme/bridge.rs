@@ -40,7 +40,7 @@
 use kael::{App, Subscription, Theme as CoreTheme};
 use smallvec::smallvec;
 
-use super::{install_theme, Theme, ThemeTokens};
+use super::{Theme, ThemeTokens, install_theme};
 
 /// Maps a loaded core [`kael::Theme`] onto a base set of [`ThemeTokens`],
 /// overlaying every field that has a core source and preserving the rest.

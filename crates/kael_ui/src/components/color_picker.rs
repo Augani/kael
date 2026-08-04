@@ -4,7 +4,7 @@ use crate::components::slider::{Slider, SliderSize, SliderState};
 use crate::components::text::{Text, TextVariant};
 use crate::overlays::popover::{Popover, PopoverContent};
 use crate::styled_ext::StyledExt;
-use crate::theme::{use_theme, Theme};
+use crate::theme::{Theme, use_theme};
 use kael::{prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 

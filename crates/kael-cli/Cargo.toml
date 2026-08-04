@@ -11,6 +11,7 @@ categories = ["command-line-utilities", "gui"]
 authors.workspace = true
 repository.workspace = true
 license.workspace = true
+readme = "README.md"
 
 [[bin]]
 name = "kael"

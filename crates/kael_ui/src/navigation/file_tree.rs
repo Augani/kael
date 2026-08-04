@@ -501,10 +501,10 @@ impl RenderOnce for FileTree {
                                         if let Some(ref handler) = on_toggle {
                                             handler(&path, !is_expanded, window, cx);
                                         }
-                                    } else if event.click_count() == 2 {
-                                        if let Some(ref handler) = on_open {
-                                            handler(&path, window, cx);
-                                        }
+                                    } else if event.click_count() == 2
+                                        && let Some(ref handler) = on_open
+                                    {
+                                        handler(&path, window, cx);
                                     }
                                 }
                             })

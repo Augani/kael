@@ -7,7 +7,7 @@ use kael::{
 #[cfg(unix)]
 fn connect_transport() -> Result<ExtensionTransport> {
     let socket_path =
-        std::env::var("GPUI_EXTENSION_SOCKET").context("GPUI_EXTENSION_SOCKET not set")?;
+        std::env::var("KAEL_EXTENSION_SOCKET").context("KAEL_EXTENSION_SOCKET not set")?;
     let transport = kael::UnixDomainSocketTransport::connect(socket_path)?;
     Ok(ExtensionTransport::new(Box::new(transport)))
 }
@@ -15,7 +15,7 @@ fn connect_transport() -> Result<ExtensionTransport> {
 #[cfg(windows)]
 fn connect_transport() -> Result<ExtensionTransport> {
     let socket_path =
-        std::env::var("GPUI_EXTENSION_SOCKET").context("GPUI_EXTENSION_SOCKET not set")?;
+        std::env::var("KAEL_EXTENSION_SOCKET").context("KAEL_EXTENSION_SOCKET not set")?;
     let pipe_name = socket_path
         .rsplit('\\')
         .next()

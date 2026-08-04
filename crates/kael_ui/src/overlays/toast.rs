@@ -252,17 +252,17 @@ impl RenderOnce for Toast {
         };
         let on_dismiss: Option<Rc<dyn Fn(ToastDismissReason, &mut Window, &mut App)>> =
             self.on_dismiss.map(Rc::from);
-        if self.is_auto_hide {
-            if let Some(handler) = on_dismiss.clone() {
-                let duration = self.auto_hide_duration;
-                window
-                    .spawn(cx, async move |cx| {
-                        Timer::after(duration).await;
-                        cx.update(|window, cx| handler(ToastDismissReason::Auto, window, cx))
-                            .ok();
-                    })
-                    .detach();
-            }
+        if self.is_auto_hide
+            && let Some(handler) = on_dismiss.clone()
+        {
+            let duration = self.auto_hide_duration;
+            window
+                .spawn(cx, async move |cx| {
+                    Timer::after(duration).await;
+                    cx.update(|window, cx| handler(ToastDismissReason::Auto, window, cx))
+                        .ok();
+                })
+                .detach();
         }
 
         div()

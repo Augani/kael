@@ -10,7 +10,7 @@ use crate::{
     },
     theme::Theme,
 };
-use kael::{prelude::FluentBuilder as _, InteractiveElement, *};
+use kael::{InteractiveElement, prelude::FluentBuilder as _, *};
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq)]

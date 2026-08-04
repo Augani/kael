@@ -80,11 +80,7 @@ impl AnimatedCounterState {
 }
 
 fn finite_counter_value(value: f64) -> f64 {
-    if value.is_finite() {
-        value
-    } else {
-        0.0
-    }
+    if value.is_finite() { value } else { 0.0 }
 }
 
 #[derive(IntoElement)]

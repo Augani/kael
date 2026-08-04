@@ -441,39 +441,39 @@ impl InputState {
             return Err(error);
         }
 
-        if let Some(min_length) = self.validation_rules.min_length {
-            if value.chars().count() < min_length {
-                let error = ValidationError {
-                    message: format!("Must be at least {} characters", min_length).into(),
-                    field_name: self.aria_label.clone(),
-                };
-                self.validation_error = Some(error.clone());
-                self.emit_input_event(InputEvent::Validate(Err(error.clone())), cx);
-                cx.notify();
-                return Err(error);
-            }
+        if let Some(min_length) = self.validation_rules.min_length
+            && value.chars().count() < min_length
+        {
+            let error = ValidationError {
+                message: format!("Must be at least {} characters", min_length).into(),
+                field_name: self.aria_label.clone(),
+            };
+            self.validation_error = Some(error.clone());
+            self.emit_input_event(InputEvent::Validate(Err(error.clone())), cx);
+            cx.notify();
+            return Err(error);
         }
 
-        if let Some(max_length) = self.validation_rules.max_length {
-            if value.chars().count() > max_length {
-                let error = ValidationError {
-                    message: format!("Must be no more than {} characters", max_length).into(),
-                    field_name: self.aria_label.clone(),
-                };
-                self.validation_error = Some(error.clone());
-                self.emit_input_event(InputEvent::Validate(Err(error.clone())), cx);
-                cx.notify();
-                return Err(error);
-            }
+        if let Some(max_length) = self.validation_rules.max_length
+            && value.chars().count() > max_length
+        {
+            let error = ValidationError {
+                message: format!("Must be no more than {} characters", max_length).into(),
+                field_name: self.aria_label.clone(),
+            };
+            self.validation_error = Some(error.clone());
+            self.emit_input_event(InputEvent::Validate(Err(error.clone())), cx);
+            cx.notify();
+            return Err(error);
         }
 
-        if let Some(ref validator) = self.validation_rules.custom_validator {
-            if let Err(error) = validator(value) {
-                self.validation_error = Some(error.clone());
-                self.emit_input_event(InputEvent::Validate(Err(error.clone())), cx);
-                cx.notify();
-                return Err(error);
-            }
+        if let Some(ref validator) = self.validation_rules.custom_validator
+            && let Err(error) = validator(value)
+        {
+            self.validation_error = Some(error.clone());
+            self.emit_input_event(InputEvent::Validate(Err(error.clone())), cx);
+            cx.notify();
+            return Err(error);
         }
 
         self.validation_error = None;
@@ -609,21 +609,21 @@ impl InputState {
         }
 
         if let Ok(value) = parsed {
-            if let Some(min) = self.validation_rules.min_value {
-                if value < min {
-                    return Err(ValidationError {
-                        message: format!("Must be at least {}", min).into(),
-                        field_name: self.aria_label.clone(),
-                    });
-                }
+            if let Some(min) = self.validation_rules.min_value
+                && value < min
+            {
+                return Err(ValidationError {
+                    message: format!("Must be at least {}", min).into(),
+                    field_name: self.aria_label.clone(),
+                });
             }
-            if let Some(max) = self.validation_rules.max_value {
-                if value > max {
-                    return Err(ValidationError {
-                        message: format!("Must be no more than {}", max).into(),
-                        field_name: self.aria_label.clone(),
-                    });
-                }
+            if let Some(max) = self.validation_rules.max_value
+                && value > max
+            {
+                return Err(ValidationError {
+                    message: format!("Must be no more than {}", max).into(),
+                    field_name: self.aria_label.clone(),
+                });
             }
         }
         Ok(())
@@ -1428,10 +1428,10 @@ impl kael::Element for InputTextElement {
             return;
         }
 
-        if focus_handle.is_focused(window) {
-            if let Some(cursor) = prepaint.cursor.take() {
-                window.paint_quad(cursor);
-            }
+        if focus_handle.is_focused(window)
+            && let Some(cursor) = prepaint.cursor.take()
+        {
+            window.paint_quad(cursor);
         }
 
         self.input.update(cx, |input, _cx| {

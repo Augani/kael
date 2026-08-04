@@ -407,10 +407,10 @@ impl RenderOnce for HotkeyInput {
                                 (captured, state.hotkey.clone())
                             });
                             if captured {
-                                if event.keystroke.key.as_str() != "escape" {
-                                    if let Some(ref handler) = on_change_for_keydown {
-                                        handler(hotkey.as_ref(), window, cx);
-                                    }
+                                if event.keystroke.key.as_str() != "escape"
+                                    && let Some(ref handler) = on_change_for_keydown
+                                {
+                                    handler(hotkey.as_ref(), window, cx);
                                 }
                                 cx.stop_propagation();
                                 window.prevent_default();

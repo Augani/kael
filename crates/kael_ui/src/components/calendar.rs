@@ -1518,8 +1518,8 @@ impl RenderOnce for Calendar {
 #[cfg(test)]
 mod tests {
     use super::{
-        calendar_keyboard_enabled_target, use_calendar_days, DateValue, DayOfWeek,
-        UseCalendarDaysOptions,
+        DateValue, DayOfWeek, UseCalendarDaysOptions, calendar_keyboard_enabled_target,
+        use_calendar_days,
     };
 
     #[test]

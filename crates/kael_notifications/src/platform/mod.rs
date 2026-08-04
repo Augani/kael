@@ -40,6 +40,16 @@ pub const fn support() -> PlatformNotificationSupport {
     imp::SUPPORT
 }
 
+/// Configure the AppUserModelID used for Windows toast delivery.
+///
+/// Packaged Windows applications should call this once, before scheduling a
+/// notification, with the AppUserModelID registered by their installer. An
+/// unpackaged development build uses a shell fallback when no ID is configured.
+#[cfg(target_os = "windows")]
+pub fn set_windows_app_user_model_id(id: impl Into<String>) -> Result<()> {
+    imp::set_app_user_model_id(id.into())
+}
+
 pub(crate) trait NotificationBackend: Send + Sync + 'static {
     fn request_authorization(&self, _options: &AuthorizationOptions) -> Result<bool> {
         Ok(true)

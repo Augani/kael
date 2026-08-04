@@ -10,8 +10,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use kael::{
-    div, point, px, Context, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    Styled as _, TestAppContext, Window,
+    Context, InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _,
+    TestAppContext, Window, div, point, px,
 };
 use kael_ui::prelude::*;
 
@@ -105,9 +105,11 @@ fn uncontrolled_collapsible_toggles_without_external_state(cx: &mut TestAppConte
             })
             .expect("collapsible trigger should be exposed");
         assert!(trigger.states.contains(kael::AccessibilityState::EXPANDED));
-        assert!(nodes
-            .values()
-            .any(|node| node.label.as_deref() == Some("Hidden details")));
+        assert!(
+            nodes
+                .values()
+                .any(|node| node.label.as_deref() == Some("Hidden details"))
+        );
     });
 
     vcx.simulate_click(point(px(80.0), px(20.0)), Default::default());
@@ -124,9 +126,11 @@ fn uncontrolled_collapsible_toggles_without_external_state(cx: &mut TestAppConte
             })
             .expect("collapsible trigger should remain exposed");
         assert!(trigger.states.contains(kael::AccessibilityState::COLLAPSED));
-        assert!(!nodes
-            .values()
-            .any(|node| node.label.as_deref() == Some("Hidden details")));
+        assert!(
+            !nodes
+                .values()
+                .any(|node| node.label.as_deref() == Some("Hidden details"))
+        );
     });
 }
 
@@ -178,9 +182,11 @@ fn thumbnail_accessibility_activation_and_states_are_complete(cx: &mut TestAppCo
             .find(|node| node.label.as_deref() == Some("Project preview"))
             .expect("interactive thumbnail should be exposed");
         assert_eq!(interactive.role, kael::AccessibilityRole::Button);
-        assert!(interactive
-            .actions
-            .contains(&kael::AccessibilityAction::Click));
+        assert!(
+            interactive
+                .actions
+                .contains(&kael::AccessibilityAction::Click)
+        );
 
         let loading = nodes
             .values()
@@ -257,8 +263,10 @@ fn audio_player_routes_accessibility_slider_actions(cx: &mut TestAppContext) {
             .expect("volume slider should be exposed");
         assert!(window
             .has_accessibility_action_handler(progress.id, kael::AccessibilityAction::SetValue,));
-        assert!(window
-            .has_accessibility_action_handler(volume.id, kael::AccessibilityAction::Decrement,));
+        assert!(
+            window
+                .has_accessibility_action_handler(volume.id, kael::AccessibilityAction::Decrement,)
+        );
         (progress.id, volume.id)
     });
 
@@ -331,8 +339,10 @@ fn video_player_routes_accessibility_slider_actions(cx: &mut TestAppContext) {
             .expect("video volume slider should be exposed");
         assert!(window
             .has_accessibility_action_handler(progress.id, kael::AccessibilityAction::SetValue,));
-        assert!(window
-            .has_accessibility_action_handler(volume.id, kael::AccessibilityAction::Increment,));
+        assert!(
+            window
+                .has_accessibility_action_handler(volume.id, kael::AccessibilityAction::Increment,)
+        );
         (progress.id, volume.id)
     });
 
@@ -650,10 +660,11 @@ fn popover_trigger_supports_accessibility_activation_and_expanded_state(cx: &mut
             node.role == kael::AccessibilityRole::Group
                 && node.label.as_deref() == Some("Quick actions")
         }));
-        assert!(tree
-            .nodes
-            .values()
-            .any(|node| node.label.as_deref() == Some("Quick actions available")));
+        assert!(
+            tree.nodes
+                .values()
+                .any(|node| node.label.as_deref() == Some("Quick actions available"))
+        );
     });
 }
 
@@ -839,9 +850,11 @@ fn command_palette_items_support_accessibility_activation(cx: &mut TestAppContex
         let palette = cx.new(|cx| {
             CommandPalette::from_commands(
                 cx,
-                vec![Command::new("run-audit", "Run audit")
-                    .description("Review the active surface")
-                    .on_select(move |_, _| action_count.set(action_count.get() + 1))],
+                vec![
+                    Command::new("run-audit", "Run audit")
+                        .description("Review the active surface")
+                        .on_select(move |_, _| action_count.set(action_count.get() + 1)),
+                ],
             )
             .on_close(move |_, _| close_count.set(close_count.get() + 1))
         });
@@ -1114,9 +1127,11 @@ fn animated_feedback_exposes_one_stable_semantic_value(cx: &mut TestAppContext) 
                         && node.label.as_deref() == Some(label)
                 })
                 .unwrap_or_else(|| panic!("missing indeterminate progress status: {label}"));
-            assert!(indeterminate
-                .states
-                .contains(kael::AccessibilityState::BUSY));
+            assert!(
+                indeterminate
+                    .states
+                    .contains(kael::AccessibilityState::BUSY)
+            );
             assert_eq!(
                 indeterminate.value,
                 Some(kael::AccessibilityValue::Text("Loading".into()))

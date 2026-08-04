@@ -98,10 +98,10 @@ impl NumberInputState {
     pub fn set_min(&mut self, min: Option<f64>, cx: &mut Context<Self>) {
         let previous = (self.min, self.max, self.value);
         self.min = min.filter(|value| value.is_finite());
-        if let (Some(min), Some(max)) = (self.min, self.max) {
-            if min > max {
-                self.max = Some(min);
-            }
+        if let (Some(min), Some(max)) = (self.min, self.max)
+            && min > max
+        {
+            self.max = Some(min);
         }
         self.value = self.clamp_value(self.value);
         if previous != (self.min, self.max, self.value) {
@@ -112,10 +112,10 @@ impl NumberInputState {
     pub fn set_max(&mut self, max: Option<f64>, cx: &mut Context<Self>) {
         let previous = (self.min, self.max, self.value);
         self.max = max.filter(|value| value.is_finite());
-        if let (Some(min), Some(max)) = (self.min, self.max) {
-            if max < min {
-                self.min = Some(max);
-            }
+        if let (Some(min), Some(max)) = (self.min, self.max)
+            && max < min
+        {
+            self.min = Some(max);
         }
         self.value = self.clamp_value(self.value);
         if previous != (self.min, self.max, self.value) {
@@ -266,10 +266,10 @@ fn handle_number_accessibility_action(
             _ => {}
         }
 
-        if state.value_option() != previous {
-            if let Some(handler) = on_change {
-                handler(state.value, window, cx);
-            }
+        if state.value_option() != previous
+            && let Some(handler) = on_change
+        {
+            handler(state.value, window, cx);
         }
     });
 }
@@ -480,10 +480,11 @@ impl RenderOnce for NumberInput {
         self.state.update(cx, |state, cx| {
             let lost_focus = state.was_focused && !currently_focused;
             state.was_focused = currently_focused;
-            if lost_focus && state.commit_draft(cx) {
-                if let Some(handler) = on_change_for_blur.as_ref() {
-                    handler(state.value, window, cx);
-                }
+            if lost_focus
+                && state.commit_draft(cx)
+                && let Some(handler) = on_change_for_blur.as_ref()
+            {
+                handler(state.value, window, cx);
             }
         });
         let theme = Theme::of(cx);
@@ -670,20 +671,20 @@ impl RenderOnce for NumberInput {
                                             } else {
                                                 s.decrement(cx);
                                             }
-                                            if s.value_option() != previous {
-                                                if let Some(handler) = on_change_for_keys.as_ref() {
-                                                    handler(s.value, window, cx);
-                                                }
+                                            if s.value_option() != previous
+                                                && let Some(handler) = on_change_for_keys.as_ref()
+                                            {
+                                                handler(s.value, window, cx);
                                             }
                                         });
                                         true
                                     }
                                     "enter" => {
                                         state.update(cx, |s, cx| {
-                                            if s.commit_draft(cx) {
-                                                if let Some(handler) = on_change_for_keys.as_ref() {
-                                                    handler(s.value, window, cx);
-                                                }
+                                            if s.commit_draft(cx)
+                                                && let Some(handler) = on_change_for_keys.as_ref()
+                                            {
+                                                handler(s.value, window, cx);
                                             }
                                         });
                                         true
@@ -850,11 +851,10 @@ impl RenderOnce for NumberInput {
                                                         state.update(cx, |s, cx| {
                                                             let previous = s.value_option();
                                                             s.decrement(cx);
-                                                            if s.value_option() != previous {
-                                                                if let Some(ref handler) = on_change
-                                                                {
-                                                                    handler(s.value, window, cx);
-                                                                }
+                                                            if s.value_option() != previous
+                                                                && let Some(ref handler) = on_change
+                                                            {
+                                                                handler(s.value, window, cx);
                                                             }
                                                         });
                                                     })
@@ -909,11 +909,10 @@ impl RenderOnce for NumberInput {
                                                         state.update(cx, |s, cx| {
                                                             let previous = s.value_option();
                                                             s.increment(cx);
-                                                            if s.value_option() != previous {
-                                                                if let Some(ref handler) = on_change
-                                                                {
-                                                                    handler(s.value, window, cx);
-                                                                }
+                                                            if s.value_option() != previous
+                                                                && let Some(ref handler) = on_change
+                                                            {
+                                                                handler(s.value, window, cx);
                                                             }
                                                         });
                                                     })
@@ -963,7 +962,7 @@ impl RenderOnce for NumberInput {
 
 #[cfg(test)]
 mod tests {
-    use super::{handle_number_accessibility_action, NumberInput, NumberInputState};
+    use super::{NumberInput, NumberInputState, handle_number_accessibility_action};
     use kael::{
         AccessibilityAction, AccessibilityRole, AccessibilityState, AppContext, Context, Entity,
         IntoElement, Render, TestAppContext, Window,

@@ -3,7 +3,7 @@
 use kael::{prelude::FluentBuilder as _, *};
 use std::fmt::Debug;
 
-use crate::theme::{use_theme, Theme};
+use crate::theme::{Theme, use_theme};
 
 use std::rc::Rc;
 
@@ -599,8 +599,8 @@ impl<T: Clone + Debug + 'static> RenderOnce for DropZone<T> {
 mod tests {
     use super::{DragData, DragDropKeyboardState, Draggable, DropZone};
     use kael::{
-        div, AccessibilityAction, AccessibilityActionRequest, AppContext, Context, Entity,
-        IntoElement, ParentElement, Render, SharedString, Styled, TestAppContext, Window,
+        AccessibilityAction, AccessibilityActionRequest, AppContext, Context, Entity, IntoElement,
+        ParentElement, Render, SharedString, Styled, TestAppContext, Window, div,
     };
     use std::{cell::RefCell, rc::Rc};
 

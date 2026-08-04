@@ -319,7 +319,7 @@ fn render_metadata_item(
     is_stacked: bool,
     is_fluid_multi: bool,
     theme: &Theme,
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
     let label_text = item.label.clone();
     let accessible_label = item.label.clone();
     let icon = item.icon.clone();

@@ -514,18 +514,18 @@ impl ExtensionHostRuntime {
         #[cfg(unix)]
         {
             process_info = process_info.env(
-                "GPUI_EXTENSION_SOCKET",
+                "KAEL_EXTENSION_SOCKET",
                 socket_path.to_string_lossy().to_string(),
             );
         }
         #[cfg(windows)]
         {
             process_info =
-                process_info.env("GPUI_EXTENSION_SOCKET", format!("\\\\.\\pipe\\{pipe_name}"));
+                process_info.env("KAEL_EXTENSION_SOCKET", format!("\\\\.\\pipe\\{pipe_name}"));
         }
         let process_info = process_info
-            .env("GPUI_EXTENSION_ID", id)
-            .env("GPUI_API_VERSION", HOST_API_VERSION);
+            .env("KAEL_EXTENSION_ID", id)
+            .env("KAEL_API_VERSION", HOST_API_VERSION);
 
         #[cfg(unix)]
         let (listener, _socket_guard) = {

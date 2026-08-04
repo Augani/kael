@@ -19,6 +19,7 @@ use anyhow::{Context as _, anyhow};
 use async_task::Runnable;
 use calloop::{LoopSignal, channel::Channel};
 use futures::channel::oneshot;
+use secret_service::{EncryptionType, SecretService};
 use util::ResultExt as _;
 #[cfg(any(feature = "wayland", feature = "x11"))]
 use xkbcommon::xkb::{self, Keycode, Keysym, State};
@@ -649,14 +650,16 @@ impl<P: LinuxClient + 'static> Platform for P {
         let username = username.to_string();
         let password = password.to_vec();
         self.background_executor().spawn(async move {
-            let keyring = oo7::Keyring::new().await?;
-            keyring.unlock().await?;
-            keyring
+            let service = SecretService::connect(EncryptionType::Dh).await?;
+            let collection = service.get_default_collection().await?;
+            collection.unlock().await?;
+            collection
                 .create_item(
                     KEYRING_LABEL,
-                    &vec![("url", &url), ("username", &username)],
-                    password,
+                    HashMap::from([("url", url.as_str()), ("username", username.as_str())]),
+                    &password,
                     true,
+                    "application/octet-stream",
                 )
                 .await?;
             Ok(())
@@ -666,25 +669,29 @@ impl<P: LinuxClient + 'static> Platform for P {
     fn read_credentials(&self, url: &str) -> Task<Result<Option<(String, Vec<u8>)>>> {
         let url = url.to_string();
         self.background_executor().spawn(async move {
-            let keyring = oo7::Keyring::new().await?;
-            keyring.unlock().await?;
-
-            let items = keyring.search_items(&vec![("url", &url)]).await?;
+            let service = SecretService::connect(EncryptionType::Dh).await?;
+            let collection = service.get_default_collection().await?;
+            collection.unlock().await?;
+            let items = collection
+                .search_items(HashMap::from([("url", url.as_str())]))
+                .await?;
 
             for item in items.into_iter() {
-                if item.label().await.is_ok_and(|label| label == KEYRING_LABEL) {
-                    let attributes = item.attributes().await?;
+                if item
+                    .get_label()
+                    .await
+                    .is_ok_and(|label| label == KEYRING_LABEL)
+                {
+                    let attributes = item.get_attributes().await?;
                     let username = attributes
                         .get("username")
                         .context("Cannot find username in stored credentials")?;
                     item.unlock().await?;
-                    let secret = item.secret().await?;
+                    let secret = item.get_secret().await?;
 
-                    // we lose the zeroizing capabilities at this boundary,
-                    // a current limitation GPUI's credentials api
+                    // The platform API returns owned bytes, so the keychain buffer cannot
+                    // remain zeroizing after it crosses this boundary.
                     return Ok(Some((username.to_string(), secret.to_vec())));
-                } else {
-                    continue;
                 }
             }
             Ok(None)
@@ -694,13 +701,19 @@ impl<P: LinuxClient + 'static> Platform for P {
     fn delete_credentials(&self, url: &str) -> Task<Result<()>> {
         let url = url.to_string();
         self.background_executor().spawn(async move {
-            let keyring = oo7::Keyring::new().await?;
-            keyring.unlock().await?;
-
-            let items = keyring.search_items(&vec![("url", &url)]).await?;
+            let service = SecretService::connect(EncryptionType::Dh).await?;
+            let collection = service.get_default_collection().await?;
+            collection.unlock().await?;
+            let items = collection
+                .search_items(HashMap::from([("url", url.as_str())]))
+                .await?;
 
             for item in items.into_iter() {
-                if item.label().await.is_ok_and(|label| label == KEYRING_LABEL) {
+                if item
+                    .get_label()
+                    .await
+                    .is_ok_and(|label| label == KEYRING_LABEL)
+                {
                     item.delete().await?;
                     return Ok(());
                 }

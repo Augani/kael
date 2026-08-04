@@ -2,10 +2,10 @@
 
 use super::scrollbar::{Scrollbar, ScrollbarAxis, ScrollbarState};
 use kael::{
-    div, relative, AnyElement, App, Bounds, Div, Element, ElementId, GlobalElementId,
-    InspectorElementId, InteractiveElement, Interactivity, IntoElement, LayoutId, ParentElement,
-    Pixels, Position, ScrollHandle, SharedString, Size, Stateful, StatefulInteractiveElement,
-    Style, StyleRefinement, Styled, Window,
+    AnyElement, App, Bounds, Div, Element, ElementId, GlobalElementId, InspectorElementId,
+    InteractiveElement, Interactivity, IntoElement, LayoutId, ParentElement, Pixels, Position,
+    ScrollHandle, SharedString, Size, Stateful, StatefulInteractiveElement, Style, StyleRefinement,
+    Styled, Window, div, relative,
 };
 use std::panic::Location;
 
@@ -328,7 +328,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::Scrollable;
-    use kael::{div, px, size, Element, ElementId};
+    use kael::{Element, ElementId, div, px, size};
 
     #[test]
     fn explicit_ids_keep_sibling_scroll_views_distinct() {

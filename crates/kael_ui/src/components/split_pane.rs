@@ -416,10 +416,10 @@ impl RenderOnce for SplitPane {
                             state.is_dragging = true;
                             cx.notify();
 
-                            if state.update_from_position(e.position, cx) {
-                                if let Some(ref handler) = on_resize_drag {
-                                    handler(state.ratio, window, cx);
-                                }
+                            if state.update_from_position(e.position, cx)
+                                && let Some(ref handler) = on_resize_drag
+                            {
+                                handler(state.ratio, window, cx);
                             }
                         },
                     ),
@@ -440,10 +440,11 @@ impl RenderOnce for SplitPane {
         let container_mouse_move = window.listener_for(
             &state_for_move,
             move |state, e: &MouseMoveEvent, window, cx| {
-                if state.is_dragging && state.update_from_position(e.position, cx) {
-                    if let Some(ref handler) = on_resize_move {
-                        handler(state.ratio, window, cx);
-                    }
+                if state.is_dragging
+                    && state.update_from_position(e.position, cx)
+                    && let Some(ref handler) = on_resize_move
+                {
+                    handler(state.ratio, window, cx);
                 }
             },
         );
@@ -631,8 +632,8 @@ impl RenderOnce for SplitPane {
 mod tests {
     use super::{SplitDirection, SplitPane, SplitPaneState};
     use kael::{
-        div, AppContext, Context, IntoElement, ParentElement, Render, Styled, TestAppContext,
-        Window,
+        AppContext, Context, IntoElement, ParentElement, Render, Styled, TestAppContext, Window,
+        div,
     };
 
     struct VerticalHost {
@@ -682,12 +683,16 @@ mod tests {
                 .values()
                 .find(|node| node.role == kael::AccessibilityRole::Slider)
                 .expect("split pane should expose its divider");
-            assert!(divider
-                .actions
-                .contains(&kael::AccessibilityAction::Increment));
-            assert!(divider
-                .actions
-                .contains(&kael::AccessibilityAction::Decrement));
+            assert!(
+                divider
+                    .actions
+                    .contains(&kael::AccessibilityAction::Increment)
+            );
+            assert!(
+                divider
+                    .actions
+                    .contains(&kael::AccessibilityAction::Decrement)
+            );
         });
     }
 }

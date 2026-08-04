@@ -446,11 +446,7 @@ impl VideoPlayerState {
     }
 
     pub fn effective_volume(&self) -> f32 {
-        if self.is_muted {
-            0.0
-        } else {
-            self.volume
-        }
+        if self.is_muted { 0.0 } else { self.volume }
     }
 
     pub fn volume_class(&self) -> &'static str {
@@ -612,11 +608,11 @@ impl VideoPlayerState {
             self.current_time = current_time;
             changed = true;
         }
-        if let Some(duration) = duration {
-            if (self.duration - duration).abs() > f64::EPSILON {
-                self.duration = duration;
-                changed = true;
-            }
+        if let Some(duration) = duration
+            && (self.duration - duration).abs() > f64::EPSILON
+        {
+            self.duration = duration;
+            changed = true;
         }
         if (self.volume - snapshot.volume).abs() > f32::EPSILON {
             self.volume = snapshot.volume.clamp(0.0, 1.0);
@@ -1067,10 +1063,10 @@ impl VideoPlayer {
 
     /// Configure source-backed preload behavior.
     pub fn preload(mut self, preload: VideoPreload) -> Self {
-        if matches!(preload, VideoPreload::Metadata | VideoPreload::Auto) {
-            if let Some(controller) = &self.controller {
-                let _ = controller.load_metadata();
-            }
+        if matches!(preload, VideoPreload::Metadata | VideoPreload::Auto)
+            && let Some(controller) = &self.controller
+        {
+            let _ = controller.load_metadata();
         }
         self.webview_options = match preload {
             VideoPreload::None => self
@@ -2326,32 +2322,32 @@ impl RenderOnce for VideoPlayer {
                                 },
                             )),
                     )
-                } else if let Some(controller) = controller.clone() {
-                    this.child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .child(
+                } else {
+                    let controller = controller.clone();
+                    if let Some(controller) = controller {
+                        this.child(
+                            div().absolute().inset_0().child(
                                 video(controller.source())
                                     .sync_to(&controller.audio_handle())
                                     .object_fit(object_fit)
-                                    .size_full()
-                            )
-                    )
-                } else {
-                    this.child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .bg(kael::black())
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_color(kael::white().opacity(0.5))
-                            .text_sm()
-                            .font_family(theme.tokens.font_family.clone())
-                            .child("Video content area")
-                    )
+                                    .size_full(),
+                            ),
+                        )
+                    } else {
+                        this.child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .bg(kael::black())
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_color(kael::white().opacity(0.5))
+                                .text_sm()
+                                .font_family(theme.tokens.font_family.clone())
+                                .child("Video content area"),
+                        )
+                    }
                 }
             })
             .when(
@@ -2467,6 +2463,8 @@ impl RenderOnce for VideoPlayer {
                 let on_seek_decrement = on_seek.clone();
                 let on_seek_set_value = on_seek.clone();
                 let progress_focus_on_mouse = progress_focus_handle.clone();
+                let tracked_progress_focus =
+                    progress_focus_handle.clone().tab_index(0).tab_stop(true);
 
                 let state_volume = state_entity.clone();
                 let state_volume_icon = state_entity.clone();
@@ -2492,6 +2490,8 @@ impl RenderOnce for VideoPlayer {
                 let on_volume_decrement = on_volume_change.clone();
                 let on_volume_set_value = on_volume_change.clone();
                 let volume_focus_on_mouse = volume_focus_handle.clone();
+                let tracked_volume_focus =
+                    volume_focus_handle.clone().tab_index(0).tab_stop(true);
 
                 let state_play_btn = state_entity.clone();
                 let controller_play_btn = controller.clone();
@@ -2547,9 +2547,7 @@ impl RenderOnce for VideoPlayer {
                                             duration.max(0.0),
                                             Some(5.0),
                                         ))
-                                        .track_focus(
-                                            &progress_focus_handle.tab_index(0).tab_stop(true),
-                                        )
+                                        .track_focus(&tracked_progress_focus)
                                         .relative()
                                         .h(px(6.0))
                                         .w_full()
@@ -2845,9 +2843,7 @@ impl RenderOnce for VideoPlayer {
                                                             1.0,
                                                             Some(0.05),
                                                         ))
-                                                        .track_focus(
-                                                            &volume_focus_handle.tab_index(0).tab_stop(true),
-                                                        )
+                                                        .track_focus(&tracked_volume_focus)
                                                         .relative()
                                                         .w(px(80.0))
                                                         .h(px(4.0))
