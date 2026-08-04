@@ -1,7 +1,10 @@
+#![doc = include_str!("../README.md")]
+#![deny(missing_docs)]
+
 mod async_body;
 
 pub use anyhow::{Result, anyhow};
-pub use async_body::{AsyncBody, Inner};
+pub use async_body::AsyncBody;
 use derive_more::Deref;
 use http::HeaderValue;
 pub use http::{self, Method, Request, Response, StatusCode, Uri};
@@ -22,14 +25,22 @@ pub use url::Url;
 /// Maximum body size buffered by the reqwest adapter for a request or response.
 pub const MAX_BUFFERED_HTTP_BODY_BYTES: usize = 256 * 1024 * 1024;
 
+/// Controls how an HTTP request handles redirects.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RedirectPolicy {
+    /// Return redirect responses to the caller without following them.
     #[default]
     NoFollow,
+    /// Follow at most the given number of redirects.
     FollowLimit(u32),
+    /// Follow redirects using the transport's safe upper bound.
+    ///
+    /// [`ReqwestClient`] interprets this as a limit of 32 redirects because
+    /// reqwest does not expose an unbounded redirect policy.
     FollowAll,
 }
 
+/// Convenience methods for building requests accepted by [`HttpClient`].
 pub trait HttpRequestExt {
     /// Conditionally modify self with the given closure.
     fn when(self, condition: bool, then: impl FnOnce(Self) -> Self) -> Self
@@ -50,7 +61,7 @@ pub trait HttpRequestExt {
         }
     }
 
-    /// Whether or not to follow redirects
+    /// Attaches a redirect policy to the request.
     fn follow_redirects(self, follow: RedirectPolicy) -> Self;
 }
 
@@ -60,16 +71,27 @@ impl HttpRequestExt for http::request::Builder {
     }
 }
 
+/// Object-safe transport interface used by Kael application services.
+///
+/// Implementations receive standard [`http::Request`] values and return
+/// standard [`http::Response`] values with [`AsyncBody`] payloads.
 pub trait HttpClient: 'static + Send + Sync {
+    /// Returns the concrete transport type name for diagnostics.
     fn type_name(&self) -> &'static str;
 
+    /// Returns the user-agent header configured for this transport, if any.
     fn user_agent(&self) -> Option<&HeaderValue>;
 
+    /// Sends one HTTP request.
     fn send(
         &self,
         req: http::Request<AsyncBody>,
     ) -> BoxFuture<'static, anyhow::Result<Response<AsyncBody>>>;
 
+    /// Sends a GET request with an optional body.
+    ///
+    /// `follow_redirects` maps to [`RedirectPolicy::FollowAll`] when true and
+    /// [`RedirectPolicy::NoFollow`] when false.
     fn get(
         &self,
         uri: &str,
@@ -91,6 +113,9 @@ pub trait HttpClient: 'static + Send + Sync {
         }
     }
 
+    /// Sends a POST request with a JSON content type.
+    ///
+    /// The caller is responsible for serializing `body` as JSON.
     fn post_json(
         &self,
         uri: &str,
@@ -108,8 +133,15 @@ pub trait HttpClient: 'static + Send + Sync {
         }
     }
 
+    /// Returns the proxy URL selected for this transport, if any.
     fn proxy(&self) -> Option<&Url>;
 
+    /// Returns this transport as a [`FakeHttpClient`].
+    ///
+    /// # Panics
+    ///
+    /// Panics unless the implementation overrides this method with a fake
+    /// client reference.
     #[cfg(feature = "test-support")]
     fn as_fake(&self) -> &FakeHttpClient {
         panic!("called as_fake on {}", type_name::<Self>())
@@ -125,7 +157,10 @@ pub struct HttpClientWithProxy {
 }
 
 impl HttpClientWithProxy {
-    /// Returns a new [`HttpClientWithProxy`] with the given proxy URL.
+    /// Wraps `client` with an explicit proxy string or environment fallback.
+    ///
+    /// An invalid explicit proxy string is treated as no proxy. When
+    /// `proxy_url` is `None`, standard proxy environment variables are read.
     pub fn new(client: Arc<dyn HttpClient>, proxy_url: Option<String>) -> Self {
         let proxy_url = match proxy_url {
             Some(proxy) => proxy.parse().ok(),
@@ -134,6 +169,7 @@ impl HttpClientWithProxy {
 
         Self::new_url(client, proxy_url)
     }
+    /// Wraps `client` with an already parsed proxy URL.
     pub fn new_url(client: Arc<dyn HttpClient>, proxy_url: Option<Url>) -> Self {
         Self {
             client,
@@ -183,7 +219,7 @@ impl std::ops::Deref for HttpClientWithUrl {
 }
 
 impl HttpClientWithUrl {
-    /// Returns a new [`HttpClientWithUrl`] with the given base URL.
+    /// Wraps `client` with a base URL and an optional proxy string.
     pub fn new(
         client: Arc<dyn HttpClient>,
         base_url: impl Into<String>,
@@ -197,6 +233,7 @@ impl HttpClientWithUrl {
         }
     }
 
+    /// Wraps `client` with a base URL and an already parsed proxy URL.
     pub fn new_url(
         client: Arc<dyn HttpClient>,
         base_url: impl Into<String>,
@@ -275,6 +312,11 @@ impl HttpClient for HttpClientWithUrl {
     }
 }
 
+/// Reads a proxy URL from the first present conventional proxy environment variable.
+///
+/// Variables are checked in `ALL_PROXY`, `HTTPS_PROXY`, then `HTTP_PROXY`
+/// order, with uppercase preferred over lowercase for each name. Returns
+/// `None` when the first present value is not a valid URL or is not Unicode.
 pub fn read_proxy_from_env() -> Option<Url> {
     const ENV_VARS: &[&str] = &[
         "ALL_PROXY",
@@ -291,6 +333,7 @@ pub fn read_proxy_from_env() -> Option<Url> {
         .and_then(|env| env.parse().ok())
 }
 
+/// Reads the first `NO_PROXY` or `no_proxy` environment value.
 pub fn read_no_proxy_from_env() -> Option<String> {
     const ENV_VARS: &[&str] = &["NO_PROXY", "no_proxy"];
 
@@ -308,7 +351,9 @@ pub struct ReqwestClient {
 }
 
 impl ReqwestClient {
-    /// Create a new reqwest-backed client with the given user agent.
+    /// Creates a reqwest-backed client with the given user agent.
+    ///
+    /// The proxy is initialized from standard proxy environment variables.
     pub fn user_agent(user_agent: impl AsRef<str>) -> Result<Self> {
         Ok(Self {
             user_agent: HeaderValue::from_str(user_agent.as_ref())?,
@@ -461,11 +506,14 @@ impl HttpClient for ReqwestClient {
     }
 }
 
+/// An [`HttpClient`] that rejects every request with `PermissionDenied`.
+#[derive(Clone, Copy, Debug, Default)]
 pub struct BlockedHttpClient;
 
 impl BlockedHttpClient {
+    /// Creates a transport that rejects all network requests.
     pub fn new() -> Self {
-        BlockedHttpClient
+        Self
     }
 }
 
@@ -510,6 +558,7 @@ type FakeHttpHandler = Arc<
 >;
 
 #[cfg(feature = "test-support")]
+/// A programmable in-memory HTTP transport for application tests.
 pub struct FakeHttpClient {
     handler: Mutex<Option<FakeHttpHandler>>,
     user_agent: HeaderValue,
@@ -517,6 +566,7 @@ pub struct FakeHttpClient {
 
 #[cfg(feature = "test-support")]
 impl FakeHttpClient {
+    /// Creates a fake client whose handler receives every request.
     pub fn create<Fut, F>(handler: F) -> Arc<HttpClientWithUrl>
     where
         Fut: futures::Future<Output = anyhow::Result<Response<AsyncBody>>> + Send + 'static,
@@ -534,6 +584,7 @@ impl FakeHttpClient {
         })
     }
 
+    /// Creates a fake client that returns an empty 404 response.
     pub fn with_404_response() -> Arc<HttpClientWithUrl> {
         Self::create(|_| async move {
             Ok(Response::builder()
@@ -543,6 +594,7 @@ impl FakeHttpClient {
         })
     }
 
+    /// Creates a fake client that returns an empty 200 response.
     pub fn with_200_response() -> Arc<HttpClientWithUrl> {
         Self::create(|_| async move {
             Ok(Response::builder()
@@ -552,6 +604,10 @@ impl FakeHttpClient {
         })
     }
 
+    /// Replaces the handler while providing the previous handler to the new one.
+    ///
+    /// This supports scoped interception: the replacement can inspect a
+    /// request and delegate unmatched requests to the previous handler.
     pub fn replace_handler<Fut, F>(&self, new_handler: F)
     where
         Fut: futures::Future<Output = anyhow::Result<Response<AsyncBody>>> + Send + 'static,
