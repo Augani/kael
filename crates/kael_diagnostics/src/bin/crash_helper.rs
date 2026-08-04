@@ -1,6 +1,8 @@
+#[cfg(unix)]
 use std::io::Write as _;
 
 use anyhow::{Result, bail};
+#[cfg(unix)]
 use kael_diagnostics::{BreadcrumbBuffer, CrashReporter};
 
 #[cfg(unix)]
