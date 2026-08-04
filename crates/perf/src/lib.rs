@@ -3,5 +3,7 @@
 //!
 //! For usage documentation, see the docs on this crate's binary.
 
+#![deny(missing_docs)]
+
 mod implementation;
 pub use implementation::*;

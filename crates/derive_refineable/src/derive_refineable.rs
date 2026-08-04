@@ -1,3 +1,6 @@
+#![doc = include_str!("../README.md")]
+#![deny(missing_docs)]
+
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::TokenStream as TokenStream2;
@@ -8,6 +11,7 @@ use syn::{
 };
 
 #[proc_macro_derive(Refineable, attributes(refineable))]
+/// Generates a partial-update type and `Refineable` implementation for a named struct.
 pub fn derive_refineable(input: TokenStream) -> TokenStream {
     derive_refineable_impl(parse_macro_input!(input))
         .unwrap_or_else(syn::Error::into_compile_error)
@@ -593,7 +597,11 @@ fn refineable_crate_path() -> syn::Result<syn::Path> {
             format!("could not locate the kael_refineable dependency: {error}"),
         )
     })? {
-        FoundCrate::Itself => Ok(parse_quote!(crate)),
+        // Examples, doctests, and integration targets belong to the
+        // `kael_refineable` package, so `proc_macro_crate` reports `Itself`
+        // even though their `crate` root is not the library. The runtime crate
+        // exposes this stable self-alias for its own derives.
+        FoundCrate::Itself => Ok(parse_quote!(::kael_refineable)),
         FoundCrate::Name(name) => {
             let ident = format_ident!("{}", name.replace('-', "_"));
             Ok(parse_quote!(::#ident))

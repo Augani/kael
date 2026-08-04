@@ -1,3 +1,8 @@
+#![doc = include_str!("../README.md")]
+#![deny(missing_docs)]
+
+extern crate self as kael_refineable;
+
 pub use derive_refineable::Refineable;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -30,6 +35,7 @@ static NEXT_CASCADE_ID: AtomicU64 = AtomicU64::new(1);
 /// Fields can be marked with:
 /// - `#[refineable]`: Field is itself refineable (uses nested refinement type)
 pub trait Refineable: Clone {
+    /// The partial-update type accepted by this value.
     type Refinement: Refineable<Refinement = Self::Refinement> + IsEmpty + Default;
 
     /// Applies the given refinement to this instance, modifying it in place.
@@ -66,6 +72,7 @@ pub trait Refineable: Clone {
     fn subtract(&self, refinement: &Self::Refinement) -> Self::Refinement;
 }
 
+/// Reports whether a refinement contains any effective changes.
 pub trait IsEmpty {
     /// Returns `true` if applying this refinement would have no effect.
     fn is_empty(&self) -> bool;

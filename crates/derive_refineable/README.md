@@ -1,9 +1,13 @@
 # kael_derive_refineable
 
-A derive macro for creating refinement types in Rust for Kael
+Implementation crate for `#[derive(Refineable)]`.
 
-Part of the [Kael](https://github.com/Augani/kael) GPU-accelerated Rust UI framework. See the [documentation](https://augani.github.io/kael/) for usage and guides.
+Application and library code should depend on
+[`kael_refineable`](https://docs.rs/kael_refineable), which re-exports this
+derive macro alongside the runtime traits and cascade types it generates code
+against. Keeping the implementation separate avoids a procedural-macro
+dependency in the runtime crate itself.
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE-APACHE](LICENSE-APACHE).
+Licensed under the [Apache License, Version 2.0](https://github.com/Augani/kael/blob/main/LICENSE-APACHE).

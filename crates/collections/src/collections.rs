@@ -1,12 +1,13 @@
-//! Collection aliases used throughout Kael.
-//!
-//! [`HashMap`], [`HashSet`], [`IndexMap`], and [`IndexSet`] use the fast,
-//! deterministic Fx hasher. They are intended for trusted in-process keys,
-//! not attacker-controlled inputs where hash-flood resistance is required.
+#![doc = include_str!("../README.md")]
+#![deny(missing_docs)]
 
+/// A hash map using the fast, deterministic Fx hasher.
 pub type HashMap<K, V> = FxHashMap<K, V>;
+/// A hash set using the fast, deterministic Fx hasher.
 pub type HashSet<T> = FxHashSet<T>;
+/// An insertion-ordered map using the fast, deterministic Fx hasher.
 pub type IndexMap<K, V> = indexmap::IndexMap<K, V, rustc_hash::FxBuildHasher>;
+/// An insertion-ordered set using the fast, deterministic Fx hasher.
 pub type IndexSet<T> = indexmap::IndexSet<T, rustc_hash::FxBuildHasher>;
 
 pub use indexmap::Equivalent;

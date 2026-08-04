@@ -19,7 +19,7 @@ perf-enabled = ["perf"]
 [lib]
 name = "kael_util_macros"
 path = "src/util_macros.rs"
-doctest = false
+doctest = true
 proc-macro = true
 
 [dependencies.perf]
