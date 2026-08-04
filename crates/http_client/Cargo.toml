@@ -24,21 +24,6 @@ doctest = true
 [dependencies.anyhow]
 workspace = true
 
-[dependencies.async-compression]
-version = "0.4"
-features = [
-    "gzip",
-    "futures-io",
-]
-
-[dependencies.async-fs]
-version = "2.1"
-
-[dependencies.async-tar]
-version = "0.6.1"
-default-features = false
-features = ["runtime-tokio"]
-
 [dependencies.bytes]
 version = "1.0"
 
@@ -55,13 +40,6 @@ version = "1.1"
 [dependencies.http-body]
 version = "1.0"
 
-[dependencies.log]
-workspace = true
-features = [
-    "kv_unstable_serde",
-    "serde",
-]
-
 [dependencies.parking_lot]
 version = "0.12.1"
 
@@ -71,49 +49,18 @@ features = [
     "charset",
     "http2",
     "macos-system-configuration",
-    "multipart",
     "rustls-tls-native-roots",
     "socks",
     "stream",
 ]
 default-features = false
 
-[dependencies.serde]
-workspace = true
-features = [
-    "derive",
-    "rc",
-]
-
-[dependencies.serde_json]
-workspace = true
-features = [
-    "preserve_order",
-    "raw_value",
-]
-
-[dependencies.sha2]
-version = "0.10"
-
-[dependencies.tempfile]
-version = "3.20.0"
-
 [dependencies.tokio]
 version = "1.52.3"
 features = ["rt-multi-thread"]
 
-[dependencies.tokio-util]
-version = "0.7"
-features = ["compat"]
-
 [dependencies.url]
 version = "2.2"
-
-[dependencies.util]
-path = "../util"
-package = "kael_util"
-version = "0.3.0"
-
 
 [lints]
 workspace = true

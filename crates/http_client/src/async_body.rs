@@ -8,18 +8,14 @@ use bytes::Bytes;
 use futures::AsyncRead;
 use http_body::{Body, Frame, SizeHint};
 
-/// Based on the implementation of AsyncBody in
-/// <https://github.com/sagebind/isahc/blob/5c533f1ef4d6bdf1fd291b5103c22110f41d0bf0/src/body/mod.rs>.
-pub struct AsyncBody(pub Inner);
+/// An HTTP body backed by empty state, in-memory bytes, or an asynchronous reader.
+///
+/// The implementation is based on isahc's `AsyncBody` design.
+pub struct AsyncBody(Inner);
 
-pub enum Inner {
-    /// An empty body.
+enum Inner {
     Empty,
-
-    /// A body stored in memory.
     Bytes(std::io::Cursor<Bytes>),
-
-    /// An asynchronous reader.
     AsyncReader(Pin<Box<dyn futures::AsyncRead + Send + Sync>>),
 }
 
@@ -39,6 +35,7 @@ impl AsyncBody {
         Self(Inner::AsyncReader(Box::pin(read)))
     }
 
+    /// Creates an in-memory body from shared bytes.
     pub fn from_bytes(bytes: Bytes) -> Self {
         Self(Inner::Bytes(Cursor::new(bytes)))
     }
