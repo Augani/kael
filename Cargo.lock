@@ -4145,7 +4145,6 @@ name = "kael_sum_tree"
 version = "0.3.0"
 dependencies = [
  "arrayvec",
- "log",
  "rand 0.9.4",
  "rayon",
 ]

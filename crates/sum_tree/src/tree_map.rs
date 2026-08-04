@@ -10,13 +10,13 @@ where
     V: Clone;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MapEntry<K, V> {
+struct MapEntry<K, V> {
     key: K,
     value: V,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct MapKey<K>(Option<K>);
+struct MapKey<K>(Option<K>);
 
 impl<K> Default for MapKey<K> {
     fn default() -> Self {
@@ -25,7 +25,7 @@ impl<K> Default for MapKey<K> {
 }
 
 #[derive(Clone, Debug)]
-pub struct MapKeyRef<'a, K>(Option<&'a K>);
+struct MapKeyRef<'a, K>(Option<&'a K>);
 
 impl<K> Default for MapKeyRef<'_, K> {
     fn default() -> Self {
@@ -92,6 +92,7 @@ impl<K: Clone + Ord, V: Clone> TreeMap<K, V> {
         self.0.insert_or_replace(MapEntry { key, value }, ());
     }
 
+    /// Inserts all entries, keeping the last value supplied for each repeated key.
     pub fn extend(&mut self, iter: impl IntoIterator<Item = (K, V)>) {
         let edits: Vec<_> = iter
             .into_iter()
@@ -349,6 +350,7 @@ where
         self.0.remove(key).is_some()
     }
 
+    /// Inserts all keys and discards duplicates.
     pub fn extend(&mut self, iter: impl IntoIterator<Item = K>) {
         self.0.extend(iter.into_iter().map(|key| (key, ())));
     }
@@ -478,6 +480,34 @@ mod tests {
         assert_eq!(map.get(&"b"), Some(&2));
         assert_eq!(map.get(&"c"), Some(&3));
         assert_eq!(map.get(&"d"), Some(&4));
+    }
+
+    #[test]
+    fn bulk_extension_keeps_the_last_value_for_duplicate_keys() {
+        let mut map = TreeMap::default();
+        map.insert("existing", 0);
+        map.extend([
+            ("duplicate", 1),
+            ("other", 2),
+            ("duplicate", 3),
+            ("existing", 4),
+            ("existing", 5),
+        ]);
+
+        assert_eq!(
+            map.iter()
+                .map(|(key, value)| (*key, *value))
+                .collect::<Vec<_>>(),
+            [("duplicate", 3), ("existing", 5), ("other", 2)]
+        );
+    }
+
+    #[test]
+    fn set_extension_discards_duplicate_keys() {
+        let mut set = TreeSet::default();
+        set.extend([3, 1, 3, 2, 1]);
+
+        assert_eq!(set.iter().copied().collect::<Vec<_>>(), [1, 2, 3]);
     }
 
     #[test]

@@ -1,8 +1,11 @@
+#![doc = include_str!("../README.md")]
+
 mod cursor;
 mod tree_map;
 
 use arrayvec::ArrayVec;
 pub use cursor::{Cursor, FilterCursor, Iter};
+#[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use std::marker::PhantomData;
 use std::mem;
@@ -10,9 +13,9 @@ use std::{cmp::Ordering, fmt, iter::FromIterator, sync::Arc};
 pub use tree_map::{MapSeekTarget, TreeMap, TreeSet};
 
 #[cfg(test)]
-pub const TREE_BASE: usize = 2;
+const TREE_BASE: usize = 2;
 #[cfg(not(test))]
-pub const TREE_BASE: usize = 6;
+const TREE_BASE: usize = 6;
 
 /// An item that can be stored in a [`SumTree`]
 ///
@@ -187,8 +190,6 @@ impl Bias {
 /// A B+ tree in which each leaf node contains `Item`s of type `T` and a `Summary`s for each `Item`.
 /// Each internal node contains a `Summary` of the items in its subtree.
 ///
-/// The maximum number of items per node is `TREE_BASE * 2`.
-///
 /// Any [`Dimension`] supported by the [`Summary`] type can be used to seek to a specific location in the tree.
 #[derive(Clone)]
 pub struct SumTree<T: Item>(Arc<Node<T>>);
@@ -293,6 +294,10 @@ impl<T: Item> SumTree<T> {
         }
     }
 
+    #[cfg(feature = "parallel")]
+    /// Builds a tree in parallel while preserving the iterator's order.
+    ///
+    /// Available with the `parallel` feature.
     pub fn from_par_iter<I, Iter>(iter: I, cx: <T::Summary as Summary>::Context<'_>) -> Self
     where
         I: IntoParallelIterator<Iter = Iter>,
@@ -482,6 +487,10 @@ impl<T: Item> SumTree<T> {
         self.append(Self::from_iter(iter, cx), cx);
     }
 
+    #[cfg(feature = "parallel")]
+    /// Appends items in parallel while preserving the iterator's order.
+    ///
+    /// Available with the `parallel` feature.
     pub fn par_extend<I, Iter>(&mut self, iter: I, cx: <T::Summary as Summary>::Context<'_>)
     where
         I: IntoParallelIterator<Iter = Iter>,
@@ -727,6 +736,10 @@ impl<T: KeyedItem> SumTree<T> {
         removed
     }
 
+    /// Applies keyed edits in one tree rebuild and returns replaced or removed items.
+    ///
+    /// Edits may be supplied in any order. If a key appears more than once, the last edit for
+    /// that key wins.
     pub fn edit(
         &mut self,
         mut edits: Vec<Edit<T>>,
@@ -737,7 +750,23 @@ impl<T: KeyedItem> SumTree<T> {
         }
 
         let mut removed = Vec::new();
-        edits.sort_unstable_by_key(|item| item.key());
+        edits.sort_by_key(Edit::key);
+
+        // Repeated keys can arrive through bulk map/set extension or directly
+        // through this API. Preserve input order while sorting so that the final
+        // edit for each key wins deterministically.
+        let mut normalized_edits: Vec<Edit<T>> = Vec::with_capacity(edits.len());
+        for edit in edits {
+            let key = edit.key();
+            if normalized_edits
+                .last()
+                .is_some_and(|previous| previous.key() == key)
+            {
+                *normalized_edits.last_mut().unwrap() = edit;
+            } else {
+                normalized_edits.push(edit);
+            }
+        }
 
         *self = {
             let mut cursor = self.cursor::<T::Key>(cx);
@@ -745,7 +774,7 @@ impl<T: KeyedItem> SumTree<T> {
             let mut buffered_items = Vec::new();
 
             cursor.seek(&T::Key::zero(cx), Bias::Left);
-            for edit in edits {
+            for edit in normalized_edits {
                 let new_key = edit.key();
                 let mut old_item = cursor.item();
 
@@ -807,7 +836,7 @@ where
 }
 
 #[derive(Clone)]
-pub enum Node<T: Item> {
+enum Node<T: Item> {
     Internal {
         height: u8,
         summary: T::Summary,
@@ -937,6 +966,17 @@ mod tests {
     use rand::{distr::StandardUniform, prelude::*};
     use std::cmp;
 
+    fn extend_for_test(tree: &mut SumTree<u8>, items: Vec<u8>, use_parallel: bool) {
+        #[cfg(feature = "parallel")]
+        if use_parallel {
+            tree.par_extend(items, ());
+            return;
+        }
+
+        let _ = use_parallel;
+        tree.extend(items, ());
+    }
+
     #[test]
     fn test_extend_and_push_tree() {
         let mut tree1 = SumTree::default();
@@ -969,15 +1009,12 @@ mod tests {
             let rng = &mut rng;
             let mut tree = SumTree::<u8>::default();
             let count = rng.random_range(0..10);
-            if rng.random() {
-                tree.extend(rng.sample_iter(StandardUniform).take(count), ());
-            } else {
-                let items = rng
-                    .sample_iter(StandardUniform)
-                    .take(count)
-                    .collect::<Vec<_>>();
-                tree.par_extend(items, ());
-            }
+            let items = rng
+                .sample_iter(StandardUniform)
+                .take(count)
+                .collect::<Vec<_>>();
+            let use_parallel = rng.random();
+            extend_for_test(&mut tree, items, use_parallel);
 
             for _ in 0..num_operations {
                 let splice_end = rng.random_range(0..tree.extent::<Count>(()).0 + 1);
@@ -995,11 +1032,8 @@ mod tests {
                 tree = {
                     let mut cursor = tree.cursor::<Count>(());
                     let mut new_tree = cursor.slice(&Count(splice_start), Bias::Right);
-                    if rng.random() {
-                        new_tree.extend(new_items, ());
-                    } else {
-                        new_tree.par_extend(new_items, ());
-                    }
+                    let use_parallel = rng.random();
+                    extend_for_test(&mut new_tree, new_items, use_parallel);
                     cursor.seek(&Count(splice_end), Bias::Right);
                     new_tree.append(cursor.slice(&tree_end, Bias::Right), ());
                     new_tree
@@ -1010,8 +1044,6 @@ mod tests {
                     tree.iter().collect::<Vec<_>>(),
                     tree.cursor::<()>(()).collect::<Vec<_>>()
                 );
-
-                log::info!("tree items: {:?}", tree.items(()));
 
                 let mut filter_cursor =
                     tree.filter::<_, Count>((), |summary| summary.contains_even);
@@ -1030,17 +1062,14 @@ mod tests {
                     expected_filtered_items.len().saturating_sub(1)
                 };
                 while item_ix < expected_filtered_items.len() {
-                    log::info!("filter_cursor, item_ix: {}", item_ix);
                     let actual_item = filter_cursor.item().unwrap();
                     let (reference_index, reference_item) = expected_filtered_items[item_ix];
                     assert_eq!(actual_item, &reference_item);
                     assert_eq!(filter_cursor.start().0, reference_index);
-                    log::info!("next");
                     filter_cursor.next();
                     item_ix += 1;
 
                     while item_ix > 0 && rng.random_bool(0.2) {
-                        log::info!("prev");
                         filter_cursor.prev();
                         item_ix -= 1;
 
@@ -1334,6 +1363,18 @@ mod tests {
         assert_eq!(tree.get(&1, ()), Some(&1));
         assert_eq!(tree.get(&2, ()), Some(&2));
         assert_eq!(tree.get(&4, ()), Some(&4));
+
+        let removed = tree.edit(
+            vec![
+                Edit::Insert(3),
+                Edit::Remove(3),
+                Edit::Remove(2),
+                Edit::Insert(2),
+            ],
+            (),
+        );
+        assert_eq!(tree.items(()), vec![1, 2, 4]);
+        assert_eq!(removed, vec![2]);
     }
 
     #[test]

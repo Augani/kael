@@ -60,7 +60,7 @@ where
     T: Item,
     D: Dimension<'a, T::Summary>,
 {
-    pub fn new(tree: &'a SumTree<T>, cx: <T::Summary as Summary>::Context<'b>) -> Self {
+    pub(super) fn new(tree: &'a SumTree<T>, cx: <T::Summary as Summary>::Context<'b>) -> Self {
         Self {
             tree,
             stack: ArrayVec::new(),
@@ -643,7 +643,7 @@ where
     T: Item,
     D: Dimension<'a, T::Summary>,
 {
-    pub fn new(
+    pub(super) fn new(
         tree: &'a SumTree<T>,
         cx: <T::Summary as Summary>::Context<'b>,
         filter_node: F,
