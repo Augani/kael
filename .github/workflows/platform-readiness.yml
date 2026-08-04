@@ -214,9 +214,9 @@ jobs:
         shell: bash
         run: |
           if [ "${{ steps.download-baseline.outputs.baseline_found }}" == "true" ]; then
-            cargo bench -p kael --bench framework -- --output benchmark-results.json --compare
+            cargo bench -p kael --bench framework -- --compare
           else
-            cargo bench -p kael --bench framework -- --output benchmark-results.json
+            cargo bench -p kael --bench framework
           fi
 
       - name: Upload benchmark results
