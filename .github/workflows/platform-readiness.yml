@@ -62,17 +62,20 @@ jobs:
   verify:
     name: Verify (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: macos-latest
             label: macOS
+            timeout_minutes: 45
           - os: windows-latest
             label: Windows
+            timeout_minutes: 75
           - os: ubuntu-latest
             label: Linux
+            timeout_minutes: 45
 
     steps:
       - uses: actions/checkout@v7
