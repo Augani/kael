@@ -39,6 +39,12 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Refuse publishing outside main
+        if: inputs.publish && github.ref != 'refs/heads/main'
+        run: |
+          echo "Publishing is only allowed from refs/heads/main; got $GITHUB_REF" >&2
+          exit 1
+
       - name: Strict workspace lint
         run: >-
           cargo clippy --workspace --all-targets
@@ -55,7 +61,7 @@ jobs:
 
   publish:
     name: Publish to crates.io
-    if: inputs.publish
+    if: inputs.publish && github.ref == 'refs/heads/main'
     needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -75,4 +81,5 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           KAEL_PUBLISH_CONFIRM: publish-kael-0.3.0
+          KAEL_PUBLISH_REF: ${{ github.ref }}
         run: bash scripts/publish-all.sh --execute
