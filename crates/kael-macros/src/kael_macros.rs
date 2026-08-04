@@ -1,3 +1,6 @@
+#![doc = include_str!("../README.md")]
+#![deny(missing_docs)]
+
 mod derive_action;
 mod derive_app_context;
 mod derive_into_element;
@@ -21,7 +24,7 @@ pub fn derive_action(input: TokenStream) -> TokenStream {
     derive_action::derive_action(input)
 }
 
-/// This can be used to register an action with the GPUI runtime when you want to manually implement
+/// Registers an action with the Kael runtime when you manually implement
 /// the `Action` trait. Typically you should use the `Action` derive macro or `actions!` macro
 /// instead.
 #[proc_macro]
@@ -148,7 +151,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
     styles::box_shadow_style_methods(input)
 }
 
-/// `#[kael::test]` can be used to annotate test functions that run with GPUI support.
+/// `#[kael::test]` annotates test functions that run with Kael support.
 ///
 /// It supports both synchronous and asynchronous tests, and can provide you with
 /// as many `TestAppContext` instances as you need.

@@ -16,7 +16,7 @@ license.workspace = true
 [lib]
 name = "kael_refineable"
 path = "src/refineable.rs"
-doctest = false
+doctest = true
 
 [dependencies.derive_refineable]
 path = "../derive_refineable"

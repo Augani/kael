@@ -19,7 +19,7 @@ test-support = []
 [lib]
 name = "kael_collections"
 path = "src/collections.rs"
-doctest = false
+doctest = true
 
 [dependencies.indexmap]
 version = "2.7.0"

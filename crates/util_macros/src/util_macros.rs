@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+#![deny(missing_docs)]
 #![allow(clippy::test_attr_in_doctest)]
 
 #[cfg(feature = "perf-enabled")]
@@ -12,7 +14,7 @@ use syn::{ItemFn, LitStr, parse_macro_input, parse_quote};
 ///
 /// # Example
 /// ```rust
-/// use util_macros::path;
+/// use kael_util_macros::path;
 ///
 /// let path = path!("/Users/user/file.txt");
 /// #[cfg(target_os = "windows")]
@@ -33,7 +35,7 @@ pub fn path(input: TokenStream) -> TokenStream {
 ///
 /// # Example
 /// ```rust
-/// use util_macros::uri;
+/// use kael_util_macros::uri;
 ///
 /// let uri = uri!("file:///path/to/file");
 /// #[cfg(target_os = "windows")]
@@ -54,7 +56,7 @@ pub fn uri(input: TokenStream) -> TokenStream {
 ///
 /// # Example
 /// ```rust
-/// use util_macros::line_endings;
+/// use kael_util_macros::line_endings;
 ///
 /// let text = line_endings!("Hello\nWorld");
 /// #[cfg(target_os = "windows")]
@@ -197,7 +199,7 @@ impl PerfArgs {
 ///
 /// # Examples
 /// ```rust
-/// use util_macros::perf;
+/// use kael_util_macros::perf;
 ///
 /// #[perf]
 /// fn generic_test() {
@@ -213,7 +215,7 @@ impl PerfArgs {
 /// This also works with `#[kael::test]`s, though in most cases it shouldn't
 /// be used with automatic iterations.
 /// ```rust,ignore
-/// use util_macros::perf;
+/// use kael_util_macros::perf;
 ///
 /// #[perf(iterations = 1, critical)]
 /// #[kael::test]
