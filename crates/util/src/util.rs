@@ -1,4 +1,5 @@
 pub mod arc_cow;
+#[cfg(feature = "archive")]
 pub mod archive;
 pub mod command;
 pub mod fs;
@@ -6,6 +7,7 @@ pub mod markdown;
 pub mod paths;
 pub mod redact;
 pub mod rel_path;
+#[cfg(feature = "schema")]
 pub mod schemars;
 pub mod serde;
 pub mod shell;
