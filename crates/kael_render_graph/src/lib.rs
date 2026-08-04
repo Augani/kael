@@ -133,7 +133,7 @@ pub struct RenderGraph {
 }
 
 /// Lifetime of a resource over the execution order, as `[first, last]` indices
-/// into [`CompiledGraph::order`].
+/// into the compiled graph's execution order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResourceLifetime {
     /// The resource this lifetime describes.

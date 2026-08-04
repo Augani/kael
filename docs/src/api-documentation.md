@@ -82,9 +82,9 @@ RUSTDOCFLAGS="-D warnings" \
 ```
 
 Open `target/doc/kael/index.html` or run `cargo doc -p kael --open` for a faster
-default-feature build. The production-readiness workflow also documents the
-full workspace with every feature enabled, so broken intra-doc links and other
-rustdoc warnings anywhere in the public crate set block a release candidate.
+default-feature build. The production-readiness workflow also documents every
+public library crate with all features enabled, so broken intra-doc links and
+other rustdoc warnings anywhere in that crate set block a release candidate.
 
 ## Documentation guarantees
 

@@ -453,7 +453,7 @@ impl std::fmt::Display for NormalizeError {
 ///
 /// </div>
 ///
-/// [`path::absolute`](absolute) is an alternative that preserves `..`.
+/// [`std::path::absolute`] is an alternative that preserves `..`.
 /// Or [`Path::canonicalize`] can be used to resolve any `..` by querying the filesystem.
 pub fn normalize_lexically(path: &Path) -> Result<PathBuf, NormalizeError> {
     use std::path::Component;

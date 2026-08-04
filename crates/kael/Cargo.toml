@@ -7,7 +7,8 @@ version.workspace = true
 authors.workspace = true
 build = "build.rs"
 publish = true
-description = "GPU-accelerated native UI framework for Rust — build desktop apps with Metal, DirectX, and Vulkan rendering"
+description = "Resource-efficient native application framework for Rust with retained UI, GPU rendering, and desktop capabilities"
+documentation = "https://docs.rs/kael"
 homepage.workspace = true
 readme = "README.md"
 keywords = [
@@ -23,8 +24,15 @@ repository.workspace = true
 exclude = [
     "benchmark-results.json",
     "benches/",
+    "docs/",
     "examples/",
 ]
+
+[package.metadata.docs.rs]
+features = ["agent-tools", "runtime_shaders"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = [

@@ -129,7 +129,7 @@ pub fn decode_ppm(bytes: &[u8]) -> Option<Image> {
 }
 
 /// Encode interleaved `samples` as a 16-bit PCM WAV (RIFF/WAVE) file — the dependency-free
-/// audio export target, the [`mix_range`](crate::audio_mix::mix_range) counterpart to
+/// audio export target, the [`mix_range`] counterpart to
 /// [`encode_ppm`]. Float samples are clamped to `-1.0..=1.0` and quantized to `i16`.
 pub fn encode_wav_pcm16(samples: &[f32], sample_rate: u32, channels: u16) -> Vec<u8> {
     try_encode_wav_pcm16(samples, sample_rate, channels).unwrap_or_default()
