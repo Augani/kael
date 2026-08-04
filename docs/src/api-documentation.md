@@ -54,6 +54,8 @@ The core crate keeps costly or specialized integrations optional:
 
 | Feature | Adds |
 | --- | --- |
+| `auto-update` | Signed update feeds, checked download queues, and platform installers |
+| `lottie` | Native Lottie and dotLottie decoding and playback |
 | `webview` | Explicit hosted web surfaces |
 | `media` | Native media playback integration |
 | `storage` | Storage primitives through `kael_storage` |

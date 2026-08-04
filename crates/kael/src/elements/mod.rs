@@ -18,6 +18,7 @@ mod label;
 mod layer;
 mod list;
 mod local_history;
+#[cfg(feature = "lottie")]
 mod lottie;
 mod menu_button;
 mod modal;
@@ -63,6 +64,7 @@ pub use img::*;
 pub use label::*;
 pub use layer::*;
 pub use list::*;
+#[cfg(feature = "lottie")]
 pub use lottie::*;
 pub use menu_button::*;
 pub use modal::*;

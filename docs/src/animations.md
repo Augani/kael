@@ -146,6 +146,13 @@ Chain whole animations with `AnimationSequence::new().then(...).then_for(duratio
 
 ## Lottie animated assets
 
+Enable the optional native renderer first:
+
+```toml
+[dependencies]
+kael = { version = "0.3", features = ["lottie"] }
+```
+
 Use `lottie(src)` for native vector animation assets instead of routing every animated visual through a WebView. Sources can be embedded resources, paths, URLs, byte buffers, or pre-decoded `LottieAnimation` values, and the element supports autoplay, once/loop/ping-pong playback, object-fit placement, loading content, failure fallback content, and frame prefetching:
 
 ```rust

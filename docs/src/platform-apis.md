@@ -40,7 +40,10 @@ kael = { version = "0.3", features = ["webview"] }
 ```
 
 Use `wayland` instead of, or alongside, `x11` as required. Other product
-services are opt-in through core features or their focused crates.
+services are opt-in through core features or their focused crates. Enable
+`auto-update` for Kael's signed-feed, checked-download, and platform-installer
+pipeline, and `lottie` for native Lottie/dotLottie playback. Leaving these
+features off keeps their implementation dependencies out of the application.
 
 ## Service overview
 
@@ -56,7 +59,7 @@ services are opt-in through core features or their focused crates.
 | Sharing | `kael_share` or core `share` feature | Destination coverage differs by OS |
 | Networking | `kael_http_client`, `kael_net` | HTTP plus higher-level network policy/state |
 | Diagnostics | `kael_diagnostics` | Bounded logs, metrics, reports, crash helper |
-| Updates | `kael_release` and core updater | Signed feeds and product-controlled installation |
+| Updates | `kael_release` and core `auto-update` feature | Signed feeds and product-controlled installation |
 | Media | `kael-media`, `kael_audio`, engine crates | Opt-in due to codecs and platform dependencies |
 | Web compatibility | core `webview` feature | WebView2 on Windows, WebKitGTK on Linux |
 

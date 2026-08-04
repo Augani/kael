@@ -46,16 +46,13 @@ use crate::{
     Capability, CaptureHandoff, CaptureHandoffBuilder, ClipboardItem, ClipboardItemBuilder,
     CommandIpcHandoff, CommandIpcHandoffBuilder, CommandRegistry, CrashReport, CrashReporter,
     CrashReporterBuilder, CursorStyle, DialogOptions, DispatchPhase, DisplayId, DockMenuBuilder,
-    DocumentOutputHandoff, DocumentOutputHandoffBuilder, DownloadBatch, DownloadBatchBuilder,
-    DownloadDestinationPlan, DownloadDestinationPlanBuilder, DownloadExecutionPlan,
-    DownloadExecutionPlanBuilder, DownloadHandoff, DownloadHandoffBuilder, DownloadRequest,
-    DownloadRequestBuilder, Easing, EventEmitter, ExternalDropData, FileAccessBookmark,
-    FileAccessBookmarkBuilder, FileDropFilter, FileWatchOptions, FileWatchOptionsBuilder,
-    FileWatchSet, FileWatchSetBuilder, FileWatcher, FocusHandle, FocusMap, FocusedWindowInfo,
-    FocusedWindowQueryBuilder, ForegroundExecutor, Global, GlobalHotkeyBuilder, GlobalHotkeySet,
-    GlobalHotkeyUnregistration, HelperPluginHandoff, HelperPluginHandoffBuilder, KeyBinding,
-    KeyBindingContextPredicate, KeyContext, Keymap, Keystroke, LayoutId, MediaKeyEvent, Menu,
-    MenuBarBuilder, MenuBarPlan, MenuItem, MessageDialogBuilder, MessageDialogPlan,
+    DocumentOutputHandoff, DocumentOutputHandoffBuilder, Easing, EventEmitter, ExternalDropData,
+    FileAccessBookmark, FileAccessBookmarkBuilder, FileDropFilter, FileWatchOptions,
+    FileWatchOptionsBuilder, FileWatchSet, FileWatchSetBuilder, FileWatcher, FocusHandle, FocusMap,
+    FocusedWindowInfo, FocusedWindowQueryBuilder, ForegroundExecutor, Global, GlobalHotkeyBuilder,
+    GlobalHotkeySet, GlobalHotkeyUnregistration, HelperPluginHandoff, HelperPluginHandoffBuilder,
+    KeyBinding, KeyBindingContextPredicate, KeyContext, Keymap, Keystroke, LayoutId, MediaKeyEvent,
+    Menu, MenuBarBuilder, MenuBarPlan, MenuItem, MessageDialogBuilder, MessageDialogPlan,
     NativeContextMenuBuilder, NavigationHandoff, NavigationHandoffBuilder, NetworkPolicy,
     NetworkPolicyBuilder, NetworkRealtimeHandoff, NetworkRealtimeHandoffBuilder, NetworkStatus,
     NotificationAction, NotificationBuilder, NotificationDeliveryPlan, NotificationFeatureSupport,
@@ -76,6 +73,12 @@ use crate::{
         theme_file_event_matches_target,
     },
     try_current_platform,
+};
+#[cfg(feature = "auto-update")]
+use crate::{
+    DownloadBatch, DownloadBatchBuilder, DownloadDestinationPlan, DownloadDestinationPlanBuilder,
+    DownloadExecutionPlan, DownloadExecutionPlanBuilder, DownloadHandoff, DownloadHandoffBuilder,
+    DownloadRequest, DownloadRequestBuilder,
 };
 #[cfg(feature = "media")]
 use crate::{
@@ -37341,6 +37344,7 @@ impl App {
     }
 
     /// Build a checked app-owned download queue handoff descriptor.
+    #[cfg(feature = "auto-update")]
     pub fn download_handoff_checked(
         &self,
         handoff: DownloadHandoffBuilder,
@@ -37349,6 +37353,7 @@ impl App {
     }
 
     /// Build a checked app-owned download destination plan before Save As or queueing.
+    #[cfg(feature = "auto-update")]
     pub fn download_destination_plan_checked(
         &self,
         destination: DownloadDestinationPlanBuilder,
@@ -37357,6 +37362,7 @@ impl App {
     }
 
     /// Build a checked app-owned download request before handing it to a worker.
+    #[cfg(feature = "auto-update")]
     pub fn download_request_checked(
         &self,
         request: DownloadRequestBuilder,
@@ -37365,11 +37371,13 @@ impl App {
     }
 
     /// Build a checked app-owned download batch before queue execution.
+    #[cfg(feature = "auto-update")]
     pub fn download_batch_checked(&self, batch: DownloadBatchBuilder) -> Result<DownloadBatch> {
         batch.build_checked()
     }
 
     /// Build a checked app-owned download execution plan before workers start.
+    #[cfg(feature = "auto-update")]
     pub fn download_execution_plan_checked(
         &self,
         plan: DownloadExecutionPlanBuilder,
@@ -40862,10 +40870,9 @@ mod test {
         AppIconFormat, AppIconPurpose, AppIconSetBuilder, AppLifecycleCommand,
         AppLifecycleCommandKind, AppLifecyclePolicyBuilder, AppLifecycleStartupHandoff,
         AppLifecycleStartupHandoffBuilder, AppLifecycleStartupNextAction, AppMetadataBuilder,
-        AppNetworkRequestBuilder, AppPackageManifest, AppPackageManifestBuilder,
-        AppPackageReadinessBuilder, AppPackageReadinessIssueKind, AppPackageReadinessSeverity,
-        AppPathBuilder, AppPathRole, AppPrivacyManifestBuilder, AppPrivacyPermissionBuilder,
-        AppPrivacyPermissionKind, AppRealtimeConnection, AppRealtimeConnectionSetBuilder,
+        AppPackageManifest, AppPackageManifestBuilder, AppPackageReadinessBuilder,
+        AppPackageReadinessIssueKind, AppPackageReadinessSeverity, AppPathBuilder, AppPathRole,
+        AppPrivacyManifestBuilder, AppPrivacyPermissionBuilder, AppPrivacyPermissionKind,
         AppResourceBudgetBuilder, AppResourceBudgetIssueKind, AppRuntimeSnapshotQueryBuilder,
         AppSigningPlanBuilder, AppSigningTargetBuilder, AppStorageDurability,
         AppStorageEntryBuilder, AppStorageKind, AppStoragePlanBuilder, AppStorageSessionHandoff,
@@ -40892,10 +40899,8 @@ mod test {
         DefaultHandlerPlanBuilder, DefaultHandlerScope, DesktopShellChromeHandoffBuilder,
         DesktopShellChromeNextAction, DeviceAccessKind, DeviceAccessRequest,
         DeviceAccessRequestBuilder, DisplayQueryBuilder, DockBadgeBuilder, DocumentExportFormat,
-        DocumentOutputHandoffBuilder, DocumentOutputNextAction, DownloadBatchBuilder,
-        DownloadDestinationPlanBuilder, DownloadExecutionPlanBuilder, DownloadHandoffBuilder,
-        DownloadHandoffNextAction, DownloadRequest, DuplicateLaunchHandoff, DuplicateLaunchPayload,
-        Easing, EditCommandStateSnapshot, EmbeddedHostedPaneProfile,
+        DocumentOutputHandoffBuilder, DocumentOutputNextAction, DuplicateLaunchHandoff,
+        DuplicateLaunchPayload, Easing, EditCommandStateSnapshot, EmbeddedHostedPaneProfile,
         EmbeddedHostedViewHandoffBuilder, EmbeddedHostedViewNextAction, ExternalDropData,
         FeatureReport, FileAccessBookmarkBuilder, FileAssociationBuilder, FileAssociationRole,
         FileAssociationSetBuilder, FileDropFilter, FileDropIntentBuilder, FileDropPathKind,
@@ -40918,13 +40923,12 @@ mod test {
         MessageDialogBuilder, MessageDialogHandoffBuilder, MessageDialogNextAction, MetricUnit,
         NativeContextMenuBuilder, NativeThemeSnapshot, NavigationHandoffBuilder,
         NavigationHandoffNextAction, NavigationRouteDescriptorBuilder, NetworkPolicy,
-        NetworkPolicyBuilder, NetworkRealtimeHandoffBuilder, NetworkRealtimeNextAction,
-        NetworkStatus, NetworkStatusMonitorBuilder, NotificationAction, NotificationActionEvent,
-        NotificationActionFollowUpBuilder, NotificationActionFollowUpNextAction,
-        NotificationBuilder, NotificationFlowHandoffBuilder, NotificationFlowNextAction,
-        OpenDialogBuilder, OpenRequest, OpenRequestKind, OpenRequestRouteNextAction,
-        OpenRequestRoutePlanBuilder, PackagingUpdateHandoffBuilder, PackagingUpdateNextAction,
-        PathPromptOptions, PathScope, PerformanceEvidenceHandoffBuilder,
+        NetworkPolicyBuilder, NetworkStatus, NetworkStatusMonitorBuilder, NotificationAction,
+        NotificationActionEvent, NotificationActionFollowUpBuilder,
+        NotificationActionFollowUpNextAction, NotificationBuilder, NotificationFlowHandoffBuilder,
+        NotificationFlowNextAction, OpenDialogBuilder, OpenRequest, OpenRequestKind,
+        OpenRequestRouteNextAction, OpenRequestRoutePlanBuilder, PackagingUpdateHandoffBuilder,
+        PackagingUpdateNextAction, PathPromptOptions, PathScope, PerformanceEvidenceHandoffBuilder,
         PerformanceEvidenceNextAction, PermissionBrokerInstallBuilder, PermissionRequestBuilder,
         PermissionResult, PermissionStatus, PlatformFeature, PowerMode, PowerSaveBlockerBuilder,
         PowerSaveBlockerKind, PowerSaveBlockerStopBuilder, PrintJob, ProcessClass, ProcessId,
@@ -40948,6 +40952,13 @@ mod test {
         WindowManagementHandoffBuilder, WindowManagementNextAction, WindowOpacityBuilder,
         WindowOptionsBuilder, WindowPlacementBuilder, WindowPresentationPolicyBuilder,
         WindowZOrderPolicyBuilder, WorkspaceCloseBuilder, px, size,
+    };
+    #[cfg(feature = "auto-update")]
+    use crate::{
+        AppNetworkRequestBuilder, AppRealtimeConnection, AppRealtimeConnectionSetBuilder,
+        DownloadBatchBuilder, DownloadDestinationPlanBuilder, DownloadExecutionPlanBuilder,
+        DownloadHandoffBuilder, DownloadHandoffNextAction, DownloadRequest,
+        NetworkRealtimeHandoffBuilder, NetworkRealtimeNextAction,
     };
     #[cfg(feature = "media")]
     use crate::{
@@ -55280,6 +55291,7 @@ mod test {
         );
     }
 
+    #[cfg(feature = "auto-update")]
     #[test]
     fn app_network_and_download_handoffs_use_checked_builders() {
         let cx = TestAppContext::single();
