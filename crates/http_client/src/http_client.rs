@@ -1,6 +1,4 @@
 mod async_body;
-pub mod github;
-pub mod github_download;
 
 pub use anyhow::{Result, anyhow};
 pub use async_body::{AsyncBody, Inner};
@@ -8,10 +6,7 @@ use derive_more::Deref;
 use http::HeaderValue;
 pub use http::{self, Method, Request, Response, StatusCode, Uri};
 
-use futures::{
-    FutureExt as _, StreamExt as _,
-    future::{self, BoxFuture},
-};
+use futures::{StreamExt as _, future::BoxFuture};
 use http::request::Builder;
 #[cfg(feature = "test-support")]
 use parking_lot::Mutex;
@@ -34,7 +29,6 @@ pub enum RedirectPolicy {
     FollowLimit(u32),
     FollowAll,
 }
-pub struct FollowRedirects(pub bool);
 
 pub trait HttpRequestExt {
     /// Conditionally modify self with the given closure.
@@ -120,14 +114,6 @@ pub trait HttpClient: 'static + Send + Sync {
     fn as_fake(&self) -> &FakeHttpClient {
         panic!("called as_fake on {}", type_name::<Self>())
     }
-
-    fn send_multipart_form<'a>(
-        &'a self,
-        _url: &str,
-        _request: reqwest::multipart::Form,
-    ) -> BoxFuture<'a, anyhow::Result<Response<AsyncBody>>> {
-        future::ready(Err(anyhow!("not implemented"))).boxed()
-    }
 }
 
 /// An [`HttpClient`] that may have a proxy.
@@ -179,14 +165,6 @@ impl HttpClient for HttpClientWithProxy {
     #[cfg(feature = "test-support")]
     fn as_fake(&self) -> &FakeHttpClient {
         self.client.as_fake()
-    }
-
-    fn send_multipart_form<'a>(
-        &'a self,
-        url: &str,
-        form: reqwest::multipart::Form,
-    ) -> BoxFuture<'a, anyhow::Result<Response<AsyncBody>>> {
-        self.client.send_multipart_form(url, form)
     }
 }
 
@@ -294,14 +272,6 @@ impl HttpClient for HttpClientWithUrl {
     #[cfg(feature = "test-support")]
     fn as_fake(&self) -> &FakeHttpClient {
         self.client.as_fake()
-    }
-
-    fn send_multipart_form<'a>(
-        &'a self,
-        url: &str,
-        request: reqwest::multipart::Form,
-    ) -> BoxFuture<'a, anyhow::Result<Response<AsyncBody>>> {
-        self.client.send_multipart_form(url, request)
     }
 }
 
@@ -488,24 +458,6 @@ impl HttpClient for ReqwestClient {
 
     fn proxy(&self) -> Option<&Url> {
         self.proxy.as_ref()
-    }
-
-    fn send_multipart_form<'a>(
-        &'a self,
-        url: &str,
-        form: reqwest::multipart::Form,
-    ) -> BoxFuture<'a, anyhow::Result<Response<AsyncBody>>> {
-        let this = self.clone();
-        let url = url.to_string();
-
-        Box::pin(async move {
-            Self::run_on_runtime(async move {
-                let client = this.build_client(&RedirectPolicy::FollowAll)?;
-                let response = client.post(url).multipart(form).send().await?;
-                Self::into_response(response).await
-            })
-            .await
-        })
     }
 }
 
