@@ -9,6 +9,10 @@ Applications can use `kael` without this crate. Choose `kael_ui` when you want
 ready-made components that can be reshaped around a product's own design tokens
 and brand.
 
+Start with the
+[component guide](https://augani.github.io/kael/component-library.html), then
+use this crate's module and type documentation while implementing a view.
+
 ```toml
 [dependencies]
 kael = "0.3"
@@ -81,8 +85,8 @@ cargo run -p kael_ui --example astryx_showcase \
   --features "media kael/runtime_shaders"
 ```
 
-Astryx and its assets are repository-only and are excluded from this published
-crate. Package consumers receive the library and its required font assets, not
-the example application or its media.
+Astryx and its assets are repository-only and are not part of the crate package.
+Crate consumers receive the library and its required font assets, not the
+example application or its media.
 
 Licensed under Apache-2.0.

@@ -39,6 +39,42 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
+  api-docs:
+    name: API Documentation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux dependencies
+        run: bash scripts/ci/install-linux-deps.sh
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check docs.rs profiles
+        env:
+          DOCS_RS: 1
+          RUSTDOCFLAGS: --cfg docsrs -D warnings
+        run: |
+          cargo doc -p kael --features "agent-tools runtime_shaders" --no-deps
+          cargo doc -p kael_ui --features "html-render markdown kael/runtime_shaders" --no-deps
+
+      - name: Check all-feature API documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          cargo doc --workspace --all-features --no-deps \
+            --exclude kael-cli \
+            --exclude xtask \
+            --exclude dashboard-app \
+            --exclude messaging-app \
+            --exclude workspace-app
+
   security:
     name: Dependency security audit
     runs-on: ubuntu-latest
@@ -75,7 +111,7 @@ jobs:
             timeout_minutes: 75
           - os: ubuntu-latest
             label: Linux
-            timeout_minutes: 45
+            timeout_minutes: 75
 
     steps:
       - uses: actions/checkout@v7

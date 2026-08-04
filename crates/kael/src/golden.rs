@@ -2,10 +2,10 @@
 //!
 //! GPU rasterization is not bit-exact across drivers and backends, so a golden test
 //! cannot demand byte equality. This module compares a rendered frame to a reference
-//! under an explicit [`Tolerance`]: a per-channel difference threshold and a cap on
-//! the fraction of pixels allowed to exceed it. The comparison is a pure function
-//! over 8-bit, 4-channel byte buffers (the format the off-screen readback produces),
-//! so it runs identically on every platform.
+//! under an explicit [`Tolerance`](crate::golden::Tolerance): a per-channel difference
+//! threshold and a cap on the fraction of pixels allowed to exceed it. The comparison
+//! is a pure function over 8-bit, 4-channel byte buffers (the format the off-screen
+//! readback produces), so it runs identically on every platform.
 
 use anyhow::{Result, bail};
 

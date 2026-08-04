@@ -1,86 +1,80 @@
 # Kael
 
-**GPU-accelerated UI framework for native desktop apps in Rust.**
+**Build ambitious desktop software that does more with less.**
 
-Kael replaces browser-runtime stack with a single Rust crate that gives you everything you need to build production desktop applications — IDEs, video editors, dashboards, design tools — with native GPU performance on macOS, Windows, and Linux.
+Kael is a native, GPU-accelerated application framework for Rust. It combines a
+retained renderer, reactive application state, native platform services,
+production tooling, and optional product batteries in one coherent system for
+macOS, Windows, and Linux.
 
-> **Kael is a fork of [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui)**, the UI framework [Zed Industries](https://zed.dev) built for the Zed editor. It was previously distributed as the *adabraka GPUI fork* and renamed to Kael. It is an independent project and is not affiliated with or endorsed by Zed Industries.
+The goal is not merely to render a window. Kael is for long-lived PC
+applications—editors, agent workspaces, communication products, dashboards,
+media tools, and creative software—that must remain responsive as their data,
+windows, background work, and feature surface grow.
 
-## What you get
+> Kael began as a fork of
+> [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), created by
+> Zed Industries, and was previously distributed as the adabraka GPUI fork.
+> Kael is an independent project and is not affiliated with or endorsed by Zed
+> Industries.
 
-| Layer | What Kael provides |
-|-------|-------------------|
-| **Widgets** | Button, TextInput, Checkbox, Toggle, RadioGroup, Slider, Select, DatePicker, Modal, Popover, Tabs, Disclosure, Progress, Toast, Splitter, and more |
-| **Layout** | GPU-accelerated flexbox via Taffy, responsive sizing, scroll containers |
-| **Rendering** | Metal (macOS), DirectX 11 (Windows), Vulkan (Linux) — 60fps (up to 120fps on ProMotion displays), sRGB-correct, pixel-perfect |
-| **State** | Reactive `Entity<T>` system with automatic re-rendering on change |
-| **Platform** | File dialogs, system tray, native menus, global hotkeys, notifications, clipboard, printing, auto-updates, session persistence |
-| **Advanced** | Plugin system (WASM sandboxed), multi-process IPC, accessibility, theming, gestures |
+## Two layers, one foundation
 
-## Quick start
+| Layer | Use it for |
+| --- | --- |
+| `kael` | Rendering, entities, elements, layout, text, input, accessibility, windows, async work, and native platform primitives |
+| `kael_ui` | Brandable controls, data surfaces, editors, charts, navigation, overlays, feedback, media controls, and responsive layouts |
 
-Add to your `Cargo.toml`:
+`kael_ui` depends on `kael`; the primitive crate never depends on the component
+crate. A product can use Kael with its own design system, adopt the complete UI
+library, or mix the two.
+
+## Designed for efficient, capable applications
+
+- Retained rendering, invalidation, frame skipping, virtualization, bounded
+  caches, and GPU budgets avoid work that does not improve the current frame.
+- Rust types flow through UI, state, async tasks, platform services,
+  diagnostics, packaging, and updates without a second application runtime.
+- Capability reports expose platform differences rather than hiding them behind
+  APIs that may not work on a user's machine.
+- Focused support crates add storage, networking, secrets, documents,
+  diagnostics, notifications, sharing, media, release services, and application
+  engines without forcing every app to compile every battery.
+- Styling primitives and design tokens keep the final product's identity in the
+  application's hands.
+
+## Start building
+
+Create an application with the CLI:
+
+```bash
+cargo install kael-cli
+kael new my_app
+cd my_app
+cargo run
+```
+
+Or choose the layers directly:
 
 ```toml
 [dependencies]
 kael = "0.3"
+kael_ui = "0.3" # optional
 ```
 
-Write your first app:
+Continue with [Getting Started](getting-started.md), then read
+[Core Concepts](core-concepts.md). Use [Choosing Kael](why-kael.md) for tradeoffs
+and [Native Capability Bridge](native-capability-bridge.md) for platform-aware
+product planning.
 
-```rust
-use kael::*;
-use kael::prelude::*;
+## Documentation map
 
-struct Hello {
-    name: SharedString,
-}
+- [API Documentation](api-documentation.md) — docs.rs, feature flags, and module map
+- [Component Library](component-library.md) — the optional brandable UI layer
+- [Platform APIs](platform-apis.md) — operating-system integrations
+- [Testing](testing.md) — headless, behavioral, and platform testing
+- [Benchmarking Evidence](benchmarking.md) — measuring resource use and responsiveness
+- [Examples Gallery](examples.md) — Astryx and application templates
 
-impl Render for Hello {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(rgb(0x1E1E1E))
-            .text_xl()
-            .text_color(rgb(0xFFFFFF))
-            .child(format!("Hello, {}!", self.name))
-    }
-}
-
-fn main() {
-    Application::new().run(|cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(400.0), px(300.0)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
-            |_, cx| cx.new(|_| Hello { name: "World".into() }),
-        ).unwrap();
-        cx.activate(true);
-    });
-}
-```
-
-## Native rendering quality
-
-Kael renders with the same sharpness as first-party platform apps:
-
-- **macOS**: SF Pro Text/Display optical sizing (automatic swap at 20pt), sRGB Metal pipeline, continuous (squircle) corners matching SwiftUI, AppKit-matched font smoothing
-- **All platforms**: `PixelSnapPolicy` for hairline strokes, device-pixel-aligned text baselines, and crisp fills at any DPI
-
-## Platform support
-
-| Platform | Renderer | Status |
-|----------|----------|--------|
-| macOS | Metal | Stable |
-| Windows | DirectX 11 | Stable |
-| Linux (X11) | Vulkan/Blade | Stable |
-| Linux (Wayland) | Vulkan/Blade | Stable |
-
-## Acknowledgements
-
-Kael began as a fork of [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), the GPU-accelerated UI framework originally created by [Zed Industries](https://zed.dev) for the Zed code editor, and was previously distributed as the *adabraka GPUI fork*. We are grateful for their foundational work which made Kael possible. Kael is an independent project and is not affiliated with or endorsed by Zed Industries.
+Kael 0.3 is pre-1.0. Pin a compatible minor version, validate the platform
+capabilities your product depends on, and expect API refinement before 1.0.

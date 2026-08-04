@@ -149,7 +149,8 @@ pub struct WebViewFindResult {
     pub matches: usize,
 }
 
-/// Event payload emitted by [`webview_find_result_bridge_script`].
+/// Event payload emitted by the internal
+/// `webview_find_result_bridge_script` helper.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WebViewFindEvent {
     /// Browser event name. Currently `"find"`.

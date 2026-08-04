@@ -1,6 +1,6 @@
 //! Versioned, relinkable project document model.
 //!
-//! Wraps a [`Timeline`](crate::media::Timeline) in a format-versioned envelope so
+//! Wraps a [`Timeline`] in a format-versioned envelope so
 //! projects can evolve safely across releases: older documents are migrated to
 //! the current format on load, newer-than-supported documents are rejected
 //! rather than misread, and media can be relinked when sources move.

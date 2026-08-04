@@ -18,19 +18,22 @@ Each entry becomes a type (`Save`, `Undo`, …) implementing the `Action` trait,
 
 Register bindings once at startup with `cx.bind_keys`. `KeyBinding::new` takes the keystroke string, the action, and an optional key context that scopes the binding:
 
-```rust
-use kael::{Application, App, KeyBinding};
+```rust,ignore
+use kael::{App, Application, KeyBinding};
 
-Application::new().run(|cx: &mut App| {
-    cx.bind_keys([
-        KeyBinding::new("cmd-s", Save, None),
-        KeyBinding::new("cmd-z", Undo, None),
-        KeyBinding::new("cmd-shift-z", Redo, None),
-        KeyBinding::new("tab", Tab, Some("Editor")),       // only in the "Editor" context
-        KeyBinding::new("shift-tab", TabPrev, Some("Editor")),
-    ]);
-    // ... open windows ...
-});
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    Application::try_new()?.run(|cx: &mut App| {
+        cx.bind_keys([
+            KeyBinding::new("cmd-s", Save, None),
+            KeyBinding::new("cmd-z", Undo, None),
+            KeyBinding::new("cmd-shift-z", Redo, None),
+            KeyBinding::new("tab", Tab, Some("Editor")),
+            KeyBinding::new("shift-tab", TabPrev, Some("Editor")),
+        ]);
+        // ... open windows ...
+    });
+    Ok(())
+}
 ```
 
 Keystroke syntax uses `cmd` / `ctrl` / `alt` / `shift` modifiers joined with `-`, and a space separates multi-key sequences (e.g. `"cmd-k cmd-s"`). Use `cmd` on macOS and `ctrl` on Windows/Linux.
@@ -104,5 +107,15 @@ fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
 
 Window focus methods: `window.focus(&handle)`, `window.focus_next()` (Tab), and `window.focus_prev()` (Shift-Tab). Query state with `handle.is_focused(window)` and style focused elements with `.focus(|s| s.border_color(...))`.
 
-See the Astryx showcase for a complete focus-navigation composition, and
-`crates/kael/docs/key_dispatch.md` for the dispatch internals.
+## Dispatch resolution
+
+An element's `.key_context("Editor")` scopes matching bindings to that part of
+the tree. When a keystroke matches, Kael starts at the focused element and walks
+through its ancestors until an `on_action` handler accepts the action. A closer
+handler can therefore override application-level behavior without coupling the
+keymap to a concrete view type.
+
+Use global bindings for commands that are valid throughout the application and
+context bindings for editor modes, dialogs, lists, and other surfaces where the
+same keystroke has a local meaning. See the Astryx showcase for a complete
+focus-navigation composition.

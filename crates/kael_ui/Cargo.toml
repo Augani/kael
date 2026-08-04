@@ -10,7 +10,8 @@ repository.workspace = true
 homepage.workspace = true
 readme = "README.md"
 publish = true
-description = "Professional shadcn-inspired UI component library for Kael. 100+ accessible components for building beautiful, performant desktop applications."
+description = "Ready-made native components for building branded, resource-efficient Kael applications"
+documentation = "https://docs.rs/kael_ui"
 keywords = ["kael", "ui", "gui", "components", "desktop"]
 categories = ["gui", "rendering"]
 exclude = [
@@ -21,7 +22,9 @@ exclude = [
 ]
 
 [package.metadata.docs.rs]
-all-features = true
+features = ["html-render", "markdown", "kael/runtime_shaders"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
 rustdoc-args = ["--cfg", "docsrs"]
 
 [lib]

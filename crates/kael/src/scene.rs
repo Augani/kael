@@ -39,7 +39,7 @@ pub(crate) struct Scene {
 
 /// Whole-frame damage tracking: the coarse "early-out" half of dirty-region rendering.
 ///
-/// When enabled, a frame whose [`Scene::structural_checksum`] matches the last presented
+/// When enabled, a frame whose internal scene checksum matches the last presented
 /// frame can be skipped — the compositor retains the previously presented contents, so
 /// re-rasterizing identical content is wasted work. This is the safe, verifiable half of
 /// the dirty-region story (the fine-grained per-rectangle GPU path is separate); it is
@@ -96,7 +96,7 @@ impl FrameSkip {
 /// This is the descriptor the fine-grained ("per-rectangle") half of dirty-region
 /// rendering consumes: rather than skipping or repainting the whole frame, only
 /// [`FrameDamage::Region`] need be re-rasterized (with the compositor's retained
-/// contents loaded underneath). [`Scene::damage_since`] computes it conservatively —
+/// contents loaded underneath). Kael computes this conservatively —
 /// it never under-reports the changed area, so acting on it is always visually correct.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FrameDamage {

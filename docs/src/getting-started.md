@@ -2,62 +2,60 @@
 
 ## Prerequisites
 
-- **Rust** 1.87+ (edition 2024) — [install via rustup](https://rustup.rs/)
-- **Platform dependencies:**
+- **Rust 1.97.1 or newer** with Rust 2024 support. The repository pins the
+  supported toolchain in `rust-toolchain.toml`.
+- **macOS:** Xcode Command Line Tools. Release builds using precompiled Metal
+  shaders require the full Xcode application; development builds can use the
+  `kael/runtime_shaders` feature.
+- **Windows:** Visual Studio Build Tools with the Desktop development with C++
+  workload.
+- **Linux:** Vulkan, Wayland/X11, font, keyboard, D-Bus, and udev development
+  packages. WebView, audio, capture, and media features add GTK/WebKitGTK, ALSA,
+  PipeWire, and FFmpeg packages. The repository's
+  [`install-linux-deps.sh`](https://github.com/Augani/kael/blob/main/scripts/ci/install-linux-deps.sh)
+  is the canonical Ubuntu/Debian list.
 
-**macOS:** the default build precompiles Metal shaders, which requires the **full Xcode application** — the standalone Command Line Tools do **not** include the Metal compiler. With only Command Line Tools installed, the build fails with `xcrun: error: unable to find utility "metal"`.
-
-```bash
-# Install Xcode from the App Store, then point the toolchain at it:
-sudo xcode-select -s /Applications/Xcode.app
-```
-
-Alternatively, skip the full-Xcode requirement entirely by compiling shaders at app launch — recommended for development:
+With only the macOS Command Line Tools installed, enable runtime shader
+compilation during development:
 
 ```bash
 cargo run --features kael/runtime_shaders
 ```
 
-Use `runtime_shaders` for day-to-day development; build with full Xcode for release builds.
+## Create an application
 
-**Linux (Ubuntu/Debian):**
-```bash
-sudo apt-get install -y \
-  libwayland-dev libxkbcommon-dev libvulkan-dev \
-  libwebkit2gtk-4.1-dev libgtk-3-dev libdbus-1-dev libnotify-dev
-```
-
-**Windows:** Visual Studio Build Tools with C++ workload
-
-## Create a new project
+The CLI creates a small application using the core framework and optional UI
+component layer:
 
 ```bash
-cargo new my_app
+cargo install kael-cli
+kael new my_app
 cd my_app
+cargo run
 ```
 
-Add Kael to `Cargo.toml`:
+To configure a project manually, choose the layer you need:
 
 ```toml
 [dependencies]
 kael = "0.3"
+kael_ui = "0.3" # remove this line when building a custom component system
 ```
+
+`kael_ui` depends on `kael`; the core framework never depends on `kael_ui`.
 
 ## Your first window
 
-Replace `src/main.rs` with:
-
-```rust
-use kael::*;
-use kael::prelude::*;
+```rust,no_run
+use kael_ui::prelude::*;
 
 struct Counter {
     count: i32,
 }
 
 impl Render for Counter {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let entity = cx.entity();
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let counter = cx.entity();
 
         div()
             .size_full()
@@ -66,121 +64,95 @@ impl Render for Counter {
             .items_center()
             .justify_center()
             .gap_4()
-            .bg(rgb(0x1E1E1E))
-            .text_color(rgb(0xFFFFFF))
-            .child(
-                div().text_3xl().child(format!("Count: {}", self.count))
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .child(
-                        button("decrement")
-                            .label("-1")
-                            .on_click({
-                                let entity = entity.clone();
-                                move |_, _, cx| {
-                                    entity.update(cx, |this, cx| {
-                                        this.count -= 1;
-                                        cx.notify();
-                                    });
-                                }
-                            })
-                    )
-                    .child(
-                        button("increment")
-                            .label("+1")
-                            .on_click({
-                                let entity = entity.clone();
-                                move |_, _, cx| {
-                                    entity.update(cx, |this, cx| {
-                                        this.count += 1;
-                                        cx.notify();
-                                    });
-                                }
-                            })
-                    )
-            )
+            .child(div().text_3xl().child(format!("Count: {}", self.count)))
+            .child(Button::new("increment", "Increase").on_click(move |_, _, cx| {
+                counter.update(cx, |state, cx| {
+                    state.count += 1;
+                    cx.notify();
+                });
+            }))
     }
 }
 
-fn main() {
-    Application::new().run(|cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(400.0), px(300.0)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
-            |_, cx| cx.new(|_| Counter { count: 0 }),
-        ).unwrap();
-        cx.activate(true);
-    });
-}
-```
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    Application::try_new()?.run(|cx| {
+        kael_ui::init(cx);
+        install_theme(cx, Theme::tokyo_night());
 
-Run it:
-```bash
-cargo run
+        if let Err(error) = cx.open_window(WindowOptions::default(), |_, cx| {
+            cx.new(|_| Counter { count: 0 })
+        }) {
+            eprintln!("failed to open the application window: {error}");
+            cx.quit();
+        }
+    });
+    Ok(())
+}
 ```
 
 ## What just happened
 
-1. **`Application::new().run()`** — boots the platform event loop
-2. **`cx.open_window()`** — creates a native window with GPU rendering
-3. **`cx.new(|_| Counter { count: 0 })`** — creates a reactive `Entity<Counter>`
-4. **`impl Render for Counter`** — defines what the entity draws each frame
-5. **`cx.notify()`** — tells the framework to re-render after state changes
+1. `Application::try_new()` initializes the native platform and returns startup
+   failures instead of panicking.
+2. `kael_ui::init(cx)` registers the component systems used by the optional UI
+   layer.
+3. `cx.open_window(...)` creates a native, GPU-rendered window.
+4. `cx.new(...)` stores the view in a reactive `Entity<Counter>`.
+5. `entity.update(...)` mutates the model, and `cx.notify()` invalidates the
+   affected view so Kael can render the next state.
 
-## Key patterns
+## Core patterns
 
-### Builder pattern for UI
+### Compose elements in Rust
 
-Every element uses method chaining. No JSX, no templates — just Rust:
+Elements use a typed builder API for layout and appearance:
 
-```rust
+```rust,ignore
 div()
     .flex()
     .flex_col()
     .gap_4()
     .p_4()
-    .bg(rgb(0x1E1E1E))
-    .text_color(rgb(0xFFFFFF))
+    .rounded_lg()
+    .bg(rgb(0x1e1e1e))
+    .text_color(rgb(0xffffff))
     .child("Hello")
 ```
 
-### Reactive state
+### Keep state in entities
 
-State lives in your struct. Mutate it, call `cx.notify()`, and the framework re-renders:
-
-```rust
-entity.update(cx, |this, cx| {
-    this.count += 1;
+```rust,ignore
+entity.update(cx, |state, cx| {
+    state.count += 1;
     cx.notify();
 });
 ```
 
-### Custom rendering
+### Treat platform support as data
 
-Every widget accepts `.render_with()` for full visual control:
+```rust,ignore
+use kael::{CapabilityReport, PlatformFeature};
 
-```rust
-button("save")
-    .label("Save")
-    .render_with(|state, _window, _cx| {
-        div()
-            .px_4().py_2()
-            .rounded(px(8.0))
-            .bg(if state.focused { rgb(0x2563eb) } else { rgb(0x3b82f6) })
-            .text_color(rgb(0xffffff))
-            .child(state.label.unwrap_or_default())
-            .into_any_element()
-    })
+let capabilities = CapabilityReport::current();
+if capabilities.is_supported(PlatformFeature::GlobalHotkeys) {
+    // Enable the native workflow.
+} else {
+    // Keep a deliberate fallback or explain the platform requirement.
+}
 ```
+
+### Add only the batteries the product needs
+
+WebView, media, storage, documents, diagnostics, icons, PDF, notifications,
+sharing, and other integrations are feature-gated or provided by focused
+support crates. Start from the smallest dependency set and add capabilities when
+the product requires them.
 
 ## Next steps
 
-- [Core Concepts](core-concepts.md) — understand Entity, Context, and the render cycle
-- [Form Controls](form-controls.md) — buttons, inputs, checkboxes, sliders, and more
-- [Platform APIs](platform-apis.md) — file dialogs, system tray, notifications
+- [Core Concepts](core-concepts.md) — entities, contexts, rendering, and ownership
+- [API Documentation](api-documentation.md) — crate/module map and docs.rs links
+- [Component Library](component-library.md) — brandable ready-made UI
+- [Platform APIs](platform-apis.md) — native services and capability checks
+- [Testing](testing.md) — headless and platform-aware verification
+- [Examples Gallery](examples.md) — Astryx and the application templates

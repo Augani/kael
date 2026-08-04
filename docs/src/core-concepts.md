@@ -5,17 +5,20 @@
 Every Kael app follows this flow:
 
 ```
-Application::new().run() → cx.open_window() → cx.new(|_| View) → render loop
+Application::try_new()? → run() → cx.open_window() → cx.new(|_| View) → render loop
 ```
 
-```rust
-fn main() {
-    Application::new().run(|cx: &mut App| {
-        cx.open_window(WindowOptions::default(), |window, cx| {
-            cx.new(|_| MyView { })
-        }).unwrap();
-        cx.activate(true);
+```rust,ignore
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    Application::try_new()?.run(|cx: &mut App| {
+        if let Err(error) = cx.open_window(WindowOptions::default(), |_, cx| {
+            cx.new(|_| MyView {})
+        }) {
+            eprintln!("failed to open the application window: {error}");
+            cx.quit();
+        }
     });
+    Ok(())
 }
 ```
 
@@ -79,9 +82,11 @@ impl Render for MyView {
 
 | Context | Where you get it | What it does |
 |---------|-----------------|--------------|
-| `App` | `Application::new().run(\|cx\| { ... })` | Root context — open windows, set globals |
+| `App` | `Application::try_new()?.run(\|cx\| { ... })` | Root context — open windows, set globals |
 | `Context<T>` | `impl Render` and `cx.new()` closures | Entity-scoped — notify, observe, subscribe |
 | `Window` | `impl Render` render method | Window-level — bounds, focus, painting |
+| `AsyncApp`, `AsyncWindowContext` | Convert a live context before spawning async work | Fallible access that can safely outlive a window or entity callback |
+| `TestAppContext` | Headless framework tests | Deterministic entity, input, and rendering test access |
 
 ### Getting an entity handle inside render
 

@@ -855,7 +855,7 @@ pub fn watch_styles(cx: &mut crate::App, path: impl AsRef<std::path::Path>) -> a
 /// Developer ergonomics front door (`kael::dev::*`).
 ///
 /// A stable, discoverable namespace for iteration-speed tools such as
-/// [`watch_styles`](dev::watch_styles) live token reload.
+/// [`watch_styles`] live token reload.
 pub mod dev {
     pub use super::watch_styles;
 }

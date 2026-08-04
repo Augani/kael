@@ -1,7 +1,8 @@
-//! Async data-loading helpers: a [`Loadable`] state enum, an entity-friendly
-//! [`QueryState`] that manages fetch lifecycles with stale-response dropping and
-//! optional debounce, and an in-memory [`QueryCache`] for deduplicating
-//! identical queries within a TTL.
+//! Async data-loading helpers: a [`Loadable`](crate::query::Loadable) state enum,
+//! an entity-friendly [`QueryState`](crate::query::QueryState) that manages fetch
+//! lifecycles with stale-response dropping and optional debounce, and an in-memory
+//! [`QueryCache`](crate::query::QueryCache) for deduplicating identical queries
+//! within a TTL.
 
 use kael::{Context, SharedString};
 use std::collections::HashMap;
