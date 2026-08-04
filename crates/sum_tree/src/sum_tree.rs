@@ -1,4 +1,5 @@
 #![doc = include_str!("../README.md")]
+#![deny(missing_docs)]
 
 mod cursor;
 mod tree_map;
@@ -21,15 +22,19 @@ const TREE_BASE: usize = 6;
 ///
 /// Must be summarized by a type that implements [`Summary`]
 pub trait Item: Clone {
+    /// The aggregate stored for this item and for every subtree containing it.
     type Summary: Summary;
 
+    /// Computes this item's summary in the supplied context.
     fn summary(&self, cx: <Self::Summary as Summary>::Context<'_>) -> Self::Summary;
 }
 
 /// An [`Item`] whose summary has a specific key that can be used to identify it
 pub trait KeyedItem: Item {
+    /// The ordered dimension that uniquely identifies an item.
     type Key: for<'a> Dimension<'a, Self::Summary> + Ord;
 
+    /// Returns the item's key.
     fn key(&self) -> Self::Key;
 }
 
@@ -38,13 +43,19 @@ pub trait KeyedItem: Item {
 /// Each Summary type can have multiple [`Dimension`]s that it measures,
 /// which can be used to navigate the tree
 pub trait Summary: Clone {
+    /// External state needed while computing or combining summaries.
     type Context<'a>: Copy;
+    /// Returns the identity summary for an empty sequence.
     fn zero<'a>(cx: Self::Context<'a>) -> Self;
+    /// Adds another ordered subtree summary to this summary.
     fn add_summary<'a>(&mut self, summary: &Self, cx: Self::Context<'a>);
 }
 
+/// A [`Summary`] whose operations require no external context.
 pub trait ContextLessSummary: Clone {
+    /// Returns the identity summary for an empty sequence.
     fn zero() -> Self;
+    /// Adds another ordered subtree summary to this summary.
     fn add_summary(&mut self, summary: &Self);
 }
 
@@ -61,6 +72,7 @@ impl<T: ContextLessSummary> Summary for T {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// A summary for item types that do not need aggregate data.
 pub struct NoSummary;
 
 /// Catch-all implementation for when you need something that implements [`Summary`] without a specific type.
@@ -82,10 +94,13 @@ impl ContextLessSummary for NoSummary {
 /// Kael's rope has a `TextSummary` type that summarizes lines, characters, and bytes.
 /// Each of these are different dimensions we may want to seek to
 pub trait Dimension<'a, S: Summary>: Clone {
+    /// Returns the dimension's position at the start of an empty sequence.
     fn zero(cx: S::Context<'_>) -> Self;
 
+    /// Advances this dimension by a subtree summary.
     fn add_summary(&mut self, summary: &'a S, cx: S::Context<'_>);
 
+    /// Creates a dimension representing the full extent of `summary`.
     fn from_summary(summary: &'a S, cx: S::Context<'_>) -> Self {
         let mut dimension = Self::zero(cx);
         dimension.add_summary(summary, cx);
@@ -103,7 +118,9 @@ impl<'a, T: Summary> Dimension<'a, T> for T {
     }
 }
 
+/// Compares a requested position with a cursor location in dimension `D`.
 pub trait SeekTarget<'a, S: Summary, D: Dimension<'a, S>> {
+    /// Returns how this target is ordered relative to `cursor_location`.
     fn cmp(&self, cursor_location: &D, cx: S::Context<'_>) -> Ordering;
 }
 
@@ -120,7 +137,15 @@ impl<'a, T: Summary> Dimension<'a, T> for () {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Dimensions<D1, D2, D3 = ()>(pub D1, pub D2, pub D3);
+/// Carries up to three dimensions through one tree traversal.
+pub struct Dimensions<D1, D2, D3 = ()>(
+    /// The primary dimension, which also acts as the default seek target.
+    pub D1,
+    /// The secondary dimension.
+    pub D2,
+    /// The tertiary dimension.
+    pub D3,
+);
 
 impl<'a, T: Summary, D1: Dimension<'a, T>, D2: Dimension<'a, T>, D3: Dimension<'a, T>>
     Dimension<'a, T> for Dimensions<D1, D2, D3>
@@ -179,6 +204,7 @@ pub enum Bias {
 }
 
 impl Bias {
+    /// Returns the opposite bias.
     pub fn invert(self) -> Self {
         match self {
             Self::Left => Self::Right,
@@ -205,6 +231,7 @@ where
 }
 
 impl<T: Item> SumTree<T> {
+    /// Creates an empty tree using `cx` to construct its zero summary.
     pub fn new(cx: <T::Summary as Summary>::Context<'_>) -> Self {
         SumTree(Arc::new(Node::Leaf {
             summary: <T::Summary as Summary>::zero(cx),
@@ -222,12 +249,14 @@ impl<T: Item> SumTree<T> {
         }))
     }
 
+    /// Creates a tree containing one item.
     pub fn from_item(item: T, cx: <T::Summary as Summary>::Context<'_>) -> Self {
         let mut tree = Self::new(cx);
         tree.push(item, cx);
         tree
     }
 
+    /// Builds a tree from items in iterator order.
     pub fn from_iter<I: IntoIterator<Item = T>>(
         iter: I,
         cx: <T::Summary as Summary>::Context<'_>,
@@ -360,7 +389,7 @@ impl<T: Item> SumTree<T> {
         }
     }
 
-    #[allow(unused)]
+    /// Clones all items into a contiguous vector in tree order.
     pub fn items<'a>(&'a self, cx: <T::Summary as Summary>::Context<'a>) -> Vec<T> {
         let mut items = Vec::new();
         let mut cursor = self.cursor::<()>(cx);
@@ -372,10 +401,12 @@ impl<T: Item> SumTree<T> {
         items
     }
 
+    /// Iterates over borrowed items in tree order.
     pub fn iter(&self) -> Iter<'_, T> {
         Iter::new(self)
     }
 
+    /// Creates a cursor whose position is tracked in dimension `S`.
     pub fn cursor<'a, 'b, S>(
         &'a self,
         cx: <T::Summary as Summary>::Context<'b>,
@@ -400,15 +431,19 @@ impl<T: Item> SumTree<T> {
         FilterCursor::new(self, cx, filter_node)
     }
 
-    #[allow(dead_code)]
+    /// Returns the first item, or `None` when the tree is empty.
     pub fn first(&self) -> Option<&T> {
         self.leftmost_leaf().0.items().first()
     }
 
+    /// Returns the last item, or `None` when the tree is empty.
     pub fn last(&self) -> Option<&T> {
         self.rightmost_leaf().0.items().last()
     }
 
+    /// Mutates the last item and recomputes every affected summary.
+    ///
+    /// The callback is not invoked when the tree is empty.
     pub fn update_last(
         &mut self,
         f: impl FnOnce(&mut T),
@@ -453,6 +488,7 @@ impl<T: Item> SumTree<T> {
         }
     }
 
+    /// Returns the complete tree extent expressed as dimension `D`.
     pub fn extent<'a, D: Dimension<'a, T::Summary>>(
         &'a self,
         cx: <T::Summary as Summary>::Context<'_>,
@@ -466,6 +502,7 @@ impl<T: Item> SumTree<T> {
         extent
     }
 
+    /// Returns the aggregate summary for the complete tree.
     pub fn summary(&self) -> &T::Summary {
         match self.0.as_ref() {
             Node::Internal { summary, .. } => summary,
@@ -473,6 +510,7 @@ impl<T: Item> SumTree<T> {
         }
     }
 
+    /// Returns `true` when the tree contains no items.
     pub fn is_empty(&self) -> bool {
         match self.0.as_ref() {
             Node::Internal { .. } => false,
@@ -480,6 +518,7 @@ impl<T: Item> SumTree<T> {
         }
     }
 
+    /// Appends items in iterator order.
     pub fn extend<I>(&mut self, iter: I, cx: <T::Summary as Summary>::Context<'_>)
     where
         I: IntoIterator<Item = T>,
@@ -502,6 +541,7 @@ impl<T: Item> SumTree<T> {
         self.append(Self::from_par_iter(iter, cx), cx);
     }
 
+    /// Appends one item.
     pub fn push(&mut self, item: T, cx: <T::Summary as Summary>::Context<'_>) {
         let summary = item.summary(cx);
         self.append(
@@ -514,6 +554,7 @@ impl<T: Item> SumTree<T> {
         );
     }
 
+    /// Moves every item from `other` onto the end of this tree.
     pub fn append(&mut self, other: Self, cx: <T::Summary as Summary>::Context<'_>) {
         if self.is_empty() {
             *self = other;
@@ -696,6 +737,7 @@ impl<T: Item + PartialEq> PartialEq for SumTree<T> {
 impl<T: Item + Eq> Eq for SumTree<T> {}
 
 impl<T: KeyedItem> SumTree<T> {
+    /// Inserts an item by key, returning the item it replaced, if any.
     pub fn insert_or_replace<'a, 'b>(
         &'a mut self,
         item: T,
@@ -719,6 +761,7 @@ impl<T: KeyedItem> SumTree<T> {
         replaced
     }
 
+    /// Removes and returns the item at `key`, if present.
     pub fn remove(&mut self, key: &T::Key, cx: <T::Summary as Summary>::Context<'_>) -> Option<T> {
         let mut removed = None;
         *self = {
@@ -811,6 +854,7 @@ impl<T: KeyedItem> SumTree<T> {
         removed
     }
 
+    /// Returns the item at `key`, if present.
     pub fn get<'a>(
         &'a self,
         key: &T::Key,
@@ -934,8 +978,11 @@ impl<T: Item> Node<T> {
 }
 
 #[derive(Debug)]
+/// A keyed insertion or removal used by [`SumTree::edit`].
 pub enum Edit<T: KeyedItem> {
+    /// Inserts an item or replaces the item with the same key.
     Insert(T),
+    /// Removes the item with this key, if present.
     Remove(T::Key),
 }
 
