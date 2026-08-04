@@ -21,10 +21,10 @@ use kael_ui::components::select::Select;
 use kael_ui::components::slider::{Slider, SliderState};
 use kael_ui::components::stepper::{StepItem, Stepper, StepperState};
 use kael_ui::components::tag_input::{TagInput, TagInputState};
-use kael_ui::components::text::{body, caption, code, h1, h2, h3, h4, h5, h6, label, muted, Text};
+use kael_ui::components::text::{Text, body, caption, code, h1, h2, h3, h4, h5, h6, label, muted};
 use kael_ui::components::time_picker::{TimeFormat, TimePicker, TimePickerState};
 use kael_ui::components::toggle_group::{ToggleGroup, ToggleGroupItem, ToggleGroupVariant};
-use kael_ui::components::tooltip::{tooltip, Tooltip, TooltipFocusTrigger, TooltipHoverIndication};
+use kael_ui::components::tooltip::{Tooltip, TooltipFocusTrigger, TooltipHoverIndication, tooltip};
 use kael_ui::components::video_player::{VideoPlayer, VideoPlayerSize, VideoPlayerState};
 use kael_ui::display::accordion::Accordion;
 use kael_ui::display::data_table::{
@@ -32,15 +32,15 @@ use kael_ui::display::data_table::{
 };
 use kael_ui::display::html::Html;
 use kael_ui::display::markdown::Markdown;
-use kael_ui::display::rich_text::{render_blocks, ListItem as RichListItem, RichBlock, RichInline};
+use kael_ui::display::rich_text::{ListItem as RichListItem, RichBlock, RichInline, render_blocks};
 use kael_ui::display::table::{
-    pixel, proportional, Table, TableBody, TableCell, TableColumn, TableColumnAlign, TableDensity,
-    TableDividers, TableFooter, TableHeader, TableHeaderCell, TableRow, TableTextOverflow,
-    TableVerticalAlign,
+    Table, TableBody, TableCell, TableColumn, TableColumnAlign, TableDensity, TableDividers,
+    TableFooter, TableHeader, TableHeaderCell, TableRow, TableTextOverflow, TableVerticalAlign,
+    pixel, proportional,
 };
 use kael_ui::navigation::tabs::{TabVariant, Tabs, TabsLayout, TabsSize};
 use kael_ui::navigation::{
-    app_menu::{file_menu, view_menu, StandardMacMenuBar},
+    app_menu::{StandardMacMenuBar, file_menu, view_menu},
     breadcrumbs::{BreadcrumbItem, Breadcrumbs, BreadcrumbsVariant},
     nav_menu::NavMenu,
     virtual_list::v_virtual_list,
@@ -59,17 +59,17 @@ use kael_ui::overlays::toast::{
 };
 use kael_ui::prelude::*;
 use kael_ui::prelude::{
-    create_static_source, register_icons, AppShell, AppShellVariant, Avatar, AvatarGroup,
-    AvatarGroupOverflow, AvatarItem, AvatarSize, AvatarStatusDot, AvatarStatusDotVariant, Badge,
-    BadgeVariant, Banner, BannerContainer, BannerStatus, Button, ButtonSize, ButtonVariant,
-    Calendar, Card, Chat, ChatMessage, ChatMessageRole, Checkbox, CheckboxList, CheckboxListItem,
-    Citation, CitationVariant, ClickableCard, Code, CodeVariant, Collapsible, CollapsibleGroup,
-    CommandPaletteEmpty, CommandPaletteFooter, CommandPaletteGroup, CommandPaletteInput,
-    CommandPaletteItem, CommandPaletteList, ContextMenu, ContextMenuItem, DateValue, DayOfWeek,
-    Divider, DividerVariant, DropdownMenuItemData, EmptyState, Grid, GridAlignment, GridSpan,
-    Heading, HeadingLevel, HeadingType, Hue, Icon, IconButton, IconColor, IconRegistry, IconSize,
-    InputGroup, InputGroupText, InputSize, InteractiveRole, InteractiveRoleContext, Item, Layer,
-    LayerAlignment, LayerPlacement, LayerProvider, LayerToastConfig, Layout, LayoutContent,
+    AppShell, AppShellVariant, Avatar, AvatarGroup, AvatarGroupOverflow, AvatarItem, AvatarSize,
+    AvatarStatusDot, AvatarStatusDotVariant, Badge, BadgeVariant, Banner, BannerContainer,
+    BannerStatus, Button, ButtonSize, ButtonVariant, Calendar, Card, Chat, ChatMessage,
+    ChatMessageRole, Checkbox, CheckboxList, CheckboxListItem, Citation, CitationVariant,
+    ClickableCard, Code, CodeVariant, Collapsible, CollapsibleGroup, CommandPaletteEmpty,
+    CommandPaletteFooter, CommandPaletteGroup, CommandPaletteInput, CommandPaletteItem,
+    CommandPaletteList, ContextMenu, ContextMenuItem, DateValue, DayOfWeek, Divider,
+    DividerVariant, DropdownMenuItemData, EmptyState, Grid, GridAlignment, GridSpan, Heading,
+    HeadingLevel, HeadingType, Hue, Icon, IconButton, IconColor, IconRegistry, IconSize,
+    InputGroup, InputGroupText, InputSize, InteractiveRole, InteractiveRoleContext, Item, KBD,
+    Layer, LayerAlignment, LayerPlacement, LayerProvider, LayerToastConfig, Layout, LayoutContent,
     LayoutHeader, LayoutPanel, Link, List, ListStyle, ListVariant, MetadataList,
     MetadataListColumns, MetadataListItem, MobileNav, MobileNavToggle, NavItem, Outline,
     OutlineItem, OverflowList, Overlay, OverlayAlign, OverlayPosition, OverlayScrimMode,
@@ -83,9 +83,9 @@ use kael_ui::prelude::{
     TextInputType, TextSize, TextType, TextWeight, Thumbnail, Timeline, TimelineItem, Toggle,
     Token, TokenColor, Tokenizer, TokenizerItem, TokenizerOverflowBehavior, Toolbar, ToolbarSize,
     TopNav, TopNavHeading, TopNavItem, TreeList, TreeListDensity, TreeNode, Typeahead,
-    TypeaheadItem, KBD,
+    TypeaheadItem, create_static_source, register_icons,
 };
-use kael_ui::theme::{install_theme, use_theme, Theme, ThemeTokens, ThemeVariant};
+use kael_ui::theme::{Theme, ThemeTokens, ThemeVariant, install_theme, use_theme};
 use std::{path::PathBuf, rc::Rc};
 
 use kael::Axis;
@@ -677,10 +677,10 @@ impl AstryxShowcase {
                     .editable(true)
                     .editor(CellEditor::Number)
                     .value_setter(|record, value| {
-                        if let Ok(value) = value.parse::<f64>() {
-                            if value.is_finite() {
-                                record.budget = value;
-                            }
+                        if let Ok(value) = value.parse::<f64>()
+                            && value.is_finite()
+                        {
+                            record.budget = value;
                         }
                     }),
                     GridColumnDef::new(
@@ -1164,13 +1164,13 @@ fn label_chip(text: &str, theme: &Theme) -> Div {
         .child(text.to_string())
 }
 
-fn theme_pill(
+fn theme_pill<T: Fn(&mut App) + 'static>(
     label: &str,
     active: bool,
     tokens: ThemeTokens,
     theme: &Theme,
-    on: impl Fn(&mut App) + 'static,
-) -> impl IntoElement {
+    on: T,
+) -> impl IntoElement + use<T> {
     let swatch = tokens.primary;
     let theme = theme.clone();
     let label_text: SharedString = label.to_string().into();
@@ -2722,14 +2722,19 @@ impl Render for AstryxShowcase {
                             .header(label("Repository outline".to_string()))
                             .expanded_ids(vec![SharedString::from("src")])
                             .selected_id(SharedString::from("components"))
-                            .nodes(vec![TreeNode::new(SharedString::from("src"), "src")
-                                .with_icon("folder")
-                                .with_children(vec![
-                                    TreeNode::new(SharedString::from("components"), "components")
+                            .nodes(vec![
+                                TreeNode::new(SharedString::from("src"), "src")
+                                    .with_icon("folder")
+                                    .with_children(vec![
+                                        TreeNode::new(
+                                            SharedString::from("components"),
+                                            "components",
+                                        )
                                         .with_icon("folder-open"),
-                                    TreeNode::new(SharedString::from("theme"), "theme")
-                                        .with_icon("palette"),
-                                ])]),
+                                        TreeNode::new(SharedString::from("theme"), "theme")
+                                            .with_icon("palette"),
+                                    ]),
+                            ]),
                     ),
                 ),
         )
