@@ -4007,13 +4007,10 @@ name = "kael_media_sys"
 version = "0.3.0"
 dependencies = [
  "anyhow",
- "bindgen 0.71.1",
  "core-foundation 0.10.1",
  "core-video",
- "ctor",
  "foreign-types",
  "metal",
- "objc",
 ]
 
 [[package]]

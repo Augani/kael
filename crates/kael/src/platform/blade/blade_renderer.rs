@@ -510,10 +510,13 @@ impl BladeRenderer {
             .unzip();
 
         #[cfg(target_os = "macos")]
-        let core_video_texture_cache = unsafe {
-            CVMetalTextureCache::new(
-                objc2::rc::Retained::as_ptr(&context.gpu.metal_device()) as *mut _
-            )
+        let core_video_texture_cache = {
+            let metal_device = context.gpu.metal_device();
+            let metal_device = objc2::rc::Retained::as_ptr(&metal_device) as *const _;
+            // SAFETY: Blade returned a live, retained object conforming to
+            // MTLDevice. It remains alive through this call, and CoreVideo
+            // retains the device for the cache lifetime.
+            unsafe { CVMetalTextureCache::new(metal_device) }
         }
         .map_err(|error| anyhow::anyhow!("failed to create CoreVideo texture cache: {error:#}"))?;
 
@@ -1012,10 +1015,7 @@ impl BladeRenderer {
 
                         #[cfg(target_os = "macos")]
                         {
-                            let (t_y, t_cb_cr) = unsafe {
-                                use core_foundation::base::TCFType as _;
-                                use std::ptr;
-
+                            let (t_y, t_cb_cr) = {
                                 if surface.image_buffer.get_pixel_format()
                                     != core_video::pixel_buffer::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
                                 {
@@ -1025,8 +1025,8 @@ impl BladeRenderer {
 
                                 let Ok(y_texture) =
                                     self.core_video_texture_cache.create_texture_from_image(
-                                        surface.image_buffer.as_concrete_TypeRef(),
-                                        ptr::null(),
+                                        &surface.image_buffer,
+                                        None,
                                         metal::MTLPixelFormat::R8Unorm,
                                         surface.image_buffer.get_width_of_plane(0),
                                         surface.image_buffer.get_height_of_plane(0),
@@ -1038,8 +1038,8 @@ impl BladeRenderer {
                                 };
                                 let Ok(cb_cr_texture) =
                                     self.core_video_texture_cache.create_texture_from_image(
-                                        surface.image_buffer.as_concrete_TypeRef(),
-                                        ptr::null(),
+                                        &surface.image_buffer,
+                                        None,
                                         metal::MTLPixelFormat::RG8Unorm,
                                         surface.image_buffer.get_width_of_plane(1),
                                         surface.image_buffer.get_height_of_plane(1),
@@ -1059,21 +1059,14 @@ impl BladeRenderer {
                                     );
                                     continue;
                                 };
-                                let Some(y_texture) = objc2::rc::Retained::retain(
-                                    foreign_types::ForeignTypeRef::as_ptr(y_texture_ref)
-                                        as *mut objc2::runtime::ProtocolObject<
-                                            dyn objc2_metal::MTLTexture,
-                                        >,
-                                ) else {
+                                let Some(y_texture) = retain_core_video_texture(y_texture_ref)
+                                else {
                                     log::warn!("failed to retain Blade Y-plane Metal texture");
                                     continue;
                                 };
-                                let Some(cb_cr_texture) = objc2::rc::Retained::retain(
-                                    foreign_types::ForeignTypeRef::as_ptr(cb_cr_texture_ref)
-                                        as *mut objc2::runtime::ProtocolObject<
-                                            dyn objc2_metal::MTLTexture,
-                                        >,
-                                ) else {
+                                let Some(cb_cr_texture) =
+                                    retain_core_video_texture(cb_cr_texture_ref)
+                                else {
                                     log::warn!("failed to retain Blade chroma-plane Metal texture");
                                     continue;
                                 };
@@ -1332,10 +1325,7 @@ impl BladeRenderer {
                             let _ = surface;
                             #[cfg(target_os = "macos")]
                             {
-                                let (t_y, t_cb_cr) = unsafe {
-                                    use core_foundation::base::TCFType as _;
-                                    use std::ptr;
-
+                                let (t_y, t_cb_cr) = {
                                     if surface.image_buffer.get_pixel_format()
                                         != core_video::pixel_buffer::kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
                                     {
@@ -1345,8 +1335,8 @@ impl BladeRenderer {
 
                                     let Ok(y_texture) =
                                         self.core_video_texture_cache.create_texture_from_image(
-                                            surface.image_buffer.as_concrete_TypeRef(),
-                                            ptr::null(),
+                                            &surface.image_buffer,
+                                            None,
                                             metal::MTLPixelFormat::R8Unorm,
                                             surface.image_buffer.get_width_of_plane(0),
                                             surface.image_buffer.get_height_of_plane(0),
@@ -1358,8 +1348,8 @@ impl BladeRenderer {
                                     };
                                     let Ok(cb_cr_texture) =
                                         self.core_video_texture_cache.create_texture_from_image(
-                                            surface.image_buffer.as_concrete_TypeRef(),
-                                            ptr::null(),
+                                            &surface.image_buffer,
+                                            None,
                                             metal::MTLPixelFormat::RG8Unorm,
                                             surface.image_buffer.get_width_of_plane(1),
                                             surface.image_buffer.get_height_of_plane(1),
@@ -1384,21 +1374,14 @@ impl BladeRenderer {
                                         );
                                         continue;
                                     };
-                                    let Some(y_texture) = objc2::rc::Retained::retain(
-                                        foreign_types::ForeignTypeRef::as_ptr(y_texture_ref)
-                                            as *mut objc2::runtime::ProtocolObject<
-                                                dyn objc2_metal::MTLTexture,
-                                            >,
-                                    ) else {
+                                    let Some(y_texture) = retain_core_video_texture(y_texture_ref)
+                                    else {
                                         log::warn!("failed to retain Blade Y-plane Metal texture");
                                         continue;
                                     };
-                                    let Some(cb_cr_texture) = objc2::rc::Retained::retain(
-                                        foreign_types::ForeignTypeRef::as_ptr(cb_cr_texture_ref)
-                                            as *mut objc2::runtime::ProtocolObject<
-                                                dyn objc2_metal::MTLTexture,
-                                            >,
-                                    ) else {
+                                    let Some(cb_cr_texture) =
+                                        retain_core_video_texture(cb_cr_texture_ref)
+                                    else {
                                         log::warn!(
                                             "failed to retain Blade chroma-plane Metal texture"
                                         );
@@ -1591,6 +1574,18 @@ impl BladeRenderer {
             }
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn retain_core_video_texture(
+    texture: &metal::TextureRef,
+) -> Option<objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLTexture>>> {
+    let texture = foreign_types::ForeignTypeRef::as_ptr(texture)
+        as *mut objc2::runtime::ProtocolObject<dyn objc2_metal::MTLTexture>;
+    // SAFETY: `texture` came from `CVMetalTextureGetTexture` and remains valid
+    // for this call because the owning CVMetalTexture wrapper is still live.
+    // `retain` creates the independent ownership required by Blade's view.
+    unsafe { objc2::rc::Retained::retain(texture) }
 }
 
 fn create_path_intermediate_texture(

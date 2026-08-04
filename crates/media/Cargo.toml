@@ -4,9 +4,8 @@ name = "kael_media_sys"
 rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
-build = "build.rs"
 publish = true
-description = "Bindings to macOS media handling APIs for Kael"
+description = "Focused macOS media interoperability for Kael"
 keywords = ["media", "coremedia", "macos", "ffi", "kael"]
 categories = ["multimedia", "os::macos-apis"]
 authors.workspace = true
@@ -14,17 +13,18 @@ repository.workspace = true
 readme = "README.md"
 license.workspace = true
 
+[package.metadata.docs.rs]
+default-target = "aarch64-apple-darwin"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
+
 [lib]
 name = "kael_media_sys"
 path = "src/media.rs"
 doctest = false
 
-[dependencies.anyhow]
+[target.'cfg(target_os = "macos")'.dependencies.anyhow]
 workspace = true
-
-
-[build-dependencies.bindgen]
-version = "0.71"
 
 [target.'cfg(target_os = "macos")'.dependencies.core-foundation]
 version = "0.10.0"
@@ -33,17 +33,11 @@ version = "0.10.0"
 version = "0.4.3"
 features = ["metal"]
 
-[target.'cfg(target_os = "macos")'.dependencies.ctor]
-version = "1"
-
 [target.'cfg(target_os = "macos")'.dependencies.foreign-types]
 version = "0.5"
 
 [target.'cfg(target_os = "macos")'.dependencies.metal]
 version = "0.29"
-
-[target.'cfg(target_os = "macos")'.dependencies.objc]
-version = "0.2"
 
 [lints]
 workspace = true
