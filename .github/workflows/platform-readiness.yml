@@ -111,7 +111,7 @@ jobs:
             timeout_minutes: 75
           - os: ubuntu-latest
             label: Linux
-            timeout_minutes: 45
+            timeout_minutes: 75
 
     steps:
       - uses: actions/checkout@v7
