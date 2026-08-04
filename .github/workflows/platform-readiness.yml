@@ -82,6 +82,26 @@ jobs:
         shell: bash
         run: bash scripts/ci/install-linux-deps.sh
 
+      - name: Install macOS media dependencies
+        if: runner.os == 'macOS'
+        shell: bash
+        run: brew install ffmpeg pkg-config
+
+      - name: Install Windows media dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
+          if (-not $vcpkgRoot) {
+            $vcpkgRoot = Split-Path -Parent (Get-Command vcpkg -ErrorAction Stop).Source
+          }
+          $vcpkg = Join-Path $vcpkgRoot "vcpkg.exe"
+          if (-not (Test-Path $vcpkg)) {
+            throw "vcpkg.exe was not found under $vcpkgRoot"
+          }
+          "VCPKG_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & $vcpkg install ffmpeg:x64-windows --clean-after-build
+
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@stable
         with:

@@ -1,6 +1,8 @@
 use anyhow::{Context as _, anyhow};
 use x11rb::connection::RequestConnection;
 
+#[cfg(feature = "webview")]
+use crate::SharedString;
 use crate::platform::blade::{BladeContext, BladeRenderer, BladeSurfaceConfig};
 #[cfg(feature = "webview")]
 use crate::platform::linux::webview::{self as linux_webview, LinuxWebViewHost};
@@ -11,9 +13,9 @@ use crate::{
     AnyWindowHandle, Bounds, Decorations, DevicePixels, DispatchEventResult, ForegroundExecutor,
     GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
     PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
-    ResizeEdge, ScaledPixels, Scene, SharedString, Size, Tiling, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowDecorations, WindowKind,
-    WindowParams, X11ClientStatePtr, px, size,
+    ResizeEdge, ScaledPixels, Scene, Size, Tiling, WindowAppearance, WindowBackgroundAppearance,
+    WindowBounds, WindowControlArea, WindowDecorations, WindowKind, WindowParams,
+    X11ClientStatePtr, px, size,
 };
 
 use blade_graphics as gpu;
@@ -34,9 +36,10 @@ use x11rb::{
     xcb_ffi::XCBConnection,
 };
 
+#[cfg(feature = "webview")]
+use std::collections::HashMap;
 use std::{
     cell::RefCell,
-    collections::HashMap,
     ffi::c_void,
     fmt::Display,
     num::NonZeroU32,

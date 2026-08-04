@@ -26,6 +26,8 @@ use wayland_protocols_plasma::blur::client::org_kde_kwin_blur;
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 #[cfg(feature = "webview")]
+use crate::SharedString;
+#[cfg(feature = "webview")]
 use crate::platform::linux::webview::{self as linux_webview, LinuxWebViewHost};
 use crate::platform::tab_manager::{TabManagerState, WindowTabManager};
 #[cfg(feature = "webview")]
@@ -33,9 +35,9 @@ use crate::webview::{PlatformWebView, PlatformWebViewCommand};
 use crate::{
     AnyWindowHandle, Bounds, Decorations, DispatchEventResult, Globals, GpuSpecs, Modifiers,
     Output, Pixels, PlatformDisplay, PlatformInput, Point, PromptButton, PromptLevel,
-    RequestFrameOptions, ResizeEdge, SharedString, Size, Tiling, WaylandClientStatePtr,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls,
-    WindowDecorations, WindowParams, px, size,
+    RequestFrameOptions, ResizeEdge, Size, Tiling, WaylandClientStatePtr, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls, WindowDecorations,
+    WindowParams, px, size,
 };
 use crate::{
     Capslock,
