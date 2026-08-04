@@ -181,6 +181,7 @@ fn network_status_returns_valid_variant() {
 ///
 /// Verify that the auto-updater module types can be constructed and
 /// serialized without panic.
+#[cfg(feature = "auto-update")]
 #[test]
 fn auto_updater_types_are_safe() {
     let config = crate::AutoUpdaterConfig {

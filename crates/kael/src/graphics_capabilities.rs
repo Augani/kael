@@ -3,6 +3,8 @@
 /// The current support level for a graphics feature.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GraphicsCapabilityStatus {
+    /// The implementation is available behind a feature that is not compiled in.
+    Disabled,
     /// Fully supported by Kael's public native rendering APIs.
     Full,
     /// Usable today with documented limitations or missing browser parity.
@@ -17,6 +19,7 @@ impl GraphicsCapabilityStatus {
     /// Return a stable label for capability reports and agent traces.
     pub fn to_text(&self) -> &'static str {
         match self {
+            Self::Disabled => "disabled",
             Self::Full => "full",
             Self::Partial => "partial",
             Self::WebView => "webview",
@@ -105,12 +108,13 @@ impl GraphicsCapabilityReport {
     /// Return a content-safe summary for docs, dashboards, and agent traces.
     pub fn to_text(&self) -> String {
         let full = self.count_status(GraphicsCapabilityStatus::Full);
+        let disabled = self.count_status(GraphicsCapabilityStatus::Disabled);
         let partial = self.count_status(GraphicsCapabilityStatus::Partial);
         let webview = self.count_status(GraphicsCapabilityStatus::WebView);
         let roadmap = self.count_status(GraphicsCapabilityStatus::Roadmap);
 
         format!(
-            "graphics capabilities: full {full}, partial {partial}, webview {webview}, roadmap {roadmap}, all native full {}",
+            "graphics capabilities: full {full}, partial {partial}, webview {webview}, roadmap {roadmap}, disabled {disabled}, all native full {}",
             self.is_full_native()
         )
     }
@@ -124,7 +128,11 @@ pub fn graphics_capability_report() -> GraphicsCapabilityReport {
         vector_paths: GraphicsCapabilityStatus::Full,
         gradients: GraphicsCapabilityStatus::Full,
         svg: GraphicsCapabilityStatus::Full,
-        lottie: GraphicsCapabilityStatus::Full,
+        lottie: if cfg!(feature = "lottie") {
+            GraphicsCapabilityStatus::Full
+        } else {
+            GraphicsCapabilityStatus::Disabled
+        },
         clip_shapes: GraphicsCapabilityStatus::Partial,
         effect_layers: GraphicsCapabilityStatus::Partial,
         headless_rendering: GraphicsCapabilityStatus::Partial,
@@ -145,11 +153,20 @@ mod tests {
         assert!(!report.is_full_native());
         assert!(report.has_roadmap_gaps());
         assert!(report.has_webview_fallbacks());
+        assert_eq!(GraphicsCapabilityStatus::Disabled.to_text(), "disabled");
         assert_eq!(GraphicsCapabilityStatus::Full.to_text(), "full");
         assert_eq!(GraphicsCapabilityStatus::Partial.to_text(), "partial");
         assert_eq!(GraphicsCapabilityStatus::WebView.to_text(), "webview");
         assert_eq!(GraphicsCapabilityStatus::Roadmap.to_text(), "roadmap");
-        assert_eq!(report.count_status(GraphicsCapabilityStatus::Full), 6);
+        let lottie_enabled = cfg!(feature = "lottie");
+        assert_eq!(
+            report.count_status(GraphicsCapabilityStatus::Full),
+            if lottie_enabled { 6 } else { 5 }
+        );
+        assert_eq!(
+            report.count_status(GraphicsCapabilityStatus::Disabled),
+            if lottie_enabled { 0 } else { 1 }
+        );
         assert_eq!(report.count_status(GraphicsCapabilityStatus::Partial), 3);
         assert_eq!(report.count_status(GraphicsCapabilityStatus::WebView), 1);
         assert_eq!(report.count_status(GraphicsCapabilityStatus::Roadmap), 2);
@@ -158,7 +175,14 @@ mod tests {
         assert_eq!(report.vector_paths, GraphicsCapabilityStatus::Full);
         assert_eq!(report.gradients, GraphicsCapabilityStatus::Full);
         assert_eq!(report.svg, GraphicsCapabilityStatus::Full);
-        assert_eq!(report.lottie, GraphicsCapabilityStatus::Full);
+        assert_eq!(
+            report.lottie,
+            if lottie_enabled {
+                GraphicsCapabilityStatus::Full
+            } else {
+                GraphicsCapabilityStatus::Disabled
+            }
+        );
         assert_eq!(report.clip_shapes, GraphicsCapabilityStatus::Partial);
         assert_eq!(report.effect_layers, GraphicsCapabilityStatus::Partial);
         assert_eq!(report.headless_rendering, GraphicsCapabilityStatus::Partial);
@@ -176,7 +200,11 @@ mod tests {
         );
         assert_eq!(
             report.to_text(),
-            "graphics capabilities: full 6, partial 3, webview 1, roadmap 2, all native full false"
+            format!(
+                "graphics capabilities: full {}, partial 3, webview 1, roadmap 2, disabled {}, all native full false",
+                if lottie_enabled { 6 } else { 5 },
+                if lottie_enabled { 0 } else { 1 }
+            )
         );
     }
 }

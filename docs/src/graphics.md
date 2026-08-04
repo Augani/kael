@@ -1,6 +1,6 @@
 # Canvas & Graphics
 
-Beyond the element tree, Kael gives you direct GPU drawing: an immediate-mode canvas, a vector path builder, gradients, backdrop blur, SVG, and Lottie playback. Everything renders through the same per-platform pipeline (Metal / DirectX 11 / Vulkan) with device-pixel snapping for crisp output at any DPI.
+Beyond the element tree, Kael gives you direct GPU drawing: an immediate-mode canvas, a vector path builder, gradients, backdrop blur, SVG, and optional Lottie playback. Everything renders through the same per-platform pipeline (Metal / DirectX 11 / Vulkan) with device-pixel snapping for crisp output at any DPI.
 
 ## Visual escape-hatch ladder
 
@@ -12,7 +12,7 @@ choose the lowest rung that solves the problem:
 | Product UI, dashboards, tool chrome | styled `div()` / `kael_ui` | Best memory and startup profile |
 | Charts, timelines, waveform views, custom controls | `canvas(...)`, `paint_quad`, `paint_path`, `PathBuilder` | Native immediate-mode drawing |
 | Icons, diagrams, generated vector assets | `svg()` / `PathBuilder` | Keep assets inspectable and themeable |
-| Motion graphics and loaders | `lottie(...)` | Decodes off the UI path |
+| Motion graphics and loaders | `lottie(...)` with feature `lottie` | Decodes off the UI path |
 | Frosted or filtered subtrees | `backdrop_blur(...)` / `effect_layer(...)` | Effect layers are partial CSS-filter coverage, not arbitrary shaders |
 | Browser-only graphics such as WebGL/WebGPU demos | `webview(id, url)` | Treat as a WebView island with native Kael chrome around it |
 | Golden-image or benchmark evidence | `HeadlessRenderer` / `golden` | Off-screen rendering is for tests and measurements |
@@ -220,6 +220,13 @@ CoreVideo pixel buffers on macOS. Use `SurfaceSource::to_text()` and
 pixel contents or dimensions.
 
 ## Lottie
+
+Enable Kael's `lottie` feature to add the native decoder and renderer:
+
+```toml
+[dependencies]
+kael = { version = "0.3", features = ["lottie"] }
+```
 
 `lottie()` plays Lottie/dotLottie animations, decoding frames on a background thread so the UI stays responsive:
 

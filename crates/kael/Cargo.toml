@@ -29,7 +29,7 @@ exclude = [
 ]
 
 [package.metadata.docs.rs]
-features = ["agent-tools", "runtime_shaders"]
+features = ["agent-tools", "auto-update", "lottie", "runtime_shaders"]
 default-target = "x86_64-unknown-linux-gnu"
 targets = []
 rustdoc-args = ["--cfg", "docsrs"]
@@ -42,8 +42,15 @@ default = [
     "windows-manifest",
 ]
 agent-tools = []
+auto-update = [
+    "dep:ed25519-dalek",
+    "dep:hex",
+    "dep:kael_release",
+    "dep:sha2",
+]
 inspector = ["kael_macros/inspector"]
 leak-detection = ["backtrace"]
+lottie = ["dep:rasterlottie"]
 macos-blade = [
     "blade-graphics",
     "blade-macros",
@@ -159,17 +166,21 @@ version = "0.22"
 
 [dependencies.ed25519-dalek]
 version = "2"
+optional = true
 
 [dependencies.hex]
 version = "0.4"
+optional = true
 
 [dependencies.sha2]
 version = "0.10"
+optional = true
 
 [dependencies.kael_release]
 path = "../kael_release"
 package = "kael_release"
 version = "0.3.0"
+optional = true
 
 [dependencies.kael_gpu_budget]
 path = "../kael_gpu_budget"
@@ -318,6 +329,7 @@ version = "0.12.1"
 version = "0.2.1"
 default-features = false
 features = ["dotlottie", "images", "text"]
+optional = true
 
 [dependencies.postage]
 version = "0.5"

@@ -65,6 +65,8 @@ Kael targets macOS (Metal), Windows (DirectX 11), and Linux X11/Wayland
 
 | Feature | Purpose |
 | --- | --- |
+| `auto-update` | Signed feeds, verified downloads, and platform installers |
+| `lottie` | Native Lottie and dotLottie playback |
 | `webview` | Explicit hosted web surfaces |
 | `media` | Native media playback integration |
 | `storage`, `document`, `audio`, `pdf` | Product data and content services |

@@ -69,6 +69,11 @@ enable the feature only when web content is part of the product:
 kael = { version = "0.3", features = ["webview"] }
 ```
 
+Specialized batteries stay explicit as well: use `auto-update` for signed
+updates and checked downloads, or `lottie` for native Lottie/dotLottie
+playback. Applications that do not enable them do not compile their
+implementation dependencies.
+
 Or add the ready-made component system:
 
 ```toml

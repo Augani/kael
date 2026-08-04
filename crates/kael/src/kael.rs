@@ -28,6 +28,7 @@ pub mod workspace;
 mod arena;
 mod asset_cache;
 mod assets;
+#[cfg(feature = "auto-update")]
 mod auto_updater;
 pub mod benchmark;
 mod bounds_tree;
@@ -69,6 +70,7 @@ pub mod interpolate;
 pub mod ipc_transport;
 mod key_dispatch;
 mod keymap;
+#[cfg(feature = "lottie")]
 mod lottie;
 pub mod media_capture;
 #[cfg(feature = "media")]
@@ -151,6 +153,7 @@ pub use app_runtime::*;
 pub(crate) use arena::*;
 pub use asset_cache::*;
 pub use assets::*;
+#[cfg(feature = "auto-update")]
 pub use auto_updater::*;
 pub use background_jobs::*;
 pub use benchmark::*;
@@ -189,6 +192,7 @@ pub use kael_share::{
 };
 use key_dispatch::*;
 pub use keymap::*;
+#[cfg(feature = "lottie")]
 pub use lottie::*;
 pub use media_capture::*;
 #[cfg(feature = "media")]
