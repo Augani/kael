@@ -1,9 +1,9 @@
 # Native Capability Bridge
 
-Kael is native-first. Its default application surface is Rust, native windows,
-and a retained GPU-rendered UI tree—not a bundled browser runtime. A WebView is
-an explicit compatibility island for a dependency that is genuinely web-shaped,
-such as an OAuth page, payment flow, map, hosted document, or vendor widget.
+Kael's primary application surface combines Rust, native windows, and a retained
+GPU-rendered UI tree. A WebView is an explicit compatibility island for a
+dependency that is genuinely web-shaped, such as an OAuth page, payment flow,
+map, hosted document, or vendor widget.
 
 ## Choose the smallest layer
 

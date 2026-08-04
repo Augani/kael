@@ -1,9 +1,15 @@
 # Kael
 
-Kael is a native, GPU-accelerated application framework for Rust. It is built
-for long-lived desktop software—editors, agent workspaces, communication apps,
-dashboards, and creative tools—without shipping a browser runtime for the main
-interface.
+Kael is a native, GPU-accelerated application framework for Rust, built to help
+ambitious desktop software do more with less: less idle work, less memory
+pressure, fewer runtime layers, and one coherent Rust codebase. It targets
+long-lived products such as editors, agent workspaces, communication apps,
+dashboards, media tools, and creative software on macOS, Windows, and Linux.
+
+Kael is not defined by another application stack. It is a complete foundation
+for responsive PC applications: retained rendering, application state, native
+platform services, production tooling, and an optional component system that a
+product can reshape around its own brand.
 
 The framework has two deliberate layers:
 
@@ -17,7 +23,7 @@ without depending on `kael_ui`.
 
 > Kael began as a fork of
 > [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), created by
-> Zed Industries, and was previously published as the adabraka GPUI fork. Kael
+> Zed Industries, and was previously distributed as the adabraka GPUI fork. Kael
 > is an independent project and is not affiliated with or endorsed by Zed
 > Industries.
 
@@ -30,6 +36,21 @@ dependencies, and checks macOS, Windows, Linux X11, and Linux Wayland.
 The public API can still change before 1.0. Applications should pin a compatible
 minor release and use `CapabilityReport::current()` when a workflow depends on a
 specific OS integration.
+
+## What Kael optimizes for
+
+- **Useful work over background work.** Retained rendering, invalidation, frame
+  skipping, virtualization, bounded caches, and GPU budgeting help large apps
+  stay responsive without redrawing or retaining more than they need.
+- **One application architecture.** UI, state, async work, platform services,
+  diagnostics, packaging, and updates can share Rust types and error handling.
+- **Product ownership.** Start from low-level primitives or adopt `kael_ui` and
+  replace its tokens, composition, and styling without inheriting a fixed look.
+- **Real desktop capabilities.** Windows, menus, files, accessibility, input,
+  notifications, capture, IPC, plugins, and lifecycle APIs are part of the
+  framework rather than unrelated integration projects.
+- **Explicit platform truth.** Capability reports expose OS differences so an
+  application can provide a deliberate setup path or fallback.
 
 ## Choose your layer
 
@@ -140,7 +161,7 @@ Optional support crates keep product concerns out of the core dependency graph:
 
 ## Astryx showcase
 
-Kael keeps one maintained UI showcase instead of publishing hundreds of small
+Kael keeps one maintained UI showcase instead of maintaining hundreds of small
 example targets. Astryx groups actions, inputs, data display, charts, feedback,
 navigation, overlays, typography, media, and layout into sections of one app:
 
@@ -151,9 +172,9 @@ cargo run -p kael_ui --example astryx_showcase \
   --features "media kael/runtime_shaders"
 ```
 
-The showcase is repository-only and is excluded from the `kael_ui` crate
-package. Core workflows are covered by focused tests and guide chapters instead
-of copy-paste examples that can drift from the supported API.
+The showcase is repository-only and is not part of the `kael_ui` crate package.
+Core workflows are covered by focused tests and guide chapters instead of
+copy-paste examples that can drift from the supported API.
 
 Three repository-only application templates demonstrate larger composition:
 
@@ -198,24 +219,16 @@ Linux build packages are listed in
 [`scripts/ci/install-linux-deps.sh`](scripts/ci/install-linux-deps.sh). CI checks
 the default platform build plus explicit X11 and Wayland feature sets.
 
-## Packages and publishing
+## Documentation
 
-Examples, benchmarks, screenshots, templates, and internal repository material
-are excluded from published crates. Release validation checks each package's
-file list and publishes internal crates in dependency order; tagging the
-repository does not implicitly grant permission to publish crates.
-
-```bash
-# Safe package-content audit; uploads nothing.
-bash scripts/publish-all.sh --preflight
-```
-
-The crates.io workflow is manual, protected by the `crates-io` environment, and
-requires an explicit version confirmation. It is not run as part of this review.
-
-See the [guide](https://augani.github.io/kael/), the
-[crate documentation](https://docs.rs/kael), and
-[`docs/src/examples.md`](docs/src/examples.md) for the maintained workflows.
+- The [Kael guide](https://augani.github.io/kael/) explains architecture,
+  workflows, platform capabilities, testing, and production concerns.
+- The [`kael` API documentation](https://docs.rs/kael) covers framework
+  primitives, while [`kael_ui`](https://docs.rs/kael_ui) covers ready-made
+  components.
+- The [API documentation map](docs/src/api-documentation.md) points to the
+  modules and feature flags relevant to common application work.
+- [`llms.txt`](llms.txt) gives agents a concise, capability-aware entry point.
 
 ## Acknowledgements
 

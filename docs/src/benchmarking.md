@@ -97,7 +97,7 @@ missing required metrics, when either side supplies duplicate results for the
 same scenario, when baseline and Kael results were captured under different
 hardware or OS conditions, when a compared scenario lacks matching
 baseline/Kael sample descriptors, or when a sample omits required interactions;
-do not publish parity claims until those are resolved.
+do not make parity claims until those are resolved.
 
 For CI, keep using `CiReport` and `RegressionThresholds` to compare a Kael
 candidate against a previous Kael baseline. Use `BaselineComparisonReport` for

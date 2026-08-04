@@ -1,7 +1,8 @@
 # Kael
 
-> Native, GPU-accelerated desktop application framework for Rust. Kael 0.3 is a
-> pre-1.0 production candidate. The workspace uses Rust 1.97.1 and Rust 2024.
+> Native, GPU-accelerated application framework for building capable,
+> resource-efficient desktop software in Rust. Kael 0.3 is a pre-1.0
+> production candidate using Rust 1.97.1 and Rust 2024.
 
 ## Primary references
 
@@ -9,6 +10,7 @@
 - Guide: https://augani.github.io/kael/
 - Core API: https://docs.rs/kael
 - Component API: https://docs.rs/kael_ui
+- API documentation map: https://augani.github.io/kael/api-documentation.html
 - Getting started: https://augani.github.io/kael/getting-started.html
 - Core concepts: https://augani.github.io/kael/core-concepts.html
 - Component library: https://augani.github.io/kael/component-library.html

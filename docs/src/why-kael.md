@@ -1,107 +1,114 @@
 # Choosing Kael
 
-This page is for engineers deciding whether Kael belongs in their stack. It is
-not a sales pitch — it lays out where Kael sits relative to the common
-alternatives, and is honest about what is missing. Kael is pre-1.0 (currently
-`0.3.x`); treat it accordingly.
+Kael is for teams building substantial desktop products in Rust: software with
+many screens, large data sets, multiple windows, background work, native OS
+integrations, and a long operational life. Its design target is simple:
+applications should become more capable without requiring proportionally more
+memory, idle CPU, runtime layers, or integration code.
 
-Kael is a fork of [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui).
-It targets native desktop apps (macOS, Windows, Linux) written in Rust and
-rendered on the GPU. Kael is native-first, but it also provides explicit WebView
-islands for workflows where web compatibility is the product requirement.
-
-## How it compares
-
-| | **Kael** | **browser-runtime stack** | **Tauri** | **egui** | **Iced** |
-|---|---|---|---|---|---|
-| Architecture | Native GPU retained-mode | Chromium + Node webview | OS webview + Rust core | Immediate-mode GPU | Native retained-mode (Elm-style) |
-| Render path | Metal / DX11 / Vulkan | Blink compositor | System WebView2/WKWebView/WebKitGTK | wgpu/glow | wgpu/tiny-skia |
-| Language | Rust | JS/TS (+ native addons) | Rust core, JS/HTML UI | Rust | Rust |
-| Styling model | Tailwind-like builder API in Rust | CSS | CSS | Code-driven, minimal theming | Code-driven stylesheets |
-| UI paradigm | Retained tree, reactive entities | DOM | DOM | Redraw-every-frame | Message/update/view |
-| Binary size (hello-world, ballpark) | ~10–30 MB | ~80–150 MB | ~3–10 MB (excludes the OS webview) | ~5–15 MB | ~10–20 MB |
-| Memory at idle | Low (no browser) | High (full Chromium) | Low–moderate (shares OS webview) | Low | Low |
-| Bundled runtime | None | Ships Chromium + Node | None (uses OS webview) | None | None |
-| Accessibility | Native per platform (see below) | Chromium a11y (mature) | OS webview a11y (mature) | Limited / partial | AccessKit-based |
-| Packaging / updater | Built in (see below) | Mature (browser-runtime-builder, Squirrel) | Built in (bundler + updater) | Bring your own | Bring your own |
-| Web deployment | No | No (desktop) | No (desktop) | Yes (wasm) | Yes (wasm) |
-| Maturity / ecosystem | Pre-1.0, small | Very mature, huge | Mature, large | Mature, focused | Mature, focused |
-
-Size and memory figures are order-of-magnitude guidance for a trivial app, not
-benchmarks; real numbers depend heavily on assets, dependencies, and build
-flags. Tauri's small binary excludes the system webview it depends on at
-runtime.
+Kael is pre-1.0 (currently `0.3.x`). The architecture and batteries are broad,
+but applications should still pin a compatible minor release and validate the
+capabilities that matter to their users.
 
 ## What the architecture buys you
 
-Kael draws native widgets itself on the GPU. The primary UI path has no HTML,
-CSS, DOM, or JavaScript bridge — layout is flexbox/grid via Taffy, and the app
-UI can live in one Rust crate. Compared to browser-runtime stack you drop the bundled browser
-(smaller binaries, lower idle memory, no IPC hop between a JS UI and a native
-core). Compared to Tauri you do not have to build the whole app in the user's
-system webview. The tradeoff is real: browser features such as mature media
-playback, DOM APIs, CSS edge cases, and the npm UI ecosystem must be replaced
-with native Kael APIs or isolated in explicit WebView surfaces.
+Kael uses a retained UI tree and reactive `Entity<T>` state. It schedules work
+when state changes instead of treating every frame as a reason to rebuild the
+whole interface. Virtualized collections, bounded caches, frame skipping,
+headless measurement, and GPU-budget APIs give large products explicit control
+over the cost of their UI.
 
-Versus immediate-mode toolkits like egui, Kael is retained-mode with a reactive
-`Entity<T>` state system, so it only re-renders what changed rather than
-redrawing every frame. Versus Iced, the main differences are the styling model
-(a Tailwind-like builder API instead of Elm-style stylesheets) and the lineage
-(a GPUI fork, proven at the scale of the Zed editor).
+The framework also keeps application concerns close together. UI, state,
+commands, async work, accessibility, native services, diagnostics, packaging,
+and updates can share Rust types and failure handling. Teams can spend their
+complexity budget on product behavior instead of maintaining bridges between
+unrelated runtimes.
+
+This does not guarantee that every Kael application is small or fast. Assets,
+dependencies, data models, and application code still determine real resource
+use. Use the [benchmarking harness](benchmarking.md) to measure the product and
+keep performance claims tied to reproducible evidence.
+
+## Choose how much framework you want
+
+- Use `kael` for rendering, state, elements, layout, text, input, windows,
+  accessibility, and platform primitives.
+- Add `kael_ui` for a broad component system that can be rethemed and restyled
+  around the product's brand.
+- Add focused `kael_*` crates for storage, networking, secrets, documents,
+  diagnostics, notifications, sharing, media, release services, and higher-level
+  application engines.
+
+The primitive layer does not depend on the component layer. A custom design
+system remains a first-class architecture, not an escape hatch.
+
+## How it compares
+
+This table is decision context, not Kael's identity. Figures are
+order-of-magnitude guidance for trivial applications; measure a representative
+build before making a product decision.
+
+| | **Kael** | **Electron-style stack** | **Tauri** | **egui** | **Iced** |
+| --- | --- | --- | --- | --- | --- |
+| Architecture | Native GPU retained mode | Bundled Chromium + Node | OS WebView + Rust core | Immediate-mode GPU | Native retained mode |
+| Main UI language | Rust | JavaScript/TypeScript | HTML/CSS/JS | Rust | Rust |
+| Render path | Metal / DX11 / Vulkan | Chromium compositor | System WebView | wgpu/glow | wgpu/tiny-skia |
+| State model | Reactive entities | Application-selected web state | Application-selected web state | Redraw each frame | Message/update/view |
+| Product batteries | Framework and focused crates | Mature web/Node ecosystem | Bundler and updater ecosystem | Mostly application-owned | Mostly application-owned |
+| Web deployment | No | No | No | Optional wasm | Optional wasm |
+| Maturity | Pre-1.0 | Very mature | Mature | Mature | Mature |
+
+Choose a web-based desktop stack when web compatibility, the npm ecosystem, or
+shared web/desktop UI is the primary requirement. Choose an immediate-mode
+toolkit when a compact tool UI benefits from that model. Choose Kael when the
+product wants a native retained interface, one Rust application architecture,
+deep desktop capabilities, and direct control over rendering and resource use.
 
 ## Accessibility
 
-Honest status, because it is often where native GPU toolkits fall down:
+Kael produces one accessibility tree and serves it through the platform adapter:
 
-- **Windows** — a hand-rolled UI Automation provider served via `WM_GETOBJECT`.
-- **macOS** — the `accesskit_macos` adapter over the window's `NSView`, serving
-  a full `NSAccessibility` tree to VoiceOver.
-- **Linux** — the `accesskit_unix` AT-SPI2 adapter (x11 and Wayland), exposing
-  the tree to Orca over D-Bus.
+- **Windows** — UI Automation through `WM_GETOBJECT`.
+- **macOS** — `accesskit_macos` over the window's `NSView` for VoiceOver.
+- **Linux** — AccessKit's AT-SPI2 adapter for X11 and Wayland.
 
-All three are driven from the same per-frame accessibility tree. This is real,
-not a stub — but it is newer than Chromium's decade-hardened a11y, so validate
-against your target screen readers.
+This is a real implementation, but it is younger than browser accessibility
+stacks. Validate the screen readers, keyboard workflows, scale factors, and
+locales your application supports.
 
 ## Packaging and updates
 
-Packaging and auto-update are built in, not an afterthought: `.dmg` on macOS,
-WiX/MSI on Windows, AppImage on Linux, with code-signing/notarization hooks. The
-auto-updater verifies update signatures against a pinned public key before
-installing. This is closer to Tauri's batteries-included story than to egui/Iced
-(where you assemble your own).
+Application packaging and updates are part of the product toolchain: DMG on
+macOS, WiX/MSI on Windows, and AppImage on Linux, with signing, notarization,
+checksums, update manifests, and signature verification. These APIs package
+applications built with Kael; they do not change the ownership or release policy
+of the Kael framework itself.
 
-## What Kael does not have yet
+## Current boundaries
 
-Be aware of the gaps before committing:
+- **Touch and pen input are partial.** Pointer, scroll, magnify, and gesture
+  primitives exist, but full contact streams and pressure/tilt metadata still
+  need backend work.
+- **Desktop only.** Kael does not provide a wasm/browser deployment target.
+- **Web-specific surfaces stay explicit.** Use the optional WebView feature for
+  OAuth, payments, maps, hosted documents, vendor widgets, or another
+  intentionally web-owned surface.
+- **Native media continues to mature.** Audio/video primitives, captions,
+  controllers, and automatic routing exist; hardware decode and broader native
+  streaming coverage remain platform-dependent.
+- **Pre-1.0 API.** Breaking changes may occur between minor versions.
+- **Smaller ecosystem.** There are fewer third-party packages and community
+  answers than in older UI ecosystems.
 
-- **Touch / pen input is not Chromium-complete yet** — pointer, scroll, and
-  magnify gestures exist, and `CapabilityReport` now separates
-  `PrecisionPointerInput`, `GestureInput`, `TouchInput`, and `PenInput`, but
-  direct touch contact streams and pen pressure/tilt metadata still need
-  backend work.
-- **No URL routing** — navigation is an in-app stack, not URL-addressable.
-- **No web deployment** — desktop only; there is no wasm/browser target. If you
-  need the same UI on the web, egui or Iced (or a webview stack) fit better.
-- **No full browser-platform parity** — native Kael UI is not a DOM/CSS/JS
-  runtime. Use WebView islands for web-shaped requirements while native
-  equivalents mature.
-- **Media is still bridging the gap** — audio/video primitives,
-  `VideoController`, and `VideoPlayer::source(...)` exist, including parsed and
-  rendered WebVTT/SRT text tracks with built-in caption selection.
-  `VideoPlayer::url(...)` defaults to automatic native-vs-WebView routing for
-  browser-media manifests, but hardware decode, richer native streaming,
-  native audio/video stream selection, and full browser-media parity are still
-  roadmap work.
-- **Pre-1.0 API** — expect breaking changes between minor versions.
-- **Smaller ecosystem** — fewer third-party widgets, examples, and answers than
-  browser-runtime stack or Tauri. You will occasionally be the first to hit something.
+## Good fits
 
-## When to pick Kael
+Kael is a strong fit for editors, IDEs, agent workspaces, collaboration tools,
+communication apps, dashboards, database clients, media tools, design software,
+and other desktop products where responsiveness, resource use, native services,
+and a coherent application architecture all matter.
 
-Reach for Kael when you want native GPU performance and a single Rust codebase
-for a desktop app — IDEs, editors, dashboards, design and media tools — and you
-are comfortable on a pre-1.0 framework. Reach for browser-runtime stack or Tauri when you
-need the full web platform as your default UI runtime, a large ecosystem, or one
-codebase for web and desktop; reach for egui when an immediate-mode tool UI is
-enough; reach for Iced when you want a mature, native, Elm-style Rust toolkit.
+It is a weaker fit when the product must share its primary interface with the
+web, depends heavily on DOM-only packages, or needs a platform capability Kael
+currently reports as unsupported. Read the
+[Native Capability Bridge](native-capability-bridge.md) before committing to an
+OS-dependent workflow.

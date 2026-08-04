@@ -22,16 +22,19 @@ collide:
 ```rust,ignore
 use kael_ui::prelude::*;
 
-fn main() {
-    Application::new().run(|cx: &mut App| {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    Application::try_new()?.run(|cx: &mut App| {
         kael_ui::init(cx);
         install_theme(cx, Theme::dark());
 
-        cx.open_window(WindowOptions::default(), |_, cx| {
+        if let Err(error) = cx.open_window(WindowOptions::default(), |_, cx| {
             cx.new(|_| MyApp)
-        })
-        .unwrap();
+        }) {
+            eprintln!("failed to open the application window: {error}");
+            cx.quit();
+        }
     });
+    Ok(())
 }
 ```
 
@@ -201,7 +204,7 @@ cargo run -p kael_ui --example astryx_showcase \
   --features "markdown html-render audio media editor-languages"
 ```
 
-The showcase is excluded from the published `kael_ui` crate.
+The showcase is not part of the `kael_ui` crate package.
 
 ## Template apps
 

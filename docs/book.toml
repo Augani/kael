@@ -1,7 +1,7 @@
 [book]
 title = "Kael Documentation"
 authors = ["Augustus Otu"]
-description = "GPU-accelerated UI framework for native desktop apps — the browser-runtime stack replacement"
+description = "Native Rust application framework for capable, resource-efficient desktop software"
 src = "src"
 language = "en"
 

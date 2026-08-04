@@ -19,8 +19,8 @@ use kael::{Application, App, KeyBinding, actions};
 #[cfg(debug_assertions)]
 actions!(myapp, [ToggleInspector]);
 
-fn main() {
-    Application::new().run(|cx: &mut App| {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    Application::try_new()?.run(|cx: &mut App| {
         kael_ui::init(cx);
 
         #[cfg(debug_assertions)]
@@ -31,6 +31,7 @@ fn main() {
 
         // ... open your window ...
     });
+    Ok(())
 }
 ```
 

@@ -4,8 +4,8 @@ Beyond the element tree, Kael gives you direct GPU drawing: an immediate-mode ca
 
 ## Visual escape-hatch ladder
 
-When porting an browser-runtime stack app or giving an AI agent a graphics task, choose the
-lowest rung that solves the problem:
+When designing a graphics-heavy workflow or giving an AI agent a rendering task,
+choose the lowest rung that solves the problem:
 
 | Need | Use today | Notes |
 | --- | --- | --- |
