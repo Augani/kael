@@ -2,7 +2,6 @@
 
 use std::{
     cell::RefCell,
-    collections::HashMap,
     num::NonZeroIsize,
     path::PathBuf,
     rc::{Rc, Weak},
@@ -10,6 +9,9 @@ use std::{
     sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
+
+#[cfg(feature = "webview")]
+use std::collections::HashMap;
 
 use ::util::ResultExt;
 use anyhow::{Context as _, Result};

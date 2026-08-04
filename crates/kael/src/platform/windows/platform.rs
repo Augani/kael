@@ -1408,7 +1408,7 @@ impl WindowsPlatformInner {
 
     #[inline]
     fn run_foreground_task(&self) -> Option<isize> {
-        for runnable in self.main_receiver.drain() {
+        for runnable in self.main_receiver.try_iter() {
             super::catch_platform_callback("foreground task", (), || {
                 runnable.run();
             });
