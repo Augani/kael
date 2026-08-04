@@ -1,6 +1,6 @@
 use crate::components::scrollable::scrollable_vertical;
 use crate::icon_config::resolve_icon_path;
-use crate::theme::{use_theme, Theme};
+use crate::theme::{Theme, use_theme};
 use kael::{prelude::FluentBuilder as _, *};
 use regex::Regex;
 use ropey::Rope;
@@ -788,16 +788,18 @@ impl EditorState {
     fn reset_cursor_blink(&mut self, cx: &mut Context<Self>) {
         self.cursor_visible = true;
         self.last_cursor_move = std::time::Instant::now();
-        self.blink_task = Some(cx.spawn(async |this, cx| loop {
-            smol::Timer::after(std::time::Duration::from_millis(500)).await;
-            let ok = this
-                .update(cx, |state, cx| {
-                    state.cursor_visible = !state.cursor_visible;
-                    cx.notify();
-                })
-                .is_ok();
-            if !ok {
-                break;
+        self.blink_task = Some(cx.spawn(async |this, cx| {
+            loop {
+                smol::Timer::after(std::time::Duration::from_millis(500)).await;
+                let ok = this
+                    .update(cx, |state, cx| {
+                        state.cursor_visible = !state.cursor_visible;
+                        cx.notify();
+                    })
+                    .is_ok();
+                if !ok {
+                    break;
+                }
             }
         }));
     }
@@ -1408,11 +1410,11 @@ impl EditorState {
         let mut breadcrumbs = Vec::new();
         loop {
             let kind = node.kind();
-            if Self::is_scope_kind(kind) {
-                if let Some(name) = Self::extract_scope_name(&node, &self.rope) {
-                    let line = node.start_position().row;
-                    breadcrumbs.push((name, line));
-                }
+            if Self::is_scope_kind(kind)
+                && let Some(name) = Self::extract_scope_name(&node, &self.rope)
+            {
+                let line = node.start_position().row;
+                breadcrumbs.push((name, line));
             }
             match node.parent() {
                 Some(p) => node = p,
@@ -1617,7 +1619,8 @@ impl EditorState {
 
     pub fn set_language(&mut self, lang: Language) {
         self.language = lang;
-        if let Some(ts_lang) = lang.tree_sitter_language() {
+        let tree_sitter_language = lang.tree_sitter_language();
+        if let Some(ts_lang) = tree_sitter_language {
             let _ = self.parser.set_language(&ts_lang);
             self.highlight_query = lang
                 .highlight_query_source()
@@ -1644,7 +1647,8 @@ impl EditorState {
         let path = path.into();
         let lang = Language::from_path(&path);
         self.language = lang;
-        if let Some(ts_lang) = lang.tree_sitter_language() {
+        let tree_sitter_language = lang.tree_sitter_language();
+        if let Some(ts_lang) = tree_sitter_language {
             let _ = self.parser.set_language(&ts_lang);
             self.highlight_query = lang
                 .highlight_query_source()
@@ -1767,7 +1771,8 @@ impl EditorState {
         let (tx, rx) = smol::channel::bounded(1);
         std::thread::spawn(move || {
             let mut parser = Parser::new();
-            if let Some(ts_lang) = lang.tree_sitter_language() {
+            let tree_sitter_language = lang.tree_sitter_language();
+            if let Some(ts_lang) = tree_sitter_language {
                 let _ = parser.set_language(&ts_lang);
                 let tree = parser.parse(&content, None);
                 let _ = tx.send_blocking(tree);
@@ -2449,10 +2454,10 @@ impl EditorState {
         if self.read_only {
             return;
         }
-        if let Ok(Some(item)) = cx.read_from_clipboard() {
-            if let Some(text) = item.text() {
-                self.insert_text_at_cursor(&text, cx);
-            }
+        if let Ok(Some(item)) = cx.read_from_clipboard()
+            && let Some(text) = item.text()
+        {
+            self.insert_text_at_cursor(&text, cx);
         }
     }
 
@@ -2857,70 +2862,72 @@ impl EditorState {
     fn start_autoscroll(&mut self, cx: &mut Context<Self>) {
         let entity = cx.entity().clone();
         let line_height = self.line_height;
-        self.autoscroll_task = Some(cx.spawn(async move |_, cx| loop {
-            Timer::after(Duration::from_millis(50)).await;
-            let should_continue = cx
-                .update(|cx| {
-                    entity.update(cx, |state, cx| {
-                        if !state.is_selecting {
-                            return false;
-                        }
-                        let Some(mouse_pos) = state.last_mouse_pos else {
-                            return true;
-                        };
-                        let Some(bounds) = state.last_bounds else {
-                            return true;
-                        };
-
-                        let viewport_bounds = state.scroll_handle.bounds();
-                        if viewport_bounds.size.height == px(0.0) {
-                            return true;
-                        }
-                        let viewport_top = viewport_bounds.top();
-                        let viewport_bottom = viewport_bounds.bottom();
-                        let mouse_y = mouse_pos.y;
-                        let edge_zone = line_height * 1.5;
-                        let mut scrolled = false;
-
-                        if mouse_y < viewport_top + edge_zone {
-                            let speed =
-                                ((viewport_top + edge_zone - mouse_y) / edge_zone).clamp(0.5, 5.0);
-                            let offset = state.scroll_handle.offset();
-                            let new_y = (offset.y + line_height * speed).min(px(0.0));
-                            state.scroll_handle.set_offset(point(offset.x, new_y));
-                            scrolled = true;
-                        } else if mouse_y > viewport_bottom - edge_zone {
-                            let speed = ((mouse_y - (viewport_bottom - edge_zone)) / edge_zone)
-                                .clamp(0.5, 5.0);
-                            let offset = state.scroll_handle.offset();
-                            let max_offset = state.scroll_handle.max_offset().height;
-                            let new_y = (offset.y - line_height * speed).max(-max_offset);
-                            state.scroll_handle.set_offset(point(offset.x, new_y));
-                            scrolled = true;
-                        }
-
-                        if scrolled {
-                            let gutter_width = state.last_mouse_gutter_width;
-                            let pos = state.position_for_mouse(
-                                mouse_pos,
-                                bounds,
-                                gutter_width,
-                                line_height,
-                            );
-                            if let Some(ref mut sel) = state.selection {
-                                sel.cursor = pos;
-                            } else {
-                                state.selection = Some(Selection::new(state.cursor, pos));
+        self.autoscroll_task = Some(cx.spawn(async move |_, cx| {
+            loop {
+                Timer::after(Duration::from_millis(50)).await;
+                let should_continue = cx
+                    .update(|cx| {
+                        entity.update(cx, |state, cx| {
+                            if !state.is_selecting {
+                                return false;
                             }
-                            state.cursor = pos;
-                            cx.notify();
-                        }
-                        true
+                            let Some(mouse_pos) = state.last_mouse_pos else {
+                                return true;
+                            };
+                            let Some(bounds) = state.last_bounds else {
+                                return true;
+                            };
+
+                            let viewport_bounds = state.scroll_handle.bounds();
+                            if viewport_bounds.size.height == px(0.0) {
+                                return true;
+                            }
+                            let viewport_top = viewport_bounds.top();
+                            let viewport_bottom = viewport_bounds.bottom();
+                            let mouse_y = mouse_pos.y;
+                            let edge_zone = line_height * 1.5;
+                            let mut scrolled = false;
+
+                            if mouse_y < viewport_top + edge_zone {
+                                let speed = ((viewport_top + edge_zone - mouse_y) / edge_zone)
+                                    .clamp(0.5, 5.0);
+                                let offset = state.scroll_handle.offset();
+                                let new_y = (offset.y + line_height * speed).min(px(0.0));
+                                state.scroll_handle.set_offset(point(offset.x, new_y));
+                                scrolled = true;
+                            } else if mouse_y > viewport_bottom - edge_zone {
+                                let speed = ((mouse_y - (viewport_bottom - edge_zone)) / edge_zone)
+                                    .clamp(0.5, 5.0);
+                                let offset = state.scroll_handle.offset();
+                                let max_offset = state.scroll_handle.max_offset().height;
+                                let new_y = (offset.y - line_height * speed).max(-max_offset);
+                                state.scroll_handle.set_offset(point(offset.x, new_y));
+                                scrolled = true;
+                            }
+
+                            if scrolled {
+                                let gutter_width = state.last_mouse_gutter_width;
+                                let pos = state.position_for_mouse(
+                                    mouse_pos,
+                                    bounds,
+                                    gutter_width,
+                                    line_height,
+                                );
+                                if let Some(ref mut sel) = state.selection {
+                                    sel.cursor = pos;
+                                } else {
+                                    state.selection = Some(Selection::new(state.cursor, pos));
+                                }
+                                state.cursor = pos;
+                                cx.notify();
+                            }
+                            true
+                        })
                     })
-                })
-                .unwrap_or(false);
-            if !should_continue {
-                break;
+                    .unwrap_or(false);
+                if !should_continue {
+                    break;
+                }
             }
         }));
     }
@@ -3429,21 +3436,20 @@ impl Element for EditorElement {
         let is_single_cursor =
             selection.is_none() || selection.as_ref().map(|s| s.is_empty()).unwrap_or(true);
 
-        if is_focused && is_single_cursor {
-            if let Some(display_row) = buf_to_disp(cursor.line) {
-                if display_row >= first_visible_display_row
-                    && display_row < last_visible_display_row
-                {
-                    let hl_y = bounds.top() + padding_top + line_height * display_row as f32;
-                    window.paint_quad(fill(
-                        Bounds::new(
-                            point(bounds.left(), hl_y),
-                            size(bounds.size.width, line_height),
-                        ),
-                        current_line_color,
-                    ));
-                }
-            }
+        if is_focused
+            && is_single_cursor
+            && let Some(display_row) = buf_to_disp(cursor.line)
+            && display_row >= first_visible_display_row
+            && display_row < last_visible_display_row
+        {
+            let hl_y = bounds.top() + padding_top + line_height * display_row as f32;
+            window.paint_quad(fill(
+                Bounds::new(
+                    point(bounds.left(), hl_y),
+                    size(bounds.size.width, line_height),
+                ),
+                current_line_color,
+            ));
         }
 
         // Cache highlight spans — only recompute when content changes or visible range shifts
@@ -3675,22 +3681,22 @@ impl Element for EditorElement {
         if is_focused && is_single_cursor {
             let word_occurrences = self.find_word_occurrences(visible_buffer_lines, cx);
             for (occ_line, occ_start, occ_end) in &word_occurrences {
-                if let Some(dr) = buf_to_disp(*occ_line) {
-                    if let Some(layout) = self.state.read(cx).line_layouts.get(occ_line) {
-                        let occ_y = bounds.top() + padding_top + line_height * dr as f32;
-                        let x_start = layout.x_for_index(*occ_start);
-                        let x_end = layout.x_for_index(*occ_end);
-                        window.paint_quad(fill(
-                            Bounds::new(
-                                point(
-                                    bounds.left() + gutter_width + x_start - scroll_offset_x,
-                                    occ_y,
-                                ),
-                                size(x_end - x_start, line_height),
+                if let Some(dr) = buf_to_disp(*occ_line)
+                    && let Some(layout) = self.state.read(cx).line_layouts.get(occ_line)
+                {
+                    let occ_y = bounds.top() + padding_top + line_height * dr as f32;
+                    let x_start = layout.x_for_index(*occ_start);
+                    let x_end = layout.x_for_index(*occ_end);
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            point(
+                                bounds.left() + gutter_width + x_start - scroll_offset_x,
+                                occ_y,
                             ),
-                            word_highlight_color,
-                        ));
-                    }
+                            size(x_end - x_start, line_height),
+                        ),
+                        word_highlight_color,
+                    ));
                 }
             }
         }
@@ -3794,33 +3800,29 @@ impl Element for EditorElement {
             }
         }
 
-        if is_focused {
-            if let Some((pos_a, pos_b)) = self.state.read(cx).find_matching_bracket() {
-                for pos in [pos_a, pos_b] {
-                    if let Some(dr) = buf_to_disp(pos.line) {
-                        if dr >= first_visible_display_row && dr < last_visible_display_row {
-                            if let Some(layout) = self.state.read(cx).line_layouts.get(&pos.line) {
-                                let bx = bounds.left() + gutter_width + layout.x_for_index(pos.col)
-                                    - scroll_offset_x;
-                                let by = bounds.top() + padding_top + line_height * dr as f32;
-                                let bw =
-                                    layout.x_for_index(pos.col + 1) - layout.x_for_index(pos.col);
-                                let bracket_bounds =
-                                    Bounds::new(point(bx, by), size(bw, line_height));
-                                window.paint_quad(PaintQuad {
-                                    bounds: bracket_bounds,
-                                    corner_radii: Corners::default(),
-                                    background: bracket_match_color.opacity(0.3).into(),
-                                    border_widths: Edges::all(px(1.0)),
-                                    border_color: (bracket_match_color).into(),
-                                    border_style: BorderStyle::default(),
-                                    continuous_corners: false,
-                                    transform: Default::default(),
-                                    blend_mode: Default::default(),
-                                });
-                            }
-                        }
-                    }
+        if is_focused && let Some((pos_a, pos_b)) = self.state.read(cx).find_matching_bracket() {
+            for pos in [pos_a, pos_b] {
+                if let Some(dr) = buf_to_disp(pos.line)
+                    && dr >= first_visible_display_row
+                    && dr < last_visible_display_row
+                    && let Some(layout) = self.state.read(cx).line_layouts.get(&pos.line)
+                {
+                    let bx = bounds.left() + gutter_width + layout.x_for_index(pos.col)
+                        - scroll_offset_x;
+                    let by = bounds.top() + padding_top + line_height * dr as f32;
+                    let bw = layout.x_for_index(pos.col + 1) - layout.x_for_index(pos.col);
+                    let bracket_bounds = Bounds::new(point(bx, by), size(bw, line_height));
+                    window.paint_quad(PaintQuad {
+                        bounds: bracket_bounds,
+                        corner_radii: Corners::default(),
+                        background: bracket_match_color.opacity(0.3).into(),
+                        border_widths: Edges::all(px(1.0)),
+                        border_color: (bracket_match_color).into(),
+                        border_style: BorderStyle::default(),
+                        continuous_corners: false,
+                        transform: Default::default(),
+                        blend_mode: Default::default(),
+                    });
                 }
             }
         }
@@ -3926,35 +3928,32 @@ impl Element for EditorElement {
             }
 
             let cursor_visible = self.state.read(cx).cursor_visible;
-            if cursor_visible {
-                if let Some(cursor_display_row) = buf_to_disp(cursor.line) {
-                    let total = self.state.read(cx).total_lines();
-                    let cursor_col = if cursor.line < total {
-                        cursor.col.min(self.state.read(cx).line_len(cursor.line))
-                    } else {
-                        0
-                    };
-                    let cursor_y =
-                        bounds.top() + padding_top + line_height * cursor_display_row as f32;
-                    let cursor_x =
-                        if let Some(layout) = self.state.read(cx).line_layouts.get(&cursor.line) {
-                            bounds.left() + gutter_width + layout.x_for_index(cursor_col)
-                                - scroll_offset_x
-                        } else {
-                            bounds.left() + gutter_width - scroll_offset_x
-                        };
+            if cursor_visible && let Some(cursor_display_row) = buf_to_disp(cursor.line) {
+                let total = self.state.read(cx).total_lines();
+                let cursor_col = if cursor.line < total {
+                    cursor.col.min(self.state.read(cx).line_len(cursor.line))
+                } else {
+                    0
+                };
+                let cursor_y = bounds.top() + padding_top + line_height * cursor_display_row as f32;
+                let cursor_x = if let Some(layout) =
+                    self.state.read(cx).line_layouts.get(&cursor.line)
+                {
+                    bounds.left() + gutter_width + layout.x_for_index(cursor_col) - scroll_offset_x
+                } else {
+                    bounds.left() + gutter_width - scroll_offset_x
+                };
 
-                    let cursor_draw_color = self
-                        .state
-                        .read(cx)
-                        .cursor_color_override
-                        .unwrap_or(theme.tokens.primary);
+                let cursor_draw_color = self
+                    .state
+                    .read(cx)
+                    .cursor_color_override
+                    .unwrap_or(theme.tokens.primary);
 
-                    window.paint_quad(fill(
-                        Bounds::new(point(cursor_x, cursor_y), size(px(2.0), line_height)),
-                        cursor_draw_color,
-                    ));
-                }
+                window.paint_quad(fill(
+                    Bounds::new(point(cursor_x, cursor_y), size(px(2.0), line_height)),
+                    cursor_draw_color,
+                ));
             }
         }
     }
@@ -4811,7 +4810,7 @@ impl IntoElement for VerticalScrollbar {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kael::{hsla, TestAppContext};
+    use kael::{TestAppContext, hsla};
 
     #[::core::prelude::v1::test]
     fn editor_position_selection_and_diagnostic_summaries_are_content_safe() {

@@ -114,7 +114,8 @@ Card::new()
 ```
 
 Use the theme for app-wide identity and `Styled` overrides for one-off
-adjustments. The [`custom_theme_demo`](https://github.com/Augani/kael/blob/main/crates/kael_ui/examples/custom_theme_demo.rs) example shows all three layers together.
+adjustments. The repository-only Astryx showcase composes both approaches in
+one application.
 
 ## What's included
 
@@ -190,18 +191,17 @@ kael_ui::set_icon_base_path("assets/icons");
 | `audio`            | no      | `AudioPlayer` playback via rodio                     |
 | `editor-languages` | no      | Tree-sitter grammars for 20+ languages in the editor |
 
-## Examples
+## Showcase
 
-More than 140 runnable demos live in [`crates/kael_ui/examples`](https://github.com/Augani/kael/tree/main/crates/kael_ui/examples):
+The repository keeps one comprehensive, sectioned showcase instead of a large
+collection of small examples:
 
 ```bash
-cargo run -p kael_ui --example custom_theme_demo
-cargo run -p kael_ui --example components_showcase
-cargo run -p kael_ui --example data_table_styled_demo
-cargo run -p kael_ui --example command_palette_styled_demo
-cargo run -p kael_ui --example sidebar_styled_demo
-cargo run -p kael_ui --example date_picker_demo
+cargo run -p kael_ui --example astryx_showcase \
+  --features "markdown html-render audio media editor-languages"
 ```
+
+The showcase is excluded from the published `kael_ui` crate.
 
 ## Template apps
 

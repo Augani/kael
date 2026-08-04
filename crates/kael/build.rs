@@ -173,7 +173,7 @@ fn check_wgsl_shaders() {
 
     let shader_source_path = "./src/platform/blade/shaders.wgsl";
     let shader_path = PathBuf::from_str(shader_source_path).unwrap();
-    println!("cargo:rerun-if-changed={}", &shader_path.display());
+    println!("cargo:rerun-if-changed={}", shader_path.display());
 
     let shader_source = std::fs::read_to_string(&shader_path).unwrap();
 
@@ -325,7 +325,7 @@ mod macos {
         let shader_source_path = "./src/platform/mac/shaders.metal";
         let shader_path = PathBuf::from_str(shader_source_path).unwrap();
         stitch_header(header_path, &shader_path).unwrap();
-        println!("cargo:rerun-if-changed={}", &shader_source_path);
+        println!("cargo:rerun-if-changed={}", shader_source_path);
     }
 
     #[cfg(not(feature = "runtime_shaders"))]
@@ -438,7 +438,7 @@ mod windows {
             .unwrap();
     }
 
-    /// You can set the `GPUI_FXC_PATH` environment variable to specify the path to the fxc.exe compiler.
+    /// You can set the `KAEL_FXC_PATH` environment variable to specify the path to the fxc.exe compiler.
     fn compile_shaders() {
         let shader_path = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
             .join("src/platform/windows/shaders.hlsl");
@@ -490,10 +490,10 @@ mod windows {
         }
     }
 
-    /// You can set the `GPUI_FXC_PATH` environment variable to specify the path to the fxc.exe compiler.
+    /// You can set the `KAEL_FXC_PATH` environment variable to specify the path to the fxc.exe compiler.
     fn find_fxc_compiler() -> String {
         // Check environment variable
-        if let Ok(path) = std::env::var("GPUI_FXC_PATH")
+        if let Ok(path) = std::env::var("KAEL_FXC_PATH")
             && Path::new(&path).exists()
         {
             return path;

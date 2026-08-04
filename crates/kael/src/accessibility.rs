@@ -1256,7 +1256,6 @@ impl AccessibilityTree {
     /// Hidden nodes are pruned along with their subtrees.
     pub fn to_accesskit_tree_update(
         &self,
-        app_name: Option<&str>,
         toolkit_name: Option<&str>,
         toolkit_version: Option<&str>,
     ) -> accesskit::TreeUpdate {
@@ -1318,13 +1317,13 @@ impl AccessibilityTree {
             .unwrap_or(root_id);
 
         let mut tree = accesskit::Tree::new(root_id);
-        tree.app_name = app_name.map(str::to_owned);
         tree.toolkit_name = toolkit_name.map(str::to_owned);
         tree.toolkit_version = toolkit_version.map(str::to_owned);
 
         accesskit::TreeUpdate {
             nodes,
             tree: Some(tree),
+            tree_id: accesskit::TreeId::ROOT,
             focus,
         }
     }
@@ -1340,11 +1339,10 @@ impl AccessibilityTree {
     pub fn to_accesskit_tree_update_after(
         &self,
         previous: Option<&Self>,
-        app_name: Option<&str>,
         toolkit_name: Option<&str>,
         toolkit_version: Option<&str>,
     ) -> accesskit::TreeUpdate {
-        let mut update = self.to_accesskit_tree_update(app_name, toolkit_name, toolkit_version);
+        let mut update = self.to_accesskit_tree_update(toolkit_name, toolkit_version);
         let Some(previous) = previous else {
             return update;
         };
@@ -3244,10 +3242,10 @@ mod accesskit_spike_tests {
         tree.insert(button);
         tree.set_parent(button_id, root_id);
 
-        let update = tree.to_accesskit_tree_update(Some("App"), Some("Kael"), Some("0.0.0"));
+        let update = tree.to_accesskit_tree_update(Some("Kael"), Some("0.0.0"));
         let ak_tree = update.tree.expect("tree present");
         assert_eq!(ak_tree.root, accesskit::NodeId(root_id.0));
-        assert_eq!(ak_tree.app_name.as_deref(), Some("App"));
+        assert_eq!(update.tree_id, accesskit::TreeId::ROOT);
         assert_eq!(update.focus, accesskit::NodeId(button_id.0));
 
         let root_node = update
@@ -3295,8 +3293,7 @@ mod accesskit_spike_tests {
         current.insert(child);
         current.set_parent(child_id, second_parent_id);
 
-        let update =
-            current.to_accesskit_tree_update_after(Some(&previous), None, Some("Kael"), None);
+        let update = current.to_accesskit_tree_update_after(Some(&previous), Some("Kael"), None);
         let position = |id: AccessibilityId| {
             update
                 .nodes
@@ -3324,7 +3321,7 @@ mod accesskit_spike_tests {
         tree.insert(child);
         tree.set_parent(child_id, hidden_id);
 
-        let update = tree.to_accesskit_tree_update(None, None, None);
+        let update = tree.to_accesskit_tree_update(None, None);
         assert!(
             !update
                 .nodes
@@ -3551,7 +3548,7 @@ mod accesskit_spike_tests {
         tree.insert(button);
         tree.set_parent(button_id, root_id);
 
-        let update = tree.to_accesskit_tree_update(Some("form_controls"), Some("Kael"), None);
+        let update = tree.to_accesskit_tree_update(Some("Kael"), None);
         let lookup = |id: AccessibilityId| {
             update
                 .nodes

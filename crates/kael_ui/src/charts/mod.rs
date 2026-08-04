@@ -24,7 +24,7 @@ pub use pie_chart::{
     PieChart, PieChartLabelPosition, PieChartSegment, PieChartSize, PieChartVariant,
 };
 
-use kael::{point, Bounds, Hsla, PathBuilder, Pixels, Window};
+use kael::{Bounds, Hsla, PathBuilder, Pixels, Window, point};
 
 pub(crate) type RadialSegment = (f32, f32, Hsla);
 
@@ -69,11 +69,7 @@ pub(crate) fn paint_radial_segments(
 }
 
 pub(crate) fn finite_or_zero(value: f64) -> f64 {
-    if value.is_finite() {
-        value
-    } else {
-        0.0
-    }
+    if value.is_finite() { value } else { 0.0 }
 }
 
 pub(crate) fn format_axis_value(value: f64) -> String {

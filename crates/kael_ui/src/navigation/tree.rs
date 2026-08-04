@@ -391,7 +391,7 @@ impl<T: Clone + PartialEq + Eq + Hash + 'static> TreeList<T> {
         theme: &crate::theme::Theme,
         is_selected: bool,
         highlight_matches: bool,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<T> {
         if match_ranges.is_empty() || !highlight_matches {
             return div().child(text.to_string()).into_any_element();
         }
@@ -910,7 +910,11 @@ impl<T: Clone + PartialEq + 'static> List<T> {
         self.selected_id.as_ref() == Some(item_id)
     }
 
-    fn render_item(&self, item: &ListItem<T>, theme: &crate::theme::Theme) -> impl IntoElement {
+    fn render_item(
+        &self,
+        item: &ListItem<T>,
+        theme: &crate::theme::Theme,
+    ) -> impl IntoElement + use<T> {
         let is_selected = self.is_selected(&item.id);
 
         let base = div()

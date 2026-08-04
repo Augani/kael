@@ -230,10 +230,13 @@ impl Popover {
                     );
                 })
                 .into_any_element()
-        } else if let Some(trigger) = self.trigger.take() {
-            (trigger)(open, window, cx)
         } else {
-            div().child("Trigger").into_any_element()
+            let trigger = self.trigger.take();
+            if let Some(trigger) = trigger {
+                (trigger)(open, window, cx)
+            } else {
+                div().child("Trigger").into_any_element()
+            }
         };
 
         div()
@@ -314,10 +317,10 @@ fn open_popover_content(
             &new_content_view,
             cx,
             move |modal, _: &DismissEvent, window, cx| {
-                if modal.focus_handle(cx).contains_focused(window, cx) {
-                    if let Some(previous_focus_handle) = previous_focus_handle.as_ref() {
-                        window.focus(previous_focus_handle);
-                    }
+                if modal.focus_handle(cx).contains_focused(window, cx)
+                    && let Some(previous_focus_handle) = previous_focus_handle.as_ref()
+                {
+                    window.focus(previous_focus_handle);
                 }
                 *view_for_dismiss.borrow_mut() = None;
                 if let Some(callback) = close_callback.as_ref() {

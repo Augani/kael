@@ -394,10 +394,10 @@ impl<T: Clone + 'static> Select<T> {
             cx.emit(SelectEvent::Change);
             cx.notify();
 
-            if let Some(ref cb) = self.on_change {
-                if let Some(option) = self.options.get(index) {
-                    (cb)(&option.value, window, cx);
-                }
+            if let Some(ref cb) = self.on_change
+                && let Some(option) = self.options.get(index)
+            {
+                (cb)(&option.value, window, cx);
             }
         }
     }

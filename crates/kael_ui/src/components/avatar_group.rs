@@ -1,5 +1,5 @@
 use crate::components::avatar::{Avatar, AvatarSize};
-use crate::components::tooltip::{tooltip, TooltipFocusTrigger};
+use crate::components::tooltip::{TooltipFocusTrigger, tooltip};
 use crate::theme::use_theme;
 use kael::{prelude::FluentBuilder as _, *};
 

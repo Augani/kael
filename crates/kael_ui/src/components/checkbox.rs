@@ -283,7 +283,7 @@ fn checkbox_icon(
     indeterminate_icon: SharedString,
     window: &mut Window,
     cx: &mut App,
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
     let toggle_state = window.use_keyed_state(id.clone(), cx, |_, _| (checked, indeterminate));
 
     let icon_size = match size {
@@ -314,17 +314,9 @@ fn checkbox_icon(
     }
 
     let opacity = if needs_animation {
-        if checked || indeterminate {
-            0.0
-        } else {
-            1.0
-        }
+        if checked || indeterminate { 0.0 } else { 1.0 }
     } else {
-        if checked || indeterminate {
-            1.0
-        } else {
-            0.0
-        }
+        if checked || indeterminate { 1.0 } else { 0.0 }
     };
 
     div()

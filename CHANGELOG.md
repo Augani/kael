@@ -9,7 +9,26 @@ stabilised — minor version bumps may include breaking changes.
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-06-11
+The workspace is prepared as the `0.3.0` release candidate. The version will
+be dated only when the crates are approved and published.
+
+### Production readiness
+
+- Unified every workspace crate and starter template on Rust 1.97.1, Rust
+  2024, and one shared minimum-supported Rust version.
+- Kept `kael` as the standalone primitives/runtime crate and `kael_ui` as an
+  optional, brandable component layer. WebView support is now opt-in.
+- Consolidated the runnable example surface into the repository-only Astryx
+  showcase; examples, benchmarks, screenshots, templates, and internal audit
+  material are excluded from published crate archives.
+- Added strict all-target/all-feature lint and test gates, dependency auditing,
+  native platform CI, package-content checks, and an explicit manual publish
+  gate. Repository tags do not publish crates.
+- Corrected capability reporting so descriptor-only or app-owned integrations
+  are not presented as complete native backends. Agent planning metadata is
+  available through the opt-in `agent-tools` feature.
+- Replaced inherited runtime and benchmark environment-variable names with the
+  `KAEL_*` namespace.
 
 ### Added
 
@@ -49,8 +68,8 @@ stabilised — minor version bumps may include breaking changes.
   two-layer stacks (`ShadowStack`), with dark-theme alphas tamed.
 - New docs chapters: State Management, Async & Data Fetching, Navigation;
   the Animations chapter covers transitions, FLIP, and springs.
-- New examples: `soft_ui`, `filters_gradients`, `content_effects`,
-  `drag_spring`, `async_query`.
+- The Astryx showcase now covers the maintained component and interaction
+  surface in one sectioned application.
 
 ### Changed
 
@@ -122,10 +141,10 @@ stabilised — minor version bumps may include breaking changes.
 
 - **Kael is re-centered as a general-purpose desktop application
   framework.** The project drifted toward being a video-editor toolkit;
-  this release corrects course. The new [VISION.md](VISION.md) states the
+  this release corrects course. The release vision states the
   mission, the layering rule that keeps the core domain-neutral, the
   `adabraka-gpui` → Kael naming history, and the project's relationship
-  to Zed/upstream GPUI. `PRODUCTION_ROADMAP.md` is retitled and re-read
+  to Zed/upstream GPUI. The production roadmap was retitled and re-read
   through the general-app lens: production gates (accessibility,
   packaging, update integrity, text correctness) come first, the GPU
   substrate (render targets, custom shaders, render graph) ships as

@@ -536,10 +536,10 @@ impl RenderOnce for ResizablePanel {
                 .flex_basis(initial_size);
         }
 
-        if let Some(panel_state) = panel_state.as_ref() {
-            if let Some(size) = panel_state.size {
-                panel_div = panel_div.flex_basis(size);
-            }
+        if let Some(panel_state) = panel_state.as_ref()
+            && let Some(size) = panel_state.size
+        {
+            panel_div = panel_div.flex_basis(size);
         }
 
         let user_style = self.style;

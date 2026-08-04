@@ -301,7 +301,7 @@ pub mod wayland {
 
     pub struct WaylandGlobalHotkey {
         state: PortalShortcutState,
-        command_tx: Option<flume::Sender<Command>>,
+        command_tx: Option<async_channel::Sender<Command>>,
         worker_started: bool,
     }
 
@@ -340,14 +340,14 @@ pub mod wayland {
             self.state.register(id, keystroke, description.clone());
 
             if !self.worker_started {
-                let (command_tx, command_rx) = flume::unbounded::<Command>();
+                let (command_tx, command_rx) = async_channel::unbounded::<Command>();
                 self.command_tx = Some(command_tx);
                 self.worker_started = true;
                 spawn_portal_worker(executor, command_rx, event_tx);
             }
 
             if let Some(tx) = &self.command_tx {
-                tx.send(Command::Register(id, keystroke.clone(), description))
+                tx.try_send(Command::Register(id, keystroke.clone(), description))
                     .map_err(|_| anyhow::anyhow!("GlobalShortcuts portal worker is gone"))?;
             }
 
@@ -357,7 +357,7 @@ pub mod wayland {
         pub fn unregister(&mut self, id: u32) {
             self.state.unregister(id);
             if let Some(tx) = &self.command_tx {
-                let _ = tx.send(Command::Unregister(id));
+                let _ = tx.try_send(Command::Unregister(id));
             }
         }
 
@@ -415,7 +415,7 @@ pub mod wayland {
 
     fn spawn_portal_worker(
         executor: &BackgroundExecutor,
-        command_rx: flume::Receiver<Command>,
+        command_rx: async_channel::Receiver<Command>,
         event_tx: Sender<HotkeyEvent>,
     ) {
         let executor = executor.clone();
@@ -474,7 +474,7 @@ pub mod wayland {
                         .detach();
                 }
 
-                while let Ok(command) = command_rx.recv_async().await {
+                while let Ok(command) = command_rx.recv().await {
                     match command {
                         Command::Register(id, keystroke, description) => {
                             state.register(id, &keystroke, description);

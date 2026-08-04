@@ -223,7 +223,7 @@ impl RenderOnce for Marquee {
 #[cfg(test)]
 mod tests {
     use super::{Marquee, MarqueePhase};
-    use kael::{div, px, IntoElement};
+    use kael::{IntoElement, div, px};
 
     #[test]
     fn phase_freezes_while_paused_and_resumes_without_a_jump() {

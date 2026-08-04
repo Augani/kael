@@ -613,20 +613,24 @@ impl RenderOnce for Pagination {
                         PaginationVariant::Count => self
                             .total_items
                             .map(|total| {
-                                vec![div()
-                                    .px(px(8.0))
-                                    .text_size(px(13.0))
-                                    .text_color(theme.tokens.muted_foreground)
-                                    .child(format!("{range_start}-{range_end} of {total}"))
-                                    .into_any_element()]
+                                vec![
+                                    div()
+                                        .px(px(8.0))
+                                        .text_size(px(13.0))
+                                        .text_color(theme.tokens.muted_foreground)
+                                        .child(format!("{range_start}-{range_end} of {total}"))
+                                        .into_any_element(),
+                                ]
                             })
                             .unwrap_or_default(),
-                        PaginationVariant::Compact => vec![div()
-                            .px(px(8.0))
-                            .text_size(px(13.0))
-                            .text_color(theme.tokens.muted_foreground)
-                            .child(format!("Page {current_page} of {total_pages}"))
-                            .into_any_element()],
+                        PaginationVariant::Compact => vec![
+                            div()
+                                .px(px(8.0))
+                                .text_size(px(13.0))
+                                .text_color(theme.tokens.muted_foreground)
+                                .child(format!("Page {current_page} of {total_pages}"))
+                                .into_any_element(),
+                        ],
                         PaginationVariant::Dots => generate_dot_range(current_page, total_pages)
                             .map(|page| {
                                 let is_current = page == current_page;
@@ -719,7 +723,7 @@ impl RenderOnce for Pagination {
 
 #[cfg(test)]
 mod tests {
-    use super::{generate_dot_range, generate_page_range, PageRangeItem, Pagination};
+    use super::{PageRangeItem, Pagination, generate_dot_range, generate_page_range};
 
     #[test]
     fn page_range_is_bounded_for_extreme_sibling_counts() {

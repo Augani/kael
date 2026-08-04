@@ -25,7 +25,6 @@ use crate::PermissionStatus;
 const TOOLKIT_NAME: &str = "Kael";
 const TOOLKIT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_PENDING_ACCESSIBILITY_ACTIONS: usize = 1_024;
-const MAX_ACCESSIBILITY_APP_NAME_BYTES: usize = 1_024;
 
 type SharedUpdate = Arc<Mutex<Option<TreeUpdate>>>;
 type PendingActions = Arc<Mutex<Vec<ActionRequest>>>;
@@ -65,14 +64,13 @@ impl DeactivationHandler for NoopDeactivationHandler {
 /// Wraps an [`accesskit_unix::Adapter`] and feeds it [`TreeUpdate`]s built from
 /// the shared [`crate::AccessibilityTree`].
 pub struct AtSpiAccessibleRoot {
-    app_name: String,
     adapter: RefCell<Adapter>,
     latest: SharedUpdate,
     pending_actions: PendingActions,
 }
 
 impl AtSpiAccessibleRoot {
-    pub fn new(app_name: &str) -> Self {
+    pub fn new() -> Self {
         let latest: SharedUpdate = Arc::new(Mutex::new(None));
         let pending_actions: PendingActions = Arc::new(Mutex::new(Vec::new()));
         let adapter = Adapter::new(
@@ -85,11 +83,6 @@ impl AtSpiAccessibleRoot {
             NoopDeactivationHandler,
         );
         Self {
-            app_name: if app_name.len() <= MAX_ACCESSIBILITY_APP_NAME_BYTES {
-                app_name.to_string()
-            } else {
-                String::new()
-            },
             adapter: RefCell::new(adapter),
             latest,
             pending_actions,
@@ -98,11 +91,7 @@ impl AtSpiAccessibleRoot {
 
     /// Feed the latest accessibility tree to the AT-SPI2 adapter.
     pub fn update_tree(&self, tree: &crate::AccessibilityTree) {
-        let update = tree.to_accesskit_tree_update(
-            Some(self.app_name.as_str()),
-            Some(TOOLKIT_NAME),
-            Some(TOOLKIT_VERSION),
-        );
+        let update = tree.to_accesskit_tree_update(Some(TOOLKIT_NAME), Some(TOOLKIT_VERSION));
         if let Ok(mut guard) = self.latest.lock() {
             *guard = Some(update.clone());
         }
@@ -118,7 +107,10 @@ impl AtSpiAccessibleRoot {
         let mut out = Vec::new();
         if let Ok(mut pending) = self.pending_actions.lock() {
             for request in pending.drain(..) {
-                let node_id = crate::AccessibilityId(request.target.0);
+                if request.target_tree != accesskit::TreeId::ROOT {
+                    continue;
+                }
+                let node_id = crate::AccessibilityId(request.target_node.0);
                 if let Some(node) = tree.get(node_id) {
                     if let Some(request) =
                         crate::AccessibilityActionRequest::from_accesskit_for_node_with_data(

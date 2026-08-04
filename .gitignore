@@ -1,4 +1,6 @@
 /target
+/benchmark-results.json
+crates/kael/benchmark-results.json
 **/.cargo-ok
 tdesktop/
 .DS_Store

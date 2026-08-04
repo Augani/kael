@@ -312,11 +312,7 @@ impl HoverCard {
 
 impl From<bool> for HoverCardHoverIndication {
     fn from(value: bool) -> Self {
-        if value {
-            Self::Always
-        } else {
-            Self::Never
-        }
+        if value { Self::Always } else { Self::Never }
     }
 }
 

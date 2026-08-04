@@ -28,9 +28,9 @@ mod inspector_panel {
     use crate::theme::Theme;
     use kael::prelude::FluentBuilder as _;
     use kael::{
-        div, px, App, Context, DivInspectorState, Hsla, InspectorElementId,
-        InteractiveElement as _, IntoElement, ParentElement as _, StatefulInteractiveElement as _,
-        Styled as _, Window,
+        App, Context, DivInspectorState, Hsla, InspectorElementId, InteractiveElement as _,
+        IntoElement, ParentElement as _, StatefulInteractiveElement as _, Styled as _, Window, div,
+        px,
     };
 
     const PANEL_PADDING: f32 = 16.0;
@@ -99,7 +99,7 @@ mod inspector_panel {
         state: &DivInspectorState,
         _window: &mut Window,
         cx: &mut App,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let tokens = Theme::try_get(cx)
             .map(|theme| theme.tokens.clone())
             .unwrap_or_else(|| Theme::dark().tokens);
@@ -150,7 +150,7 @@ mod inspector_panel {
     fn style_summary(
         tokens: &crate::theme::ThemeTokens,
         state: &DivInspectorState,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let style = &state.base_style;
         let mut entries: Vec<(String, String)> = Vec::new();
 
@@ -201,7 +201,7 @@ mod inspector_panel {
     fn breadcrumb_section(
         tokens: &crate::theme::ThemeTokens,
         segments: &[String],
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let body: kael::AnyElement = if segments.is_empty() {
             div()
                 .text_size(px(MONO_SIZE))
@@ -283,7 +283,7 @@ mod inspector_panel {
         section(tokens, "Frames", body)
     }
 
-    fn panel_header(tokens: &crate::theme::ThemeTokens, picking: bool) -> impl IntoElement {
+    fn panel_header(tokens: &crate::theme::ThemeTokens, picking: bool) -> impl IntoElement + use<> {
         let (status_label, status_color) = if picking {
             ("PICKING", tokens.primary)
         } else {
@@ -340,7 +340,7 @@ mod inspector_panel {
             .into_any_element()
     }
 
-    fn heading(tokens: &crate::theme::ThemeTokens, text: &str) -> impl IntoElement {
+    fn heading(tokens: &crate::theme::ThemeTokens, text: &str) -> impl IntoElement + use<> {
         div()
             .text_size(px(LABEL_SIZE))
             .font_weight(kael::FontWeight::BOLD)
@@ -348,7 +348,7 @@ mod inspector_panel {
             .child(text.to_uppercase())
     }
 
-    fn subheading(tokens: &crate::theme::ThemeTokens, text: &str) -> impl IntoElement {
+    fn subheading(tokens: &crate::theme::ThemeTokens, text: &str) -> impl IntoElement + use<> {
         div()
             .pt(px(4.0))
             .text_size(px(LABEL_SIZE))
@@ -356,11 +356,11 @@ mod inspector_panel {
             .child(text.to_uppercase())
     }
 
-    fn kv_row(
+    fn kv_row<T: Into<String>>(
         tokens: &crate::theme::ThemeTokens,
         key: &str,
-        value: impl Into<String>,
-    ) -> impl IntoElement {
+        value: T,
+    ) -> impl IntoElement + use<T> {
         let value: String = value.into();
         row(
             tokens.muted_foreground,

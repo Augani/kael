@@ -4,11 +4,11 @@ use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use kael::*;
 use std::rc::Rc;
 
-#[cfg(feature = "markdown")]
-use crate::display::rich_text::render_blocks;
 use crate::display::rich_text::LinkClickHandler;
 #[cfg(feature = "markdown")]
 use crate::display::rich_text::TableAlignment;
+#[cfg(feature = "markdown")]
+use crate::display::rich_text::render_blocks;
 use crate::display::rich_text::{ListItem, RichBlock, RichInline};
 #[cfg(feature = "markdown")]
 use crate::theme::Theme;
@@ -494,11 +494,11 @@ impl UrlTrackingBlockBuilder {
                 }
             }
             TagEnd::TableRow => {
-                if let Some(ref mut ts) = self.table_state {
-                    if !ts.in_head {
-                        let row = std::mem::take(&mut ts.current_row);
-                        ts.rows.push(row);
-                    }
+                if let Some(ref mut ts) = self.table_state
+                    && !ts.in_head
+                {
+                    let row = std::mem::take(&mut ts.current_row);
+                    ts.rows.push(row);
                 }
             }
             TagEnd::TableCell => {
@@ -526,11 +526,11 @@ impl UrlTrackingBlockBuilder {
     }
 
     fn push_block(&mut self, block: RichBlock) {
-        if self.blockquote_depth > 0 {
-            if let Some(blocks) = self.blockquote_blocks.last_mut() {
-                blocks.push(block);
-                return;
-            }
+        if self.blockquote_depth > 0
+            && let Some(blocks) = self.blockquote_blocks.last_mut()
+        {
+            blocks.push(block);
+            return;
         }
         self.blocks.push(block);
     }
@@ -620,13 +620,17 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn invalid_font_sizes_are_ignored() {
-        assert!(Markdown::new("text")
-            .base_font_size(px(f32::NAN))
-            .base_font_size
-            .is_none());
-        assert!(Markdown::new("text")
-            .base_font_size(px(0.0))
-            .base_font_size
-            .is_none());
+        assert!(
+            Markdown::new("text")
+                .base_font_size(px(f32::NAN))
+                .base_font_size
+                .is_none()
+        );
+        assert!(
+            Markdown::new("text")
+                .base_font_size(px(0.0))
+                .base_font_size
+                .is_none()
+        );
     }
 }

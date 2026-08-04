@@ -222,7 +222,7 @@ fn render_menu_item<T: Clone + PartialEq + Eq + Hash + 'static>(
     selected_id: &Option<T>,
     on_select: &Option<Rc<dyn Fn(&T, &mut Window, &mut App) + 'static>>,
     on_toggle: &Option<Rc<dyn Fn(&T, bool, &mut Window, &mut App) + 'static>>,
-) -> impl IntoElement {
+) -> impl IntoElement + use<T> {
     let has_children = item.has_children();
     let disabled = item.disabled;
     let is_expanded = expanded_set.contains(&item.id);
@@ -399,11 +399,7 @@ fn render_menu_item<T: Clone + PartialEq + Eq + Hash + 'static>(
 
 /// Helper function for conditional values
 fn when<T>(condition: bool, true_value: T, false_value: T) -> T {
-    if condition {
-        true_value
-    } else {
-        false_value
-    }
+    if condition { true_value } else { false_value }
 }
 
 #[cfg(test)]
@@ -472,9 +468,11 @@ mod tests {
                         && node.label.as_deref() == Some("Expand Workspace")
                 })
                 .expect("parent destination should expose its expansion control");
-            assert!(workspace_toggle
-                .actions
-                .contains(&AccessibilityAction::Click));
+            assert!(
+                workspace_toggle
+                    .actions
+                    .contains(&AccessibilityAction::Click)
+            );
             (overview.id, workspace_toggle.id)
         });
 

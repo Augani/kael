@@ -979,64 +979,63 @@ impl RenderOnce for Chart {
                                     }
                                 }
 
-                                if state.tooltip.show && hitbox.is_hovered(window) {
-                                    if let Some(hp) = hovered_point {
-                                        let series = &state.series[hp.series_index];
-                                        let tooltip_text = state
-                                            .tooltip
-                                            .format_tooltip(&hp.data_point, &series.name);
+                                if state.tooltip.show
+                                    && hitbox.is_hovered(window)
+                                    && let Some(hp) = hovered_point
+                                {
+                                    let series = &state.series[hp.series_index];
+                                    let tooltip_text =
+                                        state.tooltip.format_tooltip(&hp.data_point, &series.name);
 
-                                        let text_style = window.text_style();
-                                        let font = text_style.font();
-                                        let font_size = px(12.0);
-                                        let text_len = tooltip_text.len();
+                                    let text_style = window.text_style();
+                                    let font = text_style.font();
+                                    let font_size = px(12.0);
+                                    let text_len = tooltip_text.len();
 
-                                        let text_run = TextRun {
-                                            len: text_len,
-                                            font,
-                                            color: text_color,
-                                            background_color: None,
-                                            underline: None,
-                                            strikethrough: None,
-                                        };
+                                    let text_run = TextRun {
+                                        len: text_len,
+                                        font,
+                                        color: text_color,
+                                        background_color: None,
+                                        underline: None,
+                                        strikethrough: None,
+                                    };
 
-                                        let shaped_line = window.text_system().shape_line(
-                                            tooltip_text.into(),
-                                            font_size,
-                                            &[text_run],
-                                            None,
-                                        );
+                                    let shaped_line = window.text_system().shape_line(
+                                        tooltip_text.into(),
+                                        font_size,
+                                        &[text_run],
+                                        None,
+                                    );
 
-                                        let text_width = shaped_line.width;
-                                        let padding_h = px(12.0);
-                                        let padding_v = px(8.0);
-                                        let tooltip_width = text_width + padding_h * 2.0;
-                                        let tooltip_height = font_size + padding_v * 2.0;
+                                    let text_width = shaped_line.width;
+                                    let padding_h = px(12.0);
+                                    let padding_v = px(8.0);
+                                    let tooltip_width = text_width + padding_h * 2.0;
+                                    let tooltip_height = font_size + padding_v * 2.0;
 
-                                        let tooltip_x = (hp.screen_pos.x - tooltip_width / 2.0)
-                                            .max(bounds.left())
-                                            .min(bounds.right() - tooltip_width);
-                                        let tooltip_y = hp.screen_pos.y - tooltip_height - px(10.0);
+                                    let tooltip_x = (hp.screen_pos.x - tooltip_width / 2.0)
+                                        .max(bounds.left())
+                                        .min(bounds.right() - tooltip_width);
+                                    let tooltip_y = hp.screen_pos.y - tooltip_height - px(10.0);
 
-                                        let tooltip_bounds = Bounds::new(
-                                            point(tooltip_x, tooltip_y),
-                                            size(tooltip_width, tooltip_height),
-                                        );
+                                    let tooltip_bounds = Bounds::new(
+                                        point(tooltip_x, tooltip_y),
+                                        size(tooltip_width, tooltip_height),
+                                    );
 
-                                        window.paint_quad(quad(
-                                            tooltip_bounds,
-                                            px(6.0),
-                                            tooltip_bg,
-                                            px(1.0),
-                                            tooltip_border,
-                                            BorderStyle::default(),
-                                        ));
+                                    window.paint_quad(quad(
+                                        tooltip_bounds,
+                                        px(6.0),
+                                        tooltip_bg,
+                                        px(1.0),
+                                        tooltip_border,
+                                        BorderStyle::default(),
+                                    ));
 
-                                        let text_origin =
-                                            point(tooltip_x + padding_h, tooltip_y + padding_v);
-                                        let _ =
-                                            shaped_line.paint(text_origin, font_size, window, cx);
-                                    }
+                                    let text_origin =
+                                        point(tooltip_x + padding_h, tooltip_y + padding_v);
+                                    let _ = shaped_line.paint(text_origin, font_size, window, cx);
                                 }
                             },
                         )

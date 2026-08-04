@@ -142,9 +142,8 @@ Application::new().run(move |cx| {
 
 Order matters only in that the bridge must be registered before (or alongside)
 the watcher; `observe_theme_file` applies the initial file once, and every
-later save flows through the same path. A runnable example lives at
-`crates/kael_ui/examples/theme_hot_reload_demo.rs` — run it, edit the printed
-TOML path, and watch the buttons, badges, card, and accent bars recolor.
+later save flows through the same path. The Astryx showcase demonstrates live
+theme switching alongside branded components.
 
 ## Core → token mapping
 

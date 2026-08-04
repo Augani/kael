@@ -46,6 +46,8 @@ use super::{
     pressed_button_from_mask,
 };
 
+#[cfg(feature = "webview")]
+use crate::platform::linux::webview::pump_gtk_webview_events;
 use crate::platform::{
     LinuxCommon, PlatformWindow,
     blade::BladeContext,
@@ -54,7 +56,6 @@ use crate::platform::{
         log_cursor_icon_warning, open_uri_internal,
         platform::{DOUBLE_CLICK_INTERVAL, SCROLL_LINES},
         reveal_path_internal,
-        webview::pump_gtk_webview_events,
         xdg_desktop_portal::{Event as XDPEvent, XDPEventSource},
     },
 };
@@ -1819,6 +1820,7 @@ impl LinuxClient for X11Client {
 
         event_loop
             .run(None, &mut self.clone(), |_| {
+                #[cfg(feature = "webview")]
                 pump_gtk_webview_events();
             })
             .log_err();

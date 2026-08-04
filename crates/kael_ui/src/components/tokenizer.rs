@@ -458,16 +458,15 @@ impl TokenizerRuntime {
                     return;
                 };
 
-                if open_changed {
-                    if let (Some(callback), Some(window_handle)) =
+                if open_changed
+                    && let (Some(callback), Some(window_handle)) =
                         (props.on_open_change.clone(), this.window_handle)
-                    {
-                        cx.defer(move |cx| {
-                            let _ = cx.update_window(window_handle, move |_, window, cx| {
-                                callback(should_open, window, cx);
-                            });
+                {
+                    cx.defer(move |cx| {
+                        let _ = cx.update_window(window_handle, move |_, window, cx| {
+                            callback(should_open, window, cx);
                         });
-                    }
+                    });
                 }
 
                 if let (Some(callback), Some(window_handle)) =
@@ -708,10 +707,8 @@ impl TokenizerRuntime {
             if let Some(callback) = props.on_change.as_ref() {
                 callback(suggestion.into_change(), window, cx);
             }
-            if open_changed {
-                if let Some(callback) = props.on_open_change.as_ref() {
-                    callback(keep_open, window, cx);
-                }
+            if open_changed && let Some(callback) = props.on_open_change.as_ref() {
+                callback(keep_open, window, cx);
             }
         }
         cx.notify();
@@ -1258,7 +1255,7 @@ impl RenderOnce for Tokenizer {
 
 #[cfg(test)]
 mod tests {
-    use super::{next_tokenizer_index, Tokenizer, TokenizerChange, TokenizerItem};
+    use super::{Tokenizer, TokenizerChange, TokenizerItem, next_tokenizer_index};
     use kael::{Context, IntoElement, Render, TestAppContext, Window};
     use std::{cell::RefCell, rc::Rc};
 

@@ -361,7 +361,7 @@ impl ReqwestClient {
     fn build_client(&self, policy: &RedirectPolicy) -> Result<reqwest::Client> {
         let mut builder = reqwest::Client::builder()
             .user_agent(self.user_agent.to_str()?)
-            .redirect_policy(Self::redirect_policy(policy));
+            .redirect(Self::redirect_policy(policy));
 
         if let Some(proxy) = &self.proxy {
             builder = builder.proxy(reqwest::Proxy::all(proxy.as_str())?);

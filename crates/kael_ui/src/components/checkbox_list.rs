@@ -306,10 +306,8 @@ impl RenderOnce for CheckboxList {
                             .disabled(item_disabled || read_only)
                             .size(size)
                             .on_click(move |checked, window, cx| {
-                                if interactive {
-                                    if let Some(handler) = on_change.as_ref() {
-                                        handler(item_id.clone(), *checked, window, cx);
-                                    }
+                                if interactive && let Some(handler) = on_change.as_ref() {
+                                    handler(item_id.clone(), *checked, window, cx);
                                 }
                             }),
                     )

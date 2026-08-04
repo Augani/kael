@@ -1,6 +1,7 @@
 [package]
 edition.workspace = true
 name = "kael"
+autoexamples = false
 rust-version.workspace = true
 version.workspace = true
 authors.workspace = true
@@ -20,6 +21,7 @@ categories = ["gui", "rendering::graphics-api"]
 license.workspace = true
 repository.workspace = true
 exclude = [
+    "benchmark-results.json",
     "benches/",
     "examples/",
 ]
@@ -31,6 +33,7 @@ default = [
     "x11",
     "windows-manifest",
 ]
+agent-tools = []
 inspector = ["kael_macros/inspector"]
 leak-detection = ["backtrace"]
 macos-blade = [
@@ -41,6 +44,7 @@ macos-blade = [
     "objc2-metal",
 ]
 runtime_shaders = []
+webview = ["dep:gtk", "dep:wry"]
 media = ["kael_media"]
 storage = ["dep:kael_storage"]
 icons = ["dep:kael_icons"]
@@ -120,6 +124,10 @@ path = "tests/fixtures/worker_child.rs"
 name = "kael-extension-child"
 path = "tests/fixtures/extension_child.rs"
 
+[[bench]]
+name = "framework"
+path = "benches/framework.rs"
+harness = false
 
 [[test]]
 name = "action_macros"
@@ -161,7 +169,7 @@ package = "kael_gpu_budget"
 version = "0.3.0"
 
 [dependencies.accesskit]
-version = "0.17"
+version = "0.24.1"
 
 [dependencies.blade-graphics]
 version = "0.8"
@@ -323,7 +331,7 @@ package = "kael_refineable"
 version = "0.3.0"
 
 [dependencies.resvg]
-version = "0.45.0"
+version = "0.48.1"
 features = [
     "text",
     "system-fonts",
@@ -374,7 +382,7 @@ features = ["union", "serde"]
 workspace = true
 
 [dependencies.stacksafe]
-version = "0.1"
+version = "1.0"
 
 [dependencies.strum]
 version = "0.28"
@@ -395,7 +403,7 @@ version = "0.3"
 workspace = true
 
 [dependencies.usvg]
-version = "0.45.0"
+version = "0.48.1"
 default-features = false
 
 [dependencies.util]
@@ -467,15 +475,15 @@ package = "kael_util"
 version = "0.3.0"
 
 [build-dependencies.resvg]
-version = "0.45.0"
+version = "0.48.1"
 default-features = false
 
 [build-dependencies.usvg]
-version = "0.45.0"
+version = "0.48.1"
 default-features = false
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.accesskit_unix]
-version = "0.13.1"
+version = "0.22.1"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.as-raw-xcb-connection]
 version = "1"
@@ -483,8 +491,12 @@ optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.ashpd]
 version = "0.13"
+default-features = false
 features = ["async-io", "file_chooser", "global_shortcuts", "open_uri", "settings"]
 optional = true
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.async-channel]
+version = "2.5"
 default-features = false
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.blade-graphics]
@@ -520,9 +532,10 @@ optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.gtk]
 version = "0.18.2"
+optional = true
 
-[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.flume]
-version = "0.11"
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.crossbeam-channel]
+version = "0.5.15"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.font-kit]
 version = "0.14.1-zed"
@@ -530,22 +543,19 @@ features = ["source-fontconfig-dlopen"]
 optional = true
 package = "zed-font-kit"
 
-[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.oo7]
-version = "0.5.0"
-features = [
-    "async-std",
-    "native_crypto",
-]
-default-features = false
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.secret-service]
+version = "4"
+features = ["rt-async-io-crypto-rust"]
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.open]
 version = "5.2.0"
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.wry]
-version = "0.55.1"
+version = "0.56.0"
 default-features = false
 features = ["os-webview", "x11"]
+optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.wayland-backend]
 version = "0.3.3"
@@ -621,10 +631,14 @@ features = [
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.ksni]
-version = "0.2"
+version = "0.3.6"
+default-features = false
+features = ["async-io", "blocking"]
 
-[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.notify-rust]
-version = "4"
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.zbus]
+version = "5.18"
+default-features = false
+features = ["async-io", "blocking-api"]
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.build-dependencies.naga]
 version = "25.0"
@@ -634,13 +648,13 @@ features = ["wgsl-in"]
 version = "0.5"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))'.dependencies.scap]
-version = "0.0.8-zed"
+version = "0.1.0-beta.1"
 optional = true
 default-features = false
-package = "zed-scap"
+package = "open-gpui-scap"
 
 [target.'cfg(target_os = "macos")'.dependencies.accesskit_macos]
-version = "0.18.1"
+version = "0.26.3"
 
 [target.'cfg(target_os = "macos")'.dependencies.block]
 version = "0.1"
@@ -711,8 +725,8 @@ default-features = false
 version = "25.0"
 features = ["wgsl-in"]
 
-[target.'cfg(target_os = "windows")'.dependencies.flume]
-version = "0.11"
+[target.'cfg(target_os = "windows")'.dependencies.crossbeam-channel]
+version = "0.5.15"
 
 [target.'cfg(target_os = "windows")'.dependencies.windows-collections]
 version = "0.2"
@@ -790,9 +804,10 @@ features = [
 version = "0.62"
 
 [target.'cfg(target_os = "windows")'.dependencies.wry]
-version = "0.55.1"
+version = "0.56.0"
 default-features = false
 features = ["os-webview"]
+optional = true
 
 [target.'cfg(target_os = "windows")'.dependencies.windows-numerics]
 version = "0.3"

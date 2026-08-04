@@ -4,7 +4,7 @@
 - Tracks: roadmap workstreams P0-A (offscreen targets + pass API), P0-B (custom
   + compute shaders), P0-C (render-graph executor)
 - Audience: anyone building on Kael, and other GPUI forks interested in
-  aligning on an extensibility API (see [VISION.md](../../VISION.md))
+  aligning on an extensibility API
 
 ## Motivation
 
@@ -187,7 +187,7 @@ pre-warms the current swapchain format.
    path, only after the public API is stable.
 
 A non-media example ships with slice 1 (e.g. a shader-driven animated
-gradient background) per the layering rule in VISION.md: public framework
+gradient background) per the workspace layering rule: public framework
 features are exercised by at least one non-media consumer.
 
 ## Open questions

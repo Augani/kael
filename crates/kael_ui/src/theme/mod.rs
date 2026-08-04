@@ -71,5 +71,5 @@ mod theme;
 mod tokens;
 
 pub use bridge::{install_theme_file_bridge, observe_theme_file_bridge, tokens_from_core_theme};
-pub use theme::{install_theme, use_theme, Theme, ThemeVariant};
+pub use theme::{Theme, ThemeVariant, install_theme, use_theme};
 pub use tokens::ThemeTokens;

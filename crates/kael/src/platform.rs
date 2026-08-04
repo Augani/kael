@@ -10,7 +10,10 @@ pub mod tab_manager;
 /// Pure Rust utility for computing window bounds from a semantic [`WindowPosition`].
 pub mod window_positioner;
 
-#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
+#[cfg(all(
+    feature = "webview",
+    any(target_os = "linux", target_os = "freebsd", target_os = "windows")
+))]
 mod webview_common;
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -184,7 +187,7 @@ pub(crate) fn try_current_platform(headless: bool) -> anyhow::Result<Rc<dyn Plat
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 #[inline]
 pub fn guess_compositor() -> &'static str {
-    if std::env::var_os("ZED_HEADLESS").is_some() {
+    if std::env::var_os("KAEL_HEADLESS").is_some() {
         return "Headless";
     }
 

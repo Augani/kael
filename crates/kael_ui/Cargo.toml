@@ -1,7 +1,8 @@
 [package]
 name = "kael_ui"
+autoexamples = false
 version.workspace = true
-edition = "2021"
+edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -12,7 +13,12 @@ publish = true
 description = "Professional shadcn-inspired UI component library for Kael. 100+ accessible components for building beautiful, performant desktop applications."
 keywords = ["kael", "ui", "gui", "components", "desktop"]
 categories = ["gui", "rendering"]
-exclude = ["assets/icons/**/*", "assets/audio/**/*", "assets/images/**/*"]
+exclude = [
+    "assets/icons/**/*",
+    "assets/audio/**/*",
+    "assets/images/**/*",
+    "examples/",
+]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -102,21 +108,6 @@ editor-languages = [
 kael = { path = "../kael", version = "0.3.0", features = ["runtime_shaders", "test-support"] }
 
 [[example]]
-name = "markdown_demo"
-path = "examples/markdown_demo.rs"
-required-features = ["markdown"]
-
-[[example]]
-name = "html_demo"
-path = "examples/html_demo.rs"
-required-features = ["html-render"]
-
-[[example]]
 name = "astryx_showcase"
 path = "examples/astryx_showcase.rs"
-required-features = ["media"]
-
-[[example]]
-name = "video_player_demo"
-path = "examples/video_player_demo.rs"
 required-features = ["media"]

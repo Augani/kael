@@ -3,7 +3,7 @@
 use crate::components::icon_source::IconSource;
 use crate::components::input::{Input, InputSize, InputState};
 use crate::components::select::{Select, SelectEvent, SelectOption};
-use crate::theme::{use_theme, Theme};
+use crate::theme::{Theme, use_theme};
 use crate::virtual_list::vlist_uniform_view;
 use kael::{prelude::FluentBuilder as _, *};
 use std::collections::{HashMap, HashSet};
@@ -1207,7 +1207,7 @@ impl<T: Clone + 'static> DataTable<T> {
         }
     }
 
-    fn render_search_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_search_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<T> {
         let theme = Theme::of(cx);
 
         div()
@@ -1250,7 +1250,7 @@ impl<T: Clone + 'static> DataTable<T> {
             )
     }
 
-    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement + use<T> {
         let theme = Theme::of(cx);
 
         let total_width = self.total_table_width();
@@ -1494,7 +1494,7 @@ impl<T: Clone + 'static> DataTable<T> {
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
-    use kael::{px, TestAppContext};
+    use kael::{TestAppContext, px};
 
     #[derive(Clone)]
     struct PrivateRow {
@@ -1871,10 +1871,10 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                                             return;
                                         }
                                         window.focus(&focus_on_mouse);
-                                        if let Some(row) = this.state.get_row(actual_idx) {
-                                            if let Some(ref cb) = this.on_row_click {
-                                                (cb)(actual_idx, row, window, cx);
-                                            }
+                                        if let Some(row) = this.state.get_row(actual_idx)
+                                            && let Some(ref cb) = this.on_row_click
+                                        {
+                                            (cb)(actual_idx, row, window, cx);
                                         }
                                     }),
                                 )
@@ -1882,10 +1882,10 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                                     move |this, event: &KeyDownEvent, window, cx| {
                                         if matches!(event.keystroke.key.as_str(), "enter" | "space")
                                         {
-                                            if let Some(row) = this.state.get_row(actual_idx) {
-                                                if let Some(ref cb) = this.on_row_click {
-                                                    (cb)(actual_idx, row, window, cx);
-                                                }
+                                            if let Some(row) = this.state.get_row(actual_idx)
+                                                && let Some(ref cb) = this.on_row_click
+                                            {
+                                                (cb)(actual_idx, row, window, cx);
                                             }
                                             cx.stop_propagation();
                                         }
@@ -2171,11 +2171,11 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                 };
                 if total_items > 0 && !this.load_more_triggered {
                     let progress = end as f32 / total_items as f32;
-                    if progress >= this.load_more_threshold {
-                        if let Some(ref callback) = this.on_load_more {
-                            this.load_more_triggered = true;
-                            callback(window, cx);
-                        }
+                    if progress >= this.load_more_threshold
+                        && let Some(ref callback) = this.on_load_more
+                    {
+                        this.load_more_triggered = true;
+                        callback(window, cx);
                     }
                 }
 
@@ -2185,26 +2185,25 @@ impl<T: Clone + 'static> Render for DataTable<T> {
                     cache,
                     ..
                 } = &mut this.state.backing
+                    && let Some(ref fetch_cb) = this.on_fetch_page
                 {
-                    if let Some(ref fetch_cb) = this.on_fetch_page {
-                        let first_page_start = (start / *page_size) * *page_size;
-                        let last_index = end.saturating_sub(1);
-                        let last_page_start = (last_index / *page_size) * *page_size;
-                        let mut page = first_page_start;
-                        while page <= last_page_start {
-                            let mut needs_fetch = false;
-                            for i in page..(page + *page_size).min(total_items) {
-                                if !cache.contains_key(&i) {
-                                    needs_fetch = true;
-                                    break;
-                                }
+                    let first_page_start = (start / *page_size) * *page_size;
+                    let last_index = end.saturating_sub(1);
+                    let last_page_start = (last_index / *page_size) * *page_size;
+                    let mut page = first_page_start;
+                    while page <= last_page_start {
+                        let mut needs_fetch = false;
+                        for i in page..(page + *page_size).min(total_items) {
+                            if !cache.contains_key(&i) {
+                                needs_fetch = true;
+                                break;
                             }
-                            if needs_fetch && !in_flight_pages.contains(&page) {
-                                in_flight_pages.insert(page);
-                                fetch_cb(page, *page_size, window, cx);
-                            }
-                            page += *page_size;
                         }
+                        if needs_fetch && !in_flight_pages.contains(&page) {
+                            in_flight_pages.insert(page);
+                            fetch_cb(page, *page_size, window, cx);
+                        }
+                        page += *page_size;
                     }
                 }
             });
@@ -2375,7 +2374,7 @@ impl<T: Clone + 'static> DataTable<T> {
         row_idx: usize,
         position: Point<Pixels>,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<T> {
         let theme = Theme::of(cx);
 
         deferred(

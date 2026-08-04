@@ -22,14 +22,14 @@ pub(crate) struct LinuxDispatcher {
     parker: Mutex<Parker>,
     main_sender: Sender<Runnable>,
     timer_sender: Sender<TimerAfter>,
-    background_sender: flume::Sender<Runnable>,
+    background_sender: crossbeam_channel::Sender<Runnable>,
     _background_threads: Vec<thread::JoinHandle<()>>,
     main_thread_id: thread::ThreadId,
 }
 
 impl LinuxDispatcher {
     pub fn new(main_sender: Sender<Runnable>) -> Self {
-        let (background_sender, background_receiver) = flume::unbounded::<Runnable>();
+        let (background_sender, background_receiver) = crossbeam_channel::unbounded::<Runnable>();
         let thread_count = std::thread::available_parallelism()
             .map(|i| i.get())
             .unwrap_or(1);

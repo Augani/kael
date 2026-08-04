@@ -136,7 +136,6 @@ impl ActionHandler for CollectingActionHandler {
 
 /// A live NSAccessibility provider for a GPUI window, backed by AccessKit.
 pub struct MacAccessibilityProvider {
-    app_name: String,
     adapter: Option<SubclassingAdapter>,
     latest: SharedUpdate,
     pending_actions: PendingActions,
@@ -151,7 +150,7 @@ impl MacAccessibilityProvider {
     ///
     /// `view` must be a valid, unreleased pointer to an `NSView` that outlives
     /// this provider.
-    pub unsafe fn new(app_name: &str, view: *mut c_void) -> Self {
+    pub unsafe fn new(view: *mut c_void) -> Self {
         let latest: SharedUpdate = Arc::new(Mutex::new(None));
         let pending_actions: PendingActions = Arc::new(Mutex::new(Vec::new()));
         let activation_handler = InitialTreeHandler {
@@ -162,7 +161,6 @@ impl MacAccessibilityProvider {
         };
         let adapter = unsafe { SubclassingAdapter::new(view, activation_handler, action_handler) };
         Self {
-            app_name: app_name.to_string(),
             adapter: Some(adapter),
             latest,
             pending_actions,
@@ -172,9 +170,8 @@ impl MacAccessibilityProvider {
 
     /// Create a provider without a backing adapter (used in tests where no
     /// `NSView` is available).
-    pub fn detached(app_name: &str) -> Self {
+    pub fn detached() -> Self {
         Self {
-            app_name: app_name.to_string(),
             adapter: None,
             latest: Arc::new(Mutex::new(None)),
             pending_actions: Arc::new(Mutex::new(Vec::new())),
@@ -182,16 +179,10 @@ impl MacAccessibilityProvider {
         }
     }
 
-    /// Return the application name exposed to accessibility clients.
-    pub fn app_name(&self) -> &str {
-        &self.app_name
-    }
-
     /// Feed the latest accessibility tree to the AccessKit adapter.
     pub fn update_tree(&mut self, tree: &crate::AccessibilityTree) {
         let update = tree.to_accesskit_tree_update_after(
             self.previous_tree.as_ref(),
-            Some(self.app_name.as_str()),
             Some(TOOLKIT_NAME),
             Some(TOOLKIT_VERSION),
         );
@@ -224,7 +215,10 @@ impl MacAccessibilityProvider {
         let mut out = Vec::new();
         if let Ok(mut pending) = self.pending_actions.lock() {
             for request in pending.drain(..) {
-                let node_id = crate::AccessibilityId(request.target.0);
+                if request.target_tree != accesskit::TreeId::ROOT {
+                    continue;
+                }
+                let node_id = crate::AccessibilityId(request.target_node.0);
                 if let Some(node) = tree.get(node_id) {
                     if let Some(request) =
                         AccessibilityActionRequest::from_accesskit_for_node_with_data(
@@ -299,13 +293,13 @@ mod tests {
 
     #[test]
     fn test_provider_creation() {
-        let provider = MacAccessibilityProvider::detached("test-app");
-        assert_eq!(provider.app_name(), "test-app");
+        let provider = MacAccessibilityProvider::detached();
+        assert!(provider.adapter.is_none());
     }
 
     #[test]
     fn test_detached_provider_stores_latest_update() {
-        let mut provider = MacAccessibilityProvider::detached("test-app");
+        let mut provider = MacAccessibilityProvider::detached();
         let root = crate::AccessibilityNode::new(AccessibilityRole::Window);
         let mut tree = crate::AccessibilityTree::new(root);
         let button = crate::AccessibilityNode::new(AccessibilityRole::Button).with_label("OK");
@@ -323,7 +317,7 @@ mod tests {
 
     #[test]
     fn test_detached_provider_has_no_pending_actions() {
-        let provider = MacAccessibilityProvider::detached("test-app");
+        let provider = MacAccessibilityProvider::detached();
         let tree =
             crate::AccessibilityTree::new(crate::AccessibilityNode::new(AccessibilityRole::Window));
         assert!(provider.drain_actions(&tree).is_empty());
@@ -331,7 +325,7 @@ mod tests {
 
     #[test]
     fn test_detached_provider_normalizes_pending_actions_against_tree() {
-        let provider = MacAccessibilityProvider::detached("test-app");
+        let provider = MacAccessibilityProvider::detached();
         let root = crate::AccessibilityNode::new(AccessibilityRole::Window);
         let mut tree = crate::AccessibilityTree::new(root);
         let toggle = crate::AccessibilityNode::new(AccessibilityRole::Switch).with_actions(vec![
@@ -348,7 +342,8 @@ mod tests {
             .unwrap()
             .push(accesskit::ActionRequest {
                 action: accesskit::Action::Click,
-                target: accesskit::NodeId(toggle_id.0),
+                target_tree: accesskit::TreeId::ROOT,
+                target_node: accesskit::NodeId(toggle_id.0),
                 data: None,
             });
 

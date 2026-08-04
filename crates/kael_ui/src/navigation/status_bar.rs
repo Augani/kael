@@ -7,9 +7,9 @@ use crate::{
         icon_source::IconSource,
         text::caption,
     },
-    theme::{use_theme, Theme},
+    theme::{Theme, use_theme},
 };
-use kael::{prelude::FluentBuilder as _, InteractiveElement, *};
+use kael::{InteractiveElement, prelude::FluentBuilder as _, *};
 use std::panic::Location;
 use std::rc::Rc;
 

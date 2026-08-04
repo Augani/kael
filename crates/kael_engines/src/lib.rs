@@ -8,8 +8,8 @@
 //! [`dashboard`], [`ide`]).
 //!
 //! Media/NLE engines (timeline, compositing, export) live in the separate,
-//! optional `kael_media_engines` crate — see the project's `VISION.md` for the
-//! layering rule that keeps this crate domain-neutral.
+//! optional `kael_media_engines` crate, preserving the workspace rule that
+//! keeps this crate domain-neutral.
 
 pub mod bidi;
 pub mod canvas;

@@ -161,6 +161,10 @@ impl RenderOnce for PopoverMenu {
             )
             .read(cx)
             .clone();
+        let tracked_menu_focus = menu_focus_handle
+            .clone()
+            .tab_index(0)
+            .tab_stop(interactive_indices.is_empty());
         if !focus_handles.iter().any(|handle| handle.is_focused(window)) {
             if let Some(index) = interactive_indices.first() {
                 window.focus(&focus_handles[*index]);
@@ -193,11 +197,7 @@ impl RenderOnce for PopoverMenu {
                                     AccessibilityAttributes::new(AccessibilityRole::Menu)
                                         .label("Menu"),
                                 )
-                                .track_focus(
-                                    &menu_focus_handle
-                                        .tab_index(0)
-                                        .tab_stop(interactive_indices.is_empty()),
-                                )
+                                .track_focus(&tracked_menu_focus)
                                 .min_w(px(200.0))
                                 .max_w(px(300.0))
                                 .flex()

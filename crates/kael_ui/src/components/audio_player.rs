@@ -181,22 +181,22 @@ impl AudioPlayerState {
         let path_str = path.into();
         self.source_path = Some(path_str.clone());
 
-        if let Some(ref backend) = self.backend {
-            if let Ok(mut backend) = backend.try_borrow_mut() {
-                match backend.load(&path_str) {
-                    Ok(duration) => {
-                        self.duration = duration.as_secs_f32();
-                        self.current_time = 0.0;
-                        self.is_playing = false;
-                        backend.set_volume(self.volume);
-                        backend.set_speed(self.playback_speed.value());
-                        cx.notify();
-                        return true;
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to load audio: {}", e);
-                        return false;
-                    }
+        if let Some(ref backend) = self.backend
+            && let Ok(mut backend) = backend.try_borrow_mut()
+        {
+            match backend.load(&path_str) {
+                Ok(duration) => {
+                    self.duration = duration.as_secs_f32();
+                    self.current_time = 0.0;
+                    self.is_playing = false;
+                    backend.set_volume(self.volume);
+                    backend.set_speed(self.playback_speed.value());
+                    cx.notify();
+                    return true;
+                }
+                Err(e) => {
+                    eprintln!("Failed to load audio: {}", e);
+                    return false;
                 }
             }
         }
@@ -217,13 +217,13 @@ impl AudioPlayerState {
     pub fn set_playing(&mut self, playing: bool, cx: &mut Context<Self>) {
         self.is_playing = playing;
         #[cfg(feature = "audio")]
-        if let Some(ref backend) = self.backend {
-            if let Ok(backend) = backend.try_borrow() {
-                if playing {
-                    backend.play();
-                } else {
-                    backend.pause();
-                }
+        if let Some(ref backend) = self.backend
+            && let Ok(backend) = backend.try_borrow()
+        {
+            if playing {
+                backend.play();
+            } else {
+                backend.pause();
             }
         }
         cx.notify();
@@ -232,13 +232,13 @@ impl AudioPlayerState {
     pub fn toggle_playing(&mut self, cx: &mut Context<Self>) {
         self.is_playing = !self.is_playing;
         #[cfg(feature = "audio")]
-        if let Some(ref backend) = self.backend {
-            if let Ok(backend) = backend.try_borrow() {
-                if self.is_playing {
-                    backend.play();
-                } else {
-                    backend.pause();
-                }
+        if let Some(ref backend) = self.backend
+            && let Ok(backend) = backend.try_borrow()
+        {
+            if self.is_playing {
+                backend.play();
+            } else {
+                backend.pause();
             }
         }
         cx.notify();
@@ -312,20 +312,16 @@ impl AudioPlayerState {
 
     #[cfg(feature = "audio")]
     fn apply_volume(&self) {
-        if let Some(ref backend) = self.backend {
-            if let Ok(backend) = backend.try_borrow() {
-                let effective_vol = if self.is_muted { 0.0 } else { self.volume };
-                backend.set_volume(effective_vol);
-            }
+        if let Some(ref backend) = self.backend
+            && let Ok(backend) = backend.try_borrow()
+        {
+            let effective_vol = if self.is_muted { 0.0 } else { self.volume };
+            backend.set_volume(effective_vol);
         }
     }
 
     pub fn effective_volume(&self) -> f32 {
-        if self.is_muted {
-            0.0
-        } else {
-            self.volume
-        }
+        if self.is_muted { 0.0 } else { self.volume }
     }
 
     pub fn volume_class(&self) -> &'static str {
@@ -343,10 +339,10 @@ impl AudioPlayerState {
     pub fn set_playback_speed(&mut self, speed: PlaybackSpeed, cx: &mut Context<Self>) {
         self.playback_speed = speed;
         #[cfg(feature = "audio")]
-        if let Some(ref backend) = self.backend {
-            if let Ok(backend) = backend.try_borrow() {
-                backend.set_speed(speed.value());
-            }
+        if let Some(ref backend) = self.backend
+            && let Ok(backend) = backend.try_borrow()
+        {
+            backend.set_speed(speed.value());
         }
         cx.notify();
     }
@@ -354,10 +350,10 @@ impl AudioPlayerState {
     pub fn cycle_playback_speed(&mut self, cx: &mut Context<Self>) {
         self.playback_speed = self.playback_speed.next();
         #[cfg(feature = "audio")]
-        if let Some(ref backend) = self.backend {
-            if let Ok(backend) = backend.try_borrow() {
-                backend.set_speed(self.playback_speed.value());
-            }
+        if let Some(ref backend) = self.backend
+            && let Ok(backend) = backend.try_borrow()
+        {
+            backend.set_speed(self.playback_speed.value());
         }
         cx.notify();
     }
@@ -366,20 +362,20 @@ impl AudioPlayerState {
         self.is_playing = false;
         self.current_time = 0.0;
         #[cfg(feature = "audio")]
-        if let Some(ref backend) = self.backend {
-            if let Ok(backend) = backend.try_borrow() {
-                backend.stop();
-            }
+        if let Some(ref backend) = self.backend
+            && let Ok(backend) = backend.try_borrow()
+        {
+            backend.stop();
         }
         cx.notify();
     }
 
     #[cfg(feature = "audio")]
     pub fn is_finished(&self) -> bool {
-        if let Some(ref backend) = self.backend {
-            if let Ok(backend) = backend.try_borrow() {
-                return backend.is_empty();
-            }
+        if let Some(ref backend) = self.backend
+            && let Ok(backend) = backend.try_borrow()
+        {
+            return backend.is_empty();
         }
         false
     }
@@ -933,7 +929,7 @@ impl AudioPlayer {
         is_playing: bool,
         button_size: Pixels,
         icon_size: Pixels,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let state = self.state.clone();
         let on_play = self.on_play.clone();
         let on_pause = self.on_pause.clone();
@@ -976,7 +972,7 @@ impl AudioPlayer {
         focus_handle: FocusHandle,
         track_height: Pixels,
         thumb_size: Pixels,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let state = self.state.clone();
         let on_seek = self.on_seek.clone();
         let disabled = self.disabled;
@@ -1175,7 +1171,7 @@ impl AudioPlayer {
         is_muted: bool,
         button_size: Pixels,
         icon_size: Pixels,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let state = self.state.clone();
         let disabled = self.disabled;
 
@@ -1207,7 +1203,7 @@ impl AudioPlayer {
         width: Pixels,
         track_height: Pixels,
         thumb_size: Pixels,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let state = self.state.clone();
         let on_volume_change = self.on_volume_change.clone();
         let disabled = self.disabled;
@@ -1382,7 +1378,7 @@ impl AudioPlayer {
         window: &mut Window,
         _theme: &crate::theme::Theme,
         speed: PlaybackSpeed,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let state = self.state.clone();
         let on_speed_change = self.on_speed_change.clone();
         let disabled = self.disabled;

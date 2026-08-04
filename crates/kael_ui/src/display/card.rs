@@ -2,7 +2,7 @@
 
 use crate::{
     astryx::Hue,
-    theme::{use_theme, Theme},
+    theme::{Theme, use_theme},
 };
 use kael::{prelude::FluentBuilder as _, *};
 

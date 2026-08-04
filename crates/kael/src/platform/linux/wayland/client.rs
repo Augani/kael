@@ -69,6 +69,7 @@ use super::{
     display::WaylandDisplay,
     window::{ImeInput, WaylandWindowStatePtr},
 };
+#[cfg(feature = "webview")]
 use crate::platform::linux::webview::pump_gtk_webview_events;
 
 use crate::platform::{PlatformWindow, blade::BladeContext};
@@ -984,6 +985,7 @@ impl LinuxClient for WaylandClient {
                 None,
                 &mut WaylandClientStatePtr(Rc::downgrade(&self.0)),
                 |_| {
+                    #[cfg(feature = "webview")]
                     pump_gtk_webview_events();
                 },
             )

@@ -6,9 +6,9 @@ use crate::{
         icon_source::IconSource,
         text::{body, caption},
     },
-    theme::{use_theme, Theme},
+    theme::{Theme, use_theme},
 };
-use kael::{prelude::FluentBuilder as _, InteractiveElement, *};
+use kael::{InteractiveElement, prelude::FluentBuilder as _, *};
 use std::collections::HashMap;
 use std::panic::Location;
 use std::rc::Rc;
@@ -397,10 +397,11 @@ impl RenderOnce for Menu {
                 })
                 .collect(),
         );
-        if self.auto_focus && !focus_handles.iter().any(|handle| handle.is_focused(window)) {
-            if let Some(index) = interactive_indices.first() {
-                window.focus(&focus_handles[*index]);
-            }
+        if self.auto_focus
+            && !focus_handles.iter().any(|handle| handle.is_focused(window))
+            && let Some(index) = interactive_indices.first()
+        {
+            window.focus(&focus_handles[*index]);
         }
         let initial_checked: HashMap<_, _> = self
             .items

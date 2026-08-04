@@ -111,4 +111,8 @@ runtime.broadcast_notification(ExtensionNotification::SettingsChanged {
 });
 ```
 
-See `examples/plugin_host.rs` for a complete host UI that loads both a WASM and an external-process extension, activates them through a broker, and streams a live log.
+For the complete contract, see the `ExtensionRuntime`, `ExtensionBroker`, and
+`ExternalExtensionProcess` API documentation. The consolidated Astryx showcase
+demonstrates the UI primitives used to present extension state, commands, and logs;
+extension lifecycle and transport behavior are covered by the process integration
+tests so the example gallery does not duplicate security-sensitive runtime code.

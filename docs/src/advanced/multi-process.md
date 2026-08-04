@@ -70,7 +70,7 @@ assert_eq!(response["message"], "hello from host");
 
 ## The worker child
 
-The child binary connects back to the host with `WorkerClient::connect_from_env` (it reads the `GPUI_WORKER_SOCKET` / `GPUI_WORKER_PIPE` environment variable the host sets) and serves requests with `run`. The handler receives a `WorkerRequest` and a `progress` callback for streaming intermediate updates, and returns a `WorkerResponse` or `WorkerError`.
+The child binary connects back to the host with `WorkerClient::connect_from_env` (it reads the `KAEL_WORKER_SOCKET` / `KAEL_WORKER_PIPE` environment variable the host sets) and serves requests with `run`. The handler receives a `WorkerRequest` and a `progress` callback for streaming intermediate updates, and returns a `WorkerResponse` or `WorkerError`.
 
 ```rust
 use anyhow::Result;

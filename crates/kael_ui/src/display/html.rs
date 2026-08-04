@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use crate::display::rich_text::LinkClickHandler;
 #[cfg(feature = "html-render")]
-use crate::display::rich_text::{render_blocks, ListItem, RichBlock, RichInline, TableAlignment};
+use crate::display::rich_text::{ListItem, RichBlock, RichInline, TableAlignment, render_blocks};
 #[cfg(feature = "html-render")]
 use crate::theme::Theme;
 
@@ -226,7 +226,7 @@ fn walk_children_inlines(node: &Handle) -> Vec<RichInline> {
                     inlines.push(RichInline::Text(text));
                 }
             }
-            NodeData::Element { name, attrs: _, .. } => {
+            NodeData::Element { name, .. } => {
                 let tag = name.local.as_ref();
                 if !is_allowed_tag(tag) {
                     continue;
@@ -301,16 +301,16 @@ fn walk_children_inlines(node: &Handle) -> Vec<RichInline> {
 #[cfg(feature = "html-render")]
 fn extract_code_block(pre_node: &Handle) -> (Option<String>, String) {
     for child in pre_node.children.borrow().iter() {
-        if let NodeData::Element { name, .. } = &child.data {
-            if name.local.as_ref() == "code" {
-                let lang = get_attr(child, "class").and_then(|cls| {
-                    cls.strip_prefix("language-")
-                        .map(|l| l.to_string())
-                        .or_else(|| cls.strip_prefix("lang-").map(|l| l.to_string()))
-                });
-                let code = collect_text(child);
-                return (lang, code);
-            }
+        if let NodeData::Element { name, .. } = &child.data
+            && name.local.as_ref() == "code"
+        {
+            let lang = get_attr(child, "class").and_then(|cls| {
+                cls.strip_prefix("language-")
+                    .map(|l| l.to_string())
+                    .or_else(|| cls.strip_prefix("lang-").map(|l| l.to_string()))
+            });
+            let code = collect_text(child);
+            return (lang, code);
         }
     }
     (None, collect_text(pre_node))
@@ -321,26 +321,26 @@ fn walk_list_items(node: &Handle) -> Vec<ListItem> {
     let mut items = Vec::new();
 
     for child in node.children.borrow().iter() {
-        if let NodeData::Element { name, .. } = &child.data {
-            if name.local.as_ref() == "li" {
-                let inlines = walk_children_inlines(child);
-                let mut sub_items = Vec::new();
+        if let NodeData::Element { name, .. } = &child.data
+            && name.local.as_ref() == "li"
+        {
+            let inlines = walk_children_inlines(child);
+            let mut sub_items = Vec::new();
 
-                for sub in child.children.borrow().iter() {
-                    if let NodeData::Element { name: sub_name, .. } = &sub.data {
-                        let sub_tag = sub_name.local.as_ref();
-                        if sub_tag == "ul" || sub_tag == "ol" {
-                            sub_items = walk_list_items(sub);
-                        }
+            for sub in child.children.borrow().iter() {
+                if let NodeData::Element { name: sub_name, .. } = &sub.data {
+                    let sub_tag = sub_name.local.as_ref();
+                    if sub_tag == "ul" || sub_tag == "ol" {
+                        sub_items = walk_list_items(sub);
                     }
                 }
-
-                items.push(ListItem {
-                    checked: None,
-                    content: inlines,
-                    children: sub_items,
-                });
             }
+
+            items.push(ListItem {
+                checked: None,
+                content: inlines,
+                children: sub_items,
+            });
         }
     }
 
@@ -358,21 +358,21 @@ fn walk_table(node: &Handle) -> RichBlock {
             match name.local.as_ref() {
                 "thead" => {
                     for tr in child.children.borrow().iter() {
-                        if let NodeData::Element { name: tr_name, .. } = &tr.data {
-                            if tr_name.local.as_ref() == "tr" {
-                                headers = walk_table_cells(tr, &mut alignments, true);
-                            }
+                        if let NodeData::Element { name: tr_name, .. } = &tr.data
+                            && tr_name.local.as_ref() == "tr"
+                        {
+                            headers = walk_table_cells(tr, &mut alignments, true);
                         }
                     }
                 }
                 "tbody" => {
                     for tr in child.children.borrow().iter() {
-                        if let NodeData::Element { name: tr_name, .. } = &tr.data {
-                            if tr_name.local.as_ref() == "tr" {
-                                let mut dummy = Vec::new();
-                                let row = walk_table_cells(tr, &mut dummy, false);
-                                rows.push(row);
-                            }
+                        if let NodeData::Element { name: tr_name, .. } = &tr.data
+                            && tr_name.local.as_ref() == "tr"
+                        {
+                            let mut dummy = Vec::new();
+                            let row = walk_table_cells(tr, &mut dummy, false);
+                            rows.push(row);
                         }
                     }
                 }
@@ -524,18 +524,18 @@ fn parse_inline_style(style: &str) -> InlineStyle {
                     _ => {}
                 },
                 "font-size" => {
-                    if let Some(stripped) = value.strip_suffix("px") {
-                        if let Ok(size) = stripped.trim().parse::<f32>() {
-                            if size.is_finite() && size > 0.0 {
-                                result.font_size = Some(size);
-                            }
-                        }
-                    } else if let Some(stripped) = value.strip_suffix("em") {
-                        if let Ok(size) = stripped.trim().parse::<f32>() {
-                            if size.is_finite() && size > 0.0 {
-                                result.font_size = Some(size * 14.0);
-                            }
-                        }
+                    if let Some(stripped) = value.strip_suffix("px")
+                        && let Ok(size) = stripped.trim().parse::<f32>()
+                        && size.is_finite()
+                        && size > 0.0
+                    {
+                        result.font_size = Some(size);
+                    } else if let Some(stripped) = value.strip_suffix("em")
+                        && let Ok(size) = stripped.trim().parse::<f32>()
+                        && size.is_finite()
+                        && size > 0.0
+                    {
+                        result.font_size = Some(size * 14.0);
                     }
                 }
                 _ => {}
@@ -730,13 +730,17 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn invalid_base_font_size_is_ignored() {
-        assert!(Html::new("<p>text</p>")
-            .base_font_size(px(0.0))
-            .base_font_size
-            .is_none());
-        assert!(Html::new("<p>text</p>")
-            .base_font_size(px(f32::NAN))
-            .base_font_size
-            .is_none());
+        assert!(
+            Html::new("<p>text</p>")
+                .base_font_size(px(0.0))
+                .base_font_size
+                .is_none()
+        );
+        assert!(
+            Html::new("<p>text</p>")
+                .base_font_size(px(f32::NAN))
+                .base_font_size
+                .is_none()
+        );
     }
 }

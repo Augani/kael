@@ -96,8 +96,8 @@ self.orders.run(cx, |cx| async move {
 
 For request dedupe across views, `QueryCache` keys results by string with a TTL.
 
-A runnable demo lives at `crates/kael_ui/examples/async_query.rs` — skeleton to
-data, refetch, and the error path with simulated latency.
+The Astryx showcase composes query loading, data, refetch, and error states in
+one application.
 
 ## Rules of thumb
 

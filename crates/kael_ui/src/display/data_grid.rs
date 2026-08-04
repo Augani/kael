@@ -26,7 +26,7 @@ impl CellEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kael::{div, px, IntoElement, TestAppContext};
+    use kael::{IntoElement, TestAppContext, div, px};
 
     #[derive(Clone)]
     struct PrivateGridRow {
@@ -260,15 +260,17 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn grid_widths_and_replacement_data_are_normalized() {
-        let columns = vec![GridColumnDef::new(
-            "name",
-            "Name",
-            |row: &PrivateGridRow, _| div().child(row.name.clone()).into_any_element(),
-            |row: &PrivateGridRow| row.name.clone(),
-        )
-        .width(px(f32::NAN))
-        .min_width(px(120.0))
-        .max_width(px(200.0))];
+        let columns = vec![
+            GridColumnDef::new(
+                "name",
+                "Name",
+                |row: &PrivateGridRow, _| div().child(row.name.clone()).into_any_element(),
+                |row: &PrivateGridRow| row.name.clone(),
+            )
+            .width(px(f32::NAN))
+            .min_width(px(120.0))
+            .max_width(px(200.0)),
+        ];
         let mut state = DataGridState::new(
             vec![PrivateGridRow {
                 name: "Old".into(),
@@ -558,12 +560,11 @@ impl<T: 'static> DataGridState<T> {
 
     pub fn commit_edit(&mut self) {
         if let Some(pos) = self.editing_cell.take() {
-            if let Some(col) = self.columns.get(pos.col) {
-                if let Some(ref setter) = col.value_setter {
-                    if let Some(row) = self.data.get_mut(pos.row) {
-                        setter(row, &self.edit_value);
-                    }
-                }
+            if let Some(col) = self.columns.get(pos.col)
+                && let Some(ref setter) = col.value_setter
+                && let Some(row) = self.data.get_mut(pos.row)
+            {
+                setter(row, &self.edit_value);
             }
             self.edit_value.clear();
         }
@@ -579,12 +580,11 @@ impl<T: 'static> DataGridState<T> {
             Some(pos) => pos,
             None => return,
         };
-        if let Some(col) = self.columns.get(current.col) {
-            if let Some(ref setter) = col.value_setter {
-                if let Some(row) = self.data.get_mut(current.row) {
-                    setter(row, &self.edit_value);
-                }
-            }
+        if let Some(col) = self.columns.get(current.col)
+            && let Some(ref setter) = col.value_setter
+            && let Some(row) = self.data.get_mut(current.row)
+        {
+            setter(row, &self.edit_value);
         }
         self.edit_value.clear();
 
@@ -667,10 +667,10 @@ impl<T: 'static> DataGridState<T> {
                 position.row = *new_row;
             }
         }
-        if let Some(position) = &mut self.editing_cell {
-            if let Some(new_row) = row_map.get(position.row) {
-                position.row = *new_row;
-            }
+        if let Some(position) = &mut self.editing_cell
+            && let Some(new_row) = row_map.get(position.row)
+        {
+            position.row = *new_row;
         }
         self.data = indexed_data.into_iter().map(|(_, row)| row).collect();
     }
@@ -746,14 +746,13 @@ impl<T: 'static> DataGridState<T> {
         self.edit_value.clear();
         self.selected_cells.clear();
 
-        if let Some(column_id) = self.sort_column.clone() {
-            if let Some(column_index) = self
+        if let Some(column_id) = self.sort_column.clone()
+            && let Some(column_index) = self
                 .columns
                 .iter()
                 .position(|column| column.id == column_id && column.sortable)
-            {
-                self.apply_sort(column_index);
-            }
+        {
+            self.apply_sort(column_index);
         }
     }
 
@@ -986,6 +985,7 @@ impl<T: 'static> RenderOnce for DataGrid<T> {
             }
             s.focus_handle.clone().unwrap()
         });
+        let tracked_focus_handle = focus_handle.clone().tab_index(0).tab_stop(true);
 
         let state = state_entity.read(cx);
         let num_rows = state.data.len();
@@ -1374,7 +1374,7 @@ impl<T: 'static> RenderOnce for DataGrid<T> {
             .accessibility(
                 AccessibilityAttributes::new(AccessibilityRole::Group).label("Data grid"),
             )
-            .track_focus(&focus_handle.tab_index(0).tab_stop(true))
+            .track_focus(&tracked_focus_handle)
             .flex()
             .flex_col()
             .w_full()
@@ -1481,11 +1481,7 @@ impl<T: 'static> RenderOnce for DataGrid<T> {
                         let clamped = if new_width < min {
                             min
                         } else if let Some(max_w) = max {
-                            if new_width > max_w {
-                                max_w
-                            } else {
-                                new_width
-                            }
+                            if new_width > max_w { max_w } else { new_width }
                         } else {
                             new_width
                         };

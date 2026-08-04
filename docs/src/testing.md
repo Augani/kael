@@ -146,6 +146,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
       - name: Test kael
         run: cargo test -p kael --lib --features test-support,runtime_shaders
       - name: Test kael_ui

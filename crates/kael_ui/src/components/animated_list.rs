@@ -327,9 +327,11 @@ mod tests {
 
             let visible = state.read(cx).visible_keys();
             assert_eq!(visible.len(), 2);
-            assert!(visible
-                .iter()
-                .all(|(_, entering, exiting)| { !entering && !exiting }));
+            assert!(
+                visible
+                    .iter()
+                    .all(|(_, entering, exiting)| { !entering && !exiting })
+            );
         });
     }
 }

@@ -512,10 +512,10 @@ impl Stepper {
                             .on_click(window.listener_for(
                                 &state_clone,
                                 move |state, _, window, cx| {
-                                    if state.go_to(index, cx) {
-                                        if let Some(ref handler) = on_change {
-                                            handler(index, window, cx);
-                                        }
+                                    if state.go_to(index, cx)
+                                        && let Some(ref handler) = on_change
+                                    {
+                                        handler(index, window, cx);
                                     }
                                 },
                             ))
@@ -653,10 +653,10 @@ impl Stepper {
                             .on_click(window.listener_for(
                                 &state_clone,
                                 move |state, _, window, cx| {
-                                    if state.go_to(index, cx) {
-                                        if let Some(ref handler) = on_change {
-                                            handler(index, window, cx);
-                                        }
+                                    if state.go_to(index, cx)
+                                        && let Some(ref handler) = on_change
+                                    {
+                                        handler(index, window, cx);
                                     }
                                 },
                             ))
@@ -791,10 +791,8 @@ impl RenderOnce for Stepper {
                                         .is_some_and(|index| state.go_to(index, cx)),
                                     _ => false,
                                 };
-                                if changed {
-                                    if let Some(handler) = on_step_change.as_ref() {
-                                        handler(state.current_step, window, cx);
-                                    }
+                                if changed && let Some(handler) = on_step_change.as_ref() {
+                                    handler(state.current_step, window, cx);
                                 }
                             });
                             cx.stop_propagation();

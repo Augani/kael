@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::theme::{use_theme, Theme, ThemeTokens};
+use crate::theme::{Theme, ThemeTokens, use_theme};
 use kael::{prelude::FluentBuilder as _, *};
 
 /// Text variants for semantic typography

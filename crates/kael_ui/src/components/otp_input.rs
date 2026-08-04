@@ -597,15 +597,14 @@ impl RenderOnce for OTPInput {
                             }
 
                             let key = &event.keystroke.key;
-                            if key.len() == 1 {
-                                if let Some(ch) = key.chars().next() {
-                                    if ch.is_ascii_digit() {
-                                        state.update(cx, |s, cx| {
-                                            s.set_digit(i, ch, window, cx);
-                                        });
-                                        cx.stop_propagation();
-                                    }
-                                }
+                            if key.len() == 1
+                                && let Some(ch) = key.chars().next()
+                                && ch.is_ascii_digit()
+                            {
+                                state.update(cx, |s, cx| {
+                                    s.set_digit(i, ch, window, cx);
+                                });
+                                cx.stop_propagation();
                             }
                         }
                     })

@@ -9,7 +9,7 @@ $RegressionThreshold = if ($env:REGRESSION_THRESHOLD) { $env:REGRESSION_THRESHOL
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
-Write-Host "=== GPUI Benchmark Comparison ==="
+Write-Host "=== Kael Benchmark Comparison ==="
 Write-Host ""
 
 $BaselineFile = Join-Path $BaselineDir "kael-messaging-baseline.json"
@@ -21,7 +21,7 @@ if (-not (Test-Path $BaselineFile)) {
 
 Write-Host "Running benchmarks..."
 Set-Location $ProjectRoot
-cargo run --example perf_bench -- --output (Join-Path $OutputDir "current.json") --compare
+cargo bench --package kael --bench framework -- --output (Join-Path $OutputDir "current.json") --compare
 
 Write-Host ""
 Write-Host "Comparison complete."

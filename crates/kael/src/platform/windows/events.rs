@@ -267,7 +267,7 @@ impl WindowsWindowInner {
 
     fn handle_timer_msg(&self, handle: HWND, wparam: WPARAM) -> Option<isize> {
         if wparam.0 == SIZE_MOVE_LOOP_TIMER_ID {
-            for runnable in self.main_receiver.drain() {
+            for runnable in self.main_receiver.try_iter() {
                 super::catch_platform_callback("foreground task", (), || {
                     runnable.run();
                 });

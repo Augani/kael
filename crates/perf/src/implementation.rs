@@ -10,14 +10,14 @@ pub mod consts {
     //! on their communication protocol.
 
     /// The suffix on the actual test function.
-    pub const SUF_NORMAL: &str = "__ZED_PERF_FN";
+    pub const SUF_NORMAL: &str = "__KAEL_PERF_FN";
     /// The suffix on an extra function which prints metadata about a test to stdout.
-    pub const SUF_MDATA: &str = "__ZED_PERF_MDATA";
+    pub const SUF_MDATA: &str = "__KAEL_PERF_MDATA";
     /// The env var in which we pass the iteration count to our tests.
-    pub const ITER_ENV_VAR: &str = "ZED_PERF_ITER";
+    pub const ITER_ENV_VAR: &str = "KAEL_PERF_ITER";
     /// The prefix printed on all benchmark test metadata lines, to distinguish it from
     /// possible output by the test harness itself.
-    pub const MDATA_LINE_PREF: &str = "ZED_MDATA_";
+    pub const MDATA_LINE_PREF: &str = "KAEL_MDATA_";
     /// The version number for the data returned from the test metadata function.
     /// Increment on non-backwards-compatible changes.
     pub const MDATA_VER: u32 = 0;

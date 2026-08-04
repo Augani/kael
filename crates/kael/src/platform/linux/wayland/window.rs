@@ -25,15 +25,19 @@ use wayland_protocols::{
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur;
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
+#[cfg(feature = "webview")]
+use crate::SharedString;
+#[cfg(feature = "webview")]
 use crate::platform::linux::webview::{self as linux_webview, LinuxWebViewHost};
 use crate::platform::tab_manager::{TabManagerState, WindowTabManager};
+#[cfg(feature = "webview")]
+use crate::webview::{PlatformWebView, PlatformWebViewCommand};
 use crate::{
     AnyWindowHandle, Bounds, Decorations, DispatchEventResult, Globals, GpuSpecs, Modifiers,
     Output, Pixels, PlatformDisplay, PlatformInput, Point, PromptButton, PromptLevel,
-    RequestFrameOptions, ResizeEdge, SharedString, Size, Tiling, WaylandClientStatePtr,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls,
-    WindowDecorations, WindowParams, px, size,
-    webview::{PlatformWebView, PlatformWebViewCommand},
+    RequestFrameOptions, ResizeEdge, Size, Tiling, WaylandClientStatePtr, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls, WindowDecorations,
+    WindowParams, px, size,
 };
 use crate::{
     Capslock,
@@ -130,6 +134,7 @@ pub struct WaylandWindowState {
     visible: bool,
     tab_manager: WindowTabManager,
     accessibility_root: crate::platform::linux::accessibility::AtSpiAccessibleRoot,
+    #[cfg(feature = "webview")]
     pub(crate) webviews: HashMap<SharedString, LinuxWebViewHost>,
 }
 
@@ -212,9 +217,8 @@ impl WaylandWindowState {
             client_inset: None,
             visible: true,
             tab_manager: WindowTabManager::new(handle, tab_manager_state),
-            accessibility_root: crate::platform::linux::accessibility::AtSpiAccessibleRoot::new(
-                "Kael",
-            ),
+            accessibility_root: crate::platform::linux::accessibility::AtSpiAccessibleRoot::new(),
+            #[cfg(feature = "webview")]
             webviews: HashMap::default(),
         })
     }
@@ -1286,10 +1290,12 @@ impl PlatformWindow for WaylandWindow {
         self.0.callbacks.borrow_mut().appearance_changed = Some(callback);
     }
 
+    #[cfg(feature = "webview")]
     fn sync_webviews(&mut self, webviews: &[PlatformWebView]) {
         linux_webview::sync_wayland_webviews(&self.0, webviews);
     }
 
+    #[cfg(feature = "webview")]
     fn dispatch_webview_command(&mut self, command: PlatformWebViewCommand) -> anyhow::Result<()> {
         linux_webview::dispatch_wayland_webview_command(&self.0, command)
     }

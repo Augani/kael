@@ -19,6 +19,11 @@ packages=(
   build-essential
   clang
   libasound2-dev
+  libavcodec-dev
+  libavdevice-dev
+  libavfilter-dev
+  libavformat-dev
+  libavutil-dev
   libdbus-1-dev
   libegl1-mesa-dev
   libfontconfig1-dev
@@ -26,6 +31,8 @@ packages=(
   libgl1-mesa-dev
   libgles2-mesa-dev
   libpipewire-0.3-dev
+  libswresample-dev
+  libswscale-dev
   libudev-dev
   libvulkan-dev
   libwayland-dev

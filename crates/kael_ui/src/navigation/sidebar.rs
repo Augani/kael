@@ -396,10 +396,12 @@ impl<T: Clone + PartialEq + 'static> RenderOnce for Sidebar<T> {
         sidebar = sidebar
             .track_focus(&focus_handle)
             .on_key_down(move |event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key.as_str() == "escape" && is_collapsible && is_expanded {
-                    if let Some(on_toggle) = on_toggle_for_keyboard.clone() {
-                        on_toggle(false, window, cx);
-                    }
+                if event.keystroke.key.as_str() == "escape"
+                    && is_collapsible
+                    && is_expanded
+                    && let Some(on_toggle) = on_toggle_for_keyboard.clone()
+                {
+                    on_toggle(false, window, cx);
                 }
             })
             .map(|this| {

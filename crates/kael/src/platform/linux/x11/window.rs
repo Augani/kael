@@ -1,17 +1,21 @@
 use anyhow::{Context as _, anyhow};
 use x11rb::connection::RequestConnection;
 
+#[cfg(feature = "webview")]
+use crate::SharedString;
 use crate::platform::blade::{BladeContext, BladeRenderer, BladeSurfaceConfig};
+#[cfg(feature = "webview")]
 use crate::platform::linux::webview::{self as linux_webview, LinuxWebViewHost};
 use crate::platform::tab_manager::{TabManagerState, WindowTabManager};
+#[cfg(feature = "webview")]
+use crate::webview::{PlatformWebView, PlatformWebViewCommand};
 use crate::{
     AnyWindowHandle, Bounds, Decorations, DevicePixels, DispatchEventResult, ForegroundExecutor,
     GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
     PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
-    ResizeEdge, ScaledPixels, Scene, SharedString, Size, Tiling, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowDecorations, WindowKind,
-    WindowParams, X11ClientStatePtr, px, size,
-    webview::{PlatformWebView, PlatformWebViewCommand},
+    ResizeEdge, ScaledPixels, Scene, Size, Tiling, WindowAppearance, WindowBackgroundAppearance,
+    WindowBounds, WindowControlArea, WindowDecorations, WindowKind, WindowParams,
+    X11ClientStatePtr, px, size,
 };
 
 use blade_graphics as gpu;
@@ -32,9 +36,10 @@ use x11rb::{
     xcb_ffi::XCBConnection,
 };
 
+#[cfg(feature = "webview")]
+use std::collections::HashMap;
 use std::{
     cell::RefCell,
-    collections::HashMap,
     ffi::c_void,
     fmt::Display,
     num::NonZeroU32,
@@ -291,6 +296,7 @@ pub struct X11WindowState {
     last_insets: [u32; 4],
     tab_manager: WindowTabManager,
     accessibility_root: crate::platform::linux::accessibility::AtSpiAccessibleRoot,
+    #[cfg(feature = "webview")]
     pub(crate) webviews: HashMap<SharedString, LinuxWebViewHost>,
 }
 
@@ -765,8 +771,8 @@ impl X11WindowState {
                 last_sync_counter: None,
                 tab_manager: WindowTabManager::new(handle, tab_manager_state),
                 accessibility_root: crate::platform::linux::accessibility::AtSpiAccessibleRoot::new(
-                    "Kael",
                 ),
+                #[cfg(feature = "webview")]
                 webviews: HashMap::default(),
             })
         });
@@ -800,6 +806,7 @@ impl Drop for X11Window {
         // Clean up tab manager tracking for this window.
         state.tab_manager.remove_window();
 
+        #[cfg(feature = "webview")]
         state.webviews.clear();
 
         state.renderer.destroy();
@@ -1640,10 +1647,12 @@ impl PlatformWindow for X11Window {
         self.0.callbacks.borrow_mut().appearance_changed = Some(callback);
     }
 
+    #[cfg(feature = "webview")]
     fn sync_webviews(&mut self, webviews: &[PlatformWebView]) {
         linux_webview::sync_x11_webviews(&self.0, webviews);
     }
 
+    #[cfg(feature = "webview")]
     fn dispatch_webview_command(&mut self, command: PlatformWebViewCommand) -> anyhow::Result<()> {
         linux_webview::dispatch_x11_webview_command(&self.0, command)
     }

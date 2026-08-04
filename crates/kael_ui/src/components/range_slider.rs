@@ -1,4 +1,4 @@
-use crate::components::slider::{snap_slider_value, valid_slider_step, SliderAxis, SliderSize};
+use crate::components::slider::{SliderAxis, SliderSize, snap_slider_value, valid_slider_step};
 use crate::{astryx, theme::use_theme};
 use kael::{prelude::*, *};
 use std::{cell::Cell, rc::Rc};
@@ -37,10 +37,10 @@ fn handle_range_thumb_key(
             (ActiveThumb::End, "end") => state.set_end_value(state.max, cx),
             _ => {}
         }
-        if state.range() != previous {
-            if let Some(handler) = on_change {
-                handler(state.start_value, state.end_value, window, cx);
-            }
+        if state.range() != previous
+            && let Some(handler) = on_change
+        {
+            handler(state.start_value, state.end_value, window, cx);
         }
     });
     true
@@ -64,28 +64,26 @@ fn handle_range_thumb_accessibility_action(
             (ActiveThumb::Start, AccessibilityAction::SetValue) => {
                 if let Some(AccessibilityActionPayload::NumericValue(value)) =
                     request.payload.as_ref()
+                    && value.is_finite()
                 {
-                    if value.is_finite() {
-                        state.set_start_value(*value as f32, cx);
-                    }
+                    state.set_start_value(*value as f32, cx);
                 }
             }
             (ActiveThumb::End, AccessibilityAction::SetValue) => {
                 if let Some(AccessibilityActionPayload::NumericValue(value)) =
                     request.payload.as_ref()
+                    && value.is_finite()
                 {
-                    if value.is_finite() {
-                        state.set_end_value(*value as f32, cx);
-                    }
+                    state.set_end_value(*value as f32, cx);
                 }
             }
             _ => {}
         }
 
-        if state.range() != previous {
-            if let Some(handler) = on_change {
-                handler(state.start_value, state.end_value, window, cx);
-            }
+        if state.range() != previous
+            && let Some(handler) = on_change
+        {
+            handler(state.start_value, state.end_value, window, cx);
         }
     });
 }
@@ -607,15 +605,15 @@ impl RangeSlider {
                                                 cx,
                                             );
 
-                                            if state.range() != previous {
-                                                if let Some(ref handler) = on_change_thumb {
-                                                    handler(
-                                                        state.start_value,
-                                                        state.end_value,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
+                                            if state.range() != previous
+                                                && let Some(ref handler) = on_change_thumb
+                                            {
+                                                handler(
+                                                    state.start_value,
+                                                    state.end_value,
+                                                    window,
+                                                    cx,
+                                                );
                                             }
 
                                             cx.stop_propagation();
@@ -716,15 +714,15 @@ impl RangeSlider {
                                                 cx,
                                             );
 
-                                            if state.range() != previous {
-                                                if let Some(ref handler) = on_change_thumb {
-                                                    handler(
-                                                        state.start_value,
-                                                        state.end_value,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
+                                            if state.range() != previous
+                                                && let Some(ref handler) = on_change_thumb
+                                            {
+                                                handler(
+                                                    state.start_value,
+                                                    state.end_value,
+                                                    window,
+                                                    cx,
+                                                );
                                             }
 
                                             cx.stop_propagation();
@@ -750,10 +748,10 @@ impl RangeSlider {
                                         cx,
                                     );
 
-                                    if state.range() != previous {
-                                        if let Some(ref handler) = on_change_bar {
-                                            handler(state.start_value, state.end_value, window, cx);
-                                        }
+                                    if state.range() != previous
+                                        && let Some(ref handler) = on_change_bar
+                                    {
+                                        handler(state.start_value, state.end_value, window, cx);
                                     }
                                 },
                             ),
@@ -774,15 +772,10 @@ impl RangeSlider {
                                             cx,
                                         );
 
-                                        if state.range() != previous {
-                                            if let Some(ref handler) = on_change_move {
-                                                handler(
-                                                    state.start_value,
-                                                    state.end_value,
-                                                    window,
-                                                    cx,
-                                                );
-                                            }
+                                        if state.range() != previous
+                                            && let Some(ref handler) = on_change_move
+                                        {
+                                            handler(state.start_value, state.end_value, window, cx);
                                         }
                                     }
                                 },
@@ -991,15 +984,15 @@ impl RangeSlider {
                                                 cx,
                                             );
 
-                                            if state.range() != previous {
-                                                if let Some(ref handler) = on_change_thumb {
-                                                    handler(
-                                                        state.start_value,
-                                                        state.end_value,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
+                                            if state.range() != previous
+                                                && let Some(ref handler) = on_change_thumb
+                                            {
+                                                handler(
+                                                    state.start_value,
+                                                    state.end_value,
+                                                    window,
+                                                    cx,
+                                                );
                                             }
 
                                             cx.stop_propagation();
@@ -1100,15 +1093,15 @@ impl RangeSlider {
                                                 cx,
                                             );
 
-                                            if state.range() != previous {
-                                                if let Some(ref handler) = on_change_thumb {
-                                                    handler(
-                                                        state.start_value,
-                                                        state.end_value,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
+                                            if state.range() != previous
+                                                && let Some(ref handler) = on_change_thumb
+                                            {
+                                                handler(
+                                                    state.start_value,
+                                                    state.end_value,
+                                                    window,
+                                                    cx,
+                                                );
                                             }
 
                                             cx.stop_propagation();
@@ -1134,10 +1127,10 @@ impl RangeSlider {
                                         cx,
                                     );
 
-                                    if state.range() != previous {
-                                        if let Some(ref handler) = on_change_bar {
-                                            handler(state.start_value, state.end_value, window, cx);
-                                        }
+                                    if state.range() != previous
+                                        && let Some(ref handler) = on_change_bar
+                                    {
+                                        handler(state.start_value, state.end_value, window, cx);
                                     }
                                 },
                             ),
@@ -1158,15 +1151,10 @@ impl RangeSlider {
                                             cx,
                                         );
 
-                                        if state.range() != previous {
-                                            if let Some(ref handler) = on_change_move {
-                                                handler(
-                                                    state.start_value,
-                                                    state.end_value,
-                                                    window,
-                                                    cx,
-                                                );
-                                            }
+                                        if state.range() != previous
+                                            && let Some(ref handler) = on_change_move
+                                        {
+                                            handler(state.start_value, state.end_value, window, cx);
                                         }
                                     }
                                 },
@@ -1344,8 +1332,8 @@ impl RenderOnce for RangeSlider {
 mod tests {
     use super::{RangeSlider, RangeSliderState};
     use kael::{
-        div, AccessibilityAction, AccessibilityRole, AccessibilityState, AppContext, Context,
-        Entity, IntoElement, ParentElement, Render, TestAppContext, Window,
+        AccessibilityAction, AccessibilityRole, AccessibilityState, AppContext, Context, Entity,
+        IntoElement, ParentElement, Render, TestAppContext, Window, div,
     };
 
     struct RangeSliderHost {
@@ -1435,8 +1423,10 @@ mod tests {
                 .filter(|node| !node.states.contains(AccessibilityState::DISABLED))
             {
                 assert!(node.actions.contains(&AccessibilityAction::Increment));
-                assert!(window
-                    .has_accessibility_action_handler(node.id, AccessibilityAction::Increment,));
+                assert!(
+                    window
+                        .has_accessibility_action_handler(node.id, AccessibilityAction::Increment,)
+                );
             }
         });
     }

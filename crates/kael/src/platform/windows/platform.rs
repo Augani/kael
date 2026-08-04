@@ -69,7 +69,7 @@ struct WindowsPlatformInner {
     keep_alive_without_windows: AtomicBool,
     // The below members will never change throughout the entire lifecycle of the app.
     validation_number: usize,
-    main_receiver: flume::Receiver<Runnable>,
+    main_receiver: crossbeam_channel::Receiver<Runnable>,
 }
 
 pub(crate) struct WindowsPlatformState {
@@ -146,7 +146,7 @@ impl WindowsPlatform {
             OleInitialize(None).context("unable to initialize Windows OLE")?;
         }
         let directx_devices = DirectXDevices::new().context("Creating DirectX devices")?;
-        let (main_sender, main_receiver) = flume::unbounded::<Runnable>();
+        let (main_sender, main_receiver) = crossbeam_channel::unbounded::<Runnable>();
         let validation_number = if usize::BITS == 64 {
             rand::random::<u64>() as usize
         } else {
@@ -1408,7 +1408,7 @@ impl WindowsPlatformInner {
 
     #[inline]
     fn run_foreground_task(&self) -> Option<isize> {
-        for runnable in self.main_receiver.drain() {
+        for runnable in self.main_receiver.try_iter() {
             super::catch_platform_callback("foreground task", (), || {
                 runnable.run();
             });
@@ -1726,7 +1726,7 @@ pub(crate) struct WindowCreationInfo {
     pub(crate) windows_version: WindowsVersion,
     pub(crate) drop_target_helper: IDropTargetHelper,
     pub(crate) validation_number: usize,
-    pub(crate) main_receiver: flume::Receiver<Runnable>,
+    pub(crate) main_receiver: crossbeam_channel::Receiver<Runnable>,
     pub(crate) platform_window_handle: HWND,
     pub(crate) disable_direct_composition: bool,
     pub(crate) directx_devices: DirectXDevices,
@@ -1738,7 +1738,7 @@ struct PlatformWindowCreateContext {
     inner: Option<Result<Rc<WindowsPlatformInner>>>,
     raw_window_handles: std::sync::Weak<RwLock<SmallVec<[SafeHwnd; 4]>>>,
     validation_number: usize,
-    main_receiver: Option<flume::Receiver<Runnable>>,
+    main_receiver: Option<crossbeam_channel::Receiver<Runnable>>,
     directx_devices: Option<DirectXDevices>,
 }
 

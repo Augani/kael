@@ -446,11 +446,11 @@ impl TimePickerState {
     }
 
     fn adjust_minutes(&mut self, delta: i16, cx: &mut Context<Self>) {
-        if let Some(input) = self.pending_input.as_ref() {
-            if let Some(value) = parse_time_input(input, self.format, self.show_seconds) {
-                self.value = value;
-                self.pending_input = None;
-            }
+        if let Some(input) = self.pending_input.as_ref()
+            && let Some(value) = parse_time_input(input, self.format, self.show_seconds)
+        {
+            self.value = value;
+            self.pending_input = None;
         }
 
         let (hour, minute, second) = self.value.to_24h();
@@ -905,10 +905,8 @@ impl RenderOnce for TimePicker {
                                         }
                                     }
 
-                                    if changed {
-                                        if let Some(handler) = on_change.as_ref() {
-                                            handler(&s.value, window, cx);
-                                        }
+                                    if changed && let Some(handler) = on_change.as_ref() {
+                                        handler(&s.value, window, cx);
                                     }
                                     (changed, handled)
                                 });
@@ -1013,10 +1011,8 @@ impl RenderOnce for TimePicker {
                     state.update(cx, |s, cx| {
                         let changed = s.pending_input.is_some() && s.commit_pending(cx);
                         s.close(cx);
-                        if changed {
-                            if let Some(handler) = on_change.as_ref() {
-                                handler(&s.value, window, cx);
-                            }
+                        if changed && let Some(handler) = on_change.as_ref() {
+                            handler(&s.value, window, cx);
                         }
                     });
                 }
@@ -1407,13 +1403,13 @@ fn parse_time_input(input: &str, format: TimeFormat, show_seconds: bool) -> Opti
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_time_value, parse_time_input, scroll_offset_for_selection, TimeFormat,
-        TimePeriod, TimePicker, TimePickerScrollHandles, TimePickerState, TimeValue,
+        TimeFormat, TimePeriod, TimePicker, TimePickerScrollHandles, TimePickerState, TimeValue,
+        normalize_time_value, parse_time_input, scroll_offset_for_selection,
     };
     use kael::{
-        point, px, AccessibilityAction, AccessibilityRole, AccessibilityState, AppContext, Context,
-        Entity, IntoElement, Modifiers, Render, ScrollDelta, ScrollWheelEvent, TestAppContext,
-        Window,
+        AccessibilityAction, AccessibilityRole, AccessibilityState, AppContext, Context, Entity,
+        IntoElement, Modifiers, Render, ScrollDelta, ScrollWheelEvent, TestAppContext, Window,
+        point, px,
     };
 
     struct TimePickerHost {

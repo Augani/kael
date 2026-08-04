@@ -823,13 +823,11 @@ impl RenderOnce for PowerSearch {
                                     .id(ElementId::Name(format!("{field_id}-field-{index}").into()))
                                     .icon("plus")
                                     .disabled(disabled);
-                                if !disabled {
-                                    if let Some(handler) = on_field_select.clone() {
-                                        let selected = field.clone();
-                                        token = token.on_click(move |window, cx| {
-                                            handler(selected.clone(), window, cx);
-                                        });
-                                    }
+                                if !disabled && let Some(handler) = on_field_select.clone() {
+                                    let selected = field.clone();
+                                    token = token.on_click(move |window, cx| {
+                                        handler(selected.clone(), window, cx);
+                                    });
                                 }
                                 token.into_any_element()
                             }),

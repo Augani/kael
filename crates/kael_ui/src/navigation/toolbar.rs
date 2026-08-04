@@ -5,7 +5,7 @@ use crate::{
     components::icon::Icon,
     components::icon_source::IconSource,
     components::section::{SectionDivider, SectionVariant},
-    theme::{use_theme, Theme},
+    theme::{Theme, use_theme},
 };
 use kael::{prelude::FluentBuilder as _, *};
 use std::panic::Location;

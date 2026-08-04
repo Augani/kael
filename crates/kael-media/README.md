@@ -1,6 +1,6 @@
 # kael-media
 
-Audio playback primitives for GPUI
+Audio playback primitives for Kael.
 
 Part of the [Kael](https://github.com/Augani/kael) GPU-accelerated Rust UI framework. See the [documentation](https://augani.github.io/kael/) for usage and guides.
 

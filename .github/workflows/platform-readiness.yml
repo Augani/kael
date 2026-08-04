@@ -18,7 +18,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  ZED_HEADLESS: 1
+  KAEL_HEADLESS: 1
 
 jobs:
   rustfmt:
@@ -26,11 +26,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.97.1
           components: rustfmt
 
       - uses: Swatinem/rust-cache@v2
@@ -38,32 +39,76 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
+  security:
+    name: Dependency security audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit --version 0.22.2
+
+      - name: Audit Cargo.lock
+        run: cargo audit
+
   verify:
     name: Verify (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: macos-latest
             label: macOS
+            timeout_minutes: 45
           - os: windows-latest
             label: Windows
+            timeout_minutes: 75
           - os: ubuntu-latest
             label: Linux
+            timeout_minutes: 45
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         shell: bash
         run: bash scripts/ci/install-linux-deps.sh
 
+      - name: Install macOS media dependencies
+        if: runner.os == 'macOS'
+        shell: bash
+        run: brew install ffmpeg pkg-config
+
+      - name: Install Windows media dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
+          if (-not $vcpkgRoot) {
+            $vcpkgRoot = Split-Path -Parent (Get-Command vcpkg -ErrorAction Stop).Source
+          }
+          $vcpkg = Join-Path $vcpkgRoot "vcpkg.exe"
+          if (-not (Test-Path $vcpkg)) {
+            throw "vcpkg.exe was not found under $vcpkgRoot"
+          }
+          "VCPKG_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & $vcpkg install ffmpeg:x64-windows --clean-after-build
+
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.97.1
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
@@ -103,7 +148,7 @@ jobs:
           - linux-wayland
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         shell: bash
@@ -112,6 +157,7 @@ jobs:
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.97.1
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
@@ -133,7 +179,7 @@ jobs:
           - windows-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -142,6 +188,8 @@ jobs:
 
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
 
       - uses: Swatinem/rust-cache@v2
 
@@ -166,9 +214,9 @@ jobs:
         shell: bash
         run: |
           if [ "${{ steps.download-baseline.outputs.baseline_found }}" == "true" ]; then
-            cargo run --example perf_bench -- --output benchmark-results.json --compare
+            cargo bench -p kael --bench framework -- --compare
           else
-            cargo run --example perf_bench -- --output benchmark-results.json
+            cargo bench -p kael --bench framework
           fi
 
       - name: Upload benchmark results
@@ -177,28 +225,20 @@ jobs:
           name: benchmark-results-${{ matrix.os }}
           path: benchmark-results.json
 
-      - name: Check regressions
-        if: steps.download-baseline.outputs.baseline_found == 'true'
-        shell: bash
-        run: |
-          echo "Checking for regressions..."
-          cargo run --example perf_bench -- --output benchmark-results.json --compare || {
-            echo "::error::Benchmark regression detected"
-            exit 1
-          }
-
   template-check:
     name: Template Compile Check
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         run: bash scripts/ci/install-linux-deps.sh
 
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
 
       - uses: Swatinem/rust-cache@v2
 
@@ -210,13 +250,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Linux dependencies
         run: bash scripts/ci/install-linux-deps.sh
 
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
 
       - uses: Swatinem/rust-cache@v2
 
@@ -225,3 +267,6 @@ jobs:
 
       - name: Dry-run release pipeline
         run: cargo run -p xtask -- dry-run kael.dist.toml
+
+      - name: Audit publishable crate contents
+        run: bash scripts/publish-all.sh --preflight

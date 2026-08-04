@@ -483,28 +483,27 @@ impl TypeaheadRuntime {
                     return;
                 };
 
-                if open_changed {
-                    if let (Some(callback), Some(window_handle)) =
+                if open_changed
+                    && let (Some(callback), Some(window_handle)) =
                         (props.on_open_change.clone(), this.window_handle)
-                    {
-                        cx.defer(move |cx| {
-                            let _ = cx.update_window(window_handle, move |_, window, cx| {
-                                callback(should_open, window, cx);
-                            });
+                {
+                    cx.defer(move |cx| {
+                        let _ = cx.update_window(window_handle, move |_, window, cx| {
+                            callback(should_open, window, cx);
                         });
-                    }
+                    });
                 }
 
-                if query.is_empty() && !previous_query.is_empty() {
-                    if let (Some(callback), Some(window_handle)) =
+                if query.is_empty()
+                    && !previous_query.is_empty()
+                    && let (Some(callback), Some(window_handle)) =
                         (props.on_clear.clone(), this.window_handle)
-                    {
-                        cx.defer(move |cx| {
-                            let _ = cx.update_window(window_handle, move |_, window, cx| {
-                                callback(window, cx);
-                            });
+                {
+                    cx.defer(move |cx| {
+                        let _ = cx.update_window(window_handle, move |_, window, cx| {
+                            callback(window, cx);
                         });
-                    }
+                    });
                 }
 
                 if let (Some(callback), Some(window_handle)) =
@@ -1024,7 +1023,7 @@ impl RenderOnce for Typeahead {
 
 #[cfg(test)]
 mod tests {
-    use super::{next_typeahead_index, SearchSource, SearchableItem, Typeahead, TypeaheadItem};
+    use super::{SearchSource, SearchableItem, Typeahead, TypeaheadItem, next_typeahead_index};
     use kael::{Context, IntoElement, Render, TestAppContext, Window};
     use std::{cell::RefCell, rc::Rc};
 
@@ -1103,11 +1102,13 @@ mod tests {
 
         window.update(|window, cx| {
             window.draw(cx).clear();
-            assert!(!window
-                .accessibility_tree()
-                .nodes
-                .values()
-                .any(|node| node.role == kael::AccessibilityRole::List));
+            assert!(
+                !window
+                    .accessibility_tree()
+                    .nodes
+                    .values()
+                    .any(|node| node.role == kael::AccessibilityRole::List)
+            );
         });
     }
 

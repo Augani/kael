@@ -427,8 +427,8 @@ fn calculate_click_value(
 
 #[cfg(test)]
 mod tests {
-    use super::{calculate_click_value, RatingState};
-    use kael::{point, px, size, AppContext, Bounds, TestAppContext};
+    use super::{RatingState, calculate_click_value};
+    use kael::{AppContext, Bounds, TestAppContext, point, px, size};
 
     #[test]
     fn half_ratings_use_the_clicked_side_of_each_star() {

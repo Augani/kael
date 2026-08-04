@@ -313,10 +313,10 @@ pub fn frame_graph_ops(
 
 fn source_op(image: Option<Image>) -> PassOp<'static> {
     Box::new(move |_inputs, output| {
-        if let Some(image) = &image {
-            if image.pixels.len() == output.pixels.len() {
-                output.pixels.copy_from_slice(&image.pixels);
-            }
+        if let Some(image) = &image
+            && image.pixels.len() == output.pixels.len()
+        {
+            output.pixels.copy_from_slice(&image.pixels);
         }
     })
 }

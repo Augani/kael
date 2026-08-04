@@ -262,6 +262,7 @@ impl RenderOnce for Dropdown {
         let entity_id = state.entity_id().as_u64();
         let focus_handle = state.read(cx).focus_handle.clone();
         let is_focused = focus_handle.is_focused(window);
+        let tracked_focus_handle = focus_handle.clone().tab_index(0).tab_stop(true);
         let dark = theme.tokens.background.l < 0.5;
         let overlay_hover = crate::astryx::overlay_hover(dark);
         let align = self.align;
@@ -366,12 +367,11 @@ impl RenderOnce for Dropdown {
                         }
                     }
                     "space" | "enter" => {
-                        if let Some(index) = state.read(cx).highlighted_index {
-                            if let Some(item) = keyboard_items.get(index) {
-                                if let Some(handler) = item.on_click.as_ref() {
-                                    handler(window, cx);
-                                }
-                            }
+                        if let Some(index) = state.read(cx).highlighted_index
+                            && let Some(item) = keyboard_items.get(index)
+                            && let Some(handler) = item.on_click.as_ref()
+                        {
+                            handler(window, cx);
                         }
                         state.update(cx, |s, cx| s.close(cx));
                         true
@@ -402,7 +402,7 @@ impl RenderOnce for Dropdown {
                     .id(("dropdown-trigger", entity_id))
                     .relative()
                     .key_context("Dropdown")
-                    .track_focus(&focus_handle.clone().tab_index(0).tab_stop(true))
+                    .track_focus(&tracked_focus_handle)
                     .on_key_down(key_handler)
                     .accessibility(trigger_accessibility)
                     .cursor_pointer()

@@ -10,13 +10,13 @@ pub struct BladeContext {
 
 impl BladeContext {
     pub fn new() -> anyhow::Result<Self> {
-        let device_id_forced = match std::env::var("ZED_DEVICE_ID") {
+        let device_id_forced = match std::env::var("KAEL_DEVICE_ID") {
             Ok(val) => parse_pci_id(&val)
-                .context("Failed to parse device ID from `ZED_DEVICE_ID` environment variable")
+                .context("Failed to parse device ID from `KAEL_DEVICE_ID` environment variable")
                 .log_err(),
             Err(std::env::VarError::NotPresent) => None,
             err => {
-                err.context("Failed to read value of `ZED_DEVICE_ID` environment variable")
+                err.context("Failed to read value of `KAEL_DEVICE_ID` environment variable")
                     .log_err();
                 None
             }

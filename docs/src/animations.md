@@ -28,11 +28,17 @@ Animated properties: background (including gradients with matching stop counts),
 div().id(item.id).animate_layout(Duration::from_millis(350))
 ```
 
-Avoid it on children of containers that scroll mid-animation; scrolling moves the element and restarts the glide. See `examples/soft_ui.rs`.
+Avoid it on children of containers that scroll mid-animation; scrolling moves
+the element and restarts the glide. The Astryx showcase's layout and motion
+sections demonstrate this API in a complete application.
 
 ## Springs and gestures
 
-For physics-driven motion, `kael_ui` provides `SpringValue`/`SpringPoint` (real spring integration with velocity, presets from `SpringPreset`) and `DraggableSpring`, a container you can drag and throw: on release, the pan gesture's velocity hands off to the spring, which settles to the nearest snap point. See `crates/kael_ui/examples/drag_spring.rs`.
+For physics-driven motion, `kael_ui` provides `SpringValue`/`SpringPoint` (real
+spring integration with velocity, presets from `SpringPreset`) and
+`DraggableSpring`, a container you can drag and throw: on release, the pan
+gesture's velocity hands off to the spring, which settles to the nearest snap
+point. The Astryx showcase includes the production-facing motion examples.
 
 ## Animating an element
 
@@ -169,4 +175,4 @@ let current = scroll.offset();        // Point<Pixels>
 let max = scroll.max_offset();        // Size<Pixels>
 ```
 
-See `examples/animation.rs` and `examples/elastic_scrolling.rs` for runnable demos.
+See the Astryx showcase for runnable motion and scrolling compositions.

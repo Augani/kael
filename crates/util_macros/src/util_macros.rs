@@ -262,7 +262,10 @@ pub fn perf(our_attr: TokenStream, input: TokenStream) -> TokenStream {
 
         let block_main = {
             parse_quote!({
-                let iter_count = std::env::var(#ITER_ENV_VAR).unwrap().parse::<usize>().unwrap();
+                let iter_count = std::env::var(#ITER_ENV_VAR)
+                    .ok()
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(1);
                 for _ in 0..iter_count {
                     #block
                 }

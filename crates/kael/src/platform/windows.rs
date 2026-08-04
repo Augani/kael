@@ -31,6 +31,7 @@ mod system_settings;
 mod tray;
 mod util;
 mod vsync;
+#[cfg(feature = "webview")]
 mod webview;
 mod window;
 mod wrapper;
