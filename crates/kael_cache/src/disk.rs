@@ -25,6 +25,7 @@ pub struct DiskCache {
 struct DiskEntry {
     size: u64,
     modified: SystemTime,
+    insertion_order: u128,
 }
 
 #[derive(Debug, Default)]
@@ -32,6 +33,7 @@ struct DiskIndex {
     total_bytes: u64,
     entries: HashMap<PathBuf, DiskEntry>,
     max_entries_per_namespace: Option<usize>,
+    next_insertion_order: u128,
 }
 
 impl DiskCache {
@@ -247,7 +249,16 @@ impl DiskCache {
 
     fn record_index_entry(&self, path: PathBuf, size: u64, modified: SystemTime) {
         let mut index = self.lock_index();
-        if let Some(previous) = index.entries.insert(path, DiskEntry { size, modified }) {
+        let insertion_order = index.next_insertion_order;
+        index.next_insertion_order = index.next_insertion_order.saturating_add(1);
+        if let Some(previous) = index.entries.insert(
+            path,
+            DiskEntry {
+                size,
+                modified,
+                insertion_order,
+            },
+        ) {
             index.total_bytes = index.total_bytes.saturating_sub(previous.size);
         }
         index.total_bytes = index.total_bytes.saturating_add(size);
@@ -356,13 +367,35 @@ fn validate_namespace(namespace: &str) -> Result<()> {
 
 fn build_index(root: &Path) -> Result<DiskIndex> {
     let mut index = DiskIndex::default();
+    let mut files = Vec::new();
 
     for entry in walk_files(root)? {
         let metadata = fs::metadata(&entry)?;
         let size = metadata.len();
         let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        files.push((entry, size, modified));
+    }
+
+    files.sort_by(
+        |(left_path, _, left_modified), (right_path, _, right_modified)| {
+            left_modified
+                .cmp(right_modified)
+                .then_with(|| left_path.cmp(right_path))
+        },
+    );
+
+    for (entry, size, modified) in files {
+        let insertion_order = index.next_insertion_order;
+        index.next_insertion_order = index.next_insertion_order.saturating_add(1);
         index.total_bytes = index.total_bytes.saturating_add(size);
-        index.entries.insert(entry, DiskEntry { size, modified });
+        index.entries.insert(
+            entry,
+            DiskEntry {
+                size,
+                modified,
+                insertion_order,
+            },
+        );
     }
 
     Ok(index)
@@ -402,13 +435,28 @@ fn eviction_candidates(index: &DiskIndex, target_bytes: u64) -> Vec<PathBuf> {
     let mut entries = index
         .entries
         .iter()
-        .map(|(path, entry)| (path.clone(), entry.modified, entry.size))
+        .map(|(path, entry)| {
+            (
+                path.clone(),
+                entry.modified,
+                entry.insertion_order,
+                entry.size,
+            )
+        })
         .collect::<Vec<_>>();
-    entries.sort_by_key(|(_, modified, _)| *modified);
+    entries.sort_by(
+        |(left_path, left_modified, left_order, _),
+         (right_path, right_modified, right_order, _)| {
+            left_modified
+                .cmp(right_modified)
+                .then_with(|| left_order.cmp(right_order))
+                .then_with(|| left_path.cmp(right_path))
+        },
+    );
 
     let mut current_size = index.total_bytes;
     let mut candidates = Vec::new();
-    for (path, _, size) in entries {
+    for (path, _, _, size) in entries {
         if current_size <= target_bytes {
             break;
         }
@@ -420,23 +468,30 @@ fn eviction_candidates(index: &DiskIndex, target_bytes: u64) -> Vec<PathBuf> {
 }
 
 fn namespace_eviction_candidates(index: &DiskIndex, ns_path: &Path, limit: usize) -> Vec<PathBuf> {
-    let mut ns_entries: Vec<(PathBuf, SystemTime)> = index
+    let mut ns_entries: Vec<(PathBuf, SystemTime, u128)> = index
         .entries
         .iter()
         .filter(|(path, _)| path.starts_with(ns_path))
-        .map(|(path, entry)| (path.clone(), entry.modified))
+        .map(|(path, entry)| (path.clone(), entry.modified, entry.insertion_order))
         .collect();
 
     if ns_entries.len() <= limit {
         return vec![];
     }
 
-    ns_entries.sort_by_key(|(_, modified)| *modified);
+    ns_entries.sort_by(
+        |(left_path, left_modified, left_order), (right_path, right_modified, right_order)| {
+            left_modified
+                .cmp(right_modified)
+                .then_with(|| left_order.cmp(right_order))
+                .then_with(|| left_path.cmp(right_path))
+        },
+    );
     let excess = ns_entries.len() - limit;
     ns_entries
         .into_iter()
         .take(excess)
-        .map(|(path, _)| path)
+        .map(|(path, _, _)| path)
         .collect()
 }
 
@@ -583,6 +638,35 @@ mod tests {
         cache.put("ns", "key4", b"data4").unwrap();
         assert!(cache.get("ns", "key1").unwrap().is_none());
         assert!(cache.get("ns", "key4").unwrap().is_some());
+    }
+
+    #[test]
+    fn namespace_capacity_breaks_timestamp_ties_by_insertion_order() {
+        let namespace = PathBuf::from("cache/ns");
+        let first = namespace.join("first");
+        let second = namespace.join("second");
+        let mut index = DiskIndex::default();
+        index.entries.insert(
+            first.clone(),
+            DiskEntry {
+                size: 1,
+                modified: SystemTime::UNIX_EPOCH,
+                insertion_order: 0,
+            },
+        );
+        index.entries.insert(
+            second,
+            DiskEntry {
+                size: 1,
+                modified: SystemTime::UNIX_EPOCH,
+                insertion_order: 1,
+            },
+        );
+
+        assert_eq!(
+            namespace_eviction_candidates(&index, &namespace, 1),
+            vec![first]
+        );
     }
 
     #[test]
