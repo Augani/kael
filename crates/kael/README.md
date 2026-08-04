@@ -1,107 +1,62 @@
-# Kael
+# kael
 
-A GPU-accelerated desktop UI framework for building native applications in Rust.
+The native, GPU-accelerated application framework at the center of
+[Kael](https://github.com/Augani/kael).
 
-Renders via Metal (macOS), DirectX 11 (Windows), and Vulkan (Linux). Apps are pure Rust with
-native performance and 120fps rendering through dirty tracking and render-on-demand.
-
-> **Kael is a fork of [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui)**, the UI
-> framework [Zed Industries](https://zed.dev) built for the Zed editor. It was previously distributed
-> as the *adabraka GPUI fork* and renamed to Kael. It is an independent project — not affiliated with,
-> maintained by, or endorsed by Zed Industries.
-
-## Quick Start
+`kael` provides the application runtime and low-level UI primitives: retained
+rendering, layout, text, elements, state, windows, input, accessibility,
+animation, async work, and native platform services. It does not depend on the
+optional `kael_ui` component library, so applications can build and brand their
+own component system directly on these primitives.
 
 ```toml
 [dependencies]
-kael = "0.2"
+kael = "0.3"
+```
+
+WebView support is opt-in, so ordinary native applications do not pull Wry,
+GTK, or WebKit. Enable it only when the application embeds web content:
+
+```toml
+[dependencies]
+kael = { version = "0.3", features = ["webview"] }
 ```
 
 ```rust,no_run
 use kael::prelude::*;
-use kael::{button, div, Application, Window, WindowOptionsBuilder};
+use kael::{Application, Window, WindowOptions, div};
 
-struct Counter {
-    count: i32,
-}
+struct Hello;
 
-impl Render for Counter {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let entity = cx.entity().clone();
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(format!("Count: {}", self.count))
-            .child(button("inc").label("Increment").on_click(
-                move |_, _window, cx| {
-                    entity.update(cx, |this, cx| {
-                        this.count += 1;
-                        cx.notify();
-                    });
-                },
-            ))
+impl Render for Hello {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().flex().items_center().justify_center().child("Hello, Kael!")
     }
 }
 
-fn main() {
-    Application::new().run(|cx| {
-        cx.open_window(WindowOptionsBuilder::new().title("Counter"), |_, cx| {
-            cx.new(|_| Counter { count: 0 })
-        })
-            .unwrap();
-    });
-}
-```
-
-For applications that need to present startup failures instead of terminating, use the fallible
-constructor:
-
-```rust,no_run
-use kael::Application;
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    Application::try_new()?.run(|_cx| {
-        // Initialize application state and windows.
+    Application::try_new()?.run(|cx| {
+        if let Err(error) = cx.open_window(WindowOptions::default(), |_, cx| {
+            cx.new(|_| Hello)
+        }) {
+            eprintln!("failed to open the application window: {error}");
+            cx.quit();
+        }
     });
     Ok(())
 }
 ```
 
-`Application::try_headless()` and `try_background_executor()` provide the same error-reporting
-behavior for services, tests, and command-line processes.
+Kael targets macOS (Metal), Windows (DirectX 11), and Linux X11/Wayland
+(Vulkan through Blade). OS integrations differ by host; use
+`CapabilityReport::current()` when a product requires a specific service.
 
-## What's Included
+The minimum supported Rust version is 1.97. The crate uses Rust 2024.
 
-- **42+ UI primitives**: Button, TextInput, Checkbox, Toggle, Slider, Select, DatePicker, Modal, Popover, Tabs, Disclosure, lists, and more
-- **Flexbox layout** via Taffy with responsive styling
-- **Entity-based reactive state**: `Entity<T>`, `cx.new()`, `cx.notify()`, `cx.observe()`, `cx.subscribe()`
-- **Platform APIs**: file dialogs, system tray, notifications, global hotkeys, printing, clipboard, auto-updates, WebViews
-- **Theming**: JSON/TOML themes with hot-reload
-- **Accessibility**: screen reader roles, keyboard navigation, focus management
-- **Animation**: keyframe and spring animations, Lottie playback
-- **Canvas**: stroked/filled paths, shapes, transforms
-- **Plugin system**: WASM-sandboxed extensions
+The optional `agent-tools` feature exposes structured capability-planning
+metadata. It is disabled by default and is not required to build applications.
 
-## Platform Support
+Kael began as a fork of GPUI, created by Zed Industries. It is an independent
+project and is not affiliated with or endorsed by Zed Industries.
 
-| Platform | Renderer | Status |
-|----------|----------|--------|
-| macOS | Metal | Full support |
-| Linux (X11) | Vulkan | Full support |
-| Linux (Wayland) | Vulkan | Full support |
-| Windows | DirectX 11 | Full support |
-
-## Documentation
-
-- [Guide & API Reference](https://augani.github.io/kael/)
-- [Examples](https://augani.github.io/kael/examples.html)
-- [LLM-friendly reference](https://augani.github.io/kael/llms.html)
-
-## Acknowledgements
-
-Kael began as a fork of [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), the GPU-accelerated UI framework originally created by [Zed Industries](https://zed.dev) for the Zed code editor — and was previously distributed as the *adabraka GPUI fork*. We are grateful for their foundational work. The original GPUI code is copyright 2022-2025 Zed Industries, Inc. and licensed under Apache-2.0. Kael is an independent project and is not affiliated with or endorsed by Zed Industries.
-
-## License
-
-Apache-2.0 — see [LICENSE](LICENSE-APACHE) for details.
+Licensed under Apache-2.0. See `LICENSE-APACHE` in this package.

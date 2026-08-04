@@ -51,7 +51,7 @@ div()
     .child(div().row_span(1).col_span_full().child("Footer"))
 ```
 
-See `examples/grid_layout.rs` for a full "holy grail" layout.
+See the Astryx showcase's layout section for a complete application shell.
 
 ## Sizing
 

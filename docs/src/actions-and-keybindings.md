@@ -104,4 +104,5 @@ fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
 
 Window focus methods: `window.focus(&handle)`, `window.focus_next()` (Tab), and `window.focus_prev()` (Shift-Tab). Query state with `handle.is_focused(window)` and style focused elements with `.focus(|s| s.border_color(...))`.
 
-See `examples/tab_stop.rs` for a complete focus-navigation demo, and `crates/kael/docs/key_dispatch.md` for the dispatch internals.
+See the Astryx showcase for a complete focus-navigation composition, and
+`crates/kael/docs/key_dispatch.md` for the dispatch internals.

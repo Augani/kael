@@ -233,4 +233,5 @@ lottie("animations/loader.json")
 
 Builders: `.autoplay()`, `.loop_forever()`, `.loop_mode(LoopMode)`, `.ping_pong()`, `.object_fit(ObjectFit)`, `.prefetch_frames(n)`, `.with_loading(|| element)`, `.with_fallback(|| element)`.
 
-See `examples/painting.rs`, `gradient.rs`, `pattern.rs`, `shadow.rs`, `svg/main.rs`, and `gif_viewer.rs`.
+See the Astryx showcase's media and visual-effects sections for complete,
+runnable compositions.
