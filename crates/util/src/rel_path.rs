@@ -339,6 +339,9 @@ impl RelPathBuf {
 
     /// Appends a relative path.
     pub fn push(&mut self, path: &RelPath) {
+        if path.is_empty() {
+            return;
+        }
         if !self.is_empty() {
             self.0.push('/');
         }
@@ -620,6 +623,17 @@ mod tests {
         assert_eq!(path.as_rel_path().as_unix_str(), "");
         path.pop();
         assert_eq!(path.as_rel_path().as_unix_str(), "");
+    }
+
+    #[test]
+    fn pushing_an_empty_path_preserves_normalization() {
+        let mut path = rel_path("a/b").to_rel_path_buf();
+        path.push(RelPath::empty());
+        assert_eq!(path.as_unix_str(), "a/b");
+
+        let mut empty = RelPathBuf::new();
+        empty.push(RelPath::empty());
+        assert!(empty.is_empty());
     }
 
     #[test]
