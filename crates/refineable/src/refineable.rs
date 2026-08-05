@@ -30,6 +30,7 @@ static NEXT_CASCADE_ID: AtomicU64 = AtomicU64::new(1);
 /// The derive macro supports these attributes on the struct:
 /// - `#[refineable(Debug)]`: Implements `Debug` for the refinement type
 /// - `#[refineable(Serialize)]`: Derives `Serialize` which skips serializing `None`
+/// - `#[refineable(Deserialize)]`: Derives `Deserialize` and defaults missing nested refinements
 /// - `#[refineable(OtherTrait)]`: Derives additional traits on the refinement type
 ///
 /// Fields can be marked with:
@@ -48,9 +49,11 @@ pub trait Refineable: Clone {
 
     /// Returns a new instance with the refinement applied, equivalent to cloning `self` and calling
     /// `refine` on it.
+    #[must_use]
     fn refined(self, refinement: Self::Refinement) -> Self;
 
     /// Creates an instance from a cascade by merging all refinements atop the default value.
+    #[must_use]
     fn from_cascade(cascade: &Cascade<Self>) -> Self
     where
         Self: Default + Sized,
@@ -62,6 +65,7 @@ pub trait Refineable: Clone {
     ///
     /// For refineable fields, this recursively checks `is_superset_of`. For other fields, this
     /// checks if the refinement's `Some` values match this instance's values.
+    #[must_use]
     fn is_superset_of(&self, refinement: &Self::Refinement) -> bool;
 
     /// Returns a refinement that represents the difference between this instance and the given
@@ -69,12 +73,14 @@ pub trait Refineable: Clone {
     ///
     /// For refineable fields, this recursively calls `subtract`. For other fields, the field is
     /// `None` if the field's value is equal to the refinement.
+    #[must_use]
     fn subtract(&self, refinement: &Self::Refinement) -> Self::Refinement;
 }
 
 /// Reports whether a refinement contains any effective changes.
 pub trait IsEmpty {
     /// Returns `true` if applying this refinement would have no effect.
+    #[must_use]
     fn is_empty(&self) -> bool;
 }
 
@@ -92,7 +98,7 @@ pub struct Cascade<S: Refineable> {
     refinements: Vec<Option<S::Refinement>>,
 }
 
-impl<S: Refineable + Default> Default for Cascade<S> {
+impl<S: Refineable> Default for Cascade<S> {
     fn default() -> Self {
         Self {
             id: NEXT_CASCADE_ID.fetch_add(1, Ordering::Relaxed),
@@ -123,11 +129,12 @@ impl std::fmt::Display for InvalidCascadeSlot {
 
 impl std::error::Error for InvalidCascadeSlot {}
 
-impl<S: Refineable + Default> Cascade<S> {
+impl<S: Refineable> Cascade<S> {
     /// Reserves a new slot in the cascade and returns a handle to it.
     ///
     /// The new slot is initially empty (`None`) and can be populated later
     /// using `set()`.
+    #[must_use]
     pub fn reserve(&mut self) -> CascadeSlot {
         self.refinements.push(None);
         CascadeSlot {
@@ -169,6 +176,7 @@ impl<S: Refineable + Default> Cascade<S> {
     ///
     /// Refinements are applied in order, with later slots taking precedence.
     /// Empty slots (`None`) are skipped during merging.
+    #[must_use]
     pub fn merged(&self) -> S::Refinement {
         let mut merged = self.refinements[0]
             .clone()
@@ -200,6 +208,48 @@ mod tests {
     struct ParentStyle {
         #[refineable]
         child: theme::Child<u8>,
+    }
+
+    #[derive(Clone, Default, Refineable)]
+    struct QualifiedOptionalStyle {
+        value: std::option::Option<u8>,
+    }
+
+    #[derive(Clone, Default, Refineable)]
+    #[refineable(serde::Deserialize)]
+    struct DeserializeOnlyChild {
+        value: u8,
+    }
+
+    #[derive(Clone, Default, Refineable)]
+    #[refineable(serde::Deserialize)]
+    struct DeserializeOnlyParent {
+        #[refineable]
+        child: DeserializeOnlyChild,
+    }
+
+    mod qualified_derive_without_trait_import {
+        #[derive(Clone, Default, kael_refineable::Refineable)]
+        pub struct Values {
+            pub value: u8,
+        }
+
+        #[derive(Clone, Default, kael_refineable::Refineable)]
+        pub struct Settings {
+            #[refineable]
+            values: Values,
+        }
+
+        pub fn refined_value() -> u8 {
+            let mut settings = Settings::default();
+            kael_refineable::Refineable::refine(
+                &mut settings,
+                &SettingsRefinement {
+                    values: ValuesRefinement { value: Some(7) },
+                },
+            );
+            settings.values.value
+        }
     }
 
     #[derive(Clone, Default, PartialEq, Eq)]
@@ -282,7 +332,7 @@ mod tests {
         assert_eq!(first.merged().value, Some(7));
 
         let mut second = Cascade::<TestStyle>::default();
-        second.reserve();
+        let _second_slot = second.reserve();
         assert!(
             second
                 .set(slot, Some(TestRefinement { value: Some(9) }))
@@ -308,5 +358,32 @@ mod tests {
         let style = ParentStyle::default().refined(refinement);
 
         assert_eq!(style.child.value, 7);
+    }
+
+    #[test]
+    fn qualified_option_fields_keep_optional_refinement_semantics() {
+        let style = QualifiedOptionalStyle::default()
+            .refined(QualifiedOptionalStyleRefinement { value: Some(7) });
+
+        assert_eq!(style.value, Some(7));
+    }
+
+    #[test]
+    fn deserialize_only_nested_refinements_default_missing_fields() {
+        let refinement: DeserializeOnlyParentRefinement = serde_json::from_str("{}").unwrap();
+
+        assert!(refinement.is_empty());
+        assert_eq!(
+            DeserializeOnlyParent::default()
+                .refined(refinement)
+                .child
+                .value,
+            0
+        );
+    }
+
+    #[test]
+    fn qualified_derive_does_not_require_a_trait_import() {
+        assert_eq!(qualified_derive_without_trait_import::refined_value(), 7);
     }
 }

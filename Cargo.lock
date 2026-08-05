@@ -4010,6 +4010,8 @@ name = "kael_refineable"
 version = "0.3.0"
 dependencies = [
  "kael_derive_refineable",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

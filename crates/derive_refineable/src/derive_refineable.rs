@@ -29,6 +29,7 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 
     let mut impl_debug_on_refinement = false;
     let mut derives_serialize = false;
+    let mut derives_deserialize = false;
     let mut refinement_traits_to_derive = vec![];
 
     for refineable_attr in attrs
@@ -36,13 +37,17 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
         .filter(|attr| attr.path().is_ident("refineable"))
     {
         refineable_attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("Debug") {
+            let trait_name = meta.path.segments.last().map(|segment| &segment.ident);
+            if trait_name.is_some_and(|name| name == "Debug") {
                 impl_debug_on_refinement = true;
-            } else if meta.path.is_ident("Clone") {
+            } else if trait_name.is_some_and(|name| name == "Clone") {
                 // Every generated refinement is already Clone.
             } else {
-                if meta.path.is_ident("Serialize") {
+                if trait_name.is_some_and(|name| name == "Serialize") {
                     derives_serialize = true;
+                }
+                if trait_name.is_some_and(|name| name == "Deserialize") {
+                    derives_deserialize = true;
                 }
                 if !refinement_traits_to_derive.contains(&meta.path) {
                     refinement_traits_to_derive.push(meta.path);
@@ -99,12 +104,19 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
     let field_attributes: Vec<TokenStream2> = fields
         .iter()
         .map(|f| {
-            if derives_serialize {
-                if is_refineable_field(f) {
-                    quote! { #[serde(default, skip_serializing_if = #refineable_is_empty_path)] }
-                } else {
-                    quote! { #[serde(skip_serializing_if = "::std::option::Option::is_none")] }
+            if is_refineable_field(f) {
+                match (derives_serialize, derives_deserialize) {
+                    (true, true) => {
+                        quote! { #[serde(default, skip_serializing_if = #refineable_is_empty_path)] }
+                    }
+                    (true, false) => {
+                        quote! { #[serde(skip_serializing_if = #refineable_is_empty_path)] }
+                    }
+                    (false, true) => quote! { #[serde(default)] },
+                    (false, false) => quote! {},
                 }
+            } else if derives_serialize {
+                quote! { #[serde(skip_serializing_if = "::std::option::Option::is_none")] }
             } else {
                 quote! {}
             }
@@ -143,7 +155,10 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 
             if is_refineable {
                 quote! {
-                    self.#name.refine(&refinement.#name);
+                    #refineable_crate::Refineable::refine(
+                        &mut self.#name,
+                        &refinement.#name,
+                    );
                 }
             } else if is_optional {
                 quote! {
@@ -170,7 +185,10 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 
             if is_refineable {
                 quote! {
-                    self.#name = self.#name.refined(refinement.#name);
+                    self.#name = #refineable_crate::Refineable::refined(
+                        self.#name,
+                        refinement.#name,
+                    );
                 }
             } else if is_optional {
                 quote! {
@@ -196,7 +214,10 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 
             if is_refineable {
                 quote! {
-                    self.#name.refine(&refinement.#name);
+                    #refineable_crate::Refineable::refine(
+                        &mut self.#name,
+                        &refinement.#name,
+                    );
                 }
             } else {
                 quote! {
@@ -216,7 +237,10 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 
             if is_refineable {
                 quote! {
-                    self.#name = self.#name.refined(refinement.#name);
+                    self.#name = #refineable_crate::Refineable::refined(
+                        self.#name,
+                        refinement.#name,
+                    );
                 }
             } else {
                 quote! {
@@ -292,7 +316,7 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
             let name = &field.ident;
 
             if is_refineable_field(field) {
-                quote! { self.#name.is_empty() }
+                quote! { #refineable_crate::IsEmpty::is_empty(&self.#name) }
             } else {
                 quote! { self.#name.is_none() }
             }
@@ -308,7 +332,10 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 
             if is_refineable {
                 quote! {
-                    if !self.#name.is_superset_of(&refinement.#name) {
+                    if !#refineable_crate::Refineable::is_superset_of(
+                        &self.#name,
+                        &refinement.#name,
+                    ) {
                         return false;
                     }
                 }
@@ -338,7 +365,10 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 
             if is_refineable {
                 quote! {
-                    if !self.#name.is_superset_of(&refinement.#name) {
+                    if !#refineable_crate::Refineable::is_superset_of(
+                        &self.#name,
+                        &refinement.#name,
+                    ) {
                         return false;
                     }
                 }
@@ -361,7 +391,10 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 
             if is_refineable {
                 quote! {
-                    #name: self.#name.subtract(&refinement.#name),
+                    #name: #refineable_crate::Refineable::subtract(
+                        &self.#name,
+                        &refinement.#name,
+                    ),
                 }
             } else if is_optional {
                 quote! {
@@ -395,7 +428,10 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
 
             if is_refineable {
                 quote! {
-                    #name: self.#name.subtract(&refinement.#name),
+                    #name: #refineable_crate::Refineable::subtract(
+                        &self.#name,
+                        &refinement.#name,
+                    ),
                 }
             } else {
                 quote! {
@@ -428,7 +464,7 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
             ),*
         }
 
-        impl #impl_generics Refineable for #ident #ty_generics
+        impl #impl_generics #refineable_crate::Refineable for #ident #ty_generics
             #where_clause
         {
             type Refinement = #refinement_ident #ty_generics;
@@ -456,7 +492,7 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
             }
         }
 
-        impl #impl_generics Refineable for #refinement_ident #ty_generics
+        impl #impl_generics #refineable_crate::Refineable for #refinement_ident #ty_generics
             #where_clause
         {
             type Refinement = #refinement_ident #ty_generics;
@@ -542,21 +578,35 @@ fn is_optional_field(f: &Field) -> bool {
         && typepath.qself.is_none()
     {
         let segments = &typepath.path.segments;
-        if segments.len() == 1 && segments.iter().any(|s| s.ident == "Option") {
-            return true;
-        }
+        return (segments.len() == 1 && segments[0].ident == "Option")
+            || (segments.len() == 3
+                && (segments[0].ident == "std" || segments[0].ident == "core")
+                && segments[1].ident == "option"
+                && segments[2].ident == "Option");
     }
     false
 }
 
 fn get_wrapper_type(field: &Field, ty: &Type) -> syn::Result<syn::Type> {
     if is_refineable_field(field) {
+        if is_optional_field(field) {
+            return Err(syn::Error::new_spanned(
+                ty,
+                "an optional field cannot use `#[refineable]`; refine the inner value separately",
+            ));
+        }
         let Type::Path(mut type_path) = ty.clone() else {
             return Err(syn::Error::new_spanned(
                 ty,
                 "a refineable field must use a named struct type",
             ));
         };
+        if type_path.qself.is_some() {
+            return Err(syn::Error::new_spanned(
+                ty,
+                "a refineable field cannot use a qualified associated type",
+            ));
+        }
         let Some(segment) = type_path.path.segments.last_mut() else {
             return Err(syn::Error::new_spanned(
                 ty,
@@ -646,5 +696,31 @@ mod tests {
         let error = derive_refineable_impl(input).unwrap_err();
 
         assert!(error.to_string().contains("structs with named fields"));
+    }
+
+    #[test]
+    fn qualified_standard_option_paths_are_recognized() {
+        for field in [
+            parse_quote!(value: Option<u8>),
+            parse_quote!(value: std::option::Option<u8>),
+            parse_quote!(value: ::core::option::Option<u8>),
+        ] {
+            assert!(is_optional_field(&field));
+        }
+
+        let custom: Field = parse_quote!(value: crate::option::Option<u8>);
+        assert!(!is_optional_field(&custom));
+    }
+
+    #[test]
+    fn optional_nested_refinements_receive_a_clear_diagnostic() {
+        let field: Field = parse_quote! {
+            #[refineable]
+            child: Option<Child>
+        };
+
+        let error = get_wrapper_type(&field, &field.ty).unwrap_err();
+
+        assert!(error.to_string().contains("optional field"));
     }
 }
