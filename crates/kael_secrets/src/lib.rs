@@ -2,13 +2,24 @@
 //!
 //! Replaces ad-hoc in-memory/plaintext token storage with the platform secret
 //! store: the macOS Keychain, the Windows Credential Manager, and the Linux
-//! freedesktop Secret Service, with an in-process [`MemorySecretStore`] fallback
-//! elsewhere. Use [`default_store`] to obtain the best available store for the
-//! current platform.
+//! freedesktop Secret Service. Use [`default_store`] to obtain the native store
+//! or an explicit unsupported-platform error.
+//!
+//! ```no_run
+//! use kael_secrets::SecretStore as _;
+//!
+//! let store = kael_secrets::default_store()?;
+//! store.set_string("com.example.app", "account", "token")?;
+//! if let Some(token) = store.get_string("com.example.app", "account")? {
+//!     send_authorization(token.expose_secret());
+//! }
+//! # fn send_authorization(_token: &str) {}
+//! # Ok::<(), anyhow::Error>(())
+//! ```
 
 #![deny(missing_docs)]
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt};
 
 use anyhow::Result;
 use parking_lot::Mutex;
@@ -29,10 +40,88 @@ fn validate_identifier(label: &str, value: &str) -> Result<()> {
         "secret {label} must not contain a NUL character"
     );
     anyhow::ensure!(
+        !value.chars().any(char::is_control),
+        "secret {label} must not contain control characters"
+    );
+    anyhow::ensure!(
         value.len() <= MAX_IDENTIFIER_BYTES,
         "secret {label} exceeds the {MAX_IDENTIFIER_BYTES} byte limit"
     );
     Ok(())
+}
+
+/// Secret bytes that are zeroized when dropped and redacted when formatted.
+pub struct SecretBytes(Zeroizing<Vec<u8>>);
+
+impl SecretBytes {
+    /// Wraps secret bytes in zeroizing storage.
+    pub fn new(bytes: impl Into<Vec<u8>>) -> Self {
+        Self(Zeroizing::new(bytes.into()))
+    }
+
+    /// Exposes the secret bytes to code that needs to consume them.
+    pub fn expose_secret(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+
+    /// Returns the secret length without exposing its contents.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns whether the secret is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl AsRef<[u8]> for SecretBytes {
+    fn as_ref(&self) -> &[u8] {
+        self.expose_secret()
+    }
+}
+
+impl fmt::Debug for SecretBytes {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SecretBytes([REDACTED])")
+    }
+}
+
+/// A UTF-8 secret that is zeroized when dropped and redacted when formatted.
+pub struct SecretString(Zeroizing<String>);
+
+impl SecretString {
+    /// Wraps a UTF-8 secret in zeroizing storage.
+    pub fn new(secret: impl Into<String>) -> Self {
+        Self(Zeroizing::new(secret.into()))
+    }
+
+    /// Exposes the secret text to code that needs to consume it.
+    pub fn expose_secret(&self) -> &str {
+        self.0.as_str()
+    }
+
+    /// Returns the secret byte length without exposing its contents.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns whether the secret is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl AsRef<str> for SecretString {
+    fn as_ref(&self) -> &str {
+        self.expose_secret()
+    }
+}
+
+impl fmt::Debug for SecretString {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SecretString([REDACTED])")
+    }
 }
 
 fn validate_secret(secret: &[u8]) -> Result<()> {
@@ -50,23 +139,31 @@ fn validate_secret_len(secret_len: usize) -> Result<()> {
 /// A keyed secret store. Secrets are addressed by a `(service, account)` pair.
 pub trait SecretStore: Send + Sync {
     /// Store `secret` for `(service, account)`, replacing any existing value.
+    ///
+    /// The caller remains responsible for clearing its input buffer after this
+    /// method returns.
     fn set_secret(&self, service: &str, account: &str, secret: &[u8]) -> Result<()>;
 
-    /// Retrieve the secret for `(service, account)`, or `None` if absent.
-    fn get_secret(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>>;
+    /// Retrieve a zeroizing secret for `(service, account)`, or `None` if absent.
+    fn get_secret(&self, service: &str, account: &str) -> Result<Option<SecretBytes>>;
 
     /// Delete the secret for `(service, account)`. Succeeds even if absent.
     fn delete_secret(&self, service: &str, account: &str) -> Result<()>;
 
     /// Convenience: store a UTF-8 string secret.
+    ///
+    /// The caller remains responsible for clearing its input string.
     fn set_string(&self, service: &str, account: &str, secret: &str) -> Result<()> {
         self.set_secret(service, account, secret.as_bytes())
     }
 
-    /// Convenience: retrieve a secret as a UTF-8 string.
-    fn get_string(&self, service: &str, account: &str) -> Result<Option<String>> {
+    /// Convenience: retrieve a secret as a zeroizing UTF-8 string.
+    fn get_string(&self, service: &str, account: &str) -> Result<Option<SecretString>> {
         match self.get_secret(service, account)? {
-            Some(bytes) => Ok(Some(String::from_utf8(bytes)?)),
+            Some(bytes) => {
+                let text = std::str::from_utf8(bytes.expose_secret())?;
+                Ok(Some(SecretString::new(text)))
+            }
             None => Ok(None),
         }
     }
@@ -99,13 +196,13 @@ impl SecretStore for MemorySecretStore {
         Ok(())
     }
 
-    fn get_secret(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>> {
+    fn get_secret(&self, service: &str, account: &str) -> Result<Option<SecretBytes>> {
         validate_address(service, account)?;
         Ok(self
             .entries
             .lock()
             .get(&(service.to_string(), account.to_string()))
-            .map(|secret| secret.to_vec()))
+            .map(|secret| SecretBytes::new(secret.to_vec())))
     }
 
     fn delete_secret(&self, service: &str, account: &str) -> Result<()> {
@@ -119,7 +216,7 @@ impl SecretStore for MemorySecretStore {
 
 #[cfg(target_os = "macos")]
 mod keychain {
-    use super::{Result, SecretStore, validate_address, validate_secret};
+    use super::{Result, SecretBytes, SecretStore, validate_address, validate_secret};
     use anyhow::anyhow;
 
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
@@ -135,10 +232,10 @@ mod keychain {
                 .map_err(|error| anyhow!("keychain write failed: {error}"))
         }
 
-        fn get_secret(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>> {
+        fn get_secret(&self, service: &str, account: &str) -> Result<Option<SecretBytes>> {
             validate_address(service, account)?;
             match security_framework::passwords::get_generic_password(service, account) {
-                Ok(secret) => Ok(Some(secret)),
+                Ok(secret) => Ok(Some(SecretBytes::new(secret))),
                 Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(None),
                 Err(error) => Err(anyhow!("keychain read failed: {error}")),
             }
@@ -160,7 +257,7 @@ pub use keychain::KeychainSecretStore;
 
 #[cfg(target_os = "windows")]
 mod windows_backend {
-    use super::{Result, SecretStore, validate_address, validate_secret};
+    use super::{Result, SecretBytes, SecretStore, validate_address, validate_secret};
     use anyhow::anyhow;
     use windows::Win32::Foundation::ERROR_NOT_FOUND;
     use windows::Win32::Security::Credentials::{
@@ -168,7 +265,7 @@ mod windows_backend {
         CredReadW, CredWriteW,
     };
     use windows::core::{PCWSTR, PWSTR};
-    use zeroize::Zeroizing;
+    use zeroize::{Zeroize as _, Zeroizing};
 
     /// A [`SecretStore`] backed by the Windows Credential Manager (generic credentials).
     pub struct CredentialStore;
@@ -208,7 +305,7 @@ mod windows_backend {
             }
         }
 
-        fn get_secret(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>> {
+        fn get_secret(&self, service: &str, account: &str) -> Result<Option<SecretBytes>> {
             validate_address(service, account)?;
             let name = target_name(service, account);
             let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
@@ -227,16 +324,20 @@ mod windows_backend {
                             .ok_or_else(|| anyhow!("credential read returned a null pointer"))?;
                         let blob_size = usize::try_from(cred.CredentialBlobSize)
                             .map_err(|_| anyhow!("credential blob length does not fit in usize"))?;
-                        let bytes = if blob_size == 0 {
-                            Vec::new()
+                        let secret = if blob_size == 0 {
+                            SecretBytes::new(Vec::new())
                         } else {
                             anyhow::ensure!(
                                 !cred.CredentialBlob.is_null(),
                                 "credential read returned a null blob"
                             );
-                            std::slice::from_raw_parts(cred.CredentialBlob, blob_size).to_vec()
+                            let blob =
+                                std::slice::from_raw_parts_mut(cred.CredentialBlob, blob_size);
+                            let secret = SecretBytes::new(blob.to_vec());
+                            blob.zeroize();
+                            secret
                         };
-                        Ok(Some(bytes))
+                        Ok(Some(secret))
                     }
                     Err(error) if error.code() == ERROR_NOT_FOUND.to_hresult() => Ok(None),
                     Err(error) => Err(anyhow!("credential read failed: {error}")),
@@ -277,7 +378,7 @@ pub use windows_backend::CredentialStore;
 mod linux_backend {
     use std::collections::HashMap;
 
-    use super::{Result, SecretStore, validate_address, validate_secret};
+    use super::{Result, SecretBytes, SecretStore, validate_address, validate_secret};
     use anyhow::anyhow;
     use secret_service::EncryptionType;
     use secret_service::blocking::SecretService;
@@ -310,7 +411,7 @@ mod linux_backend {
             Ok(())
         }
 
-        fn get_secret(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>> {
+        fn get_secret(&self, service: &str, account: &str) -> Result<Option<SecretBytes>> {
             validate_address(service, account)?;
             let session = SecretService::connect(EncryptionType::Dh)
                 .map_err(|error| anyhow!("secret service connect failed: {error}"))?;
@@ -330,7 +431,7 @@ mod linux_backend {
                 let secret = item
                     .get_secret()
                     .map_err(|error| anyhow!("secret service read failed: {error}"))?;
-                Ok(Some(secret))
+                Ok(Some(SecretBytes::new(secret)))
             }
         }
 
@@ -353,27 +454,27 @@ mod linux_backend {
 #[cfg(target_os = "linux")]
 pub use linux_backend::SecretServiceStore;
 
-/// Return the best available [`SecretStore`] for the current platform.
+/// Return the native [`SecretStore`] for the current platform.
 ///
 /// macOS uses the Keychain, Windows the Credential Manager, and Linux the
-/// freedesktop Secret Service; other platforms fall back to the in-process
-/// [`MemorySecretStore`].
-pub fn default_store() -> Box<dyn SecretStore> {
+/// freedesktop Secret Service. Other platforms return an error so production
+/// applications never silently downgrade to process-local storage.
+pub fn default_store() -> Result<Box<dyn SecretStore>> {
     #[cfg(target_os = "macos")]
     {
-        Box::new(KeychainSecretStore)
+        Ok(Box::new(KeychainSecretStore))
     }
     #[cfg(target_os = "windows")]
     {
-        Box::new(CredentialStore)
+        Ok(Box::new(CredentialStore))
     }
     #[cfg(target_os = "linux")]
     {
-        Box::new(SecretServiceStore)
+        Ok(Box::new(SecretServiceStore))
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
-        Box::new(MemorySecretStore::new())
+        anyhow::bail!("no native secret store is available on this platform")
     }
 }
 
@@ -388,13 +489,21 @@ mod tests {
 
         store.set_secret("svc", "acct", b"token").unwrap();
         assert_eq!(
-            store.get_secret("svc", "acct").unwrap().as_deref(),
+            store
+                .get_secret("svc", "acct")
+                .unwrap()
+                .as_ref()
+                .map(SecretBytes::expose_secret),
             Some(&b"token"[..])
         );
 
         store.set_secret("svc", "acct", b"rotated").unwrap();
         assert_eq!(
-            store.get_secret("svc", "acct").unwrap().as_deref(),
+            store
+                .get_secret("svc", "acct")
+                .unwrap()
+                .as_ref()
+                .map(SecretBytes::expose_secret),
             Some(&b"rotated"[..])
         );
 
@@ -413,7 +522,11 @@ mod tests {
         let store = MemorySecretStore::new();
         store.set_string("svc", "acct", "hello").unwrap();
         assert_eq!(
-            store.get_string("svc", "acct").unwrap().as_deref(),
+            store
+                .get_string("svc", "acct")
+                .unwrap()
+                .as_ref()
+                .map(SecretString::expose_secret),
             Some("hello")
         );
     }
@@ -425,15 +538,27 @@ mod tests {
         store.set_secret("a", "y", b"2").unwrap();
         store.set_secret("b", "x", b"3").unwrap();
         assert_eq!(
-            store.get_secret("a", "x").unwrap().as_deref(),
+            store
+                .get_secret("a", "x")
+                .unwrap()
+                .as_ref()
+                .map(SecretBytes::expose_secret),
             Some(&b"1"[..])
         );
         assert_eq!(
-            store.get_secret("a", "y").unwrap().as_deref(),
+            store
+                .get_secret("a", "y")
+                .unwrap()
+                .as_ref()
+                .map(SecretBytes::expose_secret),
             Some(&b"2"[..])
         );
         assert_eq!(
-            store.get_secret("b", "x").unwrap().as_deref(),
+            store
+                .get_secret("b", "x")
+                .unwrap()
+                .as_ref()
+                .map(SecretBytes::expose_secret),
             Some(&b"3"[..])
         );
     }
@@ -448,13 +573,34 @@ mod tests {
                 .set_secret("service\0alias", "account", b"secret")
                 .is_err()
         );
+        assert!(
+            store
+                .set_secret("service\nlabel", "account", b"secret")
+                .is_err()
+        );
         assert!(validate_secret_len(MAX_SECRET_BYTES + 1).is_err());
     }
 
     #[test]
-    fn default_store_is_usable() {
-        let store = default_store();
-        let _ = store.get_secret("kael-secrets-test", "probe");
+    fn secret_wrappers_redact_debug_output() {
+        let bytes = SecretBytes::new(b"super-secret".to_vec());
+        let text = SecretString::new("super-secret");
+        assert_eq!(bytes.expose_secret(), b"super-secret");
+        assert_eq!(text.expose_secret(), "super-secret");
+        assert_eq!(format!("{bytes:?}"), "SecretBytes([REDACTED])");
+        assert_eq!(format!("{text:?}"), "SecretString([REDACTED])");
+    }
+
+    #[test]
+    fn invalid_utf8_never_escapes_as_an_ordinary_string() {
+        let store = MemorySecretStore::new();
+        store.set_secret("svc", "acct", &[0xff]).unwrap();
+        assert!(store.get_string("svc", "acct").is_err());
+    }
+
+    #[test]
+    fn default_store_resolves_without_accessing_user_credentials() {
+        let _: Box<dyn SecretStore> = default_store().unwrap();
     }
 
     #[cfg(target_os = "macos")]
@@ -468,7 +614,11 @@ mod tests {
 
         store.set_secret(service, account, b"super-secret").unwrap();
         assert_eq!(
-            store.get_secret(service, account).unwrap().as_deref(),
+            store
+                .get_secret(service, account)
+                .unwrap()
+                .as_ref()
+                .map(SecretBytes::expose_secret),
             Some(&b"super-secret"[..])
         );
         store.delete_secret(service, account).unwrap();

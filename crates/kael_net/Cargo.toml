@@ -19,3 +19,4 @@ serde_json.workspace = true
 anyhow.workspace = true
 fastrand = "2"
 kael_secrets = { path = "../kael_secrets", version = "0.3.0" }
+zeroize = { version = "1.8", features = ["derive"] }
