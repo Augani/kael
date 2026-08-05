@@ -98,7 +98,7 @@ fn generate_reflected_trait(trait_item: ItemTrait) -> TokenStream {
         );
         quote! {
             #(#cfg_attrs)*
-            fn #wrapper_name<T: #trait_name + 'static>(value: Box<dyn std::any::Any>) -> Box<dyn std::any::Any> {
+            fn #wrapper_name<T: #trait_name + 'static>(value: Box<dyn ::std::any::Any>) -> Box<dyn ::std::any::Any> {
                 if let Ok(concrete) = value.downcast::<T>() {
                     Box::new(concrete.#method_name())
                 } else {

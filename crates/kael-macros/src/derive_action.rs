@@ -28,6 +28,7 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
     let struct_name = &input.ident;
     let mut name_argument = None;
     let mut deprecated_aliases = Vec::new();
+    let mut deprecated_aliases_set = false;
     let mut no_json = false;
     let mut no_register = false;
     let mut namespace = None;
@@ -50,7 +51,7 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
                     }
                     meta.input.parse::<Token![=]>()?;
                     let lit: LitStr = meta.input.parse()?;
-                    name_argument = Some(lit.value());
+                    name_argument = Some(lit);
                 } else if meta.path.is_ident("namespace") {
                     if namespace.is_some() {
                         return Err(meta.error("'namespace' argument specified multiple times"));
@@ -69,11 +70,12 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
                     }
                     no_register = true;
                 } else if meta.path.is_ident("deprecated_aliases") {
-                    if !deprecated_aliases.is_empty() {
+                    if deprecated_aliases_set {
                         return Err(
                             meta.error("'deprecated_aliases' argument specified multiple times")
                         );
                     }
+                    deprecated_aliases_set = true;
                     meta.input.parse::<Token![=]>()?;
                     // Parse array of string literals
                     let content;
@@ -82,7 +84,7 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
                         |input: ParseStream| input.parse::<LitStr>(),
                         Token![,],
                     )?;
-                    deprecated_aliases.extend(aliases.into_iter().map(|lit| lit.value()));
+                    deprecated_aliases.extend(aliases);
                 } else if meta.path.is_ident("deprecated") {
                     if deprecated.is_some() {
                         return Err(meta.error("'deprecated' argument specified multiple times"));
@@ -93,7 +95,7 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
                 } else {
                     return Err(meta.error(format!(
                         "'{:?}' argument not recognized, expected \
-                        'namespace', 'no_json', 'no_register, 'deprecated_aliases', or 'deprecated'",
+                        'name', 'namespace', 'no_json', 'no_register', 'deprecated_aliases', or 'deprecated'",
                         meta.path
                     )));
                 }
@@ -120,22 +122,15 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
         }
     }
 
-    let name = name_argument.unwrap_or_else(|| struct_name.to_string());
-
-    if name.contains("::") {
-        return syn::Error::new_spanned(
-            struct_name,
-            format!(
-                "in #[action] attribute: `name = \"{name}\"` must not contain `::`; specify `namespace` instead"
-            ),
-        )
-        .into_compile_error()
-        .into();
-    }
-    if name.is_empty() {
-        return syn::Error::new_spanned(struct_name, "action name must not be empty")
-            .into_compile_error()
-            .into();
+    let name = name_argument
+        .as_ref()
+        .map(LitStr::value)
+        .unwrap_or_else(|| struct_name.to_string());
+    if let Err(message) = validate_action_name(&name, false) {
+        let span = name_argument
+            .as_ref()
+            .map_or_else(|| struct_name.span(), LitStr::span);
+        return syn::Error::new(span, message).into_compile_error().into();
     }
 
     let full_name = if let Some(namespace) = namespace {
@@ -143,6 +138,36 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
     } else {
         name
     };
+    if let Err(message) = validate_action_name(&full_name, true) {
+        return syn::Error::new_spanned(struct_name, message)
+            .into_compile_error()
+            .into();
+    }
+
+    for (index, alias) in deprecated_aliases.iter().enumerate() {
+        let value = alias.value();
+        if let Err(message) = validate_action_name(&value, true) {
+            return syn::Error::new_spanned(alias, format!("invalid deprecated alias: {message}"))
+                .into_compile_error()
+                .into();
+        }
+        if value == full_name {
+            return syn::Error::new_spanned(
+                alias,
+                "a deprecated alias must differ from the action's canonical name",
+            )
+            .into_compile_error()
+            .into();
+        }
+        if deprecated_aliases[..index]
+            .iter()
+            .any(|previous| previous.value() == value)
+        {
+            return syn::Error::new_spanned(alias, "deprecated action aliases must be unique")
+                .into_compile_error()
+                .into();
+        }
+    }
 
     let is_unit_struct = matches!(&input.data, Data::Struct(data) if data.fields.is_empty());
 
@@ -236,4 +261,47 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
             }
         }
     })
+}
+
+const MAX_ACTION_NAME_BYTES: usize = 256;
+
+fn validate_action_name(name: &str, allow_namespace: bool) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("action name must not be empty".to_owned());
+    }
+    if name.len() > MAX_ACTION_NAME_BYTES {
+        return Err(format!(
+            "action name must not exceed {MAX_ACTION_NAME_BYTES} bytes"
+        ));
+    }
+    if name.trim() != name {
+        return Err("action name must not have leading or trailing whitespace".to_owned());
+    }
+    if name.chars().any(char::is_control) {
+        return Err("action name must not contain control characters".to_owned());
+    }
+    if !allow_namespace && name.contains("::") {
+        return Err(format!(
+            "in #[action] attribute: `name = \"{name}\"` must not contain `::`; specify `namespace` instead"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_action_name;
+
+    #[test]
+    fn action_names_reject_ambiguous_protocol_values() {
+        for name in ["", " Action", "Action ", "Action\nName", "scope::Action"] {
+            assert!(validate_action_name(name, false).is_err(), "{name:?}");
+        }
+        assert!(validate_action_name(&"a".repeat(257), false).is_err());
+    }
+
+    #[test]
+    fn deprecated_aliases_may_include_namespaces() {
+        assert!(validate_action_name("old_scope::Action", true).is_ok());
+    }
 }

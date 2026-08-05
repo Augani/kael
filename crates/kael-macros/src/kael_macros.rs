@@ -16,7 +16,7 @@ mod derive_inspector_reflection;
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use quote::format_ident;
-use syn::{DeriveInput, Ident, parse_quote};
+use syn::{DeriveInput, Ident, Meta, parse_quote};
 
 /// `Action` derive macro - see the trait documentation for details.
 #[proc_macro_derive(Action, attributes(action))]
@@ -224,25 +224,34 @@ pub(crate) fn get_simple_attribute_field(
     let syn::Data::Struct(data_struct) = &ast.data else {
         return Ok(None);
     };
-    let mut matching = data_struct
-        .fields
-        .iter()
-        .filter(|field| field.attrs.iter().any(|attr| attr.path().is_ident(name)));
-    let Some(field) = matching.next() else {
-        return Ok(None);
-    };
-    if let Some(duplicate) = matching.next() {
-        return Err(syn::Error::new_spanned(
-            duplicate,
-            format!("only one field may be marked #[{name}]"),
-        ));
+    let mut matching_field = None;
+    for field in &data_struct.fields {
+        for attribute in field
+            .attrs
+            .iter()
+            .filter(|attribute| attribute.path().is_ident(name))
+        {
+            if !matches!(&attribute.meta, Meta::Path(_)) {
+                return Err(syn::Error::new_spanned(
+                    attribute,
+                    format!("#[{name}] does not accept arguments"),
+                ));
+            }
+            if matching_field.is_some() {
+                return Err(syn::Error::new_spanned(
+                    attribute,
+                    format!("only one field may be marked #[{name}]"),
+                ));
+            }
+            matching_field = Some(field.ident.clone().ok_or_else(|| {
+                syn::Error::new_spanned(
+                    field,
+                    format!("#[{name}] must be placed on a named struct field"),
+                )
+            })?);
+        }
     }
-    field.ident.clone().map(Some).ok_or_else(|| {
-        syn::Error::new_spanned(
-            field,
-            format!("#[{name}] must be placed on a named struct field"),
-        )
-    })
+    Ok(matching_field)
 }
 
 pub(crate) fn kael_crate_path() -> syn::Result<syn::Path> {
@@ -260,5 +269,35 @@ pub(crate) fn kael_crate_path() -> syn::Result<syn::Path> {
             let ident = format_ident!("{}", name.replace('-', "_"));
             Ok(parse_quote!(::#ident))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::get_simple_attribute_field;
+
+    #[test]
+    fn simple_field_attributes_reject_arguments() {
+        let input = syn::parse_quote! {
+            struct Context<'a> {
+                #[app(unexpected)]
+                app: &'a mut u8,
+            }
+        };
+        let error = get_simple_attribute_field(&input, "app").unwrap_err();
+        assert_eq!(error.to_string(), "#[app] does not accept arguments");
+    }
+
+    #[test]
+    fn simple_field_attributes_reject_duplicates_on_one_field() {
+        let input = syn::parse_quote! {
+            struct Context<'a> {
+                #[app]
+                #[app]
+                app: &'a mut u8,
+            }
+        };
+        let error = get_simple_attribute_field(&input, "app").unwrap_err();
+        assert_eq!(error.to_string(), "only one field may be marked #[app]");
     }
 }

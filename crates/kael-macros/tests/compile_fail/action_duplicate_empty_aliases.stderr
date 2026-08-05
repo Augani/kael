@@ -1,0 +1,5 @@
+error: 'deprecated_aliases' argument specified multiple times
+ --> tests/compile_fail/action_duplicate_empty_aliases.rs:8:5
+  |
+8 |     deprecated_aliases = []
+  |     ^^^^^^^^^^^^^^^^^^

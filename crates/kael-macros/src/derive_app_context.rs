@@ -100,7 +100,7 @@ pub fn derive_app_context(input: TokenStream) -> TokenStream {
                 self.#app_variable.read_window(window, read)
             }
 
-            fn background_spawn<R>(&self, future: impl std::future::Future<Output = R> + Send + 'static) -> #kael::Task<R>
+            fn background_spawn<R>(&self, future: impl ::std::future::Future<Output = R> + Send + 'static) -> #kael::Task<R>
             where
                 R: Send + 'static,
             {

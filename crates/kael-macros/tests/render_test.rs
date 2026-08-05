@@ -19,3 +19,10 @@ fn action_derive_supports_a_renamed_kael_dependency() {
         "RenamedAction"
     );
 }
+
+#[test]
+fn cursor_none_needs_no_placeholder_argument() {
+    use kael_renamed::{Styled as _, div};
+
+    let _ = div().cursor_none();
+}
