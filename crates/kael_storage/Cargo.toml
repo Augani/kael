@@ -5,7 +5,7 @@ rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
 publish = true
-description = "Platform services storage scaffolding for Kael"
+description = "Durable SQLite and JSON storage for native Kael applications"
 keywords = ["storage", "persistence", "sqlite", "database", "kael"]
 categories = ["database-implementations", "caching"]
 authors.workspace = true
@@ -16,7 +16,6 @@ license.workspace = true
 [lib]
 name = "kael_storage"
 path = "src/lib.rs"
-doctest = false
 
 [dependencies.parking_lot]
 version = "0.12.1"
