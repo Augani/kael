@@ -3,7 +3,7 @@
 Strict parsing, ordering, display, and Serde support for stable semantic-version
 core triplets (`major.minor.patch`) used by Kael's platform and updater APIs.
 Pre-release and build metadata are intentionally rejected rather than silently
-discarded.
+discarded. Surrounding whitespace and leading zeroes are rejected as well.
 
 ```rust
 use kael_semantic_version::SemanticVersion;

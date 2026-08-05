@@ -107,7 +107,7 @@ impl FromStr for SemanticVersion {
     type Err = ParseSemanticVersionError;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        let mut components = s.trim().split('.');
+        let mut components = s.split('.');
         let major = parse_component(required_component(components.next(), "major")?, "major")?;
         let minor = parse_component(required_component(components.next(), "minor")?, "minor")?;
         let patch = parse_component(required_component(components.next(), "patch")?, "patch")?;
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn stable_core_version_round_trips() {
-        let version = " 12.34.56 ".parse::<SemanticVersion>().unwrap();
+        let version = "12.34.56".parse::<SemanticVersion>().unwrap();
         assert_eq!(version, SemanticVersion::new(12, 34, 56));
         assert_eq!(version.to_string(), "12.34.56");
     }
@@ -195,6 +195,8 @@ mod tests {
             "01.2.3",
             "1.02.3",
             "1.2.03",
+            " 1.2.3",
+            "1.2.3 ",
             "1.-2.3",
             "1.２.3",
         ] {
