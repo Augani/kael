@@ -1,4 +1,19 @@
-//! Share services for Kael applications.
+//! Validated outbound share services for Kael applications.
+//!
+//! ```
+//! use kael_share::{ShareSheet, ShareType};
+//!
+//! let sheet = ShareSheet::builder()
+//!     .subject("Release notes")
+//!     .text("Kael 0.3 is ready")
+//!     .url("https://example.com/releases/0.3")
+//!     .exclude(ShareType::Social)
+//!     .build_checked()?;
+//!
+//! assert_eq!(sheet.item_count(), 2);
+//! assert!(sheet.excluded().contains(&ShareType::Social));
+//! # Ok::<(), anyhow::Error>(())
+//! ```
 
 #![deny(missing_docs)]
 
@@ -575,6 +590,9 @@ impl ShareSheet {
     }
 
     /// Validate the configured payloads before invoking a platform backend.
+    ///
+    /// Validation bounds item, attachment, text, URL, and image sizes and checks
+    /// that attachments are regular files before any platform handoff.
     pub fn validate(&self) -> Result<()> {
         const MAX_ITEMS: usize = 256;
         const MAX_FILES: usize = 256;
@@ -724,6 +742,8 @@ impl ShareSheetBuilder {
     }
 
     /// Set the subject used by mail-like share targets.
+    ///
+    /// A subject annotates another payload and is not shareable content by itself.
     pub fn subject(mut self, subject: impl Into<String>) -> Self {
         self.pending_subject = Some(subject.into());
         self
