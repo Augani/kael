@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use kael_render_graph::reference::{BlendMode, Image, PassOp, blend, crossfade};
+use kael_render_graph::reference::{BlendMode, ExecutionCache, Image, PassOp, blend, crossfade};
 use kael_render_graph::{PassDesc, PassId, RenderGraph, ResourceDesc, ResourceId};
 
 use crate::media::Timeline;
@@ -356,7 +356,7 @@ pub fn render_frames(
     height: u32,
     provider: &dyn FrameProvider,
 ) -> Vec<Image> {
-    let mut cache = HashMap::new();
+    let mut cache = ExecutionCache::new(256, 256 * 1024 * 1024);
     let mut rendered = Vec::new();
     for frame in frames {
         // The graph path does not yet emit transition passes, so frames with a clip overlap
@@ -667,7 +667,7 @@ mod tests {
         let fg = build_frame_graph(&timeline, 10);
         let compiled = fg.graph.compile().unwrap();
         let ops = frame_graph_ops(&fg, &timeline, 10, 4, 4, &provider);
-        let mut cache = HashMap::new();
+        let mut cache = ExecutionCache::new(16, 1024 * 1024);
         let (images, _) = kael_render_graph::reference::execute_cached(
             &fg.graph,
             &compiled,
@@ -779,7 +779,7 @@ mod tests {
         let fg = build_frame_graph(&timeline, 10);
         let compiled = fg.graph.compile().unwrap();
         let ops = frame_graph_ops(&fg, &timeline, 10, 2, 2, &provider);
-        let mut cache = HashMap::new();
+        let mut cache = ExecutionCache::new(16, 1024 * 1024);
         let (images, _) = kael_render_graph::reference::execute_cached(
             &fg.graph,
             &compiled,

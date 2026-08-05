@@ -27,6 +27,21 @@ pub struct ResourceId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PassId(pub u32);
 
+/// An opaque, deterministic cache key for one compiled pass.
+///
+/// Keys are intended for in-memory reuse between nearby graph evaluations. The
+/// hash format is not a persistence or network protocol and may change between
+/// Kael releases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct CacheKey(u128);
+
+impl CacheKey {
+    /// Return the key as an integer for diagnostics or backend cache adapters.
+    pub const fn as_u128(self) -> u128 {
+        self.0
+    }
+}
+
 /// The kind of a graph resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceKind {
@@ -80,8 +95,13 @@ pub struct PassDesc {
     pub reads: Vec<ResourceId>,
     /// Resources this pass renders to/writes.
     pub writes: Vec<ResourceId>,
-    /// A hash of the pass's parameters (e.g. keyframed effect values). Bump this
-    /// whenever a parameter that affects the output changes.
+    /// A caller-defined hash of everything outside the graph topology that can
+    /// affect this pass's output.
+    ///
+    /// Include the operation identity, every operation parameter, and a content
+    /// generation for imported inputs. Omitting any of these can incorrectly
+    /// reuse a stale output. [`PassDesc::frame_pts`] can represent the common
+    /// case of a time-varying imported frame.
     pub param_hash: u64,
     /// The presentation timestamp of a time-varying input (e.g. a decoded clip
     /// frame), if any. A pass with a `frame_pts` re-evaluates whenever it changes.
@@ -112,7 +132,10 @@ impl PassDesc {
         self
     }
 
-    /// Set the parameter hash for this pass.
+    /// Set the caller-defined output identity hash for this pass.
+    ///
+    /// This must change whenever the operation, one of its parameters, or
+    /// imported content that it reads can change.
     pub fn param_hash(mut self, hash: u64) -> Self {
         self.param_hash = hash;
         self
@@ -173,7 +196,7 @@ pub struct TransientAllocation {
 #[derive(Debug, Clone)]
 pub struct CompiledGraph {
     order: Vec<PassId>,
-    cache_keys: Vec<u64>,
+    cache_keys: Vec<CacheKey>,
     lifetimes: Vec<Option<ResourceLifetime>>,
     transient: Vec<bool>,
     resource_kinds: Vec<ResourceKind>,
@@ -262,7 +285,7 @@ impl RenderGraph {
         let cache_keys = self.compute_cache_keys(&order, &writer);
         let lifetimes = self.compute_lifetimes(&order, resource_count);
 
-        let mut keys_by_pass = vec![0u64; pass_count];
+        let mut keys_by_pass = vec![CacheKey(0); pass_count];
         for (position, &pass_id) in order.iter().enumerate() {
             keys_by_pass[pass_id.0 as usize] = cache_keys[position];
         }
@@ -348,40 +371,40 @@ impl RenderGraph {
         Ok(order)
     }
 
-    fn compute_cache_keys(&self, order: &[PassId], writer: &[Option<PassId>]) -> Vec<u64> {
-        let mut keys_by_pass = vec![0u64; self.passes.len()];
+    fn compute_cache_keys(&self, order: &[PassId], writer: &[Option<PassId>]) -> Vec<CacheKey> {
+        let mut keys_by_pass = vec![CacheKey(0); self.passes.len()];
         let mut keys_in_order = Vec::with_capacity(order.len());
 
         for &pass_id in order {
             let pass = &self.passes[pass_id.0 as usize];
             let mut key = FNV_OFFSET;
-            key = fnv_mix(key, pass_id.0 as u64);
-            key = fnv_mix(key, pass.param_hash);
+            key = fnv_mix(key, u128::from(pass_id.0));
+            key = fnv_mix(key, u128::from(pass.param_hash));
             match pass.frame_pts {
                 Some(pts) => {
                     key = fnv_mix(key, 1);
-                    key = fnv_mix(key, pts as u64);
+                    key = fnv_mix(key, pts as u64 as u128);
                 }
                 None => key = fnv_mix(key, 0),
             }
 
-            key = fnv_mix(key, pass.reads.len() as u64);
+            key = fnv_mix(key, pass.reads.len() as u128);
             for &resource in &pass.reads {
-                key = fnv_mix(key, resource.0 as u64);
+                key = fnv_mix(key, u128::from(resource.0));
                 let desc = &self.resources[resource.0 as usize];
                 key = fnv_mix(key, resource_kind_tag(desc.kind));
-                key = fnv_mix(key, u64::from(desc.imported));
+                key = fnv_mix(key, u128::from(desc.imported));
                 if let Some(producer) = writer[resource.0 as usize] {
-                    key = fnv_mix(key, keys_by_pass[producer.0 as usize]);
+                    key = fnv_mix(key, keys_by_pass[producer.0 as usize].0);
                 }
             }
 
-            key = fnv_mix(key, pass.writes.len() as u64);
+            key = fnv_mix(key, pass.writes.len() as u128);
             for &resource in &pass.writes {
-                key = fnv_mix(key, resource.0 as u64);
+                key = fnv_mix(key, u128::from(resource.0));
                 let desc = &self.resources[resource.0 as usize];
                 key = fnv_mix(key, resource_kind_tag(desc.kind));
-                key = fnv_mix(key, u64::from(desc.imported));
+                key = fnv_mix(key, u128::from(desc.imported));
             }
 
             keys_by_pass[pass_id.0 as usize] = key;
@@ -432,7 +455,7 @@ impl CompiledGraph {
     }
 
     /// The cache key for `pass`, or `None` if the handle is unknown.
-    pub fn cache_key(&self, pass: PassId) -> Option<u64> {
+    pub fn cache_key(&self, pass: PassId) -> Option<CacheKey> {
         self.cache_keys.get(pass.0 as usize).copied()
     }
 
@@ -534,20 +557,20 @@ impl CompiledGraph {
     }
 }
 
-const fn resource_kind_tag(kind: ResourceKind) -> u64 {
+const fn resource_kind_tag(kind: ResourceKind) -> u128 {
     match kind {
         ResourceKind::Texture => 0,
         ResourceKind::Buffer => 1,
     }
 }
 
-const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+const FNV_OFFSET: CacheKey = CacheKey(0x6c62_272e_07bb_0142_62b8_2175_6295_c58d);
+const FNV_PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
 
-fn fnv_mix(mut hash: u64, value: u64) -> u64 {
+fn fnv_mix(mut hash: CacheKey, value: u128) -> CacheKey {
     for byte in value.to_le_bytes() {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
+        hash.0 ^= u128::from(byte);
+        hash.0 = hash.0.wrapping_mul(FNV_PRIME);
     }
     hash
 }
@@ -598,6 +621,28 @@ mod tests {
         let pos = |p: PassId| order.iter().position(|&q| q == p).unwrap();
         assert!(pos(chain.decode) < pos(chain.effect));
         assert!(pos(chain.effect) < pos(chain.present));
+    }
+
+    #[test]
+    fn cache_keys_stay_attached_to_pass_ids_after_reordering() {
+        let mut graph = RenderGraph::new();
+        let intermediate = graph.add_resource(ResourceDesc::transient_texture("intermediate"));
+        let output = graph.add_resource(ResourceDesc::transient_texture("output"));
+        let consumer = graph.add_pass(PassDesc::new("consumer").read(intermediate).write(output));
+        let producer = graph.add_pass(PassDesc::new("producer").write(intermediate).param_hash(7));
+
+        let compiled = graph.compile().unwrap();
+        assert_eq!(compiled.execution_order(), &[producer, consumer]);
+
+        let mut expected_producer_key = FNV_OFFSET;
+        for value in [1, 7, 0, 0, 1, 0, 0, 0] {
+            expected_producer_key = fnv_mix(expected_producer_key, value);
+        }
+        assert_eq!(
+            compiled.cache_key(producer),
+            Some(expected_producer_key),
+            "topological scheduling must not remap the key to the consumer's pass id"
+        );
     }
 
     #[test]
@@ -891,11 +936,12 @@ mod tests {
 /// images, producing the logical result a GPU backend should — a correctness
 /// oracle and the "preview == export" reference (export determinism, V10).
 pub mod reference {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
+    use std::mem;
 
-    use anyhow::{Result, anyhow};
+    use anyhow::{Result, anyhow, bail};
 
-    use super::{CompiledGraph, PassId, RenderGraph, ResourceId};
+    use super::{CacheKey, CompiledGraph, PassId, RenderGraph, ResourceId};
 
     /// A linear, straight-alpha RGBA image.
     #[derive(Debug, Clone, PartialEq)]
@@ -905,11 +951,19 @@ pub mod reference {
         /// Height in pixels.
         pub height: u32,
         /// Row-major `[r, g, b, a]` pixels in linear light.
+        ///
+        /// Keep its length equal to `width * height`. Executors reject invalid
+        /// imported or produced images before they can reach another pass.
         pub pixels: Vec<[f32; 4]>,
     }
 
     impl Image {
         /// A transparent-black image.
+        ///
+        /// # Panics
+        ///
+        /// Panics when the dimensions exceed addressable memory or allocation
+        /// fails. Use [`Image::try_new`] when dimensions are not trusted.
         pub fn new(width: u32, height: u32) -> Self {
             Self::try_new(width, height).expect("image dimensions exceed addressable memory")
         }
@@ -926,6 +980,11 @@ pub mod reference {
         }
 
         /// An image filled with a single color.
+        ///
+        /// # Panics
+        ///
+        /// Panics when the dimensions exceed addressable memory or allocation
+        /// fails. Use [`Image::try_filled`] when dimensions are not trusted.
         pub fn filled(width: u32, height: u32, color: [f32; 4]) -> Self {
             Self::try_filled(width, height, color)
                 .expect("image dimensions exceed addressable memory")
@@ -942,9 +1001,66 @@ pub mod reference {
             })
         }
 
+        /// Build an image from row-major linear, straight-alpha RGBA pixels.
+        pub fn from_pixels(width: u32, height: u32, pixels: Vec<[f32; 4]>) -> Result<Self> {
+            let expected = pixel_count(width, height)?;
+            if pixels.len() != expected {
+                bail!(
+                    "image dimensions {width}x{height} require {expected} pixels, got {}",
+                    pixels.len()
+                );
+            }
+            Ok(Self {
+                width,
+                height,
+                pixels,
+            })
+        }
+
+        /// Width in pixels.
+        pub const fn width(&self) -> u32 {
+            self.width
+        }
+
+        /// Height in pixels.
+        pub const fn height(&self) -> u32 {
+            self.height
+        }
+
+        /// Row-major `[r, g, b, a]` pixels in linear light.
+        pub fn pixels(&self) -> &[[f32; 4]] {
+            &self.pixels
+        }
+
+        /// Row-major `[r, g, b, a]` pixels in linear light.
+        ///
+        /// The slice cannot be resized, so the image's dimensions remain valid.
+        pub fn pixels_mut(&mut self) -> &mut [[f32; 4]] {
+            &mut self.pixels
+        }
+
+        /// Return the pixel at `(x, y)`, or `None` when it is out of bounds.
+        pub fn get_pixel(&self, x: u32, y: u32) -> Option<[f32; 4]> {
+            if x >= self.width || y >= self.height {
+                return None;
+            }
+            self.pixels
+                .get((y as usize) * (self.width as usize) + (x as usize))
+                .copied()
+        }
+
         /// The pixel at `(x, y)`.
+        ///
+        /// # Panics
+        ///
+        /// Panics when `(x, y)` is outside the image.
         pub fn pixel(&self, x: u32, y: u32) -> [f32; 4] {
-            self.pixels[(y * self.width + x) as usize]
+            self.get_pixel(x, y)
+                .expect("pixel coordinates out of bounds")
+        }
+
+        fn byte_len(&self) -> usize {
+            self.pixels.len().saturating_mul(mem::size_of::<[f32; 4]>())
         }
     }
 
@@ -973,6 +1089,101 @@ pub mod reference {
     /// A pass implementation: read `inputs` (in the pass's declared read order)
     /// and write `output`.
     pub type PassOp<'a> = Box<dyn Fn(&[&Image], &mut Image) + 'a>;
+
+    /// A byte- and entry-bounded least-recently-used cache for
+    /// [`execute_cached`].
+    ///
+    /// An entry larger than the configured byte budget is returned to the
+    /// current execution but is not retained.
+    #[derive(Debug)]
+    pub struct ExecutionCache {
+        entries: HashMap<CacheKey, Image>,
+        recency: VecDeque<CacheKey>,
+        max_entries: usize,
+        max_bytes: usize,
+        used_bytes: usize,
+    }
+
+    impl ExecutionCache {
+        /// Create a cache with explicit entry and resident-byte limits.
+        pub fn new(max_entries: usize, max_bytes: usize) -> Self {
+            Self {
+                entries: HashMap::new(),
+                recency: VecDeque::new(),
+                max_entries,
+                max_bytes,
+                used_bytes: 0,
+            }
+        }
+
+        /// Number of retained pass outputs.
+        pub fn len(&self) -> usize {
+            self.entries.len()
+        }
+
+        /// Whether the cache contains no retained outputs.
+        pub fn is_empty(&self) -> bool {
+            self.entries.is_empty()
+        }
+
+        /// Approximate bytes retained by cached pixel buffers.
+        pub const fn used_bytes(&self) -> usize {
+            self.used_bytes
+        }
+
+        /// Remove every retained output.
+        pub fn clear(&mut self) {
+            self.entries.clear();
+            self.recency.clear();
+            self.used_bytes = 0;
+        }
+
+        fn get(&mut self, key: CacheKey, width: u32, height: u32) -> Option<Image> {
+            if self
+                .entries
+                .get(&key)
+                .is_some_and(|image| image.width != width || image.height != height)
+            {
+                if let Some(stale) = self.entries.remove(&key) {
+                    self.used_bytes = self.used_bytes.saturating_sub(stale.byte_len());
+                }
+                self.recency.retain(|candidate| *candidate != key);
+                return None;
+            }
+
+            let image = self.entries.get(&key)?.clone();
+            self.recency.retain(|candidate| *candidate != key);
+            self.recency.push_back(key);
+            Some(image)
+        }
+
+        fn insert(&mut self, key: CacheKey, image: Image) {
+            let image_bytes = image.byte_len();
+            if self.max_entries == 0 || self.max_bytes == 0 || image_bytes > self.max_bytes {
+                return;
+            }
+
+            if let Some(previous) = self.entries.remove(&key) {
+                self.used_bytes = self.used_bytes.saturating_sub(previous.byte_len());
+                self.recency.retain(|candidate| *candidate != key);
+            }
+
+            while self.entries.len() >= self.max_entries
+                || self.used_bytes.saturating_add(image_bytes) > self.max_bytes
+            {
+                let Some(oldest) = self.recency.pop_front() else {
+                    break;
+                };
+                if let Some(evicted) = self.entries.remove(&oldest) {
+                    self.used_bytes = self.used_bytes.saturating_sub(evicted.byte_len());
+                }
+            }
+
+            self.used_bytes = self.used_bytes.saturating_add(image_bytes);
+            self.recency.push_back(key);
+            self.entries.insert(key, image);
+        }
+    }
 
     /// Execute `compiled` over CPU images, returning the image written for each
     /// resource. `imported` supplies externally-owned inputs; `ops` supplies a
@@ -1005,6 +1216,7 @@ pub mod reference {
             if let Some(op) = ops.get(&pass_id) {
                 op(&inputs, &mut output);
             }
+            validate_produced_image(pass.name.as_str(), width, height, &output)?;
 
             for &resource in &pass.writes {
                 images.insert(resource, output.clone());
@@ -1015,14 +1227,15 @@ pub mod reference {
     }
 
     /// Execute `compiled` like [`execute`], but memoize each pass's output by its
-    /// [`CompiledGraph::cache_key`] in `cache` (carried across frames). A pass whose key is
-    /// already cached is reused without running its op; only passes with a new key — the
-    /// dirty subtree — re-execute. Returns the per-resource images and the passes that
-    /// actually ran. This is the CPU reference for V9's dirty-subtree graph caching: a key
-    /// folds in the pass's params, frame PTS, topology, and upstream producers, so a changed
-    /// effect param or frame re-runs only it and its dependents. Time-varying imported
-    /// content must be tagged via the consuming pass's frame PTS / param hash, since the key
-    /// does not hash imported pixels.
+    /// [`CompiledGraph::cache_key`] in the bounded `cache` carried across
+    /// frames. A pass whose key is already cached is reused without running its
+    /// operation; only passes with a new key — the dirty subtree — re-execute.
+    /// Returns the per-resource images and the passes that actually ran.
+    ///
+    /// A key folds in the pass's caller-provided parameter hash, frame PTS,
+    /// topology, and upstream producers. The caller must include operation
+    /// identity and imported-content generations in that hash (or frame PTS),
+    /// because keys do not hash operation code or imported pixels.
     pub fn execute_cached<'ops>(
         graph: &RenderGraph,
         compiled: &CompiledGraph,
@@ -1030,7 +1243,7 @@ pub mod reference {
         height: u32,
         imported: &HashMap<ResourceId, Image>,
         ops: &HashMap<PassId, PassOp<'ops>>,
-        cache: &mut HashMap<u64, Image>,
+        cache: &mut ExecutionCache,
     ) -> Result<(HashMap<ResourceId, Image>, Vec<PassId>)> {
         validate_imported_images(graph, width, height, imported)?;
         let mut images: HashMap<ResourceId, Image> = imported.clone();
@@ -1044,8 +1257,8 @@ pub mod reference {
                 .cache_key(pass_id)
                 .ok_or_else(|| anyhow!("compiled graph has no cache key for {pass_id:?}"))?;
 
-            let output = if let Some(cached) = cache.get(&key) {
-                cached.clone()
+            let output = if let Some(cached) = cache.get(key, width, height) {
+                cached
             } else {
                 let mut inputs = Vec::with_capacity(pass.reads.len());
                 for resource in &pass.reads {
@@ -1059,6 +1272,7 @@ pub mod reference {
                 if let Some(op) = ops.get(&pass_id) {
                     op(&inputs, &mut produced);
                 }
+                validate_produced_image(pass.name.as_str(), width, height, &produced)?;
                 executed.push(pass_id);
                 cache.insert(key, produced.clone());
                 produced
@@ -1070,6 +1284,24 @@ pub mod reference {
         }
 
         Ok((images, executed))
+    }
+
+    fn validate_produced_image(
+        pass_name: &str,
+        width: u32,
+        height: u32,
+        image: &Image,
+    ) -> Result<()> {
+        let expected_pixels = pixel_count(width, height)?;
+        if image.width != width || image.height != height || image.pixels.len() != expected_pixels {
+            bail!(
+                "pass '{pass_name}' produced an invalid {}x{} image with {} pixels; expected {width}x{height} with {expected_pixels} pixels",
+                image.width,
+                image.height,
+                image.pixels.len()
+            );
+        }
+        Ok(())
     }
 
     fn validate_imported_images(
@@ -1117,28 +1349,27 @@ pub mod reference {
         })
     }
 
-    /// A pass op compositing `inputs[0]` (top) over `inputs[1]` (bottom) with
+    /// A two-input pass op compositing the top image over the bottom image with
     /// straight-alpha source-over.
-    pub fn blend_over(inputs: &[&Image], output: &mut Image) {
-        if inputs.len() < 2 {
-            return;
-        }
-        let (top, bottom) = (inputs[0], inputs[1]);
-        for (index, pixel) in output.pixels.iter_mut().enumerate() {
-            let t = top.pixels[index];
-            let b = bottom.pixels[index];
-            let out_a = t[3] + b[3] * (1.0 - t[3]);
-            let mut out = [0.0f32; 4];
-            out[3] = out_a;
-            for channel in 0..3 {
-                out[channel] = if out_a <= f32::EPSILON {
-                    0.0
-                } else {
-                    (t[channel] * t[3] + b[channel] * b[3] * (1.0 - t[3])) / out_a
-                };
+    pub fn blend_over() -> PassOp<'static> {
+        Box::new(|inputs, output| {
+            let (top, bottom) = (inputs[0], inputs[1]);
+            for (index, pixel) in output.pixels.iter_mut().enumerate() {
+                let t = top.pixels[index];
+                let b = bottom.pixels[index];
+                let out_a = t[3] + b[3] * (1.0 - t[3]);
+                let mut out = [0.0f32; 4];
+                out[3] = out_a;
+                for channel in 0..3 {
+                    out[channel] = if out_a <= f32::EPSILON {
+                        0.0
+                    } else {
+                        (t[channel] * t[3] + b[channel] * b[3] * (1.0 - t[3])) / out_a
+                    };
+                }
+                *pixel = out;
             }
-            *pixel = out;
-        }
+        })
     }
 
     /// Separable blend modes for compositing one layer over another, following the
@@ -2771,7 +3002,7 @@ pub mod reference {
             let compiled = graph.compile().unwrap();
             let ops = chain_ops(ids);
             let imported = HashMap::new();
-            let mut cache = HashMap::new();
+            let mut cache = ExecutionCache::new(16, 1024 * 1024);
 
             let (first, ran_first) =
                 execute_cached(&graph, &compiled, 2, 2, &imported, &ops, &mut cache).unwrap();
@@ -2792,7 +3023,7 @@ pub mod reference {
             let compiled_a = graph_a.compile().unwrap();
             let ops_a = chain_ops(ids_a);
             let imported = HashMap::new();
-            let mut cache = HashMap::new();
+            let mut cache = ExecutionCache::new(16, 1024 * 1024);
             execute_cached(&graph_a, &compiled_a, 2, 2, &imported, &ops_a, &mut cache).unwrap();
 
             // Same graph but a changed effect parameter, sharing the cache.
@@ -2823,7 +3054,7 @@ pub mod reference {
             let imported = HashMap::new();
 
             let plain = execute(&graph, &compiled, 2, 2, &imported, &ops).unwrap();
-            let mut cache = HashMap::new();
+            let mut cache = ExecutionCache::new(16, 1024 * 1024);
             let (cached, _) =
                 execute_cached(&graph, &compiled, 2, 2, &imported, &ops, &mut cache).unwrap();
 
@@ -2831,6 +3062,75 @@ pub mod reference {
             for (resource, image) in &plain {
                 assert_eq!(cached[resource].pixels, image.pixels, "{resource:?}");
             }
+        }
+
+        #[test]
+        fn execute_cached_recomputes_at_a_new_resolution() {
+            let (graph, ids, backbuffer) = cache_chain(7);
+            let compiled = graph.compile().unwrap();
+            let ops = chain_ops(ids);
+            let imported = HashMap::new();
+            let mut cache = ExecutionCache::new(16, 1024 * 1024);
+
+            execute_cached(&graph, &compiled, 2, 2, &imported, &ops, &mut cache).unwrap();
+            let (images, ran) =
+                execute_cached(&graph, &compiled, 3, 3, &imported, &ops, &mut cache).unwrap();
+
+            assert_eq!(ran.len(), 3);
+            assert_eq!(
+                (images[&backbuffer].width, images[&backbuffer].height),
+                (3, 3)
+            );
+            assert_eq!(images[&backbuffer].pixels.len(), 9);
+        }
+
+        #[test]
+        fn execution_cache_evicts_by_recency_and_size() {
+            let mut cache = ExecutionCache::new(2, 128);
+            cache.insert(crate::CacheKey(1), Image::new(2, 2));
+            cache.insert(crate::CacheKey(2), Image::new(2, 2));
+            assert!(cache.get(crate::CacheKey(1), 2, 2).is_some());
+
+            cache.insert(crate::CacheKey(3), Image::new(2, 2));
+            assert!(cache.get(crate::CacheKey(2), 2, 2).is_none());
+            assert_eq!(cache.len(), 2);
+            assert_eq!(cache.used_bytes(), 128);
+
+            cache.insert(crate::CacheKey(4), Image::new(3, 3));
+            assert_eq!(cache.len(), 2, "an oversized entry is not retained");
+
+            cache.clear();
+            assert!(cache.is_empty());
+            assert_eq!(cache.used_bytes(), 0);
+        }
+
+        #[test]
+        fn executor_rejects_malformed_pass_output() {
+            let mut graph = RenderGraph::new();
+            let out = graph.add_resource(ResourceDesc::transient_texture("out"));
+            let pass = graph.add_pass(PassDesc::new("malformed").write(out));
+            let compiled = graph.compile().unwrap();
+            let mut ops: HashMap<PassId, PassOp<'static>> = HashMap::new();
+            ops.insert(
+                pass,
+                Box::new(|_inputs, output| {
+                    output.pixels.pop();
+                }),
+            );
+
+            let error = execute(&graph, &compiled, 2, 2, &HashMap::new(), &ops)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("malformed"));
+            assert!(error.contains("expected 2x2 with 4 pixels"));
+        }
+
+        #[test]
+        fn image_construction_and_checked_access_validate_shape() {
+            assert!(Image::from_pixels(2, 2, vec![[0.0; 4]; 3]).is_err());
+            let image = Image::from_pixels(2, 1, vec![[0.1; 4], [0.2; 4]]).unwrap();
+            assert_eq!(image.get_pixel(1, 0), Some([0.2; 4]));
+            assert_eq!(image.get_pixel(2, 0), None);
         }
 
         #[test]
@@ -2849,7 +3149,7 @@ pub mod reference {
 
             let mut ops: HashMap<PassId, PassOp<'static>> = HashMap::new();
             ops.insert(paint, fill([1.0, 0.0, 0.0, 0.5]));
-            ops.insert(comp, Box::new(blend_over));
+            ops.insert(comp, blend_over());
 
             let result = execute(&graph, &compiled, 2, 2, &imported, &ops).unwrap();
             let pixel = result[&out].pixel(1, 1);
