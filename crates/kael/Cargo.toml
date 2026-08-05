@@ -29,7 +29,15 @@ exclude = [
 ]
 
 [package.metadata.docs.rs]
-features = ["agent-tools", "auto-update", "icons", "lottie", "runtime_shaders"]
+features = [
+    "agent-tools",
+    "auto-update",
+    "image-avif",
+    "image-exr",
+    "icons",
+    "lottie",
+    "runtime_shaders",
+]
 default-target = "x86_64-unknown-linux-gnu"
 targets = []
 rustdoc-args = ["--cfg", "docsrs"]
@@ -69,6 +77,8 @@ audio = ["dep:kael_audio"]
 pdf = ["dep:kael_pdf"]
 notifications-full = ["dep:kael_notifications"]
 share = ["dep:kael_share"]
+image-avif = ["image/avif-native"]
+image-exr = ["image/exr"]
 platform-foundation = [
     "storage",
     "icons",
@@ -293,6 +303,22 @@ version = "0.3.0"
 
 [dependencies.image]
 version = "0.25.1"
+default-features = false
+features = [
+    "bmp",
+    "dds",
+    "ff",
+    "gif",
+    "hdr",
+    "ico",
+    "jpeg",
+    "png",
+    "pnm",
+    "qoi",
+    "tga",
+    "tiff",
+    "webp",
+]
 
 [dependencies.inventory]
 version = "0.3.19"

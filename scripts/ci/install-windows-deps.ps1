@@ -16,7 +16,28 @@ if (-not $binaryCache) {
 }
 [void][System.IO.Directory]::CreateDirectory($binaryCache)
 
-& $vcpkg install ffmpeg:x64-windows --clean-after-build
+& $vcpkg install 'ffmpeg[dav1d]:x64-windows' 'pkgconf:x64-windows' --clean-after-build
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
+
+$installedRoot = Join-Path $vcpkgRoot 'installed\x64-windows'
+$pkgconf = Join-Path $installedRoot 'tools\pkgconf\pkgconf.exe'
+if (-not (Test-Path $pkgconf)) {
+    throw "pkgconf.exe was not found under $installedRoot"
+}
+
+$pkgConfigPath = @(
+    (Join-Path $installedRoot 'lib\pkgconfig')
+    (Join-Path $installedRoot 'share\pkgconfig')
+) -join ';'
+
+$env:PKG_CONFIG = $pkgconf
+$env:PKG_CONFIG_PATH = $pkgConfigPath
+& $pkgconf --atleast-version=1.3.0 dav1d
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+"PKG_CONFIG=$pkgconf" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+"PKG_CONFIG_PATH=$pkgConfigPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append

@@ -25,6 +25,7 @@ packages=(
   libavformat-dev
   libavutil-dev
   libdbus-1-dev
+  libdav1d-dev
   libegl1-mesa-dev
   libfontconfig1-dev
   libfreetype6-dev

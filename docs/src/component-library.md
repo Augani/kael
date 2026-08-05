@@ -199,6 +199,7 @@ kael_ui::set_icon_base_path("assets/icons");
 | `markdown`         | no      | `display::markdown` rendering                        |
 | `html-render`      | no      | `display::html` rendering                            |
 | `audio`            | no      | `AudioPlayer` playback via rodio                     |
+| `image-avif`, `image-exr` | no | Opt-in AVIF (libdav1d) and OpenEXR decoding      |
 | `editor-languages` | no      | Tree-sitter grammars for 20+ languages in the editor |
 
 ## Showcase

@@ -233,12 +233,36 @@ pub fn img(source: impl Into<ImageSource>) -> Img {
 }
 
 impl Img {
-    /// A list of all format extensions currently supported by this img element
+    /// A list of all format extensions currently supported by this image element.
+    ///
+    /// AVIF and OpenEXR extensions are present only when the `image-avif` and
+    /// `image-exr` crate features are enabled, respectively.
     pub fn extensions() -> &'static [&'static str] {
-        // This is the list in [image::ImageFormat::from_extension] + `svg`
         &[
-            "avif", "jpg", "jpeg", "png", "gif", "webp", "tif", "tiff", "tga", "dds", "bmp", "ico",
-            "hdr", "exr", "pbm", "pam", "ppm", "pgm", "ff", "farbfeld", "qoi", "svg",
+            #[cfg(feature = "image-avif")]
+            "avif",
+            "jpg",
+            "jpeg",
+            "png",
+            "gif",
+            "webp",
+            "tif",
+            "tiff",
+            "tga",
+            "dds",
+            "bmp",
+            "ico",
+            "hdr",
+            #[cfg(feature = "image-exr")]
+            "exr",
+            "pbm",
+            "pam",
+            "ppm",
+            "pgm",
+            "ff",
+            "farbfeld",
+            "qoi",
+            "svg",
         ]
     }
 
@@ -691,7 +715,7 @@ fn resource_len_bytes(resource: &Resource) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImageSource, StyledImage, img};
+    use super::{ImageSource, Img, StyledImage, img};
     use crate::{IntoElement, ObjectFit, div};
     use std::path::PathBuf;
 
@@ -744,6 +768,25 @@ mod tests {
         assert!(summary.contains("kind=path"));
         assert!(!summary.contains("/private"));
         assert!(!summary.contains("secret.png"));
+    }
+
+    #[test]
+    fn advertised_extensions_match_enabled_codecs() {
+        let extensions = Img::extensions();
+
+        for extension in ["jpg", "png", "gif", "webp", "tiff", "bmp", "qoi", "svg"] {
+            assert!(extensions.contains(&extension));
+        }
+        assert_eq!(extensions.contains(&"avif"), cfg!(feature = "image-avif"));
+        assert_eq!(extensions.contains(&"exr"), cfg!(feature = "image-exr"));
+    }
+
+    #[cfg(feature = "image-avif")]
+    #[test]
+    fn image_avif_feature_enables_decoder() {
+        let result = image::codecs::avif::AvifDecoder::new(std::io::Cursor::new(&[]));
+
+        assert!(result.is_err(), "an empty AVIF payload must be rejected");
     }
 }
 
