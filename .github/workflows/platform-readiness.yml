@@ -126,7 +126,7 @@ jobs:
       - name: Install macOS media dependencies
         if: runner.os == 'macOS'
         shell: bash
-        run: brew install ffmpeg pkg-config
+        run: brew install dav1d ffmpeg pkg-config
 
       - name: Locate Windows vcpkg
         if: runner.os == 'Windows'

@@ -187,6 +187,20 @@ let poster = img("https://cdn.example.com/poster.png")
 tracing::info!(summary = poster.to_text(), "image");
 ```
 
+Common application formats—including PNG, JPEG, GIF, WebP, TIFF, BMP, ICO,
+TGA, HDR, PNM, farbfeld, DDS, and QOI—are enabled without pulling parallel
+image-processing dependencies into every Kael application. Enable the heavier
+formats only when the product needs them:
+
+```toml
+[dependencies]
+kael = { version = "0.3", features = ["image-avif", "image-exr"] }
+```
+
+AVIF decoding uses the native libdav1d library and pkg-config discovery.
+Install both through the platform package manager, or also provide Git, Meson,
+and Ninja so the binding can build libdav1d from source.
+
 Use `ImageSource::to_text()`, `ImageStyle::to_text()`, and `Img::to_text()` for
 asset-heavy generated UI. The helpers expose source kind, resource identifier
 byte length, grayscale state, object-fit key, loading/fallback hook presence,

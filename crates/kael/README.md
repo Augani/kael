@@ -73,6 +73,7 @@ Kael targets macOS (Metal), Windows (DirectX 11), and Linux X11/Wayland
 | `icons` | Compact embedded SVG catalog with application-asset overrides |
 | `diagnostics`, `notifications-full`, `share` | Optional platform batteries |
 | `screen-capture` | Screen-capture backend support |
+| `image-avif`, `image-exr` | Opt-in AVIF (libdav1d) and OpenEXR decoding |
 | `agent-tools` | Structured capability-planning metadata |
 | `runtime_shaders` | Runtime shader compilation for development |
 

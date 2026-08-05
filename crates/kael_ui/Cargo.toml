@@ -22,7 +22,13 @@ exclude = [
 ]
 
 [package.metadata.docs.rs]
-features = ["html-render", "markdown", "kael/runtime_shaders"]
+features = [
+    "html-render",
+    "image-avif",
+    "image-exr",
+    "markdown",
+    "kael/runtime_shaders",
+]
 default-target = "x86_64-unknown-linux-gnu"
 targets = []
 rustdoc-args = ["--cfg", "docsrs"]
@@ -47,7 +53,7 @@ smol.workspace = true
 futures.workspace = true
 
 # QR code generation
-qrcode = "0.14"
+qrcode = { version = "0.14", default-features = false }
 
 # Rope data structure for editor
 ropey = "1.6"
@@ -96,6 +102,8 @@ media = ["kael/media"]
 markdown = ["pulldown-cmark"]
 html-render = ["html5ever", "markup5ever_rcdom"]
 audio = ["rodio"]
+image-avif = ["kael/image-avif"]
+image-exr = ["kael/image-exr"]
 editor-languages = [
     "tree-sitter-rust", "tree-sitter-javascript", "tree-sitter-typescript",
     "tree-sitter-python", "tree-sitter-json", "tree-sitter-toml-ng",

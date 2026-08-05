@@ -82,6 +82,7 @@ kael_ui::set_icon_base_path("assets/icons");
 | `html-render` | no | Native HTML document rendering |
 | `audio` | no | Audio-player integration |
 | `media` | no | Kael media integration used by the Astryx showcase |
+| `image-avif`, `image-exr` | no | Opt-in AVIF (libdav1d) and OpenEXR image decoding |
 | `editor-languages` | no | Additional tree-sitter grammars |
 
 ## Astryx
