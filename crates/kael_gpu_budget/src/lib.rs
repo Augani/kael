@@ -88,9 +88,14 @@ fn platform_query() -> Option<GpuMemoryBudget> {
         let create_info = vk::InstanceCreateInfo::default().application_info(&app_info);
         let instance = entry.create_instance(&create_info, None).ok()?;
 
-        let result = instance
-            .enumerate_physical_devices()
-            .ok()?
+        let physical_devices = match instance.enumerate_physical_devices() {
+            Ok(devices) => devices,
+            Err(_) => {
+                instance.destroy_instance(None);
+                return None;
+            }
+        };
+        let result = physical_devices
             .into_iter()
             .filter_map(|physical| {
                 let supports_budget = instance
