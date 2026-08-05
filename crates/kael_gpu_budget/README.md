@@ -4,10 +4,23 @@ Cross-platform GPU memory-budget queries for Kael and standalone Rust apps.
 It reads Metal's recommended working set on macOS, DXGI video-memory data on
 Windows, and `VK_EXT_memory_budget` on Linux.
 
-```rust
+The crate has no UI dependency. Renderers, media pipelines, and other
+GPU-intensive systems can use it to size caches or lower quality before the
+driver starts evicting resources.
+
+```rust,no_run
 if let Some(budget) = kael_gpu_budget::GpuMemoryBudget::query() {
     println!("{:.0}% GPU memory used", budget.utilization() * 100.0);
+    println!("{} bytes available", budget.available_bytes());
 }
 ```
 
-Licensed under Apache-2.0.
+`GpuMemoryBudget::query` returns `None` when the native API, a default adapter,
+or the required Vulkan extension is unavailable. Reported usage is clamped for
+ratio calculations because drivers can transiently report usage above their
+current budget.
+
+## License
+
+Licensed under the Apache License, Version 2.0. See
+[LICENSE-APACHE](LICENSE-APACHE).

@@ -1,10 +1,4 @@
-//! Cross-platform GPU memory budget query.
-//!
-//! Reports the device's memory budget and current usage via the native API on
-//! each platform — Metal (`recommendedMaxWorkingSetSize`), DXGI
-//! (`IDXGIAdapter3::QueryVideoMemoryInfo`), and Vulkan
-//! (`VK_EXT_memory_budget`) — behind one [`GpuMemoryBudget::query`] entry point.
-
+#![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 
 /// A snapshot of GPU memory budget and usage for the default device.
