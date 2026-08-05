@@ -116,40 +116,49 @@ impl RelPath {
         unsafe { &*(s as *const str as *const Self) }
     }
 
+    /// Returns whether this path has no components.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
+    /// Iterates over this path's normalized components.
     pub fn components(&self) -> RelPathComponents<'_> {
         RelPathComponents(&self.0)
     }
 
+    /// Iterates over this path and each of its parents.
     pub fn ancestors(&self) -> RelPathAncestors<'_> {
         RelPathAncestors(Some(&self.0))
     }
 
+    /// Returns the final path component, if any.
     pub fn file_name(&self) -> Option<&str> {
         self.components().next_back()
     }
 
+    /// Returns the final component without its extension, if any.
     pub fn file_stem(&self) -> Option<&str> {
         Some(self.as_std_path().file_stem()?.to_str().unwrap())
     }
 
+    /// Returns the extension of the final component, if any.
     pub fn extension(&self) -> Option<&str> {
         Some(self.as_std_path().extension()?.to_str().unwrap())
     }
 
+    /// Returns the parent path, or `None` for the empty path.
     pub fn parent(&self) -> Option<&Self> {
         let mut components = self.components();
         components.next_back()?;
         Some(components.rest())
     }
 
+    /// Returns whether this path begins with all components of `other`.
     pub fn starts_with(&self, other: &Self) -> bool {
         self.strip_prefix(other).is_ok()
     }
 
+    /// Returns whether this path ends with all components of `other`.
     pub fn ends_with(&self, other: &Self) -> bool {
         if let Some(suffix) = self.0.strip_suffix(&other.0) {
             if suffix.ends_with('/') {
@@ -161,6 +170,9 @@ impl RelPath {
         false
     }
 
+    /// Removes `other` from the start of this path.
+    ///
+    /// Returns an error unless `other` matches complete path components.
     pub fn strip_prefix<'a>(&'a self, other: &Self) -> Result<&'a Self> {
         if other.is_empty() {
             return Ok(self);
@@ -175,10 +187,14 @@ impl RelPath {
         Err(anyhow!("failed to strip prefix: {other:?} from {self:?}"))
     }
 
+    /// Returns the number of path components.
     pub fn len(&self) -> usize {
         self.components().count()
     }
 
+    /// Returns a suffix containing the last `count` components.
+    ///
+    /// Returns `None` when the path has fewer than `count` components.
     pub fn last_n_components(&self, count: usize) -> Option<&Self> {
         let len = self.len();
         if len >= count {
@@ -192,6 +208,7 @@ impl RelPath {
         }
     }
 
+    /// Joins this path with `other` in reference-counted storage.
     pub fn join(&self, other: &Self) -> Arc<Self> {
         let result = if self.0.is_empty() {
             Cow::Borrowed(&other.0)
@@ -203,10 +220,12 @@ impl RelPath {
         Arc::from(Self::new_unchecked(result.as_ref()))
     }
 
+    /// Copies this path into an owned buffer.
     pub fn to_rel_path_buf(&self) -> RelPathBuf {
         RelPathBuf(self.0.to_string())
     }
 
+    /// Copies this path into atomically reference-counted storage.
     pub fn into_arc(&self) -> Arc<Self> {
         Arc::from(self)
     }
@@ -300,10 +319,12 @@ impl fmt::Debug for RelPathBuf {
 }
 
 impl RelPathBuf {
+    /// Creates an empty owned relative path.
     pub fn new() -> Self {
         Self(String::new())
     }
 
+    /// Removes the final component, returning whether one was removed.
     pub fn pop(&mut self) -> bool {
         if let Some(ix) = self.0.rfind('/') {
             self.0.truncate(ix);
@@ -316,22 +337,33 @@ impl RelPathBuf {
         }
     }
 
+    /// Appends a relative path.
     pub fn push(&mut self, path: &RelPath) {
+        if path.is_empty() {
+            return;
+        }
         if !self.is_empty() {
             self.0.push('/');
         }
         self.0.push_str(&path.0);
     }
 
+    /// Borrows this buffer as a [`RelPath`].
     pub fn as_rel_path(&self) -> &RelPath {
         RelPath::new_unchecked(self.0.as_str())
     }
 
+    /// Replaces the final component's extension.
+    ///
+    /// Returns `false` when the path has no final component.
     pub fn set_extension(&mut self, extension: &str) -> bool {
         if let Some(filename) = self.file_name() {
             let mut filename = PathBuf::from(filename);
             filename.set_extension(extension);
             self.pop();
+            if !self.0.is_empty() {
+                self.0.push(SEPARATOR);
+            }
             self.0.push_str(filename.to_str().unwrap());
             true
         } else {
@@ -375,6 +407,7 @@ impl From<&RelPath> for Arc<RelPath> {
 
 #[cfg(any(test, feature = "test-support"))]
 #[track_caller]
+/// Borrows a normalized POSIX relative path for tests.
 pub fn rel_path(path: &str) -> &RelPath {
     RelPath::unix(path).unwrap()
 }
@@ -385,13 +418,16 @@ impl PartialEq<str> for RelPath {
     }
 }
 
+/// Iterator over the components of a [`RelPath`].
 pub struct RelPathComponents<'a>(&'a str);
 
+/// Iterator over a [`RelPath`] and each successive parent.
 pub struct RelPathAncestors<'a>(Option<&'a str>);
 
 const SEPARATOR: char = '/';
 
 impl<'a> RelPathComponents<'a> {
+    /// Returns the unconsumed portion of the path.
     pub fn rest(&self) -> &'a RelPath {
         RelPath::new_unchecked(self.0)
     }
@@ -587,6 +623,32 @@ mod tests {
         assert_eq!(path.as_rel_path().as_unix_str(), "");
         path.pop();
         assert_eq!(path.as_rel_path().as_unix_str(), "");
+    }
+
+    #[test]
+    fn pushing_an_empty_path_preserves_normalization() {
+        let mut path = rel_path("a/b").to_rel_path_buf();
+        path.push(RelPath::empty());
+        assert_eq!(path.as_unix_str(), "a/b");
+
+        let mut empty = RelPathBuf::new();
+        empty.push(RelPath::empty());
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn set_extension_preserves_parent_components() {
+        let mut nested = rel_path("a/b.txt").to_rel_path_buf();
+        assert!(nested.set_extension("rs"));
+        assert_eq!(nested.as_unix_str(), "a/b.rs");
+
+        let mut top_level = rel_path("b.txt").to_rel_path_buf();
+        assert!(top_level.set_extension("rs"));
+        assert_eq!(top_level.as_unix_str(), "b.rs");
+
+        let mut empty = RelPathBuf::new();
+        assert!(!empty.set_extension("rs"));
+        assert!(empty.is_empty());
     }
 
     #[test]

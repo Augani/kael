@@ -1,18 +1,38 @@
+#![doc = include_str!("../README.md")]
+#![deny(missing_docs)]
+
+/// Copy-on-write storage backed by [`std::sync::Arc`].
 pub mod arc_cow;
+/// Bounded, path-safe archive extraction.
+#[cfg(feature = "archive")]
 pub mod archive;
+/// Cross-platform process command helpers.
 pub mod command;
+/// Asynchronous filesystem helpers.
 pub mod fs;
+/// Markdown text utilities.
 pub mod markdown;
+/// Path parsing, comparison, and sanitization.
 pub mod paths;
+/// Redacted debug formatting for sensitive values.
 pub mod redact;
+/// Validated relative path types.
 pub mod rel_path;
+/// JSON Schema transformation helpers.
+#[cfg(feature = "schema")]
 pub mod schemars;
+/// Serde adapters shared across Kael crates.
 pub mod serde;
+/// Shell discovery and expansion helpers.
 pub mod shell;
+/// Login-shell environment capture.
 pub mod shell_env;
+/// Human-readable byte-size formatting.
 pub mod size;
 #[cfg(any(test, feature = "test-support"))]
+/// Fixture and assertion helpers for Kael tests.
 pub mod test;
+/// Time and duration formatting.
 pub mod time;
 
 use anyhow::{Context as _, Result};
@@ -39,6 +59,7 @@ pub use take_until::*;
 pub use util_macros::{line_endings, path, uri};
 
 #[macro_export]
+/// Panics in debug builds and logs an error with a backtrace in release builds.
 macro_rules! debug_panic {
     ( $($fmt_arg:tt)* ) => {
         if cfg!(debug_assertions) {
@@ -50,6 +71,7 @@ macro_rules! debug_panic {
     };
 }
 
+/// Returns at most `max_chars` Unicode scalar values from the start of `s`.
 pub fn truncate(s: &str, max_chars: usize) -> &str {
     match s.char_indices().nth(max_chars) {
         None => s,
@@ -169,6 +191,7 @@ fn test_truncate_lines_to_byte_limit() {
     );
 }
 
+/// Increments `value` by one and returns its previous value.
 pub fn post_inc<T: From<u8> + AddAssign<T> + Copy>(value: &mut T) -> T {
     let prev = *value;
     *value += T::from(1);
@@ -203,6 +226,7 @@ where
     }
 }
 
+/// Retains the first `limit` items under `compare` and leaves them sorted.
 pub fn truncate_to_bottom_n_sorted_by<T, F>(items: &mut Vec<T>, limit: usize, compare: &F)
 where
     F: Fn(&T, &T) -> Ordering,
@@ -352,6 +376,7 @@ pub fn get_kael_cli_path() -> Result<PathBuf> {
 }
 
 #[cfg(unix)]
+/// Replaces this process's environment with values captured from the user's login shell.
 pub async fn load_login_shell_environment() -> Result<()> {
     load_shell_from_passwd().log_err();
 
@@ -396,6 +421,7 @@ pub fn set_pre_exec_to_start_new_session(
     command
 }
 
+/// Recursively merges a lenient JSON value into `target`, appending arrays.
 pub fn merge_json_lenient_value_into(
     source: serde_json_lenient::Value,
     target: &mut serde_json_lenient::Value,
@@ -421,6 +447,7 @@ pub fn merge_json_lenient_value_into(
     }
 }
 
+/// Recursively merges a JSON value into `target`, appending arrays.
 pub fn merge_json_value_into(source: serde_json::Value, target: &mut serde_json::Value) {
     use serde_json::Value;
 
@@ -445,6 +472,7 @@ pub fn merge_json_value_into(source: serde_json::Value, target: &mut serde_json:
     }
 }
 
+/// Recursively merges non-null JSON values into `target`.
 pub fn merge_non_null_json_value_into(source: serde_json::Value, target: &mut serde_json::Value) {
     use serde_json::Value;
     if let Value::Object(source_object) = source {
@@ -466,6 +494,7 @@ pub fn merge_non_null_json_value_into(source: serde_json::Value, target: &mut se
     }
 }
 
+/// Runs `f`, printing its elapsed time when `KAEL_MEASUREMENTS` is enabled.
 pub fn measure<R>(label: &str, f: impl FnOnce() -> R) -> R {
     static KAEL_MEASUREMENTS: OnceLock<bool> = OnceLock::new();
     let kael_measurements = KAEL_MEASUREMENTS.get_or_init(|| {
@@ -485,6 +514,7 @@ pub fn measure<R>(label: &str, f: impl FnOnce() -> R) -> R {
     }
 }
 
+/// Expands a range on both sides, wrapping within `wrap_length` without duplicates.
 pub fn expanded_and_wrapped_usize_range(
     range: Range<usize>,
     additional_before: usize,
@@ -581,14 +611,20 @@ fn wrapping_sub(value: usize, offset: usize, modulus: usize) -> usize {
     }
 }
 
+/// Logging and error-conversion helpers for [`Result`].
 pub trait ResultExt<E> {
+    /// The successful result value.
     type Ok;
 
+    /// Logs an error and converts it to `None`.
     fn log_err(self) -> Option<Self::Ok>;
     /// Assert that this result should never be an error in development or tests.
     fn debug_assert_ok(self, reason: &str) -> Self;
+    /// Logs an error as a warning and converts it to `None`.
     fn warn_on_err(self) -> Option<Self::Ok>;
+    /// Logs an error at `level` and converts it to `None`.
     fn log_with_level(self, level: log::Level) -> Option<Self::Ok>;
+    /// Converts the error into [`anyhow::Error`].
     fn anyhow(self) -> anyhow::Result<Self::Ok>
     where
         E: Into<anyhow::Error>;
@@ -666,22 +702,28 @@ where
     );
 }
 
+/// Logs a debug-formatted error at warning level with its caller location.
 pub fn log_err<E: std::fmt::Debug>(error: &E) {
     log_error_with_caller(*Location::caller(), error, log::Level::Warn);
 }
 
+/// Logging and unwrapping adapters for futures that produce a [`Result`].
 pub trait TryFutureExt {
+    /// Logs errors and resolves to `None` when an error occurs.
     fn log_err(self) -> LogErrorFuture<Self>
     where
         Self: Sized;
 
+    /// Logs errors using an explicitly captured caller location.
     fn log_tracked_err(self, location: core::panic::Location<'static>) -> LogErrorFuture<Self>
     where
         Self: Sized;
 
+    /// Logs errors as warnings and resolves to `None`.
     fn warn_on_err(self) -> LogErrorFuture<Self>
     where
         Self: Sized;
+    /// Resolves to the success value and panics if the future returns an error.
     fn unwrap(self) -> UnwrapFuture<Self>
     where
         Self: Sized;
@@ -726,6 +768,7 @@ where
 }
 
 #[must_use]
+/// Future returned by [`TryFutureExt::log_err`] and related logging adapters.
 pub struct LogErrorFuture<F>(F, log::Level, core::panic::Location<'static>);
 
 impl<F, T, E> Future for LogErrorFuture<F>
@@ -752,6 +795,7 @@ where
     }
 }
 
+/// Future returned by [`TryFutureExt::unwrap`].
 pub struct UnwrapFuture<F>(F);
 
 impl<F, T, E> Future for UnwrapFuture<F>
@@ -770,6 +814,7 @@ where
     }
 }
 
+/// Runs a callback on drop unless explicitly aborted.
 pub struct Deferred<F: FnOnce()>(Option<F>);
 
 impl<F: FnOnce()> Deferred<F> {
@@ -797,12 +842,14 @@ pub fn defer<F: FnOnce()>(f: F) -> Deferred<F> {
 mod rng {
     use rand::prelude::*;
 
+    /// Iterator that produces varied random Unicode characters for tests.
     pub struct RandomCharIter<T: Rng> {
         rng: T,
         simple_text: bool,
     }
 
     impl<T: Rng> RandomCharIter<T> {
+        /// Creates an iterator backed by `rng`.
         pub fn new(rng: T) -> Self {
             Self {
                 rng,
@@ -810,6 +857,7 @@ mod rng {
             }
         }
 
+        /// Restricts output to ASCII lowercase letters and occasional newlines.
         pub fn with_simple_text(mut self) -> Self {
             self.simple_text = true;
             self
@@ -873,10 +921,15 @@ macro_rules! maybe {
     };
 }
 
+/// Convenience operations shared by exclusive and inclusive ranges.
 pub trait RangeExt<T> {
+    /// Returns the range with ordered endpoints.
     fn sorted(&self) -> Self;
+    /// Converts the range to inclusive endpoints.
     fn to_inclusive(&self) -> RangeInclusive<T>;
+    /// Returns whether this range overlaps `other`.
     fn overlaps(&self, other: &Range<T>) -> bool;
+    /// Returns whether this range fully contains `other`, including its end.
     fn contains_inclusive(&self, other: &Range<T>) -> bool;
 }
 
@@ -925,6 +978,7 @@ impl<T: Ord + Clone> RangeExt<T> for RangeInclusive<T> {
 pub struct NumericPrefixWithSuffix<'a>(Option<u64>, &'a str);
 
 impl<'a> NumericPrefixWithSuffix<'a> {
+    /// Parses a leading decimal number and retains the remaining suffix.
     pub fn from_numeric_prefixed_str(str: &'a str) -> Self {
         let i = str.chars().take_while(|c| c.is_ascii_digit()).count();
         let (prefix, remainder) = str.split_at(i);
@@ -1022,6 +1076,7 @@ pub fn split_str_with_ranges(s: &str, pat: impl Fn(char) -> bool) -> Vec<(Range<
     result
 }
 
+/// Returns the default value for `D`, useful as a function argument.
 pub fn default<D: Default>() -> D {
     Default::default()
 }
@@ -1031,13 +1086,18 @@ pub use self::shell::{
 };
 
 #[derive(Debug)]
+/// Result of an operation that distinguishes transport termination from application errors.
 pub enum ConnectionResult<O> {
+    /// The operation exceeded its deadline.
     Timeout,
+    /// The peer reset the connection.
     ConnectionReset,
+    /// The operation completed with an application result.
     Result(anyhow::Result<O>),
 }
 
 impl<O> ConnectionResult<O> {
+    /// Converts transport outcomes into descriptive [`anyhow::Error`] values.
     pub fn into_response(self) -> anyhow::Result<O> {
         match self {
             ConnectionResult::Timeout => anyhow::bail!("Request timed out"),
@@ -1054,6 +1114,7 @@ impl<O> From<anyhow::Result<O>> for ConnectionResult<O> {
 }
 
 #[track_caller]
+/// Returns `option`, but panics on `None` in debug builds to expose violated assumptions.
 pub fn some_or_debug_panic<T>(option: Option<T>) -> Option<T> {
     #[cfg(debug_assertions)]
     if option.is_none() {

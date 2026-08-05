@@ -7,11 +7,13 @@ use futures::AsyncSeek;
 use futures::{AsyncRead, io::BufReader};
 
 #[cfg(windows)]
+/// Extracts a ZIP stream into `destination` after validating every entry path.
 pub async fn extract_zip<R: AsyncRead + Unpin>(destination: &Path, reader: R) -> Result<()> {
     extract_zip_with_limit(destination, reader, u64::MAX).await
 }
 
 #[cfg(windows)]
+/// Extracts a ZIP stream while rejecting archives whose declared expansion exceeds `max_uncompressed_bytes`.
 pub async fn extract_zip_with_limit<R: AsyncRead + Unpin>(
     destination: &Path,
     reader: R,
@@ -68,11 +70,13 @@ pub async fn extract_zip_with_limit<R: AsyncRead + Unpin>(
 }
 
 #[cfg(not(windows))]
+/// Extracts a ZIP stream into `destination`, preserving Unix permissions.
 pub async fn extract_zip<R: AsyncRead + Unpin>(destination: &Path, reader: R) -> Result<()> {
     extract_zip_with_limit(destination, reader, u64::MAX).await
 }
 
 #[cfg(not(windows))]
+/// Extracts a ZIP stream while preserving permissions and bounding its declared expansion.
 pub async fn extract_zip_with_limit<R: AsyncRead + Unpin>(
     destination: &Path,
     reader: R,
@@ -94,6 +98,7 @@ pub async fn extract_zip_with_limit<R: AsyncRead + Unpin>(
 }
 
 #[cfg(not(windows))]
+/// Extracts a seekable ZIP reader into `destination`, preserving Unix permissions.
 pub async fn extract_seekable_zip<R: AsyncRead + AsyncSeek + Unpin>(
     destination: &Path,
     reader: R,
@@ -102,6 +107,7 @@ pub async fn extract_seekable_zip<R: AsyncRead + AsyncSeek + Unpin>(
 }
 
 #[cfg(not(windows))]
+/// Extracts a seekable ZIP reader while bounding its declared uncompressed size.
 pub async fn extract_seekable_zip_with_limit<R: AsyncRead + AsyncSeek + Unpin>(
     destination: &Path,
     reader: R,

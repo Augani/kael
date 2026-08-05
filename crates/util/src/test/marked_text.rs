@@ -178,6 +178,7 @@ pub fn marked_text_ranges(
 }
 
 #[track_caller]
+/// Extracts zero-width `ˇ` markers as byte offsets from test text.
 pub fn marked_text_offsets(marked_text: &str) -> (String, Vec<usize>) {
     let (text, ranges) = marked_text_ranges(marked_text, false);
     (
@@ -192,6 +193,9 @@ pub fn marked_text_offsets(marked_text: &str) -> (String, Vec<usize>) {
     )
 }
 
+/// Inserts Kael's range markers into plain text at the supplied byte ranges.
+///
+/// When `indicate_cursors` is set, a `ˇ` marker records range direction.
 pub fn generate_marked_text(
     unmarked_text: &str,
     ranges: &[Range<usize>],
@@ -229,9 +233,13 @@ pub fn generate_marked_text(
 }
 
 #[derive(Clone, Eq, PartialEq, Hash)]
+/// Marker characters used to extract ranges from test text.
 pub enum TextRangeMarker {
+    /// One character marking a zero-width range.
     Empty(char),
+    /// Start and end characters marking a forward range.
     Range(char, char),
+    /// Start and end characters marking a reverse range.
     ReverseRange(char, char),
 }
 

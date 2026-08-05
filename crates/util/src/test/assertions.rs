@@ -1,9 +1,13 @@
+/// Describes which side of a set comparison lacks an element.
 pub enum SetEqError<T> {
+    /// The left set does not contain this element from the right set.
     LeftMissing(T),
+    /// The right set does not contain this element from the left set.
     RightMissing(T),
 }
 
 impl<T> SetEqError<T> {
+    /// Transforms the missing element while preserving which side lacks it.
     pub fn map<R, F: FnOnce(T) -> R>(self, update: F) -> SetEqError<R> {
         match self {
             SetEqError::LeftMissing(missing) => SetEqError::LeftMissing(update(missing)),
@@ -13,6 +17,7 @@ impl<T> SetEqError<T> {
 }
 
 #[macro_export]
+/// Compares two set-like collections and returns the first missing element.
 macro_rules! set_eq {
     ($left:expr,$right:expr) => {{
         use util::test::*;
@@ -41,6 +46,7 @@ macro_rules! set_eq {
 }
 
 #[macro_export]
+/// Asserts that two set-like collections contain the same elements.
 macro_rules! assert_set_eq {
     ($left:expr,$right:expr) => {{
         use util::test::*;

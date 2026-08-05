@@ -27,6 +27,9 @@ where
     }
 }
 
+/// Collects direct children of `dir` that satisfy `predicate`.
+///
+/// Directory read errors are logged and produce an empty or partial result.
 pub async fn collect_matching<F>(dir: &Path, predicate: F) -> Vec<PathBuf>
 where
     F: Fn(&Path) -> bool,
@@ -46,6 +49,7 @@ where
     matching
 }
 
+/// Finds the first direct child whose UTF-8-lossy file name satisfies `predicate`.
 pub async fn find_file_name_in_dir<F>(dir: &Path, predicate: F) -> Option<PathBuf>
 where
     F: Fn(&str) -> bool,
@@ -69,6 +73,7 @@ where
     None
 }
 
+/// Moves every direct child from one folder into another, then removes the source folder.
 pub async fn move_folder_files_to_folder<P: AsRef<Path>>(
     source_path: P,
     target_path: P,

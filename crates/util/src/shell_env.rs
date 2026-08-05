@@ -5,6 +5,7 @@ use collections::HashMap;
 
 use crate::shell::ShellKind;
 
+/// Prints the current process environment as formatted JSON and exits on serialization failure.
 pub fn print_env() {
     let env_vars: HashMap<String, String> = std::env::vars().collect();
     let json = serde_json::to_string_pretty(&env_vars).unwrap_or_else(|err| {
