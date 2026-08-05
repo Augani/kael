@@ -14,6 +14,7 @@
 
 use std::{
     fs,
+    io::Read as _,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
@@ -29,6 +30,7 @@ static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 const MAX_META_BYTES: u64 = 1024 * 1024;
 const MAX_DUMP_BYTES: u64 = 64 * 1024;
 const MAX_SESSION_ID_BYTES: usize = 128;
+const MAX_PENDING_NATIVE_CRASHES: usize = 256;
 
 /// Pre-crash context captured at [`install`] time and persisted alongside the
 /// dump so the next launch can reconstruct a full report without doing any work
@@ -136,32 +138,50 @@ pub fn new_session_id() -> String {
 
 fn write_context(reports_dir: &Path, context: &NativeContext) -> Result<()> {
     validate_session_id(&context.session_id)?;
-    fs::create_dir_all(reports_dir).with_context(|| {
-        format!(
-            "failed to create native crash directory: {}",
-            reports_dir.display()
-        )
-    })?;
+    crate::crash::prepare_reports_dir(reports_dir)?;
     let path = meta_path(reports_dir, &context.session_id);
     let json = serde_json::to_string_pretty(context).context("failed to serialize crash meta")?;
+    if json.len() as u64 > MAX_META_BYTES {
+        return Err(anyhow::anyhow!(
+            "serialized native crash metadata exceeds {MAX_META_BYTES} byte limit"
+        ));
+    }
     let temp = path.with_extension("json.tmp");
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options
         .open(&temp)
         .with_context(|| format!("failed to create crash meta: {}", temp.display()))?;
     use std::io::Write as _;
-    file.write_all(json.as_bytes())
-        .with_context(|| format!("failed to write crash meta: {}", temp.display()))?;
-    file.sync_all()
-        .with_context(|| format!("failed to sync crash meta: {}", temp.display()))?;
-    fs::rename(&temp, &path).with_context(|| {
+    let write_result = file
+        .write_all(json.as_bytes())
+        .with_context(|| format!("failed to write crash meta: {}", temp.display()))
+        .and_then(|()| {
+            file.sync_all()
+                .with_context(|| format!("failed to sync crash meta: {}", temp.display()))
+        });
+    if let Err(error) = write_result {
+        drop(file);
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
+    drop(file);
+    if let Err(error) = fs::rename(&temp, &path).with_context(|| {
         format!(
             "failed to finalize crash meta from {} to {}",
             temp.display(),
             path.display()
         )
-    })?;
+    }) {
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
+    crate::crash::sync_parent_dir(reports_dir)?;
     Ok(())
 }
 
@@ -244,6 +264,18 @@ pub fn pending_crashes(reports_dir: &Path) -> Result<Vec<PendingNativeCrash>> {
     if !reports_dir.exists() {
         return Ok(crashes);
     }
+    let directory_metadata = fs::symlink_metadata(reports_dir).with_context(|| {
+        format!(
+            "failed to inspect native crash directory: {}",
+            reports_dir.display()
+        )
+    })?;
+    if !directory_metadata.file_type().is_dir() {
+        return Err(anyhow::anyhow!(
+            "native crash path must be a real directory: {}",
+            reports_dir.display()
+        ));
+    }
 
     let current = current_session_id();
 
@@ -265,16 +297,16 @@ pub fn pending_crashes(reports_dir: &Path) -> Result<Vec<PendingNativeCrash>> {
             continue;
         }
 
-        let metadata = entry.metadata()?;
-        if !metadata.is_file() || metadata.len() > MAX_META_BYTES {
-            continue;
-        }
         if validate_session_id(session_id).is_err() {
             continue;
         }
-        let json = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read crash meta: {}", path.display()))?;
-        let context: NativeContext = match serde_json::from_str(&json) {
+        let Ok(bytes) = read_bounded_regular_file(&path, MAX_META_BYTES) else {
+            continue;
+        };
+        let Ok(json) = std::str::from_utf8(&bytes) else {
+            continue;
+        };
+        let context: NativeContext = match serde_json::from_str(json) {
             Ok(context) => context,
             Err(_) => continue,
         };
@@ -283,15 +315,9 @@ pub fn pending_crashes(reports_dir: &Path) -> Result<Vec<PendingNativeCrash>> {
         }
 
         let dump = dump_path(reports_dir, session_id);
-        let (signal, dump_path_out) = match fs::metadata(&dump) {
-            Ok(metadata) if metadata.is_file() && metadata.len() <= MAX_DUMP_BYTES => {
-                let bytes = fs::read(&dump)?;
-                if bytes.is_empty() {
-                    (None, None)
-                } else {
-                    (decode_dump(&bytes), Some(dump))
-                }
-            }
+        let (signal, dump_path_out) = match read_bounded_regular_file(&dump, MAX_DUMP_BYTES) {
+            Ok(bytes) if bytes.is_empty() => (None, None),
+            Ok(bytes) => (decode_dump(&bytes), Some(dump)),
             _ => (None, None),
         };
 
@@ -301,10 +327,62 @@ pub fn pending_crashes(reports_dir: &Path) -> Result<Vec<PendingNativeCrash>> {
             meta_path: path,
             dump_path: dump_path_out,
         });
+        if crashes.len() == MAX_PENDING_NATIVE_CRASHES {
+            break;
+        }
     }
 
     crashes.sort_by_key(|crash| crash.context.started_at_ms);
     Ok(crashes)
+}
+
+fn read_bounded_regular_file(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path).with_context(|| {
+        format!(
+            "failed to inspect native crash artifact: {}",
+            path.display()
+        )
+    })?;
+    if !metadata.file_type().is_file() || metadata.len() > max_bytes {
+        return Err(anyhow::anyhow!(
+            "native crash artifact must be a regular file of at most {max_bytes} bytes: {}",
+            path.display()
+        ));
+    }
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options
+        .open(path)
+        .with_context(|| format!("failed to open native crash artifact: {}", path.display()))?;
+    let opened_metadata = file.metadata().with_context(|| {
+        format!(
+            "failed to inspect native crash artifact: {}",
+            path.display()
+        )
+    })?;
+    if !opened_metadata.is_file() || opened_metadata.len() > max_bytes {
+        return Err(anyhow::anyhow!(
+            "native crash artifact changed while opening: {}",
+            path.display()
+        ));
+    }
+    let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
+    file.take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("failed to read native crash artifact: {}", path.display()))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(anyhow::anyhow!(
+            "native crash artifact exceeds {max_bytes} byte limit: {}",
+            path.display()
+        ));
+    }
+    Ok(bytes)
 }
 
 /// Removes the meta and dump artifacts for a decoded crash once reported.
@@ -426,10 +504,11 @@ mod imp {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(session_id.to_string());
 
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
+        let mut options = std::fs::OpenOptions::new();
+        options.create_new(true).write(true);
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+        let file = options
             .open(dump)
             .with_context(|| format!("failed to pre-open crash dump: {}", dump.display()))?;
         let fd = file.into_raw_fd();
@@ -644,9 +723,8 @@ mod imp {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(session_id.to_string());
 
         let file = std::fs::OpenOptions::new()
-            .create(true)
+            .create_new(true)
             .write(true)
-            .truncate(true)
             .open(dump)
             .with_context(|| format!("failed to pre-open crash dump: {}", dump.display()))?;
         let handle = file.into_raw_handle() as isize;
@@ -771,9 +849,21 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::{
-        NativeContext, NativeSignal, PendingNativeCrash, decode_dump, new_session_id, parse_int,
-        parse_uint, signal_name,
+        MAX_META_BYTES, NativeContext, NativeSignal, PendingNativeCrash, decode_dump,
+        new_session_id, parse_int, parse_uint, pending_crashes, signal_name, write_context,
     };
+
+    fn context(session_id: &str) -> NativeContext {
+        NativeContext {
+            session_id: session_id.to_string(),
+            app_version: Some("1.0.0".to_string()),
+            environment: Some("test".to_string()),
+            os: "macos".to_string(),
+            arch: "aarch64".to_string(),
+            pid: 1,
+            started_at_ms: 0,
+        }
+    }
 
     #[test]
     fn session_ids_are_unique() {
@@ -807,15 +897,7 @@ mod tests {
     #[test]
     fn summary_describes_signal() {
         let crash = PendingNativeCrash {
-            context: NativeContext {
-                session_id: "s".to_string(),
-                app_version: Some("1.0.0".to_string()),
-                environment: Some("test".to_string()),
-                os: "macos".to_string(),
-                arch: "aarch64".to_string(),
-                pid: 1,
-                started_at_ms: 0,
-            },
+            context: context("s"),
             signal: Some(NativeSignal {
                 signal: 11,
                 code: Some(1),
@@ -836,5 +918,32 @@ mod tests {
         assert_eq!(signal_name(libc::SIGSEGV as i64), "SIGSEGV");
         #[cfg(not(unix))]
         let _ = signal_name(11);
+    }
+
+    #[test]
+    fn rejects_oversized_native_context_before_writing() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut context = context("oversized");
+        context.environment = Some("x".repeat(MAX_META_BYTES as usize));
+
+        assert!(write_context(directory.path(), &context).is_err());
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pending_crashes_ignore_symlinked_metadata() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        serde_json::to_writer(outside.as_file(), &context("linked")).unwrap();
+        symlink(
+            outside.path(),
+            directory.path().join("linked.crashmeta.json"),
+        )
+        .unwrap();
+
+        assert!(pending_crashes(directory.path()).unwrap().is_empty());
     }
 }
