@@ -1,7 +1,7 @@
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 
-/// A snapshot of GPU memory budget and usage for the default device.
+/// A snapshot of GPU memory budget and usage for a platform-selected device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GpuMemoryBudget {
     /// The device-recommended memory budget, in bytes.
@@ -27,7 +27,7 @@ impl GpuMemoryBudget {
         }
     }
 
-    /// Query the default GPU's budget, or `None` if it is unavailable.
+    /// Query a platform-selected GPU budget, or `None` if it is unavailable.
     pub fn query() -> Option<Self> {
         platform_query()
     }
@@ -57,6 +57,7 @@ fn platform_query() -> Option<GpuMemoryBudget> {
     unsafe {
         let factory: IDXGIFactory = CreateDXGIFactory().ok()?;
         let adapter = factory.EnumAdapters(0).ok()?;
+        let description = adapter.GetDesc().ok()?;
         let adapter3 = adapter.cast::<IDXGIAdapter3>().ok()?;
         let mut info = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
         adapter3
@@ -65,7 +66,7 @@ fn platform_query() -> Option<GpuMemoryBudget> {
         (info.Budget > 0).then(|| GpuMemoryBudget {
             total_bytes: info.Budget,
             used_bytes: info.CurrentUsage,
-            has_unified_memory: false,
+            has_unified_memory: description.DedicatedVideoMemory == 0,
         })
     }
 }

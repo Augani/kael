@@ -15,10 +15,12 @@ if let Some(budget) = kael_gpu_budget::GpuMemoryBudget::query() {
 }
 ```
 
-`GpuMemoryBudget::query` returns `None` when the native API, a default adapter,
-or the required Vulkan extension is unavailable. Reported usage is clamped for
-ratio calculations because drivers can transiently report usage above their
-current budget.
+`GpuMemoryBudget::query` returns `None` when the native API, a suitable adapter,
+or the required Vulkan extension is unavailable. Metal and DXGI use the
+platform-selected device. Vulkan has no process-wide default device without a
+presentation context, so Linux selects the supported physical device with the
+largest reported budget. Reported usage is clamped for ratio calculations
+because drivers can transiently report usage above their current budget.
 
 ## License
 
