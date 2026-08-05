@@ -25,7 +25,6 @@ fn main() {
 struct IconAsset {
     slug: String,
     variant_name: String,
-    path: PathBuf,
 }
 
 fn load_icons(icon_dir: &Path) -> Vec<IconAsset> {
@@ -48,7 +47,6 @@ fn load_icons(icon_dir: &Path) -> Vec<IconAsset> {
             IconAsset {
                 variant_name: slug_to_variant_name(&slug),
                 slug,
-                path,
             }
         })
         .collect::<Vec<_>>();
@@ -158,9 +156,8 @@ fn generate_catalog(icons: &[IconAsset]) -> String {
     source.push_str("        match self {\n");
     for icon in icons {
         source.push_str(&format!(
-            "            Self::{} => include_str!(\"{}\"),\n",
-            icon.variant_name,
-            escape_path(&icon.path)
+            "            Self::{} => include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/icons/{}.svg\")),\n",
+            icon.variant_name, icon.slug
         ));
     }
     source.push_str("        }\n");
@@ -214,10 +211,8 @@ fn generate_catalog(icons: &[IconAsset]) -> String {
     source.push_str("pub const GENERATED_ICONS: &[IconMetadata] = &[\n");
     for icon in icons {
         source.push_str(&format!(
-            "    IconMetadata {{ name: IconName::{}, slug: \"{}\", svg: include_str!(\"{}\") }},\n",
-            icon.variant_name,
-            icon.slug,
-            escape_path(&icon.path)
+            "    IconMetadata {{ name: IconName::{}, slug: \"{}\", svg: include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/icons/{}.svg\")) }},\n",
+            icon.variant_name, icon.slug, icon.slug
         ));
     }
     source.push_str("];\n");
@@ -238,12 +233,4 @@ fn slug_to_variant_name(slug: &str) -> String {
             format!("{first}{rest}")
         })
         .collect::<String>()
-}
-
-fn escape_path(path: &Path) -> String {
-    path.canonicalize()
-        .expect("failed to canonicalize icon path")
-        .display()
-        .to_string()
-        .replace('\\', "\\\\")
 }
