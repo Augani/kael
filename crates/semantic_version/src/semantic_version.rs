@@ -1,5 +1,4 @@
-//! Constructs for working with [semantic versions](https://semver.org/).
-
+#![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 
 use std::{
