@@ -81,12 +81,11 @@ impl LocaleBundle {
     }
 
     /// Translates a key and substitutes named `{placeholder}` values.
+    ///
+    /// Substitution is performed in one pass: placeholder-like text inside an
+    /// argument value is never interpreted as another placeholder.
     pub fn translate_with_args(&self, key: &str, arguments: &[(&str, &str)]) -> String {
-        let mut translated = self.translate(key).to_string();
-        for (name, value) in arguments {
-            translated = translated.replace(&format!("{{{name}}}"), value);
-        }
-        translated
+        substitute_named(self.translate(key), arguments)
     }
 
     /// Returns a sorted list of all available locale identifiers.
@@ -122,6 +121,38 @@ impl LocaleBundle {
                 })
             })
     }
+}
+
+fn substitute_named(template: &str, arguments: &[(&str, &str)]) -> String {
+    let mut output = String::with_capacity(template.len());
+    let mut remaining = template;
+
+    while let Some(open) = remaining.find('{') {
+        output.push_str(&remaining[..open]);
+        let after_open = &remaining[open + 1..];
+        let Some(close) = after_open.find('}') else {
+            output.push_str(&remaining[open..]);
+            return output;
+        };
+        let name = &after_open[..close];
+
+        if !name.is_empty() && !name.contains('{') {
+            if let Some((_, value)) = arguments.iter().find(|(candidate, _)| *candidate == name) {
+                output.push_str(value);
+            } else {
+                output.push('{');
+                output.push_str(name);
+                output.push('}');
+            }
+            remaining = &after_open[close + 1..];
+        } else {
+            output.push('{');
+            remaining = after_open;
+        }
+    }
+
+    output.push_str(remaining);
+    output
 }
 
 fn normalize_locale(locale: &str) -> String {
@@ -237,5 +268,24 @@ mod tests {
             "Welcome, Ada"
         );
         assert!(bundle.has_locale("de-CH"));
+    }
+
+    #[test]
+    fn named_arguments_are_substituted_once_without_cascading() {
+        assert_eq!(
+            substitute_named(
+                "{first} / {second} / {missing}",
+                &[("first", "{second}"), ("second", "done")]
+            ),
+            "{second} / done / {missing}"
+        );
+        assert_eq!(
+            substitute_named("unclosed {name", &[("name", "Ada")]),
+            "unclosed {name"
+        );
+        assert_eq!(
+            substitute_named("literal {}", &[("", "hidden")]),
+            "literal {}"
+        );
     }
 }
