@@ -22,7 +22,9 @@ pub struct NotificationAction {
     pub title: String,
     /// Additional platform hints for the action.
     pub options: ActionOptions,
-    /// An optional placeholder for text-input actions.
+    /// An optional placeholder reserved for text-input actions.
+    ///
+    /// The bundled backends currently reject text-input actions.
     pub text_input_placeholder: Option<String>,
 }
 

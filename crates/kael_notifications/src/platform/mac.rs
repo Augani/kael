@@ -26,28 +26,22 @@ impl NotificationBackend for PlatformBackend {
         on_action: Option<Arc<dyn Fn(String) + Send + Sync + 'static>>,
     ) -> Result<()> {
         if actions.is_empty() {
+            let mut options = mac_notification_sys::Notification::new();
+            configure_sound(&mut options, notification.sound.as_ref());
             mac_notification_sys::send_notification(
                 &payload.title,
                 notification.subtitle.as_deref(),
                 &notification.body,
-                None,
+                Some(&options),
             )
             .map_err(|error| anyhow!("failed to show notification: {error}"))?;
             return Ok(());
         }
 
-        if actions
-            .iter()
-            .any(|action| action.text_input_placeholder.is_some())
-        {
-            return Err(anyhow!(
-                "text-input notification actions are not supported by the macOS backend"
-            ));
-        }
-
         let title = payload.title.clone();
         let subtitle = notification.subtitle.clone();
         let body = notification.body.clone();
+        let sound = notification.sound.clone();
         let actions = actions.to_vec();
         std::thread::Builder::new()
             .name("kael-notification-actions".into())
@@ -57,6 +51,7 @@ impl NotificationBackend for PlatformBackend {
                     .map(|action| action.title.as_str())
                     .collect::<Vec<_>>();
                 let mut options = mac_notification_sys::Notification::new();
+                configure_sound(&mut options, sound.as_ref());
                 if labels.len() == 1 {
                     options.main_button(mac_notification_sys::MainButton::SingleAction(labels[0]));
                 } else {
@@ -88,5 +83,20 @@ impl NotificationBackend for PlatformBackend {
                 anyhow!("failed to start macOS notification action listener: {error}")
             })?;
         Ok(())
+    }
+}
+
+fn configure_sound(
+    options: &mut mac_notification_sys::Notification<'_>,
+    sound: Option<&crate::local::NotificationSound>,
+) {
+    match sound {
+        Some(crate::local::NotificationSound::Default) => {
+            options.default_sound();
+        }
+        Some(crate::local::NotificationSound::Named(name)) => {
+            options.sound(name);
+        }
+        Some(crate::local::NotificationSound::Silent) | None => {}
     }
 }
