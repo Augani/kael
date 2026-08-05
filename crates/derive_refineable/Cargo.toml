@@ -6,12 +6,16 @@ homepage.workspace = true
 version.workspace = true
 publish = true
 description = "A derive macro for creating refinement types in Rust for Kael"
+documentation = "https://docs.rs/kael_derive_refineable"
 keywords = ["derive", "macros", "refineable", "kael"]
 categories = ["development-tools::procedural-macro-helpers", "rust-patterns"]
 authors.workspace = true
 repository.workspace = true
 readme = "README.md"
 license.workspace = true
+
+[package.metadata.docs.rs]
+targets = []
 
 [lib]
 name = "kael_derive_refineable"
