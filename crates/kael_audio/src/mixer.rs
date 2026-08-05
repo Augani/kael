@@ -18,6 +18,11 @@ use anyhow::{Context as _, Result};
 use parking_lot::Mutex;
 
 const MAX_OFFLINE_SAMPLES: usize = 64 * 1024 * 1024;
+const MAX_PENDING_COMMANDS: usize = 1024;
+const DEFAULT_CALLBACK_FRAMES: usize = 8 * 1024;
+const MAX_CALLBACK_FRAMES: usize = 64 * 1024;
+const MAX_CALLBACK_SAMPLES: usize = 1024 * 1024;
+const INITIAL_VOICE_CAPACITY: usize = 64;
 
 /// Identifier for a voice playing in a [`Mixer`].
 pub type VoiceId = u64;
@@ -59,7 +64,11 @@ impl AudioClock {
 
     /// Playback position as a [`Duration`].
     pub fn duration(&self) -> Duration {
-        Duration::from_secs_f64(self.seconds())
+        let frames = self.frames();
+        let sample_rate = u64::from(self.sample_rate);
+        let seconds = frames / sample_rate;
+        let nanos = ((frames % sample_rate) * 1_000_000_000) / sample_rate;
+        Duration::new(seconds, u32::try_from(nanos).unwrap_or(999_999_999))
     }
 
     /// Reset the frame counter to zero.
@@ -81,6 +90,9 @@ pub trait SampleSource: Send {
     /// Fill `out` with interleaved samples (`channels` per frame), up to its
     /// capacity. Returns the number of **frames** written; a write shorter than
     /// `out.len() / channels` signals that the source has ended.
+    ///
+    /// Live engines call this method on the device thread. Implementations must
+    /// not block, perform file or network I/O, or allocate in the steady state.
     fn fill(&mut self, out: &mut [f32], channels: u16) -> usize;
 }
 
@@ -236,7 +248,7 @@ impl Mixer {
             sample_rate,
             channels: channels.max(1),
             master_gain: 1.0,
-            voices: Vec::new(),
+            voices: Vec::with_capacity(INITIAL_VOICE_CAPACITY),
             clock: AudioClock::new(sample_rate),
             scratch: Vec::new(),
         }
@@ -353,6 +365,16 @@ impl Mixer {
             .advance(u64::try_from(frames).unwrap_or(u64::MAX));
     }
 
+    fn prepare_callback_buffer(&mut self, samples: usize) -> Result<()> {
+        if self.scratch.len() < samples {
+            self.scratch
+                .try_reserve_exact(samples - self.scratch.len())
+                .context("failed to reserve the audio callback buffer")?;
+            self.scratch.resize(samples, 0.0);
+        }
+        Ok(())
+    }
+
     /// Render mixed audio offline (faster than real time) into a new interleaved
     /// buffer, processing `chunk_frames` at a time and stopping once all voices
     /// have ended or `max_frames` is reached. The primitive for export mixdown.
@@ -395,8 +417,8 @@ fn finite_gain(gain: f32) -> f32 {
 
 /// Linearly resample interleaved `input` from `from_rate` to `to_rate`.
 ///
-/// This is the interim resampler for the audio spine; the production engine will
-/// use a windowed-sinc resampler for higher quality.
+/// Linear interpolation is fast and predictable for UI sounds and previews.
+/// Use a band-limited resampler when final mastering quality is required.
 pub fn resample_linear(input: &[f32], channels: u16, from_rate: u32, to_rate: u32) -> Vec<f32> {
     let channels = channels.max(1) as usize;
     if input.is_empty() || from_rate == 0 || to_rate == 0 {
@@ -464,6 +486,123 @@ fn apply_command(mixer: &mut Mixer, command: MixerCommand) {
     }
 }
 
+fn enqueue_command(commands: &Mutex<Vec<MixerCommand>>, command: MixerCommand) -> Result<()> {
+    let mut pending = commands.lock();
+
+    match &command {
+        MixerCommand::SetMasterGain(_) => {
+            if let Some(existing) = pending
+                .iter_mut()
+                .rev()
+                .find(|queued| matches!(queued, MixerCommand::SetMasterGain(_)))
+            {
+                *existing = command;
+                return Ok(());
+            }
+        }
+        MixerCommand::SetVoiceGain(id, _) => {
+            if let Some(existing) = pending.iter_mut().rev().find(|queued| {
+                matches!(queued, MixerCommand::SetVoiceGain(queued_id, _) if queued_id == id)
+            }) {
+                *existing = command;
+                return Ok(());
+            }
+        }
+        MixerCommand::Remove(id) => {
+            if let Some(position) = pending.iter().position(
+                |queued| matches!(queued, MixerCommand::Add { id: queued_id, .. } if queued_id == id),
+            ) {
+                pending.remove(position);
+                pending.retain(
+                    |queued| !matches!(queued, MixerCommand::SetVoiceGain(queued_id, _) if queued_id == id),
+                );
+                return Ok(());
+            }
+            pending.retain(
+                |queued| !matches!(queued, MixerCommand::SetVoiceGain(queued_id, _) if queued_id == id),
+            );
+        }
+        MixerCommand::Add { .. } => {}
+    }
+
+    if pending.len() >= MAX_PENDING_COMMANDS {
+        anyhow::bail!("audio command queue is full ({MAX_PENDING_COMMANDS} pending commands)");
+    }
+    pending
+        .try_reserve(1)
+        .context("failed to reserve audio command queue capacity")?;
+    pending.push(command);
+    Ok(())
+}
+
+fn callback_sample_capacity(buffer_size: &cpal::SupportedBufferSize, channels: u16) -> usize {
+    let frames = match buffer_size {
+        cpal::SupportedBufferSize::Range { max, .. } => {
+            usize::try_from(*max).unwrap_or(MAX_CALLBACK_FRAMES)
+        }
+        cpal::SupportedBufferSize::Unknown => DEFAULT_CALLBACK_FRAMES,
+    }
+    .clamp(1, MAX_CALLBACK_FRAMES);
+    frames
+        .checked_mul(usize::from(channels.max(1)))
+        .unwrap_or(MAX_CALLBACK_SAMPLES)
+        .min(MAX_CALLBACK_SAMPLES)
+}
+
+fn build_output_stream<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    mut mixer: Mixer,
+    commands: Arc<Mutex<Vec<MixerCommand>>>,
+    last_error: Arc<Mutex<Option<String>>>,
+    callback_samples: usize,
+) -> Result<cpal::Stream>
+where
+    T: cpal::SizedSample + cpal::FromSample<f32>,
+{
+    use cpal::traits::DeviceTrait as _;
+
+    mixer.prepare_callback_buffer(callback_samples)?;
+    let mut mixed = Vec::new();
+    mixed
+        .try_reserve_exact(callback_samples)
+        .context("failed to reserve the output conversion buffer")?;
+    mixed.resize(callback_samples, 0.0f32);
+
+    device
+        .build_output_stream(
+            config,
+            move |data: &mut [T], _info| {
+                if data.len() > mixed.len() {
+                    for sample in data.iter_mut() {
+                        *sample = T::from_sample(0.0);
+                    }
+                    let frames = data.len() / usize::from(mixer.channels);
+                    mixer
+                        .clock
+                        .advance(u64::try_from(frames).unwrap_or(u64::MAX));
+                    return;
+                }
+                if let Some(mut pending) = commands.try_lock() {
+                    for command in pending.drain(..) {
+                        apply_command(&mut mixer, command);
+                    }
+                }
+                mixer.process(&mut mixed[..data.len()]);
+                for (output, sample) in data.iter_mut().zip(&mixed) {
+                    *output = T::from_sample(*sample);
+                }
+            },
+            move |error| {
+                let message = bounded_error_message(error.to_string());
+                log::error!("audio output stream error: {message}");
+                *last_error.lock() = Some(message);
+            },
+            None,
+        )
+        .context("failed to build output stream")
+}
+
 /// A live audio engine: a [`Mixer`] driven by a real `cpal` output stream.
 ///
 /// Control calls enqueue commands that the audio callback drains without
@@ -472,6 +611,7 @@ pub struct AudioEngine {
     _stream: cpal::Stream,
     clock: AudioClock,
     commands: Arc<Mutex<Vec<MixerCommand>>>,
+    last_error: Arc<Mutex<Option<String>>>,
     next_id: AtomicU64,
     sample_rate: u32,
     channels: u16,
@@ -491,40 +631,107 @@ impl AudioEngine {
             .context("no default output config")?;
 
         let sample_format = supported.sample_format();
-        if sample_format != cpal::SampleFormat::F32 {
-            anyhow::bail!("unsupported sample format: {sample_format:?}");
-        }
-
         let sample_rate = supported.sample_rate().0;
         let channels = supported.channels();
+        let callback_samples = callback_sample_capacity(supported.buffer_size(), channels);
         let config: cpal::StreamConfig = supported.into();
 
-        let mut mixer = Mixer::new(sample_rate, channels);
+        let mixer = Mixer::new(sample_rate, channels);
         let clock = mixer.clock();
-        let commands: Arc<Mutex<Vec<MixerCommand>>> = Arc::new(Mutex::new(Vec::new()));
-        let callback_commands = commands.clone();
+        let commands: Arc<Mutex<Vec<MixerCommand>>> =
+            Arc::new(Mutex::new(Vec::with_capacity(INITIAL_VOICE_CAPACITY)));
+        let last_error = Arc::new(Mutex::new(None));
 
-        let stream = device
-            .build_output_stream(
+        let stream = match sample_format {
+            cpal::SampleFormat::I8 => build_output_stream::<i8>(
+                &device,
                 &config,
-                move |data: &mut [f32], _info| {
-                    if let Some(mut pending) = callback_commands.try_lock() {
-                        for command in pending.drain(..) {
-                            apply_command(&mut mixer, command);
-                        }
-                    }
-                    mixer.process(data);
-                },
-                |error| log::error!("audio output stream error: {error}"),
-                None,
-            )
-            .context("failed to build output stream")?;
+                mixer,
+                commands.clone(),
+                last_error.clone(),
+                callback_samples,
+            ),
+            cpal::SampleFormat::I16 => build_output_stream::<i16>(
+                &device,
+                &config,
+                mixer,
+                commands.clone(),
+                last_error.clone(),
+                callback_samples,
+            ),
+            cpal::SampleFormat::I32 => build_output_stream::<i32>(
+                &device,
+                &config,
+                mixer,
+                commands.clone(),
+                last_error.clone(),
+                callback_samples,
+            ),
+            cpal::SampleFormat::I64 => build_output_stream::<i64>(
+                &device,
+                &config,
+                mixer,
+                commands.clone(),
+                last_error.clone(),
+                callback_samples,
+            ),
+            cpal::SampleFormat::U8 => build_output_stream::<u8>(
+                &device,
+                &config,
+                mixer,
+                commands.clone(),
+                last_error.clone(),
+                callback_samples,
+            ),
+            cpal::SampleFormat::U16 => build_output_stream::<u16>(
+                &device,
+                &config,
+                mixer,
+                commands.clone(),
+                last_error.clone(),
+                callback_samples,
+            ),
+            cpal::SampleFormat::U32 => build_output_stream::<u32>(
+                &device,
+                &config,
+                mixer,
+                commands.clone(),
+                last_error.clone(),
+                callback_samples,
+            ),
+            cpal::SampleFormat::U64 => build_output_stream::<u64>(
+                &device,
+                &config,
+                mixer,
+                commands.clone(),
+                last_error.clone(),
+                callback_samples,
+            ),
+            cpal::SampleFormat::F32 => build_output_stream::<f32>(
+                &device,
+                &config,
+                mixer,
+                commands.clone(),
+                last_error.clone(),
+                callback_samples,
+            ),
+            cpal::SampleFormat::F64 => build_output_stream::<f64>(
+                &device,
+                &config,
+                mixer,
+                commands.clone(),
+                last_error.clone(),
+                callback_samples,
+            ),
+            _ => anyhow::bail!("unsupported sample format: {sample_format:?}"),
+        }?;
         stream.play().context("failed to start output stream")?;
 
         Ok(Self {
             _stream: stream,
             clock,
             commands,
+            last_error,
             next_id: AtomicU64::new(1),
             sample_rate,
             channels,
@@ -546,6 +753,14 @@ impl AudioEngine {
         self.channels
     }
 
+    /// Returns and clears the most recent output-stream error.
+    ///
+    /// Applications can use this to surface device loss and recreate the
+    /// engine after the default output route changes.
+    pub fn take_error(&self) -> Option<String> {
+        self.last_error.lock().take()
+    }
+
     /// Start playing `source` at `gain`, returning its voice id.
     pub fn play_source(&self, source: Box<dyn SampleSource>, gain: f32) -> Result<VoiceId> {
         let id = self
@@ -554,28 +769,37 @@ impl AudioEngine {
                 current.checked_add(1)
             })
             .map_err(|_| anyhow::anyhow!("audio voice id space exhausted"))?;
-        self.commands
-            .lock()
-            .push(MixerCommand::Add { id, source, gain });
+        enqueue_command(&self.commands, MixerCommand::Add { id, source, gain })?;
         Ok(id)
     }
 
     /// Stop the voice with the given id.
-    pub fn stop_voice(&self, id: VoiceId) {
-        self.commands.lock().push(MixerCommand::Remove(id));
+    pub fn stop_voice(&self, id: VoiceId) -> Result<()> {
+        enqueue_command(&self.commands, MixerCommand::Remove(id))
     }
 
     /// Set the gain of the voice with the given id.
-    pub fn set_voice_gain(&self, id: VoiceId, gain: f32) {
-        self.commands
-            .lock()
-            .push(MixerCommand::SetVoiceGain(id, gain));
+    pub fn set_voice_gain(&self, id: VoiceId, gain: f32) -> Result<()> {
+        enqueue_command(&self.commands, MixerCommand::SetVoiceGain(id, gain))
     }
 
     /// Set the master gain applied to the whole mix.
-    pub fn set_master_gain(&self, gain: f32) {
-        self.commands.lock().push(MixerCommand::SetMasterGain(gain));
+    pub fn set_master_gain(&self, gain: f32) -> Result<()> {
+        enqueue_command(&self.commands, MixerCommand::SetMasterGain(gain))
     }
+}
+
+fn bounded_error_message(mut message: String) -> String {
+    const MAX_ERROR_BYTES: usize = 4 * 1024;
+    if message.len() <= MAX_ERROR_BYTES {
+        return message;
+    }
+    let mut boundary = MAX_ERROR_BYTES;
+    while !message.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    message.truncate(boundary);
+    message
 }
 
 #[cfg(test)]
@@ -608,6 +832,10 @@ mod tests {
         clock.advance(10);
         assert_eq!(clock.frames(), u64::MAX);
         assert!(clock.duration() > Duration::ZERO);
+
+        let slow_clock = AudioClock::new(1);
+        slow_clock.frames.store(u64::MAX, Ordering::Release);
+        assert_eq!(slow_clock.duration(), Duration::from_secs(u64::MAX));
     }
 
     #[test]
@@ -736,6 +964,82 @@ mod tests {
         mixer.insert_voice(1, Box::new(SineSource::new(440.0, 48_000, 0.5)), 1.0);
         assert!(mixer.render_offline(usize::MAX, 64).is_empty());
         assert!(resample_linear(&[0.0], 1, 1, u32::MAX).is_empty());
+    }
+
+    #[test]
+    fn command_queue_is_bounded_and_coalesces_controls() {
+        let commands = Mutex::new(Vec::new());
+        enqueue_command(&commands, MixerCommand::SetMasterGain(0.5)).unwrap();
+        enqueue_command(&commands, MixerCommand::SetMasterGain(0.75)).unwrap();
+        enqueue_command(&commands, MixerCommand::SetVoiceGain(7, 0.5)).unwrap();
+        enqueue_command(&commands, MixerCommand::SetVoiceGain(7, 0.25)).unwrap();
+        assert_eq!(commands.lock().len(), 2);
+
+        commands.lock().clear();
+        for id in 0..MAX_PENDING_COMMANDS as u64 {
+            enqueue_command(
+                &commands,
+                MixerCommand::Add {
+                    id,
+                    source: Box::new(SineSource::new(440.0, 48_000, 0.1).with_frames(1)),
+                    gain: 1.0,
+                },
+            )
+            .unwrap();
+        }
+        assert!(
+            enqueue_command(
+                &commands,
+                MixerCommand::Add {
+                    id: u64::MAX,
+                    source: Box::new(SineSource::new(440.0, 48_000, 0.1).with_frames(1)),
+                    gain: 1.0,
+                },
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn stopping_a_pending_voice_cancels_it_before_the_callback() {
+        let commands = Mutex::new(Vec::new());
+        enqueue_command(
+            &commands,
+            MixerCommand::Add {
+                id: 7,
+                source: Box::new(SineSource::new(440.0, 48_000, 0.1)),
+                gain: 1.0,
+            },
+        )
+        .unwrap();
+        enqueue_command(&commands, MixerCommand::SetVoiceGain(7, 0.5)).unwrap();
+        enqueue_command(&commands, MixerCommand::Remove(7)).unwrap();
+        assert!(commands.lock().is_empty());
+    }
+
+    #[test]
+    fn callback_capacity_is_bounded() {
+        assert_eq!(
+            callback_sample_capacity(&cpal::SupportedBufferSize::Unknown, 2),
+            DEFAULT_CALLBACK_FRAMES * 2
+        );
+        assert_eq!(
+            callback_sample_capacity(
+                &cpal::SupportedBufferSize::Range {
+                    min: 1,
+                    max: u32::MAX,
+                },
+                u16::MAX,
+            ),
+            MAX_CALLBACK_SAMPLES
+        );
+    }
+
+    #[test]
+    fn stream_errors_are_utf8_bounded() {
+        let message = bounded_error_message("é".repeat(4096));
+        assert!(message.len() <= 4 * 1024);
+        assert!(message.is_char_boundary(message.len()));
     }
 
     #[test]
