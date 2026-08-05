@@ -13,23 +13,23 @@ repository.workspace = true
 readme = "README.md"
 license.workspace = true
 
+[package.metadata.docs.rs]
+features = ["parallel"]
+
+[features]
+parallel = ["dep:rayon"]
+
 [lib]
 name = "kael_sum_tree"
 path = "src/sum_tree.rs"
-doctest = false
+doctest = true
 
 [dependencies.arrayvec]
 version = "0.7.1"
 
-[dependencies.log]
-workspace = true
-features = [
-    "kv_unstable_serde",
-    "serde",
-]
-
 [dependencies.rayon]
 version = "1.8"
+optional = true
 
 
 [dev-dependencies.rand]

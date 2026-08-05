@@ -26,6 +26,9 @@ impl<T: Item + fmt::Debug, D: fmt::Debug> fmt::Debug for StackEntry<'_, T, D> {
 }
 
 #[derive(Clone)]
+/// A movable position in a [`SumTree`], tracked in dimension `D`.
+///
+/// Call [`Cursor::seek`], [`Cursor::next`], or [`Cursor::prev`] before reading the current item.
 pub struct Cursor<'a, 'b, T: Item, D> {
     tree: &'a SumTree<T>,
     stack: ArrayVec<StackEntry<'a, T, D>, 16>,
@@ -50,6 +53,7 @@ where
     }
 }
 
+/// A borrowed iterator over every item in a [`SumTree`].
 pub struct Iter<'a, T: Item> {
     tree: &'a SumTree<T>,
     stack: ArrayVec<StackEntry<'a, T, ()>, 16>,
@@ -60,7 +64,7 @@ where
     T: Item,
     D: Dimension<'a, T::Summary>,
 {
-    pub fn new(tree: &'a SumTree<T>, cx: <T::Summary as Summary>::Context<'b>) -> Self {
+    pub(super) fn new(tree: &'a SumTree<T>, cx: <T::Summary as Summary>::Context<'b>) -> Self {
         Self {
             tree,
             stack: ArrayVec::new(),
@@ -78,11 +82,17 @@ where
         self.position = D::zero(self.cx);
     }
 
+    /// Returns the dimension at the start of the current item.
     pub fn start(&self) -> &D {
         &self.position
     }
 
     #[track_caller]
+    /// Returns the dimension at the end of the current item.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cursor has not been positioned.
     pub fn end(&self) -> D {
         if let Some(item_summary) = self.item_summary() {
             let mut end = self.start().clone();
@@ -93,7 +103,11 @@ where
         }
     }
 
-    /// Item is None, when the list is empty, or this cursor is at the end of the list.
+    /// Returns the current item, or `None` at either end of the tree.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cursor has not been positioned.
     #[track_caller]
     pub fn item(&self) -> Option<&'a T> {
         self.assert_did_seek();
@@ -114,6 +128,11 @@ where
     }
 
     #[track_caller]
+    /// Returns the current item's summary, or `None` at either end of the tree.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cursor has not been positioned.
     pub fn item_summary(&self) -> Option<&'a T::Summary> {
         self.assert_did_seek();
         if let Some(entry) = self.stack.last() {
@@ -135,6 +154,11 @@ where
     }
 
     #[track_caller]
+    /// Peeks at the following item without moving the cursor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cursor has not been positioned.
     pub fn next_item(&self) -> Option<&'a T> {
         self.assert_did_seek();
         if let Some(entry) = self.stack.last() {
@@ -173,6 +197,11 @@ where
     }
 
     #[track_caller]
+    /// Peeks at the preceding item without moving the cursor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cursor has not been positioned.
     pub fn prev_item(&self) -> Option<&'a T> {
         self.assert_did_seek();
         if let Some(entry) = self.stack.last() {
@@ -211,11 +240,15 @@ where
     }
 
     #[track_caller]
+    /// Moves to the preceding item, or before the start of the tree.
     pub fn prev(&mut self) {
         self.search_backward(|_| true)
     }
 
     #[track_caller]
+    /// Moves backward to the nearest item whose containing summaries pass `filter_node`.
+    ///
+    /// A `false` result skips the complete subtree represented by that summary.
     pub fn search_backward<F>(&mut self, mut filter_node: F)
     where
         F: FnMut(&T::Summary) -> bool,
@@ -282,11 +315,15 @@ where
     }
 
     #[track_caller]
+    /// Moves to the following item, or past the end of the tree.
     pub fn next(&mut self) {
         self.search_forward(|_| true)
     }
 
     #[track_caller]
+    /// Moves forward to the nearest item whose containing summaries pass `filter_node`.
+    ///
+    /// A `false` result skips the complete subtree represented by that summary.
     pub fn search_forward<F>(&mut self, mut filter_node: F)
     where
         F: FnMut(&T::Summary) -> bool,
@@ -389,6 +426,9 @@ where
     D: Dimension<'a, T::Summary>,
 {
     #[track_caller]
+    /// Resets the cursor, seeks to `pos`, and reports whether that exact position exists.
+    ///
+    /// `bias` chooses a side when `pos` lies on an item boundary.
     pub fn seek<Target>(&mut self, pos: &Target, bias: Bias) -> bool
     where
         Target: SeekTarget<'a, T::Summary, D>,
@@ -398,6 +438,11 @@ where
     }
 
     #[track_caller]
+    /// Seeks forward from the current position and reports whether the exact target exists.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `pos` is before the current cursor position.
     pub fn seek_forward<Target>(&mut self, pos: &Target, bias: Bias) -> bool
     where
         Target: SeekTarget<'a, T::Summary, D>,
@@ -405,7 +450,11 @@ where
         self.seek_internal(pos, bias, &mut ())
     }
 
-    /// Advances the cursor and returns traversed items as a tree.
+    /// Advances the cursor to `end` and returns the traversed items as a tree.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `end` is before the current cursor position.
     #[track_caller]
     pub fn slice<Target>(&mut self, end: &Target, bias: Bias) -> SumTree<T>
     where
@@ -422,11 +471,17 @@ where
     }
 
     #[track_caller]
+    /// Advances to the end and returns all remaining items as a tree.
     pub fn suffix(&mut self) -> SumTree<T> {
         self.slice(&End::new(), Bias::Right)
     }
 
     #[track_caller]
+    /// Advances to `end` and aggregates the traversed range as dimension `Output`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `end` is before the current cursor position.
     pub fn summary<Target, Output>(&mut self, end: &Target, bias: Bias) -> Output
     where
         Target: SeekTarget<'a, T::Summary, D>,
@@ -632,6 +687,7 @@ where
     }
 }
 
+/// A cursor that skips subtrees rejected by a summary predicate.
 pub struct FilterCursor<'a, 'b, F, T: Item, D> {
     cursor: Cursor<'a, 'b, T, D>,
     filter_node: F,
@@ -643,7 +699,7 @@ where
     T: Item,
     D: Dimension<'a, T::Summary>,
 {
-    pub fn new(
+    pub(super) fn new(
         tree: &'a SumTree<T>,
         cx: <T::Summary as Summary>::Context<'b>,
         filter_node: F,
@@ -655,26 +711,44 @@ where
         }
     }
 
+    /// Returns the dimension at the start of the current matching item.
     pub fn start(&self) -> &D {
         self.cursor.start()
     }
 
+    /// Returns the dimension at the end of the current matching item.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cursor has not been positioned.
     pub fn end(&self) -> D {
         self.cursor.end()
     }
 
+    /// Returns the current matching item, or `None` at either end of the tree.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cursor has not been positioned.
     pub fn item(&self) -> Option<&'a T> {
         self.cursor.item()
     }
 
+    /// Returns the current matching item's summary, or `None` at either end.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cursor has not been positioned.
     pub fn item_summary(&self) -> Option<&'a T::Summary> {
         self.cursor.item_summary()
     }
 
+    /// Moves to the next matching item, or past the end of the tree.
     pub fn next(&mut self) {
         self.cursor.search_forward(&mut self.filter_node);
     }
 
+    /// Moves to the previous matching item, or before the start of the tree.
     pub fn prev(&mut self) {
         self.cursor.search_backward(&mut self.filter_node);
     }
