@@ -78,13 +78,15 @@ impl Default for AuthorizationOptions {
 pub enum NotificationSound {
     /// Use the platform default sound.
     Default,
-    /// Use a named sound if the platform supports it.
+    /// Use a platform-native named sound if the backend supports it.
     Named(String),
     /// Deliver silently.
     Silent,
 }
 
-/// A file attachment associated with a local notification.
+/// A file attachment reserved for backends that support rich notifications.
+///
+/// The bundled backends currently reject notification attachments.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotificationAttachment {
     /// The attached file path.
@@ -164,7 +166,9 @@ pub struct LocalNotification {
     pub subtitle: Option<String>,
     /// The notification sound.
     pub sound: Option<NotificationSound>,
-    /// The badge count to apply when delivered.
+    /// The application badge count to apply when delivered.
+    ///
+    /// The bundled backends currently reject badge updates.
     pub badge: Option<u32>,
     /// The category identifier used to resolve actions.
     pub category: Option<String>,
@@ -174,6 +178,23 @@ pub struct LocalNotification {
     pub trigger: NotificationTrigger,
     /// Attached files associated with the notification.
     pub attachments: Vec<NotificationAttachment>,
+}
+
+impl LocalNotification {
+    /// Creates an immediate notification with the required visible content.
+    pub fn new(title: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            body: body.into(),
+            subtitle: None,
+            sound: None,
+            badge: None,
+            category: None,
+            user_info: HashMap::new(),
+            trigger: NotificationTrigger::Immediate,
+            attachments: Vec::new(),
+        }
+    }
 }
 
 /// A unique notification identifier.
@@ -362,7 +383,7 @@ impl NotificationCenter {
         }
     }
 
-    /// Cancels all scheduled notifications.
+    /// Cancels all scheduled notifications and emits a dismissal for each one.
     pub fn cancel_all(&self) {
         let entries = self
             .inner
@@ -408,7 +429,9 @@ impl NotificationCenter {
         })
     }
 
-    /// Sets the application badge count.
+    /// Sets the application badge count when the active backend supports it.
+    ///
+    /// The bundled Kael backends currently return an explicit unsupported error.
     pub fn set_badge_count(&self, count: u32) -> Result<()> {
         self.inner.backend.set_badge_count(count)
     }
@@ -873,6 +896,16 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, NotificationEvent::Received(_)))
         );
+    }
+
+    #[test]
+    fn local_notification_constructor_uses_safe_immediate_defaults() {
+        let notification = LocalNotification::new("Hello", "World");
+        assert_eq!(notification.title, "Hello");
+        assert_eq!(notification.body, "World");
+        assert_eq!(notification.trigger, NotificationTrigger::Immediate);
+        assert!(notification.attachments.is_empty());
+        assert!(notification.user_info.is_empty());
     }
 
     #[test]

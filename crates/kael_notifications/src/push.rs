@@ -5,6 +5,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 /// A push-registration token returned by a platform backend.
+///
+/// Debug formatting is always redacted so routine logs do not expose the token.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PushToken(Vec<u8>);
 

@@ -1,4 +1,16 @@
-//! Notification services for Kael.
+//! Validated desktop notification services for Kael applications.
+//!
+//! ```no_run
+//! use kael_notifications::{LocalNotification, NotificationCenter};
+//!
+//! let center = NotificationCenter::new();
+//! let id = center.schedule_local(LocalNotification::new(
+//!     "Export complete",
+//!     "report.pdf is ready",
+//! ))?;
+//! center.cancel(&id);
+//! # Ok::<(), anyhow::Error>(())
+//! ```
 
 #![deny(missing_docs)]
 
