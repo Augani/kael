@@ -1,17 +1,24 @@
 [package]
 edition.workspace = true
 name = "kael-macros"
+autoexamples = false
 rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
 publish = true
-description = "Macros for Kael"
+description = "Procedural macros for Kael actions, contexts, elements, styles, and deterministic tests"
+documentation = "https://docs.rs/kael-macros"
 keywords = ["macros", "derive", "gui", "kael", "proc-macro"]
 categories = ["development-tools::procedural-macro-helpers", "gui"]
 authors.workspace = true
 repository.workspace = true
 readme = "README.md"
 license.workspace = true
+exclude = ["examples/"]
+
+[package.metadata.docs.rs]
+features = ["inspector"]
+targets = []
 
 [features]
 inspector = []

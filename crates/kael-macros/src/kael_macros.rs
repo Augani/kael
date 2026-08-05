@@ -18,7 +18,10 @@ use proc_macro_crate::{FoundCrate, crate_name};
 use quote::format_ident;
 use syn::{DeriveInput, Ident, Meta, parse_quote};
 
-/// `Action` derive macro - see the trait documentation for details.
+/// Derives Kael's `Action` protocol implementation for a concrete type.
+///
+/// See [`kael::Action`](https://docs.rs/kael/latest/kael/trait.Action.html) for
+/// supported attributes and runtime behavior.
 #[proc_macro_derive(Action, attributes(action))]
 pub fn derive_action(input: TokenStream) -> TokenStream {
     derive_action::derive_action(input)
@@ -32,8 +35,7 @@ pub fn register_action(ident: TokenStream) -> TokenStream {
     register_action::register_action(ident)
 }
 
-/// #[derive(IntoElement)] is used to create a Component out of anything that implements
-/// the `RenderOnce` trait.
+/// Derives `IntoElement` for a type that implements `RenderOnce`.
 #[proc_macro_derive(IntoElement)]
 pub fn derive_into_element(input: TokenStream) -> TokenStream {
     derive_into_element::derive_into_element(input)
@@ -45,8 +47,9 @@ pub fn derive_render(input: TokenStream) -> TokenStream {
     derive_render::derive_render(input)
 }
 
-/// #[derive(AppContext)] is used to create a context out of anything that holds a `&mut App`
-/// Note that a `#[app]` attribute is required to identify the variable holding the &mut App.
+/// Derives `AppContext` for a type that holds a `&mut App`.
+///
+/// An argument-free `#[app]` attribute is required on exactly one named field.
 ///
 /// Failure to add the attribute causes a compile error:
 ///
@@ -63,10 +66,10 @@ pub fn derive_app_context(input: TokenStream) -> TokenStream {
     derive_app_context::derive_app_context(input)
 }
 
-/// #[derive(VisualContext)] is used to create a visual context out of anything that holds a `&mut Window` and
-/// implements `AppContext`
-/// Note that a `#[app]` and a `#[window]` attribute are required to identify the variables holding the &mut App,
-/// and &mut Window respectively.
+/// Derives `VisualContext` for an `AppContext` that also holds a `&mut Window`.
+///
+/// Argument-free `#[app]` and `#[window]` attributes identify the named fields
+/// holding `&mut App` and `&mut Window`, respectively.
 ///
 /// Failure to add both attributes causes a compile error:
 ///
@@ -165,9 +168,9 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
 /// async fn test_foo(mut cx: &TestAppContext) { }
 /// ```
 ///
-/// In addition to passing a TestAppContext, you can also ask for a `StdRnd` instance.
-/// this will be seeded with the `SEED` environment variable and is used internally by
-/// the ForegroundExecutor and BackgroundExecutor to run tasks deterministically in tests.
+/// In addition to passing a `TestAppContext`, you can also ask for a `StdRng` instance.
+/// It is seeded with the `SEED` environment variable and is used internally by
+/// the foreground and background executors to run tasks deterministically in tests.
 /// Using the same `StdRng` for behavior in your test will allow you to exercise a wide
 /// variety of scenarios and interleavings just by changing the seed.
 ///
@@ -183,8 +186,8 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
 ///
 /// You can combine `iterations = ...` with `seeds(...)`:
 /// - `#[kael::test(iterations = 5, seed = 10)]` is equivalent to `#[kael::test(seeds(0, 1, 2, 3, 4, 10))]`.
-/// - `#[kael::test(iterations = 5, seeds(10, 20, 30)]` is equivalent to `#[kael::test(seeds(0, 1, 2, 3, 4, 10, 20, 30))]`.
-/// - `#[kael::test(seeds(10, 20, 30), iterations = 5]` is equivalent to `#[kael::test(seeds(0, 1, 2, 3, 4, 10, 20, 30))]`.
+/// - `#[kael::test(iterations = 5, seeds(10, 20, 30))]` is equivalent to `#[kael::test(seeds(0, 1, 2, 3, 4, 10, 20, 30))]`.
+/// - `#[kael::test(seeds(10, 20, 30), iterations = 5)]` is equivalent to `#[kael::test(seeds(0, 1, 2, 3, 4, 10, 20, 30))]`.
 ///
 /// # Environment Variables
 ///
