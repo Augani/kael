@@ -83,6 +83,16 @@ preflight_crate() {
     echo "error: $crate would publish fonts without a third-party license index" >&2
     return 1
   fi
+  if grep -Eq '^icons/.*\.svg$' <<<"$listing" &&
+    ! grep -qx 'LICENSE-LUCIDE' <<<"$listing"; then
+    echo "error: $crate would publish Lucide icons without their ISC/MIT notice" >&2
+    return 1
+  fi
+  if grep -Eq '^icons/.*\.svg$' <<<"$listing" &&
+    ! grep -qx 'THIRD_PARTY_LICENSES.md' <<<"$listing"; then
+    echo "error: $crate would publish icons without a third-party license index" >&2
+    return 1
+  fi
   echo "package contents clean: $crate ($(wc -l <<<"$listing" | tr -d ' ') files)"
 }
 
