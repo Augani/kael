@@ -6,12 +6,16 @@ homepage.workspace = true
 version.workspace = true
 publish = true
 description = "A tool for measuring test performance for Kael"
+documentation = "https://docs.rs/kael_perf"
 keywords = ["performance", "profiling", "benchmark", "kael"]
 categories = ["development-tools::profiling"]
 authors.workspace = true
 repository.workspace = true
 readme = "README.md"
 license.workspace = true
+
+[package.metadata.docs.rs]
+targets = []
 
 [lib]
 name = "kael_perf"
