@@ -55,7 +55,7 @@ pub enum Error {
     /// A required environment variable for path resolution was missing.
     #[error("required environment variable was not set: {0}")]
     MissingEnvironmentVariable(&'static str),
-    /// An application or database identifier was empty or contained path separators.
+    /// An application or database identifier was not a portable file name.
     #[error("invalid storage identifier: {0:?}")]
     InvalidStorageIdentifier(String),
     /// A key was empty, excessive, or contained control characters.

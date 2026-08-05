@@ -37,6 +37,12 @@ backend failures are never disguised as empty data. Observer callbacks receive
 `Result<Option<T>>`, which distinguishes a missing key from a value that does
 not match the requested type.
 
+Application and database identifiers are portable ASCII file names of at most
+200 bytes. They may contain letters, numbers, spaces, `.`, `_`, and `-`, but
+may not start or end with a space or `.`, and Windows device names such as
+`CON` and `COM1` are rejected on every platform. Valid database names are
+preserved exactly, avoiding collisions caused by lossy filename sanitization.
+
 JSON updates are written to a temporary file in the destination directory,
 flushed, synced, and atomically persisted over the previous file. The SQLite
 backend enables write-ahead logging, a five-second busy timeout, and normal

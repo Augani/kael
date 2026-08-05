@@ -1,11 +1,10 @@
 //! Platform-specific storage path resolution.
 
-use std::{
-    ffi::OsStr,
-    path::{Component, Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use crate::{Error, Result};
+
+const MAX_IDENTIFIER_BYTES: usize = 200;
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod linux;
@@ -76,25 +75,27 @@ fn create_dir_all(path: &Path) -> Result<()> {
 
 fn database_file_name(name: &str) -> Result<String> {
     validate_identifier(name)?;
-    let sanitized = name
-        .chars()
-        .map(|character| match character {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' | '.' => character,
-            _ => '_',
-        })
-        .collect::<String>();
+    let has_sqlite_extension = name.rsplit_once('.').is_some_and(|(_, extension)| {
+        extension.eq_ignore_ascii_case("sqlite") || extension.eq_ignore_ascii_case("sqlite3")
+    });
 
-    if sanitized.ends_with(".sqlite") || sanitized.ends_with(".sqlite3") {
-        Ok(sanitized)
+    if has_sqlite_extension {
+        Ok(name.to_string())
     } else {
-        Ok(format!("{sanitized}.sqlite3"))
+        Ok(format!("{name}.sqlite3"))
     }
 }
 
 fn validate_identifier(identifier: &str) -> Result<()> {
-    let mut components = Path::new(identifier).components();
-    let valid = matches!(components.next(), Some(Component::Normal(component)) if component == OsStr::new(identifier))
-        && components.next().is_none();
+    let bytes = identifier.as_bytes();
+    let valid = !bytes.is_empty()
+        && bytes.len() <= MAX_IDENTIFIER_BYTES
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b' ' | b'.' | b'_' | b'-'))
+        && !matches!(bytes.first(), Some(b' ' | b'.'))
+        && !matches!(bytes.last(), Some(b' ' | b'.'))
+        && !is_windows_reserved_identifier(identifier);
     if valid {
         Ok(())
     } else {
@@ -102,9 +103,28 @@ fn validate_identifier(identifier: &str) -> Result<()> {
     }
 }
 
+fn is_windows_reserved_identifier(identifier: &str) -> bool {
+    let base = identifier
+        .split('.')
+        .next()
+        .unwrap_or(identifier)
+        .trim_end_matches([' ', '.']);
+    if ["CON", "PRN", "AUX", "NUL"]
+        .iter()
+        .any(|reserved| base.eq_ignore_ascii_case(reserved))
+    {
+        return true;
+    }
+
+    let bytes = base.as_bytes();
+    bytes.len() == 4
+        && (bytes[..3].eq_ignore_ascii_case(b"COM") || bytes[..3].eq_ignore_ascii_case(b"LPT"))
+        && matches!(bytes[3], b'1'..=b'9')
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{database_file_name, validate_identifier};
+    use super::{MAX_IDENTIFIER_BYTES, database_file_name, validate_identifier};
 
     #[test]
     fn database_names_cannot_escape_the_storage_directory() {
@@ -113,9 +133,49 @@ mod tests {
         assert!(database_file_name("..").is_err());
         assert!(database_file_name("../outside").is_err());
         assert!(database_file_name("nested/database").is_err());
-        assert_eq!(database_file_name("main db").unwrap(), "main_db.sqlite3");
+        assert!(database_file_name(r"nested\database").is_err());
+        assert_eq!(database_file_name("main db").unwrap(), "main db.sqlite3");
+        assert_eq!(database_file_name("main.SQLITE").unwrap(), "main.SQLITE");
+        assert!(database_file_name("main?db").is_err());
         assert!(validate_identifier("../com.example.app").is_err());
         assert!(validate_identifier("/tmp/com.example.app").is_err());
         assert!(validate_identifier("com.example.app").is_ok());
+    }
+
+    #[test]
+    fn identifiers_are_portable_to_windows() {
+        for identifier in [
+            "CON",
+            "con.json",
+            "CON .json",
+            "PRN",
+            "AUX.settings",
+            "NUL",
+            "COM1",
+            "com9.sqlite3",
+            "LPT1",
+            "lpt9.data",
+            "trailing.",
+            "trailing ",
+            "drive:name",
+        ] {
+            assert!(
+                validate_identifier(identifier).is_err(),
+                "accepted {identifier:?}"
+            );
+        }
+
+        for identifier in ["com.example.product", "main db", "COM10", "LPT0"] {
+            assert!(
+                validate_identifier(identifier).is_ok(),
+                "rejected {identifier:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn identifiers_have_a_bounded_path_component() {
+        assert!(validate_identifier(&"a".repeat(MAX_IDENTIFIER_BYTES)).is_ok());
+        assert!(validate_identifier(&"a".repeat(MAX_IDENTIFIER_BYTES + 1)).is_err());
     }
 }
