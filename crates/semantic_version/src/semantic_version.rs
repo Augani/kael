@@ -1,5 +1,4 @@
-//! Constructs for working with [semantic versions](https://semver.org/).
-
+#![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 
 use std::{
@@ -7,20 +6,77 @@ use std::{
     str::FromStr,
 };
 
-use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize, de::Error};
+
+/// An error returned while parsing a stable semantic-version triplet.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ParseSemanticVersionError {
+    /// A required version component was absent or empty.
+    MissingComponent {
+        /// The absent component name.
+        component: &'static str,
+    },
+    /// A component contained something other than ASCII digits.
+    NonNumericComponent {
+        /// The invalid component name.
+        component: &'static str,
+    },
+    /// A multi-digit component began with zero.
+    LeadingZero {
+        /// The invalid component name.
+        component: &'static str,
+    },
+    /// A component exceeded the fixed-width representation.
+    ComponentOverflow {
+        /// The overflowing component name.
+        component: &'static str,
+    },
+    /// More than three dot-separated components were supplied.
+    UnexpectedComponent,
+}
+
+impl Display for ParseSemanticVersionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingComponent { component } => {
+                write!(f, "missing {component} version number")
+            }
+            Self::NonNumericComponent { component } => {
+                write!(
+                    f,
+                    "{component} version number must contain only ASCII digits"
+                )
+            }
+            Self::LeadingZero { component } => {
+                write!(
+                    f,
+                    "{component} version number must not contain a leading zero"
+                )
+            }
+            Self::ComponentOverflow { component } => {
+                write!(f, "{component} version number is too large")
+            }
+            Self::UnexpectedComponent => {
+                f.write_str("unexpected version component after patch number")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ParseSemanticVersionError {}
 
 /// A [semantic version](https://semver.org/) number.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct SemanticVersion {
-    major: usize,
-    minor: usize,
-    patch: usize,
+    major: u64,
+    minor: u64,
+    patch: u64,
 }
 
 impl SemanticVersion {
     /// Returns a new [`SemanticVersion`] from the given components.
-    pub const fn new(major: usize, minor: usize, patch: usize) -> Self {
+    pub const fn new(major: u64, minor: u64, patch: u64) -> Self {
         Self {
             major,
             minor,
@@ -30,42 +86,33 @@ impl SemanticVersion {
 
     /// Returns the major version number.
     #[inline(always)]
-    pub fn major(&self) -> usize {
+    pub fn major(&self) -> u64 {
         self.major
     }
 
     /// Returns the minor version number.
     #[inline(always)]
-    pub fn minor(&self) -> usize {
+    pub fn minor(&self) -> u64 {
         self.minor
     }
 
     /// Returns the patch version number.
     #[inline(always)]
-    pub fn patch(&self) -> usize {
+    pub fn patch(&self) -> u64 {
         self.patch
     }
 }
 
 impl FromStr for SemanticVersion {
-    type Err = anyhow::Error;
+    type Err = ParseSemanticVersionError;
 
-    fn from_str(s: &str) -> Result<Self> {
-        let mut components = s.trim().split('.');
-        let major = parse_component(
-            components.next().context("missing major version number")?,
-            "major",
-        )?;
-        let minor = parse_component(
-            components.next().context("missing minor version number")?,
-            "minor",
-        )?;
-        let patch = parse_component(
-            components.next().context("missing patch version number")?,
-            "patch",
-        )?;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let mut components = s.split('.');
+        let major = parse_component(required_component(components.next(), "major")?, "major")?;
+        let minor = parse_component(required_component(components.next(), "minor")?, "minor")?;
+        let patch = parse_component(required_component(components.next(), "patch")?, "patch")?;
         if components.next().is_some() {
-            bail!("unexpected version component after patch number");
+            return Err(ParseSemanticVersionError::UnexpectedComponent);
         }
         Ok(Self {
             major,
@@ -75,19 +122,29 @@ impl FromStr for SemanticVersion {
     }
 }
 
-fn parse_component(component: &str, name: &str) -> Result<usize> {
+fn required_component<'a>(
+    component: Option<&'a str>,
+    name: &'static str,
+) -> std::result::Result<&'a str, ParseSemanticVersionError> {
+    component.ok_or(ParseSemanticVersionError::MissingComponent { component: name })
+}
+
+fn parse_component(
+    component: &str,
+    name: &'static str,
+) -> std::result::Result<u64, ParseSemanticVersionError> {
     if component.is_empty() {
-        bail!("missing {name} version number");
+        return Err(ParseSemanticVersionError::MissingComponent { component: name });
     }
     if !component.bytes().all(|byte| byte.is_ascii_digit()) {
-        bail!("{name} version number must contain only ASCII digits");
+        return Err(ParseSemanticVersionError::NonNumericComponent { component: name });
     }
     if component.len() > 1 && component.starts_with('0') {
-        bail!("{name} version number must not contain a leading zero");
+        return Err(ParseSemanticVersionError::LeadingZero { component: name });
     }
     component
         .parse()
-        .with_context(|| format!("{name} version number is too large"))
+        .map_err(|_| ParseSemanticVersionError::ComponentOverflow { component: name })
 }
 
 impl Display for SemanticVersion {
@@ -111,18 +168,17 @@ impl<'de> Deserialize<'de> for SemanticVersion {
         D: serde::Deserializer<'de>,
     {
         let string = String::deserialize(deserializer)?;
-        Self::from_str(&string)
-            .map_err(|_| Error::custom(format!("Invalid version string \"{string}\"")))
+        Self::from_str(&string).map_err(Error::custom)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::SemanticVersion;
+    use super::{ParseSemanticVersionError, SemanticVersion};
 
     #[test]
     fn stable_core_version_round_trips() {
-        let version = " 12.34.56 ".parse::<SemanticVersion>().unwrap();
+        let version = "12.34.56".parse::<SemanticVersion>().unwrap();
         assert_eq!(version, SemanticVersion::new(12, 34, 56));
         assert_eq!(version.to_string(), "12.34.56");
     }
@@ -139,6 +195,8 @@ mod tests {
             "01.2.3",
             "1.02.3",
             "1.2.03",
+            " 1.2.3",
+            "1.2.3 ",
             "1.-2.3",
             "1.２.3",
         ] {
@@ -151,7 +209,34 @@ mod tests {
 
     #[test]
     fn parser_reports_component_overflow() {
-        let too_large = format!("{}.0.0", "9".repeat(usize::BITS as usize));
-        assert!(too_large.parse::<SemanticVersion>().is_err());
+        let maximum = format!("{}.0.0", u64::MAX);
+        assert_eq!(
+            maximum.parse::<SemanticVersion>().unwrap().major(),
+            u64::MAX
+        );
+
+        let error = "18446744073709551616.0.0"
+            .parse::<SemanticVersion>()
+            .unwrap_err();
+        assert_eq!(
+            error,
+            ParseSemanticVersionError::ComponentOverflow { component: "major" }
+        );
+    }
+
+    #[test]
+    fn parser_reports_structured_component_errors() {
+        assert_eq!(
+            "1.2".parse::<SemanticVersion>().unwrap_err(),
+            ParseSemanticVersionError::MissingComponent { component: "patch" }
+        );
+        assert_eq!(
+            "1.x.3".parse::<SemanticVersion>().unwrap_err(),
+            ParseSemanticVersionError::NonNumericComponent { component: "minor" }
+        );
+        assert_eq!(
+            "1.02.3".parse::<SemanticVersion>().unwrap_err(),
+            ParseSemanticVersionError::LeadingZero { component: "minor" }
+        );
     }
 }

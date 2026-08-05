@@ -5,7 +5,7 @@ rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
 publish = true
-description = "Semantic versioning library for Kael"
+description = "Stable semantic-version core triplets for Kael application releases"
 keywords = ["semver", "version", "versioning", "kael"]
 categories = ["parser-implementations"]
 authors.workspace = true
@@ -17,16 +17,8 @@ license.workspace = true
 name = "kael_semantic_version"
 path = "src/semantic_version.rs"
 
-[dependencies.anyhow]
-workspace = true
-
 [dependencies.serde]
 workspace = true
-features = [
-    "derive",
-    "rc",
-]
-
 
 [lints]
 workspace = true
