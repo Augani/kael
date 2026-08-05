@@ -1,4 +1,4 @@
-# kael_icons
+# `kael_icons`
 
 Compact, typed SVG icons for Kael applications and component libraries.
 
@@ -10,8 +10,19 @@ working directory to contain framework assets.
 Applications can still replace any icon through their own asset source or by
 configuring `kael_ui` with a branded icon directory.
 
+```rust
+use kael_icons::{Icon, IconName, IconWeight, svg_for_path};
+
+let icon = Icon::new(IconName::Search).weight(IconWeight::Medium);
+assert_eq!(icon.name().slug(), "search");
+assert_eq!(icon.stroke_width(), 1.75);
+assert_eq!(svg_for_path("kael-icons/search.svg"), Some(icon.svg()));
+```
+
 Part of the [Kael](https://github.com/Augani/kael) native application framework.
-See the [documentation](https://augani.github.io/kael/) for usage and guides.
+See the [`kael_icons` API documentation](https://docs.rs/kael_icons) for the
+complete typed catalog and the [Kael guide](https://augani.github.io/kael/) for
+framework-level usage.
 
 ## Third-party assets
 

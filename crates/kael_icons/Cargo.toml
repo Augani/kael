@@ -1,11 +1,13 @@
 [package]
 edition.workspace = true
 name = "kael_icons"
+autoexamples = false
 rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
 publish = true
 description = "Compact typed SVG icon catalog for Kael applications"
+documentation = "https://docs.rs/kael_icons"
 keywords = ["icons", "native", "desktop", "kael"]
 categories = ["gui", "os"]
 authors.workspace = true
@@ -13,10 +15,15 @@ repository.workspace = true
 readme = "README.md"
 license.workspace = true
 build = "build.rs"
+exclude = ["examples/"]
+
+[package.metadata.docs.rs]
+targets = []
 
 [lib]
 name = "kael_icons"
 path = "src/lib.rs"
+doctest = true
 
 [lints]
 workspace = true

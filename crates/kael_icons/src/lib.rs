@@ -3,6 +3,15 @@
 //! The catalog contains the Lucide symbols used by Kael's ready-made UI plus
 //! Kael's small set of core controls. Applications can use the typed catalog
 //! directly or resolve the virtual [`ASSET_PREFIX`] paths emitted by `kael_ui`.
+//!
+//! ```
+//! use kael_icons::{Icon, IconName, IconWeight, svg_for_path};
+//!
+//! let icon = Icon::new(IconName::Search).weight(IconWeight::Medium);
+//! assert_eq!(icon.name().slug(), "search");
+//! assert_eq!(icon.stroke_width(), 1.75);
+//! assert_eq!(svg_for_path("kael-icons/search.svg"), Some(icon.svg()));
+//! ```
 
 #![deny(missing_docs)]
 
