@@ -53,7 +53,7 @@ On orderly shutdown, mark the session clean so the next launch does not treat it
 as an unclean exit:
 
 ```rust
-reporter.mark_clean_exit();
+reporter.mark_clean_exit()?;
 ```
 
 `PriorCrashSummary` distinguishes:

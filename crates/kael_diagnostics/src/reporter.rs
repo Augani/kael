@@ -37,6 +37,8 @@ pub struct DiagnosticsConfig {
     pub http_client: Option<Arc<dyn http_client::HttpClient>>,
     /// Whether a panic hook should be installed during initialization.
     pub install_panic_hook: bool,
+    /// Whether native signal or exception handlers should be installed during initialization.
+    pub install_native_handler: bool,
 }
 
 impl std::fmt::Debug for DiagnosticsConfig {
@@ -51,6 +53,7 @@ impl std::fmt::Debug for DiagnosticsConfig {
             .field("has_before_send", &self.before_send.is_some())
             .field("has_http_client", &self.http_client.is_some())
             .field("install_panic_hook", &self.install_panic_hook)
+            .field("install_native_handler", &self.install_native_handler)
             .finish()
     }
 }
@@ -67,6 +70,7 @@ impl Default for DiagnosticsConfig {
             before_send: None,
             http_client: None,
             install_panic_hook: true,
+            install_native_handler: false,
         }
     }
 }
@@ -105,6 +109,10 @@ impl Diagnostics {
 
         if let Some(before_send) = config.before_send {
             crash_reporter.set_before_send(Arc::from(before_send));
+        }
+
+        if config.install_native_handler {
+            crash_reporter.install_native()?;
         }
 
         if config.install_panic_hook {

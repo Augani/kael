@@ -20,6 +20,7 @@ fn main() -> kael_diagnostics::Result<()> {
         release: "1.0.0".to_string(),
         environment: "production".to_string(),
         install_panic_hook: true,
+        install_native_handler: true,
         ..DiagnosticsConfig::default()
     })?;
 
@@ -38,6 +39,7 @@ fn main() -> kael_diagnostics::Result<()> {
     transaction.finish();
 
     diagnostics.tracer().write_to_file("trace.json")?;
+    diagnostics.crash_reporter().mark_clean_exit()?;
     Ok(())
 }
 ```
@@ -50,9 +52,11 @@ desired.
 ## Crash reporting contract
 
 - `install_panic_hook` controls Rust panic capture.
-- `CrashReporter::install_native` opts into OS signal or exception handlers.
+- `install_native_handler` (or `CrashReporter::install_native`) opts into OS
+  signal or exception handlers.
 - Reports remain on disk until the application supplies an HTTP client and a
-  credential-free HTTPS endpoint.
+  credential-free HTTPS endpoint without a query string or fragment; configure
+  authentication on the HTTP client instead of embedding it in the URL.
 - `CrashConsent::withheld`, the default, never submits retained reports.
 - `before_send` may redact or reject a report before it is persisted.
 - Call `mark_clean_exit` during orderly shutdown after installing native crash

@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -123,7 +123,7 @@ pub struct CrashReporter {
     reports_dir: PathBuf,
     endpoint: Option<String>,
     http_client: Option<Arc<dyn http_client::HttpClient>>,
-    previous_hook: Option<Arc<PanicHook>>,
+    hook_enabled: Option<Arc<AtomicBool>>,
     before_send: Option<Arc<BeforeSend>>,
     breadcrumbs: BreadcrumbBuffer,
     release: Option<String>,
@@ -154,7 +154,7 @@ impl CrashReporter {
             reports_dir,
             endpoint: None,
             http_client: None,
-            previous_hook: None,
+            hook_enabled: None,
             before_send: None,
             breadcrumbs,
             release: None,
@@ -173,7 +173,7 @@ impl CrashReporter {
     /// storage. Must be called before [`install_hook`](Self::install_hook) or
     /// [`install_native`](Self::install_native).
     pub fn set_reports_dir(&mut self, reports_dir: impl Into<PathBuf>) -> Result<()> {
-        if self.previous_hook.is_some() || self.native_installed {
+        if self.hook_enabled.is_some() || self.native_installed {
             return Err(anyhow!(
                 "crash reports directory cannot change after a crash handler is installed"
             ));
@@ -186,8 +186,9 @@ impl CrashReporter {
 
     /// Sets the HTTPS endpoint used for deferred crash report submission.
     ///
-    /// Credential-bearing URLs and URL fragments are rejected because crash
-    /// reports can contain sensitive application and host information.
+    /// Credential-bearing URLs, query strings, and URL fragments are rejected
+    /// because crash reports can contain sensitive application and host
+    /// information. Configure authentication on the HTTP client instead.
     pub fn set_endpoint(&mut self, endpoint: impl Into<String>) -> Result<()> {
         let endpoint = endpoint.into();
         validate_endpoint(&endpoint)?;
@@ -217,7 +218,7 @@ impl CrashReporter {
 
     /// Installs a panic hook that persists crash reports.
     pub fn install_hook(&mut self) {
-        if self.previous_hook.is_some() {
+        if self.hook_enabled.is_some() {
             return;
         }
         let reports_dir = self.reports_dir.clone();
@@ -226,36 +227,40 @@ impl CrashReporter {
         let environment = self.environment.clone();
         let before_send = self.before_send.clone();
         let previous: Arc<PanicHook> = std::panic::take_hook().into();
-        self.previous_hook = Some(previous.clone());
+        let enabled = Arc::new(AtomicBool::new(true));
+        self.hook_enabled = Some(enabled.clone());
 
         std::panic::set_hook(Box::new(move |info| {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mut report = capture_crash_report(
-                    info,
-                    breadcrumbs.snapshot(),
-                    release.clone(),
-                    environment.clone(),
-                );
-                let should_send = before_send.as_ref().is_none_or(|before_send| {
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        before_send(&mut report)
-                    }))
-                    .unwrap_or(false)
-                });
+            if enabled.load(Ordering::Relaxed) {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut report = capture_crash_report(
+                        info,
+                        breadcrumbs.snapshot(),
+                        release.clone(),
+                        environment.clone(),
+                    );
+                    let should_send = before_send.as_ref().is_none_or(|before_send| {
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            before_send(&mut report)
+                        }))
+                        .unwrap_or(false)
+                    });
 
-                if should_send {
-                    let _ = write_crash_report(&reports_dir, &report);
-                }
-            }));
+                    if should_send {
+                        let _ = write_crash_report(&reports_dir, &report);
+                    }
+                }));
+            }
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| previous(info)));
         }));
     }
 
-    /// Restores the previously installed panic hook.
+    /// Disables this reporter's panic capture without replacing hooks that may
+    /// have been installed later. The chaining wrapper remains process-wide
+    /// and continues to invoke the hook that preceded it.
     pub fn uninstall_hook(&mut self) {
-        if let Some(previous) = self.previous_hook.take() {
-            let _ = std::panic::take_hook();
-            std::panic::set_hook(Box::new(move |info| previous(info)));
+        if let Some(enabled) = self.hook_enabled.take() {
+            enabled.store(false, Ordering::Relaxed);
         }
     }
 
@@ -299,10 +304,11 @@ impl CrashReporter {
     /// Marks this session as a clean exit, removing the native crash marker so
     /// the next launch does not treat this run as an unclean exit. Call during
     /// orderly shutdown when native handlers are installed.
-    pub fn mark_clean_exit(&self) {
+    pub fn mark_clean_exit(&self) -> Result<()> {
         if self.native_installed {
-            native::mark_clean_exit(&self.reports_dir);
+            native::mark_clean_exit(&self.reports_dir)?;
         }
+        Ok(())
     }
 
     /// Decodes native crashes left by previous unclean exits without submitting
@@ -347,8 +353,11 @@ impl CrashReporter {
             let entry = entry?;
             let path = entry.path();
             let file_type = entry.file_type()?;
-            if file_type.is_file() && is_crash_report_path(&path) {
-                reports.push(path);
+            if file_type.is_file() {
+                let Some(sort_key) = crash_report_sort_key(&path) else {
+                    continue;
+                };
+                reports.push((sort_key, path));
                 if reports.len() > MAX_PENDING_REPORTS_PER_BATCH {
                     reports.pop();
                 }
@@ -356,8 +365,12 @@ impl CrashReporter {
         }
 
         let mut reports = reports.into_vec();
-        reports.sort();
-        Ok(reports)
+        reports.sort_by(|(left_key, left_path), (right_key, right_path)| {
+            left_key
+                .cmp(right_key)
+                .then_with(|| left_path.cmp(right_path))
+        });
+        Ok(reports.into_iter().map(|(_, path)| path).collect())
     }
 
     /// Attempts to upload all pending crash reports.
@@ -428,7 +441,7 @@ impl CrashReporter {
     /// }
     ///
     /// // ... run the app; on orderly shutdown:
-    /// reporter.mark_clean_exit();
+    /// reporter.mark_clean_exit()?;
     /// # Ok(())
     /// # }
     /// ```
@@ -453,7 +466,7 @@ impl CrashReporter {
             if should_keep {
                 write_crash_report(&self.reports_dir, &report)?;
             }
-            native::clear_crash(&crash);
+            native::clear_crash(&crash)?;
         }
 
         if consent.submit_enabled && self.endpoint.is_some() && self.http_client.is_some() {
@@ -523,54 +536,83 @@ pub fn write_crash_report(dir: &Path, report: &CrashReport) -> Result<PathBuf> {
     let process_id = std::process::id();
     let filename = format!("crash_report_{timestamp}_{process_id}_{sequence}.json");
     let path = dir.join(filename);
-    let temp_path = path.with_extension("json.tmp");
+    let mut json = BoundedJsonWriter::new(MAX_REPORT_BYTES as usize);
+    if let Err(error) = serde_json::to_writer_pretty(&mut json, report) {
+        if json.exceeded_limit() {
+            return Err(anyhow!(
+                "serialized crash report exceeds {MAX_REPORT_BYTES} byte limit"
+            ));
+        }
+        return Err(error).context("failed to serialize crash report");
+    }
 
-    let json = serde_json::to_string_pretty(report).context("failed to serialize crash report")?;
-    if json.len() as u64 > MAX_REPORT_BYTES {
-        return Err(anyhow!(
-            "serialized crash report exceeds {MAX_REPORT_BYTES} byte limit"
-        ));
-    }
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&temp_path).with_context(|| {
-        format!(
-            "failed to create temporary crash report file: {}",
-            temp_path.display()
-        )
-    })?;
-    let write_result = file
-        .write_all(json.as_bytes())
-        .with_context(|| format!("failed to write crash report file: {}", temp_path.display()))
-        .and_then(|()| {
-            file.sync_all().with_context(|| {
-                format!("failed to sync crash report file: {}", temp_path.display())
-            })
-        });
-    if let Err(error) = write_result {
-        drop(file);
-        let _ = fs::remove_file(&temp_path);
-        return Err(error);
-    }
-    drop(file);
-    if let Err(error) = fs::rename(&temp_path, &path).with_context(|| {
-        format!(
-            "failed to finalize crash report file from {} to {}",
-            temp_path.display(),
+    let mut file = tempfile::Builder::new()
+        .prefix(".kael-crash-report-")
+        .tempfile_in(dir)
+        .with_context(|| {
+            format!(
+                "failed to create temporary crash report in {}",
+                dir.display()
+            )
+        })?;
+    file.write_all(json.as_bytes())
+        .with_context(|| format!("failed to write crash report for {}", path.display()))?;
+    file.as_file()
+        .sync_all()
+        .with_context(|| format!("failed to sync crash report for {}", path.display()))?;
+    file.persist_noclobber(&path).map_err(|error| {
+        anyhow::Error::new(error.error).context(format!(
+            "failed to finalize crash report: {}",
             path.display()
-        )
-    }) {
-        let _ = fs::remove_file(&temp_path);
-        return Err(error);
-    }
+        ))
+    })?;
     sync_parent_dir(dir)?;
 
     Ok(path)
+}
+
+pub(crate) struct BoundedJsonWriter {
+    bytes: Vec<u8>,
+    limit: usize,
+    exceeded_limit: bool,
+}
+
+impl BoundedJsonWriter {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+            exceeded_limit: false,
+        }
+    }
+
+    pub(crate) fn exceeded_limit(&self) -> bool {
+        self.exceeded_limit
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+impl std::io::Write for BoundedJsonWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let remaining = self.limit.saturating_sub(self.bytes.len());
+        if remaining == 0 && !bytes.is_empty() {
+            self.exceeded_limit = true;
+            return Err(std::io::Error::other("crash report byte limit exceeded"));
+        }
+        let written = remaining.min(bytes.len());
+        self.bytes.extend_from_slice(&bytes[..written]);
+        if written < bytes.len() {
+            self.exceeded_limit = true;
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Collects basic operating-system information for a crash report.
@@ -595,19 +637,40 @@ fn crash_reports_dir(app_id: &str) -> Result<PathBuf> {
 }
 
 fn validate_app_id(app_id: &str) -> Result<()> {
-    if app_id.is_empty()
-        || app_id.len() > MAX_APP_ID_BYTES
-        || !app_id
-            .bytes()
+    let bytes = app_id.as_bytes();
+    let valid = !bytes.is_empty()
+        && bytes.len() <= MAX_APP_ID_BYTES
+        && bytes
+            .iter()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-        || app_id == "."
-        || app_id == ".."
-    {
+        && !matches!(bytes.first(), Some(b'.'))
+        && !matches!(bytes.last(), Some(b'.'))
+        && !is_windows_reserved_identifier(app_id);
+    if !valid {
         return Err(anyhow!(
-            "application identifier must be 1-{MAX_APP_ID_BYTES} ASCII letters, digits, '.', '_' or '-'"
+            "application identifier must be a portable 1-{MAX_APP_ID_BYTES} byte ASCII identifier"
         ));
     }
     Ok(())
+}
+
+fn is_windows_reserved_identifier(identifier: &str) -> bool {
+    let base = identifier
+        .split('.')
+        .next()
+        .unwrap_or(identifier)
+        .trim_end_matches([' ', '.']);
+    if ["CON", "PRN", "AUX", "NUL"]
+        .iter()
+        .any(|reserved| base.eq_ignore_ascii_case(reserved))
+    {
+        return true;
+    }
+
+    let bytes = base.as_bytes();
+    bytes.len() == 4
+        && (bytes[..3].eq_ignore_ascii_case(b"COM") || bytes[..3].eq_ignore_ascii_case(b"LPT"))
+        && matches!(bytes[3], b'1'..=b'9')
 }
 
 fn validate_endpoint(endpoint: &str) -> Result<()> {
@@ -634,31 +697,38 @@ fn validate_endpoint(endpoint: &str) -> Result<()> {
     if parsed.fragment().is_some() {
         return Err(anyhow!("crash report endpoint cannot contain a fragment"));
     }
+    if parsed.query().is_some() {
+        return Err(anyhow!(
+            "crash report endpoint cannot contain a query; configure credentials on the HTTP client"
+        ));
+    }
     Ok(())
 }
 
+#[cfg(test)]
 fn is_crash_report_path(path: &Path) -> bool {
+    crash_report_sort_key(path).is_some()
+}
+
+fn crash_report_sort_key(path: &Path) -> Option<(u128, u64, u64)> {
     let Some(stem) = path
         .file_name()
         .and_then(|name| name.to_str())
         .and_then(|name| name.strip_prefix("crash_report_"))
         .and_then(|name| name.strip_suffix(".json"))
     else {
-        return false;
+        return None;
     };
-    let mut parts = stem.split('_');
-    let first = parts.next();
-    let second = parts.next();
-    let third = parts.next();
-    let valid_count = third.is_none() || parts.next().is_none();
-    valid_count
-        && first.is_some_and(is_decimal_component)
-        && second.is_some_and(is_decimal_component)
-        && third.is_none_or(is_decimal_component)
-}
-
-fn is_decimal_component(component: &str) -> bool {
-    !component.is_empty() && component.bytes().all(|byte| byte.is_ascii_digit())
+    let parts = stem.split('_').collect::<Vec<_>>();
+    match parts.as_slice() {
+        [timestamp, sequence] => Some((timestamp.parse().ok()?, 0, sequence.parse().ok()?)),
+        [timestamp, process_id, sequence] => Some((
+            timestamp.parse().ok()?,
+            process_id.parse().ok()?,
+            sequence.parse().ok()?,
+        )),
+        _ => None,
+    }
 }
 
 fn read_crash_report(path: &Path) -> Result<String> {
@@ -817,7 +887,7 @@ mod tests {
             reports_dir: directory.to_path_buf(),
             endpoint: None,
             http_client: None,
-            previous_hook: None,
+            hook_enabled: None,
             before_send: None,
             breadcrumbs: BreadcrumbBuffer::new(8),
             release: Some("9.9.9".to_string()),
@@ -898,6 +968,11 @@ mod tests {
                 .set_endpoint("https://user:secret@example.com/crashes")
                 .is_err()
         );
+        assert!(
+            reporter
+                .set_endpoint("https://example.com/crashes?token=secret")
+                .is_err()
+        );
         reporter
             .set_endpoint("https://example.com/crashes")
             .unwrap();
@@ -925,7 +1000,7 @@ mod tests {
             std::fs::write(
                 directory
                     .path()
-                    .join(format!("crash_report_{index:03}_1.json")),
+                    .join(format!("crash_report_{index}_1.json")),
                 b"{}",
             )
             .unwrap();
@@ -975,8 +1050,42 @@ mod tests {
     #[test]
     fn rejects_path_like_application_identifiers() {
         let breadcrumbs = BreadcrumbBuffer::new(1);
-        assert!(CrashReporter::new("../escape", breadcrumbs.clone()).is_err());
-        assert!(CrashReporter::new("nested/app", breadcrumbs).is_err());
+        for app_id in [
+            "../escape",
+            "nested/app",
+            ".hidden",
+            "trailing.",
+            "CON",
+            "con.app",
+            "COM1",
+            "lpt9.app",
+        ] {
+            assert!(CrashReporter::new(app_id, breadcrumbs.clone()).is_err());
+        }
+        for app_id in ["com.example.app", "COM10", "LPT0"] {
+            assert!(super::validate_app_id(app_id).is_ok());
+        }
+    }
+
+    #[test]
+    fn serialized_reports_are_bounded_before_persistence() {
+        let directory = tempdir().unwrap();
+        let report = CrashReport {
+            message: "x".repeat(super::MAX_REPORT_BYTES as usize),
+            backtrace: String::new(),
+            os_info: collect_os_info(),
+            app_version: None,
+            environment: None,
+            breadcrumbs: Vec::new(),
+        };
+
+        assert!(write_crash_report(directory.path(), &report).is_err());
+        assert!(
+            std::fs::read_dir(directory.path())
+                .unwrap()
+                .next()
+                .is_none()
+        );
     }
 
     #[test]

@@ -13,10 +13,14 @@
 //! `key=value` lines to a file descriptor opened ahead of the crash.
 
 use std::{
+    collections::BinaryHeap,
     fs,
     io::Read as _,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
 };
 
 use anyhow::{Context as _, Result};
@@ -27,6 +31,7 @@ const DUMP_SUFFIX: &str = ".crashdump";
 
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+static CURRENT_SESSION_ID: Mutex<Option<String>> = Mutex::new(None);
 const MAX_META_BYTES: u64 = 1024 * 1024;
 const MAX_DUMP_BYTES: u64 = 64 * 1024;
 const MAX_SESSION_ID_BYTES: usize = 128;
@@ -136,53 +141,43 @@ pub fn new_session_id() -> String {
     format!("{nanos:032x}-{pid:08x}-{sequence:016x}")
 }
 
-fn write_context(reports_dir: &Path, context: &NativeContext) -> Result<()> {
+fn write_context(reports_dir: &Path, context: &NativeContext) -> Result<PathBuf> {
     validate_session_id(&context.session_id)?;
     crate::crash::prepare_reports_dir(reports_dir)?;
     let path = meta_path(reports_dir, &context.session_id);
-    let json = serde_json::to_string_pretty(context).context("failed to serialize crash meta")?;
-    if json.len() as u64 > MAX_META_BYTES {
-        return Err(anyhow::anyhow!(
-            "serialized native crash metadata exceeds {MAX_META_BYTES} byte limit"
-        ));
+    let mut json = crate::crash::BoundedJsonWriter::new(MAX_META_BYTES as usize);
+    if let Err(error) = serde_json::to_writer_pretty(&mut json, context) {
+        if json.exceeded_limit() {
+            return Err(anyhow::anyhow!(
+                "serialized native crash metadata exceeds {MAX_META_BYTES} byte limit"
+            ));
+        }
+        return Err(error).context("failed to serialize crash meta");
     }
-    let temp = path.with_extension("json.tmp");
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(&temp)
-        .with_context(|| format!("failed to create crash meta: {}", temp.display()))?;
     use std::io::Write as _;
-    let write_result = file
-        .write_all(json.as_bytes())
-        .with_context(|| format!("failed to write crash meta: {}", temp.display()))
-        .and_then(|()| {
-            file.sync_all()
-                .with_context(|| format!("failed to sync crash meta: {}", temp.display()))
-        });
-    if let Err(error) = write_result {
-        drop(file);
-        let _ = fs::remove_file(&temp);
+    let mut file = tempfile::Builder::new()
+        .prefix(".kael-crash-meta-")
+        .tempfile_in(reports_dir)
+        .with_context(|| {
+            format!(
+                "failed to create temporary crash meta in {}",
+                reports_dir.display()
+            )
+        })?;
+    file.write_all(json.as_bytes())
+        .with_context(|| format!("failed to write crash meta for {}", path.display()))?;
+    file.as_file()
+        .sync_all()
+        .with_context(|| format!("failed to sync crash meta for {}", path.display()))?;
+    file.persist_noclobber(&path).map_err(|error| {
+        anyhow::Error::new(error.error)
+            .context(format!("failed to finalize crash meta: {}", path.display()))
+    })?;
+    if let Err(error) = crate::crash::sync_parent_dir(reports_dir) {
+        let _ = fs::remove_file(&path);
         return Err(error);
     }
-    drop(file);
-    if let Err(error) = fs::rename(&temp, &path).with_context(|| {
-        format!(
-            "failed to finalize crash meta from {} to {}",
-            temp.display(),
-            path.display()
-        )
-    }) {
-        let _ = fs::remove_file(&temp);
-        return Err(error);
-    }
-    crate::crash::sync_parent_dir(reports_dir)?;
-    Ok(())
+    Ok(path)
 }
 
 /// Returns the canonical signal name for a captured signal number.
@@ -231,21 +226,32 @@ pub fn install(reports_dir: &Path, context: NativeContext) -> Result<bool> {
     }
 
     let result = (|| {
-        write_context(reports_dir, &context)?;
+        let metadata = write_context(reports_dir, &context)?;
         let dump = dump_path(reports_dir, &context.session_id);
 
         #[cfg(unix)]
         {
-            imp::install_unix(&dump, &context.session_id)?;
+            if let Err(error) = imp::install_unix(&dump) {
+                let _ = fs::remove_file(&metadata);
+                let _ = crate::crash::sync_parent_dir(reports_dir);
+                return Err(error);
+            }
         }
         #[cfg(windows)]
         {
-            imp::install_windows(&dump, &context.session_id)?;
+            if let Err(error) = imp::install_windows(&dump) {
+                let _ = fs::remove_file(&metadata);
+                let _ = crate::crash::sync_parent_dir(reports_dir);
+                return Err(error);
+            }
         }
         #[cfg(not(any(unix, windows)))]
         {
-            let _ = dump;
+            let _ = (&dump, &metadata);
         }
+        *CURRENT_SESSION_ID
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(context.session_id.clone());
         Ok::<(), anyhow::Error>(())
     })();
     if let Err(error) = result {
@@ -260,9 +266,9 @@ pub fn install(reports_dir: &Path, context: NativeContext) -> Result<bool> {
 /// signal record; an absent/empty dump indicates an unclean exit with no native
 /// data.
 pub fn pending_crashes(reports_dir: &Path) -> Result<Vec<PendingNativeCrash>> {
-    let mut crashes = Vec::new();
+    let mut crashes = BinaryHeap::with_capacity(MAX_PENDING_NATIVE_CRASHES + 1);
     if !reports_dir.exists() {
-        return Ok(crashes);
+        return Ok(Vec::new());
     }
     let directory_metadata = fs::symlink_metadata(reports_dir).with_context(|| {
         format!(
@@ -316,24 +322,56 @@ pub fn pending_crashes(reports_dir: &Path) -> Result<Vec<PendingNativeCrash>> {
 
         let dump = dump_path(reports_dir, session_id);
         let (signal, dump_path_out) = match read_bounded_regular_file(&dump, MAX_DUMP_BYTES) {
-            Ok(bytes) if bytes.is_empty() => (None, None),
+            Ok(bytes) if bytes.is_empty() => (None, Some(dump)),
             Ok(bytes) => (decode_dump(&bytes), Some(dump)),
             _ => (None, None),
         };
 
-        crashes.push(PendingNativeCrash {
+        crashes.push(PendingCrashCandidate(PendingNativeCrash {
             context,
             signal,
             meta_path: path,
             dump_path: dump_path_out,
-        });
-        if crashes.len() == MAX_PENDING_NATIVE_CRASHES {
-            break;
+        }));
+        if crashes.len() > MAX_PENDING_NATIVE_CRASHES {
+            crashes.pop();
         }
     }
 
-    crashes.sort_by_key(|crash| crash.context.started_at_ms);
-    Ok(crashes)
+    let mut crashes = crashes.into_vec();
+    crashes.sort();
+    Ok(crashes.into_iter().map(|candidate| candidate.0).collect())
+}
+
+struct PendingCrashCandidate(PendingNativeCrash);
+
+impl PendingCrashCandidate {
+    fn key(&self) -> (u128, &str) {
+        (
+            self.0.context.started_at_ms,
+            self.0.context.session_id.as_str(),
+        )
+    }
+}
+
+impl PartialEq for PendingCrashCandidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.key() == other.key()
+    }
+}
+
+impl Eq for PendingCrashCandidate {}
+
+impl PartialOrd for PendingCrashCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PendingCrashCandidate {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.key().cmp(&other.key())
+    }
 }
 
 fn read_bounded_regular_file(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
@@ -385,26 +423,54 @@ fn read_bounded_regular_file(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Removes the meta and dump artifacts for a decoded crash once reported.
-pub fn clear_crash(crash: &PendingNativeCrash) {
-    let _ = fs::remove_file(&crash.meta_path);
+/// Removes the dump and metadata artifacts for a decoded crash once reported.
+pub fn clear_crash(crash: &PendingNativeCrash) -> Result<()> {
     if let Some(dump) = &crash.dump_path {
-        let _ = fs::remove_file(dump);
+        remove_file_if_present(dump)?;
     }
+    remove_file_if_present(&crash.meta_path)?;
+    if let Some(directory) = crash.meta_path.parent() {
+        crate::crash::sync_parent_dir(directory)?;
+    }
+    Ok(())
 }
 
 /// Marks the current session as a clean exit, removing its (empty) artifacts so
 /// the next launch does not treat this run as an unclean exit.
-pub fn mark_clean_exit(reports_dir: &Path) {
-    let Some(session_id) = current_session_id() else {
-        return;
+pub fn mark_clean_exit(reports_dir: &Path) -> Result<()> {
+    let Some(session_id) = CURRENT_SESSION_ID
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+    else {
+        return Ok(());
     };
-    let _ = fs::remove_file(meta_path(reports_dir, &session_id));
-    let _ = fs::remove_file(dump_path(reports_dir, &session_id));
+    remove_file_if_present(&dump_path(reports_dir, &session_id))?;
+    remove_file_if_present(&meta_path(reports_dir, &session_id))?;
+    crate::crash::sync_parent_dir(reports_dir)?;
+    let mut current = CURRENT_SESSION_ID
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if current.as_deref() == Some(session_id.as_str()) {
+        current.take();
+    }
+    Ok(())
+}
+
+fn remove_file_if_present(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to remove crash artifact: {}", path.display())),
+    }
 }
 
 fn current_session_id() -> Option<String> {
-    imp::current_session_id()
+    CURRENT_SESSION_ID
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
 }
 
 fn decode_dump(bytes: &[u8]) -> Option<NativeSignal> {
@@ -464,16 +530,12 @@ mod imp {
     use std::{
         os::fd::IntoRawFd as _,
         path::Path,
-        sync::{
-            Mutex,
-            atomic::{AtomicI32, Ordering},
-        },
+        sync::atomic::{AtomicI32, Ordering},
     };
 
     use anyhow::{Context as _, Result, anyhow};
 
     static DUMP_FD: AtomicI32 = AtomicI32::new(-1);
-    static SESSION_ID: Mutex<Option<String>> = Mutex::new(None);
 
     const SIGNALS: [i32; 5] = [
         libc::SIGSEGV,
@@ -492,18 +554,7 @@ mod imp {
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     const RA_OFFSET: usize = std::mem::size_of::<usize>();
 
-    pub(super) fn current_session_id() -> Option<String> {
-        SESSION_ID
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-    }
-
-    pub(super) fn install_unix(dump: &Path, session_id: &str) -> Result<()> {
-        *SESSION_ID
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(session_id.to_string());
-
+    pub(super) fn install_unix(dump: &Path) -> Result<()> {
         let mut options = std::fs::OpenOptions::new();
         options.create_new(true).write(true);
         use std::os::unix::fs::OpenOptionsExt as _;
@@ -514,13 +565,30 @@ mod imp {
         let fd = file.into_raw_fd();
         DUMP_FD.store(fd, Ordering::SeqCst);
 
+        let mut installed = Vec::with_capacity(SIGNALS.len());
         for signal in SIGNALS {
-            install_one(signal)?;
+            match install_one(signal) {
+                Ok(previous) => installed.push((signal, previous)),
+                Err(error) => {
+                    for (installed_signal, previous) in installed.into_iter().rev() {
+                        restore_handler(installed_signal, &previous);
+                    }
+                    let fd = DUMP_FD.swap(-1, Ordering::SeqCst);
+                    if fd >= 0 {
+                        // SAFETY: fd came from into_raw_fd above and is no longer published.
+                        unsafe {
+                            libc::close(fd);
+                        }
+                    }
+                    let _ = std::fs::remove_file(dump);
+                    return Err(error);
+                }
+            }
         }
         Ok(())
     }
 
-    fn install_one(signal: i32) -> Result<()> {
+    fn install_one(signal: i32) -> Result<libc::sigaction> {
         // SAFETY: a zeroed sigaction is a valid empty handler descriptor; we set
         // the fields we depend on before installing it.
         let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
@@ -531,11 +599,19 @@ mod imp {
             libc::sigemptyset(&mut action.sa_mask);
         }
         // SAFETY: registering a valid handler for a real signal number.
-        let result = unsafe { libc::sigaction(signal, &action, std::ptr::null_mut()) };
+        let mut previous: libc::sigaction = unsafe { std::mem::zeroed() };
+        let result = unsafe { libc::sigaction(signal, &action, &mut previous) };
         if result != 0 {
             return Err(anyhow!("sigaction failed for signal {signal}"));
         }
-        Ok(())
+        Ok(previous)
+    }
+
+    fn restore_handler(signal: i32, previous: &libc::sigaction) {
+        // SAFETY: previous was returned by sigaction for this signal.
+        unsafe {
+            libc::sigaction(signal, previous, std::ptr::null_mut());
+        }
     }
 
     // Async-signal-safe from here down: no allocation, no locks, no formatting.
@@ -690,10 +766,7 @@ mod imp {
     use std::{
         os::windows::io::IntoRawHandle as _,
         path::Path,
-        sync::{
-            Mutex,
-            atomic::{AtomicIsize, Ordering},
-        },
+        sync::atomic::{AtomicIsize, Ordering},
     };
 
     use anyhow::{Context as _, Result};
@@ -706,22 +779,10 @@ mod imp {
     };
 
     static DUMP_HANDLE: AtomicIsize = AtomicIsize::new(0);
-    static SESSION_ID: Mutex<Option<String>> = Mutex::new(None);
     const MAX_FRAMES: usize = 62;
     const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
 
-    pub(super) fn current_session_id() -> Option<String> {
-        SESSION_ID
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-    }
-
-    pub(super) fn install_windows(dump: &Path, session_id: &str) -> Result<()> {
-        *SESSION_ID
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(session_id.to_string());
-
+    pub(super) fn install_windows(dump: &Path) -> Result<()> {
         let file = std::fs::OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -839,18 +900,14 @@ mod imp {
     }
 }
 
-#[cfg(not(any(unix, windows)))]
-mod imp {
-    pub(super) fn current_session_id() -> Option<String> {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::{
-        MAX_META_BYTES, NativeContext, NativeSignal, PendingNativeCrash, decode_dump,
-        new_session_id, parse_int, parse_uint, pending_crashes, signal_name, write_context,
+        MAX_META_BYTES, MAX_PENDING_NATIVE_CRASHES, NativeContext, NativeSignal,
+        PendingNativeCrash, decode_dump, meta_path, new_session_id, parse_int, parse_uint,
+        pending_crashes, signal_name, write_context,
     };
 
     fn context(session_id: &str) -> NativeContext {
@@ -945,5 +1002,25 @@ mod tests {
         .unwrap();
 
         assert!(pending_crashes(directory.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn pending_crashes_keep_the_oldest_bounded_sessions() {
+        let directory = tempfile::tempdir().unwrap();
+        for index in 0..MAX_PENDING_NATIVE_CRASHES + 2 {
+            let session_id = format!("session{index}");
+            let mut context = context(&session_id);
+            context.started_at_ms = index as u128;
+            let path = meta_path(directory.path(), &session_id);
+            fs::write(path, serde_json::to_vec(&context).unwrap()).unwrap();
+        }
+
+        let crashes = pending_crashes(directory.path()).unwrap();
+        assert_eq!(crashes.len(), MAX_PENDING_NATIVE_CRASHES);
+        assert_eq!(crashes.first().unwrap().context.started_at_ms, 0);
+        assert_eq!(
+            crashes.last().unwrap().context.started_at_ms,
+            (MAX_PENDING_NATIVE_CRASHES - 1) as u128
+        );
     }
 }
