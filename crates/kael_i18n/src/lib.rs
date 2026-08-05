@@ -2,8 +2,26 @@
 
 //! Internationalization support for the Kael framework.
 //!
-//! Provides string catalogs, pluralization rules, locale-aware formatting,
-//! and a bundle manager for multi-locale applications.
+//! Provides bounded JSON string catalogs, integer pluralization rules, common
+//! locale number/date conventions, and a bundle manager for multi-locale apps.
+//! It intentionally stays lightweight rather than embedding full CLDR data.
+//!
+//! ```
+//! use kael_i18n::{LocaleBundle, StringCatalog};
+//!
+//! let english = StringCatalog::from_json(
+//!     "en-US",
+//!     r#"{"welcome":"Welcome, {name}"}"#,
+//! )?;
+//! let mut bundle = LocaleBundle::new("en-US");
+//! bundle.add_catalog(english);
+//!
+//! assert_eq!(
+//!     bundle.translate_with_args("welcome", &[("name", "Ada")]),
+//!     "Welcome, Ada"
+//! );
+//! # Ok::<(), anyhow::Error>(())
+//! ```
 
 mod bundle;
 mod catalog;
