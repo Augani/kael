@@ -1,5 +1,4 @@
-//! Audio playback services for Kael.
-
+#![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 
 /// Audio DSP processors: gain, pan, filtering, limiting, fades, metering.
