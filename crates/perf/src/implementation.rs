@@ -1,5 +1,4 @@
-//! The implementation of the this crate is kept in a separate module
-//! so that it is easy to publish this crate as part of GPUI's dependencies
+//! Shared data types and reporting logic for Kael's performance tooling.
 
 use collections::HashMap;
 use serde::{Deserialize, Serialize};
@@ -141,6 +140,11 @@ impl Timings {
     pub fn iters_per_sec(&self, total_iters: NonZero<usize>) -> f64 {
         total_iters.get() as f64 / self.mean.as_secs_f64()
     }
+
+    /// Whether this timing can participate in throughput comparisons.
+    fn is_usable(&self) -> bool {
+        !self.mean.is_zero()
+    }
 }
 
 /// Aggregate results, meant to be used for a given importance category. Each
@@ -229,15 +233,13 @@ impl Output {
         } else {
             String::new()
         };
-        self.tests = std::mem::take(&mut self.tests)
-            .into_iter()
-            .chain(
-                other
-                    .tests
-                    .into_iter()
-                    .map(|(name, md, tm)| (pref.clone() + &name, md, tm)),
-            )
-            .collect();
+        self.tests.reserve(other.tests.len());
+        self.tests.extend(
+            other
+                .tests
+                .into_iter()
+                .map(|(name, md, tm)| (pref.clone() + &name, md, tm)),
+        );
     }
 
     /// Evaluates the performance of `self` against `baseline`. The latter is taken
@@ -272,6 +274,9 @@ impl Output {
                     };
                     let shift =
                         (s_timings.iters_per_sec(s_iters) / o_timings.iters_per_sec(o_iters)) - 1.;
+                    if !shift.is_finite() {
+                        continue;
+                    }
                     if shift > max {
                         max = shift;
                     }
@@ -300,18 +305,17 @@ impl Output {
     /// each importance category having its tests contained.
     fn collapse(self) -> HashMap<Importance, CategoryInfo> {
         let mut categories = HashMap::<Importance, HashMap<String, _>>::default();
-        for entry in self.tests {
-            if let Some(mdata) = entry.1
+        for (name, metadata, result) in self.tests {
+            if let Some(mdata) = metadata
                 && let Some(iterations) = mdata.iterations
-                && let Ok(timings) = entry.2
+                && mdata.weight > 0
+                && let Ok(timings) = result
+                && timings.is_usable()
             {
-                if let Some(handle) = categories.get_mut(&mdata.importance) {
-                    handle.insert(entry.0, (timings, iterations, mdata.weight));
-                } else {
-                    let mut new = HashMap::default();
-                    new.insert(entry.0, (timings, iterations, mdata.weight));
-                    categories.insert(mdata.importance, new);
-                }
+                categories
+                    .entry(mdata.importance)
+                    .or_default()
+                    .insert(name, (timings, iterations, mdata.weight));
             }
         }
 
@@ -336,11 +340,15 @@ impl std::fmt::Display for Output {
         )?;
         writeln!(f, "|:---|---:|---:|---:|---:|---:|")?;
         for (name, metadata, timings) in &sorted.tests {
-            match metadata {
-                Some(metadata) => match timings {
+            let name = markdown_cell(name);
+            match (metadata, timings) {
+                (Some(metadata), result) => match result {
                     // Happy path.
                     Ok(timings) => {
-                        let Some(iterations) = metadata.iterations else {
+                        let Some(iterations) = metadata
+                            .iterations
+                            .filter(|_| metadata.weight > 0 && timings.is_usable())
+                        else {
                             writeln!(
                                 f,
                                 "| ({}) {} | N/A | N/A | N/A | N/A | {} ({}) |",
@@ -387,12 +395,10 @@ impl std::fmt::Display for Output {
                     )?,
                 },
                 // No metadata, couldn't even parse the test output.
-                None => writeln!(
-                    f,
-                    "| ({}) {} | N/A | N/A | N/A | N/A | N/A |",
-                    timings.as_ref().unwrap_err(),
-                    name
-                )?,
+                (None, result) => {
+                    let error = result.as_ref().err().unwrap_or(&FailKind::BadMetadata);
+                    writeln!(f, "| ({error}) {name} | N/A | N/A | N/A | N/A | N/A |")?;
+                }
             }
         }
         Ok(())
@@ -428,32 +434,37 @@ impl std::fmt::Display for PerfReport {
         // a little jankily like this.
         write!(f, "|:---|---:|---:|---:|")?;
         for (cat, delta) in sorted {
-            const SIGN_POS: &str = "↑";
-            const SIGN_NEG: &str = "↓";
-            const SIGN_NEUTRAL: &str = "±";
-
-            let prettify = |time: f64| {
-                let sign = if time > 0.05 {
-                    SIGN_POS
-                } else if time < 0.05 && time > -0.05 {
-                    SIGN_NEUTRAL
-                } else {
-                    SIGN_NEG
-                };
-                format!("{} {:.1}%", sign, time.abs() * 100.)
-            };
-
             // Pretty-print these instead of just using the float display impl.
             write!(
                 f,
                 "\n| {cat} | {} | {} | {} |",
-                prettify(delta.max),
-                prettify(delta.mean),
-                prettify(delta.min)
+                format_delta(delta.max),
+                format_delta(delta.mean),
+                format_delta(delta.min)
             )?;
         }
         Ok(())
     }
+}
+
+/// Escapes a value for use inside a Markdown table cell.
+fn markdown_cell(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace(['\r', '\n'], " ")
+}
+
+/// Formats a fractional throughput delta with its direction.
+fn format_delta(delta: f64) -> String {
+    let sign = if delta >= 0.05 {
+        "↑"
+    } else if delta <= -0.05 {
+        "↓"
+    } else {
+        "±"
+    };
+    format!("{sign} {:.1}%", delta.abs() * 100.)
 }
 
 #[cfg(test)]
@@ -530,5 +541,58 @@ mod tests {
 
         let report = current.compare_perf(baseline).to_string();
         assert!(report.contains("↑ 100.0%"), "{report}");
+    }
+
+    #[test]
+    fn exact_report_thresholds_have_the_correct_direction() {
+        assert_eq!(format_delta(0.05), "↑ 5.0%");
+        assert_eq!(format_delta(-0.05), "↓ 5.0%");
+        assert_eq!(format_delta(0.0), "± 0.0%");
+    }
+
+    #[test]
+    fn malformed_deserialized_results_do_not_panic_while_rendering() {
+        let mut output = Output::blank();
+        output.tests.push((
+            "broken|name\nnext".to_owned(),
+            None,
+            Ok(Timings {
+                mean: Duration::ZERO,
+                stddev: Duration::ZERO,
+            }),
+        ));
+
+        let report = output.to_string();
+        assert!(report.contains("bad test metadata"));
+        assert!(report.contains("broken\\|name next"));
+    }
+
+    #[test]
+    fn zero_duration_results_are_excluded_from_comparisons() {
+        let mut current = Output::blank();
+        current.success(
+            "render",
+            metadata(Importance::Critical, 50),
+            NonZero::new(1).unwrap(),
+            Timings {
+                mean: Duration::ZERO,
+                stddev: Duration::ZERO,
+            },
+        );
+        let mut baseline = Output::blank();
+        baseline.success(
+            "render",
+            metadata(Importance::Critical, 50),
+            NonZero::new(1).unwrap(),
+            Timings {
+                mean: Duration::from_millis(1),
+                stddev: Duration::ZERO,
+            },
+        );
+
+        assert_eq!(
+            current.compare_perf(baseline).to_string(),
+            "(no matching tests)"
+        );
     }
 }
