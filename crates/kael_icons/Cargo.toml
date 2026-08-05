@@ -5,7 +5,7 @@ rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
 publish = true
-description = "Platform services icon scaffolding for Kael"
+description = "Compact typed SVG icon catalog for Kael applications"
 keywords = ["icons", "native", "desktop", "kael"]
 categories = ["gui", "os"]
 authors.workspace = true
@@ -17,7 +17,6 @@ build = "build.rs"
 [lib]
 name = "kael_icons"
 path = "src/lib.rs"
-doctest = false
 
 [lints]
 workspace = true

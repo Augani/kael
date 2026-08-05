@@ -1,6 +1,7 @@
 use crate::{AssetSource, DevicePixels, IsZero, Result, SharedString, Size};
 use resvg::tiny_skia::Pixmap;
 use std::{
+    borrow::Cow,
     hash::Hash,
     sync::{Arc, LazyLock},
 };
@@ -60,8 +61,9 @@ impl SvgRenderer {
     ) -> Result<Option<(Size<DevicePixels>, Vec<u8>)>> {
         anyhow::ensure!(!params.size.is_zero(), "can't render at a zero size");
 
-        // Load the tree.
-        let Some(bytes) = self.asset_source.load(&params.path)? else {
+        // Load the application asset first so brand overrides always win, then
+        // fall back to Kael's compact embedded icon catalog when enabled.
+        let Some(bytes) = self.load_bytes(&params.path)? else {
             return Ok(None);
         };
 
@@ -78,6 +80,19 @@ impl SvgRenderer {
             .map(|p| p.alpha())
             .collect::<Vec<_>>();
         Ok(Some((size, alpha_mask)))
+    }
+
+    fn load_bytes(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if let Some(bytes) = self.asset_source.load(path)? {
+            return Ok(Some(bytes));
+        }
+
+        #[cfg(feature = "icons")]
+        if let Some(svg) = kael_icons::svg_for_path(path) {
+            return Ok(Some(Cow::Borrowed(svg.as_bytes())));
+        }
+
+        Ok(None)
     }
 
     pub fn render_pixmap(&self, bytes: &[u8], size: SvgSize) -> Result<Pixmap, usvg::Error> {
@@ -100,5 +115,61 @@ impl SvgRenderer {
         resvg::render(&tree, transform, &mut pixmap.as_mut());
 
         Ok(pixmap)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct OverrideAssets;
+
+    impl AssetSource for OverrideAssets {
+        fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+            Ok((path == "kael-icons/check.svg")
+                .then_some(Cow::Borrowed(&b"application override"[..])))
+        }
+
+        fn list(&self, _path: &str) -> Result<Vec<SharedString>> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[test]
+    fn application_assets_take_precedence() {
+        let renderer = SvgRenderer::new(Arc::new(OverrideAssets));
+        let bytes = renderer
+            .load_bytes("kael-icons/check.svg")
+            .unwrap()
+            .unwrap();
+        assert_eq!(bytes.as_ref(), b"application override");
+    }
+
+    #[cfg(feature = "icons")]
+    #[test]
+    fn bundled_icons_fill_missing_virtual_assets() {
+        let renderer = SvgRenderer::new(Arc::new(()));
+        let bytes = renderer
+            .load_bytes("kael-icons/circle-check.svg")
+            .unwrap()
+            .unwrap();
+        assert!(bytes.starts_with(b"<svg"));
+
+        let (size, alpha_mask) = renderer
+            .render(&RenderSvgParams {
+                path: "kael-icons/circle-check.svg".into(),
+                size: Size::new(DevicePixels(24), DevicePixels(24)),
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(size, Size::new(DevicePixels(24), DevicePixels(24)));
+        assert!(alpha_mask.iter().any(|alpha| *alpha > 0));
+
+        assert!(
+            renderer
+                .load_bytes("custom/circle-check.svg")
+                .unwrap()
+                .is_none()
+        );
     }
 }

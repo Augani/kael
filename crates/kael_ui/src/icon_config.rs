@@ -1,12 +1,15 @@
 //! Icon configuration for customizing icon asset paths.
 //!
-//! This module provides global configuration for icon asset paths, allowing
-//! users to provide their own icon assets instead of bundling them with the library.
+//! Kael UI uses its compact bundled icon set by default. Applications can set
+//! a custom base path to replace those icons with branded assets.
 
 use once_cell::sync::OnceCell;
 use std::sync::RwLock;
 
 static ICON_BASE_PATH: OnceCell<RwLock<String>> = OnceCell::new();
+
+/// Virtual base path for the compact icon set bundled with Kael UI.
+pub const BUNDLED_ICON_BASE_PATH: &str = "kael-icons";
 
 /// Sets the base path for icon assets.
 ///
@@ -21,8 +24,8 @@ static ICON_BASE_PATH: OnceCell<RwLock<String>> = OnceCell::new();
 /// // Set icons to be loaded from your application's assets directory
 /// set_icon_base_path("assets/icons");
 ///
-/// // Now icons will be loaded from assets/icons/{icon-name}.svg
-/// // instead of crates/kael_ui/assets/icons/{icon-name}.svg
+/// // Icons are now loaded from assets/icons/{icon-name}.svg instead of the
+/// // compact set bundled with Kael UI.
 /// ```
 ///
 /// # Arguments
@@ -39,14 +42,14 @@ pub fn set_icon_base_path(path: impl Into<String>) {
 
 /// Gets the current icon base path.
 ///
-/// Returns the configured icon base path, or a default path if none has been set.
+/// Returns the configured icon base path, or Kael's virtual bundled-icon path.
 ///
 /// # Returns
 ///
 /// The base path for loading icon assets.
 pub(crate) fn get_icon_base_path() -> String {
     ICON_BASE_PATH
-        .get_or_init(|| RwLock::new("assets/icons".to_string()))
+        .get_or_init(|| RwLock::new(BUNDLED_ICON_BASE_PATH.to_string()))
         .read()
         .unwrap()
         .clone()
@@ -70,7 +73,7 @@ pub(crate) fn get_icon_base_path() -> String {
 /// use kael_ui::icon_config::resolve_icon_path;
 ///
 /// let path = resolve_icon_path("arrow-up");
-/// // Returns "assets/icons/arrow-up.svg" (or your configured path)
+/// assert_eq!(path, "kael-icons/arrow-up.svg");
 /// ```
 pub fn resolve_icon_path(name: &str) -> String {
     format!("{}/{}.svg", get_icon_base_path(), name)
@@ -81,13 +84,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_icon_path() {
-        let path = resolve_icon_path("test-icon");
-        assert!(path.contains("test-icon.svg"));
-    }
-
-    #[test]
-    fn test_custom_icon_path() {
+    fn bundled_default_can_be_replaced_with_a_brand_path() {
+        assert_eq!(resolve_icon_path("search"), "kael-icons/search.svg");
         set_icon_base_path("custom/path/icons");
         let path = resolve_icon_path("custom-icon");
         assert_eq!(path, "custom/path/icons/custom-icon.svg");

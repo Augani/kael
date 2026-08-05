@@ -29,7 +29,7 @@ exclude = [
 ]
 
 [package.metadata.docs.rs]
-features = ["agent-tools", "auto-update", "lottie", "runtime_shaders"]
+features = ["agent-tools", "auto-update", "icons", "lottie", "runtime_shaders"]
 default-target = "x86_64-unknown-linux-gnu"
 targets = []
 rustdoc-args = ["--cfg", "docsrs"]
