@@ -190,18 +190,28 @@ struct CachedTile {
     order: u64,
 }
 
-/// Cache for rendered tile data, optionally bounded by a maximum byte budget with
-/// least-recently-used eviction (driven by [`TileCache::insert`] and [`TileCache::touch`]).
-#[derive(Debug, Default)]
+/// Cache for rendered tile data, bounded by a maximum byte budget with
+/// least-recently-used eviction (driven by [`TileCache::insert`] and
+/// [`TileCache::touch`]).
+#[derive(Debug)]
 pub struct TileCache {
     tiles: HashMap<TileCoord, CachedTile>,
-    max_bytes: Option<usize>,
+    max_bytes: usize,
     current_bytes: usize,
     clock: u64,
 }
 
+impl Default for TileCache {
+    fn default() -> Self {
+        Self::with_max_bytes(Self::DEFAULT_MAX_BYTES)
+    }
+}
+
 impl TileCache {
-    /// Create a new, unbounded tile cache.
+    /// Default resident tile-data budget: 256 MiB.
+    pub const DEFAULT_MAX_BYTES: usize = 256 * 1024 * 1024;
+
+    /// Create a cache with the default 256 MiB resident-data budget.
     pub fn new() -> Self {
         Self::default()
     }
@@ -210,8 +220,10 @@ impl TileCache {
     /// the budget evicts least-recently-used tiles until the data fits.
     pub fn with_max_bytes(max_bytes: usize) -> Self {
         Self {
-            max_bytes: Some(max_bytes),
-            ..Self::default()
+            tiles: HashMap::new(),
+            max_bytes,
+            current_bytes: 0,
+            clock: 0,
         }
     }
 
@@ -237,7 +249,7 @@ impl TileCache {
     /// Insert tile data at the given coordinate, evicting LRU tiles if over budget.
     pub fn insert(&mut self, coord: TileCoord, data: Vec<u8>) {
         let bytes = data.len();
-        if self.max_bytes.is_some_and(|budget| bytes > budget) {
+        if bytes > self.max_bytes {
             return;
         }
         let order = self.next_order();
@@ -287,6 +299,11 @@ impl TileCache {
         self.current_bytes
     }
 
+    /// Maximum resident tile-data budget in bytes.
+    pub const fn max_bytes(&self) -> usize {
+        self.max_bytes
+    }
+
     /// Number of tiles currently cached.
     pub fn len(&self) -> usize {
         self.tiles.len()
@@ -298,10 +315,7 @@ impl TileCache {
     }
 
     fn evict_to_budget(&mut self) {
-        let Some(max_bytes) = self.max_bytes else {
-            return;
-        };
-        while self.current_bytes > max_bytes && !self.tiles.is_empty() {
+        while self.current_bytes > self.max_bytes && !self.tiles.is_empty() {
             let Some(coord) = self
                 .tiles
                 .iter()
@@ -566,12 +580,13 @@ mod tests {
     }
 
     #[test]
-    fn tile_cache_unbounded_by_default() {
+    fn tile_cache_is_bounded_by_default() {
         let mut cache = TileCache::new();
         for x in 0..100 {
             cache.insert(TileCoord { x, y: 0, zoom: 0 }, vec![0u8; 1000]);
         }
         assert_eq!(cache.len(), 100);
+        assert_eq!(cache.max_bytes(), TileCache::DEFAULT_MAX_BYTES);
     }
 
     #[test]

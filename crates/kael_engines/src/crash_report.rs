@@ -11,6 +11,9 @@ use std::panic::PanicHookInfo;
 
 use serde::{Deserialize, Serialize};
 
+const MAX_MESSAGE_BYTES: usize = 16 * 1024;
+const MAX_CONTEXT_BYTES: usize = 4 * 1024;
+
 /// A structured record of a Rust panic, ready to log or upload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CrashReport {
@@ -28,8 +31,8 @@ pub struct CrashReport {
 
 impl CrashReport {
     /// Serialize to a single-line JSON record.
-    pub fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|_| String::from("{}"))
+    pub fn to_json(&self) -> serde_json::Result<String> {
+        serde_json::to_string(self)
     }
 }
 
@@ -45,11 +48,11 @@ pub fn capture_panic(
     version: &str,
 ) -> CrashReport {
     CrashReport {
-        message: panic_message(payload),
-        location,
-        thread: thread.to_string(),
+        message: bounded(panic_message(payload), MAX_MESSAGE_BYTES),
+        location: location.map(|value| bounded(value, MAX_CONTEXT_BYTES)),
+        thread: bounded(thread.to_string(), MAX_CONTEXT_BYTES),
         timestamp_ms,
-        version: version.to_string(),
+        version: bounded(version.to_string(), MAX_CONTEXT_BYTES),
     }
 }
 
@@ -61,6 +64,18 @@ fn panic_message(payload: &(dyn Any + 'static)) -> String {
     } else {
         "unknown panic payload".to_string()
     }
+}
+
+fn bounded(mut value: String, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
+    value
 }
 
 /// Build a report directly from a [`PanicHookInfo`] inside a panic hook.
@@ -82,18 +97,22 @@ pub fn report_from_hook(info: &PanicHookInfo<'_>, timestamp_ms: u64, version: &s
 
 /// Install a global panic hook that builds a [`CrashReport`] for every panic and passes
 /// it to `handler`. `now` supplies the capture timestamp (injected so the caller owns the
-/// clock). Replaces any previously installed hook.
+/// clock). The previously installed hook is called afterward, preserving the
+/// application's existing logging or crash-handler integration. Panics from
+/// either callback are caught so the hook itself does not double-panic.
 pub fn install_panic_handler<N, H>(version: String, now: N, handler: H)
 where
     N: Fn() -> u64 + Send + Sync + 'static,
     H: Fn(CrashReport) + Send + Sync + 'static,
 {
+    let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         // A panic hook must never panic itself: doing so while the runtime is already
         // unwinding aborts the process before any fallback crash handling can run.
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             handler(report_from_hook(info, now(), &version));
         }));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| previous(info)));
     }));
 }
 
@@ -124,7 +143,7 @@ mod tests {
     #[test]
     fn report_serializes_to_json_with_all_fields() {
         let report = capture_panic(&"x", Some("a.rs:1:1".to_string()), "t", 7, "9");
-        let json = report.to_json();
+        let json = report.to_json().unwrap();
         let round: CrashReport = serde_json::from_str(&json).unwrap();
         assert_eq!(round, report);
         assert!(json.contains("\"message\":\"x\""));
@@ -155,5 +174,22 @@ mod tests {
         assert_eq!(report.timestamp_ms, 123);
         assert_eq!(report.version, "test-version");
         assert!(report.location.is_some());
+    }
+
+    #[test]
+    fn capture_bounds_untrusted_context_on_utf8_boundaries() {
+        let message = "🦀".repeat(MAX_MESSAGE_BYTES);
+        let report = capture_panic(
+            &message,
+            Some("x".repeat(MAX_CONTEXT_BYTES + 1)),
+            &"t".repeat(MAX_CONTEXT_BYTES + 1),
+            0,
+            &"v".repeat(MAX_CONTEXT_BYTES + 1),
+        );
+        assert!(report.message.len() <= MAX_MESSAGE_BYTES);
+        assert!(report.message.is_char_boundary(report.message.len()));
+        assert_eq!(report.location.unwrap().len(), MAX_CONTEXT_BYTES);
+        assert_eq!(report.thread.len(), MAX_CONTEXT_BYTES);
+        assert_eq!(report.version.len(), MAX_CONTEXT_BYTES);
     }
 }
