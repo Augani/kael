@@ -1,8 +1,13 @@
 # kael_media_engines
 
-Optional media/NLE engines (timeline, compositing, audio mix, export) for the Kael UI framework
+Optional media/NLE engines for timelines, compositing, audio mixing, playback,
+scopes, subtitles, and export.
 
-Part of the [Kael](https://github.com/Augani/kael) GPU-accelerated Rust UI framework. This is a **leaf domain stack**: it builds media-application capability on top of the general-purpose framework, and the core `kael` crate never depends on it. These modules previously lived in `kael_engines` and were split out so that crate stays domain-neutral. See the [documentation](https://augani.github.io/kael/) for usage and guides.
+This is a **leaf domain stack** in the
+[Kael](https://github.com/Augani/kael) native application framework: it builds
+media-application capability on top of the general-purpose runtime, and the
+core `kael` crate never depends on it. See the
+[documentation](https://augani.github.io/kael/) for usage and guides.
 
 ## License
 

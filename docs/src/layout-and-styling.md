@@ -36,7 +36,7 @@ div().flex_none()
 
 ## Grid layout
 
-Switch a container to CSS Grid with `.grid()`, define tracks with `.grid_cols(n)` / `.grid_rows(n)`, and place children with `.col_span(n)` / `.row_span(n)` (or `.col_span_full()` / `.row_span_full()`). `.gap_*()` sets the gutters:
+Switch a container to Kael's native grid layout with `.grid()`, define tracks with `.grid_cols(n)` / `.grid_rows(n)`, and place children with `.col_span(n)` / `.row_span(n)` (or `.col_span_full()` / `.row_span_full()`). `.gap_*()` sets the gutters:
 
 ```rust
 div()
