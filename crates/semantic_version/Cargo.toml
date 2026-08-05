@@ -17,16 +17,8 @@ license.workspace = true
 name = "kael_semantic_version"
 path = "src/semantic_version.rs"
 
-[dependencies.anyhow]
-workspace = true
-
 [dependencies.serde]
 workspace = true
-features = [
-    "derive",
-    "rc",
-]
-
 
 [lints]
 workspace = true

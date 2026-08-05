@@ -1056,9 +1056,9 @@ impl MacPlatform {
             version
         };
         SemanticVersion::new(
-            version.majorVersion as usize,
-            version.minorVersion as usize,
-            version.patchVersion as usize,
+            version.majorVersion.try_into().unwrap_or_default(),
+            version.minorVersion.try_into().unwrap_or_default(),
+            version.patchVersion.try_into().unwrap_or_default(),
         )
     }
 }

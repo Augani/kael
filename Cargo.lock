@@ -4110,7 +4110,6 @@ dependencies = [
 name = "kael_semantic_version"
 version = "0.3.0"
 dependencies = [
- "anyhow",
  "serde",
 ]
 
