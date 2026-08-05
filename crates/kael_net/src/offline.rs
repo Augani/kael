@@ -18,6 +18,47 @@ pub struct QueuedRequest {
     pub priority: u32,
 }
 
+/// Result of attempting to add a request to an [`OfflineQueue`].
+#[derive(Debug)]
+#[must_use = "handle whether the offline request was queued or rejected"]
+pub enum EnqueueOutcome {
+    /// The request was queued with its assigned identifier.
+    Queued {
+        /// Identifier assigned to the newly queued request.
+        id: String,
+        /// Lower-priority request removed to make room, if any.
+        evicted: Option<QueuedRequest>,
+    },
+    /// The queue rejected the request because no slot was available.
+    Rejected {
+        /// The original request, returned so the caller can handle or persist it.
+        request: ApiRequest,
+    },
+}
+
+impl EnqueueOutcome {
+    /// Returns the assigned request identifier when the request was queued.
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            Self::Queued { id, .. } => Some(id),
+            Self::Rejected { .. } => None,
+        }
+    }
+
+    /// Returns the request evicted to make room, if one was displaced.
+    pub fn evicted(&self) -> Option<&QueuedRequest> {
+        match self {
+            Self::Queued { evicted, .. } => evicted.as_ref(),
+            Self::Rejected { .. } => None,
+        }
+    }
+
+    /// Returns true when the incoming request was accepted.
+    pub fn is_queued(&self) -> bool {
+        matches!(self, Self::Queued { .. })
+    }
+}
+
 /// A bounded, priority-aware offline request queue.
 #[derive(Debug)]
 pub struct OfflineQueue {
@@ -36,24 +77,33 @@ impl OfflineQueue {
         }
     }
 
-    /// Enqueue a request with a given priority, returning its assigned id.
+    /// Enqueue a request with a given priority.
     ///
-    /// If the queue is at capacity, the lowest-priority (highest number) item is dropped.
-    pub fn enqueue(&mut self, request: ApiRequest, priority: u32) -> String {
-        let id = self.allocate_id();
-
+    /// If the queue is at capacity and the new request has higher priority, the
+    /// lowest-priority existing request is returned as evicted. Otherwise, the
+    /// incoming request is returned as rejected rather than silently dropped.
+    ///
+    /// ```
+    /// use kael_net::{ApiRequest, EnqueueOutcome, OfflineQueue};
+    ///
+    /// let mut queue = OfflineQueue::new(32);
+    /// match queue.enqueue(ApiRequest::get("/sync"), 1) {
+    ///     EnqueueOutcome::Queued { id, evicted } => {
+    ///         assert!(!id.is_empty());
+    ///         assert!(evicted.is_none());
+    ///     }
+    ///     EnqueueOutcome::Rejected { request } => {
+    ///         // Persist or execute the returned request another way.
+    ///         assert_eq!(request.path, "/sync");
+    ///     }
+    /// }
+    /// ```
+    pub fn enqueue(&mut self, request: ApiRequest, priority: u32) -> EnqueueOutcome {
         if self.max_size == 0 {
-            return id;
+            return EnqueueOutcome::Rejected { request };
         }
 
-        let queued = QueuedRequest {
-            id: id.clone(),
-            request,
-            created_at: now_unix_millis(),
-            attempts: 0,
-            priority,
-        };
-
+        let mut evicted = None;
         if self.queue.len() >= self.max_size {
             let worst_idx = self
                 .queue
@@ -64,12 +114,21 @@ impl OfflineQueue {
 
             if let Some(idx) = worst_idx {
                 if self.queue[idx].priority > priority {
-                    self.queue.remove(idx);
+                    evicted = self.queue.remove(idx);
                 } else {
-                    return id;
+                    return EnqueueOutcome::Rejected { request };
                 }
             }
         }
+
+        let id = self.allocate_id();
+        let queued = QueuedRequest {
+            id: id.clone(),
+            request,
+            created_at: now_unix_millis(),
+            attempts: 0,
+            priority,
+        };
 
         let insert_pos = self
             .queue
@@ -78,7 +137,7 @@ impl OfflineQueue {
             .unwrap_or(self.queue.len());
 
         self.queue.insert(insert_pos, queued);
-        id
+        EnqueueOutcome::Queued { id, evicted }
     }
 
     fn allocate_id(&mut self) -> String {
@@ -142,6 +201,15 @@ mod tests {
         ApiRequest::get(path)
     }
 
+    fn require_queued(outcome: EnqueueOutcome) -> (String, Option<QueuedRequest>) {
+        match outcome {
+            EnqueueOutcome::Queued { id, evicted } => (id, evicted),
+            EnqueueOutcome::Rejected { request } => {
+                panic!("request was unexpectedly rejected: {}", request.path)
+            }
+        }
+    }
+
     #[test]
     fn test_new_queue() {
         let queue = OfflineQueue::new(10);
@@ -152,7 +220,10 @@ mod tests {
     #[test]
     fn test_enqueue_dequeue() {
         let mut queue = OfflineQueue::new(10);
-        let id = queue.enqueue(make_request("/a"), 1);
+        let outcome = queue.enqueue(make_request("/a"), 1);
+        assert!(outcome.is_queued());
+        assert!(outcome.evicted().is_none());
+        let (id, _) = require_queued(outcome);
         assert!(!id.is_empty());
         assert_eq!(queue.len(), 1);
 
@@ -166,9 +237,9 @@ mod tests {
     #[test]
     fn test_priority_ordering() {
         let mut queue = OfflineQueue::new(10);
-        queue.enqueue(make_request("/low"), 10);
-        queue.enqueue(make_request("/high"), 1);
-        queue.enqueue(make_request("/mid"), 5);
+        require_queued(queue.enqueue(make_request("/low"), 10));
+        require_queued(queue.enqueue(make_request("/high"), 1));
+        require_queued(queue.enqueue(make_request("/mid"), 5));
 
         assert_eq!(queue.dequeue().unwrap().request.path, "/high");
         assert_eq!(queue.dequeue().unwrap().request.path, "/mid");
@@ -180,7 +251,7 @@ mod tests {
         let mut queue = OfflineQueue::new(10);
         assert!(queue.peek().is_none());
 
-        queue.enqueue(make_request("/a"), 1);
+        require_queued(queue.enqueue(make_request("/a"), 1));
         let peeked = queue.peek().unwrap();
         assert_eq!(peeked.request.path, "/a");
         assert_eq!(queue.len(), 1);
@@ -189,8 +260,8 @@ mod tests {
     #[test]
     fn test_remove() {
         let mut queue = OfflineQueue::new(10);
-        let id1 = queue.enqueue(make_request("/a"), 1);
-        let _id2 = queue.enqueue(make_request("/b"), 2);
+        let (id1, _) = require_queued(queue.enqueue(make_request("/a"), 1));
+        require_queued(queue.enqueue(make_request("/b"), 2));
 
         assert!(queue.remove(&id1));
         assert_eq!(queue.len(), 1);
@@ -201,8 +272,8 @@ mod tests {
     #[test]
     fn test_clear() {
         let mut queue = OfflineQueue::new(10);
-        queue.enqueue(make_request("/a"), 1);
-        queue.enqueue(make_request("/b"), 2);
+        require_queued(queue.enqueue(make_request("/a"), 1));
+        require_queued(queue.enqueue(make_request("/b"), 2));
         queue.clear();
         assert!(queue.is_empty());
     }
@@ -210,11 +281,12 @@ mod tests {
     #[test]
     fn test_max_size_eviction() {
         let mut queue = OfflineQueue::new(2);
-        queue.enqueue(make_request("/a"), 5);
-        queue.enqueue(make_request("/b"), 3);
+        require_queued(queue.enqueue(make_request("/a"), 5));
+        require_queued(queue.enqueue(make_request("/b"), 3));
         assert_eq!(queue.len(), 2);
 
-        queue.enqueue(make_request("/c"), 1);
+        let outcome = queue.enqueue(make_request("/c"), 1);
+        assert_eq!(outcome.evicted().unwrap().request.path, "/a");
         assert_eq!(queue.len(), 2);
 
         let first = queue.dequeue().unwrap();
@@ -226,10 +298,14 @@ mod tests {
     #[test]
     fn test_max_size_no_eviction_when_lower_priority() {
         let mut queue = OfflineQueue::new(2);
-        queue.enqueue(make_request("/a"), 1);
-        queue.enqueue(make_request("/b"), 2);
+        require_queued(queue.enqueue(make_request("/a"), 1));
+        require_queued(queue.enqueue(make_request("/b"), 2));
 
-        queue.enqueue(make_request("/c"), 10);
+        let outcome = queue.enqueue(make_request("/c"), 10);
+        match outcome {
+            EnqueueOutcome::Rejected { request } => assert_eq!(request.path, "/c"),
+            EnqueueOutcome::Queued { .. } => panic!("lower-priority request was queued"),
+        }
         assert_eq!(queue.len(), 2);
 
         assert_eq!(queue.dequeue().unwrap().request.path, "/a");
@@ -239,20 +315,24 @@ mod tests {
     #[test]
     fn test_unique_ids() {
         let mut queue = OfflineQueue::new(10);
-        let id1 = queue.enqueue(make_request("/a"), 1);
-        let id2 = queue.enqueue(make_request("/b"), 1);
-        let id3 = queue.enqueue(make_request("/c"), 1);
+        let (id1, _) = require_queued(queue.enqueue(make_request("/a"), 1));
+        let (id2, _) = require_queued(queue.enqueue(make_request("/b"), 1));
+        let (id3, _) = require_queued(queue.enqueue(make_request("/c"), 1));
         assert_ne!(id1, id2);
         assert_ne!(id2, id3);
         assert_ne!(id1, id3);
     }
 
     #[test]
-    fn test_zero_capacity_queue_drops_everything() {
+    fn test_zero_capacity_queue_rejects_and_returns_request() {
         let mut queue = OfflineQueue::new(0);
-        let id = queue.enqueue(make_request("/a"), 1);
+        let outcome = queue.enqueue(make_request("/a"), 1);
 
-        assert!(!id.is_empty());
+        assert!(!outcome.is_queued());
+        match outcome {
+            EnqueueOutcome::Rejected { request } => assert_eq!(request.path, "/a"),
+            EnqueueOutcome::Queued { .. } => panic!("zero-capacity queue accepted a request"),
+        }
         assert!(queue.is_empty());
         assert!(queue.dequeue().is_none());
     }
@@ -261,12 +341,13 @@ mod tests {
     fn request_ids_wrap_without_panicking_or_colliding() {
         let mut queue = OfflineQueue::new(4);
         queue.next_id = u64::MAX;
-        let max = queue.enqueue(make_request("/max"), 1);
-        let wrapped = queue.enqueue(make_request("/wrapped"), 1);
+        let (max, _) = require_queued(queue.enqueue(make_request("/max"), 1));
+        let (wrapped, _) = require_queued(queue.enqueue(make_request("/wrapped"), 1));
         assert_eq!(max, format!("req_{}", u64::MAX));
         assert_eq!(wrapped, "req_1");
 
         queue.next_id = 1;
-        assert_eq!(queue.enqueue(make_request("/skip-duplicate"), 1), "req_2");
+        let (id, _) = require_queued(queue.enqueue(make_request("/skip-duplicate"), 1));
+        assert_eq!(id, "req_2");
     }
 }
