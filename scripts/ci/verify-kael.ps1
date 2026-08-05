@@ -72,7 +72,7 @@ switch ($Mode) {
         Invoke-Step cargo check --package kael_http_client --no-default-features
         # These engine crates are hardware-free, so their tests also execute on
         # Windows rather than stopping at the compile/link proof.
-        Invoke-Step cargo test --package kael_engines --package kael_media_engines --package kael_render_graph --package kael_storage --lib
+        Invoke-Step cargo test --package kael_cache --package kael_engines --package kael_media_engines --package kael_render_graph --package kael_storage --lib
         Invoke-Step cargo check --package kael --lib --features 'platform-foundation'
         Invoke-Step cargo check --package kael --lib --features 'document'
         Invoke-Step cargo check --package kael --lib --features 'pdf'

@@ -31,7 +31,7 @@ workspace = true
 [dependencies.sha2]
 version = "0.10"
 
-[dev-dependencies.tempfile]
+[dependencies.tempfile]
 version = "3.20.0"
 
 [lints]

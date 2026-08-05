@@ -130,14 +130,13 @@ impl CacheManager {
 
     /// Returns current cache statistics.
     pub fn stats(&self) -> CacheStats {
-        let disk_bytes = self.disk.total_size().unwrap_or(0);
         CacheStats {
             memory_hits: self.memory.hits(),
             memory_misses: self.memory.misses(),
             disk_hits: self.disk_hits.load(Ordering::Relaxed),
             disk_misses: self.disk_misses.load(Ordering::Relaxed),
             memory_entries: self.memory.len(),
-            disk_bytes,
+            disk_bytes: self.disk.total_size(),
         }
     }
 }

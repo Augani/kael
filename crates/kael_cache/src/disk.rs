@@ -1,14 +1,12 @@
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::{
-    Mutex, MutexGuard,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
+use tempfile::Builder;
 
 /// A content-addressed disk cache organized by namespace.
 ///
@@ -176,8 +174,8 @@ impl DiskCache {
     }
 
     /// Returns the total size in bytes of all cached files.
-    pub fn total_size(&self) -> Result<u64> {
-        Ok(self.lock_index().total_bytes)
+    pub fn total_size(&self) -> u64 {
+        self.lock_index().total_bytes
     }
 
     /// Returns the configured maximum size in bytes.
@@ -294,52 +292,19 @@ impl DiskCache {
 }
 
 fn write_atomically(path: &Path, data: &[u8]) -> Result<()> {
-    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
-
-    let temp_path = loop {
-        let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
-        let candidate = path.with_extension(format!("tmp-{}-{id}", std::process::id()));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
-            Ok(mut file) => {
-                let result = (|| {
-                    file.write_all(data)?;
-                    file.flush()?;
-                    Ok::<_, std::io::Error>(())
-                })();
-                if let Err(error) = result {
-                    let _ = fs::remove_file(&candidate);
-                    return Err(error).with_context(|| {
-                        format!("failed to write cache entry: {}", path.display())
-                    });
-                }
-                break candidate;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("failed to create cache entry: {}", path.display()));
-            }
-        }
-    };
-
-    #[cfg(windows)]
-    if path.exists()
-        && let Err(error) = fs::remove_file(path)
-    {
-        let _ = fs::remove_file(&temp_path);
-        return Err(error)
-            .with_context(|| format!("failed to replace cache entry: {}", path.display()));
-    }
-
-    if let Err(error) = fs::rename(&temp_path, path) {
-        let _ = fs::remove_file(&temp_path);
-        return Err(error)
-            .with_context(|| format!("failed to replace cache entry: {}", path.display()));
-    }
+    let directory = path
+        .parent()
+        .context("cache entry has no parent directory")?;
+    let mut file = Builder::new()
+        .prefix(".kael-cache.tmp-")
+        .tempfile_in(directory)
+        .with_context(|| format!("failed to create cache entry: {}", path.display()))?;
+    file.write_all(data)
+        .and_then(|()| file.flush())
+        .with_context(|| format!("failed to write cache entry: {}", path.display()))?;
+    file.persist(path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("failed to replace cache entry: {}", path.display()))?;
     Ok(())
 }
 
@@ -579,7 +544,7 @@ mod tests {
         let (_tmp, cache) = setup();
         cache.put("ns", "k1", b"12345").unwrap();
         cache.put("ns", "k2", b"67890").unwrap();
-        assert_eq!(cache.total_size().unwrap(), 10);
+        assert_eq!(cache.total_size(), 10);
     }
 
     #[test]
@@ -598,7 +563,7 @@ mod tests {
         cache.put("ns", "b", b"bbbb").unwrap();
         let freed = cache.evict_by_size(4).unwrap();
         assert!(freed >= 4);
-        assert!(cache.total_size().unwrap() <= 4);
+        assert!(cache.total_size() <= 4);
     }
 
     #[test]
@@ -616,7 +581,7 @@ mod tests {
         cache.put("ns", "a", b"12345").unwrap();
         cache.put("ns", "b", b"67890").unwrap();
         cache.put("ns", "c", b"abcde").unwrap();
-        assert!(cache.total_size().unwrap() <= 10);
+        assert!(cache.total_size() <= 10);
     }
 
     #[test]
@@ -717,7 +682,7 @@ mod tests {
         fs::write(namespace.join("entry.tmp-123-0"), b"partial").unwrap();
 
         let cache = DiskCache::new(tmp.path().to_path_buf(), 1024).unwrap();
-        assert_eq!(cache.total_size().unwrap(), 0);
+        assert_eq!(cache.total_size(), 0);
         assert!(fs::read_dir(namespace).unwrap().next().is_none());
     }
 }
