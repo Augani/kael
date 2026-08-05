@@ -1,4 +1,7 @@
-use crate::{AssetSource, DevicePixels, IsZero, Result, SharedString, Size};
+use crate::{
+    AssetSource, DevicePixels, IsZero, Result, SharedString, Size,
+    assets::{MAX_DECODED_IMAGE_BYTES, MAX_IMAGE_DIMENSION, MAX_IMAGE_SOURCE_BYTES},
+};
 use resvg::tiny_skia::Pixmap;
 use std::{
     borrow::Cow,
@@ -96,6 +99,9 @@ impl SvgRenderer {
     }
 
     pub fn render_pixmap(&self, bytes: &[u8], size: SvgSize) -> Result<Pixmap, usvg::Error> {
+        if bytes.is_empty() || bytes.len() > MAX_IMAGE_SOURCE_BYTES {
+            return Err(usvg::Error::InvalidSize);
+        }
         let tree = usvg::Tree::from_data(bytes, &self.usvg_options)?;
         let svg_size = tree.size();
         let scale = match size {
@@ -103,12 +109,34 @@ impl SvgRenderer {
             SvgSize::ScaleFactor(scale) => scale,
         };
 
+        if !scale.is_finite() || scale <= 0.0 {
+            return Err(usvg::Error::InvalidSize);
+        }
+
+        let width = svg_size.width() * scale;
+        let height = svg_size.height() * scale;
+        if !width.is_finite()
+            || !height.is_finite()
+            || width < 1.0
+            || height < 1.0
+            || width > MAX_IMAGE_DIMENSION as f32
+            || height > MAX_IMAGE_DIMENSION as f32
+        {
+            return Err(usvg::Error::InvalidSize);
+        }
+        let width = width as u32;
+        let height = height as u32;
+        let decoded_bytes = u64::from(width)
+            .checked_mul(u64::from(height))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or(usvg::Error::InvalidSize)?;
+        if decoded_bytes == 0 || decoded_bytes > MAX_DECODED_IMAGE_BYTES as u64 {
+            return Err(usvg::Error::InvalidSize);
+        }
+
         // Render the SVG to a pixmap with the specified width and height.
-        let mut pixmap = resvg::tiny_skia::Pixmap::new(
-            (svg_size.width() * scale) as u32,
-            (svg_size.height() * scale) as u32,
-        )
-        .ok_or(usvg::Error::InvalidSize)?;
+        let mut pixmap =
+            resvg::tiny_skia::Pixmap::new(width, height).ok_or(usvg::Error::InvalidSize)?;
 
         let transform = resvg::tiny_skia::Transform::from_scale(scale, scale);
 
@@ -143,6 +171,23 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(bytes.as_ref(), b"application override");
+    }
+
+    #[test]
+    fn pixmap_limits_reject_oversized_or_invalid_renders() {
+        let renderer = SvgRenderer::new(Arc::new(()));
+        let oversized = br#"<svg xmlns="http://www.w3.org/2000/svg" width="20000" height="1"/>"#;
+
+        assert!(
+            renderer
+                .render_pixmap(oversized, SvgSize::ScaleFactor(1.0))
+                .is_err()
+        );
+        assert!(
+            renderer
+                .render_pixmap(oversized, SvgSize::ScaleFactor(f32::NAN))
+                .is_err()
+        );
     }
 
     #[cfg(feature = "icons")]

@@ -3,19 +3,25 @@ use crate::{
     Entity, GlobalElementId, Hitbox, Image, ImageCache, InspectorElementId, InteractiveElement,
     Interactivity, IntoElement, LayoutId, Length, ObjectFit, Pixels, RenderImage, Resource,
     SMOOTH_SVG_SCALE_FACTOR, SharedString, SharedUri, StyleRefinement, Styled, SvgSize, Task,
-    Window, px, swap_rgba_pa_to_bgra, util::is_uri,
+    Window,
+    assets::{
+        MAX_IMAGE_SOURCE_BYTES, checked_image_frame_len, collect_animation_frames,
+        decode_static_image, image_decode_limits, validate_image_source_bytes,
+    },
+    px, swap_rgba_pa_to_bgra,
+    util::is_uri,
 };
 use anyhow::{Context as _, Result};
 
 use futures::{AsyncReadExt, Future};
 use image::{
-    AnimationDecoder, DynamicImage, Frame, ImageBuffer, ImageError, ImageFormat, Rgba,
+    AnimationDecoder, Frame, ImageBuffer, ImageDecoder as _, ImageError, ImageFormat, Rgba,
     codecs::{gif::GifDecoder, webp::WebPDecoder},
 };
 use smallvec::SmallVec;
 use std::{
-    fs,
-    io::{self, Cursor},
+    fmt, fs,
+    io::{self, Cursor, Read as _},
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     sync::Arc,
@@ -715,8 +721,16 @@ fn resource_len_bytes(resource: &Resource) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImageSource, Img, StyledImage, img};
-    use crate::{IntoElement, ObjectFit, div};
+    use super::{ImageCacheError, ImageSource, Img, StyledImage, img};
+    use crate::{
+        IntoElement, ObjectFit,
+        assets::{
+            MAX_IMAGE_DIMENSION, MAX_IMAGE_SOURCE_BYTES, checked_image_frame_len,
+            collect_animation_frames, validate_image_source_len,
+        },
+        div,
+    };
+    use image::Frame;
     use std::path::PathBuf;
 
     #[test]
@@ -781,6 +795,35 @@ mod tests {
         assert_eq!(extensions.contains(&"exr"), cfg!(feature = "image-exr"));
     }
 
+    #[test]
+    fn image_resource_limits_reject_invalid_metadata() {
+        assert!(validate_image_source_len(1).is_ok());
+        assert!(validate_image_source_len(0).is_err());
+        assert!(validate_image_source_len(MAX_IMAGE_SOURCE_BYTES + 1).is_err());
+
+        assert!(checked_image_frame_len(1, 1).is_ok());
+        assert!(checked_image_frame_len(MAX_IMAGE_DIMENSION + 1, 1).is_err());
+        assert!(checked_image_frame_len(MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION).is_err());
+
+        let empty = std::iter::empty::<image::ImageResult<Frame>>();
+        assert!(collect_animation_frames(empty).is_err());
+    }
+
+    #[test]
+    fn image_http_status_error_redacts_location_and_body() {
+        let error = ImageCacheError::BadStatus {
+            uri: "https://example.com/private/account.png".into(),
+            status: http_client::StatusCode::BAD_REQUEST,
+            body: "private response body".into(),
+        };
+
+        for text in [error.to_string(), format!("{error:?}")] {
+            assert!(!text.contains("example.com"));
+            assert!(!text.contains("private"));
+            assert!(text.contains("400"));
+        }
+    }
+
     #[cfg(feature = "image-avif")]
     #[test]
     fn image_avif_feature_enables_decoder() {
@@ -825,34 +868,37 @@ impl Asset for ImageAssetLoader {
         let asset_source = cx.asset_source().clone();
         async move {
             let bytes = match source.clone() {
-                Resource::Path(uri) => fs::read(uri.as_ref())?,
+                Resource::Path(path) => read_image_file(path.as_ref())?,
                 Resource::Uri(uri) => {
                     let mut response = client
                         .get(uri.as_ref(), ().into(), true)
                         .await
-                        .with_context(|| format!("loading image asset from {uri:?}"))?;
-                    let mut body = Vec::new();
-                    response.body_mut().read_to_end(&mut body).await?;
+                        .context("loading image asset")?;
                     if !response.status().is_success() {
-                        let mut body = String::from_utf8_lossy(&body).into_owned();
-                        let first_line = body.lines().next().unwrap_or("").trim_end();
-                        body.truncate(first_line.len());
                         return Err(ImageCacheError::BadStatus {
                             uri,
                             status: response.status(),
-                            body,
+                            body: String::new(),
                         });
                     }
+                    let mut body = Vec::new();
+                    response
+                        .body_mut()
+                        .take((MAX_IMAGE_SOURCE_BYTES + 1) as u64)
+                        .read_to_end(&mut body)
+                        .await?;
+                    validate_image_source_bytes(&body)?;
                     body
                 }
                 Resource::Embedded(path) => {
-                    let data = asset_source.load(&path).ok().flatten();
+                    let data = asset_source
+                        .load(&path)
+                        .context("loading embedded image asset")?;
                     if let Some(data) = data {
+                        validate_image_source_bytes(&data)?;
                         data.to_vec()
                     } else {
-                        return Err(ImageCacheError::Asset(
-                            format!("Embedded resource not found: {}", path).into(),
-                        ));
+                        return Err(ImageCacheError::Asset("embedded resource not found".into()));
                     }
                 }
             };
@@ -860,59 +906,26 @@ impl Asset for ImageAssetLoader {
             let data = if let Ok(format) = image::guess_format(&bytes) {
                 let data = match format {
                     ImageFormat::Gif => {
-                        let decoder = GifDecoder::new(Cursor::new(&bytes))?;
-                        let mut frames = SmallVec::new();
-
-                        for frame in decoder.into_frames() {
-                            let mut frame = frame?;
-                            // Convert from RGBA to BGRA.
-                            for pixel in frame.buffer_mut().chunks_exact_mut(4) {
-                                pixel.swap(0, 2);
-                            }
-                            frames.push(frame);
-                        }
-
-                        frames
+                        let mut decoder = GifDecoder::new(Cursor::new(&bytes))?;
+                        decoder.set_limits(image_decode_limits())?;
+                        let (width, height) = decoder.dimensions();
+                        checked_image_frame_len(width, height)?;
+                        collect_animation_frames(decoder.into_frames())?
                     }
                     ImageFormat::WebP => {
                         let mut decoder = WebPDecoder::new(Cursor::new(&bytes))?;
+                        decoder.set_limits(image_decode_limits())?;
+                        let (width, height) = decoder.dimensions();
+                        checked_image_frame_len(width, height)?;
 
                         if decoder.has_animation() {
                             let _ = decoder.set_background_color(Rgba([0, 0, 0, 0]));
-                            let mut frames = SmallVec::new();
-
-                            for frame in decoder.into_frames() {
-                                let mut frame = frame?;
-                                // Convert from RGBA to BGRA.
-                                for pixel in frame.buffer_mut().chunks_exact_mut(4) {
-                                    pixel.swap(0, 2);
-                                }
-                                frames.push(frame);
-                            }
-
-                            frames
+                            collect_animation_frames(decoder.into_frames())?
                         } else {
-                            let mut data = DynamicImage::from_decoder(decoder)?.into_rgba8();
-
-                            // Convert from RGBA to BGRA.
-                            for pixel in data.chunks_exact_mut(4) {
-                                pixel.swap(0, 2);
-                            }
-
-                            SmallVec::from_elem(Frame::new(data), 1)
+                            decode_static_image(&bytes, format)?
                         }
                     }
-                    _ => {
-                        let mut data =
-                            image::load_from_memory_with_format(&bytes, format)?.into_rgba8();
-
-                        // Convert from RGBA to BGRA.
-                        for pixel in data.chunks_exact_mut(4) {
-                            pixel.swap(0, 2);
-                        }
-
-                        SmallVec::from_elem(Frame::new(data), 1)
-                    }
+                    _ => decode_static_image(&bytes, format)?,
                 };
 
                 RenderImage::new(data)
@@ -922,7 +935,8 @@ impl Asset for ImageAssetLoader {
                     svg_renderer.render_pixmap(&bytes, SvgSize::ScaleFactor(SMOOTH_SVG_SCALE_FACTOR))?;
 
                 let mut buffer =
-                    ImageBuffer::from_raw(pixmap.width(), pixmap.height(), pixmap.take()).unwrap();
+                    ImageBuffer::from_raw(pixmap.width(), pixmap.height(), pixmap.take())
+                        .ok_or_else(|| anyhow::anyhow!("invalid SVG pixel buffer"))?;
 
                 for pixel in buffer.chunks_exact_mut(4) {
                     swap_rgba_pa_to_bgra(pixel);
@@ -938,8 +952,21 @@ impl Asset for ImageAssetLoader {
     }
 }
 
+fn read_image_file(path: &Path) -> Result<Vec<u8>, ImageCacheError> {
+    let file = fs::File::open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > MAX_IMAGE_SOURCE_BYTES as u64 {
+        return Err(anyhow::anyhow!("image source must be a bounded regular file").into());
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take((MAX_IMAGE_SOURCE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    validate_image_source_bytes(&bytes)?;
+    Ok(bytes)
+}
+
 /// An error that can occur when interacting with the image cache.
-#[derive(Debug, Error, Clone)]
+#[derive(Error, Clone)]
 pub enum ImageCacheError {
     /// Some other kind of error occurred
     #[error("error: {0}")]
@@ -948,13 +975,16 @@ pub enum ImageCacheError {
     #[error("IO error: {0}")]
     Io(Arc<std::io::Error>),
     /// An error that occurred while processing an image.
-    #[error("unexpected http status for {uri}: {status}, body: {body}")]
+    #[error("unexpected HTTP status while loading image asset: {status}")]
     BadStatus {
         /// The URI of the image.
         uri: SharedUri,
         /// The HTTP status code.
         status: http_client::StatusCode,
         /// The HTTP response body.
+        ///
+        /// Kael's built-in loader leaves this empty so response contents are not retained or
+        /// exposed through diagnostics.
         body: String,
     },
     /// An error that occurred while processing an asset.
@@ -966,6 +996,33 @@ pub enum ImageCacheError {
     /// An error that occurred while processing an SVG.
     #[error("svg error: {0}")]
     Usvg(Arc<usvg::Error>),
+}
+
+impl fmt::Debug for ImageCacheError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Other(_) => f.write_str("ImageCacheError::Other"),
+            Self::Io(error) => f
+                .debug_struct("ImageCacheError::Io")
+                .field("kind", &error.kind())
+                .finish(),
+            Self::BadStatus { uri, status, body } => f
+                .debug_struct("ImageCacheError::BadStatus")
+                .field("uri_len_bytes", &uri.len())
+                .field("status", status)
+                .field("body_len_bytes", &body.len())
+                .finish(),
+            Self::Asset(error) => f
+                .debug_tuple("ImageCacheError::Asset")
+                .field(error)
+                .finish(),
+            Self::Image(error) => f
+                .debug_tuple("ImageCacheError::Image")
+                .field(error)
+                .finish(),
+            Self::Usvg(error) => f.debug_tuple("ImageCacheError::Usvg").field(error).finish(),
+        }
+    }
 }
 
 impl From<anyhow::Error> for ImageCacheError {

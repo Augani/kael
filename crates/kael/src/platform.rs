@@ -58,7 +58,12 @@ use crate::{
     FontRun, ForegroundExecutor, GlyphId, GpuSpecs, ImageSource, Keymap, LineLayout, Pixels,
     PlatformInput, Point, RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams,
     Scene, ShapedGlyph, ShapedRun, SharedString, Size, SvgRenderer, SvgSize, SystemWindowTab, Task,
-    TaskLabel, Window, WindowControlArea, WindowPlacement, hash, point,
+    TaskLabel, Window, WindowControlArea, WindowPlacement,
+    assets::{
+        checked_image_frame_len, collect_animation_frames, decode_static_image,
+        image_decode_limits, validate_image_source_bytes,
+    },
+    hash, point,
     print::PlatformPrintJob,
     px, size,
     webview::{PlatformWebView, PlatformWebViewCommand},
@@ -67,7 +72,7 @@ use anyhow::Result;
 use async_task::Runnable;
 use futures::channel::oneshot;
 use image::codecs::gif::GifDecoder;
-use image::{AnimationDecoder as _, Frame};
+use image::{AnimationDecoder as _, Frame, ImageDecoder as _};
 use parking::Unparker;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use schemars::JsonSchema;
@@ -7729,11 +7734,7 @@ impl Image {
 
     /// Validate this image for clipboard use.
     pub fn validate(&self) -> Result<()> {
-        anyhow::ensure!(
-            !self.bytes.is_empty(),
-            "clipboard image bytes cannot be empty"
-        );
-        Ok(())
+        validate_image_source_bytes(&self.bytes)
     }
 
     /// Use the GPUI `use_asset` API to make this image renderable
@@ -7765,47 +7766,27 @@ impl Image {
 
     /// Convert the clipboard image to an `ImageData` object.
     pub fn to_image_data(&self, svg_renderer: SvgRenderer) -> Result<Arc<RenderImage>> {
-        fn frames_for_image(
-            bytes: &[u8],
-            format: image::ImageFormat,
-        ) -> Result<SmallVec<[Frame; 1]>> {
-            let mut data = image::load_from_memory_with_format(bytes, format)?.into_rgba8();
-
-            // Convert from RGBA to BGRA.
-            for pixel in data.chunks_exact_mut(4) {
-                pixel.swap(0, 2);
-            }
-
-            Ok(SmallVec::from_elem(Frame::new(data), 1))
-        }
+        validate_image_source_bytes(&self.bytes)?;
 
         let frames = match self.format {
             ImageFormat::Gif => {
-                let decoder = GifDecoder::new(Cursor::new(&self.bytes))?;
-                let mut frames = SmallVec::new();
-
-                for frame in decoder.into_frames() {
-                    let mut frame = frame?;
-                    // Convert from RGBA to BGRA.
-                    for pixel in frame.buffer_mut().chunks_exact_mut(4) {
-                        pixel.swap(0, 2);
-                    }
-                    frames.push(frame);
-                }
-
-                frames
+                let mut decoder = GifDecoder::new(Cursor::new(&self.bytes))?;
+                decoder.set_limits(image_decode_limits())?;
+                let (width, height) = decoder.dimensions();
+                checked_image_frame_len(width, height)?;
+                collect_animation_frames(decoder.into_frames())?
             }
-            ImageFormat::Png => frames_for_image(&self.bytes, image::ImageFormat::Png)?,
-            ImageFormat::Jpeg => frames_for_image(&self.bytes, image::ImageFormat::Jpeg)?,
-            ImageFormat::Webp => frames_for_image(&self.bytes, image::ImageFormat::WebP)?,
-            ImageFormat::Bmp => frames_for_image(&self.bytes, image::ImageFormat::Bmp)?,
-            ImageFormat::Tiff => frames_for_image(&self.bytes, image::ImageFormat::Tiff)?,
+            ImageFormat::Png => decode_static_image(&self.bytes, image::ImageFormat::Png)?,
+            ImageFormat::Jpeg => decode_static_image(&self.bytes, image::ImageFormat::Jpeg)?,
+            ImageFormat::Webp => decode_static_image(&self.bytes, image::ImageFormat::WebP)?,
+            ImageFormat::Bmp => decode_static_image(&self.bytes, image::ImageFormat::Bmp)?,
+            ImageFormat::Tiff => decode_static_image(&self.bytes, image::ImageFormat::Tiff)?,
             ImageFormat::Svg => {
                 let pixmap = svg_renderer.render_pixmap(&self.bytes, SvgSize::ScaleFactor(1.0))?;
 
                 let buffer =
                     image::ImageBuffer::from_raw(pixmap.width(), pixmap.height(), pixmap.take())
-                        .unwrap();
+                        .ok_or_else(|| anyhow::anyhow!("invalid SVG pixel buffer"))?;
 
                 SmallVec::from_elem(Frame::new(buffer), 1)
             }

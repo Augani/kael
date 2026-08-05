@@ -201,6 +201,13 @@ AVIF decoding uses the native libdav1d library and pkg-config discovery.
 Install both through the platform package manager, or also provide Git, Meson,
 and Ninja so the binding can build libdav1d from source.
 
+The built-in resource loader rejects empty or larger-than-64-MiB encoded
+sources, raster or SVG dimensions above 16,384 pixels per axis, more than 256
+MiB of decoded frame data, and animations above 10,000 frames. HTTP failures do
+not retain response bodies or expose resource locations in error messages. Use
+a custom `ImageSource` loader that returns a validated `RenderImage` when a
+controlled workload intentionally needs a different budget.
+
 Use `ImageSource::to_text()`, `ImageStyle::to_text()`, and `Img::to_text()` for
 asset-heavy generated UI. The helpers expose source kind, resource identifier
 byte length, grayscale state, object-fit key, loading/fallback hook presence,
