@@ -2,7 +2,8 @@
 name = "{{name}}"
 version = "0.1.0"
 edition = "2024"
+rust-version = "{{rust_version}}"
 
 [dependencies]
-kael = "0.3"
-kael_ui = "0.3"
+kael = { version = "{{kael_version}}", features = ["runtime_shaders"] }
+kael_ui = "{{kael_version}}"

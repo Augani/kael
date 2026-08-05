@@ -13,12 +13,14 @@ const CARGO_TEMPLATE: &str = include_str!("../template/Cargo.toml.tmpl");
 const MAIN_TEMPLATE: &str = include_str!("../template/main.rs.tmpl");
 const README_TEMPLATE: &str = include_str!("../template/README.md.tmpl");
 const GITIGNORE_TEMPLATE: &str = include_str!("../template/gitignore.tmpl");
+const RUST_TOOLCHAIN_TEMPLATE: &str = include_str!("../template/rust-toolchain.toml.tmpl");
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const RUST_VERSION: &str = env!("CARGO_PKG_RUST_VERSION");
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ScaffoldError {
-    InvalidName(String),
+    InvalidName { name: String, reason: &'static str },
     AlreadyExists(PathBuf),
     Io(String),
 }
@@ -26,11 +28,9 @@ pub enum ScaffoldError {
 impl fmt::Display for ScaffoldError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ScaffoldError::InvalidName(name) => write!(
-                f,
-                "invalid project name ({} bytes): use at most 64 ASCII letters, digits, '-' or '_', not starting with a digit",
-                name.len()
-            ),
+            ScaffoldError::InvalidName { name, reason } => {
+                write!(f, "invalid project name {name:?}: {reason}")
+            }
             ScaffoldError::AlreadyExists(path) => {
                 write!(f, "destination {} already exists", path.display())
             }
@@ -39,28 +39,116 @@ impl fmt::Display for ScaffoldError {
     }
 }
 
-fn is_valid_project_name(name: &str) -> bool {
-    if name.len() > 64 {
-        return false;
+impl std::error::Error for ScaffoldError {}
+
+fn validate_project_name(name: &str) -> Result<(), &'static str> {
+    if name.is_empty() || name.len() > 64 {
+        return Err("use between 1 and 64 ASCII characters");
     }
     let mut chars = name.chars();
     match chars.next() {
         Some(first) if first.is_ascii_alphabetic() || first == '_' => {}
-        _ => return false,
+        _ => return Err("start with an ASCII letter or underscore"),
     }
-    name.chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    if !name
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || character == '-' || character == '_')
+    {
+        return Err("use only ASCII letters, digits, hyphens, or underscores");
+    }
+    if is_rust_keyword(name) {
+        return Err("Rust keywords cannot be Cargo package names");
+    }
+    if matches!(name, "test" | "build" | "deps" | "examples" | "incremental") {
+        return Err("this name is reserved by Cargo");
+    }
+    let lowercase = name.to_ascii_lowercase();
+    if matches!(lowercase.as_str(), "con" | "prn" | "aux" | "nul")
+        || lowercase
+            .strip_prefix("com")
+            .is_some_and(is_windows_device_number)
+        || lowercase
+            .strip_prefix("lpt")
+            .is_some_and(is_windows_device_number)
+    {
+        return Err("this name is reserved by Windows");
+    }
+    Ok(())
+}
+
+fn is_windows_device_number(suffix: &str) -> bool {
+    matches!(suffix.as_bytes(), [b'1'..=b'9'])
+}
+
+fn is_rust_keyword(name: &str) -> bool {
+    matches!(
+        name,
+        "_" | "as"
+            | "async"
+            | "await"
+            | "break"
+            | "const"
+            | "continue"
+            | "crate"
+            | "dyn"
+            | "else"
+            | "enum"
+            | "extern"
+            | "false"
+            | "fn"
+            | "for"
+            | "if"
+            | "impl"
+            | "in"
+            | "let"
+            | "loop"
+            | "match"
+            | "mod"
+            | "move"
+            | "mut"
+            | "pub"
+            | "ref"
+            | "return"
+            | "self"
+            | "Self"
+            | "static"
+            | "struct"
+            | "super"
+            | "trait"
+            | "true"
+            | "type"
+            | "unsafe"
+            | "use"
+            | "where"
+            | "while"
+            | "abstract"
+            | "become"
+            | "box"
+            | "do"
+            | "final"
+            | "gen"
+            | "macro"
+            | "override"
+            | "priv"
+            | "try"
+            | "typeof"
+            | "unsized"
+            | "virtual"
+            | "yield"
+    )
 }
 
 /// Scaffold a new Kael app named `name` under `dest`, returning the files written.
 ///
-/// Creates `dest/<name>/` with `Cargo.toml`, `src/main.rs`, `README.md`, and
-/// `.gitignore`. Fails without writing anything if the name is invalid or the
-/// destination directory already exists.
+/// Creates `dest/<name>/` with `Cargo.toml`, `src/main.rs`, `README.md`,
+/// `.gitignore`, and `rust-toolchain.toml`. Invalid names and existing
+/// destinations are rejected before writing; later I/O failures trigger a
+/// best-effort rollback of the new tree.
 pub fn scaffold(name: &str, dest: &Path) -> Result<Vec<PathBuf>, ScaffoldError> {
-    if !is_valid_project_name(name) {
-        return Err(ScaffoldError::InvalidName(name.to_string()));
-    }
+    validate_project_name(name).map_err(|reason| ScaffoldError::InvalidName {
+        name: name.to_owned(),
+        reason,
+    })?;
 
     let root = dest.join(name);
     match fs::create_dir(&root) {
@@ -68,40 +156,49 @@ pub fn scaffold(name: &str, dest: &Path) -> Result<Vec<PathBuf>, ScaffoldError> 
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             return Err(ScaffoldError::AlreadyExists(root));
         }
-        Err(error) => return Err(ScaffoldError::Io(error.to_string())),
+        Err(error) => return Err(io_error("failed to create", &root, error)),
     }
     let src = root.join("src");
     let result = (|| {
-        fs::create_dir(&src).map_err(|err| ScaffoldError::Io(err.to_string()))?;
+        fs::create_dir(&src).map_err(|error| io_error("failed to create", &src, error))?;
 
         let files = [
             (root.join("Cargo.toml"), CARGO_TEMPLATE),
             (src.join("main.rs"), MAIN_TEMPLATE),
             (root.join("README.md"), README_TEMPLATE),
             (root.join(".gitignore"), GITIGNORE_TEMPLATE),
+            (root.join("rust-toolchain.toml"), RUST_TOOLCHAIN_TEMPLATE),
         ];
 
         let mut written = Vec::with_capacity(files.len());
         for (path, template) in files {
-            let contents = template.replace("{{name}}", name);
+            let contents = template
+                .replace("{{name}}", name)
+                .replace("{{kael_version}}", VERSION)
+                .replace("{{rust_version}}", RUST_VERSION);
             let mut file = fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(&path)
-                .map_err(|err| ScaffoldError::Io(err.to_string()))?;
+                .map_err(|error| io_error("failed to create", &path, error))?;
             use std::io::Write as _;
             file.write_all(contents.as_bytes())
                 .and_then(|()| file.sync_all())
-                .map_err(|err| ScaffoldError::Io(err.to_string()))?;
+                .map_err(|error| io_error("failed to write", &path, error))?;
             written.push(path);
         }
-        sync_directory(&root).map_err(|err| ScaffoldError::Io(err.to_string()))?;
+        sync_directory(&src).map_err(|error| io_error("failed to sync", &src, error))?;
+        sync_directory(&root).map_err(|error| io_error("failed to sync", &root, error))?;
         Ok(written)
     })();
     if result.is_err() {
         let _ = fs::remove_dir_all(&root);
     }
     result
+}
+
+fn io_error(action: &str, path: &Path, error: std::io::Error) -> ScaffoldError {
+    ScaffoldError::Io(format!("{action} {}: {error}", path.display()))
 }
 
 #[cfg(unix)]
@@ -116,7 +213,7 @@ fn sync_directory(_path: &Path) -> std::io::Result<()> {
 
 fn print_help() {
     println!(
-        "kael {VERSION} — tools for the Kael UI framework
+        "kael {VERSION} — tools for the Kael native application framework
 
 USAGE:
     kael <COMMAND>
@@ -159,20 +256,37 @@ fn run_new(name: Option<&str>) -> ExitCode {
 }
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().collect();
+    let args = match std::env::args_os()
+        .map(|argument| argument.into_string())
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(args) => args,
+        Err(_) => {
+            eprintln!("error: command-line arguments must be valid UTF-8");
+            return ExitCode::FAILURE;
+        }
+    };
     if args.len() > 3 {
         eprintln!("error: too many arguments");
         return ExitCode::FAILURE;
     }
     match args.get(1).map(String::as_str) {
         Some("new") => run_new(args.get(2).map(String::as_str)),
-        Some("-V") | Some("--version") => {
+        Some("-V") | Some("--version") if args.len() == 2 => {
             println!("kael {VERSION}");
             ExitCode::SUCCESS
         }
-        Some("-h") | Some("--help") | None => {
+        Some("-h") | Some("--help") if args.len() == 2 => {
             print_help();
             ExitCode::SUCCESS
+        }
+        None => {
+            print_help();
+            ExitCode::SUCCESS
+        }
+        Some("-V" | "--version" | "-h" | "--help") => {
+            eprintln!("error: too many arguments");
+            ExitCode::FAILURE
         }
         Some(other) => {
             eprintln!("error: unknown command {other:?}\n");
@@ -203,28 +317,34 @@ mod tests {
         let dest = temp_dir();
         let written = scaffold("my_app", &dest).unwrap();
 
-        assert_eq!(written.len(), 4);
+        assert_eq!(written.len(), 5);
         for path in &written {
             assert!(path.exists(), "{} should exist", path.display());
+            let contents = fs::read_to_string(path).unwrap();
+            assert!(
+                !contents.contains("{{"),
+                "{} contains an unreplaced template marker",
+                path.display()
+            );
         }
 
         let cargo = fs::read_to_string(dest.join("my_app/Cargo.toml")).unwrap();
         assert!(cargo.contains("name = \"my_app\""));
-        assert!(cargo.contains("kael = \"0.3\""));
-        assert!(cargo.contains("kael_ui = \"0.3\""));
+        assert!(cargo.contains(&format!("rust-version = \"{RUST_VERSION}\"")));
+        assert!(cargo.contains(&format!(
+            "kael = {{ version = \"{VERSION}\", features = [\"runtime_shaders\"] }}"
+        )));
+        assert!(cargo.contains(&format!("kael_ui = \"{VERSION}\"")));
 
         let main = fs::read_to_string(dest.join("my_app/src/main.rs")).unwrap();
         assert!(main.contains("Hello, Kael!"));
         assert!(main.contains("Some(\"my_app\".into())"));
         assert!(main.contains("Application::try_new()?"));
         assert!(!main.contains(".unwrap()"));
-        assert!(
-            !main.contains("{{name}}"),
-            "all placeholders must be substituted"
-        );
-
         assert!(dest.join("my_app/README.md").exists());
         assert!(dest.join("my_app/.gitignore").exists());
+        let toolchain = fs::read_to_string(dest.join("my_app/rust-toolchain.toml")).unwrap();
+        assert!(toolchain.contains(&format!("channel = \"{RUST_VERSION}\"")));
 
         fs::remove_dir_all(&dest).ok();
     }
@@ -241,15 +361,30 @@ mod tests {
     #[test]
     fn scaffold_rejects_invalid_names() {
         let dest = temp_dir();
-        for bad in ["1app", "my app", "weird!", "", &"x".repeat(65)] {
+        for bad in [
+            "1app",
+            "my app",
+            "weird!",
+            "",
+            &"x".repeat(65),
+            "type",
+            "gen",
+            "test",
+            "build",
+            "CON",
+            "nul",
+            "com1",
+            "LPT9",
+        ] {
             assert!(
-                matches!(scaffold(bad, &dest), Err(ScaffoldError::InvalidName(_))),
+                matches!(scaffold(bad, &dest), Err(ScaffoldError::InvalidName { .. })),
                 "{bad:?} must be rejected"
             );
         }
-        assert!(is_valid_project_name("my_app"));
-        assert!(is_valid_project_name("my-app"));
-        assert!(is_valid_project_name("App2"));
+        assert!(validate_project_name("my_app").is_ok());
+        assert!(validate_project_name("my-app").is_ok());
+        assert!(validate_project_name("App2").is_ok());
+        assert!(validate_project_name("com0").is_ok());
         fs::remove_dir_all(&dest).ok();
     }
 
