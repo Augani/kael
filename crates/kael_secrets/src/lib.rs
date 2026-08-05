@@ -4,6 +4,18 @@
 //! store: the macOS Keychain, the Windows Credential Manager, and the Linux
 //! freedesktop Secret Service. Use [`default_store`] to obtain the native store
 //! or an explicit unsupported-platform error.
+//!
+//! ```no_run
+//! use kael_secrets::SecretStore as _;
+//!
+//! let store = kael_secrets::default_store()?;
+//! store.set_string("com.example.app", "account", "token")?;
+//! if let Some(token) = store.get_string("com.example.app", "account")? {
+//!     send_authorization(token.expose_secret());
+//! }
+//! # fn send_authorization(_token: &str) {}
+//! # Ok::<(), anyhow::Error>(())
+//! ```
 
 #![deny(missing_docs)]
 
@@ -127,20 +139,25 @@ fn validate_secret_len(secret_len: usize) -> Result<()> {
 /// A keyed secret store. Secrets are addressed by a `(service, account)` pair.
 pub trait SecretStore: Send + Sync {
     /// Store `secret` for `(service, account)`, replacing any existing value.
+    ///
+    /// The caller remains responsible for clearing its input buffer after this
+    /// method returns.
     fn set_secret(&self, service: &str, account: &str, secret: &[u8]) -> Result<()>;
 
-    /// Retrieve the secret for `(service, account)`, or `None` if absent.
+    /// Retrieve a zeroizing secret for `(service, account)`, or `None` if absent.
     fn get_secret(&self, service: &str, account: &str) -> Result<Option<SecretBytes>>;
 
     /// Delete the secret for `(service, account)`. Succeeds even if absent.
     fn delete_secret(&self, service: &str, account: &str) -> Result<()>;
 
     /// Convenience: store a UTF-8 string secret.
+    ///
+    /// The caller remains responsible for clearing its input string.
     fn set_string(&self, service: &str, account: &str, secret: &str) -> Result<()> {
         self.set_secret(service, account, secret.as_bytes())
     }
 
-    /// Convenience: retrieve a secret as a UTF-8 string.
+    /// Convenience: retrieve a secret as a zeroizing UTF-8 string.
     fn get_string(&self, service: &str, account: &str) -> Result<Option<SecretString>> {
         match self.get_secret(service, account)? {
             Some(bytes) => {
