@@ -1,28 +1,32 @@
-//! Test support for GPUI.
+//! Deterministic test support for Kael applications.
 //!
-//! GPUI provides first-class support for testing, which includes a macro to run test that rely on having a context,
-//! and a test implementation of the `ForegroundExecutor` and `BackgroundExecutor` which ensure that your tests run
-//! deterministically even in the face of arbitrary parallelism.
+//! [`kael::test`](macro@crate::test) supplies test application contexts plus foreground
+//! and background executors whose scheduling is controlled by a reproducible
+//! seed. Its generated functions use the standard Rust test harness, so they
+//! work with `cargo test`, `cargo-nextest`, and compatible runners.
 //!
-//! The output of the `gpui::test` macro is understood by other rust test runners, so you can use it with `cargo test`
-//! or `cargo-nextest`, or another runner of your choice.
-//!
-//! To make it possible to test collaborative user interfaces (like Kael) you can ask for as many different contexts
-//! as you need.
+//! A test may request multiple contexts to model collaboration or independent
+//! windows. Set `SEED` to an unsigned integer to reproduce a run. Set
+//! `ITERATIONS` to a positive integer to override the attribute's iteration
+//! count; with `SEED`, that many consecutive wrapping seed values are used and
+//! explicit attribute seeds are ignored.
 //!
 //! ## Example
 //!
 //! ```
-//! use gpui;
+//! use kael::TestAppContext;
 //!
 //! #[kael::test]
-//! async fn test_example(cx: &TestAppContext) {
-//!   assert!(true)
+//! async fn test_example(_cx: &mut TestAppContext) {
+//!     assert_eq!(2 + 2, 4);
 //! }
 //!
 //! #[kael::test]
-//! async fn test_collaboration_example(cx_a: &TestAppContext, cx_b: &TestAppContext) {
-//!   assert!(true)
+//! async fn test_collaboration_example(
+//!     _cx_a: &mut TestAppContext,
+//!     _cx_b: &mut TestAppContext,
+//! ) {
+//!     assert!(true);
 //! }
 //! ```
 use crate::{Entity, Subscription, TestAppContext, TestDispatcher};
@@ -35,9 +39,12 @@ use std::{
     pin::Pin,
 };
 
-/// Run the given test function with the configured parameters.
-/// This is intended for use with the `gpui::test` macro
-/// and generally should not be used directly.
+/// Runs a generated Kael test with deterministic seeds and bounded retries.
+///
+/// This is the runtime entry point for [`kael::test`](macro@crate::test) and generally
+/// should not be called directly. `num_iterations` must be greater than zero;
+/// `SEED` and `ITERATIONS` environment variables override the generated plan as
+/// described in the [module documentation](self).
 pub fn run_test(
     num_iterations: usize,
     explicit_seeds: &[u64],
@@ -141,7 +148,7 @@ fn read_unsigned_env(name: &str) -> Option<u64> {
     )
 }
 
-/// A test struct for converting an observation callback into a stream.
+/// A stream that owns the subscription backing an entity observation.
 #[must_use = "the observation stream must be retained and polled to receive changes"]
 pub struct Observation<T> {
     rx: Pin<Box<channel::Receiver<T>>>,
@@ -159,7 +166,7 @@ impl<T: 'static> futures::Stream for Observation<T> {
     }
 }
 
-/// observe returns a stream of the change events from the given `Entity`
+/// Observes an [`Entity`] and returns a stream item after each change event.
 pub fn observe<T: 'static>(entity: &Entity<T>, cx: &mut TestAppContext) -> Observation<()> {
     let (tx, rx) = smol::channel::unbounded();
     let _subscription = cx.update(|cx| {
