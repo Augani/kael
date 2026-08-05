@@ -6,7 +6,7 @@
 //! orchestration can be exercised with a mock backend; [`FsInstaller`] is the
 //! real implementation that renames directories on disk.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Result, bail};
 use sha2::{Digest as _, Sha256};
@@ -139,6 +139,10 @@ impl RollbackState {
 /// Real installs use [`FsInstaller`]; tests use a mock so the rollback state
 /// machine can be driven through failure paths without touching disk.
 pub trait InstallerBackend {
+    /// Validate the complete plan before any install path is moved.
+    fn preflight(&self, _plan: &SwapPlan) -> Result<()> {
+        Ok(())
+    }
     /// Move `from` aside to `to` (the backup).
     fn backup(&self, from: &Path, to: &Path) -> Result<()>;
     /// Move the staged install `from` into the live location `to`.
@@ -170,6 +174,7 @@ pub fn atomic_swap_with_rollback(
     plan: &SwapPlan,
 ) -> Result<RollbackState> {
     validate_swap_plan(plan)?;
+    backend.preflight(plan)?;
     let mut state = RollbackState::Idle;
 
     backend.backup(&plan.live, &plan.backup)?;
@@ -200,11 +205,24 @@ pub fn atomic_swap_with_rollback(
 }
 
 fn validate_swap_plan(plan: &SwapPlan) -> Result<()> {
+    for (label, path) in [
+        ("live", plan.live.as_path()),
+        ("staged", plan.staged.as_path()),
+        ("backup", plan.backup.as_path()),
+    ] {
+        if !path.is_absolute()
+            || path
+                .components()
+                .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+        {
+            bail!("{label} update path must be absolute and normalized");
+        }
+    }
     if plan.live == plan.staged || plan.live == plan.backup || plan.staged == plan.backup {
         bail!("live, staged, and backup paths must be distinct");
     }
-    if plan.live.parent() != plan.backup.parent() {
-        bail!("live and backup paths must share a parent for an atomic rename");
+    if plan.live.parent() != plan.backup.parent() || plan.live.parent() != plan.staged.parent() {
+        bail!("live, staged, and backup paths must share a parent for an atomic rename");
     }
     Ok(())
 }
@@ -214,6 +232,59 @@ fn validate_swap_plan(plan: &SwapPlan) -> Result<()> {
 pub struct FsInstaller;
 
 impl InstallerBackend for FsInstaller {
+    fn preflight(&self, plan: &SwapPlan) -> Result<()> {
+        let live = std::fs::symlink_metadata(&plan.live).map_err(|error| {
+            anyhow::anyhow!(
+                "failed to inspect live install {}: {error}",
+                plan.live.display()
+            )
+        })?;
+        let staged = std::fs::symlink_metadata(&plan.staged).map_err(|error| {
+            anyhow::anyhow!(
+                "failed to inspect staged install {}: {error}",
+                plan.staged.display()
+            )
+        })?;
+        anyhow::ensure!(
+            !live.file_type().is_symlink() && !staged.file_type().is_symlink(),
+            "live and staged install paths must not be symbolic links"
+        );
+        anyhow::ensure!(
+            live.is_file() == staged.is_file() && live.is_dir() == staged.is_dir(),
+            "live and staged install paths must have the same file type"
+        );
+        anyhow::ensure!(
+            live.is_file() || live.is_dir(),
+            "live and staged install paths must be regular files or directories"
+        );
+        match std::fs::symlink_metadata(&plan.backup) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(anyhow::anyhow!(
+                    "failed to inspect update backup {}: {error}",
+                    plan.backup.display()
+                ));
+            }
+            Ok(_) => {
+                bail!(
+                    "refusing to overwrite existing update backup: {}",
+                    plan.backup.display()
+                );
+            }
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            anyhow::ensure!(
+                live.dev() == staged.dev(),
+                "live and staged install paths must be on the same filesystem"
+            );
+        }
+
+        Ok(())
+    }
+
     fn backup(&self, from: &Path, to: &Path) -> Result<()> {
         if to.exists() {
             bail!(
@@ -282,11 +353,14 @@ fn remove_path(path: &Path) -> Result<()> {
 pub fn verify_codesign(_bundle: &Path) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
-        if !_bundle.is_dir() {
+        let metadata = std::fs::symlink_metadata(_bundle).map_err(|error| {
+            anyhow::anyhow!("failed to inspect bundle {}: {error}", _bundle.display())
+        })?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
             bail!("bundle is not a directory: {}", _bundle.display());
         }
         let status = std::process::Command::new("codesign")
-            .args(["--verify", "--deep", "--strict"])
+            .args(["--verify", "--deep", "--strict", "--all-architectures"])
             .arg(_bundle)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -369,6 +443,20 @@ mod tests {
     }
 
     #[test]
+    fn rejects_non_atomic_paths_before_backend_side_effects() {
+        let backend = MockBackend::default();
+        let mut invalid = plan();
+        invalid.staged = PathBuf::from("/other-volume/Kael.app");
+        assert!(atomic_swap_with_rollback(&backend, &invalid).is_err());
+        assert!(backend.calls.borrow().is_empty());
+
+        invalid = plan();
+        invalid.live = PathBuf::from("relative/Kael.app");
+        assert!(atomic_swap_with_rollback(&backend, &invalid).is_err());
+        assert!(backend.calls.borrow().is_empty());
+    }
+
+    #[test]
     fn rollback_state_machine_rejects_out_of_order() {
         assert!(RollbackState::Idle.swapped().is_err());
         assert!(RollbackState::Idle.committed().is_err());
@@ -420,7 +508,7 @@ mod tests {
     fn plan() -> SwapPlan {
         SwapPlan {
             live: PathBuf::from("/app/Kael.app"),
-            staged: PathBuf::from("/staging/Kael.app"),
+            staged: PathBuf::from("/app/Kael.app.staged"),
             backup: PathBuf::from("/app/Kael.app.backup"),
         }
     }
@@ -476,7 +564,7 @@ mod tests {
     fn fs_installer_swaps_a_real_directory_with_rollback() {
         let tmp = tempfile::tempdir().unwrap();
         let live = tmp.path().join("Kael.app");
-        let staged = tmp.path().join("staging").join("Kael.app");
+        let staged = tmp.path().join("Kael.app.staged");
         let backup = tmp.path().join("Kael.app.backup");
 
         std::fs::create_dir_all(&live).unwrap();
@@ -499,8 +587,8 @@ mod tests {
     }
 
     #[test]
-    fn fs_installer_restores_when_swap_target_is_a_file_conflict() {
-        // Force swap_in to fail by making the staged path nonexistent.
+    fn fs_installer_preserves_live_when_staged_path_is_missing() {
+        // A missing staged path must fail before the live path is moved.
         let tmp = tempfile::tempdir().unwrap();
         let live = tmp.path().join("Kael.app");
         let staged = tmp.path().join("does-not-exist.app");
@@ -533,5 +621,33 @@ mod tests {
         assert!(FsInstaller.backup(&live, &backup).is_err());
         assert_eq!(std::fs::read(backup.join("marker")).unwrap(), b"recovery");
         assert!(live.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fs_installer_rejects_symlinked_inputs_before_moving_live_install() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let live = tmp.path().join("Kael.app");
+        let real_staged = tmp.path().join("real-staged.app");
+        let staged = tmp.path().join("Kael.app.staged");
+        let backup = tmp.path().join("Kael.app.backup");
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::create_dir_all(&real_staged).unwrap();
+        symlink(&real_staged, &staged).unwrap();
+
+        let result = atomic_swap_with_rollback(
+            &FsInstaller,
+            &SwapPlan {
+                live: live.clone(),
+                staged,
+                backup: backup.clone(),
+            },
+        );
+
+        assert!(result.is_err());
+        assert!(live.exists());
+        assert!(!backup.exists());
     }
 }

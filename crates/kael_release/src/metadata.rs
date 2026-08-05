@@ -67,6 +67,7 @@ impl AppMetadata {
 
         Self::validate_version_str(&self.version)?;
         Self::validate_identifier_str(&self.identifier)?;
+        self.validate_icon_paths()?;
 
         Ok(())
     }
@@ -270,6 +271,7 @@ mod tests {
         let mut m = valid_metadata();
         m.icon_paths.clear();
         assert!(m.validate_icon_paths().is_err());
+        assert!(m.validate().is_err());
     }
 
     #[test]
@@ -278,6 +280,7 @@ mod tests {
         m.icon_paths
             .insert("64x64".to_string(), "icons/bad.bmp".to_string());
         assert!(m.validate_icon_paths().is_err());
+        assert!(m.validate().is_err());
     }
 
     #[test]
