@@ -15,6 +15,6 @@ pub mod retry;
 
 pub use auth::{AuthToken, SecureTokenStore, TokenStore};
 pub use client::{ApiRequest, ApiResponse, HttpMethod};
-pub use offline::{OfflineQueue, QueuedRequest};
+pub use offline::{EnqueueOutcome, OfflineQueue, QueuedRequest};
 pub use presence::{Presence, PresenceStatus, PresenceTracker};
 pub use retry::RetryPolicy;
