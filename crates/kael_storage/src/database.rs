@@ -8,7 +8,7 @@ use std::{
 
 use parking_lot::Mutex;
 use rusqlite::{
-    Connection, OptionalExtension, Params, Row, ToSql, params_from_iter,
+    Connection, OptionalExtension, Params, Row, ToSql, TransactionBehavior, params_from_iter,
     types::{ToSqlOutput, Value},
 };
 
@@ -299,15 +299,10 @@ fn clone_param(param: &dyn ToSql) -> Result<Value> {
 }
 
 fn apply_migrations(connection: &mut Connection, migrations: &[Migration]) -> Result<()> {
-    ensure_migrations_table(connection)?;
-    let current_version = current_version(connection)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    ensure_migrations_table(&transaction)?;
+    let current_version = current_version(&transaction)?;
     let pending = pending_migrations(current_version, migrations)?;
-
-    if pending.is_empty() {
-        return Ok(());
-    }
-
-    let transaction = connection.transaction()?;
 
     for migration in pending {
         transaction.execute_batch(migration.up)?;
@@ -368,6 +363,8 @@ fn rollback_to(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Barrier};
+
     use super::{Database, Migration, current_version, rollback_to};
     use crate::Error;
 
@@ -420,6 +417,39 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "widget");
+    }
+
+    #[test]
+    fn serializes_migrations_across_connections() {
+        const CONNECTIONS: usize = 4;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("concurrent.sqlite3");
+        let databases = (0..CONNECTIONS)
+            .map(|_| futures::executor::block_on(Database::open(&path)).unwrap())
+            .collect::<Vec<_>>();
+        let barrier = Arc::new(Barrier::new(CONNECTIONS));
+        let threads = databases
+            .into_iter()
+            .map(|database| {
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    futures::executor::block_on(database.migrate(&MIGRATIONS))
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for thread in threads {
+            thread.join().unwrap().unwrap();
+        }
+
+        let database = futures::executor::block_on(Database::open(path)).unwrap();
+        let applied = futures::executor::block_on(
+            database.query_one::<i64>("SELECT COUNT(*) FROM __kael_schema_migrations", &[]),
+        )
+        .unwrap();
+        assert_eq!(applied, 2);
     }
 
     #[test]

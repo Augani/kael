@@ -1,27 +1,110 @@
 //! Typed key-value storage backends.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, VecDeque},
     fs::File,
-    io::Write,
+    io::{Read, Write},
+    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::Arc,
     time::Duration,
 };
 
 use parking_lot::Mutex;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
+use tempfile::NamedTempFile;
 
 use crate::{Error, Result, Subscription, platform};
 
-type Observer = Arc<dyn Fn(Option<Value>) + Send + Sync + 'static>;
+type ObserverCallback = Arc<dyn Fn(Option<Value>) + Send + Sync + 'static>;
+type Observer = Arc<QueuedObserver>;
 
 const MAX_JSON_STORE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_KEY_BYTES: usize = 4 * 1024;
+const LEGACY_JSON_IMPORT_KEY: &str = "legacy-json-import-v1";
+
+fn validate_key(key: &str) -> Result<()> {
+    if key.is_empty() || key.len() > MAX_KEY_BYTES || key.chars().any(char::is_control) {
+        return Err(Error::InvalidStorageKey);
+    }
+    Ok(())
+}
+
+struct ObserverDelivery {
+    queue: VecDeque<Option<Value>>,
+    delivering: bool,
+}
+
+struct QueuedObserver {
+    callback: ObserverCallback,
+    delivery: Mutex<ObserverDelivery>,
+}
+
+impl QueuedObserver {
+    fn pending(callback: ObserverCallback, initial_value: Option<Value>) -> Observer {
+        Arc::new(Self {
+            callback,
+            delivery: Mutex::new(ObserverDelivery {
+                queue: VecDeque::from([initial_value]),
+                delivering: true,
+            }),
+        })
+    }
+
+    fn activate(&self) {
+        self.drain();
+    }
+
+    fn notify(&self, value: Option<Value>) {
+        let should_drain = {
+            let mut delivery = self.delivery.lock();
+            delivery.queue.push_back(value);
+            if delivery.delivering {
+                false
+            } else {
+                delivery.delivering = true;
+                true
+            }
+        };
+        if should_drain {
+            self.drain();
+        }
+    }
+
+    fn drain(&self) {
+        let mut reset = DeliveryReset {
+            observer: self,
+            armed: true,
+        };
+        loop {
+            let value = {
+                let mut delivery = self.delivery.lock();
+                let Some(value) = delivery.queue.pop_front() else {
+                    delivery.delivering = false;
+                    reset.armed = false;
+                    return;
+                };
+                value
+            };
+            (self.callback)(value);
+        }
+    }
+}
+
+struct DeliveryReset<'a> {
+    observer: &'a QueuedObserver,
+    armed: bool,
+}
+
+impl Drop for DeliveryReset<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.observer.delivery.lock().delivering = false;
+        }
+    }
+}
 
 struct KvState {
     values: BTreeMap<String, Value>,
@@ -47,13 +130,18 @@ pub trait KvStore: Send + Sync {
     fn remove(&self, key: &str) -> Result<bool>;
 
     /// Returns all known keys in deterministic order.
-    fn keys(&self) -> Vec<String>;
+    fn keys(&self) -> Result<Vec<String>>;
 
-    /// Observes changes to a key.
-    fn observe<T, F>(&self, key: &str, callback: F) -> Subscription
+    /// Observes changes to a key and immediately reports its current value.
+    ///
+    /// Registration fails if the backend cannot read the current value. Later
+    /// type mismatches are delivered to `callback` instead of being reported as
+    /// a missing value. Each observer receives serialized notifications in
+    /// arrival order, with the initial value first.
+    fn observe<T, F>(&self, key: &str, callback: F) -> Result<Subscription>
     where
         T: DeserializeOwned + Send + 'static,
-        F: Fn(Option<T>) + Send + Sync + 'static;
+        F: Fn(Result<Option<T>>) + Send + Sync + 'static;
 }
 
 /// A JSON-file-backed key-value store.
@@ -138,8 +226,15 @@ impl JsonKvStore {
     }
 
     fn notify(observers: Vec<Observer>, value: Option<Value>) {
+        let mut panic_payload = None;
         for observer in observers {
-            observer(value.clone());
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| observer.notify(value.clone())))
+            {
+                panic_payload.get_or_insert(payload);
+            }
+        }
+        if let Some(payload) = panic_payload {
+            resume_unwind(payload);
         }
     }
 }
@@ -150,7 +245,7 @@ impl SqliteKvStore {
         let paths = platform::ensure_storage_paths(app_id)?;
         let path = sqlite_preferences_path(&paths.preferences_path);
         let store = Self::open_at(&path)?;
-        store.import_legacy_json_if_empty(&paths.preferences_path)?;
+        store.import_legacy_json_once(&paths.preferences_path)?;
         Ok(store)
     }
 
@@ -184,25 +279,25 @@ impl SqliteKvStore {
         &self.path
     }
 
-    fn import_legacy_json_if_empty(&self, legacy_json_path: &Path) -> Result<()> {
-        if !legacy_json_path.exists() {
-            return Ok(());
-        }
-
+    fn import_legacy_json_once(&self, legacy_json_path: &Path) -> Result<()> {
         let mut connection = self.connection.lock();
-        let existing_rows: i64 =
-            connection.query_row("SELECT COUNT(*) FROM kv_entries", [], |row| row.get(0))?;
-        if existing_rows > 0 {
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let already_imported = transaction
+            .query_row(
+                "SELECT 1 FROM __kael_kv_metadata WHERE key = ?1",
+                params![LEGACY_JSON_IMPORT_KEY],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if already_imported {
             return Ok(());
         }
 
         let values = load_values(legacy_json_path)?;
-        if values.is_empty() {
-            return Ok(());
-        }
-
-        let transaction = connection.transaction()?;
-        {
+        let existing_rows: i64 =
+            transaction.query_row("SELECT COUNT(*) FROM kv_entries", [], |row| row.get(0))?;
+        if existing_rows == 0 && !values.is_empty() {
             let mut statement =
                 transaction.prepare("INSERT INTO kv_entries (key, value) VALUES (?1, ?2)")?;
             for (key, value) in values {
@@ -210,6 +305,10 @@ impl SqliteKvStore {
                 statement.execute(params![key, json])?;
             }
         }
+        transaction.execute(
+            "INSERT INTO __kael_kv_metadata (key) VALUES (?1)",
+            params![LEGACY_JSON_IMPORT_KEY],
+        )?;
         transaction.commit()?;
         Ok(())
     }
@@ -217,6 +316,7 @@ impl SqliteKvStore {
 
 impl KvStore for JsonKvStore {
     fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
+        validate_key(key)?;
         let state = self.state.lock();
         let Some(value) = state.values.get(key).cloned() else {
             return Ok(None);
@@ -231,12 +331,13 @@ impl KvStore for JsonKvStore {
     }
 
     fn set<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
+        validate_key(key)?;
         let serialized = serde_json::to_value(value).map_err(|source| Error::SerializeValue {
             key: key.to_string(),
             source,
         })?;
 
-        let observers = {
+        let (observers, durability_error) = {
             let mut state = self.state.lock();
 
             if state.values.get(key) == Some(&serialized) {
@@ -244,31 +345,31 @@ impl KvStore for JsonKvStore {
             }
 
             let previous = state.values.insert(key.to_string(), serialized.clone());
-            if let Err(error) = persist_values(&self.path, &state.values) {
-                match previous {
-                    Some(previous) => {
-                        state.values.insert(key.to_string(), previous);
+            let durability_error = match persist_values(&self.path, &state.values) {
+                Ok(()) => None,
+                Err(error @ Error::DurabilityUncertain { .. }) => Some(error),
+                Err(error) => {
+                    match previous {
+                        Some(previous) => {
+                            state.values.insert(key.to_string(), previous);
+                        }
+                        None => {
+                            state.values.remove(key);
+                        }
                     }
-                    None => {
-                        state.values.remove(key);
-                    }
+                    return Err(error);
                 }
-                return Err(error);
-            }
-
-            state
-                .observers
-                .get(key)
-                .map(|obs| obs.values().cloned().collect::<Vec<_>>())
-                .unwrap_or_default()
+            };
+            (observers_for_key(&state.observers, key), durability_error)
         };
 
         Self::notify(observers, Some(serialized));
-        Ok(())
+        durability_error.map_or(Ok(()), Err)
     }
 
     fn remove(&self, key: &str) -> Result<bool> {
-        let observers = {
+        validate_key(key)?;
+        let (observers, durability_error) = {
             let mut state = self.state.lock();
 
             if !state.values.contains_key(key) {
@@ -278,57 +379,50 @@ impl KvStore for JsonKvStore {
             let Some(previous) = state.values.remove(key) else {
                 return Ok(false);
             };
-            if let Err(error) = persist_values(&self.path, &state.values) {
-                state.values.insert(key.to_string(), previous);
-                return Err(error);
-            }
-
-            state
-                .observers
-                .get(key)
-                .map(|obs| obs.values().cloned().collect::<Vec<_>>())
-                .unwrap_or_default()
+            let durability_error = match persist_values(&self.path, &state.values) {
+                Ok(()) => None,
+                Err(error @ Error::DurabilityUncertain { .. }) => Some(error),
+                Err(error) => {
+                    state.values.insert(key.to_string(), previous);
+                    return Err(error);
+                }
+            };
+            (observers_for_key(&state.observers, key), durability_error)
         };
 
         Self::notify(observers, None);
-        Ok(true)
+        durability_error.map_or(Ok(true), Err)
     }
 
-    fn keys(&self) -> Vec<String> {
-        self.state.lock().values.keys().cloned().collect()
+    fn keys(&self) -> Result<Vec<String>> {
+        Ok(self.state.lock().values.keys().cloned().collect())
     }
 
-    fn observe<T, F>(&self, key: &str, callback: F) -> Subscription
+    fn observe<T, F>(&self, key: &str, callback: F) -> Result<Subscription>
     where
         T: DeserializeOwned + Send + 'static,
-        F: Fn(Option<T>) + Send + Sync + 'static,
+        F: Fn(Result<Option<T>>) + Send + Sync + 'static,
     {
-        let callback = Arc::new(callback);
-        let observer: Observer = {
-            Arc::new(move |value| {
-                let deserialized = value.and_then(|value| serde_json::from_value(value).ok());
-                callback(deserialized);
-            })
-        };
+        validate_key(key)?;
+        let callback = typed_observer(key, callback);
 
         let key = key.to_string();
         let observer_id;
-        let current_value = {
+        let observer = {
             let mut state = self.state.lock();
             observer_id = state.allocate_observer_id();
+            let observer = QueuedObserver::pending(callback, state.values.get(&key).cloned());
             state
                 .observers
                 .entry(key.clone())
                 .or_default()
                 .insert(observer_id, observer.clone());
-            state.values.get(&key).cloned()
+            observer
         };
-
-        observer(current_value);
 
         let state = self.state.clone();
         let unsubscribe_key = key;
-        Subscription::new(move || {
+        let subscription = Subscription::new(move || {
             let mut state = state.lock();
             if let Some(observers) = state.observers.get_mut(&unsubscribe_key) {
                 observers.remove(&observer_id);
@@ -336,12 +430,15 @@ impl KvStore for JsonKvStore {
                     state.observers.remove(&unsubscribe_key);
                 }
             }
-        })
+        });
+        observer.activate();
+        Ok(subscription)
     }
 }
 
 impl KvStore for SqliteKvStore {
     fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
+        validate_key(key)?;
         let connection = self.connection.lock();
         let Some(value) = load_value_from_connection(&connection, key)? else {
             return Ok(None);
@@ -356,6 +453,7 @@ impl KvStore for SqliteKvStore {
     }
 
     fn set<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
+        validate_key(key)?;
         let serialized = serde_json::to_value(value).map_err(|source| Error::SerializeValue {
             key: key.to_string(),
             source,
@@ -384,6 +482,7 @@ impl KvStore for SqliteKvStore {
     }
 
     fn remove(&self, key: &str) -> Result<bool> {
+        validate_key(key)?;
         let removed = {
             let connection = self.connection.lock();
             connection.execute("DELETE FROM kv_entries WHERE key = ?1", params![key])? > 0
@@ -401,51 +500,46 @@ impl KvStore for SqliteKvStore {
         Ok(true)
     }
 
-    fn keys(&self) -> Vec<String> {
+    fn keys(&self) -> Result<Vec<String>> {
         let connection = self.connection.lock();
-        let Ok(mut statement) = connection.prepare("SELECT key FROM kv_entries ORDER BY key")
-        else {
-            return Vec::new();
-        };
-        let Ok(rows) = statement.query_map([], |row| row.get::<_, String>(0)) else {
-            return Vec::new();
-        };
+        let mut statement = connection.prepare("SELECT key FROM kv_entries ORDER BY key")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
 
-        rows.filter_map(|row| row.ok()).collect()
+        let keys = rows
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Error::from)?;
+        for key in &keys {
+            validate_key(key)?;
+        }
+        Ok(keys)
     }
 
-    fn observe<T, F>(&self, key: &str, callback: F) -> Subscription
+    fn observe<T, F>(&self, key: &str, callback: F) -> Result<Subscription>
     where
         T: DeserializeOwned + Send + 'static,
-        F: Fn(Option<T>) + Send + Sync + 'static,
+        F: Fn(Result<Option<T>>) + Send + Sync + 'static,
     {
-        let callback = Arc::new(callback);
-        let observer: Observer = {
-            Arc::new(move |value| {
-                let deserialized = value.and_then(|value| serde_json::from_value(value).ok());
-                callback(deserialized);
-            })
-        };
+        validate_key(key)?;
+        let callback = typed_observer(key, callback);
 
         let key = key.to_string();
-        let (observer_id, current_value) = {
+        let (observer_id, observer) = {
             let connection = self.connection.lock();
-            let current_value = load_value_from_connection(&connection, &key).ok().flatten();
+            let current_value = load_value_from_connection(&connection, &key)?;
             let mut state = self.observers.lock();
             let observer_id = state.allocate_observer_id();
+            let observer = QueuedObserver::pending(callback, current_value);
             state
                 .observers
                 .entry(key.clone())
                 .or_default()
                 .insert(observer_id, observer.clone());
-            (observer_id, current_value)
+            (observer_id, observer)
         };
-
-        observer(current_value);
 
         let observers = self.observers.clone();
         let unsubscribe_key = key;
-        Subscription::new(move || {
+        let subscription = Subscription::new(move || {
             let mut state = observers.lock();
             if let Some(observers) = state.observers.get_mut(&unsubscribe_key) {
                 observers.remove(&observer_id);
@@ -453,14 +547,16 @@ impl KvStore for SqliteKvStore {
                     state.observers.remove(&unsubscribe_key);
                 }
             }
-        })
+        });
+        observer.activate();
+        Ok(subscription)
     }
 }
 
 fn configure_sqlite_kv_connection(connection: &Connection) -> Result<()> {
     connection.busy_timeout(Duration::from_secs(5))?;
     connection.execute_batch(
-        "PRAGMA journal_mode = WAL;\nPRAGMA synchronous = NORMAL;\nCREATE TABLE IF NOT EXISTS kv_entries (\n    key TEXT PRIMARY KEY,\n    value TEXT NOT NULL\n);",
+        "PRAGMA journal_mode = WAL;\nPRAGMA synchronous = NORMAL;\nCREATE TABLE IF NOT EXISTS kv_entries (\n    key TEXT PRIMARY KEY,\n    value TEXT NOT NULL\n);\nCREATE TABLE IF NOT EXISTS __kael_kv_metadata (\n    key TEXT PRIMARY KEY\n);",
     )?;
     Ok(())
 }
@@ -475,7 +571,12 @@ fn load_value_from_connection(connection: &Connection, key: &str) -> Result<Opti
         .optional()?;
 
     stored
-        .map(|json| serde_json::from_str(&json).map_err(Error::from))
+        .map(|json| {
+            serde_json::from_str(&json).map_err(|source| Error::DeserializeValue {
+                key: key.to_string(),
+                source,
+            })
+        })
         .transpose()
 }
 
@@ -491,6 +592,25 @@ fn observers_for_key(
         .get(key)
         .map(|observers| observers.values().cloned().collect())
         .unwrap_or_default()
+}
+
+fn typed_observer<T, F>(key: &str, callback: F) -> ObserverCallback
+where
+    T: DeserializeOwned + Send + 'static,
+    F: Fn(Result<Option<T>>) + Send + Sync + 'static,
+{
+    let key = key.to_string();
+    Arc::new(move |value| {
+        let value = value
+            .map(|value| {
+                serde_json::from_value(value).map_err(|source| Error::DeserializeValue {
+                    key: key.clone(),
+                    source,
+                })
+            })
+            .transpose();
+        callback(value);
+    })
 }
 
 fn allocate_observer_id(
@@ -510,16 +630,27 @@ fn allocate_observer_id(
 }
 
 fn load_values(path: &Path) -> Result<BTreeMap<String, Value>> {
-    if !path.exists() {
-        return Ok(BTreeMap::new());
-    }
-
-    let metadata =
-        std::fs::metadata(path).map_err(|source| Error::io(path.to_path_buf(), source))?;
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(BTreeMap::new());
+        }
+        Err(source) => return Err(Error::io(path.to_path_buf(), source)),
+    };
+    let metadata = file
+        .metadata()
+        .map_err(|source| Error::io(path.to_path_buf(), source))?;
     ensure_json_store_size(metadata.len())?;
-    let contents = std::fs::read(path).map_err(|source| Error::io(path.to_path_buf(), source))?;
+    let mut contents = Vec::with_capacity(metadata.len().try_into().unwrap_or(0));
+    file.take(MAX_JSON_STORE_BYTES + 1)
+        .read_to_end(&mut contents)
+        .map_err(|source| Error::io(path.to_path_buf(), source))?;
     ensure_json_store_size(contents.len().try_into().unwrap_or(u64::MAX))?;
-    Ok(serde_json::from_slice(&contents)?)
+    let values: BTreeMap<String, Value> = serde_json::from_slice(&contents)?;
+    for key in values.keys() {
+        validate_key(key)?;
+    }
+    Ok(values)
 }
 
 fn ensure_json_store_size(actual: u64) -> Result<()> {
@@ -534,6 +665,9 @@ fn ensure_json_store_size(actual: u64) -> Result<()> {
 }
 
 fn persist_values(path: &Path, values: &BTreeMap<String, Value>) -> Result<()> {
+    for key in values.keys() {
+        validate_key(key)?;
+    }
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -542,57 +676,54 @@ fn persist_values(path: &Path, values: &BTreeMap<String, Value>) -> Result<()> {
             .map_err(|source| Error::io(parent.to_path_buf(), source))?;
     }
 
-    let temp_path = temporary_path(path);
     let contents = serde_json::to_vec(values)?;
     ensure_json_store_size(contents.len().try_into().unwrap_or(u64::MAX))?;
-    let result = (|| {
-        let mut file =
-            File::create(&temp_path).map_err(|source| Error::io(temp_path.clone(), source))?;
-        file.write_all(&contents)
-            .map_err(|source| Error::io(temp_path.clone(), source))?;
-        file.flush()
-            .map_err(|source| Error::io(temp_path.clone(), source))?;
-        file.sync_all()
-            .map_err(|source| Error::io(temp_path.clone(), source))?;
-        std::fs::rename(&temp_path, path)
-            .map_err(|source| Error::io(path.to_path_buf(), source))?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temp_path);
-    }
-    result
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut file =
+        NamedTempFile::new_in(directory).map_err(|source| Error::io(path.to_path_buf(), source))?;
+    file.write_all(&contents)
+        .map_err(|source| Error::io(path.to_path_buf(), source))?;
+    file.flush()
+        .map_err(|source| Error::io(path.to_path_buf(), source))?;
+    file.as_file()
+        .sync_all()
+        .map_err(|source| Error::io(path.to_path_buf(), source))?;
+    file.persist(path)
+        .map_err(|error| Error::io(path.to_path_buf(), error.error))?;
+    sync_parent_directory(directory).map_err(|source| Error::DurabilityUncertain {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(())
 }
 
-fn temporary_path(path: &Path) -> PathBuf {
-    static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
+#[cfg(unix)]
+fn sync_parent_directory(directory: &Path) -> std::io::Result<()> {
+    std::fs::File::open(directory)?.sync_all()
+}
 
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("preferences.json");
-    let unique_suffix = NEXT_TEMP_FILE_ID.fetch_add(1, Ordering::Relaxed);
-
-    path.with_file_name(format!(
-        "{file_name}.{}.{}.tmp",
-        std::process::id(),
-        unique_suffix
-    ))
+#[cfg(not(unix))]
+fn sync_parent_directory(_directory: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
         collections::BTreeMap,
-        sync::{Arc, Mutex},
+        sync::{Arc, Barrier, Mutex},
     };
 
+    use rusqlite::params;
     use serde::{Deserialize, Serialize};
     use tempfile::tempdir;
 
     use super::{
-        JsonKvStore, KvStore, MAX_JSON_STORE_BYTES, SqliteKvStore, ensure_json_store_size,
-        persist_values,
+        Error, JsonKvStore, KvStore, MAX_JSON_STORE_BYTES, MAX_KEY_BYTES, SqliteKvStore,
+        ensure_json_store_size, persist_values,
     };
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -614,7 +745,7 @@ mod tests {
         let restored = store.get::<Preferences>("preferences").unwrap();
 
         assert_eq!(restored, Some(preferences));
-        assert_eq!(store.keys(), vec!["preferences".to_string()]);
+        assert_eq!(store.keys().unwrap(), vec!["preferences".to_string()]);
     }
 
     #[test]
@@ -624,9 +755,11 @@ mod tests {
         let values = Arc::new(Mutex::new(Vec::new()));
         let observed = values.clone();
 
-        let _subscription = store.observe::<String, _>("theme", move |value| {
-            observed.lock().unwrap().push(value);
-        });
+        let _subscription = store
+            .observe::<String, _>("theme", move |value| {
+                observed.lock().unwrap().push(value.unwrap());
+            })
+            .unwrap();
 
         store.set("theme", &"dark").unwrap();
         store.remove("theme").unwrap();
@@ -648,7 +781,7 @@ mod tests {
         let restored = store.get::<Preferences>("preferences").unwrap();
 
         assert_eq!(restored, Some(preferences));
-        assert_eq!(store.keys(), vec!["preferences".to_string()]);
+        assert_eq!(store.keys().unwrap(), vec!["preferences".to_string()]);
     }
 
     #[test]
@@ -658,9 +791,11 @@ mod tests {
         let values = Arc::new(Mutex::new(Vec::new()));
         let observed = values.clone();
 
-        let _subscription = store.observe::<String, _>("theme", move |value| {
-            observed.lock().unwrap().push(value);
-        });
+        let _subscription = store
+            .observe::<String, _>("theme", move |value| {
+                observed.lock().unwrap().push(value.unwrap());
+            })
+            .unwrap();
 
         store.set("theme", &"dark").unwrap();
         store.remove("theme").unwrap();
@@ -677,9 +812,11 @@ mod tests {
 
         let received = Arc::new(Mutex::new(Vec::new()));
         let recv_clone = received.clone();
-        let _sub = store.observe::<String, _>("color", move |value| {
-            recv_clone.lock().unwrap().push(value);
-        });
+        let _sub = store
+            .observe::<String, _>("color", move |value| {
+                recv_clone.lock().unwrap().push(value.unwrap());
+            })
+            .unwrap();
 
         let values = received.lock().unwrap();
         assert_eq!(values.len(), 1);
@@ -717,6 +854,183 @@ mod tests {
     }
 
     #[test]
+    fn json_store_atomically_replaces_an_existing_file() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("preferences.json");
+        let store = JsonKvStore::open_at(&path).unwrap();
+
+        store.set("theme", &"light").unwrap();
+        store.set("theme", &"dark").unwrap();
+
+        let reopened = JsonKvStore::open_at(path).unwrap();
+        assert_eq!(
+            reopened.get::<String>("theme").unwrap().as_deref(),
+            Some("dark")
+        );
+    }
+
+    #[test]
+    fn observer_reports_type_mismatches() {
+        let directory = tempdir().unwrap();
+        let store = JsonKvStore::open_at(directory.path().join("preferences.json")).unwrap();
+        let results = Arc::new(Mutex::new(Vec::new()));
+        let observed = results.clone();
+
+        let _subscription = store
+            .observe::<String, _>("theme", move |value| {
+                observed.lock().unwrap().push(value.is_err());
+            })
+            .unwrap();
+        store.set("theme", &42).unwrap();
+
+        assert_eq!(*results.lock().unwrap(), vec![false, true]);
+    }
+
+    #[test]
+    fn observer_delivers_initial_value_before_a_concurrent_update() {
+        let directory = tempdir().unwrap();
+        let store =
+            Arc::new(JsonKvStore::open_at(directory.path().join("preferences.json")).unwrap());
+        let initial_started = Arc::new(Barrier::new(2));
+        let release_initial = Arc::new(Barrier::new(2));
+        let observed = Arc::new(Mutex::new(Vec::new()));
+
+        let observer_store = store.clone();
+        let observer_started = initial_started.clone();
+        let observer_release = release_initial.clone();
+        let observer_values = observed.clone();
+        let observer_thread = std::thread::spawn(move || {
+            let _subscription = observer_store
+                .observe::<String, _>("theme", move |value| {
+                    let value = value.unwrap();
+                    if value.is_none() {
+                        observer_started.wait();
+                        observer_release.wait();
+                    }
+                    observer_values.lock().unwrap().push(value);
+                })
+                .unwrap();
+        });
+
+        initial_started.wait();
+        store.set("theme", &"dark").unwrap();
+        release_initial.wait();
+        observer_thread.join().unwrap();
+
+        assert_eq!(
+            *observed.lock().unwrap(),
+            vec![None, Some("dark".to_string())]
+        );
+    }
+
+    #[test]
+    fn observer_delivery_is_reentrant_without_reordering() {
+        let directory = tempdir().unwrap();
+        let store =
+            Arc::new(JsonKvStore::open_at(directory.path().join("preferences.json")).unwrap());
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let callback_store = store.clone();
+        let callback_values = observed.clone();
+
+        let _subscription = store
+            .observe::<String, _>("theme", move |value| {
+                let value = value.unwrap();
+                if value.is_none() {
+                    callback_store.set("theme", &"dark").unwrap();
+                }
+                callback_values.lock().unwrap().push(value);
+            })
+            .unwrap();
+
+        assert_eq!(
+            *observed.lock().unwrap(),
+            vec![None, Some("dark".to_string())]
+        );
+    }
+
+    #[test]
+    fn sqlite_keys_reports_query_failures() {
+        let directory = tempdir().unwrap();
+        let store = SqliteKvStore::open_at(directory.path().join("preferences.sqlite3")).unwrap();
+        store
+            .connection
+            .lock()
+            .execute("DROP TABLE kv_entries", [])
+            .unwrap();
+
+        assert!(store.keys().is_err());
+    }
+
+    #[test]
+    fn sqlite_observe_reports_an_invalid_stored_value() {
+        let directory = tempdir().unwrap();
+        let store = SqliteKvStore::open_at(directory.path().join("preferences.sqlite3")).unwrap();
+        store
+            .connection
+            .lock()
+            .execute(
+                "INSERT INTO kv_entries (key, value) VALUES (?1, ?2)",
+                params!["theme", "not valid JSON"],
+            )
+            .unwrap();
+
+        let result = store.observe::<String, _>("theme", |_| {
+            panic!("the callback must not run when initial loading fails");
+        });
+        assert!(matches!(result, Err(Error::DeserializeValue { .. })));
+    }
+
+    #[test]
+    fn stores_reject_invalid_logical_keys() {
+        let directory = tempdir().unwrap();
+        let json = JsonKvStore::open_at(directory.path().join("preferences.json")).unwrap();
+        let sqlite = SqliteKvStore::open_at(directory.path().join("preferences.sqlite3")).unwrap();
+
+        for key in ["", "line\nbreak"] {
+            assert!(matches!(
+                json.set(key, &"value"),
+                Err(Error::InvalidStorageKey)
+            ));
+            assert!(matches!(
+                sqlite.get::<String>(key),
+                Err(Error::InvalidStorageKey)
+            ));
+        }
+
+        let excessive = "k".repeat(MAX_KEY_BYTES + 1);
+        assert!(matches!(
+            json.observe::<String, _>(&excessive, |_| {}),
+            Err(Error::InvalidStorageKey)
+        ));
+        assert!(matches!(
+            sqlite.remove(&excessive),
+            Err(Error::InvalidStorageKey)
+        ));
+    }
+
+    #[test]
+    fn stores_reject_invalid_keys_already_on_disk() {
+        let directory = tempdir().unwrap();
+        let json_path = directory.path().join("preferences.json");
+        std::fs::write(&json_path, r#"{"line\nbreak":true}"#).unwrap();
+        assert!(matches!(
+            JsonKvStore::open_at(json_path),
+            Err(Error::InvalidStorageKey)
+        ));
+
+        let sqlite = SqliteKvStore::open_at(directory.path().join("preferences.sqlite3")).unwrap();
+        sqlite
+            .connection
+            .lock()
+            .execute(
+                "INSERT INTO kv_entries (key, value) VALUES (?1, ?2)",
+                params!["line\nbreak", "true"],
+            )
+            .unwrap();
+        assert!(matches!(sqlite.keys(), Err(Error::InvalidStorageKey)));
+    }
+
+    #[test]
     fn sqlite_store_imports_legacy_json_values() {
         let directory = tempdir().unwrap();
         let json_path = directory.path().join("preferences.json");
@@ -733,7 +1047,7 @@ mod tests {
         persist_values(&json_path, &values).unwrap();
 
         let store = SqliteKvStore::open_at(&sqlite_path).unwrap();
-        store.import_legacy_json_if_empty(&json_path).unwrap();
+        store.import_legacy_json_once(&json_path).unwrap();
 
         let restored = store.get::<Preferences>("preferences").unwrap();
         assert_eq!(
@@ -743,6 +1057,23 @@ mod tests {
                 recent_ids: vec![1, 2, 3],
             })
         );
+    }
+
+    #[test]
+    fn sqlite_legacy_import_does_not_resurrect_deleted_values() {
+        let directory = tempdir().unwrap();
+        let json_path = directory.path().join("preferences.json");
+        let sqlite_path = directory.path().join("preferences.sqlite3");
+        let values = BTreeMap::from([("theme".to_string(), serde_json::to_value("dark").unwrap())]);
+        persist_values(&json_path, &values).unwrap();
+
+        let store = SqliteKvStore::open_at(sqlite_path).unwrap();
+        store.import_legacy_json_once(&json_path).unwrap();
+        assert!(store.remove("theme").unwrap());
+
+        std::fs::write(&json_path, "not valid JSON").unwrap();
+        store.import_legacy_json_once(&json_path).unwrap();
+        assert_eq!(store.get::<String>("theme").unwrap(), None);
     }
 
     #[test]

@@ -16,6 +16,18 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
+    /// A file replacement completed, but syncing its parent directory failed.
+    ///
+    /// The new value is visible to this process, but may not survive a system
+    /// crash because the directory entry could not be durably flushed.
+    #[error("data was committed at {path}, but syncing its parent directory failed: {source}")]
+    DurabilityUncertain {
+        /// The path that was atomically replaced.
+        path: PathBuf,
+        /// The source directory-sync error.
+        #[source]
+        source: std::io::Error,
+    },
     /// A SQLite operation failed.
     #[error("sqlite error: {0}")]
     Sql(#[from] rusqlite::Error),
@@ -43,9 +55,12 @@ pub enum Error {
     /// A required environment variable for path resolution was missing.
     #[error("required environment variable was not set: {0}")]
     MissingEnvironmentVariable(&'static str),
-    /// An application or database identifier was empty or contained path separators.
+    /// An application or database identifier was not a portable file name.
     #[error("invalid storage identifier: {0:?}")]
     InvalidStorageIdentifier(String),
+    /// A key was empty, excessive, or contained control characters.
+    #[error("storage key must be non-empty, at most 4096 bytes, and free of control characters")]
+    InvalidStorageKey,
     /// A JSON store exceeded its bounded on-disk size.
     #[error("JSON store is {actual} bytes, exceeding the {limit} byte limit")]
     JsonStoreTooLarge {
