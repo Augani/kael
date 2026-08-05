@@ -432,6 +432,7 @@ fn parse_csv_line(line: &str) -> anyhow::Result<Vec<String>> {
         match (state, character) {
             (State::FieldStart, '"') => state = State::Quoted,
             (State::FieldStart, ',') => push_csv_value(&mut values, String::new(), MAX_FIELDS)?,
+            (State::FieldStart, character) if character.is_ascii_whitespace() => {}
             (State::FieldStart, _) => {
                 value.push(character);
                 state = State::Unquoted;
@@ -656,6 +657,9 @@ mod tests {
         );
         let row = csv.parse_row("Alice,\"hello, \"\"world\"\"\"").unwrap();
         assert_eq!(row[1].1, "hello, \"world\"");
+        let spaced = csv.parse_row(" Alice ,  \" keep me \"  ").unwrap();
+        assert_eq!(spaced[0].1, "Alice");
+        assert_eq!(spaced[1].1, " keep me ");
         assert!(!csv.validate_row("Alice,\"unterminated"));
         assert!(csv.parse_header("name,name").is_err());
         assert!(csv.parse_header("name,").is_err());

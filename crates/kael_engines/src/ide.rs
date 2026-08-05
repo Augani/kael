@@ -108,7 +108,8 @@ pub enum LspStatus {
     Crashed(String),
 }
 
-/// Represents a managed language server process.
+/// State recorded for a language-server process owned by an external process
+/// supervisor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LspProcess {
     /// Language identifier (e.g. "rust", "typescript").
@@ -123,7 +124,10 @@ pub struct LspProcess {
     pub pid: Option<u32>,
 }
 
-/// Manages multiple language server processes.
+/// Tracks language-server definitions and observed lifecycle state.
+///
+/// This type does not spawn, signal, or monitor operating-system processes; the
+/// application owns that work and records transitions here.
 #[derive(Debug, Default)]
 pub struct LspManager {
     processes: HashMap<String, LspProcess>,
@@ -140,7 +144,7 @@ impl LspManager {
         self.processes.insert(process.language_id.clone(), process);
     }
 
-    /// Mark a language server as running with the given PID.
+    /// Record that a language server is running with the given PID.
     pub fn start(&mut self, language_id: &str, pid: u32) -> anyhow::Result<()> {
         if pid == 0 {
             anyhow::bail!("language server PID must be non-zero");
@@ -154,7 +158,7 @@ impl LspManager {
         Ok(())
     }
 
-    /// Mark a language server as stopped.
+    /// Record that a language server has stopped.
     pub fn stop(&mut self, language_id: &str) -> anyhow::Result<()> {
         let proc = self
             .processes
@@ -214,7 +218,8 @@ pub struct SearchQuery {
     pub exclude_paths: Option<Vec<String>>,
 }
 
-/// An in-memory full-text search index.
+/// An in-memory collection of line-level entries searched with deterministic
+/// linear scans.
 #[derive(Debug, Default)]
 pub struct SearchIndex {
     entries: Vec<SearchEntry>,
@@ -232,12 +237,18 @@ impl SearchIndex {
     }
 
     /// Search the index with the given query.
-    pub fn search(&self, query: &SearchQuery) -> Vec<&SearchEntry> {
+    ///
+    /// Invalid, empty, or excessively large patterns return an error rather
+    /// than being confused with a valid query that has no matches.
+    pub fn search(&self, query: &SearchQuery) -> anyhow::Result<Vec<&SearchEntry>> {
         const MAX_PATTERN_BYTES: usize = 64 * 1024;
-        if query.pattern.is_empty() || query.pattern.len() > MAX_PATTERN_BYTES {
-            return Vec::new();
+        if query.pattern.is_empty() {
+            anyhow::bail!("search pattern must not be empty");
         }
-        let regex = if query.regex || query.whole_word {
+        if query.pattern.len() > MAX_PATTERN_BYTES {
+            anyhow::bail!("search pattern exceeds {MAX_PATTERN_BYTES} bytes");
+        }
+        let regex = if query.regex || query.whole_word || !query.case_sensitive {
             let source = if query.regex {
                 query.pattern.clone()
             } else {
@@ -248,14 +259,13 @@ impl SearchIndex {
             } else {
                 source
             };
-            match RegexBuilder::new(&pattern)
-                .case_insensitive(!query.case_sensitive)
-                .size_limit(1024 * 1024)
-                .build()
-            {
-                Ok(regex) => Some(regex),
-                Err(_) => return Vec::new(),
-            }
+            Some(
+                RegexBuilder::new(&pattern)
+                    .case_insensitive(!query.case_sensitive)
+                    .size_limit(1024 * 1024)
+                    .build()
+                    .map_err(|error| anyhow::anyhow!("invalid search pattern: {error}"))?,
+            )
         } else {
             None
         };
@@ -279,23 +289,22 @@ impl SearchIndex {
                     return regex.is_match(&entry.content);
                 }
 
-                if query.case_sensitive {
-                    entry.content.contains(&query.pattern)
-                } else {
-                    entry
-                        .content
-                        .to_lowercase()
-                        .contains(&query.pattern.to_lowercase())
-                }
+                entry.content.contains(&query.pattern)
             })
             .collect();
         results.sort_by(|a, b| a.path.cmp(&b.path).then(a.line.cmp(&b.line)));
-        results
+        Ok(results)
     }
 
     /// Search the index and return at most `max_results` entries.
-    pub fn search_with_limit(&self, query: &SearchQuery, max_results: usize) -> Vec<&SearchEntry> {
-        self.search(query).into_iter().take(max_results).collect()
+    pub fn search_with_limit(
+        &self,
+        query: &SearchQuery,
+        max_results: usize,
+    ) -> anyhow::Result<Vec<&SearchEntry>> {
+        let mut results = self.search(query)?;
+        results.truncate(max_results);
+        Ok(results)
     }
 
     /// Remove all entries from the index.
@@ -446,7 +455,7 @@ mod tests {
             include_paths: None,
             exclude_paths: None,
         };
-        assert_eq!(idx.search(&query).len(), 1);
+        assert_eq!(idx.search(&query).unwrap().len(), 1);
         assert_eq!(idx.count(), 2);
     }
 
@@ -466,7 +475,7 @@ mod tests {
             include_paths: None,
             exclude_paths: None,
         };
-        assert_eq!(idx.search(&query).len(), 1);
+        assert_eq!(idx.search(&query).unwrap().len(), 1);
     }
 
     #[test]
@@ -485,13 +494,13 @@ mod tests {
             include_paths: None,
             exclude_paths: None,
         };
-        assert_eq!(idx.search(&query).len(), 1);
+        assert_eq!(idx.search(&query).unwrap().len(), 1);
         idx.add(SearchEntry {
             path: "b.rs".into(),
             line: 1,
             content: "format, formatter".into(),
         });
-        assert_eq!(idx.search(&query).len(), 2);
+        assert_eq!(idx.search(&query).unwrap().len(), 2);
     }
 
     #[test]
@@ -515,7 +524,7 @@ mod tests {
             include_paths: None,
             exclude_paths: None,
         };
-        assert_eq!(idx.search(&query).len(), 1);
+        assert_eq!(idx.search(&query).unwrap().len(), 1);
     }
 
     #[test]
@@ -539,7 +548,7 @@ mod tests {
             include_paths: None,
             exclude_paths: Some(vec!["vendor/".into()]),
         };
-        assert_eq!(idx.search(&query).len(), 1);
+        assert_eq!(idx.search(&query).unwrap().len(), 1);
     }
 
     #[test]
@@ -572,7 +581,7 @@ mod tests {
             include_paths: None,
             exclude_paths: None,
         };
-        let results = idx.search_with_limit(&query, 3);
+        let results = idx.search_with_limit(&query, 3).unwrap();
         assert_eq!(results.len(), 3);
     }
 
@@ -596,13 +605,14 @@ mod tests {
         };
         let paths: Vec<_> = index
             .search(&query)
+            .unwrap()
             .iter()
             .map(|entry| entry.path.as_str())
             .collect();
         assert_eq!(paths, ["a.rs", "z.rs"]);
         query.pattern.clear();
-        assert!(index.search(&query).is_empty());
+        assert!(index.search(&query).is_err());
         query.pattern = "x".repeat(64 * 1024 + 1);
-        assert!(index.search(&query).is_empty());
+        assert!(index.search(&query).is_err());
     }
 }
