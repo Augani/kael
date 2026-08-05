@@ -69,6 +69,7 @@ switch ($Mode) {
         # Windows CI as a compile/link proof and run the test binaries on
         # macOS/Linux, where the headless runtime is stable in Actions.
         Invoke-Step cargo test --workspace --all-targets --all-features --no-run
+        Invoke-Step cargo check --package kael_http_client --no-default-features
         # These engine crates are hardware-free, so their tests also execute on
         # Windows rather than stopping at the compile/link proof.
         Invoke-Step cargo test --package kael_engines --package kael_media_engines --package kael_render_graph --lib
