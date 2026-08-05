@@ -1,8 +1,4 @@
-//! `kael` command-line tool: scaffold new Kael applications.
-//!
-//! `kael new <name>` writes a minimal, ready-to-run app into `./<name>`, with
-//! its templates embedded in the binary so it works offline once installed via
-//! `cargo install kael-cli`.
+#![doc = include_str!("../README.md")]
 
 use std::fmt;
 use std::fs;

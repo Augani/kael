@@ -1,22 +1,28 @@
 [package]
 edition.workspace = true
 name = "kael-cli"
+autoexamples = false
 rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
 publish = true
-description = "Command-line tools for the Kael UI framework — scaffold new apps with `kael new`"
+description = "Scaffold release-aligned native Kael applications from the command line"
+documentation = "https://docs.rs/kael-cli"
 keywords = ["kael", "cli", "scaffold", "gui"]
 categories = ["command-line-utilities", "gui"]
 authors.workspace = true
 repository.workspace = true
 license.workspace = true
 readme = "README.md"
+exclude = ["examples/"]
+
+[package.metadata.docs.rs]
+targets = []
 
 [[bin]]
 name = "kael"
 path = "src/main.rs"
+doc = true
 
-[lints.clippy]
-dbg_macro = "deny"
-todo = "deny"
+[lints]
+workspace = true
