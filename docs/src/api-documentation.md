@@ -59,7 +59,7 @@ The core crate keeps costly or specialized integrations optional:
 | `webview` | Explicit hosted web surfaces |
 | `media` | Native media playback integration |
 | `storage` | Storage primitives through `kael_storage` |
-| `icons` | Icon catalog integration |
+| `icons` | Compact embedded icon catalog with application-asset overrides |
 | `diagnostics` | Metrics, breadcrumbs, and crash-report integration |
 | `document` | Document lifecycle helpers |
 | `audio` | Audio integration |

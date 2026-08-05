@@ -65,6 +65,14 @@ install_theme(cx, Theme::custom(ThemeTokens {
 }));
 ```
 
+The component icons work without copying assets into an application. `kael_ui`
+bundles the compact Lucide subset its components use and resolves it through
+virtual `kael-icons/<name>.svg` paths. To replace the set with branded SVGs:
+
+```rust,ignore
+kael_ui::set_icon_base_path("assets/icons");
+```
+
 ## Features
 
 | Feature | Default | Purpose |

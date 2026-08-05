@@ -70,7 +70,8 @@ Kael targets macOS (Metal), Windows (DirectX 11), and Linux X11/Wayland
 | `webview` | Explicit hosted web surfaces |
 | `media` | Native media playback integration |
 | `storage`, `document`, `audio`, `pdf` | Product data and content services |
-| `icons`, `diagnostics`, `notifications-full`, `share` | Optional platform batteries |
+| `icons` | Compact embedded SVG catalog with application-asset overrides |
+| `diagnostics`, `notifications-full`, `share` | Optional platform batteries |
 | `screen-capture` | Screen-capture backend support |
 | `agent-tools` | Structured capability-planning metadata |
 | `runtime_shaders` | Runtime shader compilation for development |

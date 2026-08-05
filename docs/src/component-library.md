@@ -178,7 +178,14 @@ callback internals.
 
 ## Icons
 
-Components render [Lucide](https://lucide.dev/) icons by name, resolved against a configurable base path. The 1,600+ SVGs ship in the repository under `crates/kael_ui/assets/icons`. Point the resolver at your app's asset directory at startup:
+Components render [Lucide](https://lucide.dev/) icons by name. `kael_ui`
+bundles the compact set used by its built-in components, so published-crate
+consumers do not need to copy framework assets into their application. An
+application asset source is checked first, preserving branded overrides.
+
+The complete 1,600+ SVG catalog remains repository-only under
+`crates/kael_ui/assets/icons` for discovery and the Astryx showcase. Point the
+resolver at your own icon directory to replace the bundled set:
 
 ```rust,ignore
 kael_ui::set_icon_base_path("assets/icons");
