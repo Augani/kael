@@ -16,7 +16,6 @@ license.workspace = true
 [lib]
 name = "kael_audio"
 path = "src/lib.rs"
-doctest = false
 
 [dependencies.anyhow]
 workspace = true
@@ -37,6 +36,9 @@ version = "0.12.1"
 
 [dependencies.smol]
 workspace = true
+
+[dependencies.url]
+version = "2.2"
 
 [dev-dependencies.futures]
 workspace = true

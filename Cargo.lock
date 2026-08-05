@@ -3820,6 +3820,7 @@ dependencies = [
  "log",
  "parking_lot",
  "smol",
+ "url",
 ]
 
 [[package]]

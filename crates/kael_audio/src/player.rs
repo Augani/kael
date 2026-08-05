@@ -45,7 +45,7 @@ impl std::fmt::Debug for Subscription {
 }
 
 /// A source of audio content.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum AudioSource {
     /// Audio loaded from a file on disk.
     File(PathBuf),
@@ -53,6 +53,22 @@ pub enum AudioSource {
     Url(String),
     /// Audio loaded from in-memory bytes.
     Memory(Arc<[u8]>),
+}
+
+impl std::fmt::Debug for AudioSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::File(path) => f.debug_tuple("File").field(path).finish(),
+            Self::Url(url) => f
+                .debug_struct("Url")
+                .field("bytes", &url.len())
+                .finish_non_exhaustive(),
+            Self::Memory(bytes) => f
+                .debug_struct("Memory")
+                .field("bytes", &bytes.len())
+                .finish_non_exhaustive(),
+        }
+    }
 }
 
 impl AudioSource {
@@ -111,7 +127,10 @@ pub struct Track {
     pub duration: Option<Duration>,
 }
 
-const MAX_DECODED_AUDIO_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_DECODED_AUDIO_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_MEMORY_SOURCE_BYTES: usize = 256 * 1024 * 1024;
+const MAX_URL_BYTES: usize = 16 * 1024;
+const MAX_ERROR_BYTES: usize = 4 * 1024;
 
 /// A clonable audio player that wraps `kael-media` playback.
 #[derive(Clone)]
@@ -174,6 +193,7 @@ impl AudioPlayer {
 
     /// Loads a track and makes it the current player target.
     pub async fn load(&self, source: AudioSource) -> Result<Track> {
+        validate_source(&source)?;
         let my_generation = {
             let mut state = self.inner.lock();
             state.load_generation = state
@@ -224,7 +244,7 @@ impl AudioPlayer {
                 Ok(track)
             }
             Err(error) => {
-                let message = error.to_string();
+                let message = bounded_error_message(error.to_string());
                 let listeners = {
                     let mut state = self.inner.lock();
                     if state.load_generation != my_generation {
@@ -243,7 +263,7 @@ impl AudioPlayer {
     pub fn play(&self, track: &Track) -> Result<()> {
         let handle = self.ensure_track_handle(track)?;
         if let Err(error) = handle.play() {
-            let message = error.to_string();
+            let message = bounded_error_message(error.to_string());
             let listeners = self.set_state(PlaybackState::Error(message.clone()));
             notify_state_listeners(&listeners, PlaybackState::Error(message));
             return Err(error.into());
@@ -475,6 +495,55 @@ impl AudioPlayer {
     }
 }
 
+fn validate_source(source: &AudioSource) -> Result<()> {
+    match source {
+        AudioSource::File(_) => Ok(()),
+        AudioSource::Memory(bytes) => {
+            if bytes.len() > MAX_MEMORY_SOURCE_BYTES {
+                anyhow::bail!(
+                    "in-memory audio source exceeds {MAX_MEMORY_SOURCE_BYTES} byte limit"
+                );
+            }
+            Ok(())
+        }
+        AudioSource::Url(url) => {
+            if url.is_empty()
+                || url.len() > MAX_URL_BYTES
+                || url.trim() != url
+                || url.chars().any(char::is_control)
+            {
+                anyhow::bail!(
+                    "audio URL must be non-empty, at most {MAX_URL_BYTES} bytes, and contain no surrounding whitespace or control characters"
+                );
+            }
+            let parsed =
+                url::Url::parse(url).map_err(|_| anyhow::anyhow!("audio URL is invalid"))?;
+            if parsed.scheme() != "https" {
+                anyhow::bail!("audio URL must use https");
+            }
+            if parsed.host_str().is_none() {
+                anyhow::bail!("audio URL must include a host");
+            }
+            if !parsed.username().is_empty() || parsed.password().is_some() {
+                anyhow::bail!("audio URL cannot contain credentials");
+            }
+            Ok(())
+        }
+    }
+}
+
+fn bounded_error_message(mut message: String) -> String {
+    if message.len() <= MAX_ERROR_BYTES {
+        return message;
+    }
+    let mut boundary = MAX_ERROR_BYTES;
+    while !message.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    message.truncate(boundary);
+    message
+}
+
 fn allocate_listener_id(state: &mut AudioPlayerState) -> usize {
     let start = state.next_listener_id;
     let mut candidate = start;
@@ -519,7 +588,7 @@ mod tests {
 
     use futures::executor::block_on;
 
-    use super::{AudioPlayer, AudioSource, PlaybackState};
+    use super::{AudioPlayer, AudioSource, PlaybackState, bounded_error_message, validate_source};
 
     #[test]
     fn rejects_oversized_audio() {
@@ -565,6 +634,45 @@ mod tests {
         assert_eq!(player.rate(), 2.0);
         player.set_rate(f32::NAN);
         assert_eq!(player.rate(), 1.0);
+    }
+
+    #[test]
+    fn source_debug_output_does_not_expose_bytes_or_urls() {
+        let memory = AudioSource::from(b"secret audio bytes".to_vec());
+        let url = AudioSource::Url("https://example.com/audio?token=secret".to_string());
+
+        let memory_debug = format!("{memory:?}");
+        let url_debug = format!("{url:?}");
+        assert!(memory_debug.contains("bytes"));
+        assert!(!memory_debug.contains("secret audio"));
+        assert!(url_debug.contains("bytes"));
+        assert!(!url_debug.contains("example.com"));
+        assert!(!url_debug.contains("token"));
+    }
+
+    #[test]
+    fn validates_remote_audio_urls() {
+        assert!(
+            validate_source(&AudioSource::Url("https://example.com/audio".to_string())).is_ok()
+        );
+        assert!(
+            validate_source(&AudioSource::Url("file:///private/audio.wav".to_string())).is_err()
+        );
+        assert!(
+            validate_source(&AudioSource::Url("http://example.com/audio".to_string())).is_err()
+        );
+        assert!(
+            validate_source(&AudioSource::Url(
+                "https://user:secret@example.com/audio".to_string()
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn playback_errors_are_utf8_bounded() {
+        let message = bounded_error_message("é".repeat(4096));
+        assert!(message.len() <= 4 * 1024);
     }
 
     #[test]
