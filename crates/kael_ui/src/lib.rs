@@ -43,7 +43,7 @@ pub mod http;
 pub mod query;
 
 // Re-export commonly used icon configuration functions
-pub use icon_config::set_icon_base_path;
+pub use icon_config::{BUNDLED_ICON_BASE_PATH, set_icon_base_path};
 
 // Re-export HTTP client functions
 pub use http::{init_http, init_http_with_user_agent};
