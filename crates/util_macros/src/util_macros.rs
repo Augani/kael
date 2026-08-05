@@ -1,6 +1,9 @@
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
-#![allow(clippy::test_attr_in_doctest)]
+#![allow(
+    clippy::test_attr_in_doctest,
+    reason = "the perf macro intentionally emits test functions in its doctest"
+)]
 
 #[cfg(feature = "perf-enabled")]
 use perf::*;
@@ -83,7 +86,9 @@ fn target_string_literal(native: &str, windows: &str, span: proc_macro2::Span) -
 
 fn windows_path(path: &str) -> String {
     let path = path.replace('/', "\\");
-    if path.starts_with('\\') {
+    if path.starts_with("\\\\") {
+        path
+    } else if path.starts_with('\\') {
         format!("C:{path}")
     } else {
         path
@@ -91,6 +96,9 @@ fn windows_path(path: &str) -> String {
 }
 
 fn windows_uri(uri: &str) -> String {
+    if uri.starts_with("file:////") {
+        return uri.to_owned();
+    }
     let Some(path) = uri.strip_prefix("file:///") else {
         return uri.to_owned();
     };
@@ -144,7 +152,7 @@ struct PerfArgs {
     weight: Option<syn::Expr>,
     /// How relevant a benchmark is to overall performance. See docs on the enum
     /// for details. If unspecified, `Average` is selected.
-    importance: Importance,
+    importance: Option<Importance>,
 }
 
 #[warn(clippy::all, clippy::pedantic)]
@@ -152,23 +160,41 @@ impl PerfArgs {
     /// Parses attribute arguments into a `PerfArgs`.
     fn parse_into(&mut self, meta: syn::meta::ParseNestedMeta) -> syn::Result<()> {
         if meta.path.is_ident("iterations") {
+            if self.iterations.is_some() {
+                return Err(meta.error("duplicate `iterations` argument"));
+            }
             self.iterations = Some(meta.value()?.parse()?);
         } else if meta.path.is_ident("weight") {
+            if self.weight.is_some() {
+                return Err(meta.error("duplicate `weight` argument"));
+            }
             self.weight = Some(meta.value()?.parse()?);
         } else if meta.path.is_ident("critical") {
-            self.importance = Importance::Critical;
+            self.set_importance(Importance::Critical, &meta)?;
         } else if meta.path.is_ident("important") {
-            self.importance = Importance::Important;
+            self.set_importance(Importance::Important, &meta)?;
         } else if meta.path.is_ident("average") {
-            // This shouldn't be specified manually, but oh well.
-            self.importance = Importance::Average;
+            self.set_importance(Importance::Average, &meta)?;
         } else if meta.path.is_ident("iffy") {
-            self.importance = Importance::Iffy;
+            self.set_importance(Importance::Iffy, &meta)?;
         } else if meta.path.is_ident("fluff") {
-            self.importance = Importance::Fluff;
+            self.set_importance(Importance::Fluff, &meta)?;
         } else {
             return Err(syn::Error::new_spanned(meta.path, "unexpected identifier"));
         }
+        Ok(())
+    }
+
+    /// Records exactly one importance level.
+    fn set_importance(
+        &mut self,
+        importance: Importance,
+        meta: &syn::meta::ParseNestedMeta<'_>,
+    ) -> syn::Result<()> {
+        if self.importance.is_some() {
+            return Err(meta.error("only one importance level may be specified"));
+        }
+        self.importance = Some(importance);
         Ok(())
     }
 }
@@ -236,13 +262,21 @@ pub fn perf(our_attr: TokenStream, input: TokenStream) -> TokenStream {
         sig: sig_main,
         block,
     } = parse_macro_input!(input as ItemFn);
-    if !attrs_main
-        .iter()
-        .any(|a| Some(&parse_quote!(test)) == a.path().segments.last())
-    {
+    if !attrs_main.iter().any(|attribute| {
+        attribute
+            .path()
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "test")
+    }) {
         attrs_main.push(parse_quote!(#[test]));
     }
-    attrs_main.push(parse_quote!(#[allow(non_snake_case)]));
+    attrs_main.push(parse_quote!(
+        #[allow(
+            non_snake_case,
+            reason = "performance protocol suffixes are machine-readable"
+        )]
+    ));
 
     #[cfg(feature = "perf-enabled")]
     let fns = {
@@ -260,24 +294,31 @@ pub fn perf(our_attr: TokenStream, input: TokenStream) -> TokenStream {
 
         let new_ident_meta = syn::Ident::new(&new_ident_meta, sig_main.ident.span());
         let sig_meta = parse_quote!(fn #new_ident_meta());
-        let attrs_meta = parse_quote!(#[test] #[allow(non_snake_case)]);
+        let attrs_meta = parse_quote!(
+            #[test]
+            #[allow(
+                non_snake_case,
+                reason = "performance protocol suffixes are machine-readable"
+            )]
+        );
 
         let block_main = {
             parse_quote!({
-                let iter_count = std::env::var(#ITER_ENV_VAR)
+                let iter_count = ::std::env::var(#ITER_ENV_VAR)
                     .ok()
-                    .and_then(|value| value.parse::<usize>().ok())
+                    .and_then(|value| value.parse::<::std::num::NonZero<usize>>().ok())
+                    .map(::std::num::NonZero::get)
                     .unwrap_or(1);
                 for _ in 0..iter_count {
                     #block
                 }
             })
         };
-        let importance = format!("{}", args.importance);
+        let importance = format!("{}", args.importance.unwrap_or_default());
         let block_meta = {
             let q_iter = if let Some(iter) = args.iterations {
                 quote! {
-                    println!("{} {} {}", #MDATA_LINE_PREF, #ITER_COUNT_LINE_NAME, #iter);
+                    ::std::println!("{} {} {}", #MDATA_LINE_PREF, #ITER_COUNT_LINE_NAME, #iter);
                 }
             } else {
                 quote! {}
@@ -287,9 +328,9 @@ pub fn perf(our_attr: TokenStream, input: TokenStream) -> TokenStream {
                 .unwrap_or_else(|| parse_quote! { #WEIGHT_DEFAULT });
             parse_quote!({
                 #q_iter
-                println!("{} {} {}", #MDATA_LINE_PREF, #WEIGHT_LINE_NAME, #weight);
-                println!("{} {} {}", #MDATA_LINE_PREF, #IMPORTANCE_LINE_NAME, #importance);
-                println!("{} {} {}", #MDATA_LINE_PREF, #VERSION_LINE_NAME, #MDATA_VER);
+                ::std::println!("{} {} {}", #MDATA_LINE_PREF, #WEIGHT_LINE_NAME, #weight);
+                ::std::println!("{} {} {}", #MDATA_LINE_PREF, #IMPORTANCE_LINE_NAME, #importance);
+                ::std::println!("{} {} {}", #MDATA_LINE_PREF, #VERSION_LINE_NAME, #MDATA_VER);
             })
         };
 
@@ -324,7 +365,15 @@ pub fn perf(our_attr: TokenStream, input: TokenStream) -> TokenStream {
 
 #[cfg(test)]
 mod tests {
-    use super::{windows_line_endings, windows_path, windows_uri};
+    use super::{PerfArgs, windows_line_endings, windows_path, windows_uri};
+    use syn::parse::Parser as _;
+
+    fn parse_perf_args(tokens: proc_macro2::TokenStream) -> syn::Result<PerfArgs> {
+        let mut args = PerfArgs::default();
+        let parser = syn::meta::parser(|meta| PerfArgs::parse_into(&mut args, meta));
+        parser.parse2(tokens)?;
+        Ok(args)
+    }
 
     #[test]
     fn windows_path_conversion_is_independent_of_the_macro_host() {
@@ -333,6 +382,7 @@ mod tests {
             "C:\\Users\\user\\file.txt"
         );
         assert_eq!(windows_path("relative/file.txt"), "relative\\file.txt");
+        assert_eq!(windows_path("//server/share"), "\\\\server\\share");
     }
 
     #[test]
@@ -346,6 +396,10 @@ mod tests {
             "file:///D:/path/to/file"
         );
         assert_eq!(windows_uri("https://example.com"), "https://example.com");
+        assert_eq!(
+            windows_uri("file:////server/share"),
+            "file:////server/share"
+        );
     }
 
     #[test]
@@ -354,5 +408,25 @@ mod tests {
             windows_line_endings("one\ntwo\r\nthree"),
             "one\r\ntwo\r\nthree"
         );
+    }
+
+    #[test]
+    fn perf_arguments_reject_ambiguous_duplicates() {
+        for tokens in [
+            quote::quote!(iterations = 1, iterations = 2),
+            quote::quote!(weight = 10, weight = 20),
+            quote::quote!(critical, fluff),
+        ] {
+            assert!(parse_perf_args(tokens).is_err());
+        }
+    }
+
+    #[test]
+    fn perf_arguments_accept_one_value_of_each_kind() {
+        let args = parse_perf_args(quote::quote!(iterations = 4, weight = 80, important)).unwrap();
+
+        assert!(args.iterations.is_some());
+        assert!(args.weight.is_some());
+        assert!(args.importance.is_some());
     }
 }

@@ -5,7 +5,8 @@ rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
 publish = true
-description = "Utility macros for Kael"
+description = "Cross-platform fixture and performance-test macros for Kael"
+documentation = "https://docs.rs/kael_util_macros"
 keywords = ["macros", "utilities", "proc-macro", "kael"]
 categories = ["development-tools::procedural-macro-helpers"]
 authors.workspace = true
@@ -13,8 +14,12 @@ repository.workspace = true
 readme = "README.md"
 license.workspace = true
 
+[package.metadata.docs.rs]
+features = ["perf-enabled"]
+targets = []
+
 [features]
-perf-enabled = ["perf"]
+perf-enabled = ["dep:perf"]
 
 [lib]
 name = "kael_util_macros"
