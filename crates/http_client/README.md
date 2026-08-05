@@ -9,7 +9,9 @@ and base-URL wrappers compose over either choice.
 
 The `reqwest` feature is enabled by default. Transport implementations that only
 need Kael's traits and standard HTTP types can disable default features to avoid
-pulling Reqwest and Tokio.
+pulling Reqwest and Tokio. The bundled adapter reuses pooled clients for the
+standard redirect modes, honors `NO_PROXY`, and applies 30-second connect and
+five-minute total request timeouts.
 
 ```no_run
 # #[cfg(feature = "reqwest")]
