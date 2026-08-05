@@ -128,8 +128,9 @@ jobs:
         shell: bash
         run: brew install ffmpeg pkg-config
 
-      - name: Install Windows media dependencies
+      - name: Locate Windows vcpkg
         if: runner.os == 'Windows'
+        id: windows-vcpkg
         shell: pwsh
         run: |
           $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
@@ -140,8 +141,28 @@ jobs:
           if (-not (Test-Path $vcpkg)) {
             throw "vcpkg.exe was not found under $vcpkgRoot"
           }
+          $revision = git -C $vcpkgRoot rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) {
+            throw "failed to determine the vcpkg revision"
+          }
+          $binaryCache = Join-Path $env:LOCALAPPDATA "vcpkg\archives"
+          "revision=$revision" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "VCPKG_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          & $vcpkg install ffmpeg:x64-windows --clean-after-build
+          "VCPKG_DEFAULT_BINARY_CACHE=$binaryCache" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Restore Windows vcpkg binary cache
+        if: runner.os == 'Windows'
+        uses: actions/cache@v6
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-${{ runner.os }}-x64-windows-${{ steps.windows-vcpkg.outputs.revision }}-${{ hashFiles('scripts/ci/install-windows-deps.ps1') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-x64-windows-
+
+      - name: Install Windows media dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -File scripts/ci/install-windows-deps.ps1
 
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@stable
