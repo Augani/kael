@@ -16,7 +16,6 @@ readme = "README.md"
 [lib]
 name = "kael_render_graph"
 path = "src/lib.rs"
-doctest = false
 
 [dependencies.anyhow]
 workspace = true

@@ -1,18 +1,4 @@
-//! Render-graph: a pass/resource DAG with scheduling, transient-resource
-//! lifetimes, and — the hard part — a **time-varying cache-invalidation model**.
-//!
-//! An NLE composites by evaluating, per output frame, a DAG of GPU passes into
-//! offscreen buffers. Naïvely re-running the whole graph every frame is wasteful;
-//! naïvely caching sub-trees corrupts the preview when a clip frame or an effect
-//! keyframe changes. This crate models invalidation explicitly: every pass gets a
-//! cache key derived from **(topology + per-pass param hash + frame PTS + the
-//! cache keys of its producers)**, so a change propagates to exactly the passes
-//! whose output it can affect and no further.
-//!
-//! The graph here is GPU-agnostic — it computes *what* to execute and *what can
-//! be reused*; a backend executes it. This separation keeps the scheduling and
-//! invalidation logic pure and fully testable.
-
+#![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 
 use std::collections::VecDeque;
