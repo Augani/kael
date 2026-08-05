@@ -61,12 +61,18 @@ Use only the framework primitives:
 kael = "0.3"
 ```
 
-WebView support is opt-in. Native applications do not pull Wry, GTK, or WebKit;
-enable the feature only when web content is part of the product:
+WebView and the bundled Reqwest transport are opt-in. Primitive-only native
+applications do not pull Wry, GTK, WebKit, Reqwest, or Tokio; enable only the
+implementation batteries the product uses:
 
 ```toml
 [dependencies]
 kael = { version = "0.3", features = ["webview"] }
+```
+
+```toml
+[dependencies]
+kael = { version = "0.3", features = ["http-client"] }
 ```
 
 Specialized batteries stay explicit as well: use `auto-update` for signed

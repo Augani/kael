@@ -116,6 +116,7 @@ impl From<&'static str> for AsyncBody {
     }
 }
 
+#[cfg(feature = "reqwest")]
 impl TryFrom<reqwest::Body> for AsyncBody {
     type Error = anyhow::Error;
 

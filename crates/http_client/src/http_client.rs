@@ -9,20 +9,22 @@ use derive_more::Deref;
 use http::HeaderValue;
 pub use http::{self, Method, Request, Response, StatusCode, Uri};
 
-use futures::{StreamExt as _, future::BoxFuture};
+#[cfg(feature = "reqwest")]
+use futures::StreamExt as _;
+use futures::future::BoxFuture;
 use http::request::Builder;
 #[cfg(feature = "test-support")]
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 #[cfg(feature = "test-support")]
 use std::fmt;
-use std::{
-    any::type_name,
-    sync::{Arc, OnceLock},
-};
+#[cfg(feature = "reqwest")]
+use std::sync::OnceLock;
+use std::{any::type_name, sync::Arc};
 pub use url::Url;
 
-/// Maximum body size buffered by the reqwest adapter for a request or response.
+/// Maximum body size buffered by the optional reqwest adapter for a request or response.
+#[cfg(feature = "reqwest")]
 pub const MAX_BUFFERED_HTTP_BODY_BYTES: usize = 256 * 1024 * 1024;
 
 /// Controls how an HTTP request handles redirects.
@@ -35,8 +37,8 @@ pub enum RedirectPolicy {
     FollowLimit(u32),
     /// Follow redirects using the transport's safe upper bound.
     ///
-    /// [`ReqwestClient`] interprets this as a limit of 32 redirects because
-    /// reqwest does not expose an unbounded redirect policy.
+    /// The optional reqwest adapter interprets this as a limit of 32 redirects
+    /// because reqwest does not expose an unbounded redirect policy.
     FollowAll,
 }
 
@@ -345,11 +347,13 @@ pub fn read_no_proxy_from_env() -> Option<String> {
 /// This adapter is useful for applications and examples that want a
 /// batteries-included HTTP client without wiring a custom transport.
 #[derive(Clone)]
+#[cfg(feature = "reqwest")]
 pub struct ReqwestClient {
     user_agent: HeaderValue,
     proxy: Option<Url>,
 }
 
+#[cfg(feature = "reqwest")]
 impl ReqwestClient {
     /// Creates a reqwest-backed client with the given user agent.
     ///
@@ -459,6 +463,7 @@ impl ReqwestClient {
     }
 }
 
+#[cfg(feature = "reqwest")]
 impl HttpClient for ReqwestClient {
     fn type_name(&self) -> &'static str {
         type_name::<Self>()
