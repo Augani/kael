@@ -31,8 +31,9 @@ fn main() -> kael_storage::Result<()> {
 }
 ```
 
-Key enumeration and observer registration return `Result` so backend failures
-are never disguised as empty data. Observer callbacks receive
+Logical keys must be non-empty, no more than 4 KiB, and free of control
+characters. Key enumeration and observer registration return `Result` so
+backend failures are never disguised as empty data. Observer callbacks receive
 `Result<Option<T>>`, which distinguishes a missing key from a value that does
 not match the requested type.
 

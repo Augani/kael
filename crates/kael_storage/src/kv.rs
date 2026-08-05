@@ -19,6 +19,14 @@ use crate::{Error, Result, Subscription, platform};
 type Observer = Arc<dyn Fn(Option<Value>) + Send + Sync + 'static>;
 
 const MAX_JSON_STORE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_KEY_BYTES: usize = 4 * 1024;
+
+fn validate_key(key: &str) -> Result<()> {
+    if key.is_empty() || key.len() > MAX_KEY_BYTES || key.chars().any(char::is_control) {
+        return Err(Error::InvalidStorageKey);
+    }
+    Ok(())
+}
 
 struct KvState {
     values: BTreeMap<String, Value>,
@@ -218,6 +226,7 @@ impl SqliteKvStore {
 
 impl KvStore for JsonKvStore {
     fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
+        validate_key(key)?;
         let state = self.state.lock();
         let Some(value) = state.values.get(key).cloned() else {
             return Ok(None);
@@ -232,6 +241,7 @@ impl KvStore for JsonKvStore {
     }
 
     fn set<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
+        validate_key(key)?;
         let serialized = serde_json::to_value(value).map_err(|source| Error::SerializeValue {
             key: key.to_string(),
             source,
@@ -269,6 +279,7 @@ impl KvStore for JsonKvStore {
     }
 
     fn remove(&self, key: &str) -> Result<bool> {
+        validate_key(key)?;
         let observers = {
             let mut state = self.state.lock();
 
@@ -304,6 +315,7 @@ impl KvStore for JsonKvStore {
         T: DeserializeOwned + Send + 'static,
         F: Fn(Result<Option<T>>) + Send + Sync + 'static,
     {
+        validate_key(key)?;
         let observer = typed_observer(key, callback);
 
         let key = key.to_string();
@@ -337,6 +349,7 @@ impl KvStore for JsonKvStore {
 
 impl KvStore for SqliteKvStore {
     fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
+        validate_key(key)?;
         let connection = self.connection.lock();
         let Some(value) = load_value_from_connection(&connection, key)? else {
             return Ok(None);
@@ -351,6 +364,7 @@ impl KvStore for SqliteKvStore {
     }
 
     fn set<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
+        validate_key(key)?;
         let serialized = serde_json::to_value(value).map_err(|source| Error::SerializeValue {
             key: key.to_string(),
             source,
@@ -379,6 +393,7 @@ impl KvStore for SqliteKvStore {
     }
 
     fn remove(&self, key: &str) -> Result<bool> {
+        validate_key(key)?;
         let removed = {
             let connection = self.connection.lock();
             connection.execute("DELETE FROM kv_entries WHERE key = ?1", params![key])? > 0
@@ -401,8 +416,13 @@ impl KvStore for SqliteKvStore {
         let mut statement = connection.prepare("SELECT key FROM kv_entries ORDER BY key")?;
         let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
 
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(Error::from)
+        let keys = rows
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Error::from)?;
+        for key in &keys {
+            validate_key(key)?;
+        }
+        Ok(keys)
     }
 
     fn observe<T, F>(&self, key: &str, callback: F) -> Result<Subscription>
@@ -410,6 +430,7 @@ impl KvStore for SqliteKvStore {
         T: DeserializeOwned + Send + 'static,
         F: Fn(Result<Option<T>>) + Send + Sync + 'static,
     {
+        validate_key(key)?;
         let observer = typed_observer(key, callback);
 
         let key = key.to_string();
@@ -528,7 +549,11 @@ fn load_values(path: &Path) -> Result<BTreeMap<String, Value>> {
     ensure_json_store_size(metadata.len())?;
     let contents = std::fs::read(path).map_err(|source| Error::io(path.to_path_buf(), source))?;
     ensure_json_store_size(contents.len().try_into().unwrap_or(u64::MAX))?;
-    Ok(serde_json::from_slice(&contents)?)
+    let values: BTreeMap<String, Value> = serde_json::from_slice(&contents)?;
+    for key in values.keys() {
+        validate_key(key)?;
+    }
+    Ok(values)
 }
 
 fn ensure_json_store_size(actual: u64) -> Result<()> {
@@ -543,6 +568,9 @@ fn ensure_json_store_size(actual: u64) -> Result<()> {
 }
 
 fn persist_values(path: &Path, values: &BTreeMap<String, Value>) -> Result<()> {
+    for key in values.keys() {
+        validate_key(key)?;
+    }
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -568,6 +596,18 @@ fn persist_values(path: &Path, values: &BTreeMap<String, Value>) -> Result<()> {
         .map_err(|source| Error::io(path.to_path_buf(), source))?;
     file.persist(path)
         .map_err(|error| Error::io(path.to_path_buf(), error.error))?;
+    sync_parent_directory(directory)
+        .map_err(|source| Error::io(directory.to_path_buf(), source))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(directory: &Path) -> std::io::Result<()> {
+    std::fs::File::open(directory)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_directory: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
@@ -583,8 +623,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        Error, JsonKvStore, KvStore, MAX_JSON_STORE_BYTES, SqliteKvStore, ensure_json_store_size,
-        persist_values,
+        Error, JsonKvStore, KvStore, MAX_JSON_STORE_BYTES, MAX_KEY_BYTES, SqliteKvStore,
+        ensure_json_store_size, persist_values,
     };
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -777,6 +817,56 @@ mod tests {
             panic!("the callback must not run when initial loading fails");
         });
         assert!(matches!(result, Err(Error::DeserializeValue { .. })));
+    }
+
+    #[test]
+    fn stores_reject_invalid_logical_keys() {
+        let directory = tempdir().unwrap();
+        let json = JsonKvStore::open_at(directory.path().join("preferences.json")).unwrap();
+        let sqlite = SqliteKvStore::open_at(directory.path().join("preferences.sqlite3")).unwrap();
+
+        for key in ["", "line\nbreak"] {
+            assert!(matches!(
+                json.set(key, &"value"),
+                Err(Error::InvalidStorageKey)
+            ));
+            assert!(matches!(
+                sqlite.get::<String>(key),
+                Err(Error::InvalidStorageKey)
+            ));
+        }
+
+        let excessive = "k".repeat(MAX_KEY_BYTES + 1);
+        assert!(matches!(
+            json.observe::<String, _>(&excessive, |_| {}),
+            Err(Error::InvalidStorageKey)
+        ));
+        assert!(matches!(
+            sqlite.remove(&excessive),
+            Err(Error::InvalidStorageKey)
+        ));
+    }
+
+    #[test]
+    fn stores_reject_invalid_keys_already_on_disk() {
+        let directory = tempdir().unwrap();
+        let json_path = directory.path().join("preferences.json");
+        std::fs::write(&json_path, r#"{"line\nbreak":true}"#).unwrap();
+        assert!(matches!(
+            JsonKvStore::open_at(json_path),
+            Err(Error::InvalidStorageKey)
+        ));
+
+        let sqlite = SqliteKvStore::open_at(directory.path().join("preferences.sqlite3")).unwrap();
+        sqlite
+            .connection
+            .lock()
+            .execute(
+                "INSERT INTO kv_entries (key, value) VALUES (?1, ?2)",
+                params!["line\nbreak", "true"],
+            )
+            .unwrap();
+        assert!(matches!(sqlite.keys(), Err(Error::InvalidStorageKey)));
     }
 
     #[test]

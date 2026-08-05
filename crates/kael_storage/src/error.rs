@@ -46,6 +46,9 @@ pub enum Error {
     /// An application or database identifier was empty or contained path separators.
     #[error("invalid storage identifier: {0:?}")]
     InvalidStorageIdentifier(String),
+    /// A key was empty, excessive, or contained control characters.
+    #[error("storage key must be non-empty, at most 4096 bytes, and free of control characters")]
+    InvalidStorageKey,
     /// A JSON store exceeded its bounded on-disk size.
     #[error("JSON store is {actual} bytes, exceeding the {limit} byte limit")]
     JsonStoreTooLarge {
