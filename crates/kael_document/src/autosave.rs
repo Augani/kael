@@ -5,7 +5,6 @@ use std::{
     io::Write as _,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
 };
 
 use anyhow::{Context as _, Result};
@@ -14,20 +13,23 @@ use sha2::{Digest, Sha256};
 pub(crate) const MAX_DOCUMENT_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Configuration for document autosave.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutosaveConfig {
-    /// The nominal autosave interval.
-    pub interval: Duration,
     /// Where autosave snapshots are written.
     pub location: AutosaveLocation,
 }
 
+impl AutosaveConfig {
+    /// Creates autosave configuration for a recovery location.
+    pub const fn new(location: AutosaveLocation) -> Self {
+        Self { location }
+    }
+}
+
 impl Default for AutosaveConfig {
     fn default() -> Self {
-        Self {
-            interval: Duration::from_secs(30),
-            location: AutosaveLocation::SystemTemp,
-        }
+        Self::new(AutosaveLocation::SystemTemp)
     }
 }
 
@@ -99,7 +101,7 @@ pub(crate) fn write_autosave(path: &Path, bytes: &[u8]) -> Result<()> {
             .with_context(|| format!("failed to create autosave directory {}", parent.display()))?;
     }
 
-    write_bytes_atomically(path, bytes)
+    write_private_bytes_atomically(path, bytes)
 }
 
 pub(crate) fn clear_autosave(path: &Path) -> Result<()> {
@@ -112,6 +114,14 @@ pub(crate) fn clear_autosave(path: &Path) -> Result<()> {
 }
 
 pub(crate) fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_bytes_atomically_with_privacy(path, bytes, false)
+}
+
+pub(crate) fn write_private_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_bytes_atomically_with_privacy(path, bytes, true)
+}
+
+fn write_bytes_atomically_with_privacy(path: &Path, bytes: &[u8], private: bool) -> Result<()> {
     ensure_size(u64::try_from(bytes.len()).unwrap_or(u64::MAX))?;
     if let Some(parent) = path
         .parent()
@@ -138,9 +148,7 @@ pub(crate) fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     };
 
     let (temp_path, mut file) = create_temporary_file(path)?;
-    if let Some(permissions) = existing_permissions
-        && let Err(error) = file.set_permissions(permissions)
-    {
+    if let Err(error) = configure_temporary_permissions(&file, existing_permissions, private) {
         drop(file);
         let _ = std::fs::remove_file(&temp_path);
         return Err(error).with_context(|| {
@@ -177,6 +185,26 @@ pub(crate) fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+fn configure_temporary_permissions(
+    file: &std::fs::File,
+    existing_permissions: Option<std::fs::Permissions>,
+    private: bool,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    if private {
+        use std::os::unix::fs::PermissionsExt as _;
+        return file.set_permissions(std::fs::Permissions::from_mode(0o600));
+    }
+
+    #[cfg(not(unix))]
+    let _ = private;
+
+    if let Some(permissions) = existing_permissions {
+        file.set_permissions(permissions)?;
+    }
+    Ok(())
+}
+
 #[cfg(not(windows))]
 fn replace_file(temp_path: &Path, path: &Path) -> std::io::Result<()> {
     std::fs::rename(temp_path, path)
@@ -188,13 +216,34 @@ fn replace_file(temp_path: &Path, path: &Path) -> std::io::Result<()> {
         return std::fs::rename(temp_path, path);
     }
 
-    let backup_path = temp_path.with_extension("replace-backup");
-    std::fs::rename(path, &backup_path)?;
-    if let Err(error) = std::fs::rename(temp_path, path) {
-        let _ = std::fs::rename(&backup_path, path);
-        return Err(error);
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{REPLACEFILE_WRITE_THROUGH, ReplaceFileW};
+
+    let replaced = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let replacement = temp_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    // SAFETY: both paths are owned, NUL-terminated UTF-16 buffers that remain alive for the call;
+    // the optional backup and reserved pointers are intentionally null.
+    let replaced_ok = unsafe {
+        ReplaceFileW(
+            replaced.as_ptr(),
+            replacement.as_ptr(),
+            std::ptr::null(),
+            REPLACEFILE_WRITE_THROUGH,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    if replaced_ok == 0 {
+        return Err(std::io::Error::last_os_error());
     }
-    let _ = std::fs::remove_file(backup_path);
     Ok(())
 }
 
@@ -359,6 +408,22 @@ mod tests {
 
         assert_eq!(
             std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_writes_use_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("recovery");
+
+        write_private_bytes_atomically(&target, b"private").unwrap();
+
+        assert_eq!(
+            std::fs::metadata(target).unwrap().permissions().mode() & 0o777,
             0o600
         );
     }

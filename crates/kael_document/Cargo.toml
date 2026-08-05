@@ -5,7 +5,7 @@ rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
 publish = true
-description = "Document lifecycle services for Kael"
+description = "Atomic document persistence, recovery, undo history, versions, and recents for Kael"
 keywords = ["document", "versioning", "storage", "kael"]
 categories = ["text-processing", "data-structures"]
 authors.workspace = true
@@ -16,15 +16,9 @@ license.workspace = true
 [lib]
 name = "kael_document"
 path = "src/lib.rs"
-doctest = false
 
 [dependencies.anyhow]
 workspace = true
-
-[dependencies.kael_storage]
-path = "../kael_storage"
-package = "kael_storage"
-version = "0.3.0"
 
 [dependencies.parking_lot]
 version = "0.12.1"
@@ -41,6 +35,10 @@ version = "0.10"
 
 [dependencies.smol]
 workspace = true
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.59"
+features = ["Win32_Storage_FileSystem"]
 
 [dev-dependencies.futures]
 workspace = true

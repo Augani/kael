@@ -118,7 +118,7 @@ impl VersionStore {
         let mut versions = VecDeque::from(self.load(document_key)?);
         let digest = digest_hex(bytes);
         let blob_path = document_dir.join(format!("{digest}.bin"));
-        autosave::write_bytes_atomically(&blob_path, bytes).with_context(|| {
+        autosave::write_private_bytes_atomically(&blob_path, bytes).with_context(|| {
             format!(
                 "failed to write document version blob {}",
                 blob_path.display()
@@ -218,7 +218,7 @@ impl VersionStore {
             u64::try_from(json.len()).unwrap_or(u64::MAX) <= MAX_VERSION_METADATA_BYTES,
             "document version metadata exceeds the {MAX_VERSION_METADATA_BYTES} byte limit"
         );
-        autosave::write_bytes_atomically(&metadata_path, &json)
+        autosave::write_private_bytes_atomically(&metadata_path, &json)
     }
 
     fn document_dir(&self, document_key: &str) -> PathBuf {

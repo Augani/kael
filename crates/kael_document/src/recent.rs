@@ -134,7 +134,7 @@ fn persist_recent_documents(path: &Path, documents: &[RecentDocument]) -> Result
         u64::try_from(json.len()).unwrap_or(u64::MAX) <= MAX_RECENT_METADATA_BYTES,
         "recent document metadata exceeds the {MAX_RECENT_METADATA_BYTES} byte limit"
     );
-    autosave::write_bytes_atomically(path, &json)
+    autosave::write_private_bytes_atomically(path, &json)
 }
 
 fn now_unix_millis() -> u64 {

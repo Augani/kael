@@ -14,7 +14,7 @@ use anyhow::{Context as _, Result, anyhow};
 use parking_lot::Mutex;
 
 use crate::{
-    AutosaveConfig, FileType, RecentDocument, autosave,
+    AutosaveConfig, FileType, RecentDocument, Subscription, autosave,
     file_type::{default_file_type_index, file_type_index_for_path},
     recent::RecentDocumentStore,
     versions::{DocumentVersion, VersionStore},
@@ -131,9 +131,7 @@ impl<D: Document> DocumentController<D> {
     /// Creates a controller rooted in the platform-standard data directory.
     pub fn new(app_id: impl Into<String>) -> Result<Self> {
         let app_id = app_id.into();
-        let root = kael_storage::platform::ensure_storage_paths(&app_id)?
-            .data_dir
-            .join("documents");
+        let root = crate::platform::document_storage_root(&app_id)?;
         Self::new_in(app_id, root)
     }
 
@@ -305,7 +303,7 @@ impl<D: Document> DocumentHandle<D> {
 
     /// Applies an in-memory change to the document content.
     pub fn modify(&self, f: impl FnOnce(&mut D::Content)) -> Result<()> {
-        let (content, change_listeners, dirty_listeners, dirty_changed, dirty) = {
+        let (content, change_listeners, dirty_listeners, dirty_changed, dirty, autosave_result) = {
             let mut state = self.state.lock();
             let mut next_content = state.content.as_ref().clone();
             f(&mut next_content);
@@ -320,12 +318,6 @@ impl<D: Document> DocumentHandle<D> {
                 .last_saved_snapshot
                 .as_ref()
                 .is_none_or(|saved| saved.as_ref() != next_content.as_ref());
-            if dirty {
-                let autosave_bytes = D::write(next_content.as_ref(), &file_type)?;
-                autosave::write_autosave(&state.autosave_path, &autosave_bytes)?;
-            } else {
-                autosave::clear_autosave(&state.autosave_path)?;
-            }
 
             let previous_content = state.content.clone();
             push_history_entry(
@@ -339,6 +331,14 @@ impl<D: Document> DocumentHandle<D> {
             let content = state.content.clone();
             let previous_dirty = state.dirty;
             state.dirty = dirty;
+            let autosave_result = (|| {
+                if dirty {
+                    let autosave_bytes = D::write(state.content.as_ref(), &file_type)?;
+                    autosave::write_autosave(&state.autosave_path, &autosave_bytes)
+                } else {
+                    autosave::clear_autosave(&state.autosave_path)
+                }
+            })();
 
             (
                 content,
@@ -346,6 +346,7 @@ impl<D: Document> DocumentHandle<D> {
                 state.dirty_listeners.values().cloned().collect::<Vec<_>>(),
                 previous_dirty != state.dirty,
                 state.dirty,
+                autosave_result,
             )
         };
 
@@ -353,7 +354,9 @@ impl<D: Document> DocumentHandle<D> {
         if dirty_changed {
             notify_dirty_listeners(&dirty_listeners, dirty);
         }
-        Ok(())
+        autosave_result.context(
+            "document was modified, but its autosave recovery snapshot could not be updated",
+        )
     }
 
     /// Returns whether the document has unsaved changes.
@@ -499,7 +502,7 @@ impl<D: Document> DocumentHandle<D> {
             Ok::<_, anyhow::Error>(Arc::new(D::read(&bytes, &file_type)?))
         })
         .await?;
-        let (content, change_listeners, dirty_listeners, dirty_changed, dirty) = {
+        let (content, change_listeners, dirty_listeners, dirty_changed, dirty, autosave_result) = {
             let mut state = self.state.lock();
             anyhow::ensure!(
                 Arc::ptr_eq(&state.content, &previous_content)
@@ -516,13 +519,6 @@ impl<D: Document> DocumentHandle<D> {
                 .last_saved_snapshot
                 .as_ref()
                 .is_none_or(|saved| saved.as_ref() != content.as_ref());
-            if dirty {
-                let autosave_bytes = D::write(content.as_ref(), &file_type)?;
-                autosave::write_autosave(&state.autosave_path, &autosave_bytes)?;
-            } else {
-                autosave::clear_autosave(&state.autosave_path)?;
-            }
-
             let previous_content = state.content.clone();
             push_history_entry(
                 &mut state.undo_stack,
@@ -533,6 +529,14 @@ impl<D: Document> DocumentHandle<D> {
             state.content = content.clone();
             let previous_dirty = state.dirty;
             state.dirty = dirty;
+            let autosave_result = (|| {
+                if dirty {
+                    let autosave_bytes = D::write(state.content.as_ref(), &file_type)?;
+                    autosave::write_autosave(&state.autosave_path, &autosave_bytes)
+                } else {
+                    autosave::clear_autosave(&state.autosave_path)
+                }
+            })();
 
             (
                 content,
@@ -540,6 +544,7 @@ impl<D: Document> DocumentHandle<D> {
                 state.dirty_listeners.values().cloned().collect::<Vec<_>>(),
                 previous_dirty != state.dirty,
                 state.dirty,
+                autosave_result,
             )
         };
 
@@ -547,14 +552,16 @@ impl<D: Document> DocumentHandle<D> {
         if dirty_changed {
             notify_dirty_listeners(&dirty_listeners, dirty);
         }
-        Ok(())
+        autosave_result.context(
+            "document version was restored, but its autosave recovery snapshot could not be updated",
+        )
     }
 
     /// Registers a listener that fires when the document content changes.
     pub fn on_change(
         &self,
         callback: impl Fn(&D::Content) + Send + Sync + 'static,
-    ) -> kael_storage::Subscription {
+    ) -> Subscription {
         let state = self.state.clone();
         let listener_id = {
             let mut state = state.lock();
@@ -565,16 +572,13 @@ impl<D: Document> DocumentHandle<D> {
             listener_id
         };
 
-        kael_storage::Subscription::new(move || {
+        Subscription::new(move || {
             state.lock().change_listeners.remove(&listener_id);
         })
     }
 
     /// Registers a listener that fires when the dirty state changes.
-    pub fn on_dirty_change(
-        &self,
-        callback: impl Fn(bool) + Send + Sync + 'static,
-    ) -> kael_storage::Subscription {
+    pub fn on_dirty_change(&self, callback: impl Fn(bool) + Send + Sync + 'static) -> Subscription {
         let state = self.state.clone();
         let listener_id = {
             let mut state = state.lock();
@@ -585,7 +589,7 @@ impl<D: Document> DocumentHandle<D> {
             listener_id
         };
 
-        kael_storage::Subscription::new(move || {
+        Subscription::new(move || {
             state.lock().dirty_listeners.remove(&listener_id);
         })
     }
@@ -689,7 +693,7 @@ impl<D: Document> DocumentHandle<D> {
     }
 
     fn restore_history_entry(&self, undo: bool) -> Result<()> {
-        let (content, dirty, dirty_changed, change_listeners, dirty_listeners) = {
+        let (content, dirty, dirty_changed, change_listeners, dirty_listeners, autosave_result) = {
             let mut state = self.state.lock();
             let next_content = if undo {
                 let Some(previous) = state.undo_stack.back().cloned() else {
@@ -707,14 +711,6 @@ impl<D: Document> DocumentHandle<D> {
                 .last_saved_snapshot
                 .as_ref()
                 .is_none_or(|saved| saved.as_ref() != next_content.as_ref());
-            if dirty {
-                let file_type = *selected_file_type::<D>(&state)?;
-                let autosave_bytes = D::write(next_content.as_ref(), &file_type)?;
-                autosave::write_autosave(&state.autosave_path, &autosave_bytes)?;
-            } else {
-                autosave::clear_autosave(&state.autosave_path)?;
-            }
-
             let current_content = state.content.clone();
             if undo {
                 state.undo_stack.pop_back();
@@ -726,6 +722,15 @@ impl<D: Document> DocumentHandle<D> {
             state.content = next_content;
             let previous_dirty = state.dirty;
             state.dirty = dirty;
+            let autosave_result = (|| {
+                if dirty {
+                    let file_type = *selected_file_type::<D>(&state)?;
+                    let autosave_bytes = D::write(state.content.as_ref(), &file_type)?;
+                    autosave::write_autosave(&state.autosave_path, &autosave_bytes)
+                } else {
+                    autosave::clear_autosave(&state.autosave_path)
+                }
+            })();
 
             (
                 state.content.clone(),
@@ -733,6 +738,7 @@ impl<D: Document> DocumentHandle<D> {
                 previous_dirty != state.dirty,
                 state.change_listeners.values().cloned().collect::<Vec<_>>(),
                 state.dirty_listeners.values().cloned().collect::<Vec<_>>(),
+                autosave_result,
             )
         };
 
@@ -740,7 +746,9 @@ impl<D: Document> DocumentHandle<D> {
         if dirty_changed {
             notify_dirty_listeners(&dirty_listeners, dirty);
         }
-        Ok(())
+        autosave_result.context(
+            "document history was restored, but its autosave recovery snapshot could not be updated",
+        )
     }
 
     fn document_key(&self) -> Result<String> {
@@ -1045,10 +1053,7 @@ mod tests {
             directory.path(),
         )
         .unwrap()
-        .with_autosave_config(AutosaveConfig {
-            interval: std::time::Duration::from_secs(30),
-            location: AutosaveLocation::Custom(autosave_root),
-        });
+        .with_autosave_config(AutosaveConfig::new(AutosaveLocation::Custom(autosave_root)));
         let handle = controller.new_document();
         let path = directory.path().join("draft.txt");
 
@@ -1248,7 +1253,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_autosave_does_not_commit_a_modification() {
+    fn failed_autosave_keeps_the_modification_in_memory() {
         let directory = tempdir().unwrap();
         let autosave_root = directory.path().join("autosave");
         let controller = DocumentController::<TextDocument>::new_in(
@@ -1256,18 +1261,20 @@ mod tests {
             directory.path(),
         )
         .unwrap()
-        .with_autosave_config(AutosaveConfig {
-            interval: std::time::Duration::from_secs(30),
-            location: AutosaveLocation::Custom(autosave_root),
-        });
+        .with_autosave_config(AutosaveConfig::new(AutosaveLocation::Custom(autosave_root)));
         let handle = controller.new_document();
         let autosave_path = handle.state.lock().autosave_path.clone();
         std::fs::create_dir_all(&autosave_path).unwrap();
 
         assert!(handle.modify(|content| content.push_str("lost")).is_err());
+        assert_eq!(handle.content(), "lost");
+        assert!(handle.is_dirty());
+        assert!(handle.can_undo());
+
+        assert!(handle.undo().is_err());
         assert_eq!(handle.content(), "");
         assert!(!handle.is_dirty());
-        assert!(!handle.can_undo());
+        assert!(handle.can_redo());
     }
 
     #[test]
