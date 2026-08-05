@@ -170,10 +170,18 @@ fn generate_catalog(icons: &[IconAsset]) -> String {
     source.push_str("    pub fn from_slug(slug: &str) -> Option<Self> {\n");
     source.push_str("        match slug {\n");
     for icon in icons {
-        source.push_str(&format!(
-            "            \"{}\" => Some(Self::{}),\n",
-            icon.slug, icon.variant_name
-        ));
+        let kebab_slug = icon.slug.replace('_', "-");
+        if kebab_slug == icon.slug {
+            source.push_str(&format!(
+                "            \"{}\" => Some(Self::{}),\n",
+                icon.slug, icon.variant_name
+            ));
+        } else {
+            source.push_str(&format!(
+                "            \"{}\" | \"{}\" => Some(Self::{}),\n",
+                icon.slug, kebab_slug, icon.variant_name
+            ));
+        }
     }
     source.push_str("            _ => None,\n");
     source.push_str("        }\n");
