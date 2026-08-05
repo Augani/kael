@@ -2,14 +2,15 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
-    io::Write,
+    fs::File,
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
 
 use parking_lot::Mutex;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use tempfile::NamedTempFile;
@@ -20,6 +21,7 @@ type Observer = Arc<dyn Fn(Option<Value>) + Send + Sync + 'static>;
 
 const MAX_JSON_STORE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_KEY_BYTES: usize = 4 * 1024;
+const LEGACY_JSON_IMPORT_KEY: &str = "legacy-json-import-v1";
 
 fn validate_key(key: &str) -> Result<()> {
     if key.is_empty() || key.len() > MAX_KEY_BYTES || key.chars().any(char::is_control) {
@@ -159,7 +161,7 @@ impl SqliteKvStore {
         let paths = platform::ensure_storage_paths(app_id)?;
         let path = sqlite_preferences_path(&paths.preferences_path);
         let store = Self::open_at(&path)?;
-        store.import_legacy_json_if_empty(&paths.preferences_path)?;
+        store.import_legacy_json_once(&paths.preferences_path)?;
         Ok(store)
     }
 
@@ -193,25 +195,25 @@ impl SqliteKvStore {
         &self.path
     }
 
-    fn import_legacy_json_if_empty(&self, legacy_json_path: &Path) -> Result<()> {
-        if !legacy_json_path.exists() {
-            return Ok(());
-        }
-
+    fn import_legacy_json_once(&self, legacy_json_path: &Path) -> Result<()> {
         let mut connection = self.connection.lock();
-        let existing_rows: i64 =
-            connection.query_row("SELECT COUNT(*) FROM kv_entries", [], |row| row.get(0))?;
-        if existing_rows > 0 {
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let already_imported = transaction
+            .query_row(
+                "SELECT 1 FROM __kael_kv_metadata WHERE key = ?1",
+                params![LEGACY_JSON_IMPORT_KEY],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if already_imported {
             return Ok(());
         }
 
         let values = load_values(legacy_json_path)?;
-        if values.is_empty() {
-            return Ok(());
-        }
-
-        let transaction = connection.transaction()?;
-        {
+        let existing_rows: i64 =
+            transaction.query_row("SELECT COUNT(*) FROM kv_entries", [], |row| row.get(0))?;
+        if existing_rows == 0 && !values.is_empty() {
             let mut statement =
                 transaction.prepare("INSERT INTO kv_entries (key, value) VALUES (?1, ?2)")?;
             for (key, value) in values {
@@ -219,6 +221,10 @@ impl SqliteKvStore {
                 statement.execute(params![key, json])?;
             }
         }
+        transaction.execute(
+            "INSERT INTO __kael_kv_metadata (key) VALUES (?1)",
+            params![LEGACY_JSON_IMPORT_KEY],
+        )?;
         transaction.commit()?;
         Ok(())
     }
@@ -247,7 +253,7 @@ impl KvStore for JsonKvStore {
             source,
         })?;
 
-        let observers = {
+        let (observers, durability_error) = {
             let mut state = self.state.lock();
 
             if state.values.get(key) == Some(&serialized) {
@@ -255,32 +261,31 @@ impl KvStore for JsonKvStore {
             }
 
             let previous = state.values.insert(key.to_string(), serialized.clone());
-            if let Err(error) = persist_values(&self.path, &state.values) {
-                match previous {
-                    Some(previous) => {
-                        state.values.insert(key.to_string(), previous);
+            let durability_error = match persist_values(&self.path, &state.values) {
+                Ok(()) => None,
+                Err(error @ Error::DurabilityUncertain { .. }) => Some(error),
+                Err(error) => {
+                    match previous {
+                        Some(previous) => {
+                            state.values.insert(key.to_string(), previous);
+                        }
+                        None => {
+                            state.values.remove(key);
+                        }
                     }
-                    None => {
-                        state.values.remove(key);
-                    }
+                    return Err(error);
                 }
-                return Err(error);
-            }
-
-            state
-                .observers
-                .get(key)
-                .map(|obs| obs.values().cloned().collect::<Vec<_>>())
-                .unwrap_or_default()
+            };
+            (observers_for_key(&state.observers, key), durability_error)
         };
 
         Self::notify(observers, Some(serialized));
-        Ok(())
+        durability_error.map_or(Ok(()), Err)
     }
 
     fn remove(&self, key: &str) -> Result<bool> {
         validate_key(key)?;
-        let observers = {
+        let (observers, durability_error) = {
             let mut state = self.state.lock();
 
             if !state.values.contains_key(key) {
@@ -290,20 +295,19 @@ impl KvStore for JsonKvStore {
             let Some(previous) = state.values.remove(key) else {
                 return Ok(false);
             };
-            if let Err(error) = persist_values(&self.path, &state.values) {
-                state.values.insert(key.to_string(), previous);
-                return Err(error);
-            }
-
-            state
-                .observers
-                .get(key)
-                .map(|obs| obs.values().cloned().collect::<Vec<_>>())
-                .unwrap_or_default()
+            let durability_error = match persist_values(&self.path, &state.values) {
+                Ok(()) => None,
+                Err(error @ Error::DurabilityUncertain { .. }) => Some(error),
+                Err(error) => {
+                    state.values.insert(key.to_string(), previous);
+                    return Err(error);
+                }
+            };
+            (observers_for_key(&state.observers, key), durability_error)
         };
 
         Self::notify(observers, None);
-        Ok(true)
+        durability_error.map_or(Ok(true), Err)
     }
 
     fn keys(&self) -> Result<Vec<String>> {
@@ -466,7 +470,7 @@ impl KvStore for SqliteKvStore {
 fn configure_sqlite_kv_connection(connection: &Connection) -> Result<()> {
     connection.busy_timeout(Duration::from_secs(5))?;
     connection.execute_batch(
-        "PRAGMA journal_mode = WAL;\nPRAGMA synchronous = NORMAL;\nCREATE TABLE IF NOT EXISTS kv_entries (\n    key TEXT PRIMARY KEY,\n    value TEXT NOT NULL\n);",
+        "PRAGMA journal_mode = WAL;\nPRAGMA synchronous = NORMAL;\nCREATE TABLE IF NOT EXISTS kv_entries (\n    key TEXT PRIMARY KEY,\n    value TEXT NOT NULL\n);\nCREATE TABLE IF NOT EXISTS __kael_kv_metadata (\n    key TEXT PRIMARY KEY\n);",
     )?;
     Ok(())
 }
@@ -540,14 +544,21 @@ fn allocate_observer_id(
 }
 
 fn load_values(path: &Path) -> Result<BTreeMap<String, Value>> {
-    if !path.exists() {
-        return Ok(BTreeMap::new());
-    }
-
-    let metadata =
-        std::fs::metadata(path).map_err(|source| Error::io(path.to_path_buf(), source))?;
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(BTreeMap::new());
+        }
+        Err(source) => return Err(Error::io(path.to_path_buf(), source)),
+    };
+    let metadata = file
+        .metadata()
+        .map_err(|source| Error::io(path.to_path_buf(), source))?;
     ensure_json_store_size(metadata.len())?;
-    let contents = std::fs::read(path).map_err(|source| Error::io(path.to_path_buf(), source))?;
+    let mut contents = Vec::with_capacity(metadata.len().try_into().unwrap_or(0));
+    file.take(MAX_JSON_STORE_BYTES + 1)
+        .read_to_end(&mut contents)
+        .map_err(|source| Error::io(path.to_path_buf(), source))?;
     ensure_json_store_size(contents.len().try_into().unwrap_or(u64::MAX))?;
     let values: BTreeMap<String, Value> = serde_json::from_slice(&contents)?;
     for key in values.keys() {
@@ -596,8 +607,10 @@ fn persist_values(path: &Path, values: &BTreeMap<String, Value>) -> Result<()> {
         .map_err(|source| Error::io(path.to_path_buf(), source))?;
     file.persist(path)
         .map_err(|error| Error::io(path.to_path_buf(), error.error))?;
-    sync_parent_directory(directory)
-        .map_err(|source| Error::io(directory.to_path_buf(), source))?;
+    sync_parent_directory(directory).map_err(|source| Error::DurabilityUncertain {
+        path: path.to_path_buf(),
+        source,
+    })?;
     Ok(())
 }
 
@@ -886,7 +899,7 @@ mod tests {
         persist_values(&json_path, &values).unwrap();
 
         let store = SqliteKvStore::open_at(&sqlite_path).unwrap();
-        store.import_legacy_json_if_empty(&json_path).unwrap();
+        store.import_legacy_json_once(&json_path).unwrap();
 
         let restored = store.get::<Preferences>("preferences").unwrap();
         assert_eq!(
@@ -896,6 +909,23 @@ mod tests {
                 recent_ids: vec![1, 2, 3],
             })
         );
+    }
+
+    #[test]
+    fn sqlite_legacy_import_does_not_resurrect_deleted_values() {
+        let directory = tempdir().unwrap();
+        let json_path = directory.path().join("preferences.json");
+        let sqlite_path = directory.path().join("preferences.sqlite3");
+        let values = BTreeMap::from([("theme".to_string(), serde_json::to_value("dark").unwrap())]);
+        persist_values(&json_path, &values).unwrap();
+
+        let store = SqliteKvStore::open_at(sqlite_path).unwrap();
+        store.import_legacy_json_once(&json_path).unwrap();
+        assert!(store.remove("theme").unwrap());
+
+        std::fs::write(&json_path, "not valid JSON").unwrap();
+        store.import_legacy_json_once(&json_path).unwrap();
+        assert_eq!(store.get::<String>("theme").unwrap(), None);
     }
 
     #[test]

@@ -16,6 +16,18 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
+    /// A file replacement completed, but syncing its parent directory failed.
+    ///
+    /// The new value is visible to this process, but may not survive a system
+    /// crash because the directory entry could not be durably flushed.
+    #[error("data was committed at {path}, but syncing its parent directory failed: {source}")]
+    DurabilityUncertain {
+        /// The path that was atomically replaced.
+        path: PathBuf,
+        /// The source directory-sync error.
+        #[source]
+        source: std::io::Error,
+    },
     /// A SQLite operation failed.
     #[error("sqlite error: {0}")]
     Sql(#[from] rusqlite::Error),
