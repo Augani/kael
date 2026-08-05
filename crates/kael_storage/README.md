@@ -35,7 +35,8 @@ Logical keys must be non-empty, no more than 4 KiB, and free of control
 characters. Key enumeration and observer registration return `Result` so
 backend failures are never disguised as empty data. Observer callbacks receive
 `Result<Option<T>>`, which distinguishes a missing key from a value that does
-not match the requested type.
+not match the requested type. Notifications are serialized per observer and
+the initial value is always delivered before concurrent updates.
 
 Application and database identifiers are portable ASCII file names of at most
 200 bytes. They may contain letters, numbers, spaces, `.`, `_`, and `-`, but

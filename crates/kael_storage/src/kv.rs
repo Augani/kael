@@ -1,9 +1,10 @@
 //! Typed key-value storage backends.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, VecDeque},
     fs::File,
     io::{Read, Write},
+    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -17,7 +18,8 @@ use tempfile::NamedTempFile;
 
 use crate::{Error, Result, Subscription, platform};
 
-type Observer = Arc<dyn Fn(Option<Value>) + Send + Sync + 'static>;
+type ObserverCallback = Arc<dyn Fn(Option<Value>) + Send + Sync + 'static>;
+type Observer = Arc<QueuedObserver>;
 
 const MAX_JSON_STORE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_KEY_BYTES: usize = 4 * 1024;
@@ -28,6 +30,80 @@ fn validate_key(key: &str) -> Result<()> {
         return Err(Error::InvalidStorageKey);
     }
     Ok(())
+}
+
+struct ObserverDelivery {
+    queue: VecDeque<Option<Value>>,
+    delivering: bool,
+}
+
+struct QueuedObserver {
+    callback: ObserverCallback,
+    delivery: Mutex<ObserverDelivery>,
+}
+
+impl QueuedObserver {
+    fn pending(callback: ObserverCallback, initial_value: Option<Value>) -> Observer {
+        Arc::new(Self {
+            callback,
+            delivery: Mutex::new(ObserverDelivery {
+                queue: VecDeque::from([initial_value]),
+                delivering: true,
+            }),
+        })
+    }
+
+    fn activate(&self) {
+        self.drain();
+    }
+
+    fn notify(&self, value: Option<Value>) {
+        let should_drain = {
+            let mut delivery = self.delivery.lock();
+            delivery.queue.push_back(value);
+            if delivery.delivering {
+                false
+            } else {
+                delivery.delivering = true;
+                true
+            }
+        };
+        if should_drain {
+            self.drain();
+        }
+    }
+
+    fn drain(&self) {
+        let mut reset = DeliveryReset {
+            observer: self,
+            armed: true,
+        };
+        loop {
+            let value = {
+                let mut delivery = self.delivery.lock();
+                let Some(value) = delivery.queue.pop_front() else {
+                    delivery.delivering = false;
+                    reset.armed = false;
+                    return;
+                };
+                value
+            };
+            (self.callback)(value);
+        }
+    }
+}
+
+struct DeliveryReset<'a> {
+    observer: &'a QueuedObserver,
+    armed: bool,
+}
+
+impl Drop for DeliveryReset<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.observer.delivery.lock().delivering = false;
+        }
+    }
 }
 
 struct KvState {
@@ -60,7 +136,8 @@ pub trait KvStore: Send + Sync {
     ///
     /// Registration fails if the backend cannot read the current value. Later
     /// type mismatches are delivered to `callback` instead of being reported as
-    /// a missing value.
+    /// a missing value. Each observer receives serialized notifications in
+    /// arrival order, with the initial value first.
     fn observe<T, F>(&self, key: &str, callback: F) -> Result<Subscription>
     where
         T: DeserializeOwned + Send + 'static,
@@ -149,8 +226,15 @@ impl JsonKvStore {
     }
 
     fn notify(observers: Vec<Observer>, value: Option<Value>) {
+        let mut panic_payload = None;
         for observer in observers {
-            observer(value.clone());
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| observer.notify(value.clone())))
+            {
+                panic_payload.get_or_insert(payload);
+            }
+        }
+        if let Some(payload) = panic_payload {
+            resume_unwind(payload);
         }
     }
 }
@@ -320,26 +404,25 @@ impl KvStore for JsonKvStore {
         F: Fn(Result<Option<T>>) + Send + Sync + 'static,
     {
         validate_key(key)?;
-        let observer = typed_observer(key, callback);
+        let callback = typed_observer(key, callback);
 
         let key = key.to_string();
         let observer_id;
-        let current_value = {
+        let observer = {
             let mut state = self.state.lock();
             observer_id = state.allocate_observer_id();
+            let observer = QueuedObserver::pending(callback, state.values.get(&key).cloned());
             state
                 .observers
                 .entry(key.clone())
                 .or_default()
                 .insert(observer_id, observer.clone());
-            state.values.get(&key).cloned()
+            observer
         };
-
-        observer(current_value);
 
         let state = self.state.clone();
         let unsubscribe_key = key;
-        Ok(Subscription::new(move || {
+        let subscription = Subscription::new(move || {
             let mut state = state.lock();
             if let Some(observers) = state.observers.get_mut(&unsubscribe_key) {
                 observers.remove(&observer_id);
@@ -347,7 +430,9 @@ impl KvStore for JsonKvStore {
                     state.observers.remove(&unsubscribe_key);
                 }
             }
-        }))
+        });
+        observer.activate();
+        Ok(subscription)
     }
 }
 
@@ -435,27 +520,26 @@ impl KvStore for SqliteKvStore {
         F: Fn(Result<Option<T>>) + Send + Sync + 'static,
     {
         validate_key(key)?;
-        let observer = typed_observer(key, callback);
+        let callback = typed_observer(key, callback);
 
         let key = key.to_string();
-        let (observer_id, current_value) = {
+        let (observer_id, observer) = {
             let connection = self.connection.lock();
             let current_value = load_value_from_connection(&connection, &key)?;
             let mut state = self.observers.lock();
             let observer_id = state.allocate_observer_id();
+            let observer = QueuedObserver::pending(callback, current_value);
             state
                 .observers
                 .entry(key.clone())
                 .or_default()
                 .insert(observer_id, observer.clone());
-            (observer_id, current_value)
+            (observer_id, observer)
         };
-
-        observer(current_value);
 
         let observers = self.observers.clone();
         let unsubscribe_key = key;
-        Ok(Subscription::new(move || {
+        let subscription = Subscription::new(move || {
             let mut state = observers.lock();
             if let Some(observers) = state.observers.get_mut(&unsubscribe_key) {
                 observers.remove(&observer_id);
@@ -463,7 +547,9 @@ impl KvStore for SqliteKvStore {
                     state.observers.remove(&unsubscribe_key);
                 }
             }
-        }))
+        });
+        observer.activate();
+        Ok(subscription)
     }
 }
 
@@ -508,7 +594,7 @@ fn observers_for_key(
         .unwrap_or_default()
 }
 
-fn typed_observer<T, F>(key: &str, callback: F) -> Observer
+fn typed_observer<T, F>(key: &str, callback: F) -> ObserverCallback
 where
     T: DeserializeOwned + Send + 'static,
     F: Fn(Result<Option<T>>) + Send + Sync + 'static,
@@ -628,7 +714,7 @@ fn sync_parent_directory(_directory: &Path) -> std::io::Result<()> {
 mod tests {
     use std::{
         collections::BTreeMap,
-        sync::{Arc, Mutex},
+        sync::{Arc, Barrier, Mutex},
     };
 
     use rusqlite::params;
@@ -798,6 +884,68 @@ mod tests {
         store.set("theme", &42).unwrap();
 
         assert_eq!(*results.lock().unwrap(), vec![false, true]);
+    }
+
+    #[test]
+    fn observer_delivers_initial_value_before_a_concurrent_update() {
+        let directory = tempdir().unwrap();
+        let store =
+            Arc::new(JsonKvStore::open_at(directory.path().join("preferences.json")).unwrap());
+        let initial_started = Arc::new(Barrier::new(2));
+        let release_initial = Arc::new(Barrier::new(2));
+        let observed = Arc::new(Mutex::new(Vec::new()));
+
+        let observer_store = store.clone();
+        let observer_started = initial_started.clone();
+        let observer_release = release_initial.clone();
+        let observer_values = observed.clone();
+        let observer_thread = std::thread::spawn(move || {
+            let _subscription = observer_store
+                .observe::<String, _>("theme", move |value| {
+                    let value = value.unwrap();
+                    if value.is_none() {
+                        observer_started.wait();
+                        observer_release.wait();
+                    }
+                    observer_values.lock().unwrap().push(value);
+                })
+                .unwrap();
+        });
+
+        initial_started.wait();
+        store.set("theme", &"dark").unwrap();
+        release_initial.wait();
+        observer_thread.join().unwrap();
+
+        assert_eq!(
+            *observed.lock().unwrap(),
+            vec![None, Some("dark".to_string())]
+        );
+    }
+
+    #[test]
+    fn observer_delivery_is_reentrant_without_reordering() {
+        let directory = tempdir().unwrap();
+        let store =
+            Arc::new(JsonKvStore::open_at(directory.path().join("preferences.json")).unwrap());
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let callback_store = store.clone();
+        let callback_values = observed.clone();
+
+        let _subscription = store
+            .observe::<String, _>("theme", move |value| {
+                let value = value.unwrap();
+                if value.is_none() {
+                    callback_store.set("theme", &"dark").unwrap();
+                }
+                callback_values.lock().unwrap().push(value);
+            })
+            .unwrap();
+
+        assert_eq!(
+            *observed.lock().unwrap(),
+            vec![None, Some("dark".to_string())]
+        );
     }
 
     #[test]
