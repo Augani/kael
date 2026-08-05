@@ -30,5 +30,8 @@ version = "0.20"
 [dependencies.thiserror]
 workspace = true
 
+[dependencies.url]
+version = "2.5"
+
 [lints]
 workspace = true

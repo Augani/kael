@@ -4816,8 +4816,11 @@ fn validate_media_source(
             }
             Ok(())
         }
-        MediaSource::Bytes(bytes) => {
-            anyhow::ensure!(!bytes.is_empty(), "video source bytes cannot be empty");
+        MediaSource::Bytes(_) => {
+            anyhow::ensure!(
+                !source.byte_data().unwrap_or_default().is_empty(),
+                "video source bytes cannot be empty"
+            );
             Ok(())
         }
         MediaSource::Reader(_) => {
@@ -7733,10 +7736,7 @@ mod tests {
         controller.drain_events();
         controller.set_bytes(Arc::<[u8]>::from([4, 5, 6]));
 
-        let MediaSource::Bytes(bytes) = controller.source() else {
-            panic!("expected bytes source");
-        };
-        assert_eq!(bytes.as_ref(), &[4, 5, 6]);
+        assert_eq!(controller.source().byte_data(), Some(&[4, 5, 6][..]));
         assert_eq!(controller.audio_handle().source(), controller.source());
         assert_eq!(controller.metadata(), None);
         assert_eq!(controller.duration(), None);

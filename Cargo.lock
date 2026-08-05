@@ -3807,6 +3807,7 @@ dependencies = [
  "parking_lot",
  "rodio 0.20.1",
  "thiserror 2.0.18",
+ "url",
 ]
 
 [[package]]
