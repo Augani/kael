@@ -4,7 +4,7 @@ use std::fmt;
 use kael_secrets::SecretStore;
 
 /// An authentication token for a named service.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize, zeroize::Zeroize, zeroize::ZeroizeOnDrop)]
 pub struct AuthToken {
     /// The raw token string.
     pub token: String,
@@ -113,13 +113,13 @@ impl SecureTokenStore {
 
     /// Create a store using the platform's default secret backend (the OS
     /// keychain where available).
-    pub fn with_default_store(keychain_service: impl Into<String>) -> Self {
-        Self::new(keychain_service, kael_secrets::default_store())
+    pub fn with_default_store(keychain_service: impl Into<String>) -> anyhow::Result<Self> {
+        Ok(Self::new(keychain_service, kael_secrets::default_store()?))
     }
 
     /// Persist `token` for `service`, replacing any existing value.
     pub fn set(&self, service: &str, token: &AuthToken) -> anyhow::Result<()> {
-        let json = serde_json::to_vec(token)?;
+        let json = zeroize::Zeroizing::new(serde_json::to_vec(token)?);
         self.store
             .set_secret(&self.keychain_service, service, &json)
     }
@@ -127,7 +127,7 @@ impl SecureTokenStore {
     /// Load the token for `service`, or `None` if absent.
     pub fn get(&self, service: &str) -> anyhow::Result<Option<AuthToken>> {
         match self.store.get_secret(&self.keychain_service, service)? {
-            Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+            Some(bytes) => Ok(Some(serde_json::from_slice(bytes.expose_secret())?)),
             None => Ok(None),
         }
     }
