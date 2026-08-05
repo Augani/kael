@@ -1,13 +1,49 @@
 # kael_engines
 
-General-purpose workload engines for the Kael UI framework
+`kael_engines` provides dependency-light algorithms and state models that are
+useful across native applications. It can be used with Kael or on its own; none
+of its modules depend on Kael's renderer or UI crate.
 
-Domain-neutral building blocks any desktop application can use: Unicode text correctness (UAX#9 bidirectional text, UAX#14 line breaking), transactional undo, crash-report capture, and data models for common app shapes (canvas/design, dashboard, IDE).
+## Included primitives
 
-Media/NLE engines (timeline, compositing, export) live in the separate, optional [`kael_media_engines`](../kael_media_engines) crate, keeping this crate domain-neutral.
+- `bidi`: Unicode bidirectional classification, weak-type helpers, and visual
+  ordering through UAX #9 rule L2. Glyph shaping, cursor mapping, combining-mark
+  adjustment, and mirrored glyph selection belong in the text renderer.
+- `linebreak`: UAX #14 break opportunities with extended-grapheme-safe hard
+  wrapping for fixed-cell text. Proportional text should wrap using shaped glyph
+  advances.
+- `undo`: bounded snapshot undo/redo with transaction and coalescing helpers.
+- `canvas`: vector/canvas data types, export validation, visible-tile queries,
+  and a byte-bounded tile cache.
+- `crash_report`: bounded, serializable Rust panic records and a panic hook that
+  preserves an existing hook. Native faults still require the optional
+  `kael_diagnostics` out-of-process crash service.
+- `dashboard`: chart/query state and a bounded single-record CSV parser. The
+  query scheduler models lifecycle state; applications still execute queries.
+- `ide`: deterministic in-memory project/search models and language-server
+  lifecycle state. The application still owns file watching, durable indexing,
+  and operating-system process supervision.
 
-Part of the [Kael](https://github.com/Augani/kael) GPU-accelerated Rust UI framework. See the [documentation](https://augani.github.io/kael/) for usage and guides.
+## Undo example
+
+```rust
+use kael_engines::undo::UndoHistory;
+
+let mut document = UndoHistory::new(String::from("draft"));
+document.edit(|text| text.push_str(" one"));
+document.edit(|text| text.push_str(" two"));
+
+assert_eq!(document.current(), "draft one two");
+assert!(document.undo());
+assert_eq!(document.current(), "draft one");
+```
+
+All caches and parsers provided by this crate have explicit or conservative
+limits. Collections that represent application-owned data, such as project and
+search entries, remain caller-owned and intentionally grow only when the caller
+adds data.
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE-APACHE](LICENSE-APACHE).
+Licensed under the Apache License, Version 2.0. See
+[LICENSE-APACHE](LICENSE-APACHE).
