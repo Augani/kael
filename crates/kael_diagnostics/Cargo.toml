@@ -16,17 +16,6 @@ license.workspace = true
 [lib]
 name = "kael_diagnostics"
 path = "src/lib.rs"
-doctest = false
-
-[features]
-# Builds the crash_helper test binary. Off by default so the published crate
-# ships only the library; the native_crash integration test enables it.
-_crash_test_helper = []
-
-[[bin]]
-name = "crash_helper"
-path = "src/bin/crash_helper.rs"
-required-features = ["_crash_test_helper"]
 
 [dependencies.anyhow]
 workspace = true
@@ -35,6 +24,7 @@ workspace = true
 path = "../http_client"
 package = "kael_http_client"
 version = "0.3.0"
+default-features = false
 
 [dependencies.serde]
 workspace = true
@@ -42,6 +32,9 @@ features = ["derive"]
 
 [dependencies.serde_json]
 workspace = true
+
+[dependencies.tempfile]
+version = "3.20.0"
 
 [target.'cfg(unix)'.dependencies.libc]
 version = "0.2"
@@ -56,9 +49,6 @@ features = [
     "Win32_System_Kernel",
     "Win32_Security",
 ]
-
-[dev-dependencies.tempfile]
-version = "3.20.0"
 
 [dev-dependencies.pollster]
 version = "0.2"

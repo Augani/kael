@@ -1,48 +1,56 @@
 //! Real native-crash integration test.
 //!
-//! Spawns the `crash_helper` binary, which installs the native crash handler
-//! and then triggers a genuine SIGSEGV (null dereference) or SIGABRT. The
+//! Spawns this integration-test executable in a dedicated helper mode, installs
+//! the native crash handler, and triggers a genuine SIGSEGV or SIGABRT. The
 //! parent process asserts that the on-disk crash artifacts (meta marker + dump)
 //! were produced by the handler and parse into a submittable report.
-//!
-//! Requires the `_crash_test_helper` feature so the helper binary is built:
-//! `cargo test -p kael_diagnostics --features _crash_test_helper`.
 
 #![cfg(unix)]
 
-use std::{path::Path, process::Command, time::Duration};
+use std::{io::Write as _, path::Path, process::Command, time::Duration};
 
 use kael_diagnostics::{BreadcrumbBuffer, CrashConsent, CrashReporter};
 
-fn helper_path() -> &'static str {
-    env!("CARGO_BIN_EXE_crash_helper")
-}
-
-/// The helper binary is only built with the `_crash_test_helper` feature.
-/// Without it, Cargo still defines `CARGO_BIN_EXE_crash_helper` (so the path
-/// compiles) but no binary exists on disk; skip rather than fail in that case.
-fn helper_available() -> bool {
-    if Path::new(helper_path()).exists() {
-        true
-    } else {
-        eprintln!("skipping: build with --features _crash_test_helper to run real crash tests");
-        false
-    }
-}
-
 fn run_helper(reports_dir: &Path, mode: &str) -> (String, std::process::Output) {
-    let output = Command::new(helper_path())
-        .arg(reports_dir)
-        .arg(mode)
-        .output()
-        .expect("failed to spawn crash_helper");
+    let output =
+        Command::new(std::env::current_exe().expect("test executable should be available"))
+            .args(["--exact", "crash_helper_process", "--nocapture"])
+            .env("KAEL_CRASH_HELPER_DIR", reports_dir)
+            .env("KAEL_CRASH_HELPER_MODE", mode)
+            .output()
+            .expect("failed to spawn native-crash helper process");
     let session_id = String::from_utf8_lossy(&output.stdout)
         .lines()
-        .next()
+        .find_map(|line| line.trim().strip_prefix("KAEL_SESSION_ID="))
         .unwrap_or_default()
-        .trim()
         .to_string();
     (session_id, output)
+}
+
+#[test]
+fn crash_helper_process() {
+    let Some(reports_dir) = std::env::var_os("KAEL_CRASH_HELPER_DIR") else {
+        return;
+    };
+    let mode = std::env::var("KAEL_CRASH_HELPER_MODE").expect("helper mode should be set");
+    let mut reporter = CrashReporter::new(
+        "dev.kael.diagnostics.crash-helper",
+        BreadcrumbBuffer::new(8),
+    )
+    .unwrap();
+    reporter.set_reports_dir(reports_dir).unwrap();
+    reporter.install_native().unwrap();
+    println!("KAEL_SESSION_ID={}", reporter.session_id());
+    std::io::stdout().flush().unwrap();
+
+    match mode.as_str() {
+        "segv" => unsafe {
+            libc::raise(libc::SIGSEGV);
+        },
+        "abort" => std::process::abort(),
+        _ => panic!("unsupported crash mode {mode}"),
+    }
+    unreachable!("crash signal unexpectedly returned");
 }
 
 fn wait_for_dump(reports_dir: &Path, session_id: &str) -> Vec<u8> {
@@ -60,9 +68,6 @@ fn wait_for_dump(reports_dir: &Path, session_id: &str) -> Vec<u8> {
 
 #[test]
 fn captures_real_sigsegv() {
-    if !helper_available() {
-        return;
-    }
     let directory = tempfile::tempdir().unwrap();
     let (session_id, output) = run_helper(directory.path(), "segv");
 
@@ -122,9 +127,6 @@ fn captures_real_sigsegv() {
 
 #[test]
 fn captures_real_abort() {
-    if !helper_available() {
-        return;
-    }
     let directory = tempfile::tempdir().unwrap();
     let (session_id, output) = run_helper(directory.path(), "abort");
 

@@ -6,7 +6,7 @@ use std::{
     fs,
     io::Write,
     mem,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
@@ -184,9 +184,12 @@ impl Tracer {
         let name = name.into();
         let category = category.into();
         self.record(name.clone(), category.clone(), TracePhase::Begin);
-        let result = f();
-        self.record(name, category, TracePhase::End);
-        result
+        let _end = TraceEndGuard {
+            tracer: self.clone(),
+            name,
+            category,
+        };
+        f()
     }
 
     /// Returns a snapshot of retained events.
@@ -236,29 +239,46 @@ impl Tracer {
     pub fn write_to_file(&self, path: impl Into<PathBuf>) -> Result<()> {
         let json = self.export_to_chrome_json()?;
         let path = path.into();
-        if let Some(parent) = path
+        let parent = path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::create_dir_all(parent).with_context(|| {
-                format!("failed to create trace directory: {}", parent.display())
+            .unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create trace directory: {}", parent.display()))?;
+        let mut file = tempfile::Builder::new()
+            .prefix(".kael-trace-")
+            .tempfile_in(parent)
+            .with_context(|| {
+                format!(
+                    "failed to create temporary trace file in {}",
+                    parent.display()
+                )
             })?;
-        }
-        let temp = path.with_extension(format!("tmp.{}", std::process::id()));
-        let mut file = fs::File::create(&temp)
-            .with_context(|| format!("failed to create trace file: {}", temp.display()))?;
-        file.write_all(json.as_bytes())
-            .with_context(|| format!("failed to write trace file: {}", temp.display()))?;
-        file.sync_all()
-            .with_context(|| format!("failed to sync trace file: {}", temp.display()))?;
-        fs::rename(&temp, &path).with_context(|| {
-            format!(
-                "failed to finalize trace file from {} to {}",
-                temp.display(),
-                path.display()
-            )
+        file.as_file_mut()
+            .write_all(json.as_bytes())
+            .with_context(|| format!("failed to write trace file for {}", path.display()))?;
+        file.as_file()
+            .sync_all()
+            .with_context(|| format!("failed to sync trace file for {}", path.display()))?;
+        file.persist(&path).map_err(|error| {
+            anyhow::Error::new(error.error)
+                .context(format!("failed to finalize trace file: {}", path.display()))
         })?;
+        sync_directory(parent)?;
         Ok(())
+    }
+}
+
+struct TraceEndGuard {
+    tracer: Tracer,
+    name: String,
+    category: String,
+}
+
+impl Drop for TraceEndGuard {
+    fn drop(&mut self) {
+        self.tracer
+            .record(self.name.clone(), self.category.clone(), TracePhase::End);
     }
 }
 
@@ -282,7 +302,14 @@ pub struct MetricsSnapshot {
 /// An in-memory metrics registry.
 #[derive(Debug, Clone, Default)]
 pub struct MetricsRegistry {
-    inner: Arc<Mutex<MetricsSnapshot>>,
+    inner: Arc<Mutex<MetricsState>>,
+}
+
+#[derive(Debug, Default)]
+struct MetricsState {
+    gauges: BTreeMap<String, f64>,
+    counters: BTreeMap<String, i64>,
+    histograms: BTreeMap<String, VecDeque<f64>>,
 }
 
 impl MetricsRegistry {
@@ -329,17 +356,26 @@ impl MetricsRegistry {
         }
         let samples = inner.histograms.entry(name.to_string()).or_default();
         if samples.len() >= MAX_HISTOGRAM_SAMPLES {
-            samples.remove(0);
+            samples.pop_front();
         }
-        samples.push(value);
+        samples.push_back(value);
     }
 
     /// Returns a clone of the current metrics snapshot.
     pub fn snapshot(&self) -> MetricsSnapshot {
-        self.inner
+        let inner = self
+            .inner
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        MetricsSnapshot {
+            gauges: inner.gauges.clone(),
+            counters: inner.counters.clone(),
+            histograms: inner
+                .histograms
+                .iter()
+                .map(|(name, samples)| (name.clone(), samples.iter().copied().collect()))
+                .collect(),
+        }
     }
 }
 
@@ -347,6 +383,7 @@ impl MetricsRegistry {
 pub struct Transaction {
     tracer: Option<Tracer>,
     name: String,
+    finished: bool,
 }
 
 impl Transaction {
@@ -356,7 +393,11 @@ impl Transaction {
         if let Some(tracer) = tracer.as_ref() {
             tracer.record(name.clone(), "transaction", TracePhase::Begin);
         }
-        Self { tracer, name }
+        Self {
+            tracer,
+            name,
+            finished: false,
+        }
     }
 
     /// Starts a child span.
@@ -364,11 +405,24 @@ impl Transaction {
         Span::new(operation.to_string(), self.tracer.clone())
     }
 
-    /// Finishes the transaction.
-    pub fn finish(self) {
-        if let Some(tracer) = self.tracer {
-            tracer.record(self.name, "transaction", TracePhase::End);
+    /// Finishes the transaction. Dropping it also finishes it automatically.
+    pub fn finish(mut self) {
+        self.finish_once();
+    }
+
+    fn finish_once(&mut self) {
+        if !self.finished {
+            if let Some(tracer) = self.tracer.as_ref() {
+                tracer.record(self.name.clone(), "transaction", TracePhase::End);
+            }
+            self.finished = true;
         }
+    }
+}
+
+impl Drop for Transaction {
+    fn drop(&mut self) {
+        self.finish_once();
     }
 }
 
@@ -376,6 +430,7 @@ impl Transaction {
 pub struct Span {
     tracer: Option<Tracer>,
     operation: String,
+    finished: bool,
 }
 
 impl Span {
@@ -385,19 +440,49 @@ impl Span {
         if let Some(tracer) = tracer.as_ref() {
             tracer.record(operation.clone(), "span", TracePhase::Begin);
         }
-        Self { tracer, operation }
+        Self {
+            tracer,
+            operation,
+            finished: false,
+        }
     }
 
-    /// Finishes the span.
-    pub fn finish(self) {
-        if let Some(tracer) = self.tracer {
-            tracer.record(self.operation, "span", TracePhase::End);
+    /// Finishes the span. Dropping it also finishes it automatically.
+    pub fn finish(mut self) {
+        self.finish_once();
+    }
+
+    fn finish_once(&mut self) {
+        if !self.finished {
+            if let Some(tracer) = self.tracer.as_ref() {
+                tracer.record(self.operation.clone(), "span", TracePhase::End);
+            }
+            self.finished = true;
         }
+    }
+}
+
+impl Drop for Span {
+    fn drop(&mut self) {
+        self.finish_once();
     }
 }
 
 fn global_tracer_slot() -> &'static Mutex<Option<Tracer>> {
     GLOBAL_TRACER.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(unix)]
+fn sync_directory(directory: &Path) -> Result<()> {
+    fs::File::open(directory)
+        .with_context(|| format!("failed to open trace directory: {}", directory.display()))?
+        .sync_all()
+        .with_context(|| format!("failed to sync trace directory: {}", directory.display()))
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_directory: &Path) -> Result<()> {
+    Ok(())
 }
 
 fn current_thread_id() -> u64 {
@@ -439,7 +524,7 @@ fn valid_metric(name: &str, value: f64) -> bool {
     !name.is_empty() && name.len() <= MAX_NAME_BYTES && value.is_finite()
 }
 
-fn metric_count(snapshot: &MetricsSnapshot) -> usize {
+fn metric_count(snapshot: &MetricsState) -> usize {
     snapshot
         .gauges
         .len()
@@ -449,7 +534,9 @@ fn metric_count(snapshot: &MetricsSnapshot) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{MetricsRegistry, TraceEvent, TracePhase, Tracer, Transaction};
+    use super::{
+        MAX_HISTOGRAM_SAMPLES, MetricsRegistry, TraceEvent, TracePhase, Tracer, Transaction,
+    };
 
     #[test]
     fn tracer_records_events_when_enabled() {
@@ -503,6 +590,38 @@ mod tests {
     }
 
     #[test]
+    fn dropped_transactions_and_spans_emit_end_events_once() {
+        let tracer = Tracer::new(8);
+        tracer.enable();
+        {
+            let transaction = Transaction::new("load", Some(tracer.clone()));
+            let _span = transaction.start_span("sql");
+        }
+
+        let events = tracer.events();
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].phase, TracePhase::Begin);
+        assert_eq!(events[1].phase, TracePhase::Begin);
+        assert_eq!(events[2].phase, TracePhase::End);
+        assert_eq!(events[3].phase, TracePhase::End);
+    }
+
+    #[test]
+    fn record_duration_emits_end_when_the_closure_panics() {
+        let tracer = Tracer::new(8);
+        tracer.enable();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tracer.record_duration("work", "test", || panic!("stop"));
+        }));
+
+        assert!(result.is_err());
+        let events = tracer.events();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].phase, TracePhase::Begin);
+        assert_eq!(events[1].phase, TracePhase::End);
+    }
+
+    #[test]
     fn zero_capacity_tracer_retains_nothing() {
         let tracer = Tracer::new(0);
         tracer.enable();
@@ -521,5 +640,38 @@ mod tests {
         assert!(!snapshot.gauges.contains_key("bad"));
         assert!(!snapshot.histograms.contains_key("bad"));
         assert_eq!(snapshot.counters["requests"], i64::MAX);
+    }
+
+    #[test]
+    fn histograms_retain_the_newest_bounded_samples() {
+        let metrics = MetricsRegistry::default();
+        for value in 0..=MAX_HISTOGRAM_SAMPLES {
+            metrics.record_histogram("latency", value as f64);
+        }
+
+        let snapshot = metrics.snapshot();
+        let samples = &snapshot.histograms["latency"];
+        assert_eq!(samples.len(), MAX_HISTOGRAM_SAMPLES);
+        assert_eq!(samples[0], 1.0);
+        assert_eq!(
+            samples[MAX_HISTOGRAM_SAMPLES - 1],
+            MAX_HISTOGRAM_SAMPLES as f64
+        );
+    }
+
+    #[test]
+    fn trace_export_replaces_existing_file_atomically() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("trace.json");
+        std::fs::write(&path, "old").unwrap();
+        let tracer = Tracer::new(8);
+        tracer.enable();
+        tracer.record("event", "test", TracePhase::Instant);
+
+        tracer.write_to_file(&path).unwrap();
+
+        let events: Vec<TraceEvent> =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(events.len(), 1);
     }
 }
