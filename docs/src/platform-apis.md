@@ -39,6 +39,16 @@ platform WebView dependencies:
 kael = { version = "0.3", features = ["webview"] }
 ```
 
+The core exports the `HttpClient` interface without selecting a transport.
+Enable `http-client` for Kael's Reqwest adapter, supply an app-owned transport,
+or use `kael_ui`'s default `http` feature, which enables the adapter for remote
+assets:
+
+```toml
+[dependencies]
+kael = { version = "0.3", features = ["http-client"] }
+```
+
 Use `wayland` instead of, or alongside, `x11` as required. Other product
 services are opt-in through core features or their focused crates. Enable
 `auto-update` for Kael's signed-feed, checked-download, and platform-installer
@@ -57,7 +67,7 @@ features off keeps their implementation dependencies out of the application.
 | Credentials | `kael_secrets` | Keychain, Credential Manager, or Secret Service |
 | Documents and PDF | `kael_document`, `kael_pdf` | Lifecycle, autosave, versions, and PDF operations |
 | Sharing | `kael_share` or core `share` feature | Destination coverage differs by OS |
-| Networking | `kael_http_client`, `kael_net` | HTTP plus higher-level network policy/state |
+| Networking | core `http-client`, `kael_http_client`, `kael_net` | Optional Reqwest transport plus higher-level network policy/state |
 | Diagnostics | `kael_diagnostics` | Bounded logs, metrics, reports, crash helper |
 | Updates | `kael_release` and core `auto-update` feature | Signed feeds and product-controlled installation |
 | Media | `kael-media`, `kael_audio`, engine crates | Opt-in due to codecs and platform dependencies |

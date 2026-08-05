@@ -32,6 +32,7 @@ exclude = [
 features = [
     "agent-tools",
     "auto-update",
+    "http-client",
     "image-avif",
     "image-exr",
     "icons",
@@ -67,6 +68,7 @@ macos-blade = [
     "objc2-metal",
 ]
 runtime_shaders = []
+http-client = ["http_client/reqwest"]
 webview = ["dep:gtk", "dep:wry"]
 media = ["kael_media"]
 storage = ["dep:kael_storage"]
@@ -300,6 +302,7 @@ optional = true
 path = "../http_client"
 package = "kael_http_client"
 version = "0.3.0"
+default-features = false
 
 [dependencies.image]
 version = "0.25.1"
@@ -499,6 +502,7 @@ path = "../http_client"
 features = ["test-support"]
 package = "kael_http_client"
 version = "0.3.0"
+default-features = false
 
 [dev-dependencies.lyon]
 version = "1.0"

@@ -97,7 +97,7 @@ rodio = { version = "0.19", optional = true }
 
 [features]
 default = ["http"]
-http = []
+http = ["kael/http-client"]
 media = ["kael/media"]
 markdown = ["pulldown-cmark"]
 html-render = ["html5ever", "markup5ever_rcdom"]

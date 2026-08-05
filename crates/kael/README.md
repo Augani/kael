@@ -65,6 +65,7 @@ Kael targets macOS (Metal), Windows (DirectX 11), and Linux X11/Wayland
 
 | Feature | Purpose |
 | --- | --- |
+| `http-client` | Bundled Reqwest transport; the transport trait remains available without it |
 | `auto-update` | Signed feeds, verified downloads, and platform installers |
 | `lottie` | Native Lottie and dotLottie playback |
 | `webview` | Explicit hosted web surfaces |

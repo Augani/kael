@@ -77,7 +77,7 @@ kael_ui::set_icon_base_path("assets/icons");
 
 | Feature | Default | Purpose |
 | --- | --- | --- |
-| `http` | yes | Remote images and HTTP-backed assets |
+| `http` | yes | Reqwest transport for remote images and HTTP-backed assets |
 | `markdown` | no | Markdown rendering |
 | `html-render` | no | Native HTML document rendering |
 | `audio` | no | Audio-player integration |

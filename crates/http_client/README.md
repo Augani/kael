@@ -7,9 +7,17 @@ request and response types behind an object-safe `HttpClient` trait. Application
 can provide their own transport or use the included `ReqwestClient`. Proxy-aware
 and base-URL wrappers compose over either choice.
 
+The `reqwest` feature is enabled by default. Transport implementations that only
+need Kael's traits and standard HTTP types can disable default features to avoid
+pulling Reqwest and Tokio. The bundled adapter reuses pooled clients for the
+standard redirect modes, honors `NO_PROXY`, and applies 30-second connect and
+five-minute total request timeouts.
+
 ```no_run
+# #[cfg(feature = "reqwest")]
 use kael_http_client::{AsyncBody, HttpClient, Request, ReqwestClient};
 
+# #[cfg(feature = "reqwest")]
 # async fn fetch() -> kael_http_client::Result<()> {
 let client = ReqwestClient::user_agent("my-app/1.0")?;
 let request = Request::get("https://example.com/status")

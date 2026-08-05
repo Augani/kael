@@ -20,6 +20,7 @@ case "$mode" in
     # repository-only Astryx showcase. This is the workspace-wide quality gate.
     run cargo clippy --workspace --all-targets --all-features -- -D warnings
     run cargo test --workspace --all-targets --all-features
+    run cargo check -p kael_http_client --no-default-features
     run cargo check -p kael --lib --features "platform-foundation"
     run cargo check -p kael --lib --features "document"
     run cargo check -p kael --lib --features "pdf"

@@ -64,6 +64,7 @@ jobs:
         run: |
           cargo doc -p kael --features "agent-tools runtime_shaders" --no-deps
           cargo doc -p kael_ui --features "html-render markdown kael/runtime_shaders" --no-deps
+          cargo doc -p kael_http_client --no-default-features --no-deps
           cargo doc -p kael_media_sys --target aarch64-apple-darwin --no-deps
 
       - name: Check all-feature API documentation
@@ -310,9 +311,6 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-
-      - name: Install Linux dependencies
-        run: bash scripts/ci/install-linux-deps.sh
 
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@stable
