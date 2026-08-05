@@ -6,12 +6,17 @@ homepage.workspace = true
 version.workspace = true
 publish = true
 description = "Cross-platform audio playback, capture, mixing, DSP, and spatial services for Kael"
+documentation = "https://docs.rs/kael_audio"
 keywords = ["audio", "playback", "sound", "kael"]
 categories = ["multimedia::audio"]
 authors.workspace = true
 repository.workspace = true
 readme = "README.md"
 license.workspace = true
+
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
 
 [lib]
 name = "kael_audio"
