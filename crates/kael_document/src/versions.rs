@@ -75,12 +75,17 @@ impl VersionStore {
             return Ok(Vec::new());
         }
 
-        let metadata = std::fs::metadata(&metadata_path).with_context(|| {
+        let metadata = std::fs::symlink_metadata(&metadata_path).with_context(|| {
             format!(
                 "failed to inspect document version metadata at {}",
                 metadata_path.display()
             )
         })?;
+        anyhow::ensure!(
+            metadata.file_type().is_file(),
+            "document version metadata {} is not a regular file",
+            metadata_path.display()
+        );
         anyhow::ensure!(
             metadata.len() <= MAX_VERSION_METADATA_BYTES,
             "document version metadata exceeds the {MAX_VERSION_METADATA_BYTES} byte limit"
@@ -134,20 +139,23 @@ impl VersionStore {
         };
         versions.push_back(version.clone());
 
+        let mut stale_digests = Vec::new();
         while versions.len() > self.max_versions {
             if let Some(removed) = versions.pop_front() {
                 if versions
                     .iter()
                     .all(|candidate| candidate.digest != removed.digest)
                 {
-                    let removed_blob = document_dir.join(format!("{}.bin", removed.digest));
-                    let _ = std::fs::remove_file(removed_blob);
+                    stale_digests.push(removed.digest);
                 }
             }
         }
 
         let versions = versions.into_iter().collect::<Vec<_>>();
         self.persist_versions(document_key, &versions)?;
+        for digest in stale_digests {
+            let _ = std::fs::remove_file(document_dir.join(format!("{digest}.bin")));
+        }
         Ok(version)
     }
 
@@ -161,12 +169,17 @@ impl VersionStore {
         let blob_path = self
             .document_dir(document_key)
             .join(format!("{}.bin", stored.digest));
-        let metadata = std::fs::metadata(&blob_path).with_context(|| {
+        let metadata = std::fs::symlink_metadata(&blob_path).with_context(|| {
             format!(
                 "failed to inspect document version blob {}",
                 blob_path.display()
             )
         })?;
+        anyhow::ensure!(
+            metadata.file_type().is_file(),
+            "document version blob {} is not a regular file",
+            blob_path.display()
+        );
         autosave::ensure_size(metadata.len())?;
         let bytes = std::fs::read(&blob_path).with_context(|| {
             format!(

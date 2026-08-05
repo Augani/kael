@@ -12,7 +12,6 @@ use std::{
 
 use anyhow::{Context as _, Result, anyhow};
 use parking_lot::Mutex;
-use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
     AutosaveConfig, FileType, RecentDocument, autosave,
@@ -28,7 +27,7 @@ type Snapshot<T> = Arc<T>;
 /// A document format supported by the controller.
 pub trait Document: Send + Sync + 'static {
     /// The document content model.
-    type Content: Serialize + DeserializeOwned + Clone + PartialEq + Send + Sync;
+    type Content: Clone + PartialEq + Send + Sync;
 
     /// Returns the supported file types for this document.
     fn file_types() -> &'static [FileType];
@@ -44,16 +43,33 @@ pub trait Document: Send + Sync + 'static {
 }
 
 /// A controller that manages documents of a specific type.
-#[derive(Clone)]
 pub struct DocumentController<D: Document> {
     inner: Arc<ControllerState<D>>,
 }
 
 /// A mutable document handle managed by a controller.
-#[derive(Clone)]
 pub struct DocumentHandle<D: Document> {
     controller: Arc<ControllerState<D>>,
     state: Arc<Mutex<DocumentState<D>>>,
+    file_operation_lock: Arc<smol::lock::Mutex<()>>,
+}
+
+impl<D: Document> Clone for DocumentController<D> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<D: Document> Clone for DocumentHandle<D> {
+    fn clone(&self) -> Self {
+        Self {
+            controller: self.controller.clone(),
+            state: self.state.clone(),
+            file_operation_lock: self.file_operation_lock.clone(),
+        }
+    }
 }
 
 struct ControllerState<D: Document> {
@@ -62,8 +78,24 @@ struct ControllerState<D: Document> {
     recent_store: RecentDocumentStore,
     version_store: VersionStore,
     max_history_depth: usize,
-    next_untitled_id: AtomicU64,
+    next_untitled_id: Arc<AtomicU64>,
+    metadata_lock: Arc<Mutex<()>>,
     _marker: PhantomData<fn() -> D>,
+}
+
+impl<D: Document> Clone for ControllerState<D> {
+    fn clone(&self) -> Self {
+        Self {
+            app_id: self.app_id.clone(),
+            autosave_config: self.autosave_config.clone(),
+            recent_store: self.recent_store.clone(),
+            version_store: self.version_store.clone(),
+            max_history_depth: self.max_history_depth,
+            next_untitled_id: self.next_untitled_id.clone(),
+            metadata_lock: self.metadata_lock.clone(),
+            _marker: PhantomData,
+        }
+    }
 }
 
 struct DocumentState<D: Document> {
@@ -123,7 +155,8 @@ impl<D: Document> DocumentController<D> {
                 recent_store: RecentDocumentStore::new_in(storage_root, 50)?,
                 version_store: VersionStore::new_in(storage_root, 20)?,
                 max_history_depth: 100,
-                next_untitled_id: AtomicU64::new(1),
+                next_untitled_id: Arc::new(AtomicU64::new(1)),
+                metadata_lock: Arc::new(Mutex::new(())),
                 _marker: PhantomData,
             }),
         })
@@ -131,17 +164,13 @@ impl<D: Document> DocumentController<D> {
 
     /// Returns a controller configured with a custom autosave strategy.
     pub fn with_autosave_config(mut self, autosave_config: AutosaveConfig) -> Self {
-        if let Some(inner) = Arc::get_mut(&mut self.inner) {
-            inner.autosave_config = autosave_config;
-        }
+        Arc::make_mut(&mut self.inner).autosave_config = autosave_config;
         self
     }
 
     /// Returns a controller configured with a custom undo history depth.
     pub fn with_history_limit(mut self, max_history_depth: usize) -> Self {
-        if let Some(inner) = Arc::get_mut(&mut self.inner) {
-            inner.max_history_depth = max_history_depth.max(1);
-        }
+        Arc::make_mut(&mut self.inner).max_history_depth = max_history_depth.max(1);
         self
     }
 
@@ -174,6 +203,7 @@ impl<D: Document> DocumentController<D> {
                 change_listeners: BTreeMap::new(),
                 dirty_listeners: BTreeMap::new(),
             })),
+            file_operation_lock: Arc::new(smol::lock::Mutex::new(())),
         }
     }
 
@@ -219,6 +249,7 @@ impl<D: Document> DocumentController<D> {
 
                 // Recent-document tracking is ancillary and must not make an otherwise valid
                 // document impossible to open. Callers can still inspect or clear the store.
+                let _metadata_guard = controller.metadata_lock.lock();
                 let _ = controller.recent_store.record(&path);
 
                 Ok((
@@ -249,16 +280,19 @@ impl<D: Document> DocumentController<D> {
                 change_listeners: BTreeMap::new(),
                 dirty_listeners: BTreeMap::new(),
             })),
+            file_operation_lock: Arc::new(smol::lock::Mutex::new(())),
         })
     }
 
     /// Returns the recent documents tracked by this controller.
     pub fn recent_documents(&self) -> Result<Vec<RecentDocument>> {
+        let _metadata_guard = self.inner.metadata_lock.lock();
         self.inner.recent_store.load()
     }
 
     /// Clears the stored recent-document list.
     pub fn clear_recent(&self) -> Result<()> {
+        let _metadata_guard = self.inner.metadata_lock.lock();
         self.inner.recent_store.clear()
     }
 }
@@ -334,6 +368,8 @@ impl<D: Document> DocumentHandle<D> {
 
     /// Saves the document back to its current path.
     pub async fn save(&self) -> Result<()> {
+        let operation_lock = self.file_operation_lock.clone();
+        let _operation_guard = operation_lock.lock().await;
         let path = self
             .state
             .lock()
@@ -345,12 +381,16 @@ impl<D: Document> DocumentHandle<D> {
 
     /// Saves the document to a new path.
     pub async fn save_as(&self, path: impl AsRef<Path>) -> Result<()> {
+        let operation_lock = self.file_operation_lock.clone();
+        let _operation_guard = operation_lock.lock().await;
         self.save_to_path(normalize_path(path.as_ref())?, true)
             .await
     }
 
     /// Reverts the document to the most recently saved on-disk version.
     pub async fn revert(&self) -> Result<()> {
+        let operation_lock = self.file_operation_lock.clone();
+        let _operation_guard = operation_lock.lock().await;
         let (path, file_type_index, previous_content, autosave_path) = {
             let state = self.state.lock();
             (
@@ -426,17 +466,47 @@ impl<D: Document> DocumentHandle<D> {
     /// Returns the persisted versions for the current file-backed document.
     pub fn versions(&self) -> Result<Vec<DocumentVersion>> {
         let document_key = self.document_key()?;
+        let _metadata_guard = self.controller.metadata_lock.lock();
         self.controller.version_store.load(&document_key)
     }
 
     /// Restores a persisted version into the current document without saving it.
     pub async fn restore_version(&self, version: &DocumentVersion) -> Result<()> {
-        let document_key = self.document_key()?;
-        let bytes = self.controller.version_store.read(&document_key, version)?;
+        let operation_lock = self.file_operation_lock.clone();
+        let _operation_guard = operation_lock.lock().await;
+        let (document_key, path, file_type_index, previous_content) = {
+            let state = self.state.lock();
+            let path = state
+                .file_path
+                .clone()
+                .ok_or_else(|| anyhow!("document does not have a file path yet"))?;
+            (
+                document_key(&path),
+                path,
+                state.file_type_index,
+                state.content.clone(),
+            )
+        };
+        let file_type = *D::file_types()
+            .get(file_type_index)
+            .ok_or_else(|| anyhow!("invalid file type index {file_type_index}"))?;
+        let version_store = self.controller.version_store.clone();
+        let metadata_lock = self.controller.metadata_lock.clone();
+        let version = version.clone();
+        let content = smol::unblock(move || {
+            let _metadata_guard = metadata_lock.lock();
+            let bytes = version_store.read(&document_key, &version)?;
+            Ok::<_, anyhow::Error>(Arc::new(D::read(&bytes, &file_type)?))
+        })
+        .await?;
         let (content, change_listeners, dirty_listeners, dirty_changed, dirty) = {
             let mut state = self.state.lock();
-            let file_type = *selected_file_type::<D>(&state)?;
-            let content = Arc::new(D::read(&bytes, &file_type)?);
+            anyhow::ensure!(
+                Arc::ptr_eq(&state.content, &previous_content)
+                    && state.file_path.as_ref() == Some(&path)
+                    && state.file_type_index == file_type_index,
+                "document changed while version restore was in progress"
+            );
 
             if content.as_ref() == state.content.as_ref() {
                 return Ok(());
@@ -564,6 +634,7 @@ impl<D: Document> DocumentHandle<D> {
             let bytes = D::write(save_content.as_ref(), file_type)?;
             autosave::write_bytes_atomically(&save_path, &bytes)?;
             Ok((|| {
+                let _metadata_guard = controller.metadata_lock.lock();
                 controller.recent_store.record(&save_path).context(
                     "document was saved, but its recent-document entry could not be updated",
                 )?;
@@ -611,7 +682,9 @@ impl<D: Document> DocumentHandle<D> {
             notify_dirty_listeners(&dirty_listeners, dirty);
         }
 
-        autosave_result?;
+        autosave_result.context(
+            "document was saved, but its autosave recovery snapshot could not be updated",
+        )?;
         ancillary_result
     }
 
@@ -721,18 +794,43 @@ fn notify_dirty_listeners(listeners: &[DirtyListener], dirty: bool) {
 }
 
 fn normalize_path(path: &Path) -> Result<PathBuf> {
-    if path.is_absolute() {
-        return Ok(path.to_path_buf());
-    }
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .context("failed to resolve current working directory")?
+            .join(path)
+    };
 
-    Ok(std::env::current_dir()
-        .context("failed to resolve current working directory")?
-        .join(path))
+    match std::fs::canonicalize(&absolute) {
+        Ok(canonical) => Ok(canonical),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let Some((parent, file_name)) = absolute.parent().zip(absolute.file_name()) else {
+                return Ok(absolute);
+            };
+            match std::fs::canonicalize(parent) {
+                Ok(canonical_parent) => Ok(canonical_parent.join(file_name)),
+                Err(parent_error) if parent_error.kind() == std::io::ErrorKind::NotFound => {
+                    Ok(absolute)
+                }
+                Err(parent_error) => Err(parent_error).with_context(|| {
+                    format!("failed to resolve document parent {}", parent.display())
+                }),
+            }
+        }
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to resolve document path {}", absolute.display())),
+    }
 }
 
 fn read_document_bytes(path: &Path) -> Result<Vec<u8>> {
-    let metadata = std::fs::metadata(path)
+    let metadata = std::fs::symlink_metadata(path)
         .with_context(|| format!("failed to inspect document at {}", path.display()))?;
+    anyhow::ensure!(
+        metadata.file_type().is_file(),
+        "document {} is not a regular file",
+        path.display()
+    );
     autosave::ensure_size(metadata.len())?;
     let bytes = std::fs::read(path)
         .with_context(|| format!("failed to read document from {}", path.display()))?;
@@ -748,11 +846,10 @@ fn document_key(path: &Path) -> String {
 mod tests {
     use std::{
         sync::atomic::{AtomicUsize, Ordering},
-        sync::{Arc, Mutex},
+        sync::{Arc, Condvar, Mutex, OnceLock},
     };
 
     use futures::executor::block_on;
-    use serde::{Deserialize, Serialize};
     use tempfile::tempdir;
 
     use crate::{AutosaveConfig, AutosaveLocation, FileType};
@@ -763,7 +860,7 @@ mod tests {
 
     struct TextDocument;
 
-    #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+    #[derive(Debug, PartialEq, Eq)]
     struct CountedContent {
         text: String,
     }
@@ -778,6 +875,17 @@ mod tests {
     }
 
     struct CountedDocument;
+
+    struct BlockingReadDocument;
+
+    #[derive(Default)]
+    struct ReadGate {
+        enabled: bool,
+        started: bool,
+        released: bool,
+    }
+
+    static READ_GATE: OnceLock<(Mutex<ReadGate>, Condvar)> = OnceLock::new();
 
     const TEXT_FILE_TYPES: [FileType; 1] = [FileType {
         name: "Plain Text",
@@ -827,6 +935,36 @@ mod tests {
 
         fn write(content: &Self::Content, _file_type: &FileType) -> crate::Result<Vec<u8>> {
             Ok(content.text.as_bytes().to_vec())
+        }
+    }
+
+    impl Document for BlockingReadDocument {
+        type Content = String;
+
+        fn file_types() -> &'static [FileType] {
+            &TEXT_FILE_TYPES
+        }
+
+        fn new_untitled() -> Self::Content {
+            String::new()
+        }
+
+        fn read(data: &[u8], _file_type: &FileType) -> crate::Result<Self::Content> {
+            let (gate, condition) = READ_GATE.get_or_init(Default::default);
+            let mut gate = gate.lock().unwrap();
+            if gate.enabled {
+                gate.started = true;
+                condition.notify_all();
+                while !gate.released {
+                    gate = condition.wait(gate).unwrap();
+                }
+            }
+            drop(gate);
+            String::from_utf8(data.to_vec()).map_err(Into::into)
+        }
+
+        fn write(content: &Self::Content, _file_type: &FileType) -> crate::Result<Vec<u8>> {
+            Ok(content.as_bytes().to_vec())
         }
     }
 
@@ -888,7 +1026,10 @@ mod tests {
         assert_eq!(versions.len(), 2);
         let recent_documents = controller.recent_documents().unwrap();
         assert_eq!(recent_documents.len(), 1);
-        assert_eq!(recent_documents[0].path, path);
+        assert_eq!(
+            recent_documents[0].path,
+            std::fs::canonicalize(path).unwrap()
+        );
 
         block_on(handle.restore_version(&versions[0])).unwrap();
         assert_eq!(handle.content(), "one");
@@ -943,6 +1084,120 @@ mod tests {
             .unwrap();
 
         assert_eq!(CONTENT_CLONE_COUNT.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn builder_configuration_is_not_lost_after_cloning_the_controller() {
+        let directory = tempdir().unwrap();
+        let controller = DocumentController::<TextDocument>::new_in(
+            "dev.kael.doc.tests.builder-clone",
+            directory.path(),
+        )
+        .unwrap();
+        let original = controller.clone();
+        let configured = controller.with_history_limit(1);
+
+        let configured_handle = configured.new_document();
+        configured_handle
+            .modify(|content| content.push('1'))
+            .unwrap();
+        configured_handle
+            .modify(|content| content.push('2'))
+            .unwrap();
+        configured_handle.undo().unwrap();
+        assert!(!configured_handle.can_undo());
+
+        let original_handle = original.new_document();
+        original_handle.modify(|content| content.push('1')).unwrap();
+        original_handle.modify(|content| content.push('2')).unwrap();
+        original_handle.undo().unwrap();
+        assert!(original_handle.can_undo());
+    }
+
+    #[test]
+    fn concurrent_edit_prevents_stale_version_restore() {
+        let directory = tempdir().unwrap();
+        let controller = DocumentController::<BlockingReadDocument>::new_in(
+            "dev.kael.doc.tests.restore-race",
+            directory.path(),
+        )
+        .unwrap();
+        let handle = controller.new_document();
+        let path = directory.path().join("notes.txt");
+        handle.modify(|content| content.push_str("saved")).unwrap();
+        block_on(handle.save_as(path)).unwrap();
+        let version = handle.versions().unwrap().remove(0);
+
+        let (gate, condition) = READ_GATE.get_or_init(Default::default);
+        {
+            let mut gate = gate.lock().unwrap();
+            *gate = ReadGate {
+                enabled: true,
+                started: false,
+                released: false,
+            };
+        }
+
+        let restoring_handle = handle.clone();
+        let restore =
+            std::thread::spawn(move || block_on(restoring_handle.restore_version(&version)));
+        {
+            let mut gate = gate.lock().unwrap();
+            while !gate.started {
+                gate = condition.wait(gate).unwrap();
+            }
+        }
+
+        handle
+            .modify(|content| content.push_str(" live edit"))
+            .unwrap();
+        {
+            let mut gate = gate.lock().unwrap();
+            gate.released = true;
+            gate.enabled = false;
+            condition.notify_all();
+        }
+
+        let error = restore.join().unwrap().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("document changed while version restore was in progress")
+        );
+        assert_eq!(handle.content(), "saved live edit");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_as_preserves_an_existing_symbolic_link() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().unwrap();
+        let controller = DocumentController::<TextDocument>::new_in(
+            "dev.kael.doc.tests.save-symlink",
+            directory.path(),
+        )
+        .unwrap();
+        let target = directory.path().join("target.txt");
+        let link = directory.path().join("link.txt");
+        std::fs::write(&target, b"old").unwrap();
+        symlink(&target, &link).unwrap();
+        let handle = controller.new_document();
+        handle.modify(|content| content.push_str("new")).unwrap();
+
+        block_on(handle.save_as(&link)).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            handle.file_path().as_deref(),
+            Some(std::fs::canonicalize(target).unwrap().as_path())
+        );
     }
 
     #[test]
@@ -1050,7 +1305,10 @@ mod tests {
 
         assert!(error.to_string().contains("document was saved"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "saved");
-        assert_eq!(handle.file_path().as_deref(), Some(path.as_path()));
+        assert_eq!(
+            handle.file_path().as_deref(),
+            Some(std::fs::canonicalize(path).unwrap().as_path())
+        );
         assert!(!handle.is_dirty());
     }
 }

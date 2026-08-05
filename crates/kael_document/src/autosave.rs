@@ -76,8 +76,13 @@ pub(crate) fn load_autosave(path: &Path) -> Result<Option<Vec<u8>>> {
         return Ok(None);
     }
 
-    let metadata = std::fs::metadata(path)
+    let metadata = std::fs::symlink_metadata(path)
         .with_context(|| format!("failed to inspect autosave snapshot at {}", path.display()))?;
+    anyhow::ensure!(
+        metadata.file_type().is_file(),
+        "autosave snapshot {} is not a regular file",
+        path.display()
+    );
     ensure_size(metadata.len())?;
     let bytes = std::fs::read(path)
         .with_context(|| format!("failed to read autosave snapshot from {}", path.display()))?;
@@ -116,7 +121,7 @@ pub(crate) fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
             .with_context(|| format!("failed to create parent directory {}", parent.display()))?;
     }
 
-    let existing_permissions = match std::fs::metadata(path) {
+    let existing_permissions = match std::fs::symlink_metadata(path) {
         Ok(metadata) => {
             anyhow::ensure!(
                 metadata.is_file(),
@@ -317,6 +322,27 @@ mod tests {
 
         assert!(write_bytes_atomically(&target, b"data").is_err());
         assert!(target.is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_to_replace_a_symbolic_link() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target");
+        let link = directory.path().join("link");
+        std::fs::write(&target, b"original").unwrap();
+        symlink(&target, &link).unwrap();
+
+        assert!(write_bytes_atomically(&link, b"replacement").is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"original");
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[cfg(unix)]

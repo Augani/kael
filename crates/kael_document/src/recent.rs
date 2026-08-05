@@ -42,12 +42,17 @@ impl RecentDocumentStore {
             return Ok(Vec::new());
         }
 
-        let metadata = std::fs::metadata(&self.path).with_context(|| {
+        let metadata = std::fs::symlink_metadata(&self.path).with_context(|| {
             format!(
                 "failed to inspect recent documents at {}",
                 self.path.display()
             )
         })?;
+        anyhow::ensure!(
+            metadata.file_type().is_file(),
+            "recent document metadata {} is not a regular file",
+            self.path.display()
+        );
         anyhow::ensure!(
             metadata.len() <= MAX_RECENT_METADATA_BYTES,
             "recent document metadata exceeds the {MAX_RECENT_METADATA_BYTES} byte limit"
