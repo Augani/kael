@@ -28,7 +28,10 @@ impl LocaleBundle {
         self.catalogs.insert(locale, catalog);
     }
 
-    /// Sets the active locale. Returns an error if no catalog exists for the locale.
+    /// Sets the active locale. Returns an error if no compatible catalog exists.
+    ///
+    /// Exact matches win, followed by catalogs sharing the most leading locale
+    /// subtags. Remaining language-compatible ties are resolved deterministically.
     pub fn set_active(&mut self, locale: impl Into<String>) -> Result<()> {
         let locale = locale.into();
         let Some(resolved) = self.resolve_locale(&locale) else {
@@ -81,12 +84,11 @@ impl LocaleBundle {
     }
 
     /// Translates a key and substitutes named `{placeholder}` values.
+    ///
+    /// Substitution is performed in one pass: placeholder-like text inside an
+    /// argument value is never interpreted as another placeholder.
     pub fn translate_with_args(&self, key: &str, arguments: &[(&str, &str)]) -> String {
-        let mut translated = self.translate(key).to_string();
-        for (name, value) in arguments {
-            translated = translated.replace(&format!("{{{name}}}"), value);
-        }
-        translated
+        substitute_named(self.translate(key), arguments)
     }
 
     /// Returns a sorted list of all available locale identifiers.
@@ -106,6 +108,7 @@ impl LocaleBundle {
         if requested.is_empty() {
             return None;
         }
+        let requested_parts = locale_subtags(&requested);
         let mut locales = self.catalogs.keys().map(String::as_str).collect::<Vec<_>>();
         locales.sort_unstable();
         locales
@@ -113,19 +116,80 @@ impl LocaleBundle {
             .copied()
             .find(|locale| normalize_locale(locale) == requested)
             .or_else(|| {
-                let language = requested.split('-').next().unwrap_or_default();
-                locales.into_iter().find(|locale| {
-                    normalize_locale(locale)
-                        .split('-')
-                        .next()
-                        .is_some_and(|candidate| candidate == language)
-                })
+                locales
+                    .into_iter()
+                    .filter_map(|locale| {
+                        let candidate = normalize_locale(locale);
+                        let (shared, distance) = locale_match_rank(&requested_parts, &candidate)?;
+                        Some((locale, shared, distance))
+                    })
+                    .min_by(
+                        |(left_locale, left_shared, left_distance),
+                         (right_locale, right_shared, right_distance)| {
+                            right_shared
+                                .cmp(left_shared)
+                                .then_with(|| left_distance.cmp(right_distance))
+                                .then_with(|| left_locale.cmp(right_locale))
+                        },
+                    )
+                    .map(|(locale, _, _)| locale)
             })
     }
 }
 
+fn substitute_named(template: &str, arguments: &[(&str, &str)]) -> String {
+    let mut output = String::with_capacity(template.len());
+    let mut remaining = template;
+
+    while let Some(open) = remaining.find('{') {
+        output.push_str(&remaining[..open]);
+        let after_open = &remaining[open + 1..];
+        let Some(close) = after_open.find('}') else {
+            output.push_str(&remaining[open..]);
+            return output;
+        };
+        let name = &after_open[..close];
+
+        if !name.is_empty() && !name.contains('{') {
+            if let Some((_, value)) = arguments.iter().find(|(candidate, _)| *candidate == name) {
+                output.push_str(value);
+            } else {
+                output.push('{');
+                output.push_str(name);
+                output.push('}');
+            }
+            remaining = &after_open[close + 1..];
+        } else {
+            output.push('{');
+            remaining = after_open;
+        }
+    }
+
+    output.push_str(remaining);
+    output
+}
+
 fn normalize_locale(locale: &str) -> String {
     locale.trim().replace('_', "-").to_ascii_lowercase()
+}
+
+fn locale_subtags(locale: &str) -> Vec<&str> {
+    locale.split('-').filter(|part| !part.is_empty()).collect()
+}
+
+fn locale_match_rank(requested: &[&str], candidate: &str) -> Option<(usize, usize)> {
+    let candidate = locale_subtags(candidate);
+    if requested.first()? != candidate.first()? {
+        return None;
+    }
+
+    let shared = requested
+        .iter()
+        .zip(&candidate)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let distance = requested.len() + candidate.len() - (2 * shared);
+    Some((shared, distance))
 }
 
 #[cfg(test)]
@@ -237,5 +301,45 @@ mod tests {
             "Welcome, Ada"
         );
         assert!(bundle.has_locale("de-CH"));
+    }
+
+    #[test]
+    fn locale_fallback_prefers_matching_scripts_and_neutral_catalogs() {
+        let mut bundle = LocaleBundle::new("zh-Hans");
+        let mut simplified = StringCatalog::new("zh-Hans");
+        simplified.insert("script", "simplified");
+        let mut traditional = StringCatalog::new("zh-Hant");
+        traditional.insert("script", "traditional");
+        bundle.add_catalog(simplified);
+        bundle.add_catalog(traditional);
+
+        bundle.set_active("zh_Hant_HK").unwrap();
+        assert_eq!(bundle.active_locale(), "zh-Hant");
+        assert_eq!(bundle.translate("script"), "traditional");
+
+        let mut neutral_bundle = LocaleBundle::new("zh-Hans");
+        neutral_bundle.add_catalog(StringCatalog::new("zh-Hans"));
+        neutral_bundle.add_catalog(StringCatalog::new("zh"));
+        neutral_bundle.set_active("zh-Hant-HK").unwrap();
+        assert_eq!(neutral_bundle.active_locale(), "zh");
+    }
+
+    #[test]
+    fn named_arguments_are_substituted_once_without_cascading() {
+        assert_eq!(
+            substitute_named(
+                "{first} / {second} / {missing}",
+                &[("first", "{second}"), ("second", "done")]
+            ),
+            "{second} / done / {missing}"
+        );
+        assert_eq!(
+            substitute_named("unclosed {name", &[("name", "Ada")]),
+            "unclosed {name"
+        );
+        assert_eq!(
+            substitute_named("literal {}", &[("", "hidden")]),
+            "literal {}"
+        );
     }
 }

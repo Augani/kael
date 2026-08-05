@@ -1,7 +1,12 @@
 use anyhow::Result;
-use std::collections::HashMap;
+use serde::de::{Deserialize, Deserializer, Error as _, MapAccess, Visitor};
+use std::collections::{HashMap, hash_map::Entry};
+use std::fmt;
 
 const MAX_CATALOG_JSON_BYTES: usize = 16 * 1024 * 1024;
+const MAX_CATALOG_ENTRIES: usize = 100_000;
+const MAX_CATALOG_KEY_BYTES: usize = 4 * 1024;
+const MAX_CATALOG_VALUE_BYTES: usize = 1024 * 1024;
 
 /// A collection of localized strings for a specific locale.
 #[derive(Debug, Clone)]
@@ -19,14 +24,79 @@ impl StringCatalog {
         }
     }
 
-    /// Creates a string catalog from a JSON string containing key-value pairs.
+    /// Creates a string catalog from a JSON object containing string key-value pairs.
+    ///
+    /// The loader rejects duplicate keys, payloads over 16 MiB, more than
+    /// 100,000 entries, keys over 4 KiB, and values over 1 MiB.
     pub fn from_json(locale: &str, json: &str) -> Result<Self> {
         validate_catalog_size(json.len())?;
-        let strings: HashMap<String, String> = serde_json::from_str(json)?;
+        let strings = serde_json::from_str::<CatalogStrings>(json)?.0;
         Ok(Self {
             locale: locale.to_string(),
             strings,
         })
+    }
+}
+
+struct CatalogStrings(HashMap<String, String>);
+
+impl<'de> Deserialize<'de> for CatalogStrings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(CatalogVisitor)
+    }
+}
+
+struct CatalogVisitor;
+
+impl<'de> Visitor<'de> for CatalogVisitor {
+    type Value = CatalogStrings;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a JSON object containing bounded string translations")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let capacity = map.size_hint().unwrap_or(0).min(MAX_CATALOG_ENTRIES);
+        let mut strings = HashMap::with_capacity(capacity);
+
+        while let Some(key) = map.next_key::<String>()? {
+            if strings.len() >= MAX_CATALOG_ENTRIES {
+                return Err(A::Error::custom(format_args!(
+                    "catalog exceeds the {MAX_CATALOG_ENTRIES} entry limit"
+                )));
+            }
+            if key.len() > MAX_CATALOG_KEY_BYTES {
+                return Err(A::Error::custom(format_args!(
+                    "catalog key exceeds the {MAX_CATALOG_KEY_BYTES} byte limit"
+                )));
+            }
+
+            let value = map.next_value::<String>()?;
+            if value.len() > MAX_CATALOG_VALUE_BYTES {
+                return Err(A::Error::custom(format_args!(
+                    "catalog value exceeds the {MAX_CATALOG_VALUE_BYTES} byte limit"
+                )));
+            }
+            match strings.entry(key) {
+                Entry::Vacant(entry) => {
+                    entry.insert(value);
+                }
+                Entry::Occupied(entry) => {
+                    return Err(A::Error::custom(format_args!(
+                        "catalog contains duplicate key {:?}",
+                        entry.key()
+                    )));
+                }
+            }
+        }
+
+        Ok(CatalogStrings(strings))
     }
 }
 
@@ -139,5 +209,33 @@ mod tests {
     #[test]
     fn rejects_oversized_catalogs_without_parsing() {
         assert!(validate_catalog_size(MAX_CATALOG_JSON_BYTES + 1).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_and_oversized_entries() {
+        assert!(StringCatalog::from_json("en", r#"{"key":"one","key":"two"}"#).is_err());
+
+        let oversized_key = "k".repeat(MAX_CATALOG_KEY_BYTES + 1);
+        let oversized_key_json = format!(r#"{{"{oversized_key}":"value"}}"#);
+        assert!(StringCatalog::from_json("en", &oversized_key_json).is_err());
+
+        let oversized_value = "v".repeat(MAX_CATALOG_VALUE_BYTES + 1);
+        let oversized_value_json = format!(r#"{{"key":"{oversized_value}"}}"#);
+        assert!(StringCatalog::from_json("en", &oversized_value_json).is_err());
+    }
+
+    #[test]
+    fn entry_limit_is_enforced_while_streaming() {
+        let mut entries = String::from("{");
+        for index in 0..=MAX_CATALOG_ENTRIES {
+            if index > 0 {
+                entries.push(',');
+            }
+            entries.push_str(&format!(r#""{index}":"""#));
+        }
+        entries.push('}');
+
+        assert!(entries.len() < MAX_CATALOG_JSON_BYTES);
+        assert!(StringCatalog::from_json("en", &entries).is_err());
     }
 }
