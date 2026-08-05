@@ -1,8 +1,66 @@
 # kael_diagnostics
 
-Platform services diagnostics scaffolding for Kael
+Bounded diagnostics, metrics, tracing, and crash reporting for desktop
+applications built with Kael primitives or any other UI stack.
 
-Part of the [Kael](https://github.com/Augani/kael) GPU-accelerated Rust UI framework. See the [documentation](https://augani.github.io/kael/) for usage and guides.
+The crate keeps its hot paths in memory, applies fixed retention and payload
+limits, writes reports atomically, and treats upload as an explicit application
+decision. Rust panics and native crashes are persisted locally; native signal or
+exception handlers and network submission are opt-in.
+
+## Quick start
+
+```no_run
+use kael_diagnostics::{Breadcrumb, Diagnostics, DiagnosticsConfig, Level};
+use std::{collections::HashMap, time::SystemTime};
+
+fn main() -> kael_diagnostics::Result<()> {
+    let diagnostics = Diagnostics::new(DiagnosticsConfig {
+        app_id: "com.example.product".to_string(),
+        release: "1.0.0".to_string(),
+        environment: "production".to_string(),
+        install_panic_hook: true,
+        ..DiagnosticsConfig::default()
+    })?;
+
+    diagnostics.add_breadcrumb(Breadcrumb {
+        category: "workspace".to_string(),
+        message: "opened project".to_string(),
+        level: Level::Info,
+        timestamp: SystemTime::now(),
+        data: HashMap::new(),
+    });
+    diagnostics.record_counter("workspace.opened", 1);
+
+    let transaction = diagnostics.start_transaction("index-project");
+    let span = transaction.start_span("scan-files");
+    span.finish();
+    transaction.finish();
+
+    diagnostics.tracer().write_to_file("trace.json")?;
+    Ok(())
+}
+```
+
+`Diagnostics::new` creates an independently owned instance and does not replace
+the process-global tracer. Its panic hook is still process-wide when enabled.
+Use `init` when the process-wide convenience functions and global tracer are
+desired.
+
+## Crash reporting contract
+
+- `install_panic_hook` controls Rust panic capture.
+- `CrashReporter::install_native` opts into OS signal or exception handlers.
+- Reports remain on disk until the application supplies an HTTP client and a
+  credential-free HTTPS endpoint.
+- `CrashConsent::withheld`, the default, never submits retained reports.
+- `before_send` may redact or reject a report before it is persisted.
+- Call `mark_clean_exit` during orderly shutdown after installing native crash
+  capture, otherwise the next launch correctly treats the session as unclean.
+
+The API reference is available on
+[docs.rs](https://docs.rs/kael_diagnostics). Repository-level architecture and
+production guidance live in the [Kael repository](https://github.com/Augani/kael).
 
 ## License
 

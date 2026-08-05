@@ -1,5 +1,4 @@
-//! Platform services diagnostics scaffolding for Kael.
-
+#![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 
 /// Breadcrumb storage and types.
