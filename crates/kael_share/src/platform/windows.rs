@@ -87,11 +87,6 @@ fn copy_to_clipboard(text: &str) -> Result<bool> {
     }
 
     unsafe {
-        OpenClipboard(None)?;
-        let _clipboard = ClipboardGuard;
-
-        EmptyClipboard()?;
-
         let allocation = match GlobalAlloc(GMEM_MOVEABLE, std::mem::size_of_val(wide.as_slice())) {
             Ok(alloc) => alloc,
             Err(_) => return Ok(false),
@@ -105,6 +100,11 @@ fn copy_to_clipboard(text: &str) -> Result<bool> {
 
         target.copy_from_nonoverlapping(wide.as_ptr(), wide.len());
         let _ = GlobalUnlock(allocation);
+
+        OpenClipboard(None)?;
+        let _clipboard = ClipboardGuard;
+        EmptyClipboard()?;
+
         SetClipboardData(CF_UNICODETEXT, Some(HANDLE(allocation.0)))?;
         std::mem::forget(allocation_guard);
     }

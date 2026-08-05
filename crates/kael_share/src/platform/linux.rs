@@ -15,7 +15,7 @@ pub(crate) async fn show(sheet: &ShareSheet) -> Result<ShareResult> {
 }
 
 fn show_blocking(sheet: &ShareSheet) -> Result<ShareResult> {
-    if !sheet.is_excluded(ShareType::Mail) {
+    if !sheet.is_excluded(ShareType::Mail) && executable_in_path("xdg-email") {
         let attachments = sheet.attachment_paths()?;
         if launch_email(sheet, &attachments)? {
             return Ok(ShareResult::Completed {
@@ -84,13 +84,14 @@ fn copy_to_clipboard(text: &str) -> Result<bool> {
         command.args(&args).stdin(Stdio::piped());
         match command.spawn() {
             Ok(mut child) => {
-                if let Some(mut stdin) = child.stdin.take() {
-                    stdin.write_all(text.as_bytes())?;
-                }
-                return child
-                    .wait()
-                    .map(|status| status.success())
-                    .map_err(Into::into);
+                let write_result = child
+                    .stdin
+                    .take()
+                    .map(|mut stdin| stdin.write_all(text.as_bytes()))
+                    .unwrap_or(Ok(()));
+                let status = child.wait()?;
+                write_result?;
+                return Ok(status.success());
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error.into()),

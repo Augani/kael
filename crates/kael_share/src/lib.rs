@@ -1,4 +1,19 @@
-//! Share services for Kael applications.
+//! Validated outbound share services for Kael applications.
+//!
+//! ```
+//! use kael_share::{ShareSheet, ShareType};
+//!
+//! let sheet = ShareSheet::builder()
+//!     .subject("Release notes")
+//!     .text("Kael 0.3 is ready")
+//!     .url("https://example.com/releases/0.3")
+//!     .exclude(ShareType::Social)
+//!     .build_checked()?;
+//!
+//! assert_eq!(sheet.item_count(), 2);
+//! assert!(sheet.excluded().contains(&ShareType::Social));
+//! # Ok::<(), anyhow::Error>(())
+//! ```
 
 #![deny(missing_docs)]
 
@@ -10,6 +25,9 @@ use std::{collections::BTreeSet, path::PathBuf, sync::Arc, time::Duration};
 pub use platform::PlatformShareSupport;
 
 type ReceiverCallback = Box<dyn Fn(Vec<ShareItem>) + Send + 'static>;
+
+const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_TOTAL_IMAGE_BYTES: usize = 256 * 1024 * 1024;
 
 /// An in-memory image payload that can be materialized for sharing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -201,7 +219,6 @@ impl ShareItem {
             && self.url.as_deref().is_none_or(str::is_empty)
             && self.image.is_none()
             && self.files.is_empty()
-            && self.subject.as_deref().is_none_or(str::is_empty)
     }
 
     /// Returns whether this item contains a non-empty text payload.
@@ -573,12 +590,14 @@ impl ShareSheet {
     }
 
     /// Validate the configured payloads before invoking a platform backend.
+    ///
+    /// Validation bounds item, attachment, text, URL, and image sizes and checks
+    /// that attachments are regular files before any platform handoff.
     pub fn validate(&self) -> Result<()> {
         const MAX_ITEMS: usize = 256;
         const MAX_FILES: usize = 256;
         const MAX_TEXT_BYTES: usize = 1024 * 1024;
         const MAX_TOTAL_TEXT_BYTES: usize = 8 * 1024 * 1024;
-        const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
 
         if self.items.is_empty() {
             bail!("share sheet requires at least one item");
@@ -593,6 +612,7 @@ impl ShareSheet {
 
         let mut total_text_bytes = 0usize;
         let mut total_files = 0usize;
+        let mut total_image_bytes = 0usize;
         for item in &self.items {
             for value in [item.text.as_deref(), item.subject.as_deref()]
                 .into_iter()
@@ -628,6 +648,8 @@ impl ShareSheet {
                 if image.bytes().len() > MAX_IMAGE_BYTES {
                     bail!("share image exceeds the {MAX_IMAGE_BYTES} byte limit");
                 }
+                total_image_bytes =
+                    checked_total_image_bytes(total_image_bytes, image.bytes().len())?;
                 if let Some(name) = image.suggested_name() {
                     if name.is_empty() || name.len() > 255 || name.chars().any(char::is_control) {
                         bail!("share image suggested name is invalid");
@@ -659,6 +681,16 @@ impl ShareSheet {
 
         Ok(())
     }
+}
+
+fn checked_total_image_bytes(current: usize, additional: usize) -> Result<usize> {
+    let total = current
+        .checked_add(additional)
+        .ok_or_else(|| anyhow::anyhow!("share image size overflow"))?;
+    if total > MAX_TOTAL_IMAGE_BYTES {
+        bail!("share images exceed the {MAX_TOTAL_IMAGE_BYTES} byte total limit");
+    }
+    Ok(total)
 }
 
 /// Builder for composing a checked share sheet from common payload types.
@@ -710,6 +742,8 @@ impl ShareSheetBuilder {
     }
 
     /// Set the subject used by mail-like share targets.
+    ///
+    /// A subject annotates another payload and is not shareable content by itself.
     pub fn subject(mut self, subject: impl Into<String>) -> Self {
         self.pending_subject = Some(subject.into());
         self
@@ -919,17 +953,29 @@ fn materialize_image(image: &ShareImage) -> Result<PathBuf> {
             "kael-share-{stamp}-{}-{attempt}",
             std::process::id()
         ));
-        match fs::create_dir(&dir) {
+        #[cfg(unix)]
+        let directory = {
+            use std::os::unix::fs::DirBuilderExt as _;
+            let mut builder = fs::DirBuilder::new();
+            builder.mode(0o700);
+            builder
+        };
+        #[cfg(not(unix))]
+        let directory = fs::DirBuilder::new();
+        match directory.create(&dir) {
             Ok(()) => {
                 let path = dir.join(&final_name);
                 let result = (|| {
-                    let mut file = fs::OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .open(&path)
-                        .with_context(|| {
-                            format!("failed to materialize share image at {}", path.display())
-                        })?;
+                    let mut options = fs::OpenOptions::new();
+                    options.write(true).create_new(true);
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::OpenOptionsExt as _;
+                        options.mode(0o600);
+                    }
+                    let mut file = options.open(&path).with_context(|| {
+                        format!("failed to materialize share image at {}", path.display())
+                    })?;
                     file.write_all(image.bytes()).with_context(|| {
                         format!("failed to write share image at {}", path.display())
                     })?;
@@ -1131,6 +1177,12 @@ mod tests {
     #[test]
     fn share_sheet_builder_rejects_generated_bad_payloads() {
         assert!(ShareSheet::builder().build_checked().is_err());
+        assert!(
+            ShareSheet::builder()
+                .subject("subject without content")
+                .build_checked()
+                .is_err()
+        );
         assert!(ShareSheet::builder().text("").build_checked().is_err());
         assert!(
             ShareSheet::builder()
@@ -1167,6 +1219,11 @@ mod tests {
                 .validate()
                 .is_err()
         );
+        assert_eq!(
+            checked_total_image_bytes(MAX_TOTAL_IMAGE_BYTES - 1, 1).unwrap(),
+            MAX_TOTAL_IMAGE_BYTES
+        );
+        assert!(checked_total_image_bytes(MAX_TOTAL_IMAGE_BYTES, 1).is_err());
     }
 
     #[test]
@@ -1211,6 +1268,23 @@ mod tests {
         let image = ShareImage::new("image/png", vec![1, 2, 3]).with_suggested_name("preview");
         let path = materialize_image(&image).expect("image should materialize");
         assert_eq!(path.extension().and_then(|ext| ext.to_str()), Some("png"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(
+                fs::metadata(path.parent().unwrap())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+        }
         let parent = path.parent().map(Path::to_path_buf);
         fs::remove_file(&path).ok();
         if let Some(parent) = parent {
