@@ -2,8 +2,8 @@
 
 Bounded caching for data that applications can recreate.
 
-`CacheManager` combines a priority-aware in-memory LRU with a
-content-addressed disk tier. `MemoryCache` and `DiskCache` are also available
+`CacheManager` combines a priority-aware in-memory LRU with a key-addressed
+disk tier. `MemoryCache` and `DiskCache` are also available
 independently when an application needs only one tier. The crate has no UI
 dependency and works with Kael's runtime primitives or another interface layer.
 
@@ -26,11 +26,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Namespaces are restricted to one relative path component. Disk keys are
-SHA-256-addressed, replacements are atomic on supported platforms, and byte and
-per-namespace entry budgets evict the oldest entries deterministically. Cached
-values use JSON serialization; secrets and irreplaceable user data belong in
-their dedicated storage systems instead.
+Namespaces are restricted to short portable path components, and logical keys
+are bounded before hashing. Disk keys are SHA-256-addressed, replacements are
+atomic on supported platforms, and byte and per-namespace entry budgets evict
+the oldest entries deterministically, including when an existing cache is
+opened. Cached values use JSON serialization; secrets and irreplaceable user
+data belong in their dedicated storage systems instead.
 
 See the [Kael guide](https://augani.github.io/kael/) for framework-level usage.
 

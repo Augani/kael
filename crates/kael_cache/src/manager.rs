@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::disk::DiskCache;
+use crate::disk::{DiskCache, validate_cache_address};
 use crate::memory::{CachePriority, MemoryCache};
 
 /// Configuration for the [`CacheManager`].
@@ -77,6 +77,7 @@ impl CacheManager {
     ///
     /// On a disk hit the value is promoted into the memory cache.
     pub fn get<V: DeserializeOwned>(&mut self, namespace: &str, key: &str) -> Result<Option<V>> {
+        validate_cache_address(namespace, key)?;
         let mem_key = memory_key(namespace, key);
 
         if let Some(bytes) = self.memory.get(&mem_key) {
@@ -104,6 +105,7 @@ impl CacheManager {
         value: &V,
         priority: CachePriority,
     ) -> Result<()> {
+        validate_cache_address(namespace, key)?;
         let bytes = Arc::<[u8]>::from(serde_json::to_vec(value)?);
         let mem_key = memory_key(namespace, key);
 
@@ -114,6 +116,7 @@ impl CacheManager {
 
     /// Removes a single entry from both tiers.
     pub fn invalidate(&mut self, namespace: &str, key: &str) -> Result<()> {
+        validate_cache_address(namespace, key)?;
         let mem_key = memory_key(namespace, key);
         self.memory.remove(&mem_key);
         self.disk.remove(namespace, key)?;
@@ -340,17 +343,17 @@ mod tests {
     fn memory_keys_do_not_collide_and_namespace_invalidation_is_scoped() {
         let tmp = TempDir::new().unwrap();
         let mut manager = CacheManager::new(test_config(&tmp)).unwrap();
-        manager.put("a:b", "c", &1, CachePriority::Normal).unwrap();
-        manager.put("a", "b:c", &2, CachePriority::Normal).unwrap();
+        manager.put("a-b", "c", &1, CachePriority::Normal).unwrap();
+        manager.put("a", "-bc", &2, CachePriority::Normal).unwrap();
         manager
             .put("other", "kept", &3, CachePriority::Normal)
             .unwrap();
 
-        assert_eq!(manager.get::<i32>("a:b", "c").unwrap(), Some(1));
-        assert_eq!(manager.get::<i32>("a", "b:c").unwrap(), Some(2));
-        manager.invalidate_namespace("a:b").unwrap();
-        assert_eq!(manager.get::<i32>("a:b", "c").unwrap(), None);
-        assert_eq!(manager.get::<i32>("a", "b:c").unwrap(), Some(2));
+        assert_eq!(manager.get::<i32>("a-b", "c").unwrap(), Some(1));
+        assert_eq!(manager.get::<i32>("a", "-bc").unwrap(), Some(2));
+        manager.invalidate_namespace("a-b").unwrap();
+        assert_eq!(manager.get::<i32>("a-b", "c").unwrap(), None);
+        assert_eq!(manager.get::<i32>("a", "-bc").unwrap(), Some(2));
         assert_eq!(manager.get::<i32>("other", "kept").unwrap(), Some(3));
     }
 

@@ -8,7 +8,10 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
 use tempfile::Builder;
 
-/// A content-addressed disk cache organized by namespace.
+const MAX_NAMESPACE_BYTES: usize = 128;
+const MAX_KEY_BYTES: usize = 16 * 1024;
+
+/// A key-addressed disk cache organized by namespace.
 ///
 /// Files are stored at `{root}/{namespace}/{hash_prefix}/{hash}` where the hash
 /// is derived from the key using SHA-256.
@@ -39,12 +42,14 @@ impl DiskCache {
     pub fn new(root: PathBuf, max_bytes: u64) -> Result<Self> {
         fs::create_dir_all(&root)
             .with_context(|| format!("failed to create cache root: {}", root.display()))?;
-        Ok(Self {
+        let cache = Self {
             index: Mutex::new(build_index(&root)?),
             operations: Mutex::new(()),
             root,
             max_bytes,
-        })
+        };
+        cache.enforce_startup_limits()?;
+        Ok(cache)
     }
 
     /// Creates a new disk cache with both a byte budget and a per-namespace entry count limit.
@@ -57,12 +62,14 @@ impl DiskCache {
             .with_context(|| format!("failed to create cache root: {}", root.display()))?;
         let mut index = build_index(&root)?;
         index.max_entries_per_namespace = Some(max_entries_per_namespace);
-        Ok(Self {
+        let cache = Self {
             index: Mutex::new(index),
             operations: Mutex::new(()),
             root,
             max_bytes,
-        })
+        };
+        cache.enforce_startup_limits()?;
+        Ok(cache)
     }
 
     /// Retrieves cached data for the given namespace and key.
@@ -217,7 +224,8 @@ impl DiskCache {
     }
 
     fn entry_path(&self, namespace: &str, key: &str) -> Result<PathBuf> {
-        let namespace_path = self.namespace_path(namespace)?;
+        validate_cache_address(namespace, key)?;
+        let namespace_path = self.root.join(namespace);
         let hash = hash_key(key);
         let prefix = &hash[..2];
         Ok(namespace_path.join(prefix).join(&hash))
@@ -231,6 +239,36 @@ impl DiskCache {
     fn cleanup_empty_dirs(&self) -> Result<()> {
         remove_empty_dirs(&self.root)?;
         Ok(())
+    }
+
+    fn enforce_startup_limits(&self) -> Result<()> {
+        self.evict_by_size(self.max_bytes)?;
+
+        let Some(limit) = self.lock_index().max_entries_per_namespace else {
+            return Ok(());
+        };
+        let _operation = self.lock_operations();
+        let candidates = {
+            let index = self.lock_index();
+            let mut namespaces = index
+                .entries
+                .keys()
+                .filter_map(|path| path.strip_prefix(&self.root).ok())
+                .filter_map(|path| path.components().next())
+                .filter_map(|component| match component {
+                    std::path::Component::Normal(component) => Some(self.root.join(component)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            namespaces.sort_unstable();
+            namespaces.dedup();
+            namespaces
+                .iter()
+                .flat_map(|namespace| namespace_eviction_candidates(&index, namespace, limit))
+                .collect::<Vec<_>>()
+        };
+        self.remove_paths(&candidates)?;
+        self.cleanup_empty_dirs()
     }
 
     fn lock_index(&self) -> MutexGuard<'_, DiskIndex> {
@@ -316,17 +354,30 @@ fn hash_key(key: &str) -> String {
 
 fn validate_namespace(namespace: &str) -> Result<()> {
     if namespace.is_empty()
+        || namespace.len() > MAX_NAMESPACE_BYTES
         || namespace == "."
         || namespace == ".."
-        || namespace.contains('/')
-        || namespace.contains('\\')
+        || !namespace
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
         || !std::path::Path::new(namespace)
             .components()
             .all(|component| matches!(component, std::path::Component::Normal(_)))
     {
-        anyhow::bail!("cache namespace must be a single relative path component");
+        anyhow::bail!(
+            "cache namespace must be a portable ASCII path component of at most {MAX_NAMESPACE_BYTES} bytes"
+        );
     }
 
+    Ok(())
+}
+
+pub(crate) fn validate_cache_address(namespace: &str, key: &str) -> Result<()> {
+    validate_namespace(namespace)?;
+    anyhow::ensure!(
+        !key.is_empty() && key.len() <= MAX_KEY_BYTES,
+        "cache key must be between 1 and {MAX_KEY_BYTES} bytes"
+    );
     Ok(())
 }
 
@@ -675,6 +726,47 @@ mod tests {
     }
 
     #[test]
+    fn cache_addresses_are_portable_and_bounded() {
+        let (_tmp, cache) = setup();
+        for namespace in ["", ".", "../escape", "with space", "windows:drive"] {
+            assert!(cache.put(namespace, "key", b"value").is_err());
+        }
+        assert!(
+            cache
+                .put(&"n".repeat(MAX_NAMESPACE_BYTES + 1), "key", b"value")
+                .is_err()
+        );
+        assert!(cache.put("ns", "", b"value").is_err());
+        assert!(
+            cache
+                .put("ns", &"k".repeat(MAX_KEY_BYTES + 1), b"value")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn reopening_enforces_existing_byte_and_namespace_budgets() {
+        let directory = tempfile::tempdir().unwrap();
+        {
+            let cache = DiskCache::new(directory.path().to_path_buf(), 1_000_000).unwrap();
+            cache.put("one", "a", b"aaaaa").unwrap();
+            cache.put("one", "b", b"bbbbb").unwrap();
+            cache.put("two", "a", b"ccccc").unwrap();
+            cache.put("two", "b", b"ddddd").unwrap();
+        }
+
+        let cache = DiskCache::with_namespace_limit(directory.path().to_path_buf(), 15, 1).unwrap();
+        assert!(cache.total_size() <= 10);
+        for namespace in ["one", "two"] {
+            let remaining = ["a", "b"]
+                .into_iter()
+                .filter(|key| cache.get(namespace, key).unwrap().is_some())
+                .count();
+            assert!(remaining <= 1);
+        }
+    }
+
+    #[test]
     fn stale_temporary_files_are_not_indexed() {
         let tmp = TempDir::new().unwrap();
         let namespace = tmp.path().join("ns");
@@ -683,6 +775,6 @@ mod tests {
 
         let cache = DiskCache::new(tmp.path().to_path_buf(), 1024).unwrap();
         assert_eq!(cache.total_size(), 0);
-        assert!(fs::read_dir(namespace).unwrap().next().is_none());
+        assert!(!namespace.exists() || fs::read_dir(namespace).unwrap().next().is_none());
     }
 }
