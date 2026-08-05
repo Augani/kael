@@ -19,3 +19,5 @@ serde_json.workspace = true
 anyhow.workspace = true
 regex = "1"
 unicode-bidi = "0.3"
+unicode-linebreak = "0.1.5"
+unicode-segmentation.workspace = true
