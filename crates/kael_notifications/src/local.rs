@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -253,7 +253,6 @@ struct NotificationCenterState {
     backend: Arc<dyn NotificationBackend>,
     next_notification_id: AtomicU64,
     next_listener_id: AtomicUsize,
-    badge_count: AtomicU32,
     scheduled: Mutex<HashMap<NotificationId, ScheduledNotification>>,
     listeners: Mutex<BTreeMap<usize, EventListener>>,
     categories: Mutex<HashMap<String, NotificationCategory>>,
@@ -372,12 +371,15 @@ impl NotificationCenter {
             .drain()
             .map(|(_, entry)| entry)
             .collect::<Vec<_>>();
-        for entry in entries {
+        for entry in &entries {
             entry.cancelled.store(true, Ordering::Relaxed);
         }
         let (queue, cvar) = &*self.inner.scheduler_queue;
         queue.lock().clear();
         cvar.notify_one();
+        for entry in entries {
+            self.emit(NotificationEvent::Dismissed(entry.payload));
+        }
     }
 
     /// Registers for push notifications when the backend supports it.
@@ -408,9 +410,7 @@ impl NotificationCenter {
 
     /// Sets the application badge count.
     pub fn set_badge_count(&self, count: u32) -> Result<()> {
-        self.inner.backend.set_badge_count(count)?;
-        self.inner.badge_count.store(count, Ordering::Relaxed);
-        Ok(())
+        self.inner.backend.set_badge_count(count)
     }
 
     pub(crate) fn with_backend(backend: Arc<dyn NotificationBackend>) -> Self {
@@ -501,7 +501,6 @@ impl NotificationCenter {
                 backend,
                 next_notification_id: AtomicU64::new(1),
                 next_listener_id: AtomicUsize::new(0),
-                badge_count: AtomicU32::new(0),
                 scheduled: Mutex::new(HashMap::new()),
                 listeners: Mutex::new(BTreeMap::new()),
                 categories: Mutex::new(HashMap::new()),
@@ -633,7 +632,6 @@ fn validate_notification(notification: &LocalNotification) -> Result<()> {
     const MAX_TITLE_BYTES: usize = 512;
     const MAX_BODY_BYTES: usize = 64 * 1024;
     const MAX_USER_INFO_ENTRIES: usize = 256;
-    const MAX_ATTACHMENTS: usize = 32;
 
     anyhow::ensure!(
         !notification.title.trim().is_empty() && notification.title.len() <= MAX_TITLE_BYTES,
@@ -666,23 +664,9 @@ fn validate_notification(notification: &LocalNotification) -> Result<()> {
         );
     }
     anyhow::ensure!(
-        notification.attachments.len() <= MAX_ATTACHMENTS,
-        "notification contains too many attachments"
+        notification.attachments.is_empty(),
+        "notification attachments are not implemented in kael_notifications yet"
     );
-    for attachment in &notification.attachments {
-        anyhow::ensure!(
-            !attachment.path.as_os_str().is_empty(),
-            "notification attachment path must not be empty"
-        );
-        if let Some(mime_type) = &attachment.mime_type {
-            anyhow::ensure!(
-                !mime_type.is_empty()
-                    && mime_type.len() <= 256
-                    && !mime_type.chars().any(char::is_control),
-                "notification attachment MIME type is invalid"
-            );
-        }
-    }
     match &notification.trigger {
         NotificationTrigger::Immediate => {}
         NotificationTrigger::TimeInterval { seconds, repeats } => {
@@ -746,6 +730,9 @@ fn validate_category(category: &NotificationCategory) -> Result<()> {
                 placeholder.len() <= 256,
                 "notification text-input placeholder is too large"
             );
+            return Err(anyhow!(
+                "text-input notification actions are not implemented in kael_notifications yet"
+            ));
         }
     }
     Ok(())
@@ -816,8 +803,8 @@ mod tests {
     };
 
     use super::{
-        AuthorizationOptions, LocalNotification, NotificationCenter, NotificationEvent,
-        NotificationPayload, NotificationTrigger,
+        AuthorizationOptions, LocalNotification, NotificationAttachment, NotificationCenter,
+        NotificationEvent, NotificationPayload, NotificationTrigger,
     };
 
     #[derive(Default)]
@@ -852,7 +839,7 @@ mod tests {
         }
 
         fn register_for_push(&self) -> anyhow::Result<PushToken> {
-            Ok(PushToken(vec![1, 2, 3]))
+            Ok(PushToken::new([1, 2, 3]))
         }
     }
 
@@ -871,7 +858,7 @@ mod tests {
             body: "World".into(),
             subtitle: None,
             sound: None,
-            badge: Some(2),
+            badge: None,
             category: None,
             user_info: Default::default(),
             trigger: NotificationTrigger::Immediate,
@@ -1035,6 +1022,34 @@ mod tests {
     }
 
     #[test]
+    fn cancelling_all_emits_dismissed_events_and_clears_the_queue() {
+        let center = NotificationCenter::with_backend(Arc::new(MockBackend::default()));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let observed = events.clone();
+        let _subscription = center.on_received(move |event| observed.lock().push(event));
+        for _ in 0..2 {
+            center
+                .schedule_local(test_notification(NotificationTrigger::TimeInterval {
+                    seconds: 3600.0,
+                    repeats: false,
+                }))
+                .unwrap();
+        }
+
+        center.cancel_all();
+
+        assert!(center.inner.scheduler_queue.0.lock().is_empty());
+        assert_eq!(
+            events
+                .lock()
+                .iter()
+                .filter(|event| matches!(event, NotificationEvent::Dismissed(_)))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
     fn failed_delivery_is_removed_from_scheduled_state() {
         let backend = Arc::new(MockBackend::default());
         backend.fail_delivery.store(true, Ordering::Relaxed);
@@ -1084,6 +1099,32 @@ mod tests {
                             text_input_placeholder: None,
                         },
                     ],
+                })
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn unsupported_payloads_fail_instead_of_being_silently_ignored() {
+        let center = NotificationCenter::with_backend(Arc::new(MockBackend::default()));
+        let mut notification = test_notification(NotificationTrigger::Immediate);
+        notification.attachments.push(NotificationAttachment {
+            path: "preview.png".into(),
+            mime_type: Some("image/png".into()),
+        });
+
+        assert!(center.schedule_local(notification).is_err());
+        assert!(center.set_badge_count(1).is_err());
+        assert!(
+            center
+                .register_category(NotificationCategory {
+                    identifier: "reply".into(),
+                    actions: vec![NotificationAction {
+                        identifier: "reply".into(),
+                        title: "Reply".into(),
+                        options: ActionOptions::default(),
+                        text_input_placeholder: Some("Message".into()),
+                    }],
                 })
                 .is_err()
         );

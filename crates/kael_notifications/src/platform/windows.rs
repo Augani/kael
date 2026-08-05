@@ -120,6 +120,18 @@ fn toast_xml(
         "<text>{}</text></binding></visual>",
         escape_xml(&notification.body)
     ));
+    match notification.sound.as_ref() {
+        Some(crate::local::NotificationSound::Silent) => {
+            xml.push_str("<audio silent=\"true\"/>");
+        }
+        Some(crate::local::NotificationSound::Named(name)) => {
+            xml.push_str(&format!(
+                "<audio src=\"ms-winsoundevent:Notification.{}\"/>",
+                escape_xml(name)
+            ));
+        }
+        Some(crate::local::NotificationSound::Default) | None => {}
+    }
     if !actions.is_empty() {
         xml.push_str("<actions>");
         for action in actions {

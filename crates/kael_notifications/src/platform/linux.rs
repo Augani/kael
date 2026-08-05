@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use anyhow::{Context as _, Result};
 use zbus::{
     blocking::{Connection, Proxy, proxy::SignalIterator},
-    zvariant::OwnedValue,
+    zvariant::Value,
 };
 
 use crate::{
@@ -34,11 +34,12 @@ impl NotificationBackend for PlatformBackend {
             let connection =
                 Connection::session().context("failed to connect to the D-Bus session")?;
             let proxy = notification_proxy(&connection)?;
-            send_notification(&proxy, &payload.title, &body, actions)?;
+            send_notification(&proxy, &payload.title, &body, &notification.sound, actions)?;
             return Ok(());
         }
 
         let title = payload.title.clone();
+        let sound = notification.sound.clone();
         let actions = actions.to_vec();
         let Some(on_action) = on_action else {
             return Ok(());
@@ -47,7 +48,7 @@ impl NotificationBackend for PlatformBackend {
         std::thread::Builder::new()
             .name("kael-notification-actions".into())
             .spawn(
-                move || match prepare_action_listener(&title, &body, &actions) {
+                move || match prepare_action_listener(&title, &body, &sound, &actions) {
                     Ok((_proxy, mut signals, notification_id)) => {
                         let _ = ready_tx.send(Ok(()));
                         if let Err(error) = forward_action(&mut signals, notification_id, on_action)
@@ -93,13 +94,23 @@ fn send_notification(
     proxy: &Proxy<'_>,
     title: &str,
     body: &str,
+    sound: &Option<crate::local::NotificationSound>,
     actions: &[NotificationAction],
 ) -> Result<u32> {
     let actions = actions
         .iter()
         .flat_map(|action| [action.identifier.as_str(), action.title.as_str()])
         .collect::<Vec<_>>();
-    let hints = HashMap::<&str, OwnedValue>::new();
+    let mut hints = HashMap::<&str, Value<'_>>::new();
+    match sound {
+        Some(crate::local::NotificationSound::Named(name)) => {
+            hints.insert("sound-name", Value::Str(name.as_str().into()));
+        }
+        Some(crate::local::NotificationSound::Silent) => {
+            hints.insert("suppress-sound", Value::Bool(true));
+        }
+        Some(crate::local::NotificationSound::Default) | None => {}
+    }
     proxy
         .call(
             "Notify",
@@ -111,14 +122,15 @@ fn send_notification(
 fn prepare_action_listener(
     title: &str,
     body: &str,
+    sound: &Option<crate::local::NotificationSound>,
     actions: &[NotificationAction],
 ) -> Result<(Proxy<'static>, SignalIterator<'static>, u32)> {
     let connection = Connection::session().context("failed to connect to the D-Bus session")?;
     let proxy = owned_notification_proxy(connection)?;
     let signals = proxy
-        .receive_signal("ActionInvoked")
-        .context("failed to subscribe to notification actions")?;
-    let notification_id = send_notification(&proxy, title, body, actions)?;
+        .receive_all_signals()
+        .context("failed to subscribe to notification lifecycle events")?;
+    let notification_id = send_notification(&proxy, title, body, sound, actions)?;
     Ok((proxy, signals, notification_id))
 }
 
@@ -128,15 +140,29 @@ fn forward_action(
     on_action: Arc<dyn Fn(String) + Send + Sync + 'static>,
 ) -> Result<()> {
     for message in signals {
-        let (id, action_id): (u32, String) = message
-            .body()
-            .deserialize()
-            .context("invalid notification action signal")?;
-        if id == notification_id {
-            if action_id != "__closed" {
-                on_action(action_id);
+        match message.header().member().map(|member| member.as_str()) {
+            Some("ActionInvoked") => {
+                let (id, action_id): (u32, String) = message
+                    .body()
+                    .deserialize()
+                    .context("invalid notification action signal")?;
+                if id == notification_id {
+                    if action_id != "__closed" {
+                        on_action(action_id);
+                    }
+                    return Ok(());
+                }
             }
-            return Ok(());
+            Some("NotificationClosed") => {
+                let (id, _reason): (u32, u32) = message
+                    .body()
+                    .deserialize()
+                    .context("invalid notification close signal")?;
+                if id == notification_id {
+                    return Ok(());
+                }
+            }
+            _ => {}
         }
     }
     Ok(())

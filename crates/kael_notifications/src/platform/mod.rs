@@ -70,7 +70,9 @@ pub(crate) trait NotificationBackend: Send + Sync + 'static {
     }
 
     fn set_badge_count(&self, _count: u32) -> Result<()> {
-        Ok(())
+        Err(anyhow!(
+            "application badge counts are not implemented on this platform"
+        ))
     }
 }
 
