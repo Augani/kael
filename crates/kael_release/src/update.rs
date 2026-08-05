@@ -3,10 +3,13 @@
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use url::Url;
+use zeroize::Zeroizing;
 
 const MAX_UPDATE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_TEXT_BYTES: usize = 1024 * 1024;
 const MAX_CHANNEL_BYTES: usize = 128;
+const MIN_UPDATE_CHECK_INTERVAL_SECS: u64 = 60;
+const MAX_UPDATE_CHECK_INTERVAL_SECS: u64 = 365 * 24 * 60 * 60;
 
 /// Distribution channel for updates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,15 +77,7 @@ impl UpdateManifest {
         {
             anyhow::bail!("minimum version must be a strict MAJOR.MINOR.PATCH triplet");
         }
-        if let UpdateChannel::Custom(channel) = &self.channel
-            && (channel.is_empty()
-                || channel.len() > MAX_CHANNEL_BYTES
-                || !channel
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
-        {
-            anyhow::bail!("custom update channel is invalid");
-        }
+        validate_channel(&self.channel)?;
         let url = Url::parse(&self.url).map_err(|_| anyhow::anyhow!("update URL is invalid"))?;
         if url.scheme() != "https"
             || url.host_str().is_none()
@@ -147,6 +142,44 @@ impl UpdatePolicy {
             require_signed_feeds: true,
         }
     }
+
+    /// Validates the update schedule and automatic-action dependencies.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        validate_channel(&self.channel)?;
+        anyhow::ensure!(
+            (MIN_UPDATE_CHECK_INTERVAL_SECS..=MAX_UPDATE_CHECK_INTERVAL_SECS)
+                .contains(&self.check_interval_secs),
+            "update check interval must be between {MIN_UPDATE_CHECK_INTERVAL_SECS} and {MAX_UPDATE_CHECK_INTERVAL_SECS} seconds"
+        );
+        anyhow::ensure!(
+            !self.auto_download || self.auto_check,
+            "automatic update downloads require automatic checks"
+        );
+        anyhow::ensure!(
+            !self.auto_install || self.auto_download,
+            "automatic update installation requires automatic downloads"
+        );
+        Ok(())
+    }
+}
+
+fn validate_channel(channel: &UpdateChannel) -> anyhow::Result<()> {
+    let UpdateChannel::Custom(channel) = channel else {
+        return Ok(());
+    };
+    let reserved = ["stable", "beta", "nightly"];
+    anyhow::ensure!(
+        !channel.is_empty()
+            && channel.len() <= MAX_CHANNEL_BYTES
+            && channel
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            && !reserved
+                .iter()
+                .any(|reserved| channel.eq_ignore_ascii_case(reserved)),
+        "custom update channel is invalid or uses a reserved channel name"
+    );
+    Ok(())
 }
 
 /// Information needed to roll back to a previous version.
@@ -218,11 +251,13 @@ pub fn verify_manifest(
 /// `KAEL_UPDATE_SIGNING_KEY` environment variable consumed by the release feed
 /// signer.
 pub fn signing_key_from_hex(hex_key: &str) -> anyhow::Result<SigningKey> {
-    let bytes = hex::decode(hex_key.trim())
-        .map_err(|_| anyhow::anyhow!("ed25519 signing key is not valid hex"))?;
-    let seed: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
+    let bytes = Zeroizing::new(
+        hex::decode(hex_key.trim())
+            .map_err(|_| anyhow::anyhow!("ed25519 signing key is not valid hex"))?,
+    );
+    let seed = Zeroizing::new(<[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| {
         anyhow::anyhow!("ed25519 signing key must be exactly 32 bytes (64 hex chars)")
-    })?;
+    })?);
     Ok(SigningKey::from_bytes(&seed))
 }
 
@@ -243,6 +278,21 @@ pub fn verifying_key_from_hex(hex_key: &str) -> anyhow::Result<VerifyingKey> {
 pub fn signature_to_base64(signature: &Signature) -> String {
     use base64::Engine as _;
     base64::engine::general_purpose::STANDARD.encode(signature.to_bytes())
+}
+
+/// Parses a standard-base64 ed25519 signature from an update feed.
+pub fn signature_from_base64(encoded: &str) -> anyhow::Result<Signature> {
+    use base64::Engine as _;
+
+    anyhow::ensure!(encoded.len() <= 128, "update signature is too large");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| anyhow::anyhow!("update signature is not valid base64"))?;
+    let signature: [u8; 64] = bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("update signature must be exactly 64 bytes"))?;
+    Ok(Signature::from_bytes(&signature))
 }
 
 /// Generates a fresh ed25519 keypair, returning `(private_hex, public_hex)`.
@@ -405,6 +455,49 @@ mod tests {
         assert!(!policy.auto_download);
         assert!(!policy.auto_install);
         assert_eq!(policy.channel, UpdateChannel::Stable);
+        policy.validate().unwrap();
+    }
+
+    #[test]
+    fn policy_rejects_invalid_intervals_and_action_dependencies() {
+        let mut policy = UpdatePolicy::default_stable();
+        policy.check_interval_secs = MIN_UPDATE_CHECK_INTERVAL_SECS - 1;
+        assert!(policy.validate().is_err());
+
+        policy = UpdatePolicy::default_stable();
+        policy.check_interval_secs = MAX_UPDATE_CHECK_INTERVAL_SECS + 1;
+        assert!(policy.validate().is_err());
+
+        policy = UpdatePolicy::default_stable();
+        policy.auto_check = false;
+        policy.auto_download = true;
+        assert!(policy.validate().is_err());
+
+        policy = UpdatePolicy::default_stable();
+        policy.auto_install = true;
+        assert!(policy.validate().is_err());
+    }
+
+    #[test]
+    fn custom_channels_are_distinct_and_machine_safe() {
+        let mut manifest = valid_manifest();
+        manifest.channel = UpdateChannel::Custom("internal-canary_2".to_string());
+        manifest.validate().unwrap();
+
+        for channel in [
+            "",
+            "Stable",
+            "BETA",
+            "nightly",
+            "internal preview",
+            "canary/",
+        ] {
+            manifest.channel = UpdateChannel::Custom(channel.to_string());
+            assert!(manifest.validate().is_err(), "accepted channel {channel:?}");
+        }
+
+        manifest.channel = UpdateChannel::Custom("a".repeat(MAX_CHANNEL_BYTES + 1));
+        assert!(manifest.validate().is_err());
     }
 
     #[test]
@@ -527,6 +620,18 @@ mod tests {
         assert!(signing_key_from_hex("zz").is_err());
         assert!(signing_key_from_hex(&"a".repeat(10)).is_err());
         assert!(verifying_key_from_hex("not-hex").is_err());
+    }
+
+    #[test]
+    fn signature_base64_roundtrips_and_rejects_bad_input() {
+        let signing_key = SigningKey::generate(&mut rand::thread_rng());
+        let signature = sign_manifest(&valid_manifest(), &signing_key);
+        let encoded = signature_to_base64(&signature);
+        assert_eq!(signature_from_base64(&encoded).unwrap(), signature);
+
+        assert!(signature_from_base64("not base64").is_err());
+        assert!(signature_from_base64("YQ==").is_err());
+        assert!(signature_from_base64(&"A".repeat(129)).is_err());
     }
 
     #[test]
