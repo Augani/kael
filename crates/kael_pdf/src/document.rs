@@ -1,7 +1,7 @@
 //! PDF document loading and persistence.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fs::OpenOptions,
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     annotation::{Annotation, AnnotationId, PageAnnotation},
     page::{PdfLink, PdfLinkDestination, PdfPage, PdfPageSize},
-    renderer::{RenderedPage, normalize_scale, render_page_preview},
+    renderer::{PagePreview, normalize_scale, render_schematic_preview},
     text::{TextMatch, extract_page_text, search_text},
 };
 
@@ -28,7 +28,10 @@ const MAX_PDF_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PDF_OBJECTS: usize = 1_000_000;
 const MAX_PDF_PAGES: usize = 100_000;
 const MAX_EXTRACTED_PAGE_TEXT_BYTES: usize = 16 * 1024 * 1024;
-const MAX_RENDER_CACHE_BYTES: usize = 128 * 1024 * 1024;
+const MAX_TEXT_CACHE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_TEXT_CACHE_ENTRIES: usize = 1_024;
+const MAX_PREVIEW_CACHE_BYTES: usize = 128 * 1024 * 1024;
+const MAX_PREVIEW_CACHE_ENTRIES: usize = 256;
 const MAX_ANNOTATION_SIDECAR_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_ANNOTATIONS: usize = 100_000;
 
@@ -64,6 +67,7 @@ pub struct OutlineItem {
 #[derive(Clone)]
 pub struct PdfDocument {
     inner: Arc<Mutex<DocumentState>>,
+    file_operation_lock: Arc<smol::lock::Mutex<()>>,
 }
 
 #[derive(Debug, Clone)]
@@ -79,11 +83,103 @@ struct DocumentState {
     pages: Vec<PageDescriptor>,
     metadata: PdfMetadata,
     outline: Vec<OutlineItem>,
-    page_text_cache: BTreeMap<usize, Arc<str>>,
-    rendered_page_cache: BTreeMap<(usize, u32, u64), RenderedPage>,
+    page_text_cache: PageTextCache,
+    page_preview_cache: PagePreviewCache,
     annotations: BTreeMap<usize, Arc<[PageAnnotation]>>,
+    annotation_load_warning: Option<Arc<str>>,
+    annotations_dirty: bool,
     annotation_generation: u64,
     next_annotation_id: u64,
+}
+
+#[derive(Default)]
+struct PageTextCache {
+    entries: VecDeque<(usize, Arc<str>)>,
+    bytes: usize,
+}
+
+impl PageTextCache {
+    fn get(&mut self, page_index: usize) -> Option<Arc<str>> {
+        let position = self
+            .entries
+            .iter()
+            .position(|(index, _)| *index == page_index)?;
+        let entry = self.entries.remove(position)?;
+        let text = entry.1.clone();
+        self.entries.push_back(entry);
+        Some(text)
+    }
+
+    fn insert(&mut self, page_index: usize, text: Arc<str>) {
+        if let Some(position) = self
+            .entries
+            .iter()
+            .position(|(index, _)| *index == page_index)
+            && let Some((_, replaced)) = self.entries.remove(position)
+        {
+            self.bytes = self.bytes.saturating_sub(replaced.len());
+        }
+        while self.entries.len() >= MAX_TEXT_CACHE_ENTRIES
+            || self.bytes.saturating_add(text.len()) > MAX_TEXT_CACHE_BYTES
+        {
+            let Some((_, evicted)) = self.entries.pop_front() else {
+                break;
+            };
+            self.bytes = self.bytes.saturating_sub(evicted.len());
+        }
+        if text.len() <= MAX_TEXT_CACHE_BYTES {
+            self.bytes = self.bytes.saturating_add(text.len());
+            self.entries.push_back((page_index, text));
+        }
+    }
+}
+
+#[derive(Default)]
+struct PagePreviewCache {
+    entries: VecDeque<((usize, u32, u64), PagePreview)>,
+    bytes: usize,
+}
+
+impl PagePreviewCache {
+    fn get(&mut self, key: (usize, u32, u64)) -> Option<PagePreview> {
+        let position = self
+            .entries
+            .iter()
+            .position(|(candidate, _)| *candidate == key)?;
+        let entry = self.entries.remove(position)?;
+        let preview = entry.1.clone();
+        self.entries.push_back(entry);
+        Some(preview)
+    }
+
+    fn insert(&mut self, key: (usize, u32, u64), preview: PagePreview) {
+        if let Some(position) = self
+            .entries
+            .iter()
+            .position(|(candidate, _)| *candidate == key)
+            && let Some((_, replaced)) = self.entries.remove(position)
+        {
+            self.bytes = self.bytes.saturating_sub(replaced.pixels().len());
+        }
+        let preview_bytes = preview.pixels().len();
+        while self.entries.len() >= MAX_PREVIEW_CACHE_ENTRIES
+            || self.bytes.saturating_add(preview_bytes) > MAX_PREVIEW_CACHE_BYTES
+        {
+            let Some((_, evicted)) = self.entries.pop_front() else {
+                break;
+            };
+            self.bytes = self.bytes.saturating_sub(evicted.pixels().len());
+        }
+        if preview_bytes <= MAX_PREVIEW_CACHE_BYTES {
+            self.bytes = self.bytes.saturating_add(preview_bytes);
+            self.entries.push_back((key, preview));
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.bytes = 0;
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -95,10 +191,15 @@ struct AnnotationSidecar {
 impl PdfDocument {
     /// Opens a PDF document from disk.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref().to_path_buf();
+        let path = normalize_path(path.as_ref())?;
         smol::unblock(move || {
-            let metadata = std::fs::metadata(&path)
+            let metadata = std::fs::symlink_metadata(&path)
                 .with_context(|| format!("failed to inspect PDF document {}", path.display()))?;
+            anyhow::ensure!(
+                metadata.file_type().is_file(),
+                "PDF document {} is not a regular file",
+                path.display()
+            );
             ensure_size(metadata.len(), MAX_PDF_BYTES, "PDF document")?;
             let data = std::fs::read(&path)
                 .with_context(|| format!("failed to read PDF document {}", path.display()))?;
@@ -158,9 +259,71 @@ impl PdfDocument {
         self.inner.lock().outline.clone()
     }
 
-    /// Saves the current document and sidecar annotations to disk.
+    /// Returns a warning produced while loading an invalid annotation sidecar, if any.
+    ///
+    /// A malformed, stale, or unsafe sidecar never prevents the PDF itself from opening.
+    pub fn annotation_load_warning(&self) -> Option<String> {
+        self.inner
+            .lock()
+            .annotation_load_warning
+            .as_deref()
+            .map(str::to_owned)
+    }
+
+    /// Returns whether sidecar annotations have changed since their last successful save.
+    pub fn has_unsaved_annotations(&self) -> bool {
+        self.inner.lock().annotations_dirty
+    }
+
+    /// Saves only the annotation sidecar for a document opened from disk or previously saved.
+    ///
+    /// The write is refused when the underlying PDF has changed since it was opened or saved.
+    pub async fn save_annotations(&self) -> Result<()> {
+        let operation_lock = self.file_operation_lock.clone();
+        let _operation_guard = operation_lock.lock().await;
+        let (path, expected_digest, annotations, page_count, generation) = {
+            let state = self.inner.lock();
+            (
+                state
+                    .source_path
+                    .clone()
+                    .ok_or_else(|| anyhow!("PDF document has not been saved to a path yet"))?,
+                state
+                    .source_digest
+                    .clone()
+                    .ok_or_else(|| anyhow!("PDF document is missing its source digest"))?,
+                state.annotations.clone(),
+                state.pages.len(),
+                state.annotation_generation,
+            )
+        };
+
+        smol::unblock(move || {
+            let current_digest = digest_file(&path)?;
+            anyhow::ensure!(
+                current_digest == expected_digest,
+                "PDF document changed on disk; refusing to save annotations against stale contents"
+            );
+            persist_annotations(&path, &current_digest, &annotations, page_count)
+        })
+        .await?;
+
+        let mut state = self.inner.lock();
+        state.annotation_load_warning = None;
+        if state.annotation_generation == generation {
+            state.annotations_dirty = false;
+        }
+        Ok(())
+    }
+
+    /// Saves the current PDF and its sidecar annotations to a destination.
+    ///
+    /// Prefer [`Self::save_annotations`] when only annotations changed; this method rewrites the
+    /// PDF and may invalidate signatures or other byte-sensitive external metadata.
     pub async fn save(&self, path: impl AsRef<Path>) -> Result<()> {
-        let path = path.as_ref().to_path_buf();
+        let operation_lock = self.file_operation_lock.clone();
+        let _operation_guard = operation_lock.lock().await;
+        let path = normalize_path(path.as_ref())?;
         let inner = self.inner.clone();
 
         smol::unblock(move || {
@@ -174,15 +337,20 @@ impl PdfDocument {
             }
 
             let mut state = inner.lock();
-            write_file_atomically(&path, "PDF document", |file| {
+            write_file_atomically(&path, "PDF document", false, MAX_PDF_BYTES, |file| {
                 state.document.save_to(file).map(|_| ()).map_err(Into::into)
             })
             .with_context(|| format!("failed to save PDF document {}", path.display()))?;
-            state.source_path = Some(path.clone());
-            let source_digest = digest_file(&path)?;
-            state.source_digest = Some(source_digest.clone());
-            persist_annotations(&path, &source_digest, &state.annotations, state.pages.len())?;
-            Ok(())
+            (|| {
+                let source_digest = digest_file(&path)?;
+                state.source_path = Some(path.clone());
+                state.source_digest = Some(source_digest.clone());
+                persist_annotations(&path, &source_digest, &state.annotations, state.pages.len())?;
+                state.annotation_load_warning = None;
+                state.annotations_dirty = false;
+                Ok::<(), anyhow::Error>(())
+            })()
+            .context("PDF was saved, but its annotation sidecar could not be updated")
         })
         .await
     }
@@ -197,8 +365,8 @@ impl PdfDocument {
 
     fn page_text_shared(&self, page_index: usize) -> Result<Arc<str>> {
         let mut state = self.inner.lock();
-        if let Some(text) = state.page_text_cache.get(&page_index) {
-            return Ok(text.clone());
+        if let Some(text) = state.page_text_cache.get(page_index) {
+            return Ok(text);
         }
 
         let page_number = state
@@ -224,20 +392,20 @@ impl PdfDocument {
         search_text(page_index, text.as_ref(), query)
     }
 
-    pub(crate) fn render_page(&self, page_index: usize, scale: f32) -> Result<RenderedPage> {
+    pub(crate) fn schematic_preview(&self, page_index: usize, scale: f32) -> Result<PagePreview> {
         let scale = normalize_scale(scale)?;
         let (page_size, annotation_generation, cached_page) = {
-            let state = self.inner.lock();
+            let mut state = self.inner.lock();
             let page_size = state
                 .pages
                 .get(page_index)
                 .ok_or_else(|| anyhow!("page index {page_index} out of range"))?
                 .size;
             let annotation_generation = state.annotation_generation;
-            let cached_page = state
-                .rendered_page_cache
-                .get(&(page_index, scale.to_bits(), annotation_generation))
-                .cloned();
+            let cached_page =
+                state
+                    .page_preview_cache
+                    .get((page_index, scale.to_bits(), annotation_generation));
             (page_size, annotation_generation, cached_page)
         };
 
@@ -247,25 +415,11 @@ impl PdfDocument {
 
         let text = self.page_text_shared(page_index)?;
         let annotations = self.page_annotations_shared(page_index);
-        let rendered = render_page_preview(page_size, text.as_ref(), &annotations, scale)?;
+        let rendered = render_schematic_preview(page_size, text.as_ref(), &annotations, scale)?;
 
         let mut state = self.inner.lock();
         if state.annotation_generation == annotation_generation {
-            let new_bytes = rendered.pixels().len();
-            while state
-                .rendered_page_cache
-                .values()
-                .map(|page| page.pixels().len())
-                .fold(0usize, usize::saturating_add)
-                .saturating_add(new_bytes)
-                > MAX_RENDER_CACHE_BYTES
-            {
-                let Some(oldest_key) = state.rendered_page_cache.keys().next().copied() else {
-                    break;
-                };
-                state.rendered_page_cache.remove(&oldest_key);
-            }
-            state.rendered_page_cache.insert(
+            state.page_preview_cache.insert(
                 (page_index, scale.to_bits(), annotation_generation),
                 rendered.clone(),
             );
@@ -371,7 +525,8 @@ impl PdfDocument {
         next_annotations.push(entry);
         *annotations = Arc::from(next_annotations);
         state.annotation_generation = state.annotation_generation.wrapping_add(1);
-        state.rendered_page_cache.clear();
+        state.annotations_dirty = true;
+        state.page_preview_cache.clear();
         Ok(())
     }
 
@@ -397,7 +552,8 @@ impl PdfDocument {
             *annotations = Arc::from(next_annotations);
         }
         state.annotation_generation = state.annotation_generation.wrapping_add(1);
-        state.rendered_page_cache.clear();
+        state.annotations_dirty = true;
+        state.page_preview_cache.clear();
         Ok(())
     }
 
@@ -413,16 +569,19 @@ impl PdfDocument {
         let pages = collect_pages(&document)?;
         let metadata = extract_metadata(&document);
         let outline = extract_outline(&document).unwrap_or_default();
-        let annotations = if let Some(path) = source_path.as_ref() {
-            load_annotations(
-                path,
-                source_digest
-                    .as_deref()
-                    .ok_or_else(|| anyhow!("missing PDF source digest"))?,
-                pages.len(),
-            )?
+        let (annotations, annotation_load_warning) = if let Some(path) = source_path.as_ref() {
+            let source_digest = source_digest
+                .as_deref()
+                .ok_or_else(|| anyhow!("missing PDF source digest"))?;
+            match load_annotations(path, source_digest, pages.len()) {
+                Ok(annotations) => (annotations, None),
+                Err(error) => (
+                    BTreeMap::new(),
+                    Some(Arc::<str>::from(format!("{error:#}"))),
+                ),
+            }
         } else {
-            BTreeMap::new()
+            (BTreeMap::new(), None)
         };
         let next_annotation_id = next_annotation_id(&annotations)?;
 
@@ -434,12 +593,15 @@ impl PdfDocument {
                 pages,
                 metadata,
                 outline,
-                page_text_cache: BTreeMap::new(),
-                rendered_page_cache: BTreeMap::new(),
+                page_text_cache: PageTextCache::default(),
+                page_preview_cache: PagePreviewCache::default(),
                 annotations,
+                annotation_load_warning,
+                annotations_dirty: false,
                 annotation_generation: 0,
                 next_annotation_id,
             })),
+            file_operation_lock: Arc::new(smol::lock::Mutex::new(())),
         })
     }
 
@@ -483,8 +645,13 @@ fn digest_hex(bytes: &[u8]) -> String {
 }
 
 fn digest_file(path: &Path) -> Result<String> {
-    let metadata = std::fs::metadata(path)
+    let metadata = std::fs::symlink_metadata(path)
         .with_context(|| format!("failed to inspect saved PDF document {}", path.display()))?;
+    anyhow::ensure!(
+        metadata.file_type().is_file(),
+        "saved PDF document {} is not a regular file",
+        path.display()
+    );
     ensure_size(metadata.len(), MAX_PDF_BYTES, "saved PDF document")?;
     let file = std::fs::File::open(path)
         .with_context(|| format!("failed to hash saved PDF document {}", path.display()))?;
@@ -625,8 +792,7 @@ fn link_destination(
                 return action
                     .get(b"URI")
                     .ok()
-                    .and_then(object_text)
-                    .filter(|uri| !uri.is_empty())
+                    .and_then(bounded_destination_text)
                     .map(PdfLinkDestination::Uri);
             }
             b"GoTo" => {
@@ -656,9 +822,22 @@ fn parse_destination(
     object: &Object,
     page_indices: &BTreeMap<ObjectId, usize>,
 ) -> Option<PdfLinkDestination> {
+    parse_destination_inner(document, object, page_indices, 0)
+}
+
+fn parse_destination_inner(
+    document: &LoDocument,
+    object: &Object,
+    page_indices: &BTreeMap<ObjectId, usize>,
+    depth: usize,
+) -> Option<PdfLinkDestination> {
+    const MAX_DESTINATION_DEPTH: usize = 128;
+    if depth > MAX_DESTINATION_DEPTH {
+        return None;
+    }
     match object {
         Object::Name(_) | Object::String(_, _) => {
-            object_text(object).map(PdfLinkDestination::Named)
+            bounded_destination_text(object).map(PdfLinkDestination::Named)
         }
         Object::Reference(object_id) => page_indices
             .get(object_id)
@@ -666,13 +845,22 @@ fn parse_destination(
             .map(PdfLinkDestination::Page),
         Object::Array(values) => values
             .first()
-            .and_then(|target| parse_destination(document, target, page_indices)),
+            .and_then(|target| parse_destination_inner(document, target, page_indices, depth + 1)),
         _ => document
             .dereference(object)
             .ok()
             .and_then(|(_, target)| (!std::ptr::eq(target, object)).then_some(target))
-            .and_then(|target| parse_destination(document, target, page_indices)),
+            .and_then(|target| parse_destination_inner(document, target, page_indices, depth + 1)),
     }
+}
+
+fn bounded_destination_text(object: &Object) -> Option<String> {
+    const MAX_DESTINATION_BYTES: usize = 16 * 1024;
+    object_text(object).filter(|value| {
+        !value.is_empty()
+            && value.len() <= MAX_DESTINATION_BYTES
+            && !value.chars().any(char::is_control)
+    })
 }
 
 fn object_text(object: &Object) -> Option<String> {
@@ -685,6 +873,9 @@ fn object_text(object: &Object) -> Option<String> {
 }
 
 fn extract_metadata(document: &LoDocument) -> PdfMetadata {
+    const MAX_METADATA_FIELD_BYTES: usize = 64 * 1024;
+    const MAX_KEYWORDS: usize = 1_024;
+
     let mut metadata = PdfMetadata::default();
     let Some(info_id) = document
         .trailer
@@ -699,20 +890,29 @@ fn extract_metadata(document: &LoDocument) -> PdfMetadata {
         return metadata;
     };
 
-    metadata.title = dictionary.get(b"Title").ok().map(pdf_string);
-    metadata.author = dictionary.get(b"Author").ok().map(pdf_string);
-    metadata.subject = dictionary.get(b"Subject").ok().map(pdf_string);
-    metadata.creator = dictionary.get(b"Creator").ok().map(pdf_string);
-    metadata.producer = dictionary.get(b"Producer").ok().map(pdf_string);
+    let bounded_field = |key: &[u8]| {
+        dictionary
+            .get(key)
+            .ok()
+            .map(pdf_string)
+            .map(|value| truncate_utf8(value, MAX_METADATA_FIELD_BYTES))
+    };
+    metadata.title = bounded_field(b"Title");
+    metadata.author = bounded_field(b"Author");
+    metadata.subject = bounded_field(b"Subject");
+    metadata.creator = bounded_field(b"Creator");
+    metadata.producer = bounded_field(b"Producer");
     metadata.keywords = dictionary
         .get(b"Keywords")
         .ok()
         .map(pdf_string)
+        .map(|value| truncate_utf8(value, MAX_METADATA_FIELD_BYTES))
         .map(|keywords| {
             keywords
                 .split(|character| matches!(character, ',' | ';'))
                 .map(str::trim)
                 .filter(|keyword| !keyword.is_empty())
+                .take(MAX_KEYWORDS)
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
         })
@@ -774,6 +974,7 @@ fn walk_outline_siblings(
             .get(b"Title")
             .ok()
             .and_then(object_text)
+            .map(|title| truncate_utf8(title, 4 * 1024))
             .unwrap_or_default();
         let page_index =
             link_destination(document, dictionary, page_indices).and_then(|destination| {
@@ -817,6 +1018,18 @@ fn pdf_string(object: &Object) -> String {
     }
 }
 
+fn truncate_utf8(mut value: String, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut boundary = max_bytes;
+    while !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    value.truncate(boundary);
+    value
+}
+
 fn load_annotations(
     path: &Path,
     document_sha256: &str,
@@ -827,12 +1040,17 @@ fn load_annotations(
         return Ok(BTreeMap::new());
     }
 
-    let metadata = std::fs::metadata(&sidecar_path).with_context(|| {
+    let metadata = std::fs::symlink_metadata(&sidecar_path).with_context(|| {
         format!(
             "failed to inspect annotation sidecar {}",
             sidecar_path.display()
         )
     })?;
+    anyhow::ensure!(
+        metadata.file_type().is_file(),
+        "PDF annotation sidecar {} is not a regular file",
+        sidecar_path.display()
+    );
     ensure_size(
         metadata.len(),
         MAX_ANNOTATION_SIDECAR_BYTES,
@@ -1047,14 +1265,20 @@ fn validate_rect(rect: crate::annotation::PdfRect) -> Result<()> {
 }
 
 fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
-    write_file_atomically(path, "PDF annotation sidecar", |file| {
-        file.write_all(bytes).map_err(Into::into)
-    })
+    write_file_atomically(
+        path,
+        "PDF annotation sidecar",
+        true,
+        MAX_ANNOTATION_SIDECAR_BYTES,
+        |file| file.write_all(bytes).map_err(Into::into),
+    )
 }
 
 fn write_file_atomically(
     path: &Path,
     label: &str,
+    private: bool,
+    max_bytes: u64,
     write: impl FnOnce(&mut std::fs::File) -> Result<()>,
 ) -> Result<()> {
     if let Some(parent) = path
@@ -1065,7 +1289,7 @@ fn write_file_atomically(
             .with_context(|| format!("failed to create {label} directory {}", parent.display()))?;
     }
 
-    let existing_permissions = match std::fs::metadata(path) {
+    let existing_permissions = match std::fs::symlink_metadata(path) {
         Ok(metadata) => {
             anyhow::ensure!(
                 metadata.is_file(),
@@ -1082,9 +1306,7 @@ fn write_file_atomically(
     };
 
     let (temp_path, mut file) = create_temporary_file(path, label)?;
-    if let Some(permissions) = existing_permissions
-        && let Err(error) = file.set_permissions(permissions)
-    {
+    if let Err(error) = configure_temporary_permissions(&file, existing_permissions, private) {
         drop(file);
         let _ = std::fs::remove_file(&temp_path);
         return Err(error).with_context(|| {
@@ -1094,10 +1316,14 @@ fn write_file_atomically(
             )
         });
     }
-    if let Err(error) = write(&mut file)
-        .and_then(|()| file.flush().map_err(Into::into))
-        .and_then(|()| file.sync_all().map_err(Into::into))
-    {
+    let write_result = (|| {
+        write(&mut file)?;
+        file.flush()?;
+        ensure_size(file.metadata()?.len(), max_bytes, label)?;
+        file.sync_all()?;
+        Ok::<(), anyhow::Error>(())
+    })();
+    if let Err(error) = write_result {
         drop(file);
         let _ = std::fs::remove_file(&temp_path);
         return Err(error)
@@ -1116,6 +1342,26 @@ fn write_file_atomically(
         });
     }
     sync_parent_directory(path)?;
+    Ok(())
+}
+
+fn configure_temporary_permissions(
+    file: &std::fs::File,
+    existing_permissions: Option<std::fs::Permissions>,
+    private: bool,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    if private {
+        use std::os::unix::fs::PermissionsExt as _;
+        return file.set_permissions(std::fs::Permissions::from_mode(0o600));
+    }
+
+    #[cfg(not(unix))]
+    let _ = private;
+
+    if let Some(permissions) = existing_permissions {
+        file.set_permissions(permissions)?;
+    }
     Ok(())
 }
 
@@ -1157,14 +1403,65 @@ fn replace_file(temp_path: &Path, path: &Path) -> std::io::Result<()> {
     if !path.exists() {
         return std::fs::rename(temp_path, path);
     }
-    let backup_path = temp_path.with_extension("replace-backup");
-    std::fs::rename(path, &backup_path)?;
-    if let Err(error) = std::fs::rename(temp_path, path) {
-        let _ = std::fs::rename(&backup_path, path);
-        return Err(error);
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{REPLACEFILE_WRITE_THROUGH, ReplaceFileW};
+
+    let replaced = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let replacement = temp_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    // SAFETY: both paths are owned, NUL-terminated UTF-16 buffers that remain alive for the call;
+    // the optional backup and reserved pointers are intentionally null.
+    let replaced_ok = unsafe {
+        ReplaceFileW(
+            replaced.as_ptr(),
+            replacement.as_ptr(),
+            std::ptr::null(),
+            REPLACEFILE_WRITE_THROUGH,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    if replaced_ok == 0 {
+        return Err(std::io::Error::last_os_error());
     }
-    let _ = std::fs::remove_file(backup_path);
     Ok(())
+}
+
+fn normalize_path(path: &Path) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .context("failed to resolve current working directory")?
+            .join(path)
+    };
+
+    match std::fs::canonicalize(&absolute) {
+        Ok(canonical) => Ok(canonical),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let Some((parent, file_name)) = absolute.parent().zip(absolute.file_name()) else {
+                return Ok(absolute);
+            };
+            match std::fs::canonicalize(parent) {
+                Ok(canonical_parent) => Ok(canonical_parent.join(file_name)),
+                Err(parent_error) if parent_error.kind() == std::io::ErrorKind::NotFound => {
+                    Ok(absolute)
+                }
+                Err(parent_error) => Err(parent_error)
+                    .with_context(|| format!("failed to resolve PDF parent {}", parent.display())),
+            }
+        }
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to resolve PDF path {}", absolute.display()))
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -1200,7 +1497,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn opens_extracts_text_and_renders_generated_pdf() {
+    fn opens_extracts_text_and_generates_schematic_preview() {
         let pdf = make_test_pdf(
             &[("Hello PDF\nSecond line", (200.0, 240.0))],
             &[("Title", "Fixture Title"), ("Author", "Kael")],
@@ -1213,7 +1510,7 @@ mod tests {
         assert!(page.text().unwrap().contains("Hello PDF"));
         assert_eq!(page.search("second").unwrap().len(), 1);
 
-        let rendered = block_on(page.render(1.0)).unwrap();
+        let rendered = block_on(page.schematic_preview(1.0)).unwrap();
         assert_eq!(rendered.width(), 200);
         assert_eq!(rendered.height(), 240);
         assert_eq!(rendered.pixels().len(), 200 * 240 * 4);
@@ -1241,13 +1538,23 @@ mod tests {
             text: "Remember this".to_string(),
         })
         .unwrap();
-        block_on(document.save(&path)).unwrap();
+        assert!(document.has_unsaved_annotations());
+        block_on(document.save_annotations()).unwrap();
+        assert!(!document.has_unsaved_annotations());
 
         let reopened = block_on(PdfDocument::open(&path)).unwrap();
         let annotations = reopened.page(0).unwrap().annotations();
         assert_eq!(annotations.len(), 2);
         let sidecar = path.with_file_name("notes.pdf.annotations.json");
         assert!(sidecar.exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(sidecar).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
     }
 
     #[test]
@@ -1275,7 +1582,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_duplicate_and_out_of_range_sidecar_entries() {
+    fn ignores_invalid_sidecars_and_reports_a_warning() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("notes.pdf");
         std::fs::write(&path, make_test_pdf(&[("Page", (200.0, 240.0))], &[])).unwrap();
@@ -1298,7 +1605,9 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        assert!(block_on(PdfDocument::open(&path)).is_err());
+        let document = block_on(PdfDocument::open(&path)).unwrap();
+        assert!(document.annotation_load_warning().is_some());
+        assert!(document.page(0).unwrap().annotations().is_empty());
 
         let mut pages = BTreeMap::new();
         pages.insert(
@@ -1320,11 +1629,13 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        assert!(block_on(PdfDocument::open(&path)).is_err());
+        let document = block_on(PdfDocument::open(&path)).unwrap();
+        assert!(document.annotation_load_warning().is_some());
+        assert!(document.page(0).unwrap().annotations().is_empty());
     }
 
     #[test]
-    fn rejects_sidecars_from_different_document_contents() {
+    fn ignores_sidecars_from_different_document_contents() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("notes.pdf");
         std::fs::write(&path, make_test_pdf(&[("First", (200.0, 240.0))], &[])).unwrap();
@@ -1345,8 +1656,14 @@ mod tests {
         )
         .unwrap();
 
-        let error = block_on(PdfDocument::open(&path)).err().unwrap();
-        assert!(error.to_string().contains("does not match"));
+        let reopened = block_on(PdfDocument::open(&path)).unwrap();
+        assert!(
+            reopened
+                .annotation_load_warning()
+                .unwrap()
+                .contains("does not match")
+        );
+        assert!(reopened.page(0).unwrap().annotations().is_empty());
     }
 
     #[test]
@@ -1466,6 +1783,147 @@ mod tests {
         assert!(write_bytes_atomically(&target, b"data").is_err());
         assert!(target.is_dir());
         assert_eq!(pdf_string(&lopdf::text_string("Résumé")), "Résumé");
+        assert_eq!(truncate_utf8("éé".to_string(), 3), "é");
+    }
+
+    #[test]
+    fn link_destinations_are_bounded() {
+        let document = LoDocument::new();
+        let page_indices = BTreeMap::new();
+        let mut destination = Object::Name(b"chapter".to_vec());
+        for _ in 0..130 {
+            destination = Object::Array(vec![destination]);
+        }
+        assert!(parse_destination(&document, &destination, &page_indices).is_none());
+        assert!(
+            bounded_destination_text(&Object::String(
+                b"https://example.com/\nunsafe".to_vec(),
+                lopdf::StringFormat::Literal,
+            ))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn cache_entry_counts_are_bounded() {
+        let mut text_cache = PageTextCache::default();
+        for index in 0..=MAX_TEXT_CACHE_ENTRIES {
+            text_cache.insert(index, Arc::<str>::from("x"));
+        }
+        assert_eq!(text_cache.entries.len(), MAX_TEXT_CACHE_ENTRIES);
+        assert!(text_cache.get(0).is_none());
+
+        let mut preview_cache = PagePreviewCache::default();
+        for index in 0..=MAX_PREVIEW_CACHE_ENTRIES {
+            preview_cache.insert(
+                (index, 1.0f32.to_bits(), 0),
+                PagePreview::new(1, 1, Arc::<[u8]>::from([0, 0, 0, 0])).unwrap(),
+            );
+        }
+        assert_eq!(preview_cache.entries.len(), MAX_PREVIEW_CACHE_ENTRIES);
+        assert!(preview_cache.get((0, 1.0f32.to_bits(), 0)).is_none());
+    }
+
+    #[test]
+    fn sidecar_failure_reports_that_the_pdf_was_saved() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("notes.pdf");
+        let pdf = make_test_pdf(&[("Page", (200.0, 240.0))], &[]);
+        let document = block_on(PdfDocument::open_from_memory(&pdf)).unwrap();
+        document
+            .page(0)
+            .unwrap()
+            .add_annotation(Annotation::Note {
+                position: PdfPoint::new(1.0, 1.0),
+                text: "note".into(),
+            })
+            .unwrap();
+        std::fs::create_dir(annotations_sidecar_path(&path)).unwrap();
+
+        let error = block_on(document.save(&path)).unwrap_err();
+
+        assert!(error.to_string().contains("PDF was saved"));
+        assert!(document.has_unsaved_annotations());
+        assert!(block_on(PdfDocument::open(&path)).is_ok());
+
+        std::fs::remove_dir(annotations_sidecar_path(&path)).unwrap();
+        block_on(document.save_annotations()).unwrap();
+        assert!(!document.has_unsaved_annotations());
+    }
+
+    #[test]
+    fn sidecar_only_save_rejects_an_externally_changed_pdf() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("notes.pdf");
+        std::fs::write(&path, make_test_pdf(&[("Original", (200.0, 240.0))], &[])).unwrap();
+        let document = block_on(PdfDocument::open(&path)).unwrap();
+        document
+            .page(0)
+            .unwrap()
+            .add_annotation(Annotation::Note {
+                position: PdfPoint::new(1.0, 1.0),
+                text: "note".into(),
+            })
+            .unwrap();
+        std::fs::write(
+            &path,
+            make_test_pdf(&[("External change", (200.0, 240.0))], &[]),
+        )
+        .unwrap();
+
+        let error = block_on(document.save_annotations()).unwrap_err();
+
+        assert!(error.to_string().contains("changed on disk"));
+        assert!(document.has_unsaved_annotations());
+        assert!(!annotations_sidecar_path(&path).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saves_through_existing_symbolic_links_without_replacing_them() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().unwrap();
+        let target = directory.path().join("target.pdf");
+        let link = directory.path().join("link.pdf");
+        std::fs::write(&target, make_test_pdf(&[("Old", (200.0, 240.0))], &[])).unwrap();
+        symlink(&target, &link).unwrap();
+        let replacement = make_test_pdf(&[("Replacement", (300.0, 400.0))], &[]);
+        let document = block_on(PdfDocument::open_from_memory(&replacement)).unwrap();
+
+        block_on(document.save(&link)).unwrap();
+
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        let reopened = block_on(PdfDocument::open(&target)).unwrap();
+        assert_eq!(reopened.page(0).unwrap().size().unwrap().width, 300.0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symbolic_link_sidecars_are_ignored() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("notes.pdf");
+        let outside = directory.path().join("outside.json");
+        std::fs::write(&path, make_test_pdf(&[("Page", (200.0, 240.0))], &[])).unwrap();
+        std::fs::write(&outside, b"{}").unwrap();
+        symlink(&outside, annotations_sidecar_path(&path)).unwrap();
+
+        let document = block_on(PdfDocument::open(&path)).unwrap();
+
+        assert!(
+            document
+                .annotation_load_warning()
+                .unwrap()
+                .contains("not a regular file")
+        );
+        assert!(document.page(0).unwrap().annotations().is_empty());
     }
 
     fn make_test_pdf(

@@ -4,22 +4,70 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use image::{ImageBuffer, Rgba, RgbaImage};
 
 use crate::{
     annotation::{Annotation, PageAnnotation, PdfColor, PdfPoint, PdfRect},
     page::PdfPageSize,
 };
 
-/// A rasterized PDF page preview in RGBA pixel format.
+type Rgba = [u8; 4];
+
+struct PreviewImage {
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+}
+
+impl PreviewImage {
+    fn new(width: u32, height: u32, color: Rgba) -> Result<Self> {
+        let mut pixels = vec![0; rgba_buffer_len(width, height)?];
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&color);
+        }
+        Ok(Self {
+            width,
+            height,
+            pixels,
+        })
+    }
+
+    fn width(&self) -> u32 {
+        self.width
+    }
+
+    fn height(&self) -> u32 {
+        self.height
+    }
+
+    fn put_pixel(&mut self, x: u32, y: u32, color: Rgba) {
+        if let Some(pixel) = self.pixel_mut(x, y) {
+            pixel.copy_from_slice(&color);
+        }
+    }
+
+    fn pixel_mut(&mut self, x: u32, y: u32) -> Option<&mut [u8]> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        let offset = (u64::from(y) * u64::from(self.width) + u64::from(x)) * 4;
+        let offset = usize::try_from(offset).ok()?;
+        self.pixels.get_mut(offset..offset + 4)
+    }
+
+    fn into_raw(self) -> Vec<u8> {
+        self.pixels
+    }
+}
+
+/// A schematic PDF page preview in RGBA pixel format.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RenderedPage {
+pub struct PagePreview {
     width: u32,
     height: u32,
     pixels: Arc<[u8]>,
 }
 
-impl RenderedPage {
+impl PagePreview {
     /// Creates a raster page from raw RGBA pixels.
     pub fn new(width: u32, height: u32, pixels: impl Into<Arc<[u8]>>) -> Result<Self> {
         let expected_len = rgba_buffer_len(width, height)?;
@@ -52,13 +100,13 @@ impl RenderedPage {
     }
 }
 
-/// A bounded LRU cache for rendered PDF pages.
-pub struct PageRenderCache {
+/// A bounded LRU cache for schematic PDF page previews.
+pub struct PagePreviewCache {
     max_pages: usize,
-    pages: VecDeque<(usize, RenderedPage)>,
+    pages: VecDeque<(usize, PagePreview)>,
 }
 
-impl PageRenderCache {
+impl PagePreviewCache {
     /// Creates a new cache with the given maximum number of retained pages.
     pub fn new(max_pages: usize) -> Self {
         Self {
@@ -67,16 +115,20 @@ impl PageRenderCache {
         }
     }
 
-    /// Returns the rendered page at `page_index`, if cached.
-    pub fn get(&self, page_index: usize) -> Option<&RenderedPage> {
-        self.pages
+    /// Returns a cheap clone of the preview at `page_index` and marks it recently used.
+    pub fn get(&mut self, page_index: usize) -> Option<PagePreview> {
+        let position = self
+            .pages
             .iter()
-            .find(|(idx, _)| *idx == page_index)
-            .map(|(_, page)| page)
+            .position(|(index, _)| *index == page_index)?;
+        let entry = self.pages.remove(position)?;
+        let preview = entry.1.clone();
+        self.pages.push_back(entry);
+        Some(preview)
     }
 
     /// Inserts or replaces the rendered page for `page_index`, evicting the oldest entry when full.
-    pub fn insert(&mut self, page_index: usize, page: RenderedPage) {
+    pub fn insert(&mut self, page_index: usize, page: PagePreview) {
         self.pages.retain(|(idx, _)| *idx != page_index);
         if self.max_pages == 0 {
             return;
@@ -98,12 +150,12 @@ impl PageRenderCache {
     }
 }
 
-pub(crate) fn render_page_preview(
+pub(crate) fn render_schematic_preview(
     page_size: PdfPageSize,
     text: &str,
     annotations: &[PageAnnotation],
     scale: f32,
-) -> Result<RenderedPage> {
+) -> Result<PagePreview> {
     let scale = normalize_scale(scale)?;
     anyhow::ensure!(
         page_size.width.is_finite()
@@ -114,15 +166,15 @@ pub(crate) fn render_page_preview(
     );
     let width = (page_size.width * scale).round().clamp(1.0, 4096.0) as u32;
     let height = (page_size.height * scale).round().clamp(1.0, 4096.0) as u32;
-    let mut image = ImageBuffer::from_pixel(width, height, Rgba([255, 255, 255, 255]));
+    let mut image = PreviewImage::new(width, height, [255, 255, 255, 255])?;
 
-    draw_border(&mut image, Rgba([214, 219, 226, 255]));
+    draw_border(&mut image, [214, 219, 226, 255]);
     draw_text_bars(&mut image, text, scale);
     for annotation in annotations {
         draw_annotation(&mut image, page_size, annotation, scale);
     }
 
-    RenderedPage::new(width, height, image.into_raw())
+    PagePreview::new(width, height, image.into_raw())
 }
 
 pub(crate) fn normalize_scale(scale: f32) -> Result<f32> {
@@ -151,7 +203,7 @@ fn rgba_buffer_len(width: u32, height: u32) -> Result<usize> {
     usize::try_from(pixels).map_err(|_| anyhow!("rendered page is too large for this platform"))
 }
 
-fn draw_border(image: &mut RgbaImage, color: Rgba<u8>) {
+fn draw_border(image: &mut PreviewImage, color: Rgba) {
     if image.width() == 0 || image.height() == 0 {
         return;
     }
@@ -168,7 +220,7 @@ fn draw_border(image: &mut RgbaImage, color: Rgba<u8>) {
     }
 }
 
-fn draw_text_bars(image: &mut RgbaImage, text: &str, scale: f32) {
+fn draw_text_bars(image: &mut PreviewImage, text: &str, scale: f32) {
     let margin = (24.0 * scale).round() as i32;
     let line_height = (10.0 * scale).round().max(6.0) as i32;
     let line_gap = (7.0 * scale).round().max(4.0) as i32;
@@ -188,14 +240,14 @@ fn draw_text_bars(image: &mut RgbaImage, text: &str, scale: f32) {
             y,
             bar_width.max((32.0 * scale) as i32),
             line_height,
-            Rgba([88, 98, 118, 255]),
+            [88, 98, 118, 255],
         );
         y += line_height + line_gap;
     }
 }
 
 fn draw_annotation(
-    image: &mut RgbaImage,
+    image: &mut PreviewImage,
     page_size: PdfPageSize,
     annotation: &PageAnnotation,
     scale: f32,
@@ -210,11 +262,11 @@ fn draw_annotation(
         Annotation::Note { position, .. } => {
             let x = (position.x * scale).round() as i32;
             let y = ((page_size.height - position.y) * scale).round() as i32;
-            fill_rect(image, x - 5, y - 5, 10, 10, Rgba([255, 204, 64, 255]));
+            fill_rect(image, x - 5, y - 5, 10, 10, [255, 204, 64, 255]);
         }
         Annotation::FreeText { bounds, .. } => {
             let (x, y, width, height) = map_rect(page_size, *bounds, scale);
-            stroke_rect(image, x, y, width, height, Rgba([56, 92, 158, 255]));
+            stroke_rect(image, x, y, width, height, [56, 92, 158, 255]);
         }
         Annotation::Ink {
             paths,
@@ -240,8 +292,8 @@ fn draw_annotation(
         }
         Annotation::Stamp { bounds, .. } => {
             let (x, y, width, height) = map_rect(page_size, *bounds, scale);
-            fill_rect(image, x, y, width, height, Rgba([222, 74, 74, 200]));
-            stroke_rect(image, x, y, width, height, Rgba([160, 34, 34, 255]));
+            fill_rect(image, x, y, width, height, [222, 74, 74, 200]);
+            stroke_rect(image, x, y, width, height, [160, 34, 34, 255]);
         }
     }
 }
@@ -254,11 +306,11 @@ fn map_rect(page_size: PdfPageSize, rect: PdfRect, scale: f32) -> (i32, i32, i32
     (x, y, width, height)
 }
 
-fn rgba(color: PdfColor) -> Rgba<u8> {
-    Rgba([color.red, color.green, color.blue, color.alpha])
+fn rgba(color: PdfColor) -> Rgba {
+    [color.red, color.green, color.blue, color.alpha]
 }
 
-fn fill_rect(image: &mut RgbaImage, x: i32, y: i32, width: i32, height: i32, color: Rgba<u8>) {
+fn fill_rect(image: &mut PreviewImage, x: i32, y: i32, width: i32, height: i32, color: Rgba) {
     for dy in 0..height.max(0) {
         for dx in 0..width.max(0) {
             blend_pixel(image, x + dx, y + dy, color);
@@ -266,7 +318,7 @@ fn fill_rect(image: &mut RgbaImage, x: i32, y: i32, width: i32, height: i32, col
     }
 }
 
-fn stroke_rect(image: &mut RgbaImage, x: i32, y: i32, width: i32, height: i32, color: Rgba<u8>) {
+fn stroke_rect(image: &mut PreviewImage, x: i32, y: i32, width: i32, height: i32, color: Rgba) {
     for dx in 0..width.max(0) {
         blend_pixel(image, x + dx, y, color);
         blend_pixel(image, x + dx, y + height.saturating_sub(1), color);
@@ -278,12 +330,12 @@ fn stroke_rect(image: &mut RgbaImage, x: i32, y: i32, width: i32, height: i32, c
 }
 
 fn draw_line(
-    image: &mut RgbaImage,
+    image: &mut PreviewImage,
     page_size: PdfPageSize,
     from: PdfPoint,
     to: PdfPoint,
     scale: f32,
-    color: Rgba<u8>,
+    color: Rgba,
     stroke_width: i32,
 ) {
     let mut x0 = (from.x * scale).round() as i32;
@@ -320,12 +372,14 @@ fn draw_line(
     }
 }
 
-fn blend_pixel(image: &mut RgbaImage, x: i32, y: i32, color: Rgba<u8>) {
+fn blend_pixel(image: &mut PreviewImage, x: i32, y: i32, color: Rgba) {
     if x < 0 || y < 0 || x >= image.width() as i32 || y >= image.height() as i32 {
         return;
     }
 
-    let pixel = image.get_pixel_mut(x as u32, y as u32);
+    let Some(pixel) = image.pixel_mut(x as u32, y as u32) else {
+        return;
+    };
     let alpha = color[3] as f32 / 255.0;
     let inverse_alpha = 1.0 - alpha;
     pixel[0] = ((color[0] as f32 * alpha) + (pixel[0] as f32 * inverse_alpha)).round() as u8;
@@ -340,11 +394,11 @@ mod tests {
 
     #[test]
     fn page_cache_respects_limit() {
-        let mut cache = PageRenderCache::new(3);
+        let mut cache = PagePreviewCache::new(3);
         for i in 0..4 {
             cache.insert(
                 i,
-                RenderedPage::new(100, 100, Arc::<[u8]>::from(vec![0u8; 40000])).unwrap(),
+                PagePreview::new(100, 100, Arc::<[u8]>::from(vec![0u8; 40000])).unwrap(),
             );
         }
         assert!(cache.get(0).is_none());
@@ -353,15 +407,30 @@ mod tests {
     }
 
     #[test]
+    fn page_cache_refreshes_recently_used_entries() {
+        let mut cache = PagePreviewCache::new(2);
+        let preview = || PagePreview::new(1, 1, Arc::<[u8]>::from([0, 0, 0, 0])).unwrap();
+        cache.insert(0, preview());
+        cache.insert(1, preview());
+
+        assert!(cache.get(0).is_some());
+        cache.insert(2, preview());
+
+        assert!(cache.get(0).is_some());
+        assert!(cache.get(1).is_none());
+        assert!(cache.get(2).is_some());
+    }
+
+    #[test]
     fn page_cache_overwrites_existing_entry() {
-        let mut cache = PageRenderCache::new(3);
+        let mut cache = PagePreviewCache::new(3);
         cache.insert(
             0,
-            RenderedPage::new(100, 100, Arc::<[u8]>::from(vec![1u8; 40000])).unwrap(),
+            PagePreview::new(100, 100, Arc::<[u8]>::from(vec![1u8; 40000])).unwrap(),
         );
         cache.insert(
             0,
-            RenderedPage::new(200, 200, Arc::<[u8]>::from(vec![2u8; 160000])).unwrap(),
+            PagePreview::new(200, 200, Arc::<[u8]>::from(vec![2u8; 160000])).unwrap(),
         );
         assert_eq!(cache.len(), 1);
         assert_eq!(cache.get(0).unwrap().width(), 200);
@@ -369,26 +438,26 @@ mod tests {
 
     #[test]
     fn page_cache_is_empty_on_new() {
-        let cache = PageRenderCache::new(5);
+        let cache = PagePreviewCache::new(5);
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
     }
 
     #[test]
     fn zero_capacity_cache_never_retains_pages() {
-        let mut cache = PageRenderCache::new(0);
+        let mut cache = PagePreviewCache::new(0);
         cache.insert(
             0,
-            RenderedPage::new(1, 1, Arc::<[u8]>::from([0, 0, 0, 0])).unwrap(),
+            PagePreview::new(1, 1, Arc::<[u8]>::from([0, 0, 0, 0])).unwrap(),
         );
         assert!(cache.is_empty());
     }
 
     #[test]
-    fn rendered_pages_validate_dimensions_and_rgba_length() {
-        assert!(RenderedPage::new(0, 1, Arc::<[u8]>::from([])).is_err());
-        assert!(RenderedPage::new(1, 1, Arc::<[u8]>::from([0, 0, 0])).is_err());
-        assert!(RenderedPage::new(4_097, 1, Arc::<[u8]>::from([])).is_err());
+    fn page_previews_validate_dimensions_and_rgba_length() {
+        assert!(PagePreview::new(0, 1, Arc::<[u8]>::from([])).is_err());
+        assert!(PagePreview::new(1, 1, Arc::<[u8]>::from([0, 0, 0])).is_err());
+        assert!(PagePreview::new(4_097, 1, Arc::<[u8]>::from([])).is_err());
         assert!(normalize_scale(f32::NAN).is_err());
         assert!(normalize_scale(f32::INFINITY).is_err());
         assert!(normalize_scale(0.0).is_err());

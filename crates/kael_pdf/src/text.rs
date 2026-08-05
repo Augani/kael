@@ -39,20 +39,30 @@ pub(crate) fn search_text(page_index: usize, text: &str, query: &str) -> Result<
     let mut matches = Vec::new();
 
     for (line_index, line) in text.lines().enumerate() {
-        let (haystack, offsets) = folded_line_with_offsets(line);
+        let (haystack, offsets) = if line.is_ascii() && needle.is_ascii() {
+            (line.to_ascii_lowercase(), None)
+        } else {
+            let (haystack, offsets) = folded_line_with_offsets(line);
+            (haystack, Some(offsets))
+        };
         let mut search_start = 0;
 
         while let Some(offset) = haystack[search_start..].find(&needle) {
             let folded_start = search_start + offset;
             let folded_end = folded_start + needle.len();
-            let start = offsets
-                .get(folded_start)
-                .map(|offset| offset.0)
-                .ok_or_else(|| anyhow!("invalid folded PDF search offset"))?;
-            let end = offsets
-                .get(folded_end.saturating_sub(1))
-                .map(|offset| offset.1)
-                .ok_or_else(|| anyhow!("invalid folded PDF search end offset"))?;
+            let (start, end) = if let Some(offsets) = offsets.as_ref() {
+                let start = offsets
+                    .get(folded_start)
+                    .map(|offset| offset.0)
+                    .ok_or_else(|| anyhow!("invalid folded PDF search offset"))?;
+                let end = offsets
+                    .get(folded_end.saturating_sub(1))
+                    .map(|offset| offset.1)
+                    .ok_or_else(|| anyhow!("invalid folded PDF search end offset"))?;
+                (start, end)
+            } else {
+                (folded_start, folded_end)
+            };
             matches.push(TextMatch {
                 page_index,
                 line_index,
@@ -127,6 +137,7 @@ mod tests {
         let text = format!("{} needle {}", "a".repeat(1_000), "b".repeat(1_000));
         let matches = search_text(0, &text, "needle").unwrap();
         assert_eq!(matches.len(), 1);
+        assert_eq!(&text[matches[0].start..matches[0].end], "needle");
         assert!(matches[0].snippet.chars().count() <= 170);
         assert!(search_text(0, "text", &"x".repeat(4_097)).is_err());
     }
