@@ -58,8 +58,29 @@ preflight_crate() {
   local crate="$1"
   local listing
   listing="$(cargo package --locked --allow-dirty -p "$crate" --list)"
+
+  if ! grep -qx 'LICENSE-APACHE' <<<"$listing"; then
+    echo "error: $crate would publish without its Apache-2.0 license text" >&2
+    return 1
+  fi
   if grep -Eq '(^|/)(examples?|benches?)/' <<<"$listing"; then
     echo "error: $crate would publish an example or benchmark" >&2
+    return 1
+  fi
+
+  if grep -Eq '^assets/fonts/Inter-.*\.ttf$' <<<"$listing" &&
+    ! grep -qx 'assets/fonts/LICENSE-INTER' <<<"$listing"; then
+    echo "error: $crate would publish Inter fonts without their OFL-1.1 notice" >&2
+    return 1
+  fi
+  if grep -Eq '^assets/fonts/JetBrainsMono-.*\.ttf$' <<<"$listing" &&
+    ! grep -qx 'assets/fonts/LICENSE-JETBRAINS-MONO' <<<"$listing"; then
+    echo "error: $crate would publish JetBrains Mono without its OFL-1.1 notice" >&2
+    return 1
+  fi
+  if grep -Eq '^assets/fonts/.*\.ttf$' <<<"$listing" &&
+    ! grep -qx 'THIRD_PARTY_LICENSES.md' <<<"$listing"; then
+    echo "error: $crate would publish fonts without a third-party license index" >&2
     return 1
   fi
   echo "package contents clean: $crate ($(wc -l <<<"$listing" | tr -d ' ') files)"
