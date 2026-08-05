@@ -51,7 +51,7 @@ impl<V: Clone> MemoryCache<V> {
     /// Creates a new memory cache limited to `max_entries` items.
     pub fn new(max_entries: usize) -> Self {
         Self {
-            entries: HashMap::with_capacity(max_entries),
+            entries: HashMap::new(),
             eviction_order: BTreeSet::new(),
             max_entries,
             access_counter: 0,
@@ -307,5 +307,11 @@ mod tests {
         assert_eq!(cache.hits(), u64::MAX);
         cache.insert("c".into(), 3, CachePriority::Normal);
         assert_eq!(cache.get("b"), None);
+    }
+
+    #[test]
+    fn large_limits_do_not_allocate_eagerly() {
+        let cache = MemoryCache::<i32>::new(usize::MAX);
+        assert!(cache.is_empty());
     }
 }

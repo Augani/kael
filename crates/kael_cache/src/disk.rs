@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::fs;
-use std::io::Write as _;
+use std::fs::{self, File};
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
@@ -15,6 +15,9 @@ const MAX_KEY_BYTES: usize = 16 * 1024;
 ///
 /// Files are stored at `{root}/{namespace}/{hash_prefix}/{hash}` where the hash
 /// is derived from the key using SHA-256.
+///
+/// A cache root must have one live [`DiskCache`] owner. Instances and processes
+/// that independently manage the same root do not coordinate their indexes.
 pub struct DiskCache {
     root: PathBuf,
     max_bytes: u64,
@@ -74,16 +77,47 @@ impl DiskCache {
 
     /// Retrieves cached data for the given namespace and key.
     pub fn get(&self, namespace: &str, key: &str) -> Result<Option<Vec<u8>>> {
+        let _operation = self.lock_operations();
         let path = self.entry_path(namespace, key)?;
-        match fs::read(&path) {
-            Ok(data) => Ok(Some(data)),
+        let file = match File::open(&path) {
+            Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 self.remove_index_entry(&path);
-                Ok(None)
+                return Ok(None);
             }
-            Err(error) => Err(error)
-                .with_context(|| format!("failed to read cache entry: {}", path.display())),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to read cache entry: {}", path.display()));
+            }
+        };
+
+        let metadata = file
+            .metadata()
+            .with_context(|| format!("failed to stat cache entry: {}", path.display()))?;
+        if metadata.len() > self.max_bytes {
+            self.discard_entry(&path)?;
+            return Ok(None);
         }
+
+        let mut data = Vec::new();
+        file.take(self.max_bytes.saturating_add(1))
+            .read_to_end(&mut data)
+            .with_context(|| format!("failed to read cache entry: {}", path.display()))?;
+        if u64::try_from(data.len()).unwrap_or(u64::MAX) > self.max_bytes {
+            self.discard_entry(&path)?;
+            return Ok(None);
+        }
+
+        let index_changed = self.reconcile_index_entry(
+            path,
+            u64::try_from(data.len()).unwrap_or(u64::MAX),
+            metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+        );
+        if index_changed {
+            self.enforce_limits_for_namespace(namespace)?;
+        }
+
+        Ok(Some(data))
     }
 
     /// Stores data under the given namespace and key, evicting old entries if
@@ -112,31 +146,7 @@ impl DiskCache {
             metadata.len(),
             metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
         );
-
-        let byte_candidates = {
-            let index = self.lock_index();
-            eviction_candidates(&index, self.max_bytes)
-        };
-        if !byte_candidates.is_empty() {
-            self.remove_paths(&byte_candidates)?;
-            self.cleanup_empty_dirs()?;
-        }
-
-        let ns_candidates = {
-            let index = self.lock_index();
-            if let Some(limit) = index.max_entries_per_namespace {
-                let ns_path = self.namespace_path(namespace)?;
-                namespace_eviction_candidates(&index, &ns_path, limit)
-            } else {
-                vec![]
-            }
-        };
-        if !ns_candidates.is_empty() {
-            self.remove_paths(&ns_candidates)?;
-            self.cleanup_empty_dirs()?;
-        }
-
-        Ok(())
+        self.enforce_limits_for_namespace(namespace)
     }
 
     /// Removes a single cached entry.
@@ -300,6 +310,61 @@ impl DiskCache {
         index.total_bytes = index.total_bytes.saturating_add(size);
     }
 
+    fn reconcile_index_entry(&self, path: PathBuf, size: u64, modified: SystemTime) -> bool {
+        let mut index = self.lock_index();
+        if let Some((previous_size, changed)) = index.entries.get_mut(&path).map(|entry| {
+            let previous_size = entry.size;
+            let changed = entry.size != size || entry.modified != modified;
+            entry.size = size;
+            entry.modified = modified;
+            (previous_size, changed)
+        }) {
+            index.total_bytes = index.total_bytes.saturating_sub(previous_size);
+            index.total_bytes = index.total_bytes.saturating_add(size);
+            return changed;
+        }
+
+        let insertion_order = index.next_insertion_order;
+        index.next_insertion_order = index.next_insertion_order.saturating_add(1);
+        index.entries.insert(
+            path,
+            DiskEntry {
+                size,
+                modified,
+                insertion_order,
+            },
+        );
+        index.total_bytes = index.total_bytes.saturating_add(size);
+        true
+    }
+
+    fn enforce_limits_for_namespace(&self, namespace: &str) -> Result<()> {
+        let byte_candidates = {
+            let index = self.lock_index();
+            eviction_candidates(&index, self.max_bytes)
+        };
+        if !byte_candidates.is_empty() {
+            self.remove_paths(&byte_candidates)?;
+            self.cleanup_empty_dirs()?;
+        }
+
+        let namespace_candidates = {
+            let index = self.lock_index();
+            if let Some(limit) = index.max_entries_per_namespace {
+                let namespace_path = self.namespace_path(namespace)?;
+                namespace_eviction_candidates(&index, &namespace_path, limit)
+            } else {
+                Vec::new()
+            }
+        };
+        if !namespace_candidates.is_empty() {
+            self.remove_paths(&namespace_candidates)?;
+            self.cleanup_empty_dirs()?;
+        }
+
+        Ok(())
+    }
+
     fn remove_index_entry(&self, path: &Path) {
         let mut index = self.lock_index();
         remove_index_entry_from(&mut index, path);
@@ -327,6 +392,11 @@ impl DiskCache {
 
         Ok(freed)
     }
+
+    fn discard_entry(&self, path: &PathBuf) -> Result<()> {
+        self.remove_paths(std::slice::from_ref(path))?;
+        self.cleanup_empty_dirs()
+    }
 }
 
 fn write_atomically(path: &Path, data: &[u8]) -> Result<()> {
@@ -353,23 +423,45 @@ fn hash_key(key: &str) -> String {
 }
 
 fn validate_namespace(namespace: &str) -> Result<()> {
-    if namespace.is_empty()
-        || namespace.len() > MAX_NAMESPACE_BYTES
-        || namespace == "."
-        || namespace == ".."
-        || !namespace
-            .bytes()
+    let bytes = namespace.as_bytes();
+    let valid = !bytes.is_empty()
+        && bytes.len() <= MAX_NAMESPACE_BYTES
+        && bytes
+            .iter()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
-        || !std::path::Path::new(namespace)
+        && namespace != "."
+        && namespace != ".."
+        && !matches!(bytes.last(), Some(b'.'))
+        && !is_windows_reserved_namespace(namespace)
+        && std::path::Path::new(namespace)
             .components()
-            .all(|component| matches!(component, std::path::Component::Normal(_)))
-    {
+            .all(|component| matches!(component, std::path::Component::Normal(_)));
+    if !valid {
         anyhow::bail!(
             "cache namespace must be a portable ASCII path component of at most {MAX_NAMESPACE_BYTES} bytes"
         );
     }
 
     Ok(())
+}
+
+fn is_windows_reserved_namespace(namespace: &str) -> bool {
+    let base = namespace
+        .split('.')
+        .next()
+        .unwrap_or(namespace)
+        .trim_end_matches([' ', '.']);
+    if ["CON", "PRN", "AUX", "NUL"]
+        .iter()
+        .any(|reserved| base.eq_ignore_ascii_case(reserved))
+    {
+        return true;
+    }
+
+    let bytes = base.as_bytes();
+    bytes.len() == 4
+        && (bytes[..3].eq_ignore_ascii_case(b"COM") || bytes[..3].eq_ignore_ascii_case(b"LPT"))
+        && matches!(bytes[3], b'1'..=b'9')
 }
 
 pub(crate) fn validate_cache_address(namespace: &str, key: &str) -> Result<()> {
@@ -386,6 +478,9 @@ fn build_index(root: &Path) -> Result<DiskIndex> {
     let mut files = Vec::new();
 
     for entry in walk_files(root)? {
+        if !is_canonical_entry_path(root, &entry) {
+            continue;
+        }
         let metadata = fs::metadata(&entry)?;
         let size = metadata.len();
         let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
@@ -417,6 +512,41 @@ fn build_index(root: &Path) -> Result<DiskIndex> {
     Ok(index)
 }
 
+fn is_canonical_entry_path(root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    let mut components = relative.components();
+    let Some(std::path::Component::Normal(namespace)) = components.next() else {
+        return false;
+    };
+    let Some(std::path::Component::Normal(prefix)) = components.next() else {
+        return false;
+    };
+    let Some(std::path::Component::Normal(hash)) = components.next() else {
+        return false;
+    };
+    if components.next().is_some() {
+        return false;
+    }
+
+    let (Some(namespace), Some(prefix), Some(hash)) =
+        (namespace.to_str(), prefix.to_str(), hash.to_str())
+    else {
+        return false;
+    };
+    validate_namespace(namespace).is_ok()
+        && prefix.len() == 2
+        && prefix
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        && hash.len() == 64
+        && hash
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        && hash.starts_with(prefix)
+}
+
 fn walk_files(root: &std::path::Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     if !root.exists() {
@@ -432,7 +562,7 @@ fn walk_files(root: &std::path::Path) -> Result<Vec<PathBuf>> {
             if entry
                 .file_name()
                 .to_str()
-                .is_some_and(|name| name.contains(".tmp-"))
+                .is_some_and(|name| name.starts_with(".kael-cache.tmp-"))
             {
                 let _ = fs::remove_file(entry.path());
                 continue;
@@ -448,6 +578,10 @@ fn walk_files(root: &std::path::Path) -> Result<Vec<PathBuf>> {
 }
 
 fn eviction_candidates(index: &DiskIndex, target_bytes: u64) -> Vec<PathBuf> {
+    if index.total_bytes <= target_bytes {
+        return Vec::new();
+    }
+
     let mut entries = index
         .entries
         .iter()
@@ -728,8 +862,22 @@ mod tests {
     #[test]
     fn cache_addresses_are_portable_and_bounded() {
         let (_tmp, cache) = setup();
-        for namespace in ["", ".", "../escape", "with space", "windows:drive"] {
+        for namespace in [
+            "",
+            ".",
+            "trailing.",
+            "../escape",
+            "with space",
+            "windows:drive",
+            "CON",
+            "con.txt",
+            "COM1",
+            "lpt9.cache",
+        ] {
             assert!(cache.put(namespace, "key", b"value").is_err());
+        }
+        for namespace in ["cache-v1", ".hidden", "COM10", "LPT0"] {
+            assert!(validate_namespace(namespace).is_ok());
         }
         assert!(
             cache
@@ -771,10 +919,66 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let namespace = tmp.path().join("ns");
         fs::create_dir_all(&namespace).unwrap();
-        fs::write(namespace.join("entry.tmp-123-0"), b"partial").unwrap();
+        fs::write(namespace.join(".kael-cache.tmp-stale"), b"partial").unwrap();
 
         let cache = DiskCache::new(tmp.path().to_path_buf(), 1024).unwrap();
         assert_eq!(cache.total_size(), 0);
         assert!(!namespace.exists() || fs::read_dir(namespace).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn startup_indexes_only_canonical_cache_entries() {
+        let tmp = TempDir::new().unwrap();
+        let hash = hash_key("kept");
+        let canonical = tmp.path().join("ns").join(&hash[..2]).join(&hash);
+        fs::create_dir_all(canonical.parent().unwrap()).unwrap();
+        fs::write(&canonical, b"kept").unwrap();
+
+        let root_junk = tmp.path().join("README.txt");
+        let wrong_prefix_name = if &hash[..2] == "ff" { "00" } else { "ff" };
+        let wrong_prefix = tmp.path().join("ns").join(wrong_prefix_name).join(&hash);
+        let nested_junk = tmp.path().join("ns").join(&hash[..2]).join("extra/file");
+        fs::write(&root_junk, b"ignore").unwrap();
+        fs::create_dir_all(wrong_prefix.parent().unwrap()).unwrap();
+        fs::write(&wrong_prefix, b"ignore").unwrap();
+        fs::create_dir_all(nested_junk.parent().unwrap()).unwrap();
+        fs::write(&nested_junk, b"ignore").unwrap();
+
+        let cache = DiskCache::new(tmp.path().to_path_buf(), 1024).unwrap();
+        assert_eq!(cache.total_size(), 4);
+        assert_eq!(cache.get("ns", "kept").unwrap(), Some(b"kept".to_vec()));
+        assert!(root_junk.exists());
+        assert!(wrong_prefix.exists());
+        assert!(nested_junk.exists());
+    }
+
+    #[test]
+    fn oversized_external_replacements_are_discarded_without_loading() {
+        let tmp = TempDir::new().unwrap();
+        let cache = DiskCache::new(tmp.path().to_path_buf(), 8).unwrap();
+        cache.put("ns", "key", b"small").unwrap();
+        let path = cache.entry_path("ns", "key").unwrap();
+        fs::write(&path, vec![b'x'; 1024]).unwrap();
+
+        assert_eq!(cache.get("ns", "key").unwrap(), None);
+        assert!(!path.exists());
+        assert_eq!(cache.total_size(), 0);
+    }
+
+    #[test]
+    fn external_size_changes_are_reconciled_with_the_budget() {
+        let tmp = TempDir::new().unwrap();
+        let cache = DiskCache::new(tmp.path().to_path_buf(), 10).unwrap();
+        cache.put("ns", "old", b"1234").unwrap();
+        cache.put("ns", "changed", b"5678").unwrap();
+        let changed_path = cache.entry_path("ns", "changed").unwrap();
+        fs::write(&changed_path, b"12345678").unwrap();
+
+        assert_eq!(
+            cache.get("ns", "changed").unwrap(),
+            Some(b"12345678".to_vec())
+        );
+        assert!(cache.total_size() <= cache.max_bytes());
+        assert_eq!(cache.get("ns", "old").unwrap(), None);
     }
 }

@@ -23,7 +23,7 @@ pub struct CacheConfig {
 pub struct CacheStats {
     /// Number of in-memory cache hits.
     pub memory_hits: u64,
-    /// Number of in-memory cache misses.
+    /// Number of in-memory fallthroughs to the disk tier.
     pub memory_misses: u64,
     /// Number of disk cache hits.
     pub disk_hits: u64,
@@ -36,12 +36,14 @@ pub struct CacheStats {
 }
 
 impl CacheStats {
-    /// Returns the combined hit rate across both tiers as a value in `[0.0, 1.0]`.
+    /// Returns the end-to-end lookup hit rate as a value in `[0.0, 1.0]`.
     ///
-    /// Returns `0.0` when no lookups have been recorded.
+    /// An in-memory miss followed by a disk lookup is one request, so memory
+    /// fallthroughs are not counted again in the denominator. Returns `0.0`
+    /// when no lookups have been recorded.
     pub fn hit_rate(&self) -> f64 {
         let hits = u128::from(self.memory_hits) + u128::from(self.disk_hits);
-        let total = hits + u128::from(self.memory_misses) + u128::from(self.disk_misses);
+        let total = hits + u128::from(self.disk_misses);
         if total == 0 {
             return 0.0;
         }
@@ -118,8 +120,8 @@ impl CacheManager {
     pub fn invalidate(&mut self, namespace: &str, key: &str) -> Result<()> {
         validate_cache_address(namespace, key)?;
         let mem_key = memory_key(namespace, key);
-        self.memory.remove(&mem_key);
         self.disk.remove(namespace, key)?;
+        self.memory.remove(&mem_key);
         Ok(())
     }
 
@@ -161,6 +163,7 @@ fn increment_saturating(counter: &AtomicU64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
 
     fn test_config(tmp: &TempDir) -> CacheConfig {
@@ -261,9 +264,9 @@ mod tests {
     fn hit_rate_calculation() {
         let stats = CacheStats {
             memory_hits: 3,
-            memory_misses: 1,
+            memory_misses: 2,
             disk_hits: 1,
-            disk_misses: 0,
+            disk_misses: 1,
             memory_entries: 0,
             disk_bytes: 0,
         };
@@ -294,7 +297,7 @@ mod tests {
             memory_entries: 0,
             disk_bytes: 0,
         };
-        assert!((stats.hit_rate() - 0.5).abs() < f64::EPSILON);
+        assert!((stats.hit_rate() - (2.0 / 3.0)).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -370,5 +373,33 @@ mod tests {
                 .is_err()
         );
         assert_eq!(manager.memory.len(), 0);
+    }
+
+    #[test]
+    fn failed_disk_invalidation_preserves_the_memory_entry() {
+        let tmp = TempDir::new().unwrap();
+        let mut manager = CacheManager::new(test_config(&tmp)).unwrap();
+        manager
+            .put("ns", "key", &42, CachePriority::Normal)
+            .unwrap();
+
+        let namespace = tmp.path().join("cache/ns");
+        let prefix = fs::read_dir(&namespace)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let entry = fs::read_dir(prefix)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        fs::remove_file(&entry).unwrap();
+        fs::create_dir(&entry).unwrap();
+
+        assert!(manager.invalidate("ns", "key").is_err());
+        assert!(manager.memory.get(&memory_key("ns", "key")).is_some());
     }
 }

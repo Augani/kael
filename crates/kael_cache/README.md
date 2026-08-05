@@ -26,12 +26,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Namespaces are restricted to short portable path components, and logical keys
-are bounded before hashing. Disk keys are SHA-256-addressed, replacements are
-atomic on supported platforms, and byte and per-namespace entry budgets evict
-the oldest entries deterministically, including when an existing cache is
-opened. Cached values use JSON serialization; secrets and irreplaceable user
-data belong in their dedicated storage systems instead.
+Namespaces are restricted to short portable path components, including the
+same Windows reserved-name rules on every platform, and logical keys are
+bounded before hashing. Disk keys are SHA-256-addressed, replacements are
+atomic on supported platforms, reads are bounded by the configured byte budget,
+and byte and per-namespace entry budgets evict the oldest entries
+deterministically, including when an existing cache is opened.
+
+Use one live `DiskCache` or `CacheManager` for each disk root. Independent
+instances and processes do not coordinate their in-memory indexes. Cached
+values use JSON serialization; secrets and irreplaceable user data belong in
+their dedicated storage systems instead.
 
 See the [Kael guide](https://augani.github.io/kael/) for framework-level usage.
 
