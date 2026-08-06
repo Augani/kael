@@ -67,9 +67,11 @@ Use `DocumentController::new` to place Kael's metadata under the platform-standa
 
 `modify`, `undo`, `redo`, and version restoration update the in-memory model first, then maintain a recovery snapshot. If recovery persistence fails, the operation returns an error but the in-memory change is retained and remains observable through listeners. A successful primary save is likewise not rolled back when recent-document or version-history bookkeeping fails; the returned error explains that the document itself was saved.
 
+Recovery snapshots for file-backed documents carry the SHA-256 digest of the primary revision they extend. Reopening applies a snapshot only when that baseline still matches, so an external file revision is not silently replaced by stale recovery data. Corrupt, incompatible, and stale snapshots are ignored and removed without blocking the primary document from opening.
+
 Primary saves use a temporary sibling, flush and sync it, then atomically replace the destination. Existing file permissions are preserved. Existing symbolic-link save destinations are resolved to their target so saving does not silently replace the link itself. Recovery and metadata files reject symbolic links and non-regular files; on Unix, Kael creates them with owner-only permissions and secures the platform-standard metadata root.
 
-Save, Save As, revert, and version-restore operations are serialized across clones of one `DocumentHandle`. Concurrent edits are allowed while an asynchronous save is in flight: the saved snapshot becomes the baseline and any newer content stays dirty. A stale revert or version restore refuses to overwrite a concurrent edit.
+Save, Save As, revert, and version-restore operations are serialized across clones of one `DocumentHandle`. Recovery updates are serialized with save finalization as well. Concurrent edits are allowed while an asynchronous save is in flight: the saved snapshot becomes the baseline and any newer content stays dirty and recoverable. A stale revert or version restore refuses to overwrite a concurrent edit.
 
 Kael does not lock a document against other processes or a second independently opened handle. Coordinate those writers in the application, or add domain-specific conflict detection when external modification is possible.
 
@@ -79,14 +81,15 @@ Kael does not lock a document against other processes or a second independently 
 - Controllers retain up to 100 undo snapshots by default, 20 persisted versions per document, and 50 recent documents.
 - `with_history_limit` changes the undo bound for documents subsequently created by that controller.
 - Undo entries are shared snapshots, but every `modify` call clones the current content model and writes a recovery snapshot synchronously.
+- File reads are streamed under their configured bound, and autosave headers are written without duplicating the serialized document buffer.
 
-Keep `Document::read` and `Document::write` deterministic. Batch high-frequency edits, and use an application-specific incremental model for very large editors or media projects. Listener callbacks run synchronously after state is committed; they should return quickly. Keep the returned `Subscription` alive for as long as the listener is needed; dropping it unregisters the callback. A listener panic is isolated from the document and from other listeners.
+Keep `Document::read` and `Document::write` deterministic. Batch high-frequency edits, and use an application-specific incremental model for very large editors or media projects. Listener callbacks run synchronously after state is committed; they should return quickly. Keep the returned `Subscription` alive for as long as the listener is needed; dropping it or calling `unsubscribe` unregisters the callback. A listener panic is isolated from the document and from other listeners.
 
 The default recovery location is the operating system's temporary directory. Pass `AutosaveConfig::new(AutosaveLocation::AdjacentToFile)` or a custom location to `with_autosave_config` when recovery data must survive temporary-directory cleanup. Treat version history as local recovery data, not as a collaborative revision system or backup service.
 
 ## Platform scope
 
-The portable recent list is JSON metadata owned by the controller. Register file associations in the application bundle or installer, and bridge to the native recent-items API when that integration is appropriate for the product. `platform::support()` reports this boundary; it does not register associations.
+The portable recent list is JSON metadata owned by the controller and preserves native non-Unicode paths on Unix and Windows. Register file associations in the application bundle or installer, and bridge to the native recent-items API when that integration is appropriate for the product. `platform::support()` reports this boundary; it does not register associations.
 
 API documentation is generated from this README and the public item documentation on [docs.rs](https://docs.rs/kael_document). The broader framework guide lives in the [Kael repository](https://github.com/Augani/kael).
 
