@@ -37,12 +37,12 @@ pub(crate) struct VersionStore {
 impl VersionStore {
     pub(crate) fn new_in(root: impl AsRef<Path>, max_versions: usize) -> Result<Self> {
         let root = root.as_ref();
-        std::fs::create_dir_all(root)
-            .with_context(|| format!("failed to create version root {}", root.display()))?;
+        autosave::ensure_real_directory(root, "document metadata root")?;
         let store = Self {
             root: root.join("document_versions"),
             max_versions: max_versions.max(1),
         };
+        autosave::ensure_real_directory(&store.root, "document version root")?;
         store.cleanup_temp_files();
         Ok(store)
     }
@@ -56,7 +56,7 @@ impl VersionStore {
         };
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
-            if path.is_dir() {
+            if entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
                 if let Ok(sub_entries) = std::fs::read_dir(&path) {
                     for sub_entry in sub_entries.filter_map(|e| e.ok()) {
                         let sub_path = sub_entry.path();
@@ -75,31 +75,11 @@ impl VersionStore {
             return Ok(Vec::new());
         }
 
-        let metadata = std::fs::symlink_metadata(&metadata_path).with_context(|| {
-            format!(
-                "failed to inspect document version metadata at {}",
-                metadata_path.display()
-            )
-        })?;
-        anyhow::ensure!(
-            metadata.file_type().is_file(),
-            "document version metadata {} is not a regular file",
-            metadata_path.display()
-        );
-        anyhow::ensure!(
-            metadata.len() <= MAX_VERSION_METADATA_BYTES,
-            "document version metadata exceeds the {MAX_VERSION_METADATA_BYTES} byte limit"
-        );
-        let json = std::fs::read(&metadata_path).with_context(|| {
-            format!(
-                "failed to read document version metadata from {}",
-                metadata_path.display()
-            )
-        })?;
-        anyhow::ensure!(
-            u64::try_from(json.len()).unwrap_or(u64::MAX) <= MAX_VERSION_METADATA_BYTES,
-            "document version metadata exceeds the {MAX_VERSION_METADATA_BYTES} byte limit"
-        );
+        let json = autosave::read_regular_file_bounded(
+            &metadata_path,
+            MAX_VERSION_METADATA_BYTES,
+            "document version metadata",
+        )?;
         let versions: Vec<DocumentVersion> = serde_json::from_slice(&json)
             .context("failed to deserialize document version metadata")?;
         validate_versions(&versions)?;
@@ -108,12 +88,7 @@ impl VersionStore {
 
     pub(crate) fn record(&self, document_key: &str, bytes: &[u8]) -> Result<DocumentVersion> {
         let document_dir = self.document_dir(document_key);
-        std::fs::create_dir_all(&document_dir).with_context(|| {
-            format!(
-                "failed to create document version directory {}",
-                document_dir.display()
-            )
-        })?;
+        autosave::ensure_real_directory(&document_dir, "document version directory")?;
 
         let mut versions = VecDeque::from(self.load(document_key)?);
         let digest = digest_hex(bytes);
@@ -130,7 +105,9 @@ impl VersionStore {
         {
             return Ok(existing.clone());
         }
-        let timestamp = now_unix_millis();
+        let timestamp = versions.back().map_or_else(now_unix_millis, |last| {
+            now_unix_millis().max(last.created_at_millis)
+        });
         let version = DocumentVersion {
             id: next_version_id(timestamp, &digest, &versions),
             created_at_millis: timestamp,
@@ -169,25 +146,11 @@ impl VersionStore {
         let blob_path = self
             .document_dir(document_key)
             .join(format!("{}.bin", stored.digest));
-        let metadata = std::fs::symlink_metadata(&blob_path).with_context(|| {
-            format!(
-                "failed to inspect document version blob {}",
-                blob_path.display()
-            )
-        })?;
-        anyhow::ensure!(
-            metadata.file_type().is_file(),
-            "document version blob {} is not a regular file",
-            blob_path.display()
-        );
-        autosave::ensure_size(metadata.len())?;
-        let bytes = std::fs::read(&blob_path).with_context(|| {
-            format!(
-                "failed to read document version blob {}",
-                blob_path.display()
-            )
-        })?;
-        autosave::ensure_size(u64::try_from(bytes.len()).unwrap_or(u64::MAX))?;
+        let bytes = autosave::read_regular_file_bounded(
+            &blob_path,
+            autosave::MAX_DOCUMENT_BYTES,
+            "document version blob",
+        )?;
         let actual_digest = digest_hex(&bytes);
         if actual_digest != stored.digest {
             return Err(anyhow!(
@@ -222,8 +185,7 @@ impl VersionStore {
     }
 
     fn document_dir(&self, document_key: &str) -> PathBuf {
-        self.root
-            .join(short_hash(&digest_hex(document_key.as_bytes())))
+        self.root.join(digest_hex(document_key.as_bytes()))
     }
 
     fn metadata_path(&self, document_key: &str) -> PathBuf {
@@ -399,5 +361,39 @@ mod tests {
         .unwrap();
 
         assert!(store.load("doc").is_err());
+    }
+
+    #[test]
+    fn document_directories_use_full_sha256_identities() {
+        let tmp = TempDir::new().unwrap();
+        let store = VersionStore::new_in(tmp.path(), 4).unwrap();
+        let directory = store.document_dir("doc");
+
+        assert_eq!(directory.file_name().unwrap().to_string_lossy().len(), 64);
+    }
+
+    #[test]
+    fn versions_remain_ordered_when_the_wall_clock_moves_back() {
+        let tmp = TempDir::new().unwrap();
+        let store = VersionStore::new_in(tmp.path(), 4).unwrap();
+        let document_dir = store.document_dir("doc");
+        std::fs::create_dir_all(&document_dir).unwrap();
+        let existing = DocumentVersion {
+            id: "future".into(),
+            created_at_millis: u64::MAX,
+            digest: digest_hex(b"future"),
+            size_bytes: 6,
+        };
+        autosave::write_private_bytes_atomically(
+            &document_dir.join(format!("{}.bin", existing.digest)),
+            b"future",
+        )
+        .unwrap();
+        store.persist_versions("doc", &[existing]).unwrap();
+
+        let recorded = store.record("doc", b"new").unwrap();
+
+        assert_eq!(recorded.created_at_millis, u64::MAX);
+        assert_eq!(store.load("doc").unwrap().len(), 2);
     }
 }

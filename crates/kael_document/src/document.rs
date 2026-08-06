@@ -2,6 +2,7 @@
 
 use std::{
     collections::{BTreeMap, VecDeque},
+    ffi::OsString,
     marker::PhantomData,
     path::{Path, PathBuf},
     sync::{
@@ -52,6 +53,7 @@ pub struct DocumentHandle<D: Document> {
     controller: Arc<ControllerState<D>>,
     state: Arc<Mutex<DocumentState<D>>>,
     file_operation_lock: Arc<smol::lock::Mutex<()>>,
+    recovery_lock: Arc<Mutex<()>>,
 }
 
 impl<D: Document> Clone for DocumentController<D> {
@@ -68,6 +70,7 @@ impl<D: Document> Clone for DocumentHandle<D> {
             controller: self.controller.clone(),
             state: self.state.clone(),
             file_operation_lock: self.file_operation_lock.clone(),
+            recovery_lock: self.recovery_lock.clone(),
         }
     }
 }
@@ -78,7 +81,6 @@ struct ControllerState<D: Document> {
     recent_store: RecentDocumentStore,
     version_store: VersionStore,
     max_history_depth: usize,
-    next_untitled_id: Arc<AtomicU64>,
     metadata_lock: Arc<Mutex<()>>,
     _marker: PhantomData<fn() -> D>,
 }
@@ -91,7 +93,6 @@ impl<D: Document> Clone for ControllerState<D> {
             recent_store: self.recent_store.clone(),
             version_store: self.version_store.clone(),
             max_history_depth: self.max_history_depth,
-            next_untitled_id: self.next_untitled_id.clone(),
             metadata_lock: self.metadata_lock.clone(),
             _marker: PhantomData,
         }
@@ -102,6 +103,7 @@ struct DocumentState<D: Document> {
     name: String,
     content: Snapshot<D::Content>,
     last_saved_snapshot: Option<Snapshot<D::Content>>,
+    last_saved_digest: Option<autosave::ContentDigest>,
     file_path: Option<PathBuf>,
     file_type_index: usize,
     dirty: bool,
@@ -145,6 +147,17 @@ impl<D: Document> DocumentController<D> {
                 storage_root.display()
             )
         })?;
+        let storage_metadata = std::fs::symlink_metadata(storage_root).with_context(|| {
+            format!(
+                "failed to inspect document storage root {}",
+                storage_root.display()
+            )
+        })?;
+        anyhow::ensure!(
+            storage_metadata.file_type().is_dir(),
+            "document storage root {} is not a real directory",
+            storage_root.display()
+        );
 
         Ok(Self {
             inner: Arc::new(ControllerState {
@@ -153,7 +166,6 @@ impl<D: Document> DocumentController<D> {
                 recent_store: RecentDocumentStore::new_in(storage_root, 50)?,
                 version_store: VersionStore::new_in(storage_root, 20)?,
                 max_history_depth: 100,
-                next_untitled_id: Arc::new(AtomicU64::new(1)),
                 metadata_lock: Arc::new(Mutex::new(())),
                 _marker: PhantomData,
             }),
@@ -174,7 +186,8 @@ impl<D: Document> DocumentController<D> {
 
     /// Creates a new untitled document.
     pub fn new_document(&self) -> DocumentHandle<D> {
-        let untitled_id = self.inner.next_untitled_id.fetch_add(1, Ordering::Relaxed);
+        static NEXT_UNTITLED_ID: AtomicU64 = AtomicU64::new(1);
+        let untitled_id = NEXT_UNTITLED_ID.fetch_add(1, Ordering::Relaxed);
         let name = format!("untitled-{untitled_id}");
         let file_type_index = default_file_type_index(D::file_types()).unwrap_or(0);
         let autosave_path = autosave::autosave_path(
@@ -191,6 +204,7 @@ impl<D: Document> DocumentController<D> {
                 name,
                 content: content.clone(),
                 last_saved_snapshot: Some(content),
+                last_saved_digest: None,
                 file_path: None,
                 file_type_index,
                 dirty: false,
@@ -202,6 +216,7 @@ impl<D: Document> DocumentController<D> {
                 dirty_listeners: BTreeMap::new(),
             })),
             file_operation_lock: Arc::new(smol::lock::Mutex::new(())),
+            recovery_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -209,58 +224,81 @@ impl<D: Document> DocumentController<D> {
     pub async fn open(&self, path: impl AsRef<Path>) -> Result<DocumentHandle<D>> {
         let path = normalize_path(path.as_ref())?;
         let controller = self.inner.clone();
-        let (path, name, content, saved_content, file_type_index, dirty, autosave_path) =
-            smol::unblock(move || -> Result<_> {
-                let file_types = D::file_types();
-                let file_type_index = file_type_index_for_path(&path, file_types)
-                    .or_else(|| default_file_type_index(file_types))
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "document type {} does not define any file types",
-                            std::any::type_name::<D>()
-                        )
-                    })?;
-                let file_type = &file_types[file_type_index];
-                let saved_bytes = read_document_bytes(&path)?;
-                let saved_content = Arc::new(D::read(&saved_bytes, file_type)?);
-                let name = path
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .unwrap_or("document")
-                    .to_string();
-                let autosave_path = autosave::autosave_path(
-                    &controller.app_id,
-                    &controller.autosave_config.location,
-                    Some(&path),
-                    &name,
-                );
+        let (
+            path,
+            name,
+            content,
+            saved_content,
+            saved_digest,
+            file_type_index,
+            dirty,
+            autosave_path,
+        ) = smol::unblock(move || -> Result<_> {
+            let file_types = D::file_types();
+            let file_type_index = file_type_index_for_path(&path, file_types)
+                .or_else(|| default_file_type_index(file_types))
+                .ok_or_else(|| {
+                    anyhow!(
+                        "document type {} does not define any file types",
+                        std::any::type_name::<D>()
+                    )
+                })?;
+            let file_type = &file_types[file_type_index];
+            let saved_bytes = read_document_bytes(&path)?;
+            let saved_digest = autosave::content_digest(&saved_bytes);
+            let saved_content = Arc::new(D::read(&saved_bytes, file_type)?);
+            let name = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("document")
+                .to_string();
+            let autosave_path = autosave::autosave_path(
+                &controller.app_id,
+                &controller.autosave_config.location,
+                Some(&path),
+                &name,
+            );
 
-                let (content, dirty) = match autosave::load_autosave(&autosave_path)? {
-                    Some(autosave_bytes) => match D::read(&autosave_bytes, file_type) {
-                        Ok(autosave_content) if autosave_content != *saved_content => {
-                            (Arc::new(autosave_content), true)
-                        }
-                        _ => (saved_content.clone(), false),
-                    },
-                    None => (saved_content.clone(), false),
-                };
+            let (content, dirty) = match autosave::load_autosave(&autosave_path) {
+                Ok(Some(snapshot)) => {
+                    let compatible = snapshot.baseline_digest.as_ref() == Some(&saved_digest)
+                        || (snapshot.legacy
+                            && autosave::legacy_snapshot_is_newer(&autosave_path, &path)
+                                .unwrap_or(false));
+                    if compatible
+                        && let Ok(autosave_content) = D::read(&snapshot.bytes, file_type)
+                        && autosave_content != *saved_content
+                    {
+                        (Arc::new(autosave_content), true)
+                    } else {
+                        let _ = autosave::clear_autosave(&autosave_path);
+                        (saved_content.clone(), false)
+                    }
+                }
+                Ok(None) => (saved_content.clone(), false),
+                Err(_) => {
+                    let _ = autosave::clear_autosave(&autosave_path);
+                    (saved_content.clone(), false)
+                }
+            };
 
-                // Recent-document tracking is ancillary and must not make an otherwise valid
-                // document impossible to open. Callers can still inspect or clear the store.
-                let _metadata_guard = controller.metadata_lock.lock();
-                let _ = controller.recent_store.record(&path);
+            // Recent-document tracking is ancillary and must not make an otherwise valid
+            // document impossible to open. Callers can still inspect or clear the store.
+            let _metadata_guard = controller.metadata_lock.lock();
+            let _ = controller.recent_store.record(&path);
 
-                Ok((
-                    path,
-                    name,
-                    content,
-                    saved_content,
-                    file_type_index,
-                    dirty,
-                    autosave_path,
-                ))
-            })
-            .await?;
+            Ok((
+                path,
+                name,
+                content,
+                saved_content,
+                saved_digest,
+                file_type_index,
+                dirty,
+                autosave_path,
+            ))
+        })
+        .await?;
 
         Ok(DocumentHandle {
             controller: self.inner.clone(),
@@ -268,6 +306,7 @@ impl<D: Document> DocumentController<D> {
                 name,
                 content,
                 last_saved_snapshot: Some(saved_content),
+                last_saved_digest: Some(saved_digest),
                 file_path: Some(path),
                 file_type_index,
                 dirty,
@@ -279,6 +318,7 @@ impl<D: Document> DocumentController<D> {
                 dirty_listeners: BTreeMap::new(),
             })),
             file_operation_lock: Arc::new(smol::lock::Mutex::new(())),
+            recovery_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -304,6 +344,7 @@ impl<D: Document> DocumentHandle<D> {
     /// Applies an in-memory change to the document content.
     pub fn modify(&self, f: impl FnOnce(&mut D::Content)) -> Result<()> {
         let (content, change_listeners, dirty_listeners, dirty_changed, dirty, autosave_result) = {
+            let _recovery_guard = self.recovery_lock.lock();
             let mut state = self.state.lock();
             let mut next_content = state.content.as_ref().clone();
             f(&mut next_content);
@@ -331,10 +372,14 @@ impl<D: Document> DocumentHandle<D> {
             let content = state.content.clone();
             let previous_dirty = state.dirty;
             state.dirty = dirty;
-            let autosave_result = (|| {
+            let autosave_result: Result<()> = (|| {
                 if dirty {
                     let autosave_bytes = D::write(state.content.as_ref(), &file_type)?;
-                    autosave::write_autosave(&state.autosave_path, &autosave_bytes)
+                    autosave::write_autosave(
+                        &state.autosave_path,
+                        &autosave_bytes,
+                        state.last_saved_digest.as_ref(),
+                    )
                 } else {
                     autosave::clear_autosave(&state.autosave_path)
                 }
@@ -411,13 +456,15 @@ impl<D: Document> DocumentHandle<D> {
             .get(file_type_index)
             .ok_or_else(|| anyhow!("invalid file type index {file_type_index}"))?;
         let path_for_read = path.clone();
-        let content = smol::unblock(move || {
+        let (content, saved_digest) = smol::unblock(move || {
             let bytes = read_document_bytes(&path_for_read)?;
-            Ok::<_, anyhow::Error>(Arc::new(D::read(&bytes, file_type)?))
+            let digest = autosave::content_digest(&bytes);
+            Ok::<_, anyhow::Error>((Arc::new(D::read(&bytes, file_type)?), digest))
         })
         .await?;
 
         let (previous_dirty, change_listeners, dirty_listeners) = {
+            let _recovery_guard = self.recovery_lock.lock();
             let mut state = self.state.lock();
             anyhow::ensure!(
                 Arc::ptr_eq(&state.content, &previous_content)
@@ -429,6 +476,7 @@ impl<D: Document> DocumentHandle<D> {
             let previous_dirty = state.dirty;
             state.content = content.clone();
             state.last_saved_snapshot = Some(content.clone());
+            state.last_saved_digest = Some(saved_digest);
             state.dirty = false;
             state.undo_stack.clear();
             state.redo_stack.clear();
@@ -503,6 +551,7 @@ impl<D: Document> DocumentHandle<D> {
         })
         .await?;
         let (content, change_listeners, dirty_listeners, dirty_changed, dirty, autosave_result) = {
+            let _recovery_guard = self.recovery_lock.lock();
             let mut state = self.state.lock();
             anyhow::ensure!(
                 Arc::ptr_eq(&state.content, &previous_content)
@@ -532,7 +581,11 @@ impl<D: Document> DocumentHandle<D> {
             let autosave_result = (|| {
                 if dirty {
                     let autosave_bytes = D::write(state.content.as_ref(), &file_type)?;
-                    autosave::write_autosave(&state.autosave_path, &autosave_bytes)
+                    autosave::write_autosave(
+                        &state.autosave_path,
+                        &autosave_bytes,
+                        state.last_saved_digest.as_ref(),
+                    )
                 } else {
                     autosave::clear_autosave(&state.autosave_path)
                 }
@@ -634,51 +687,66 @@ impl<D: Document> DocumentHandle<D> {
         let controller = self.controller.clone();
         let save_path = normalized_path.clone();
         let save_content = content.clone();
-        let ancillary_result = smol::unblock(move || -> Result<Result<()>> {
-            let bytes = D::write(save_content.as_ref(), file_type)?;
-            autosave::write_bytes_atomically(&save_path, &bytes)?;
-            Ok((|| {
-                let _metadata_guard = controller.metadata_lock.lock();
-                controller.recent_store.record(&save_path).context(
-                    "document was saved, but its recent-document entry could not be updated",
-                )?;
-                controller
-                    .version_store
-                    .record(&document_key(&save_path), &bytes)
-                    .context("document was saved, but its version history could not be updated")?;
-                Ok(())
-            })())
-        })
-        .await?;
+        let (saved_digest, ancillary_result) =
+            smol::unblock(move || -> Result<(autosave::ContentDigest, Result<()>)> {
+                let bytes = D::write(save_content.as_ref(), file_type)?;
+                autosave::write_bytes_atomically(&save_path, &bytes)?;
+                let saved_digest = autosave::content_digest(&bytes);
+                let ancillary_result = (|| {
+                    let _metadata_guard = controller.metadata_lock.lock();
+                    controller.recent_store.record(&save_path).context(
+                        "document was saved, but its recent-document entry could not be updated",
+                    )?;
+                    controller
+                        .version_store
+                        .record(&document_key(&save_path), &bytes)
+                        .context(
+                            "document was saved, but its version history could not be updated",
+                        )?;
+                    Ok(())
+                })();
+                Ok((saved_digest, ancillary_result))
+            })
+            .await?;
 
-        let (dirty, dirty_changed, dirty_listeners, autosave_content) = {
-            let mut state = self.state.lock();
+        let state = self.state.clone();
+        let recovery_lock = self.recovery_lock.clone();
+        let autosave_target = new_autosave_path.clone();
+        let state_path = normalized_path.clone();
+        let (dirty, dirty_changed, dirty_listeners, autosave_result) = smol::unblock(move || {
+            let _recovery_guard = recovery_lock.lock();
+            let mut state = state.lock();
             let dirty_before = state.dirty;
-            state.file_path = Some(normalized_path.clone());
+            state.file_path = Some(state_path);
             state.file_type_index = file_type_index;
             state.last_saved_snapshot = Some(content);
-            state.autosave_path = new_autosave_path.clone();
+            state.last_saved_digest = Some(saved_digest);
+            state.autosave_path = autosave_target.clone();
             state.dirty = compute_dirty(&state);
+
+            let autosave_result: Result<()> = (|| {
+                if state.dirty {
+                    let autosave_bytes = D::write(state.content.as_ref(), file_type)?;
+                    autosave::write_autosave(
+                        &autosave_target,
+                        &autosave_bytes,
+                        state.last_saved_digest.as_ref(),
+                    )?;
+                } else {
+                    autosave::clear_autosave(&autosave_target)?;
+                }
+                if old_autosave_path != autosave_target {
+                    autosave::clear_autosave(&old_autosave_path)?;
+                }
+                Ok(())
+            })();
+
             (
                 state.dirty,
                 dirty_before != state.dirty,
                 state.dirty_listeners.values().cloned().collect::<Vec<_>>(),
-                state.dirty.then(|| state.content.clone()),
+                autosave_result,
             )
-        };
-
-        let autosave_target = new_autosave_path.clone();
-        let autosave_result = smol::unblock(move || -> Result<()> {
-            if old_autosave_path != autosave_target {
-                autosave::clear_autosave(&old_autosave_path)?;
-            }
-            if let Some(autosave_content) = autosave_content {
-                let autosave_bytes = D::write(autosave_content.as_ref(), file_type)?;
-                autosave::write_autosave(&autosave_target, &autosave_bytes)?;
-            } else {
-                autosave::clear_autosave(&autosave_target)?;
-            }
-            Ok(())
         })
         .await;
 
@@ -694,6 +762,7 @@ impl<D: Document> DocumentHandle<D> {
 
     fn restore_history_entry(&self, undo: bool) -> Result<()> {
         let (content, dirty, dirty_changed, change_listeners, dirty_listeners, autosave_result) = {
+            let _recovery_guard = self.recovery_lock.lock();
             let mut state = self.state.lock();
             let next_content = if undo {
                 let Some(previous) = state.undo_stack.back().cloned() else {
@@ -726,7 +795,11 @@ impl<D: Document> DocumentHandle<D> {
                 if dirty {
                     let file_type = *selected_file_type::<D>(&state)?;
                     let autosave_bytes = D::write(state.content.as_ref(), &file_type)?;
-                    autosave::write_autosave(&state.autosave_path, &autosave_bytes)
+                    autosave::write_autosave(
+                        &state.autosave_path,
+                        &autosave_bytes,
+                        state.last_saved_digest.as_ref(),
+                    )
                 } else {
                     autosave::clear_autosave(&state.autosave_path)
                 }
@@ -809,21 +882,43 @@ fn normalize_path(path: &Path) -> Result<PathBuf> {
             .context("failed to resolve current working directory")?
             .join(path)
     };
-
     match std::fs::canonicalize(&absolute) {
         Ok(canonical) => Ok(canonical),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let Some((parent, file_name)) = absolute.parent().zip(absolute.file_name()) else {
-                return Ok(absolute);
-            };
-            match std::fs::canonicalize(parent) {
-                Ok(canonical_parent) => Ok(canonical_parent.join(file_name)),
-                Err(parent_error) if parent_error.kind() == std::io::ErrorKind::NotFound => {
-                    Ok(absolute)
+            let mut candidate = absolute.as_path();
+            let mut missing = Vec::<OsString>::new();
+            loop {
+                match std::fs::canonicalize(candidate) {
+                    Ok(mut canonical) => {
+                        for component in missing.iter().rev() {
+                            canonical.push(component);
+                        }
+                        return Ok(canonical);
+                    }
+                    Err(parent_error) if parent_error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(parent_error) => {
+                        return Err(parent_error).with_context(|| {
+                            format!(
+                                "failed to resolve document ancestor {}",
+                                candidate.display()
+                            )
+                        });
+                    }
                 }
-                Err(parent_error) => Err(parent_error).with_context(|| {
-                    format!("failed to resolve document parent {}", parent.display())
-                }),
+
+                let file_name = candidate.file_name().ok_or_else(|| {
+                    anyhow!(
+                        "failed to find an existing ancestor for document path {}",
+                        absolute.display()
+                    )
+                })?;
+                missing.push(file_name.to_os_string());
+                candidate = candidate.parent().ok_or_else(|| {
+                    anyhow!(
+                        "failed to find an existing ancestor for document path {}",
+                        absolute.display()
+                    )
+                })?;
             }
         }
         Err(error) => Err(error)
@@ -832,27 +927,17 @@ fn normalize_path(path: &Path) -> Result<PathBuf> {
 }
 
 fn read_document_bytes(path: &Path) -> Result<Vec<u8>> {
-    let metadata = std::fs::symlink_metadata(path)
-        .with_context(|| format!("failed to inspect document at {}", path.display()))?;
-    anyhow::ensure!(
-        metadata.file_type().is_file(),
-        "document {} is not a regular file",
-        path.display()
-    );
-    autosave::ensure_size(metadata.len())?;
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("failed to read document from {}", path.display()))?;
-    autosave::ensure_size(u64::try_from(bytes.len()).unwrap_or(u64::MAX))?;
-    Ok(bytes)
+    autosave::read_regular_file_bounded(path, autosave::MAX_DOCUMENT_BYTES, "document payload")
 }
 
 fn document_key(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
+    autosave::path_digest_hex(path)
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
+        path::PathBuf,
         sync::atomic::{AtomicUsize, Ordering},
         sync::{Arc, Condvar, Mutex, OnceLock},
     };
@@ -862,7 +947,7 @@ mod tests {
 
     use crate::{AutosaveConfig, AutosaveLocation, FileType};
 
-    use super::{Document, DocumentController};
+    use super::{Document, DocumentController, document_key, normalize_path};
 
     static CONTENT_CLONE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -886,6 +971,8 @@ mod tests {
 
     struct BlockingReadDocument;
 
+    struct BlockingWriteDocument;
+
     #[derive(Default)]
     struct ReadGate {
         enabled: bool,
@@ -894,6 +981,7 @@ mod tests {
     }
 
     static READ_GATE: OnceLock<(Mutex<ReadGate>, Condvar)> = OnceLock::new();
+    static WRITE_GATE: OnceLock<(Mutex<ReadGate>, Condvar)> = OnceLock::new();
 
     const TEXT_FILE_TYPES: [FileType; 1] = [FileType {
         name: "Plain Text",
@@ -972,6 +1060,36 @@ mod tests {
         }
 
         fn write(content: &Self::Content, _file_type: &FileType) -> crate::Result<Vec<u8>> {
+            Ok(content.as_bytes().to_vec())
+        }
+    }
+
+    impl Document for BlockingWriteDocument {
+        type Content = String;
+
+        fn file_types() -> &'static [FileType] {
+            &TEXT_FILE_TYPES
+        }
+
+        fn new_untitled() -> Self::Content {
+            String::new()
+        }
+
+        fn read(data: &[u8], _file_type: &FileType) -> crate::Result<Self::Content> {
+            String::from_utf8(data.to_vec()).map_err(Into::into)
+        }
+
+        fn write(content: &Self::Content, _file_type: &FileType) -> crate::Result<Vec<u8>> {
+            let (gate, condition) = WRITE_GATE.get_or_init(Default::default);
+            let mut gate = gate.lock().unwrap();
+            if gate.enabled && content == "saved" {
+                gate.started = true;
+                condition.notify_all();
+                while !gate.released {
+                    gate = condition.wait(gate).unwrap();
+                }
+            }
+            drop(gate);
             Ok(content.as_bytes().to_vec())
         }
     }
@@ -1073,6 +1191,111 @@ mod tests {
     }
 
     #[test]
+    fn stale_autosave_does_not_replace_an_external_file_revision() {
+        let directory = tempdir().unwrap();
+        let autosave_root = directory.path().join("autosave");
+        let controller = DocumentController::<TextDocument>::new_in(
+            "dev.kael.doc.tests.stale-autosave",
+            directory.path(),
+        )
+        .unwrap()
+        .with_autosave_config(AutosaveConfig::new(AutosaveLocation::Custom(autosave_root)));
+        let handle = controller.new_document();
+        let path = directory.path().join("draft.txt");
+        handle.modify(|content| content.push_str("saved")).unwrap();
+        block_on(handle.save_as(&path)).unwrap();
+        handle
+            .modify(|content| {
+                content.clear();
+                content.push_str("recovery");
+            })
+            .unwrap();
+
+        std::fs::write(&path, "external").unwrap();
+        let reopened = block_on(controller.open(&path)).unwrap();
+
+        assert_eq!(reopened.content(), "external");
+        assert!(!reopened.is_dirty());
+    }
+
+    #[test]
+    fn corrupt_recovery_does_not_prevent_opening_the_primary_document() {
+        let directory = tempdir().unwrap();
+        let autosave_root = directory.path().join("autosave");
+        let controller = DocumentController::<TextDocument>::new_in(
+            "dev.kael.doc.tests.corrupt-autosave",
+            directory.path(),
+        )
+        .unwrap()
+        .with_autosave_config(AutosaveConfig::new(AutosaveLocation::Custom(autosave_root)));
+        let handle = controller.new_document();
+        let path = directory.path().join("draft.txt");
+        handle.modify(|content| content.push_str("saved")).unwrap();
+        block_on(handle.save_as(&path)).unwrap();
+        let autosave_path = handle.state.lock().autosave_path.clone();
+        std::fs::create_dir_all(autosave_path.parent().unwrap()).unwrap();
+        std::fs::write(&autosave_path, b"KAEL-AUTOSAVE\0").unwrap();
+
+        let reopened = block_on(controller.open(&path)).unwrap();
+
+        assert_eq!(reopened.content(), "saved");
+        assert!(!reopened.is_dirty());
+        assert!(!autosave_path.exists());
+    }
+
+    #[test]
+    fn concurrent_edits_cannot_be_overwritten_by_save_finalization() {
+        let directory = tempdir().unwrap();
+        let autosave_root = directory.path().join("autosave");
+        let controller = DocumentController::<BlockingWriteDocument>::new_in(
+            "dev.kael.doc.tests.save-autosave-race",
+            directory.path(),
+        )
+        .unwrap()
+        .with_autosave_config(AutosaveConfig::new(AutosaveLocation::Custom(autosave_root)));
+        let handle = controller.new_document();
+        let path = directory.path().join("draft.txt");
+        handle.modify(|content| content.push_str("saved")).unwrap();
+
+        let (gate, condition) = WRITE_GATE.get_or_init(Default::default);
+        {
+            let mut gate = gate.lock().unwrap();
+            *gate = ReadGate {
+                enabled: true,
+                started: false,
+                released: false,
+            };
+        }
+
+        let saving_handle = handle.clone();
+        let save_path = path.clone();
+        let save = std::thread::spawn(move || block_on(saving_handle.save_as(save_path)));
+        {
+            let mut gate = gate.lock().unwrap();
+            while !gate.started {
+                gate = condition.wait(gate).unwrap();
+            }
+        }
+
+        handle.modify(|content| content.push_str(" live")).unwrap();
+        {
+            let mut gate = gate.lock().unwrap();
+            gate.released = true;
+            gate.enabled = false;
+            condition.notify_all();
+        }
+        save.join().unwrap().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "saved");
+        assert_eq!(handle.content(), "saved live");
+        assert!(handle.is_dirty());
+        drop(handle);
+
+        let reopened = block_on(controller.open(&path)).unwrap();
+        assert_eq!(reopened.content(), "saved live");
+        assert!(reopened.is_dirty());
+    }
+
+    #[test]
     fn modify_creates_one_new_content_snapshot() {
         CONTENT_CLONE_COUNT.store(0, Ordering::SeqCst);
 
@@ -1117,6 +1340,29 @@ mod tests {
         original_handle.modify(|content| content.push('2')).unwrap();
         original_handle.undo().unwrap();
         assert!(original_handle.can_undo());
+    }
+
+    #[test]
+    fn independent_controllers_do_not_share_untitled_recovery_paths() {
+        let first_directory = tempdir().unwrap();
+        let second_directory = tempdir().unwrap();
+        let first = DocumentController::<TextDocument>::new_in(
+            "dev.kael.doc.tests.untitled-identity",
+            first_directory.path(),
+        )
+        .unwrap()
+        .new_document();
+        let second = DocumentController::<TextDocument>::new_in(
+            "dev.kael.doc.tests.untitled-identity",
+            second_directory.path(),
+        )
+        .unwrap()
+        .new_document();
+
+        assert_ne!(
+            first.state.lock().autosave_path,
+            second.state.lock().autosave_path
+        );
     }
 
     #[test]
@@ -1253,6 +1499,29 @@ mod tests {
     }
 
     #[test]
+    fn listeners_can_modify_the_document_reentrantly() {
+        let directory = tempdir().unwrap();
+        let controller = DocumentController::<TextDocument>::new_in(
+            "dev.kael.doc.tests.reentrant-listener",
+            directory.path(),
+        )
+        .unwrap();
+        let handle = controller.new_document();
+        let callback_handle = handle.clone();
+        let _subscription = handle.on_change(move |content| {
+            if content == "first" {
+                callback_handle
+                    .modify(|content| content.push_str(" second"))
+                    .unwrap();
+            }
+        });
+
+        handle.modify(|content| content.push_str("first")).unwrap();
+
+        assert_eq!(handle.content(), "first second");
+    }
+
+    #[test]
     fn failed_autosave_keeps_the_modification_in_memory() {
         let directory = tempdir().unwrap();
         let autosave_root = directory.path().join("autosave");
@@ -1317,5 +1586,75 @@ mod tests {
             Some(std::fs::canonicalize(path).unwrap().as_path())
         );
         assert!(!handle.is_dirty());
+    }
+
+    #[test]
+    fn missing_document_parents_are_normalized_from_the_nearest_existing_ancestor() {
+        let directory = tempdir().unwrap();
+        let existing = directory.path().join("existing");
+        std::fs::create_dir(&existing).unwrap();
+        let requested = existing.join("missing").join("nested").join("note.txt");
+
+        let normalized = normalize_path(&requested).unwrap();
+
+        assert_eq!(
+            normalized,
+            std::fs::canonicalize(existing)
+                .unwrap()
+                .join("missing")
+                .join("nested")
+                .join("note.txt")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_normalization_preserves_symlink_parent_semantics() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().unwrap();
+        let target_parent = directory.path().join("outside");
+        let target = target_parent.join("target");
+        let link = directory.path().join("link");
+        std::fs::create_dir_all(&target).unwrap();
+        symlink(&target, &link).unwrap();
+
+        let normalized = normalize_path(&link.join("..").join("note.txt")).unwrap();
+
+        assert_eq!(
+            normalized,
+            std::fs::canonicalize(target_parent)
+                .unwrap()
+                .join("note.txt")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_paths_have_distinct_document_keys() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let first = PathBuf::from(std::ffi::OsString::from_vec(vec![b'a', 0xfe]));
+        let second = PathBuf::from(std::ffi::OsString::from_vec(vec![b'a', 0xff]));
+
+        assert_ne!(document_key(&first), document_key(&second));
+        assert_eq!(document_key(&first).len(), 64);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_storage_roots_reject_symbolic_links() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().unwrap();
+        let target = directory.path().join("target");
+        let link = directory.path().join("link");
+        std::fs::create_dir(&target).unwrap();
+        symlink(&target, &link).unwrap();
+
+        assert!(
+            DocumentController::<TextDocument>::new_in("dev.kael.doc.tests.storage-symlink", link,)
+                .is_err()
+        );
     }
 }

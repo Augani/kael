@@ -17,6 +17,13 @@ impl Subscription {
     pub fn detach(mut self) {
         self.unsubscribe.take();
     }
+
+    /// Unregisters the listener immediately.
+    pub fn unsubscribe(mut self) {
+        if let Some(unsubscribe) = self.unsubscribe.take() {
+            unsubscribe();
+        }
+    }
 }
 
 impl Drop for Subscription {

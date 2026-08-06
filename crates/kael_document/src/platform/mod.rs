@@ -45,9 +45,23 @@ pub(crate) fn document_storage_root(app_id: &str) -> Result<PathBuf> {
         "invalid application identifier {app_id:?}"
     );
 
-    let root = imp::base_data_dir()?.join(app_id).join("documents");
+    let app_root = imp::base_data_dir()?.join(app_id);
+    let root = app_root.join("documents");
     std::fs::create_dir_all(&root)
         .with_context(|| format!("failed to create document storage root {}", root.display()))?;
+    for directory in [&app_root, &root] {
+        let metadata = std::fs::symlink_metadata(directory).with_context(|| {
+            format!(
+                "failed to inspect document storage directory {}",
+                directory.display()
+            )
+        })?;
+        anyhow::ensure!(
+            metadata.file_type().is_dir(),
+            "document storage directory {} is not a real directory",
+            directory.display()
+        );
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
