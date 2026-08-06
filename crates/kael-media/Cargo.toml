@@ -5,18 +5,24 @@ rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
 publish = true
-description = "Audio playback primitives for Kael"
+autoexamples = false
+description = "Bounded audio playback and incremental video decoding primitives for Kael"
+documentation = "https://docs.rs/kael-media"
+exclude = ["examples/**"]
 keywords = ["media", "audio", "playback", "kael"]
-categories = ["multimedia::audio", "multimedia"]
+categories = ["multimedia::audio", "multimedia::video", "multimedia"]
 authors.workspace = true
 repository.workspace = true
 readme = "README.md"
 license.workspace = true
 
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+
 [lib]
 name = "kael_media"
 path = "src/lib.rs"
-doctest = false
 
 [dependencies.ffmpeg-next]
 version = "8.1.0"
@@ -29,6 +35,9 @@ version = "0.20"
 
 [dependencies.thiserror]
 workspace = true
+
+[dependencies.url]
+version = "2.5"
 
 [lints]
 workspace = true
