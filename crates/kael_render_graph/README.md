@@ -15,8 +15,12 @@ use kael_render_graph::{PassDesc, RenderGraph, ResourceDesc};
 
 # fn main() -> anyhow::Result<()> {
 let mut graph = RenderGraph::new();
-let source = graph.add_resource(ResourceDesc::imported_texture("source"));
-let filtered = graph.add_resource(ResourceDesc::transient_texture("filtered"));
+let source = graph.add_resource(
+    ResourceDesc::imported_texture("source").allocation_class(0x1001),
+);
+let filtered = graph.add_resource(
+    ResourceDesc::transient_texture("filtered").allocation_class(0x1001),
+);
 
 let filter = graph.add_pass(
     PassDesc::new("filter")
@@ -40,6 +44,12 @@ reads, and dependency cycles. A backend can then use:
 - `assign_transient_memory` to reuse compatible, non-overlapping allocations;
 - `cache_key` and `changed_passes` to reuse unchanged pass outputs.
 
+Transient resources alias only when their lifetimes do not overlap and their
+resource kind and caller-defined `allocation_class` match. Backends should
+derive that class from every allocation constraint, including dimensions,
+format, sample count, and usage. `CompiledGraph::is_current_for` detects a
+compilation made stale by subsequent graph construction.
+
 ## Cache identity contract
 
 `PassDesc::param_hash` is caller-defined. It must represent the operation
@@ -60,6 +70,12 @@ straight-alpha RGBA `f32` images. It is useful for correctness tests,
 deterministic previews, and validating a GPU implementation. Its
 `ExecutionCache` applies explicit entry and resident-byte limits and refuses to
 reuse images at a different resolution.
+
+The reference executor limits each image to 256 MiB and all returned logical
+images to 1 GiB. Graph construction is limited to 100,000 resources, 100,000
+passes, 1,000,000 resource references, 4 KiB per diagnostic name, and 16 MiB
+across names. Use `try_add_resource` and `try_add_pass` when graph shape is
+dynamic so limit failures are returned instead of panicking.
 
 This module is not a GPU backend, a color-management pipeline, or an optimized
 production image processor. Applications should execute compiled graphs on

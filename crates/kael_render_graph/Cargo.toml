@@ -1,17 +1,25 @@
 [package]
 edition.workspace = true
 name = "kael_render_graph"
+autoexamples = false
 rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
 publish = true
 description = "Render-graph: pass/resource DAG, scheduling, and time-varying cache invalidation for Kael"
+documentation = "https://docs.rs/kael_render_graph"
 keywords = ["render-graph", "gpu", "rendering", "kael"]
 categories = ["rendering::graphics-api"]
 authors.workspace = true
 repository.workspace = true
 license.workspace = true
 readme = "README.md"
+exclude = ["examples/"]
+
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
 
 [lib]
 name = "kael_render_graph"
