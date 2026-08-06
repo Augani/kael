@@ -937,17 +937,21 @@ fn document_key(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use std::{
-        path::PathBuf,
         sync::atomic::{AtomicUsize, Ordering},
         sync::{Arc, Condvar, Mutex, OnceLock},
     };
+
+    #[cfg(unix)]
+    use std::path::PathBuf;
 
     use futures::executor::block_on;
     use tempfile::tempdir;
 
     use crate::{AutosaveConfig, AutosaveLocation, FileType};
 
-    use super::{Document, DocumentController, document_key, normalize_path};
+    #[cfg(unix)]
+    use super::document_key;
+    use super::{Document, DocumentController, normalize_path};
 
     static CONTENT_CLONE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
