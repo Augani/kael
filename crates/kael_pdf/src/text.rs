@@ -1,6 +1,8 @@
 //! Text extraction and search helpers.
 
-use anyhow::{Result, anyhow};
+use std::collections::VecDeque;
+
+use anyhow::Result;
 use lopdf::Document;
 
 /// A textual search match within a PDF page.
@@ -36,46 +38,48 @@ pub(crate) fn search_text(page_index: usize, text: &str, query: &str) -> Result<
     );
 
     let needle = query.to_lowercase();
+    let prefix = match_prefixes(needle.as_bytes());
     let mut matches = Vec::new();
 
     for (line_index, line) in text.lines().enumerate() {
-        let (haystack, offsets) = if line.is_ascii() && needle.is_ascii() {
-            (line.to_ascii_lowercase(), None)
-        } else {
-            let (haystack, offsets) = folded_line_with_offsets(line);
-            (haystack, Some(offsets))
-        };
-        let mut search_start = 0;
-
-        while let Some(offset) = haystack[search_start..].find(&needle) {
-            let folded_start = search_start + offset;
-            let folded_end = folded_start + needle.len();
-            let (start, end) = if let Some(offsets) = offsets.as_ref() {
-                let start = offsets
-                    .get(folded_start)
-                    .map(|offset| offset.0)
-                    .ok_or_else(|| anyhow!("invalid folded PDF search offset"))?;
-                let end = offsets
-                    .get(folded_end.saturating_sub(1))
-                    .map(|offset| offset.1)
-                    .ok_or_else(|| anyhow!("invalid folded PDF search end offset"))?;
-                (start, end)
-            } else {
-                (folded_start, folded_end)
-            };
-            matches.push(TextMatch {
-                page_index,
-                line_index,
-                start,
-                end,
-                snippet: short_snippet(line, start, end),
-            });
-            if matches.len() >= MAX_MATCHES {
-                return Ok(matches);
+        let mut matcher = FoldedMatcher::new(needle.as_bytes(), &prefix);
+        if line.is_ascii() && needle.is_ascii() {
+            for (index, byte) in line.bytes().enumerate() {
+                if let Some((start, end)) =
+                    matcher.push(byte.to_ascii_lowercase(), index, index + 1)
+                {
+                    matches.push(TextMatch {
+                        page_index,
+                        line_index,
+                        start,
+                        end,
+                        snippet: short_snippet(line, start, end),
+                    });
+                    if matches.len() >= MAX_MATCHES {
+                        return Ok(matches);
+                    }
+                }
             }
-            search_start = folded_end;
-            if search_start >= haystack.len() {
-                break;
+        } else {
+            for (start, character) in line.char_indices() {
+                let end = start + character.len_utf8();
+                for folded_character in character.to_lowercase() {
+                    let mut buffer = [0; 4];
+                    for byte in folded_character.encode_utf8(&mut buffer).bytes() {
+                        if let Some((match_start, match_end)) = matcher.push(byte, start, end) {
+                            matches.push(TextMatch {
+                                page_index,
+                                line_index,
+                                start: match_start,
+                                end: match_end,
+                                snippet: short_snippet(line, match_start, match_end),
+                            });
+                            if matches.len() >= MAX_MATCHES {
+                                return Ok(matches);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -83,19 +87,57 @@ pub(crate) fn search_text(page_index: usize, text: &str, query: &str) -> Result<
     Ok(matches)
 }
 
-fn folded_line_with_offsets(line: &str) -> (String, Vec<(usize, usize)>) {
-    let mut folded = String::with_capacity(line.len());
-    let mut offsets = Vec::with_capacity(line.len());
-    for (start, character) in line.char_indices() {
-        let end = start + character.len_utf8();
-        for folded_character in character.to_lowercase() {
-            let mut buffer = [0; 4];
-            let encoded = folded_character.encode_utf8(&mut buffer);
-            folded.push_str(encoded);
-            offsets.extend(std::iter::repeat_n((start, end), encoded.len()));
+fn match_prefixes(needle: &[u8]) -> Vec<usize> {
+    let mut prefixes = vec![0; needle.len()];
+    let mut matched = 0usize;
+    for index in 1..needle.len() {
+        while matched > 0 && needle[index] != needle[matched] {
+            matched = prefixes[matched - 1];
+        }
+        if needle[index] == needle[matched] {
+            matched += 1;
+        }
+        prefixes[index] = matched;
+    }
+    prefixes
+}
+
+struct FoldedMatcher<'a> {
+    needle: &'a [u8],
+    prefixes: &'a [usize],
+    matched: usize,
+    offsets: VecDeque<(usize, usize)>,
+}
+
+impl<'a> FoldedMatcher<'a> {
+    fn new(needle: &'a [u8], prefixes: &'a [usize]) -> Self {
+        Self {
+            needle,
+            prefixes,
+            matched: 0,
+            offsets: VecDeque::with_capacity(needle.len()),
         }
     }
-    (folded, offsets)
+
+    fn push(&mut self, byte: u8, start: usize, end: usize) -> Option<(usize, usize)> {
+        self.offsets.push_back((start, end));
+        if self.offsets.len() > self.needle.len() {
+            self.offsets.pop_front();
+        }
+
+        while self.matched > 0 && byte != self.needle[self.matched] {
+            self.matched = self.prefixes[self.matched - 1];
+        }
+        if byte == self.needle[self.matched] {
+            self.matched += 1;
+        }
+        if self.matched != self.needle.len() {
+            return None;
+        }
+
+        self.matched = 0;
+        Some((self.offsets.front()?.0, self.offsets.back()?.1))
+    }
 }
 
 fn short_snippet(line: &str, match_start: usize, match_end: usize) -> String {
@@ -140,5 +182,20 @@ mod tests {
         assert_eq!(&text[matches[0].start..matches[0].end], "needle");
         assert!(matches[0].snippet.chars().count() <= 170);
         assert!(search_text(0, "text", &"x".repeat(4_097)).is_err());
+    }
+
+    #[test]
+    fn search_reports_non_overlapping_matches_without_line_sized_indexes() {
+        let matches = search_text(0, "aaaa İSTANBUL", "aa").unwrap();
+        assert_eq!(
+            matches
+                .iter()
+                .map(|result| (result.start, result.end))
+                .collect::<Vec<_>>(),
+            vec![(0, 2), (2, 4)]
+        );
+
+        let unicode = search_text(0, "aaaa İSTANBUL", "i\u{307}s").unwrap();
+        assert_eq!(&"aaaa İSTANBUL"[unicode[0].start..unicode[0].end], "İS");
     }
 }

@@ -11,6 +11,31 @@ use crate::{
 };
 
 type Rgba = [u8; 4];
+pub(crate) const MAX_PREVIEW_CACHE_BYTES: usize = 128 * 1024 * 1024;
+const MAX_PREVIEW_DRAW_OPERATIONS: usize = 16 * 1024 * 1024;
+const MAX_RENDER_DIMENSION: u32 = 4_096;
+
+struct DrawBudget {
+    remaining: usize,
+}
+
+impl DrawBudget {
+    const fn new(remaining: usize) -> Self {
+        Self { remaining }
+    }
+
+    fn consume(&mut self) -> bool {
+        let Some(remaining) = self.remaining.checked_sub(1) else {
+            return false;
+        };
+        self.remaining = remaining;
+        true
+    }
+
+    const fn exhausted(&self) -> bool {
+        self.remaining == 0
+    }
+}
 
 struct PreviewImage {
     width: u32,
@@ -103,14 +128,22 @@ impl PagePreview {
 /// A bounded LRU cache for schematic PDF page previews.
 pub struct PagePreviewCache {
     max_pages: usize,
+    max_bytes: usize,
+    bytes: usize,
     pages: VecDeque<(usize, PagePreview)>,
 }
 
 impl PagePreviewCache {
     /// Creates a new cache with the given maximum number of retained pages.
     pub fn new(max_pages: usize) -> Self {
+        Self::with_limits(max_pages, MAX_PREVIEW_CACHE_BYTES)
+    }
+
+    fn with_limits(max_pages: usize, max_bytes: usize) -> Self {
         Self {
             max_pages,
+            max_bytes,
+            bytes: 0,
             pages: VecDeque::new(),
         }
     }
@@ -127,15 +160,29 @@ impl PagePreviewCache {
         Some(preview)
     }
 
-    /// Inserts or replaces the rendered page for `page_index`, evicting the oldest entry when full.
+    /// Inserts or replaces the rendered page for `page_index`.
+    ///
+    /// The oldest entries are evicted to stay within the configured page count and the crate's
+    /// 128 MiB cache budget.
     pub fn insert(&mut self, page_index: usize, page: PagePreview) {
-        self.pages.retain(|(idx, _)| *idx != page_index);
-        if self.max_pages == 0 {
+        if let Some(position) = self.pages.iter().position(|(idx, _)| *idx == page_index)
+            && let Some((_, replaced)) = self.pages.remove(position)
+        {
+            self.bytes = self.bytes.saturating_sub(replaced.pixels().len());
+        }
+        let page_bytes = page.pixels().len();
+        if self.max_pages == 0 || page_bytes > self.max_bytes {
             return;
         }
-        if self.pages.len() >= self.max_pages {
-            self.pages.pop_front();
+        while self.pages.len() >= self.max_pages
+            || self.bytes.saturating_add(page_bytes) > self.max_bytes
+        {
+            let Some((_, evicted)) = self.pages.pop_front() else {
+                break;
+            };
+            self.bytes = self.bytes.saturating_sub(evicted.pixels().len());
         }
+        self.bytes = self.bytes.saturating_add(page_bytes);
         self.pages.push_back((page_index, page));
     }
 
@@ -164,14 +211,17 @@ pub(crate) fn render_schematic_preview(
             && page_size.height > 0.0,
         "PDF page size must contain finite positive dimensions"
     );
-    let width = (page_size.width * scale).round().clamp(1.0, 4096.0) as u32;
-    let height = (page_size.height * scale).round().clamp(1.0, 4096.0) as u32;
+    let (width, height, scale) = preview_geometry(page_size, scale);
     let mut image = PreviewImage::new(width, height, [255, 255, 255, 255])?;
+    let mut budget = DrawBudget::new(MAX_PREVIEW_DRAW_OPERATIONS);
 
-    draw_border(&mut image, [214, 219, 226, 255]);
-    draw_text_bars(&mut image, text, scale);
+    draw_border(&mut image, [214, 219, 226, 255], &mut budget);
+    draw_text_bars(&mut image, text, scale, &mut budget);
     for annotation in annotations {
-        draw_annotation(&mut image, page_size, annotation, scale);
+        if budget.exhausted() {
+            break;
+        }
+        draw_annotation(&mut image, page_size, annotation, scale, &mut budget);
     }
 
     PagePreview::new(width, height, image.into_raw())
@@ -187,7 +237,6 @@ pub(crate) fn normalize_scale(scale: f32) -> Result<f32> {
 }
 
 fn rgba_buffer_len(width: u32, height: u32) -> Result<usize> {
-    const MAX_RENDER_DIMENSION: u32 = 4_096;
     anyhow::ensure!(
         width > 0 && height > 0,
         "rendered page dimensions must be greater than zero"
@@ -203,7 +252,20 @@ fn rgba_buffer_len(width: u32, height: u32) -> Result<usize> {
     usize::try_from(pixels).map_err(|_| anyhow!("rendered page is too large for this platform"))
 }
 
-fn draw_border(image: &mut PreviewImage, color: Rgba) {
+fn preview_geometry(page_size: PdfPageSize, requested_scale: f32) -> (u32, u32, f32) {
+    let fitted_scale = requested_scale
+        .min(MAX_RENDER_DIMENSION as f32 / page_size.width)
+        .min(MAX_RENDER_DIMENSION as f32 / page_size.height);
+    let width = (page_size.width * fitted_scale)
+        .round()
+        .clamp(1.0, MAX_RENDER_DIMENSION as f32) as u32;
+    let height = (page_size.height * fitted_scale)
+        .round()
+        .clamp(1.0, MAX_RENDER_DIMENSION as f32) as u32;
+    (width, height, fitted_scale)
+}
+
+fn draw_border(image: &mut PreviewImage, color: Rgba, budget: &mut DrawBudget) {
     if image.width() == 0 || image.height() == 0 {
         return;
     }
@@ -211,16 +273,28 @@ fn draw_border(image: &mut PreviewImage, color: Rgba) {
     let max_x = image.width() - 1;
     let max_y = image.height() - 1;
     for x in 0..=max_x {
+        if !budget.consume() {
+            return;
+        }
         image.put_pixel(x, 0, color);
+        if !budget.consume() {
+            return;
+        }
         image.put_pixel(x, max_y, color);
     }
     for y in 0..=max_y {
+        if !budget.consume() {
+            return;
+        }
         image.put_pixel(0, y, color);
+        if !budget.consume() {
+            return;
+        }
         image.put_pixel(max_x, y, color);
     }
 }
 
-fn draw_text_bars(image: &mut PreviewImage, text: &str, scale: f32) {
+fn draw_text_bars(image: &mut PreviewImage, text: &str, scale: f32, budget: &mut DrawBudget) {
     let margin = (24.0 * scale).round() as i32;
     let line_height = (10.0 * scale).round().max(6.0) as i32;
     let line_gap = (7.0 * scale).round().max(4.0) as i32;
@@ -241,7 +315,11 @@ fn draw_text_bars(image: &mut PreviewImage, text: &str, scale: f32) {
             bar_width.max((32.0 * scale) as i32),
             line_height,
             [88, 98, 118, 255],
+            budget,
         );
+        if budget.exhausted() {
+            break;
+        }
         y += line_height + line_gap;
     }
 }
@@ -251,31 +329,44 @@ fn draw_annotation(
     page_size: PdfPageSize,
     annotation: &PageAnnotation,
     scale: f32,
+    budget: &mut DrawBudget,
 ) {
     match &annotation.kind {
         Annotation::Highlight { rects, color } => {
             for rect in rects {
                 let (x, y, width, height) = map_rect(page_size, *rect, scale);
-                fill_rect(image, x, y, width, height, rgba(*color));
+                fill_rect(image, x, y, width, height, rgba(*color), budget);
+                if budget.exhausted() {
+                    break;
+                }
             }
         }
         Annotation::Note { position, .. } => {
             let x = (position.x * scale).round() as i32;
             let y = ((page_size.height - position.y) * scale).round() as i32;
-            fill_rect(image, x - 5, y - 5, 10, 10, [255, 204, 64, 255]);
+            fill_rect(image, x - 5, y - 5, 10, 10, [255, 204, 64, 255], budget);
         }
         Annotation::FreeText { bounds, .. } => {
             let (x, y, width, height) = map_rect(page_size, *bounds, scale);
-            stroke_rect(image, x, y, width, height, [56, 92, 158, 255]);
+            stroke_rect(image, x, y, width, height, [56, 92, 158, 255], budget);
         }
         Annotation::Ink {
             paths,
             color,
             width,
         } => {
-            let stroke_width = ((*width * scale).round() as i32).max(1);
+            let max_stroke_width = image
+                .width()
+                .max(image.height())
+                .saturating_mul(2)
+                .try_into()
+                .unwrap_or(i32::MAX);
+            let stroke_width = ((*width * scale).round() as i32).clamp(1, max_stroke_width);
             for path in paths {
                 for segment in path.windows(2) {
+                    if budget.exhausted() {
+                        return;
+                    }
                     if let [from, to] = segment {
                         draw_line(
                             image,
@@ -285,6 +376,7 @@ fn draw_annotation(
                             scale,
                             rgba(*color),
                             stroke_width,
+                            budget,
                         );
                     }
                 }
@@ -292,8 +384,8 @@ fn draw_annotation(
         }
         Annotation::Stamp { bounds, .. } => {
             let (x, y, width, height) = map_rect(page_size, *bounds, scale);
-            fill_rect(image, x, y, width, height, [222, 74, 74, 200]);
-            stroke_rect(image, x, y, width, height, [160, 34, 34, 255]);
+            fill_rect(image, x, y, width, height, [222, 74, 74, 200], budget);
+            stroke_rect(image, x, y, width, height, [160, 34, 34, 255], budget);
         }
     }
 }
@@ -310,23 +402,71 @@ fn rgba(color: PdfColor) -> Rgba {
     [color.red, color.green, color.blue, color.alpha]
 }
 
-fn fill_rect(image: &mut PreviewImage, x: i32, y: i32, width: i32, height: i32, color: Rgba) {
-    for dy in 0..height.max(0) {
-        for dx in 0..width.max(0) {
-            blend_pixel(image, x + dx, y + dy, color);
+fn fill_rect(
+    image: &mut PreviewImage,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    color: Rgba,
+    budget: &mut DrawBudget,
+) {
+    if width <= 0 || height <= 0 || budget.exhausted() {
+        return;
+    }
+    let image_width = i64::from(image.width());
+    let image_height = i64::from(image.height());
+    let start_x = i64::from(x).clamp(0, image_width);
+    let start_y = i64::from(y).clamp(0, image_height);
+    let end_x = i64::from(x)
+        .saturating_add(i64::from(width))
+        .clamp(0, image_width);
+    let end_y = i64::from(y)
+        .saturating_add(i64::from(height))
+        .clamp(0, image_height);
+
+    for pixel_y in start_y..end_y {
+        for pixel_x in start_x..end_x {
+            if !budget.consume() {
+                return;
+            }
+            blend_pixel(image, pixel_x as i32, pixel_y as i32, color);
         }
     }
 }
 
-fn stroke_rect(image: &mut PreviewImage, x: i32, y: i32, width: i32, height: i32, color: Rgba) {
-    for dx in 0..width.max(0) {
-        blend_pixel(image, x + dx, y, color);
-        blend_pixel(image, x + dx, y + height.saturating_sub(1), color);
+fn stroke_rect(
+    image: &mut PreviewImage,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    color: Rgba,
+    budget: &mut DrawBudget,
+) {
+    if width <= 0 || height <= 0 {
+        return;
     }
-    for dy in 0..height.max(0) {
-        blend_pixel(image, x, y + dy, color);
-        blend_pixel(image, x + width.saturating_sub(1), y + dy, color);
-    }
+    fill_rect(image, x, y, width, 1, color, budget);
+    fill_rect(
+        image,
+        x,
+        y.saturating_add(height.saturating_sub(1)),
+        width,
+        1,
+        color,
+        budget,
+    );
+    fill_rect(image, x, y, 1, height, color, budget);
+    fill_rect(
+        image,
+        x.saturating_add(width.saturating_sub(1)),
+        y,
+        1,
+        height,
+        color,
+        budget,
+    );
 }
 
 fn draw_line(
@@ -337,11 +477,16 @@ fn draw_line(
     scale: f32,
     color: Rgba,
     stroke_width: i32,
+    budget: &mut DrawBudget,
 ) {
-    let mut x0 = (from.x * scale).round() as i32;
-    let mut y0 = ((page_size.height - from.y) * scale).round() as i32;
+    let x0 = (from.x * scale).round() as i32;
+    let y0 = ((page_size.height - from.y) * scale).round() as i32;
     let x1 = (to.x * scale).round() as i32;
     let y1 = ((page_size.height - to.y) * scale).round() as i32;
+    let padding = stroke_width / 2;
+    let Some((mut x0, mut y0, x1, y1)) = clip_line_to_image(image, x0, y0, x1, y1, padding) else {
+        return;
+    };
     let dx = (x1 - x0).abs();
     let sx = if x0 < x1 { 1 } else { -1 };
     let dy = -(y1 - y0).abs();
@@ -356,7 +501,11 @@ fn draw_line(
             stroke_width,
             stroke_width,
             color,
+            budget,
         );
+        if budget.exhausted() {
+            return;
+        }
         if x0 == x1 && y0 == y1 {
             break;
         }
@@ -370,6 +519,56 @@ fn draw_line(
             y0 += sy;
         }
     }
+}
+
+fn clip_line_to_image(
+    image: &PreviewImage,
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+    padding: i32,
+) -> Option<(i32, i32, i32, i32)> {
+    let min_x = -f64::from(padding);
+    let min_y = -f64::from(padding);
+    let max_x = f64::from(image.width().saturating_sub(1)) + f64::from(padding);
+    let max_y = f64::from(image.height().saturating_sub(1)) + f64::from(padding);
+    let x0 = f64::from(x0);
+    let y0 = f64::from(y0);
+    let dx = f64::from(x1) - x0;
+    let dy = f64::from(y1) - y0;
+    let mut start = 0.0f64;
+    let mut end = 1.0f64;
+
+    for (direction, distance) in [
+        (-dx, x0 - min_x),
+        (dx, max_x - x0),
+        (-dy, y0 - min_y),
+        (dy, max_y - y0),
+    ] {
+        if direction == 0.0 {
+            if distance < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let ratio = distance / direction;
+        if direction < 0.0 {
+            start = start.max(ratio);
+        } else {
+            end = end.min(ratio);
+        }
+        if start > end {
+            return None;
+        }
+    }
+
+    Some((
+        (x0 + start * dx).round() as i32,
+        (y0 + start * dy).round() as i32,
+        (x0 + end * dx).round() as i32,
+        (y0 + end * dy).round() as i32,
+    ))
 }
 
 fn blend_pixel(image: &mut PreviewImage, x: i32, y: i32, color: Rgba) {
@@ -454,6 +653,20 @@ mod tests {
     }
 
     #[test]
+    fn page_cache_respects_its_byte_limit() {
+        let mut cache = PagePreviewCache::with_limits(3, 8);
+        let preview = || PagePreview::new(1, 1, Arc::<[u8]>::from([0, 0, 0, 0])).unwrap();
+        cache.insert(0, preview());
+        cache.insert(1, preview());
+        cache.insert(2, preview());
+
+        assert_eq!(cache.len(), 2);
+        assert!(cache.get(0).is_none());
+        assert!(cache.get(1).is_some());
+        assert!(cache.get(2).is_some());
+    }
+
+    #[test]
     fn page_previews_validate_dimensions_and_rgba_length() {
         assert!(PagePreview::new(0, 1, Arc::<[u8]>::from([])).is_err());
         assert!(PagePreview::new(1, 1, Arc::<[u8]>::from([0, 0, 0])).is_err());
@@ -463,5 +676,48 @@ mod tests {
         assert!(normalize_scale(0.0).is_err());
         assert_eq!(normalize_scale(0.1).unwrap(), 0.25);
         assert_eq!(normalize_scale(9.0).unwrap(), 4.0);
+    }
+
+    #[test]
+    fn oversized_pages_preserve_their_aspect_ratio() {
+        let (width, height, scale) = preview_geometry(PdfPageSize::new(20_000.0, 1_000.0), 4.0);
+
+        assert_eq!((width, height), (4_096, 205));
+        assert!((scale - 0.2048).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn drawing_clips_untrusted_geometry_and_respects_the_work_budget() {
+        let mut image = PreviewImage::new(8, 8, [255, 255, 255, 255]).unwrap();
+        let mut budget = DrawBudget::new(4);
+
+        fill_rect(
+            &mut image,
+            -10_000_000,
+            -10_000_000,
+            20_000_000,
+            20_000_000,
+            [0, 0, 0, 255],
+            &mut budget,
+        );
+
+        assert!(budget.exhausted());
+        assert_eq!(
+            image
+                .pixels
+                .chunks_exact(4)
+                .filter(|pixel| *pixel == [0, 0, 0, 255])
+                .count(),
+            4
+        );
+
+        assert!(
+            clip_line_to_image(&image, -10_000_000, -10_000_000, -9_000_000, -9_000_000, 1,)
+                .is_none()
+        );
+        assert_eq!(
+            clip_line_to_image(&image, -10, 4, 10, 4, 0),
+            Some((0, 4, 7, 4))
+        );
     }
 }

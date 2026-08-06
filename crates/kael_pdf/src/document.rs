@@ -2,8 +2,9 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
+    ffi::OsString,
     fs::OpenOptions,
-    io::{Read as _, Write as _},
+    io::{Read as _, Write},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -20,7 +21,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     annotation::{Annotation, AnnotationId, PageAnnotation},
     page::{PdfLink, PdfLinkDestination, PdfPage, PdfPageSize},
-    renderer::{PagePreview, normalize_scale, render_schematic_preview},
+    renderer::{MAX_PREVIEW_CACHE_BYTES, PagePreview, normalize_scale, render_schematic_preview},
     text::{TextMatch, extract_page_text, search_text},
 };
 
@@ -30,9 +31,9 @@ const MAX_PDF_PAGES: usize = 100_000;
 const MAX_EXTRACTED_PAGE_TEXT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TEXT_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TEXT_CACHE_ENTRIES: usize = 1_024;
-const MAX_PREVIEW_CACHE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_PREVIEW_CACHE_ENTRIES: usize = 256;
 const MAX_ANNOTATION_SIDECAR_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_ANNOTATION_MODEL_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ANNOTATIONS: usize = 100_000;
 
 /// High-level metadata extracted from a PDF document.
@@ -73,6 +74,7 @@ pub struct PdfDocument {
 #[derive(Debug, Clone)]
 struct PageDescriptor {
     page_number: u32,
+    object_id: ObjectId,
     size: PdfPageSize,
 }
 
@@ -81,14 +83,17 @@ struct DocumentState {
     source_path: Option<PathBuf>,
     source_digest: Option<String>,
     pages: Vec<PageDescriptor>,
+    page_indices: BTreeMap<ObjectId, usize>,
     metadata: PdfMetadata,
     outline: Vec<OutlineItem>,
     page_text_cache: PageTextCache,
     page_preview_cache: PagePreviewCache,
-    annotations: BTreeMap<usize, Arc<[PageAnnotation]>>,
+    annotations: BTreeMap<usize, Arc<Vec<PageAnnotation>>>,
     annotation_load_warning: Option<Arc<str>>,
     annotations_dirty: bool,
     annotation_generation: u64,
+    annotation_count: usize,
+    annotation_model_bytes: usize,
     next_annotation_id: u64,
 }
 
@@ -193,21 +198,7 @@ impl PdfDocument {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = normalize_path(path.as_ref())?;
         smol::unblock(move || {
-            let metadata = std::fs::symlink_metadata(&path)
-                .with_context(|| format!("failed to inspect PDF document {}", path.display()))?;
-            anyhow::ensure!(
-                metadata.file_type().is_file(),
-                "PDF document {} is not a regular file",
-                path.display()
-            );
-            ensure_size(metadata.len(), MAX_PDF_BYTES, "PDF document")?;
-            let data = std::fs::read(&path)
-                .with_context(|| format!("failed to read PDF document {}", path.display()))?;
-            ensure_size(
-                u64::try_from(data.len()).unwrap_or(u64::MAX),
-                MAX_PDF_BYTES,
-                "PDF document",
-            )?;
+            let data = read_regular_file_bounded(&path, MAX_PDF_BYTES, "PDF document")?;
             let document = LoDocument::load_mem(&data)
                 .with_context(|| format!("failed to open PDF document {}", path.display()))?;
             let digest = digest_hex(&data);
@@ -327,15 +318,6 @@ impl PdfDocument {
         let inner = self.inner.clone();
 
         smol::unblock(move || {
-            if let Some(parent) = path
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-            {
-                std::fs::create_dir_all(parent).with_context(|| {
-                    format!("failed to create PDF output directory {}", parent.display())
-                })?;
-            }
-
             let mut state = inner.lock();
             write_file_atomically(&path, "PDF document", false, MAX_PDF_BYTES, |file| {
                 state.document.save_to(file).map(|_| ()).map_err(Into::into)
@@ -436,17 +418,8 @@ impl PdfDocument {
             .pages
             .get(page_index)
             .ok_or_else(|| anyhow!("page index {page_index} out of range"))?;
-        let pages = state.document.get_pages();
-        let page_id = pages
-            .get(&descriptor.page_number)
-            .ok_or_else(|| anyhow!("PDF page object is missing"))?;
-        let page_indices = pages
-            .values()
-            .enumerate()
-            .map(|(index, object_id)| (*object_id, index))
-            .collect::<BTreeMap<_, _>>();
         let mut links = Vec::new();
-        for annotation in state.document.get_page_annotations(*page_id)? {
+        for annotation in state.document.get_page_annotations(descriptor.object_id)? {
             if links.len() >= MAX_PAGE_LINKS {
                 break;
             }
@@ -460,7 +433,8 @@ impl PdfDocument {
             let Ok(bounds) = link_bounds(&state.document, rect_object) else {
                 continue;
             };
-            let Some(destination) = link_destination(&state.document, annotation, &page_indices)
+            let Some(destination) =
+                link_destination(&state.document, annotation, &state.page_indices)
             else {
                 continue;
             };
@@ -479,13 +453,13 @@ impl PdfDocument {
             .collect()
     }
 
-    fn page_annotations_shared(&self, page_index: usize) -> Arc<[PageAnnotation]> {
+    fn page_annotations_shared(&self, page_index: usize) -> Arc<Vec<PageAnnotation>> {
         self.inner
             .lock()
             .annotations
             .get(&page_index)
             .cloned()
-            .unwrap_or_else(|| Arc::<[PageAnnotation]>::from([]))
+            .unwrap_or_default()
     }
 
     pub(crate) fn add_page_annotation(
@@ -499,13 +473,12 @@ impl PdfDocument {
             .get(page_index)
             .ok_or_else(|| anyhow!("page index {page_index} out of range"))?;
         validate_annotation(&annotation)?;
+        let next_generation = state
+            .annotation_generation
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("PDF annotation generation is exhausted"))?;
         anyhow::ensure!(
-            state
-                .annotations
-                .values()
-                .map(|annotations| annotations.len())
-                .fold(0usize, usize::saturating_add)
-                < MAX_ANNOTATIONS,
+            state.annotation_count < MAX_ANNOTATIONS,
             "PDF annotation count exceeds the {MAX_ANNOTATIONS} entry limit"
         );
         let next_annotation_id = state
@@ -516,15 +489,20 @@ impl PdfDocument {
             id: AnnotationId(state.next_annotation_id),
             kind: annotation,
         };
+        let entry_bytes = annotation_storage_cost(&entry)?;
+        let next_model_bytes = state
+            .annotation_model_bytes
+            .checked_add(entry_bytes)
+            .ok_or_else(|| anyhow!("PDF annotation model size overflow"))?;
+        anyhow::ensure!(
+            next_model_bytes <= MAX_ANNOTATION_MODEL_BYTES,
+            "PDF annotation model exceeds the {MAX_ANNOTATION_MODEL_BYTES} byte limit"
+        );
         state.next_annotation_id = next_annotation_id;
-        let annotations = state
-            .annotations
-            .entry(page_index)
-            .or_insert_with(|| Arc::<[PageAnnotation]>::from([]));
-        let mut next_annotations = annotations.as_ref().to_vec();
-        next_annotations.push(entry);
-        *annotations = Arc::from(next_annotations);
-        state.annotation_generation = state.annotation_generation.wrapping_add(1);
+        Arc::make_mut(state.annotations.entry(page_index).or_default()).push(entry);
+        state.annotation_generation = next_generation;
+        state.annotation_count += 1;
+        state.annotation_model_bytes = next_model_bytes;
         state.annotations_dirty = true;
         state.page_preview_cache.clear();
         Ok(())
@@ -532,26 +510,41 @@ impl PdfDocument {
 
     pub(crate) fn remove_page_annotation(&self, page_index: usize, id: AnnotationId) -> Result<()> {
         let mut state = self.inner.lock();
+        let next_generation = state
+            .annotation_generation
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("PDF annotation generation is exhausted"))?;
         let annotations = state
             .annotations
-            .get_mut(&page_index)
+            .get(&page_index)
             .ok_or_else(|| anyhow!("page index {page_index} has no annotations"))?;
-        let mut next_annotations = annotations.as_ref().to_vec();
-        let previous_len = next_annotations.len();
-        next_annotations.retain(|annotation| annotation.id != id);
-        if next_annotations.len() == previous_len {
-            return Err(anyhow!(
-                "annotation {} not found on page {}",
-                id.0,
-                page_index
-            ));
-        }
-        if next_annotations.is_empty() {
+        let position = annotations
+            .iter()
+            .position(|annotation| annotation.id == id)
+            .ok_or_else(|| anyhow!("annotation {} not found on page {}", id.0, page_index))?;
+        let entry_bytes = annotation_storage_cost(&annotations[position])?;
+        let next_count = state
+            .annotation_count
+            .checked_sub(1)
+            .ok_or_else(|| anyhow!("PDF annotation count accounting underflow"))?;
+        let next_model_bytes = state
+            .annotation_model_bytes
+            .checked_sub(entry_bytes)
+            .ok_or_else(|| anyhow!("PDF annotation size accounting underflow"))?;
+        let remove_page = {
+            let annotations = state
+                .annotations
+                .get_mut(&page_index)
+                .ok_or_else(|| anyhow!("page index {page_index} has no annotations"))?;
+            Arc::make_mut(annotations).remove(position);
+            annotations.is_empty()
+        };
+        if remove_page {
             state.annotations.remove(&page_index);
-        } else {
-            *annotations = Arc::from(next_annotations);
         }
-        state.annotation_generation = state.annotation_generation.wrapping_add(1);
+        state.annotation_generation = next_generation;
+        state.annotation_count = next_count;
+        state.annotation_model_bytes = next_model_bytes;
         state.annotations_dirty = true;
         state.page_preview_cache.clear();
         Ok(())
@@ -567,8 +560,13 @@ impl PdfDocument {
             "PDF document contains more than {MAX_PDF_OBJECTS} objects"
         );
         let pages = collect_pages(&document)?;
+        let page_indices = pages
+            .iter()
+            .enumerate()
+            .map(|(index, page)| (page.object_id, index))
+            .collect::<BTreeMap<_, _>>();
         let metadata = extract_metadata(&document);
-        let outline = extract_outline(&document).unwrap_or_default();
+        let outline = extract_outline(&document, &page_indices).unwrap_or_default();
         let (annotations, annotation_load_warning) = if let Some(path) = source_path.as_ref() {
             let source_digest = source_digest
                 .as_deref()
@@ -583,6 +581,7 @@ impl PdfDocument {
         } else {
             (BTreeMap::new(), None)
         };
+        let (annotation_count, annotation_model_bytes) = annotation_usage(&annotations)?;
         let next_annotation_id = next_annotation_id(&annotations)?;
 
         Ok(Self {
@@ -591,6 +590,7 @@ impl PdfDocument {
                 source_path,
                 source_digest,
                 pages,
+                page_indices,
                 metadata,
                 outline,
                 page_text_cache: PageTextCache::default(),
@@ -599,6 +599,8 @@ impl PdfDocument {
                 annotation_load_warning,
                 annotations_dirty: false,
                 annotation_generation: 0,
+                annotation_count,
+                annotation_model_bytes,
                 next_annotation_id,
             })),
             file_operation_lock: Arc::new(smol::lock::Mutex::new(())),
@@ -625,6 +627,7 @@ fn collect_pages(document: &LoDocument) -> Result<Vec<PageDescriptor>> {
     for (page_number, object_id) in document_pages {
         pages.push(PageDescriptor {
             page_number,
+            object_id,
             size: page_size_for_object(document, object_id)?,
         });
     }
@@ -637,6 +640,57 @@ fn ensure_size(size: u64, limit: u64, label: &str) -> Result<()> {
         "{label} is {size} bytes, exceeding the {limit} byte limit"
     );
     Ok(())
+}
+
+fn read_regular_file_bounded(path: &Path, limit: u64, label: &str) -> Result<Vec<u8>> {
+    let path_metadata = std::fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect {label} {}", path.display()))?;
+    anyhow::ensure!(
+        path_metadata.file_type().is_file(),
+        "{label} {} is not a regular file",
+        path.display()
+    );
+    ensure_size(path_metadata.len(), limit, label)?;
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .open(path)
+        .with_context(|| format!("failed to open {label} {}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("failed to inspect opened {label} {}", path.display()))?;
+    anyhow::ensure!(
+        metadata.is_file(),
+        "{label} {} is not a regular file",
+        path.display()
+    );
+    ensure_size(metadata.len(), limit, label)?;
+
+    let capacity = usize::try_from(metadata.len())
+        .with_context(|| format!("{label} is too large for this platform's address space"))?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .with_context(|| format!("failed to reserve {label} buffer"))?;
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut chunk)
+            .with_context(|| format!("failed to read {label} {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        let next_len = bytes
+            .len()
+            .checked_add(read)
+            .ok_or_else(|| anyhow!("{label} size overflow"))?;
+        ensure_size(u64::try_from(next_len).unwrap_or(u64::MAX), limit, label)?;
+        bytes
+            .try_reserve_exact(read)
+            .with_context(|| format!("failed to grow {label} buffer"))?;
+        bytes.extend_from_slice(&chunk[..read]);
+    }
+    Ok(bytes)
 }
 
 fn digest_hex(bytes: &[u8]) -> String {
@@ -792,7 +846,7 @@ fn link_destination(
                 return action
                     .get(b"URI")
                     .ok()
-                    .and_then(bounded_destination_text)
+                    .and_then(|object| bounded_destination_text(document, object))
                     .map(PdfLinkDestination::Uri);
             }
             b"GoTo" => {
@@ -837,7 +891,7 @@ fn parse_destination_inner(
     }
     match object {
         Object::Name(_) | Object::String(_, _) => {
-            bounded_destination_text(object).map(PdfLinkDestination::Named)
+            bounded_destination_text(document, object).map(PdfLinkDestination::Named)
         }
         Object::Reference(object_id) => page_indices
             .get(object_id)
@@ -854,22 +908,18 @@ fn parse_destination_inner(
     }
 }
 
-fn bounded_destination_text(object: &Object) -> Option<String> {
+fn bounded_destination_text(document: &LoDocument, object: &Object) -> Option<String> {
     const MAX_DESTINATION_BYTES: usize = 16 * 1024;
-    object_text(object).filter(|value| {
-        !value.is_empty()
-            && value.len() <= MAX_DESTINATION_BYTES
-            && !value.chars().any(char::is_control)
-    })
-}
-
-fn object_text(object: &Object) -> Option<String> {
-    match object {
-        Object::String(bytes, _) | Object::Name(bytes) => {
-            Some(String::from_utf8_lossy(bytes).into_owned())
-        }
-        _ => None,
+    let (_, resolved) = document.dereference(object).ok()?;
+    let bytes = match resolved {
+        Object::String(bytes, _) | Object::Name(bytes) => bytes,
+        _ => return None,
+    };
+    if bytes.len() > MAX_DESTINATION_BYTES || bytes.iter().any(u8::is_ascii_control) {
+        return None;
     }
+    bounded_pdf_string(document, object, MAX_DESTINATION_BYTES)
+        .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
 }
 
 fn extract_metadata(document: &LoDocument) -> PdfMetadata {
@@ -894,8 +944,7 @@ fn extract_metadata(document: &LoDocument) -> PdfMetadata {
         dictionary
             .get(key)
             .ok()
-            .map(pdf_string)
-            .map(|value| truncate_utf8(value, MAX_METADATA_FIELD_BYTES))
+            .and_then(|object| bounded_pdf_string(document, object, MAX_METADATA_FIELD_BYTES))
     };
     metadata.title = bounded_field(b"Title");
     metadata.author = bounded_field(b"Author");
@@ -905,8 +954,7 @@ fn extract_metadata(document: &LoDocument) -> PdfMetadata {
     metadata.keywords = dictionary
         .get(b"Keywords")
         .ok()
-        .map(pdf_string)
-        .map(|value| truncate_utf8(value, MAX_METADATA_FIELD_BYTES))
+        .and_then(|object| bounded_pdf_string(document, object, MAX_METADATA_FIELD_BYTES))
         .map(|keywords| {
             keywords
                 .split(|character| matches!(character, ',' | ';'))
@@ -920,7 +968,10 @@ fn extract_metadata(document: &LoDocument) -> PdfMetadata {
     metadata
 }
 
-fn extract_outline(document: &LoDocument) -> Result<Vec<OutlineItem>> {
+fn extract_outline(
+    document: &LoDocument,
+    page_indices: &BTreeMap<ObjectId, usize>,
+) -> Result<Vec<OutlineItem>> {
     let root = document.trailer.get(b"Root")?;
     let catalog = resolve_dictionary(document, root)?;
     let outlines = match catalog.get(b"Outlines") {
@@ -931,15 +982,9 @@ fn extract_outline(document: &LoDocument) -> Result<Vec<OutlineItem>> {
         Ok(first) => first.clone(),
         Err(_) => return Ok(Vec::new()),
     };
-    let page_indices = document
-        .get_pages()
-        .values()
-        .enumerate()
-        .map(|(index, object_id)| (*object_id, index))
-        .collect::<BTreeMap<_, _>>();
     let mut visited = BTreeSet::new();
     let mut total = 0usize;
-    walk_outline_siblings(document, first, &page_indices, 0, &mut visited, &mut total)
+    walk_outline_siblings(document, first, page_indices, 0, &mut visited, &mut total)
 }
 
 fn walk_outline_siblings(
@@ -973,8 +1018,7 @@ fn walk_outline_siblings(
         let title = dictionary
             .get(b"Title")
             .ok()
-            .and_then(object_text)
-            .map(|title| truncate_utf8(title, 4 * 1024))
+            .and_then(|object| bounded_pdf_string(document, object, 4 * 1024))
             .unwrap_or_default();
         let page_index =
             link_destination(document, dictionary, page_indices).and_then(|destination| {
@@ -1009,61 +1053,44 @@ fn walk_outline_siblings(
     Ok(items)
 }
 
-fn pdf_string(object: &Object) -> String {
-    match object {
+fn bounded_pdf_string(document: &LoDocument, object: &Object, max_bytes: usize) -> Option<String> {
+    let (_, object) = document.dereference(object).ok()?;
+    let bytes = match object {
+        Object::String(bytes, _) | Object::Name(bytes) if bytes.len() <= max_bytes => bytes,
+        _ => return None,
+    };
+    let value = match object {
         Object::String(_, _) => lopdf::decode_text_string(object)
-            .unwrap_or_else(|_| object_text(object).unwrap_or_default()),
-        Object::Name(bytes) => String::from_utf8_lossy(bytes).into_owned(),
-        _ => format!("{object:?}"),
-    }
-}
-
-fn truncate_utf8(mut value: String, max_bytes: usize) -> String {
-    if value.len() <= max_bytes {
-        return value;
-    }
-    let mut boundary = max_bytes;
-    while !value.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    value.truncate(boundary);
-    value
+            .unwrap_or_else(|_| String::from_utf8_lossy(bytes).into_owned()),
+        Object::Name(_) => String::from_utf8_lossy(bytes).into_owned(),
+        _ => return None,
+    };
+    (value.len() <= max_bytes).then_some(value)
 }
 
 fn load_annotations(
     path: &Path,
     document_sha256: &str,
     page_count: usize,
-) -> Result<BTreeMap<usize, Arc<[PageAnnotation]>>> {
+) -> Result<BTreeMap<usize, Arc<Vec<PageAnnotation>>>> {
     let sidecar_path = annotations_sidecar_path(path);
-    if !sidecar_path.exists() {
-        return Ok(BTreeMap::new());
+    match std::fs::symlink_metadata(&sidecar_path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(BTreeMap::new());
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to inspect annotation sidecar {}",
+                    sidecar_path.display()
+                )
+            });
+        }
     }
 
-    let metadata = std::fs::symlink_metadata(&sidecar_path).with_context(|| {
-        format!(
-            "failed to inspect annotation sidecar {}",
-            sidecar_path.display()
-        )
-    })?;
-    anyhow::ensure!(
-        metadata.file_type().is_file(),
-        "PDF annotation sidecar {} is not a regular file",
-        sidecar_path.display()
-    );
-    ensure_size(
-        metadata.len(),
-        MAX_ANNOTATION_SIDECAR_BYTES,
-        "PDF annotation sidecar",
-    )?;
-    let json = std::fs::read(&sidecar_path).with_context(|| {
-        format!(
-            "failed to read annotation sidecar {}",
-            sidecar_path.display()
-        )
-    })?;
-    ensure_size(
-        u64::try_from(json.len()).unwrap_or(u64::MAX),
+    let json = read_regular_file_bounded(
+        &sidecar_path,
         MAX_ANNOTATION_SIDECAR_BYTES,
         "PDF annotation sidecar",
     )?;
@@ -1078,35 +1105,24 @@ fn load_annotations(
     Ok(sidecar
         .pages
         .into_iter()
-        .map(|(page_index, annotations)| (page_index, Arc::<[PageAnnotation]>::from(annotations)))
+        .map(|(page_index, annotations)| (page_index, Arc::new(annotations)))
         .collect())
 }
 
 fn persist_annotations(
     path: &Path,
     document_sha256: &str,
-    annotations: &BTreeMap<usize, Arc<[PageAnnotation]>>,
+    annotations: &BTreeMap<usize, Arc<Vec<PageAnnotation>>>,
     page_count: usize,
 ) -> Result<()> {
     let sidecar_path = annotations_sidecar_path(path);
     if annotations.is_empty() {
-        match std::fs::remove_file(&sidecar_path) {
-            Ok(()) => return Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!(
-                        "failed to remove annotation sidecar {}",
-                        sidecar_path.display()
-                    )
-                });
-            }
-        }
+        return remove_regular_file_if_exists(&sidecar_path, "PDF annotation sidecar");
     }
 
     let pages = annotations
         .iter()
-        .map(|(page_index, annotations)| (*page_index, annotations.as_ref().to_vec()))
+        .map(|(page_index, annotations)| (*page_index, annotations.as_ref().clone()))
         .collect();
     validate_annotation_pages(&pages, page_count)?;
     validate_digest(document_sha256)?;
@@ -1123,6 +1139,25 @@ fn persist_annotations(
     write_bytes_atomically(&sidecar_path, &json)
 }
 
+fn remove_regular_file_if_exists(path: &Path, label: &str) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            anyhow::ensure!(
+                metadata.file_type().is_file(),
+                "{label} {} is not a regular file",
+                path.display()
+            );
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to inspect {label} {}", path.display()));
+        }
+    }
+    std::fs::remove_file(path)
+        .with_context(|| format!("failed to remove {label} {}", path.display()))
+}
+
 fn annotations_sidecar_path(path: &Path) -> PathBuf {
     let mut file_name = path
         .file_name()
@@ -1132,7 +1167,7 @@ fn annotations_sidecar_path(path: &Path) -> PathBuf {
     path.with_file_name(file_name)
 }
 
-fn next_annotation_id(annotations: &BTreeMap<usize, Arc<[PageAnnotation]>>) -> Result<u64> {
+fn next_annotation_id(annotations: &BTreeMap<usize, Arc<Vec<PageAnnotation>>>) -> Result<u64> {
     annotations
         .values()
         .flat_map(|entries| entries.iter().map(|entry| entry.id.0))
@@ -1142,6 +1177,42 @@ fn next_annotation_id(annotations: &BTreeMap<usize, Arc<[PageAnnotation]>>) -> R
                 .checked_add(1)
                 .ok_or_else(|| anyhow!("PDF annotation identifiers are exhausted"))
         })
+}
+
+fn annotation_usage(
+    annotations: &BTreeMap<usize, Arc<Vec<PageAnnotation>>>,
+) -> Result<(usize, usize)> {
+    let mut count = 0usize;
+    let mut bytes = 0usize;
+    for annotation in annotations.values().flat_map(|entries| entries.iter()) {
+        count = count
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("PDF annotation count overflow"))?;
+        bytes = bytes
+            .checked_add(annotation_storage_cost(annotation)?)
+            .ok_or_else(|| anyhow!("PDF annotation model size overflow"))?;
+    }
+    anyhow::ensure!(
+        count <= MAX_ANNOTATIONS,
+        "PDF annotation count exceeds the {MAX_ANNOTATIONS} entry limit"
+    );
+    anyhow::ensure!(
+        bytes <= MAX_ANNOTATION_MODEL_BYTES,
+        "PDF annotation model exceeds the {MAX_ANNOTATION_MODEL_BYTES} byte limit"
+    );
+    Ok((count, bytes))
+}
+
+fn annotation_storage_cost(annotation: &PageAnnotation) -> Result<usize> {
+    const ENTRY_OVERHEAD_BYTES: usize = 64;
+
+    let mut counter = CountingWriter::default();
+    serde_json::to_writer(&mut counter, annotation)
+        .context("failed to measure PDF annotation storage")?;
+    counter
+        .bytes
+        .checked_add(ENTRY_OVERHEAD_BYTES)
+        .ok_or_else(|| anyhow!("PDF annotation model size overflow"))
 }
 
 fn validate_annotation_pages(
@@ -1274,12 +1345,65 @@ fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     )
 }
 
+#[derive(Default)]
+struct CountingWriter {
+    bytes: usize,
+}
+
+impl Write for CountingWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.bytes = self
+            .bytes
+            .checked_add(buffer.len())
+            .ok_or_else(|| std::io::Error::other("counted byte length overflow"))?;
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+struct BoundedFileWriter<'a> {
+    file: &'a mut std::fs::File,
+    remaining: u64,
+    label: &'a str,
+}
+
+impl Write for BoundedFileWriter<'_> {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        if self.remaining == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::FileTooLarge,
+                format!("{} exceeds its configured byte limit", self.label),
+            ));
+        }
+        let allowed = usize::try_from(self.remaining)
+            .unwrap_or(usize::MAX)
+            .min(buffer.len());
+        let written = self.file.write(&buffer[..allowed])?;
+        let written_u64 = u64::try_from(written)
+            .map_err(|_| std::io::Error::other(format!("{} write length overflow", self.label)))?;
+        self.remaining = self.remaining.checked_sub(written_u64).ok_or_else(|| {
+            std::io::Error::other(format!("{} write accounting underflow", self.label))
+        })?;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
 fn write_file_atomically(
     path: &Path,
     label: &str,
     private: bool,
     max_bytes: u64,
-    write: impl FnOnce(&mut std::fs::File) -> Result<()>,
+    write: impl FnOnce(&mut BoundedFileWriter<'_>) -> Result<()>,
 ) -> Result<()> {
     if let Some(parent) = path
         .parent()
@@ -1287,6 +1411,13 @@ fn write_file_atomically(
     {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {label} directory {}", parent.display()))?;
+        let metadata = std::fs::symlink_metadata(parent)
+            .with_context(|| format!("failed to inspect {label} directory {}", parent.display()))?;
+        anyhow::ensure!(
+            metadata.file_type().is_dir(),
+            "{label} directory {} is not a real directory",
+            parent.display()
+        );
     }
 
     let existing_permissions = match std::fs::symlink_metadata(path) {
@@ -1317,9 +1448,15 @@ fn write_file_atomically(
         });
     }
     let write_result = (|| {
-        write(&mut file)?;
-        file.flush()?;
-        ensure_size(file.metadata()?.len(), max_bytes, label)?;
+        {
+            let mut writer = BoundedFileWriter {
+                file: &mut file,
+                remaining: max_bytes,
+                label,
+            };
+            write(&mut writer)?;
+            writer.flush()?;
+        }
         file.sync_all()?;
         Ok::<(), anyhow::Error>(())
     })();
@@ -1446,16 +1583,37 @@ fn normalize_path(path: &Path) -> Result<PathBuf> {
     match std::fs::canonicalize(&absolute) {
         Ok(canonical) => Ok(canonical),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let Some((parent, file_name)) = absolute.parent().zip(absolute.file_name()) else {
-                return Ok(absolute);
-            };
-            match std::fs::canonicalize(parent) {
-                Ok(canonical_parent) => Ok(canonical_parent.join(file_name)),
-                Err(parent_error) if parent_error.kind() == std::io::ErrorKind::NotFound => {
-                    Ok(absolute)
+            let mut candidate = absolute.as_path();
+            let mut missing = Vec::<OsString>::new();
+            loop {
+                match std::fs::canonicalize(candidate) {
+                    Ok(mut canonical) => {
+                        for component in missing.iter().rev() {
+                            canonical.push(component);
+                        }
+                        return Ok(canonical);
+                    }
+                    Err(parent_error) if parent_error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(parent_error) => {
+                        return Err(parent_error).with_context(|| {
+                            format!("failed to resolve PDF ancestor {}", candidate.display())
+                        });
+                    }
                 }
-                Err(parent_error) => Err(parent_error)
-                    .with_context(|| format!("failed to resolve PDF parent {}", parent.display())),
+
+                let file_name = candidate.file_name().ok_or_else(|| {
+                    anyhow!(
+                        "failed to find an existing ancestor for PDF path {}",
+                        absolute.display()
+                    )
+                })?;
+                missing.push(file_name.to_os_string());
+                candidate = candidate.parent().ok_or_else(|| {
+                    anyhow!(
+                        "failed to find an existing ancestor for PDF path {}",
+                        absolute.display()
+                    )
+                })?;
             }
         }
         Err(error) => {
@@ -1575,6 +1733,20 @@ mod tests {
             page.add_annotation(Annotation::Note {
                 position: PdfPoint::new(1.0, 1.0),
                 text: "valid".into(),
+            })
+            .is_err()
+        );
+        assert!(page.annotations().is_empty());
+
+        {
+            let mut state = document.inner.lock();
+            state.next_annotation_id = 1;
+            state.annotation_model_bytes = MAX_ANNOTATION_MODEL_BYTES;
+        }
+        assert!(
+            page.add_annotation(Annotation::Note {
+                position: PdfPoint::new(1.0, 1.0),
+                text: "bounded".into(),
             })
             .is_err()
         );
@@ -1782,8 +1954,24 @@ mod tests {
         std::fs::create_dir(&target).unwrap();
         assert!(write_bytes_atomically(&target, b"data").is_err());
         assert!(target.is_dir());
-        assert_eq!(pdf_string(&lopdf::text_string("Résumé")), "Résumé");
-        assert_eq!(truncate_utf8("éé".to_string(), 3), "é");
+
+        let oversized = directory.path().join("oversized");
+        assert!(
+            write_file_atomically(&oversized, "bounded output", false, 4, |writer| {
+                writer.write_all(b"12345").map_err(Into::into)
+            })
+            .is_err()
+        );
+        assert!(!oversized.exists());
+        std::fs::write(&oversized, b"12345").unwrap();
+        assert!(read_regular_file_bounded(&oversized, 4, "bounded input").is_err());
+
+        let document = LoDocument::new();
+        assert_eq!(
+            bounded_pdf_string(&document, &lopdf::text_string("Résumé"), 64).as_deref(),
+            Some("Résumé")
+        );
+        assert!(bounded_pdf_string(&document, &lopdf::text_string("Résumé"), 3).is_none());
     }
 
     #[test]
@@ -1796,10 +1984,13 @@ mod tests {
         }
         assert!(parse_destination(&document, &destination, &page_indices).is_none());
         assert!(
-            bounded_destination_text(&Object::String(
-                b"https://example.com/\nunsafe".to_vec(),
-                lopdf::StringFormat::Literal,
-            ))
+            bounded_destination_text(
+                &document,
+                &Object::String(
+                    b"https://example.com/\nunsafe".to_vec(),
+                    lopdf::StringFormat::Literal,
+                )
+            )
             .is_none()
         );
     }
@@ -1924,6 +2115,55 @@ mod tests {
                 .contains("not a regular file")
         );
         assert!(document.page(0).unwrap().annotations().is_empty());
+        assert!(block_on(document.save_annotations()).is_err());
+        assert!(
+            std::fs::symlink_metadata(annotations_sidecar_path(&path))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read(&outside).unwrap(), b"{}");
+    }
+
+    #[test]
+    fn missing_pdf_parents_are_normalized_from_the_nearest_existing_ancestor() {
+        let directory = tempdir().unwrap();
+        let existing = directory.path().join("existing");
+        std::fs::create_dir(&existing).unwrap();
+        let requested = existing.join("missing").join("nested").join("note.pdf");
+
+        let normalized = normalize_path(&requested).unwrap();
+
+        assert_eq!(
+            normalized,
+            std::fs::canonicalize(existing)
+                .unwrap()
+                .join("missing")
+                .join("nested")
+                .join("note.pdf")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pdf_path_normalization_preserves_symlink_parent_semantics() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().unwrap();
+        let target_parent = directory.path().join("outside");
+        let target = target_parent.join("target");
+        let link = directory.path().join("link");
+        std::fs::create_dir_all(&target).unwrap();
+        symlink(&target, &link).unwrap();
+
+        let normalized = normalize_path(&link.join("..").join("note.pdf")).unwrap();
+
+        assert_eq!(
+            normalized,
+            std::fs::canonicalize(target_parent)
+                .unwrap()
+                .join("note.pdf")
+        );
     }
 
     fn make_test_pdf(
