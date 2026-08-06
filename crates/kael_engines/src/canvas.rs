@@ -197,19 +197,22 @@ struct CachedTile {
 pub struct TileCache {
     tiles: HashMap<TileCoord, CachedTile>,
     max_bytes: usize,
+    max_entries: usize,
     current_bytes: usize,
     clock: u64,
 }
 
 impl Default for TileCache {
     fn default() -> Self {
-        Self::with_max_bytes(Self::DEFAULT_MAX_BYTES)
+        Self::with_limits(Self::DEFAULT_MAX_BYTES, Self::DEFAULT_MAX_ENTRIES)
     }
 }
 
 impl TileCache {
     /// Default resident tile-data budget: 256 MiB.
     pub const DEFAULT_MAX_BYTES: usize = 256 * 1024 * 1024;
+    /// Default resident tile-count budget.
+    pub const DEFAULT_MAX_ENTRIES: usize = 65_536;
 
     /// Create a cache with the default 256 MiB resident-data budget.
     pub fn new() -> Self {
@@ -217,11 +220,18 @@ impl TileCache {
     }
 
     /// Create a tile cache bounded to at most `max_bytes` of tile data. Inserting beyond
-    /// the budget evicts least-recently-used tiles until the data fits.
+    /// the budget evicts least-recently-used tiles until the data fits. The default
+    /// entry-count limit still applies, including to empty tile payloads.
     pub fn with_max_bytes(max_bytes: usize) -> Self {
+        Self::with_limits(max_bytes, Self::DEFAULT_MAX_ENTRIES)
+    }
+
+    /// Create a tile cache with explicit data and entry-count budgets.
+    pub fn with_limits(max_bytes: usize, max_entries: usize) -> Self {
         Self {
             tiles: HashMap::new(),
             max_bytes,
+            max_entries,
             current_bytes: 0,
             clock: 0,
         }
@@ -247,10 +257,17 @@ impl TileCache {
     }
 
     /// Insert tile data at the given coordinate, evicting LRU tiles if over budget.
-    pub fn insert(&mut self, coord: TileCoord, data: Vec<u8>) {
+    ///
+    /// Returns `false` without changing the cache when the payload cannot fit the
+    /// configured byte budget, the entry budget is zero, or the cache cannot reserve
+    /// storage for a new entry.
+    pub fn insert(&mut self, coord: TileCoord, data: Vec<u8>) -> bool {
         let bytes = data.len();
-        if bytes > self.max_bytes {
-            return;
+        if bytes > self.max_bytes || self.max_entries == 0 {
+            return false;
+        }
+        if !self.tiles.contains_key(&coord) && self.tiles.try_reserve(1).is_err() {
+            return false;
         }
         let order = self.next_order();
         if let Some(previous) = self.tiles.insert(coord, CachedTile { data, order }) {
@@ -258,11 +275,12 @@ impl TileCache {
         }
         self.current_bytes = self.current_bytes.saturating_add(bytes);
         self.evict_to_budget();
+        self.tiles.contains_key(&coord)
     }
 
     /// Get cached tile data.
-    pub fn get(&self, coord: &TileCoord) -> Option<&Vec<u8>> {
-        self.tiles.get(coord).map(|tile| &tile.data)
+    pub fn get(&self, coord: &TileCoord) -> Option<&[u8]> {
+        self.tiles.get(coord).map(|tile| tile.data.as_slice())
     }
 
     /// Mark a tile as most-recently-used so it is evicted last. Returns true if present.
@@ -304,6 +322,11 @@ impl TileCache {
         self.max_bytes
     }
 
+    /// Maximum number of resident tile entries.
+    pub const fn max_entries(&self) -> usize {
+        self.max_entries
+    }
+
     /// Number of tiles currently cached.
     pub fn len(&self) -> usize {
         self.tiles.len()
@@ -315,15 +338,21 @@ impl TileCache {
     }
 
     fn evict_to_budget(&mut self) {
-        while self.current_bytes > self.max_bytes && !self.tiles.is_empty() {
-            let Some(coord) = self
-                .tiles
-                .iter()
-                .min_by_key(|(_, tile)| tile.order)
-                .map(|(coord, _)| *coord)
-            else {
+        if self.current_bytes <= self.max_bytes && self.tiles.len() <= self.max_entries {
+            return;
+        }
+
+        let mut by_age = Vec::new();
+        if by_age.try_reserve_exact(self.tiles.len()).is_err() {
+            self.clear();
+            return;
+        }
+        by_age.extend(self.tiles.iter().map(|(coord, tile)| (tile.order, *coord)));
+        by_age.sort_unstable_by_key(|(order, _)| *order);
+        for (_, coord) in by_age {
+            if self.current_bytes <= self.max_bytes && self.tiles.len() <= self.max_entries {
                 break;
-            };
+            }
             if let Some(tile) = self.tiles.remove(&coord) {
                 self.current_bytes = self.current_bytes.saturating_sub(tile.data.len());
             }
@@ -490,8 +519,8 @@ mod tests {
             y: 2,
             zoom: 3,
         };
-        cache.insert(coord, vec![42]);
-        assert_eq!(cache.get(&coord).unwrap(), &vec![42]);
+        assert!(cache.insert(coord, vec![42]));
+        assert_eq!(cache.get(&coord), Some([42].as_slice()));
         assert!(
             cache
                 .get(&TileCoord {
@@ -625,12 +654,31 @@ mod tests {
             y: 0,
             zoom: 0,
         };
-        cache.insert(first, vec![1; 5]);
-        cache.insert(second, vec![2; 5]);
-        cache.insert(first, vec![3; 11]);
-        assert_eq!(cache.get(&first), Some(&vec![1; 5]));
+        assert!(cache.insert(first, vec![1; 5]));
+        assert!(cache.insert(second, vec![2; 5]));
+        assert!(!cache.insert(first, vec![3; 11]));
+        assert_eq!(cache.get(&first), Some([1; 5].as_slice()));
         assert!(cache.get(&second).is_some());
         assert_eq!(cache.byte_len(), 10);
+    }
+
+    #[test]
+    fn tile_cache_bounds_empty_entries() {
+        let mut cache = TileCache::with_limits(10, 2);
+        let coord = |x| TileCoord { x, y: 0, zoom: 0 };
+
+        assert!(cache.insert(coord(0), Vec::new()));
+        assert!(cache.insert(coord(1), Vec::new()));
+        assert!(cache.insert(coord(2), Vec::new()));
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.max_entries(), 2);
+        assert!(cache.get(&coord(0)).is_none());
+        assert!(cache.get(&coord(1)).is_some());
+        assert!(cache.get(&coord(2)).is_some());
+
+        let mut disabled = TileCache::with_limits(10, 0);
+        assert!(!disabled.insert(coord(0), Vec::new()));
+        assert!(disabled.is_empty());
     }
 
     #[test]

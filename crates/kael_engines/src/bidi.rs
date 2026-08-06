@@ -62,17 +62,28 @@ pub fn segment_runs(text: &str, base: Direction) -> Vec<DirectionalRun> {
         return Vec::new();
     }
     let strong: Vec<Option<Direction>> = chars.iter().map(|&ch| strong_direction(ch)).collect();
+    let mut next_strong = vec![None; strong.len()];
+    let mut next = None;
+    for index in (0..strong.len()).rev() {
+        next_strong[index] = next;
+        if let Some(direction) = strong[index] {
+            next = Some(direction);
+        }
+    }
 
     let mut runs: Vec<DirectionalRun> = Vec::new();
+    let mut previous = None;
     for (index, &ch) in chars.iter().enumerate() {
-        let direction = strong[index].unwrap_or_else(|| {
-            let previous = strong[..index].iter().rev().find_map(|entry| *entry);
-            let next = strong[index + 1..].iter().find_map(|entry| *entry);
-            match (previous, next) {
+        let direction = match strong[index] {
+            Some(direction) => {
+                previous = Some(direction);
+                direction
+            }
+            None => match (previous, next_strong[index]) {
                 (Some(left), Some(right)) if left == right => left,
                 _ => base,
-            }
-        });
+            },
+        };
         match runs.last_mut() {
             Some(run) if run.direction == direction => run.text.push(ch),
             _ => runs.push(DirectionalRun {

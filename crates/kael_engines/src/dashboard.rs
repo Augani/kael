@@ -1,5 +1,7 @@
 //! Data dashboard workload engine.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 /// Supported chart visualization types.
@@ -216,28 +218,61 @@ pub struct QueryJob {
 }
 
 /// Manages query job scheduling and lifecycle.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct QueryScheduler {
     jobs: Vec<QueryJob>,
+    indices: HashMap<String, usize>,
     next_id: u64,
+    max_jobs: usize,
+}
+
+impl Default for QueryScheduler {
+    fn default() -> Self {
+        Self::with_max_jobs(Self::DEFAULT_MAX_JOBS)
+    }
 }
 
 impl QueryScheduler {
+    /// Default maximum number of tracked jobs.
+    pub const DEFAULT_MAX_JOBS: usize = 100_000;
+
     /// Create a new empty scheduler.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Create an empty scheduler that tracks at most `max_jobs` jobs.
+    pub fn with_max_jobs(max_jobs: usize) -> Self {
+        Self {
+            jobs: Vec::new(),
+            indices: HashMap::new(),
+            next_id: 0,
+            max_jobs,
+        }
+    }
+
     /// Submit a new query job at the supplied epoch-millisecond timestamp.
-    /// Returns the assigned job id.
+    ///
+    /// Returns the assigned job id, or an error when the configured capacity is
+    /// full or storage cannot be reserved.
     pub fn submit(
         &mut self,
         query: String,
         filters: Vec<DataFilter>,
         group_by: Option<GroupBy>,
         created_at: u64,
-    ) -> String {
-        let id = self.allocate_id();
+    ) -> anyhow::Result<String> {
+        if self.jobs.len() >= self.max_jobs {
+            anyhow::bail!("query scheduler capacity of {} jobs reached", self.max_jobs);
+        }
+        self.jobs
+            .try_reserve(1)
+            .map_err(|error| anyhow::anyhow!("cannot reserve query job storage: {error}"))?;
+        self.indices
+            .try_reserve(1)
+            .map_err(|error| anyhow::anyhow!("cannot reserve query index storage: {error}"))?;
+        let id = self.allocate_id()?;
+        let index = self.jobs.len();
         self.jobs.push(QueryJob {
             id: id.clone(),
             query,
@@ -247,31 +282,31 @@ impl QueryScheduler {
             created_at,
             completed_at: None,
         });
-        id
+        let replaced = self.indices.insert(id.clone(), index);
+        debug_assert!(replaced.is_none());
+        Ok(id)
     }
 
-    fn allocate_id(&mut self) -> String {
+    fn allocate_id(&mut self) -> anyhow::Result<String> {
         let start = self.next_id;
         let mut candidate = start;
         loop {
             let id = format!("job-{candidate}");
-            if self.jobs.iter().all(|job| job.id != id) {
+            if !self.indices.contains_key(&id) {
                 self.next_id = candidate.wrapping_add(1);
-                return id;
+                return Ok(id);
             }
             candidate = candidate.wrapping_add(1);
-            assert!(candidate != start, "query job id space exhausted");
+            if candidate == start {
+                anyhow::bail!("query job id space exhausted");
+            }
         }
     }
 
     /// Cancel a queued or running job at the supplied epoch-millisecond
     /// timestamp. Returns an error if the job is not found or already terminal.
     pub fn cancel(&mut self, id: &str, completed_at: u64) -> anyhow::Result<()> {
-        let job = self
-            .jobs
-            .iter_mut()
-            .find(|j| j.id == id)
-            .ok_or_else(|| anyhow::anyhow!("job '{id}' not found"))?;
+        let job = self.job_mut(id)?;
         match job.status {
             QueryStatus::Queued | QueryStatus::Running => {
                 job.status = QueryStatus::Cancelled;
@@ -320,20 +355,54 @@ impl QueryScheduler {
     }
 
     fn job_mut(&mut self, id: &str) -> anyhow::Result<&mut QueryJob> {
+        let index = self
+            .indices
+            .get(id)
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("job '{id}' not found"))?;
         self.jobs
-            .iter_mut()
-            .find(|job| job.id == id)
-            .ok_or_else(|| anyhow::anyhow!("job '{id}' not found"))
+            .get_mut(index)
+            .ok_or_else(|| anyhow::anyhow!("job index for '{id}' is invalid"))
     }
 
     /// Get a reference to a job by id.
     pub fn get(&self, id: &str) -> Option<&QueryJob> {
-        self.jobs.iter().find(|j| j.id == id)
+        self.indices.get(id).and_then(|&index| self.jobs.get(index))
+    }
+
+    /// Remove a tracked job and return it.
+    ///
+    /// Removing an active job only forgets its state; the application remains
+    /// responsible for cancelling any underlying query execution.
+    pub fn remove(&mut self, id: &str) -> Option<QueryJob> {
+        let index = self.indices.remove(id)?;
+        let removed = self.jobs.remove(index);
+        for (offset, job) in self.jobs[index..].iter().enumerate() {
+            if let Some(stored_index) = self.indices.get_mut(&job.id) {
+                *stored_index = index + offset;
+            }
+        }
+        Some(removed)
     }
 
     /// List all jobs.
     pub fn list(&self) -> &[QueryJob] {
         &self.jobs
+    }
+
+    /// Maximum number of jobs this scheduler can track.
+    pub const fn max_jobs(&self) -> usize {
+        self.max_jobs
+    }
+
+    /// Number of jobs currently tracked.
+    pub fn len(&self) -> usize {
+        self.jobs.len()
+    }
+
+    /// Whether the scheduler tracks no jobs.
+    pub fn is_empty(&self) -> bool {
+        self.jobs.is_empty()
     }
 
     /// Return all completed jobs.
@@ -587,7 +656,7 @@ mod tests {
     #[test]
     fn query_scheduler_submit_and_get() {
         let mut sched = QueryScheduler::new();
-        let id = sched.submit("SELECT *".into(), vec![], None, 10);
+        let id = sched.submit("SELECT *".into(), vec![], None, 10).unwrap();
         assert!(sched.get(&id).is_some());
         assert_eq!(sched.get(&id).unwrap().status, QueryStatus::Queued);
         assert_eq!(sched.pending_count(), 1);
@@ -596,7 +665,7 @@ mod tests {
     #[test]
     fn query_scheduler_cancel() {
         let mut sched = QueryScheduler::new();
-        let id = sched.submit("SELECT 1".into(), vec![], None, 10);
+        let id = sched.submit("SELECT 1".into(), vec![], None, 10).unwrap();
         assert!(sched.cancel(&id, 20).is_ok());
         assert_eq!(sched.get(&id).unwrap().status, QueryStatus::Cancelled);
         assert_eq!(sched.get(&id).unwrap().completed_at, Some(20));
@@ -612,8 +681,8 @@ mod tests {
     #[test]
     fn query_scheduler_list_and_completed() {
         let mut sched = QueryScheduler::new();
-        sched.submit("q1".into(), vec![], None, 1);
-        sched.submit("q2".into(), vec![], None, 2);
+        sched.submit("q1".into(), vec![], None, 1).unwrap();
+        sched.submit("q2".into(), vec![], None, 2).unwrap();
         assert_eq!(sched.list().len(), 2);
         assert!(sched.completed_jobs().is_empty());
     }
@@ -622,8 +691,8 @@ mod tests {
     fn query_scheduler_runs_jobs_to_terminal_states_and_wraps_ids() {
         let mut scheduler = QueryScheduler::new();
         scheduler.next_id = u64::MAX;
-        let max = scheduler.submit("max".into(), vec![], None, 1);
-        let zero = scheduler.submit("zero".into(), vec![], None, 2);
+        let max = scheduler.submit("max".into(), vec![], None, 1).unwrap();
+        let zero = scheduler.submit("zero".into(), vec![], None, 2).unwrap();
         assert_eq!(max, format!("job-{}", u64::MAX));
         assert_eq!(zero, "job-0");
         scheduler.start(&max).unwrap();
@@ -635,6 +704,28 @@ mod tests {
             scheduler.get(&zero).unwrap().status,
             QueryStatus::Failed(_)
         ));
+    }
+
+    #[test]
+    fn query_scheduler_enforces_capacity_and_can_release_jobs() {
+        let mut scheduler = QueryScheduler::with_max_jobs(2);
+        let first = scheduler.submit("first".into(), vec![], None, 1).unwrap();
+        let second = scheduler.submit("second".into(), vec![], None, 2).unwrap();
+        assert_eq!(scheduler.max_jobs(), 2);
+        assert_eq!(scheduler.len(), 2);
+        assert!(
+            scheduler
+                .submit("overflow".into(), vec![], None, 3)
+                .is_err()
+        );
+
+        assert_eq!(scheduler.remove(&first).unwrap().query, "first");
+        let third = scheduler.submit("third".into(), vec![], None, 4).unwrap();
+        assert!(scheduler.get(&first).is_none());
+        assert_eq!(scheduler.get(&second).unwrap().query, "second");
+        assert_eq!(scheduler.get(&third).unwrap().query, "third");
+        assert_eq!(scheduler.list()[0].id, second);
+        assert_eq!(scheduler.list()[1].id, third);
     }
 
     #[test]
