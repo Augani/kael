@@ -1,5 +1,4 @@
-//! Platform services diagnostics scaffolding for Kael.
-
+#![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 
 /// Breadcrumb storage and types.
@@ -21,7 +20,7 @@ pub use crash::{
     CrashConsent, CrashReport, CrashReporter, OsInfo, PriorCrashSummary, capture_crash_report,
     collect_os_info, write_crash_report,
 };
-pub use metrics::{MetricsRegistry, Span, TraceEvent, TracePhase, Tracer, Transaction};
+pub use metrics::{MetricsRegistry, Span, TraceEvent, TracePhase, TraceScope, Tracer, Transaction};
 pub use native::{NativeContext, NativeSignal, PendingNativeCrash};
 pub use reporter::{
     Diagnostics, DiagnosticsConfig, add_breadcrumb, capture_error, init, record_counter,

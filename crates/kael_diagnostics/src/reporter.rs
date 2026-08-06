@@ -1,7 +1,7 @@
 //! Global diagnostics configuration and reporting facade.
 
 use std::sync::{
-    Arc, OnceLock,
+    Arc, Mutex, OnceLock,
     atomic::{AtomicU64, Ordering},
 };
 
@@ -15,6 +15,7 @@ use crate::{
 type BeforeSend = dyn Fn(&mut CrashReport) -> bool + Send + Sync + 'static;
 
 static GLOBAL_DIAGNOSTICS: OnceLock<Diagnostics> = OnceLock::new();
+static INIT_LOCK: Mutex<()> = Mutex::new(());
 
 /// Configuration used to initialize diagnostics.
 pub struct DiagnosticsConfig {
@@ -36,13 +37,15 @@ pub struct DiagnosticsConfig {
     pub http_client: Option<Arc<dyn http_client::HttpClient>>,
     /// Whether a panic hook should be installed during initialization.
     pub install_panic_hook: bool,
+    /// Whether native signal or exception handlers should be installed during initialization.
+    pub install_native_handler: bool,
 }
 
 impl std::fmt::Debug for DiagnosticsConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DiagnosticsConfig")
             .field("app_id", &self.app_id)
-            .field("dsn", &self.dsn)
+            .field("has_dsn", &self.dsn.is_some())
             .field("release", &self.release)
             .field("environment", &self.environment)
             .field("max_breadcrumbs", &self.max_breadcrumbs)
@@ -50,6 +53,7 @@ impl std::fmt::Debug for DiagnosticsConfig {
             .field("has_before_send", &self.before_send.is_some())
             .field("has_http_client", &self.http_client.is_some())
             .field("install_panic_hook", &self.install_panic_hook)
+            .field("install_native_handler", &self.install_native_handler)
             .finish()
     }
 }
@@ -66,6 +70,7 @@ impl Default for DiagnosticsConfig {
             before_send: None,
             http_client: None,
             install_panic_hook: true,
+            install_native_handler: false,
         }
     }
 }
@@ -95,7 +100,7 @@ impl Diagnostics {
         crash_reporter.set_environment(config.environment);
 
         if let Some(dsn) = config.dsn {
-            crash_reporter.set_endpoint(dsn);
+            crash_reporter.set_endpoint(dsn)?;
         }
 
         if let Some(client) = config.http_client {
@@ -106,6 +111,10 @@ impl Diagnostics {
             crash_reporter.set_before_send(Arc::from(before_send));
         }
 
+        if config.install_native_handler {
+            crash_reporter.install_native()?;
+        }
+
         if config.install_panic_hook {
             crash_reporter.install_hook();
         }
@@ -113,7 +122,6 @@ impl Diagnostics {
         let tracer = Tracer::default();
         if sample_rate > 0.0 {
             tracer.enable();
-            tracer.install_global();
         }
 
         Ok(Self {
@@ -195,12 +203,20 @@ impl Diagnostics {
 
 /// Initializes the process-global diagnostics subsystem.
 pub fn init(config: DiagnosticsConfig) -> Result<&'static Diagnostics> {
+    let _guard = INIT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(diagnostics) = GLOBAL_DIAGNOSTICS.get() {
         return Ok(diagnostics);
     }
 
     let diagnostics = Diagnostics::new(config)?;
-    let _ = GLOBAL_DIAGNOSTICS.set(diagnostics);
+    if diagnostics.sample_rate > 0.0 {
+        diagnostics.tracer.install_global();
+    }
+    GLOBAL_DIAGNOSTICS
+        .set(diagnostics)
+        .map_err(|_| anyhow!("diagnostics were initialized concurrently"))?;
     Ok(GLOBAL_DIAGNOSTICS
         .get()
         .expect("diagnostics must be initialized after set"))
@@ -271,4 +287,21 @@ pub fn breadcrumb(
 /// Starts a span from a transaction convenience wrapper.
 pub fn start_span(transaction: &Transaction, operation: &str) -> Span {
     transaction.start_span(operation)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DiagnosticsConfig;
+
+    #[test]
+    fn configuration_debug_redacts_the_upload_endpoint() {
+        let config = DiagnosticsConfig {
+            dsn: Some("https://secret.example/crashes".to_string()),
+            ..DiagnosticsConfig::default()
+        };
+
+        let debug = format!("{config:?}");
+        assert!(debug.contains("has_dsn: true"));
+        assert!(!debug.contains("secret.example"));
+    }
 }
