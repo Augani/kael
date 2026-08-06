@@ -1,8 +1,8 @@
 //! Audio DSP processors for the mixer: gain, pan, filtering, limiting, fades.
 //!
-//! These operate on interleaved `f32` buffers and are the building blocks for
-//! per-track inserts and automation in the mixing graph. They are deterministic
-//! and device-free, so they are fully unit tested.
+//! The stateless helpers operate on interleaved `f32` buffers. Stateful filters and compressors
+//! operate on one channel at a time, so create one processor per channel. These are the building
+//! blocks for per-track inserts and automation in the mixing graph.
 
 /// Apply a linear gain to an interleaved buffer in place.
 pub fn apply_gain(buffer: &mut [f32], gain: f32) {
@@ -141,7 +141,7 @@ impl OnePole {
         }
     }
 
-    /// Process an interleaved buffer in place (mono coefficients applied per sample).
+    /// Process a mono buffer in place. Use one filter instance per interleaved channel.
     pub fn process(&mut self, buffer: &mut [f32]) {
         for sample in buffer.iter_mut() {
             *sample = self.process_sample(*sample);
@@ -258,16 +258,16 @@ impl Biquad {
         }
     }
 
-    fn omega(freq_hz: f32, sample_rate: u32) -> (f32, f32, f32) {
+    fn omega(freq_hz: f32, sample_rate: u32) -> (f32, f32) {
         let sample_rate = sample_rate.max(1) as f32;
         let freq_hz = if freq_hz.is_finite() { freq_hz } else { 0.0 }.clamp(0.0, sample_rate * 0.5);
         let w0 = 2.0 * std::f32::consts::PI * (freq_hz / sample_rate);
-        (w0.sin(), w0.cos(), w0.sin())
+        (w0.sin(), w0.cos())
     }
 
     /// A low-pass filter at `freq_hz` with resonance `q` (0.707 is maximally flat).
     pub fn low_pass(freq_hz: f32, sample_rate: u32, q: f32) -> Self {
-        let (sin_w, cos_w, _) = Self::omega(freq_hz, sample_rate);
+        let (sin_w, cos_w) = Self::omega(freq_hz, sample_rate);
         let alpha = sin_w / (2.0 * finite_q(q));
         Self::from_coeffs(
             (1.0 - cos_w) / 2.0,
@@ -281,7 +281,7 @@ impl Biquad {
 
     /// A high-pass filter at `freq_hz` with resonance `q`.
     pub fn high_pass(freq_hz: f32, sample_rate: u32, q: f32) -> Self {
-        let (sin_w, cos_w, _) = Self::omega(freq_hz, sample_rate);
+        let (sin_w, cos_w) = Self::omega(freq_hz, sample_rate);
         let alpha = sin_w / (2.0 * finite_q(q));
         Self::from_coeffs(
             (1.0 + cos_w) / 2.0,
@@ -295,14 +295,14 @@ impl Biquad {
 
     /// A band-pass filter (0 dB peak gain) centered at `freq_hz` with width set by `q`.
     pub fn band_pass(freq_hz: f32, sample_rate: u32, q: f32) -> Self {
-        let (sin_w, cos_w, _) = Self::omega(freq_hz, sample_rate);
+        let (sin_w, cos_w) = Self::omega(freq_hz, sample_rate);
         let alpha = sin_w / (2.0 * finite_q(q));
         Self::from_coeffs(alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cos_w, 1.0 - alpha)
     }
 
     /// A peaking EQ that boosts or cuts `gain_db` around `freq_hz` (the parametric band).
     pub fn peaking_eq(freq_hz: f32, sample_rate: u32, q: f32, gain_db: f32) -> Self {
-        let (sin_w, cos_w, _) = Self::omega(freq_hz, sample_rate);
+        let (sin_w, cos_w) = Self::omega(freq_hz, sample_rate);
         let alpha = sin_w / (2.0 * finite_q(q));
         let amp = 10f32.powf(finite_db(gain_db) / 40.0);
         Self::from_coeffs(
@@ -317,7 +317,7 @@ impl Biquad {
 
     /// A low-shelf filter applying `gain_db` below `freq_hz`.
     pub fn low_shelf(freq_hz: f32, sample_rate: u32, q: f32, gain_db: f32) -> Self {
-        let (sin_w, cos_w, _) = Self::omega(freq_hz, sample_rate);
+        let (sin_w, cos_w) = Self::omega(freq_hz, sample_rate);
         let alpha = sin_w / (2.0 * finite_q(q));
         let amp = 10f32.powf(finite_db(gain_db) / 40.0);
         let beta = 2.0 * amp.sqrt() * alpha;
@@ -333,7 +333,7 @@ impl Biquad {
 
     /// A high-shelf filter applying `gain_db` above `freq_hz`.
     pub fn high_shelf(freq_hz: f32, sample_rate: u32, q: f32, gain_db: f32) -> Self {
-        let (sin_w, cos_w, _) = Self::omega(freq_hz, sample_rate);
+        let (sin_w, cos_w) = Self::omega(freq_hz, sample_rate);
         let alpha = sin_w / (2.0 * finite_q(q));
         let amp = 10f32.powf(finite_db(gain_db) / 40.0);
         let beta = 2.0 * amp.sqrt() * alpha;
@@ -464,6 +464,11 @@ impl Compressor {
         for sample in buffer.iter_mut() {
             *sample = self.process_sample(*sample);
         }
+    }
+
+    /// Clear the detector envelope without changing compressor settings.
+    pub fn reset(&mut self) {
+        self.envelope = 0.0;
     }
 }
 

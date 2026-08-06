@@ -3,9 +3,10 @@
 use crate::AudioSource;
 
 /// The repeat behavior used by a playlist.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RepeatMode {
     /// Do not repeat when the playlist reaches the end.
+    #[default]
     Off,
     /// Repeat the currently selected item.
     One,
@@ -42,6 +43,23 @@ impl Playlist {
         let current = self.current_index();
         self.items.push(source);
         self.rebuild_order(current);
+    }
+
+    /// Returns the number of sources in the playlist.
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    /// Returns whether the playlist contains no sources.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    /// Removes every source and clears the current selection.
+    pub fn clear(&mut self) {
+        self.items.clear();
+        self.order.clear();
+        self.order_position = None;
     }
 
     /// Removes the source at `index` and returns it when present.
@@ -105,6 +123,11 @@ impl Playlist {
         self.repeat_mode = mode;
     }
 
+    /// Returns the configured repeat behavior.
+    pub fn repeat_mode(&self) -> RepeatMode {
+        self.repeat_mode
+    }
+
     /// Enables or disables shuffle ordering.
     pub fn set_shuffle(&mut self, enabled: bool) {
         if self.shuffle_enabled == enabled {
@@ -113,6 +136,18 @@ impl Playlist {
 
         self.shuffle_enabled = enabled;
         self.rebuild_order(self.current_index());
+    }
+
+    /// Enables shuffle with an application-provided seed and rebuilds the remaining order.
+    pub fn shuffle_with_seed(&mut self, seed: u64) {
+        self.shuffle_seed = seed;
+        self.shuffle_enabled = true;
+        self.rebuild_order(self.current_index());
+    }
+
+    /// Returns whether shuffle ordering is enabled.
+    pub fn is_shuffle_enabled(&self) -> bool {
+        self.shuffle_enabled
     }
 
     /// Returns the currently selected source.
@@ -248,5 +283,23 @@ mod tests {
         assert_eq!(playlist.current_index(), Some(1));
         playlist.set_shuffle(true);
         assert_eq!(playlist.current_index(), Some(1));
+    }
+
+    #[test]
+    fn query_clear_and_seeded_shuffle_are_explicit() {
+        let mut playlist = Playlist::new();
+        assert!(playlist.is_empty());
+        playlist.add(AudioSource::File("a.wav".into()));
+        playlist.add(AudioSource::File("b.wav".into()));
+        playlist.set_repeat(RepeatMode::One);
+        playlist.shuffle_with_seed(42);
+
+        assert_eq!(playlist.len(), 2);
+        assert_eq!(playlist.repeat_mode(), RepeatMode::One);
+        assert!(playlist.is_shuffle_enabled());
+
+        playlist.clear();
+        assert!(playlist.is_empty());
+        assert_eq!(playlist.current(), None);
     }
 }
