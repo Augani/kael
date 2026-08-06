@@ -1,8 +1,9 @@
 //! IDE workload engine.
 
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap};
 
-use regex::RegexBuilder;
+use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 
 /// A single entry in the project index.
@@ -108,7 +109,8 @@ pub enum LspStatus {
     Crashed(String),
 }
 
-/// Represents a managed language server process.
+/// State recorded for a language-server process owned by an external process
+/// supervisor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LspProcess {
     /// Language identifier (e.g. "rust", "typescript").
@@ -123,7 +125,10 @@ pub struct LspProcess {
     pub pid: Option<u32>,
 }
 
-/// Manages multiple language server processes.
+/// Tracks language-server definitions and observed lifecycle state.
+///
+/// This type does not spawn, signal, or monitor operating-system processes; the
+/// application owns that work and records transitions here.
 #[derive(Debug, Default)]
 pub struct LspManager {
     processes: HashMap<String, LspProcess>,
@@ -140,7 +145,7 @@ impl LspManager {
         self.processes.insert(process.language_id.clone(), process);
     }
 
-    /// Mark a language server as running with the given PID.
+    /// Record that a language server is running with the given PID.
     pub fn start(&mut self, language_id: &str, pid: u32) -> anyhow::Result<()> {
         if pid == 0 {
             anyhow::bail!("language server PID must be non-zero");
@@ -154,7 +159,7 @@ impl LspManager {
         Ok(())
     }
 
-    /// Mark a language server as stopped.
+    /// Record that a language server has stopped.
     pub fn stop(&mut self, language_id: &str) -> anyhow::Result<()> {
         let proc = self
             .processes
@@ -214,10 +219,102 @@ pub struct SearchQuery {
     pub exclude_paths: Option<Vec<String>>,
 }
 
-/// An in-memory full-text search index.
+/// An in-memory collection of line-level entries searched with deterministic
+/// linear scans.
 #[derive(Debug, Default)]
 pub struct SearchIndex {
     entries: Vec<SearchEntry>,
+}
+
+struct SearchMatcher<'a> {
+    query: &'a SearchQuery,
+    regex: Option<Regex>,
+}
+
+impl<'a> SearchMatcher<'a> {
+    fn new(query: &'a SearchQuery) -> anyhow::Result<Self> {
+        const MAX_PATTERN_BYTES: usize = 64 * 1024;
+        if query.pattern.is_empty() {
+            anyhow::bail!("search pattern must not be empty");
+        }
+        if query.pattern.len() > MAX_PATTERN_BYTES {
+            anyhow::bail!("search pattern exceeds {MAX_PATTERN_BYTES} bytes");
+        }
+        let regex = if query.regex || query.whole_word || !query.case_sensitive {
+            let source = if query.regex {
+                query.pattern.clone()
+            } else {
+                regex::escape(&query.pattern)
+            };
+            let pattern = if query.whole_word {
+                format!(r"\b(?:{source})\b")
+            } else {
+                source
+            };
+            Some(
+                RegexBuilder::new(&pattern)
+                    .case_insensitive(!query.case_sensitive)
+                    .size_limit(1024 * 1024)
+                    .build()
+                    .map_err(|error| anyhow::anyhow!("invalid search pattern: {error}"))?,
+            )
+        } else {
+            None
+        };
+        Ok(Self { query, regex })
+    }
+
+    fn matches(&self, entry: &SearchEntry) -> bool {
+        if let Some(includes) = &self.query.include_paths
+            && !includes
+                .iter()
+                .any(|pattern| entry.path.contains(pattern.as_str()))
+        {
+            return false;
+        }
+        if let Some(excludes) = &self.query.exclude_paths
+            && excludes
+                .iter()
+                .any(|pattern| entry.path.contains(pattern.as_str()))
+        {
+            return false;
+        }
+
+        self.regex.as_ref().map_or_else(
+            || entry.content.contains(&self.query.pattern),
+            |regex| regex.is_match(&entry.content),
+        )
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RankedSearchEntry<'a> {
+    entry: &'a SearchEntry,
+    insertion_index: usize,
+}
+
+impl PartialEq for RankedSearchEntry<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for RankedSearchEntry<'_> {}
+
+impl PartialOrd for RankedSearchEntry<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RankedSearchEntry<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.entry
+            .path
+            .cmp(&other.entry.path)
+            .then(self.entry.line.cmp(&other.entry.line))
+            .then(self.insertion_index.cmp(&other.insertion_index))
+    }
 }
 
 impl SearchIndex {
@@ -232,70 +329,51 @@ impl SearchIndex {
     }
 
     /// Search the index with the given query.
-    pub fn search(&self, query: &SearchQuery) -> Vec<&SearchEntry> {
-        const MAX_PATTERN_BYTES: usize = 64 * 1024;
-        if query.pattern.is_empty() || query.pattern.len() > MAX_PATTERN_BYTES {
-            return Vec::new();
-        }
-        let regex = if query.regex || query.whole_word {
-            let source = if query.regex {
-                query.pattern.clone()
-            } else {
-                regex::escape(&query.pattern)
-            };
-            let pattern = if query.whole_word {
-                format!(r"\b(?:{source})\b")
-            } else {
-                source
-            };
-            match RegexBuilder::new(&pattern)
-                .case_insensitive(!query.case_sensitive)
-                .size_limit(1024 * 1024)
-                .build()
-            {
-                Ok(regex) => Some(regex),
-                Err(_) => return Vec::new(),
-            }
-        } else {
-            None
-        };
+    ///
+    /// Invalid, empty, or excessively large patterns return an error rather
+    /// than being confused with a valid query that has no matches.
+    pub fn search(&self, query: &SearchQuery) -> anyhow::Result<Vec<&SearchEntry>> {
+        let matcher = SearchMatcher::new(query)?;
 
         let mut results: Vec<_> = self
             .entries
             .iter()
-            .filter(|entry| {
-                if let Some(ref includes) = query.include_paths
-                    && !includes.iter().any(|p| entry.path.contains(p.as_str()))
-                {
-                    return false;
-                }
-                if let Some(ref excludes) = query.exclude_paths
-                    && excludes.iter().any(|p| entry.path.contains(p.as_str()))
-                {
-                    return false;
-                }
-
-                if let Some(regex) = &regex {
-                    return regex.is_match(&entry.content);
-                }
-
-                if query.case_sensitive {
-                    entry.content.contains(&query.pattern)
-                } else {
-                    entry
-                        .content
-                        .to_lowercase()
-                        .contains(&query.pattern.to_lowercase())
-                }
-            })
+            .filter(|entry| matcher.matches(entry))
             .collect();
         results.sort_by(|a, b| a.path.cmp(&b.path).then(a.line.cmp(&b.line)));
-        results
+        Ok(results)
     }
 
     /// Search the index and return at most `max_results` entries.
-    pub fn search_with_limit(&self, query: &SearchQuery, max_results: usize) -> Vec<&SearchEntry> {
-        self.search(query).into_iter().take(max_results).collect()
+    ///
+    /// The result buffer remains bounded by `max_results` even when every indexed
+    /// entry matches. Results use the same deterministic path/line/insertion order
+    /// as [`SearchIndex::search`].
+    pub fn search_with_limit(
+        &self,
+        query: &SearchQuery,
+        max_results: usize,
+    ) -> anyhow::Result<Vec<&SearchEntry>> {
+        let matcher = SearchMatcher::new(query)?;
+        let mut results = BinaryHeap::new();
+        for (insertion_index, entry) in self.entries.iter().enumerate() {
+            if !matcher.matches(entry) {
+                continue;
+            }
+            let candidate = RankedSearchEntry {
+                entry,
+                insertion_index,
+            };
+            if results.len() < max_results {
+                results.push(candidate);
+            } else if results.peek().is_some_and(|largest| candidate < *largest) {
+                results.pop();
+                results.push(candidate);
+            }
+        }
+        let mut results = results.into_vec();
+        results.sort_unstable();
+        Ok(results.into_iter().map(|ranked| ranked.entry).collect())
     }
 
     /// Remove all entries from the index.
@@ -446,7 +524,7 @@ mod tests {
             include_paths: None,
             exclude_paths: None,
         };
-        assert_eq!(idx.search(&query).len(), 1);
+        assert_eq!(idx.search(&query).unwrap().len(), 1);
         assert_eq!(idx.count(), 2);
     }
 
@@ -466,7 +544,7 @@ mod tests {
             include_paths: None,
             exclude_paths: None,
         };
-        assert_eq!(idx.search(&query).len(), 1);
+        assert_eq!(idx.search(&query).unwrap().len(), 1);
     }
 
     #[test]
@@ -485,13 +563,13 @@ mod tests {
             include_paths: None,
             exclude_paths: None,
         };
-        assert_eq!(idx.search(&query).len(), 1);
+        assert_eq!(idx.search(&query).unwrap().len(), 1);
         idx.add(SearchEntry {
             path: "b.rs".into(),
             line: 1,
             content: "format, formatter".into(),
         });
-        assert_eq!(idx.search(&query).len(), 2);
+        assert_eq!(idx.search(&query).unwrap().len(), 2);
     }
 
     #[test]
@@ -515,7 +593,7 @@ mod tests {
             include_paths: None,
             exclude_paths: None,
         };
-        assert_eq!(idx.search(&query).len(), 1);
+        assert_eq!(idx.search(&query).unwrap().len(), 1);
     }
 
     #[test]
@@ -539,7 +617,7 @@ mod tests {
             include_paths: None,
             exclude_paths: Some(vec!["vendor/".into()]),
         };
-        assert_eq!(idx.search(&query).len(), 1);
+        assert_eq!(idx.search(&query).unwrap().len(), 1);
     }
 
     #[test]
@@ -557,10 +635,10 @@ mod tests {
     #[test]
     fn search_respects_max_results() {
         let mut idx = SearchIndex::new();
-        for i in 0..10u32 {
+        for (line, path) in ["z.rs", "a.rs", "m.rs", "b.rs"].into_iter().enumerate() {
             idx.add(SearchEntry {
-                path: format!("file{i}.rs"),
-                line: i,
+                path: path.into(),
+                line: u32::try_from(line).unwrap(),
                 content: "needle".into(),
             });
         }
@@ -572,8 +650,10 @@ mod tests {
             include_paths: None,
             exclude_paths: None,
         };
-        let results = idx.search_with_limit(&query, 3);
-        assert_eq!(results.len(), 3);
+        let results = idx.search_with_limit(&query, 2).unwrap();
+        let paths: Vec<_> = results.iter().map(|entry| entry.path.as_str()).collect();
+        assert_eq!(paths, ["a.rs", "b.rs"]);
+        assert!(idx.search_with_limit(&query, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -596,13 +676,14 @@ mod tests {
         };
         let paths: Vec<_> = index
             .search(&query)
+            .unwrap()
             .iter()
             .map(|entry| entry.path.as_str())
             .collect();
         assert_eq!(paths, ["a.rs", "z.rs"]);
         query.pattern.clear();
-        assert!(index.search(&query).is_empty());
+        assert!(index.search(&query).is_err());
         query.pattern = "x".repeat(64 * 1024 + 1);
-        assert!(index.search(&query).is_empty());
+        assert!(index.search(&query).is_err());
     }
 }
