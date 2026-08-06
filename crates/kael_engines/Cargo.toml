@@ -1,5 +1,6 @@
 [package]
 name = "kael_engines"
+autoexamples = false
 rust-version.workspace = true
 authors.workspace = true
 homepage.workspace = true
@@ -7,11 +8,22 @@ version.workspace = true
 edition.workspace = true
 publish = true
 description = "Unicode text, bounded undo/cache, crash, and workload-state primitives for native Rust applications"
+documentation = "https://docs.rs/kael_engines"
 keywords = ["search", "unicode", "indexing", "kael"]
 categories = ["text-processing", "data-structures"]
 readme = "README.md"
 repository.workspace = true
 license.workspace = true
+exclude = ["examples/"]
+
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lib]
+name = "kael_engines"
+path = "src/lib.rs"
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
@@ -21,3 +33,6 @@ regex = "1"
 unicode-bidi = "0.3"
 unicode-linebreak = "0.1.5"
 unicode-segmentation.workspace = true
+
+[lints]
+workspace = true

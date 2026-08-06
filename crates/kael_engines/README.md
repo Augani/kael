@@ -14,15 +14,17 @@ of its modules depend on Kael's renderer or UI crate.
   advances.
 - `undo`: bounded snapshot undo/redo with transaction and coalescing helpers.
 - `canvas`: vector/canvas data types, export validation, visible-tile queries,
-  and a byte-bounded tile cache.
+  and a byte-and-entry-bounded tile cache.
 - `crash_report`: bounded, serializable Rust panic records and a panic hook that
   preserves an existing hook. Native faults still require the optional
   `kael_diagnostics` out-of-process crash service.
-- `dashboard`: chart/query state and a bounded single-record CSV parser. The
-  query scheduler models lifecycle state; applications still execute queries.
+- `dashboard`: chart/query state, a capacity-bounded query lifecycle model,
+  and a bounded single-record CSV parser. Applications still execute queries
+  and remove state they no longer need.
 - `ide`: deterministic in-memory project/search models and language-server
-  lifecycle state. The application still owns file watching, durable indexing,
-  and operating-system process supervision.
+  lifecycle state. Limited search keeps its result buffer bounded. The
+  application still owns file watching, durable indexing, and operating-system
+  process supervision.
 
 ## Undo example
 
@@ -38,10 +40,10 @@ assert!(document.undo());
 assert_eq!(document.current(), "draft one");
 ```
 
-All caches and parsers provided by this crate have explicit or conservative
-limits. Collections that represent application-owned data, such as project and
-search entries, remain caller-owned and intentionally grow only when the caller
-adds data.
+Caches, schedulers, result buffers, and parsers provided by this crate have
+explicit or conservative limits. Collections that represent application-owned
+data, such as project and search entries, remain caller-owned and intentionally
+grow only when the caller adds data.
 
 ## License
 
