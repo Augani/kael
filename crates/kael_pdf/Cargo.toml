@@ -1,17 +1,25 @@
 [package]
 edition.workspace = true
 name = "kael_pdf"
+autoexamples = false
 rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
 publish = true
 description = "Bounded PDF parsing, text search, links, metadata, and sidecar annotations for Kael"
+documentation = "https://docs.rs/kael_pdf"
 keywords = ["pdf", "document", "annotations", "kael"]
 categories = ["multimedia"]
 authors.workspace = true
 repository.workspace = true
 readme = "README.md"
 license.workspace = true
+exclude = ["examples/"]
+
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
 
 [lib]
 name = "kael_pdf"

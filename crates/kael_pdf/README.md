@@ -46,9 +46,9 @@ A stale, malformed, oversized, or unsafe sidecar never prevents a valid PDF from
 - parsed objects: 1,000,000; pages: 100,000;
 - extracted text per page: 16 MiB;
 - cached text: 64 MiB and 1,024 pages;
-- schematic previews: at most 4,096 × 4,096 RGBA pixels;
+- schematic previews: aspect-preserving output of at most 4,096 × 4,096 RGBA pixels and 16 million drawing operations;
 - cached previews: 128 MiB and 256 entries;
-- annotation sidecar: 16 MiB and 100,000 annotations;
+- annotation sidecar and in-memory model: 16 MiB and 100,000 annotations;
 - search query: 4 KiB; results per page: 10,000; and
 - links per page and outline entries: 10,000 each.
 
