@@ -1,4 +1,5 @@
 [package]
+autoexamples = false
 edition.workspace = true
 name = "kael_util_macros"
 rust-version.workspace = true
@@ -13,6 +14,7 @@ authors.workspace = true
 repository.workspace = true
 readme = "README.md"
 license.workspace = true
+exclude = ["examples/**"]
 
 [package.metadata.docs.rs]
 features = ["perf-enabled"]

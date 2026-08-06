@@ -17,9 +17,10 @@ explicit drive letters and UNC paths. `line_endings!` normalizes mixed LF/CRLF
 fixtures before producing the target-specific literal.
 
 `#[perf]` accepts at most one importance level plus optional positive
-`iterations` and `weight` expressions. With `perf-enabled`, generated benchmark
-tests ignore zero or malformed iteration environment values, emit the versioned
-`kael_perf` metadata protocol, and keep test bodies unchanged otherwise.
+`iterations: usize` and `weight: u8` expressions. With `perf-enabled`, generated
+benchmark tests ignore zero or malformed iteration environment values, emit the
+versioned `kael_perf` metadata protocol, and keep conditional-compilation
+attributes paired with their metadata tests.
 
 See the [Kael guide](https://augani.github.io/kael/) for framework-level usage.
 

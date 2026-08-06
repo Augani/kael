@@ -6,7 +6,7 @@
 )]
 
 #[cfg(feature = "perf-enabled")]
-use perf::*;
+use perf::{Importance, consts};
 use proc_macro::TokenStream;
 use quote::{ToTokens, quote};
 use syn::{ItemFn, LitStr, parse_macro_input, parse_quote};
@@ -127,19 +127,6 @@ enum Importance {
     Average,
     Iffy,
     Fluff,
-}
-
-#[cfg(not(feature = "perf-enabled"))]
-impl std::fmt::Display for Importance {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Importance::Critical => write!(f, "Critical"),
-            Importance::Important => write!(f, "Important"),
-            Importance::Average => write!(f, "Average"),
-            Importance::Iffy => write!(f, "Iffy"),
-            Importance::Fluff => write!(f, "Fluff"),
-        }
-    }
 }
 
 #[derive(Default)]
@@ -279,76 +266,7 @@ pub fn perf(our_attr: TokenStream, input: TokenStream) -> TokenStream {
     ));
 
     #[cfg(feature = "perf-enabled")]
-    let fns = {
-        #[allow(clippy::wildcard_imports, reason = "We control the other side")]
-        use consts::*;
-
-        let mut sig_main = sig_main;
-        let mut new_ident_main = sig_main.ident.to_string();
-        let mut new_ident_meta = new_ident_main.clone();
-        new_ident_main.push_str(SUF_NORMAL);
-        new_ident_meta.push_str(SUF_MDATA);
-
-        let new_ident_main = syn::Ident::new(&new_ident_main, sig_main.ident.span());
-        sig_main.ident = new_ident_main;
-
-        let new_ident_meta = syn::Ident::new(&new_ident_meta, sig_main.ident.span());
-        let sig_meta = parse_quote!(fn #new_ident_meta());
-        let attrs_meta = parse_quote!(
-            #[test]
-            #[allow(
-                non_snake_case,
-                reason = "performance protocol suffixes are machine-readable"
-            )]
-        );
-
-        let block_main = {
-            parse_quote!({
-                let iter_count = ::std::env::var(#ITER_ENV_VAR)
-                    .ok()
-                    .and_then(|value| value.parse::<::std::num::NonZero<usize>>().ok())
-                    .map(::std::num::NonZero::get)
-                    .unwrap_or(1);
-                for _ in 0..iter_count {
-                    #block
-                }
-            })
-        };
-        let importance = format!("{}", args.importance.unwrap_or_default());
-        let block_meta = {
-            let q_iter = if let Some(iter) = args.iterations {
-                quote! {
-                    ::std::println!("{} {} {}", #MDATA_LINE_PREF, #ITER_COUNT_LINE_NAME, #iter);
-                }
-            } else {
-                quote! {}
-            };
-            let weight = args
-                .weight
-                .unwrap_or_else(|| parse_quote! { #WEIGHT_DEFAULT });
-            parse_quote!({
-                #q_iter
-                ::std::println!("{} {} {}", #MDATA_LINE_PREF, #WEIGHT_LINE_NAME, #weight);
-                ::std::println!("{} {} {}", #MDATA_LINE_PREF, #IMPORTANCE_LINE_NAME, #importance);
-                ::std::println!("{} {} {}", #MDATA_LINE_PREF, #VERSION_LINE_NAME, #MDATA_VER);
-            })
-        };
-
-        vec![
-            ItemFn {
-                attrs: attrs_main,
-                vis: vis.clone(),
-                sig: sig_main,
-                block: block_main,
-            },
-            ItemFn {
-                attrs: attrs_meta,
-                vis,
-                sig: sig_meta,
-                block: block_meta,
-            },
-        ]
-    };
+    let fns = perf_functions(args, attrs_main, vis, sig_main, block);
 
     #[cfg(not(feature = "perf-enabled"))]
     let fns = vec![ItemFn {
@@ -360,6 +278,107 @@ pub fn perf(our_attr: TokenStream, input: TokenStream) -> TokenStream {
 
     fns.into_iter()
         .flat_map(|f| TokenStream::from(f.into_token_stream()))
+        .collect()
+}
+
+/// Generates the executable and metadata test pair used by the profiler.
+#[cfg(feature = "perf-enabled")]
+fn perf_functions(
+    args: PerfArgs,
+    attrs_main: Vec<syn::Attribute>,
+    vis: syn::Visibility,
+    mut sig_main: syn::Signature,
+    block: Box<syn::Block>,
+) -> Vec<ItemFn> {
+    #[allow(clippy::wildcard_imports, reason = "we control the protocol constants")]
+    use consts::*;
+
+    let mut new_ident_main = sig_main.ident.to_string();
+    let mut new_ident_meta = new_ident_main.clone();
+    new_ident_main.push_str(SUF_NORMAL);
+    new_ident_meta.push_str(SUF_MDATA);
+
+    let new_ident_main = syn::Ident::new(&new_ident_main, sig_main.ident.span());
+    sig_main.ident = new_ident_main;
+
+    let new_ident_meta = syn::Ident::new(&new_ident_meta, sig_main.ident.span());
+    let sig_meta = parse_quote!(fn #new_ident_meta());
+    let mut attrs_meta = metadata_attributes(&attrs_main);
+    attrs_meta.push(parse_quote!(#[test]));
+    attrs_meta.push(parse_quote!(
+        #[allow(
+            non_snake_case,
+            reason = "performance protocol suffixes are machine-readable"
+        )]
+    ));
+
+    let block_main = parse_quote!({
+        let iter_count = ::std::env::var(#ITER_ENV_VAR)
+            .ok()
+            .and_then(|value| value.parse::<::std::num::NonZero<usize>>().ok())
+            .map(::std::num::NonZero::get)
+            .unwrap_or(1);
+        for _ in 0..iter_count {
+            #block
+        }
+    });
+    let importance = format!("{}", args.importance.unwrap_or_default());
+    let q_iter = if let Some(iter) = args.iterations {
+        quote! {
+            let iterations = ::std::num::NonZero::<usize>::new(#iter)
+                .expect("`#[perf]` iterations must be positive");
+            ::std::println!(
+                "{} {} {}",
+                #MDATA_LINE_PREF,
+                #ITER_COUNT_LINE_NAME,
+                iterations.get(),
+            );
+        }
+    } else {
+        quote! {}
+    };
+    let weight_expr = args
+        .weight
+        .unwrap_or_else(|| parse_quote! { #WEIGHT_DEFAULT });
+    let block_meta = parse_quote!({
+        #q_iter
+        let weight = ::std::num::NonZero::<u8>::new(#weight_expr)
+            .expect("`#[perf]` weight must be positive");
+        ::std::println!(
+            "{} {} {}",
+            #MDATA_LINE_PREF,
+            #WEIGHT_LINE_NAME,
+            weight.get(),
+        );
+        ::std::println!("{} {} {}", #MDATA_LINE_PREF, #IMPORTANCE_LINE_NAME, #importance);
+        ::std::println!("{} {} {}", #MDATA_LINE_PREF, #VERSION_LINE_NAME, #MDATA_VER);
+    });
+
+    vec![
+        ItemFn {
+            attrs: attrs_main,
+            vis: vis.clone(),
+            sig: sig_main,
+            block: block_main,
+        },
+        ItemFn {
+            attrs: attrs_meta,
+            vis,
+            sig: sig_meta,
+            block: block_meta,
+        },
+    ]
+}
+
+/// Copies conditional-compilation attributes to a generated metadata test.
+#[cfg(feature = "perf-enabled")]
+fn metadata_attributes(attributes: &[syn::Attribute]) -> Vec<syn::Attribute> {
+    attributes
+        .iter()
+        .filter(|attribute| {
+            attribute.path().is_ident("cfg") || attribute.path().is_ident("cfg_attr")
+        })
+        .cloned()
         .collect()
 }
 
@@ -428,5 +447,21 @@ mod tests {
         assert!(args.iterations.is_some());
         assert!(args.weight.is_some());
         assert!(args.importance.is_some());
+    }
+
+    #[cfg(feature = "perf-enabled")]
+    #[test]
+    fn metadata_functions_keep_conditional_attributes_only() {
+        let attributes = vec![
+            syn::parse_quote!(#[cfg(unix)]),
+            syn::parse_quote!(#[cfg_attr(target_os = "windows", ignore)]),
+            syn::parse_quote!(#[ignore]),
+        ];
+
+        let attributes = super::metadata_attributes(&attributes);
+
+        assert_eq!(attributes.len(), 2);
+        assert!(attributes[0].path().is_ident("cfg"));
+        assert!(attributes[1].path().is_ident("cfg_attr"));
     }
 }
