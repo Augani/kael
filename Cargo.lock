@@ -3815,11 +3815,13 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "cpal",
+ "crossbeam-channel",
  "futures",
  "kael-media",
  "log",
  "parking_lot",
  "smol",
+ "url",
 ]
 
 [[package]]

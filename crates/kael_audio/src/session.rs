@@ -43,7 +43,10 @@ pub enum Interruption {
     },
 }
 
-/// A lightweight in-memory audio-session model.
+/// A lightweight application audio-session state model.
+///
+/// This coordinates category, active state, routes, and interruptions within the application. It
+/// does not claim ownership of an operating-system media session.
 #[derive(Clone)]
 pub struct AudioSession {
     inner: Arc<Mutex<AudioSessionState>>,
@@ -78,10 +81,19 @@ impl AudioSession {
         self.inner.lock().category = category;
     }
 
+    /// Returns the current audio-session category.
+    pub fn category(&self) -> AudioCategory {
+        self.inner.lock().category
+    }
+
     /// Activates or deactivates the audio session.
-    pub fn set_active(&self, active: bool) -> anyhow::Result<()> {
+    pub fn set_active(&self, active: bool) {
         self.inner.lock().active = active;
-        Ok(())
+    }
+
+    /// Returns whether the application audio session is active.
+    pub fn is_active(&self) -> bool {
+        self.inner.lock().active
     }
 
     /// Returns the current audio route.
@@ -213,5 +225,15 @@ mod tests {
             AudioRoute::Named("headphones".into())
         );
         assert_eq!(session.inner.lock().category, AudioCategory::Ambient);
+    }
+
+    #[test]
+    fn category_and_active_state_round_trip() {
+        let session = AudioSession::new();
+        session.set_category(AudioCategory::PlayAndRecord);
+        session.set_active(true);
+
+        assert_eq!(session.category(), AudioCategory::PlayAndRecord);
+        assert!(session.is_active());
     }
 }

@@ -5,7 +5,7 @@ rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
 publish = true
-description = "Audio playback services for Kael"
+description = "Cross-platform audio playback, capture, mixing, DSP, and spatial services for Kael"
 keywords = ["audio", "playback", "sound", "kael"]
 categories = ["multimedia::audio"]
 authors.workspace = true
@@ -16,13 +16,15 @@ license.workspace = true
 [lib]
 name = "kael_audio"
 path = "src/lib.rs"
-doctest = false
 
 [dependencies.anyhow]
 workspace = true
 
 [dependencies.cpal]
 version = "0.15"
+
+[dependencies.crossbeam-channel]
+version = "0.5"
 
 [dependencies.log]
 workspace = true
@@ -37,6 +39,9 @@ version = "0.12.1"
 
 [dependencies.smol]
 workspace = true
+
+[dependencies.url]
+version = "2.2"
 
 [dev-dependencies.futures]
 workspace = true

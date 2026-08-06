@@ -7,8 +7,8 @@ use parking_lot::Mutex;
 
 use crate::effects::{clamp_playback_rate, clamp_volume};
 
-type StateListener = Arc<dyn Fn(PlaybackState) + Send + Sync + 'static>;
-type PositionListener = Arc<dyn Fn(Duration) + Send + Sync + 'static>;
+type StateListener = Rc<dyn Fn(PlaybackState) + 'static>;
+type PositionListener = Rc<dyn Fn(Duration) + 'static>;
 
 /// A handle that unregisters an audio callback when it is dropped.
 #[must_use]
@@ -25,8 +25,17 @@ impl Subscription {
     }
 
     /// Detaches the callback from this handle.
+    ///
+    /// The callback remains registered for the rest of the owning service's lifetime.
     pub fn detach(mut self) {
         self.unsubscribe.take();
+    }
+
+    /// Unregister the callback immediately.
+    pub fn unsubscribe(mut self) {
+        if let Some(unsubscribe) = self.unsubscribe.take() {
+            unsubscribe();
+        }
     }
 }
 
@@ -45,7 +54,7 @@ impl std::fmt::Debug for Subscription {
 }
 
 /// A source of audio content.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum AudioSource {
     /// Audio loaded from a file on disk.
     File(PathBuf),
@@ -53,6 +62,22 @@ pub enum AudioSource {
     Url(String),
     /// Audio loaded from in-memory bytes.
     Memory(Arc<[u8]>),
+}
+
+impl std::fmt::Debug for AudioSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::File(path) => f.debug_tuple("File").field(path).finish(),
+            Self::Url(url) => f
+                .debug_struct("Url")
+                .field("bytes", &url.len())
+                .finish_non_exhaustive(),
+            Self::Memory(bytes) => f
+                .debug_struct("Memory")
+                .field("bytes", &bytes.len())
+                .finish_non_exhaustive(),
+        }
+    }
 }
 
 impl AudioSource {
@@ -111,9 +136,15 @@ pub struct Track {
     pub duration: Option<Duration>,
 }
 
-const MAX_DECODED_AUDIO_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_DECODED_AUDIO_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_MEMORY_SOURCE_BYTES: usize = 256 * 1024 * 1024;
+const MAX_URL_BYTES: usize = 16 * 1024;
+const MAX_ERROR_BYTES: usize = 4 * 1024;
 
-/// A clonable audio player that wraps `kael-media` playback.
+/// A clonable, thread-local audio player that wraps `kael-media` playback.
+///
+/// Clone it freely on the UI thread. Device-independent mixing and live output use
+/// [`crate::Mixer`] and [`crate::AudioEngine`], which are designed for cross-thread control.
 #[derive(Clone)]
 pub struct AudioPlayer {
     inner: Rc<Mutex<AudioPlayerState>>,
@@ -172,18 +203,33 @@ impl AudioPlayer {
         total.is_none_or(|bytes| bytes > u128::from(MAX_DECODED_AUDIO_BYTES))
     }
 
-    /// Loads a track and makes it the current player target.
+    /// Stops the current track, then loads and selects a new player target.
     pub async fn load(&self, source: AudioSource) -> Result<Track> {
-        let my_generation = {
+        validate_source(&source)?;
+        let (my_generation, track_id, previous_handle, loading_listeners) = {
             let mut state = self.inner.lock();
-            state.load_generation = state
+            let next_generation = state
                 .load_generation
                 .checked_add(1)
                 .ok_or_else(|| anyhow::anyhow!("audio load generation exhausted"))?;
-            state.load_generation
+            let track_id = state.next_track_id;
+            let next_track_id = track_id
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("audio track id space exhausted"))?;
+            state.load_generation = next_generation;
+            state.next_track_id = next_track_id;
+            state.current_track = None;
+            state.playback_state = PlaybackState::Loading;
+            (
+                next_generation,
+                track_id,
+                state.handle.take(),
+                state.state_listeners.values().cloned().collect::<Vec<_>>(),
+            )
         };
-
-        let loading_listeners = self.set_state(PlaybackState::Loading);
+        if let Some(handle) = previous_handle {
+            handle.stop();
+        }
         notify_state_listeners(&loading_listeners, PlaybackState::Loading);
 
         let duration = smol::unblock({
@@ -200,11 +246,6 @@ impl AudioPlayer {
                     if state.load_generation != my_generation {
                         return Err(anyhow::anyhow!("load superseded by newer request"));
                     }
-                    let track_id = state.next_track_id;
-                    state.next_track_id = state
-                        .next_track_id
-                        .checked_add(1)
-                        .ok_or_else(|| anyhow::anyhow!("audio track id space exhausted"))?;
                     let track = Track {
                         id: track_id,
                         source,
@@ -224,7 +265,7 @@ impl AudioPlayer {
                 Ok(track)
             }
             Err(error) => {
-                let message = error.to_string();
+                let message = bounded_error_message(error.to_string());
                 let listeners = {
                     let mut state = self.inner.lock();
                     if state.load_generation != my_generation {
@@ -243,7 +284,7 @@ impl AudioPlayer {
     pub fn play(&self, track: &Track) -> Result<()> {
         let handle = self.ensure_track_handle(track)?;
         if let Err(error) = handle.play() {
-            let message = error.to_string();
+            let message = bounded_error_message(error.to_string());
             let listeners = self.set_state(PlaybackState::Error(message.clone()));
             notify_state_listeners(&listeners, PlaybackState::Error(message));
             return Err(error.into());
@@ -383,32 +424,69 @@ impl AudioPlayer {
     }
 
     /// Returns the current externally visible playback state.
+    ///
+    /// Polling synchronizes backend state and notifies listeners when playback
+    /// has ended or otherwise changed outside a direct player command.
     pub fn state(&self) -> PlaybackState {
         let (cached_state, handle) = {
             let state = self.inner.lock();
             (state.playback_state.clone(), state.handle.clone())
         };
 
-        match cached_state {
-            PlaybackState::Loading | PlaybackState::Error(_) | PlaybackState::Idle => cached_state,
+        let observed_state = match cached_state {
+            PlaybackState::Loading | PlaybackState::Error(_) | PlaybackState::Idle => {
+                return cached_state;
+            }
             _ => handle
                 .map(|handle| map_playback_state(handle.state()))
                 .unwrap_or(cached_state),
+        };
+        let listeners = {
+            let mut state = self.inner.lock();
+            if state.playback_state == observed_state {
+                return observed_state;
+            }
+            state.playback_state = observed_state.clone();
+            state.state_listeners.values().cloned().collect::<Vec<_>>()
+        };
+        notify_state_listeners(&listeners, observed_state.clone());
+        observed_state
+    }
+
+    /// Return the currently loaded track, if any.
+    pub fn current_track(&self) -> Option<Track> {
+        self.inner.lock().current_track.clone()
+    }
+
+    /// Stop playback, cancel an in-flight load, and return the player to idle.
+    pub fn unload(&self) -> Result<()> {
+        let (handle, listeners) = {
+            let mut state = self.inner.lock();
+            state.load_generation = state
+                .load_generation
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("audio load generation exhausted"))?;
+            state.current_track = None;
+            state.playback_state = PlaybackState::Idle;
+            (
+                state.handle.take(),
+                state.state_listeners.values().cloned().collect::<Vec<_>>(),
+            )
+        };
+        if let Some(handle) = handle {
+            handle.stop();
         }
+        notify_state_listeners(&listeners, PlaybackState::Idle);
+        Ok(())
     }
 
     /// Registers a listener for state changes.
-    pub fn on_state_change(
-        &self,
-        callback: impl Fn(PlaybackState) + Send + Sync + 'static,
-    ) -> Subscription {
+    pub fn on_state_change(&self, callback: impl Fn(PlaybackState) + 'static) -> Subscription {
         let state = self.inner.clone();
         let listener_id = {
             let mut state = state.lock();
             let listener_id = allocate_listener_id(&mut state);
-            state
-                .state_listeners
-                .insert(listener_id, Arc::new(callback));
+            state.state_listeners.insert(listener_id, Rc::new(callback));
             listener_id
         };
 
@@ -418,17 +496,14 @@ impl AudioPlayer {
     }
 
     /// Registers a listener for position changes.
-    pub fn on_position_change(
-        &self,
-        callback: impl Fn(Duration) + Send + Sync + 'static,
-    ) -> Subscription {
+    pub fn on_position_change(&self, callback: impl Fn(Duration) + 'static) -> Subscription {
         let state = self.inner.clone();
         let listener_id = {
             let mut state = state.lock();
             let listener_id = allocate_listener_id(&mut state);
             state
                 .position_listeners
-                .insert(listener_id, Arc::new(callback));
+                .insert(listener_id, Rc::new(callback));
             listener_id
         };
 
@@ -454,12 +529,32 @@ impl AudioPlayer {
             }
         }
 
+        validate_source(&track.source)?;
         let handle = kael_media::AudioHandle::new(track.source.to_media_source());
         handle.set_volume(volume);
         handle.set_speed(rate);
-        let mut state = self.inner.lock();
-        state.current_track = Some(track.clone());
-        state.handle = Some(handle.clone());
+        let previous_handle = {
+            let mut state = self.inner.lock();
+            let next_generation = state
+                .load_generation
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("audio load generation exhausted"))?;
+            let next_track_id = if track.id >= state.next_track_id {
+                track
+                    .id
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow::anyhow!("audio track id space exhausted"))?
+            } else {
+                state.next_track_id
+            };
+            state.load_generation = next_generation;
+            state.next_track_id = next_track_id;
+            state.current_track = Some(track.clone());
+            state.handle.replace(handle.clone())
+        };
+        if let Some(previous_handle) = previous_handle {
+            previous_handle.stop();
+        }
         Ok(handle)
     }
 
@@ -473,6 +568,63 @@ impl AudioPlayer {
         let state = self.inner.lock();
         state.position_listeners.values().cloned().collect()
     }
+}
+
+fn validate_source(source: &AudioSource) -> Result<()> {
+    match source {
+        AudioSource::File(path) => {
+            if path.as_os_str().is_empty() {
+                anyhow::bail!("audio file path cannot be empty");
+            }
+            Ok(())
+        }
+        AudioSource::Memory(bytes) => {
+            if bytes.is_empty() {
+                anyhow::bail!("in-memory audio source cannot be empty");
+            }
+            if bytes.len() > MAX_MEMORY_SOURCE_BYTES {
+                anyhow::bail!(
+                    "in-memory audio source exceeds {MAX_MEMORY_SOURCE_BYTES} byte limit"
+                );
+            }
+            Ok(())
+        }
+        AudioSource::Url(url) => {
+            if url.is_empty()
+                || url.len() > MAX_URL_BYTES
+                || url.trim() != url
+                || url.chars().any(char::is_control)
+            {
+                anyhow::bail!(
+                    "audio URL must be non-empty, at most {MAX_URL_BYTES} bytes, and contain no surrounding whitespace or control characters"
+                );
+            }
+            let parsed =
+                url::Url::parse(url).map_err(|_| anyhow::anyhow!("audio URL is invalid"))?;
+            if parsed.scheme() != "https" {
+                anyhow::bail!("audio URL must use https");
+            }
+            if parsed.host_str().is_none() {
+                anyhow::bail!("audio URL must include a host");
+            }
+            if !parsed.username().is_empty() || parsed.password().is_some() {
+                anyhow::bail!("audio URL cannot contain credentials");
+            }
+            Ok(())
+        }
+    }
+}
+
+fn bounded_error_message(mut message: String) -> String {
+    if message.len() <= MAX_ERROR_BYTES {
+        return message;
+    }
+    let mut boundary = MAX_ERROR_BYTES;
+    while !message.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    message.truncate(boundary);
+    message
 }
 
 fn allocate_listener_id(state: &mut AudioPlayerState) -> usize {
@@ -513,13 +665,16 @@ fn notify_position_listeners(listeners: &[PositionListener], position: Duration)
 #[cfg(test)]
 mod tests {
     use std::{
+        path::PathBuf,
         sync::{Arc, Mutex},
         time::Duration,
     };
 
     use futures::executor::block_on;
 
-    use super::{AudioPlayer, AudioSource, PlaybackState};
+    use super::{
+        AudioPlayer, AudioSource, PlaybackState, Track, bounded_error_message, validate_source,
+    };
 
     #[test]
     fn rejects_oversized_audio() {
@@ -568,15 +723,54 @@ mod tests {
     }
 
     #[test]
-    fn load_generation_increments_on_load() {
+    fn source_debug_output_does_not_expose_bytes_or_urls() {
+        let memory = AudioSource::from(b"secret audio bytes".to_vec());
+        let url = AudioSource::Url("https://example.com/audio?token=secret".to_string());
+
+        let memory_debug = format!("{memory:?}");
+        let url_debug = format!("{url:?}");
+        assert!(memory_debug.contains("bytes"));
+        assert!(!memory_debug.contains("secret audio"));
+        assert!(url_debug.contains("bytes"));
+        assert!(!url_debug.contains("example.com"));
+        assert!(!url_debug.contains("token"));
+    }
+
+    #[test]
+    fn validates_remote_audio_urls() {
+        assert!(
+            validate_source(&AudioSource::Url("https://example.com/audio".to_string())).is_ok()
+        );
+        assert!(
+            validate_source(&AudioSource::Url("file:///private/audio.wav".to_string())).is_err()
+        );
+        assert!(
+            validate_source(&AudioSource::Url("http://example.com/audio".to_string())).is_err()
+        );
+        assert!(
+            validate_source(&AudioSource::Url(
+                "https://user:secret@example.com/audio".to_string()
+            ))
+            .is_err()
+        );
+        assert!(validate_source(&AudioSource::File(PathBuf::new())).is_err());
+        assert!(validate_source(&AudioSource::Memory(Arc::from([]))).is_err());
+    }
+
+    #[test]
+    fn playback_errors_are_utf8_bounded() {
+        let message = bounded_error_message("é".repeat(4096));
+        assert!(message.len() <= 4 * 1024);
+    }
+
+    #[test]
+    fn exhausted_load_generation_fails_without_mutating_state() {
         let player = AudioPlayer::new();
-        let gen_before = player.inner.lock().load_generation;
-        {
-            let mut state = player.inner.lock();
-            state.load_generation += 1;
-        }
-        let gen_after = player.inner.lock().load_generation;
-        assert_eq!(gen_after, gen_before + 1);
+        player.inner.lock().load_generation = u64::MAX;
+
+        assert!(block_on(player.load(AudioSource::from(silent_wav_1s()))).is_err());
+        assert_eq!(player.current_track(), None);
+        assert_eq!(player.state(), PlaybackState::Idle);
     }
 
     #[test]
@@ -590,6 +784,17 @@ mod tests {
         assert!(state.position_listeners.contains_key(&0));
         drop(state);
         drop((max, zero));
+    }
+
+    #[test]
+    fn subscriptions_can_unregister_immediately() {
+        let player = AudioPlayer::new();
+        let subscription = player.on_state_change(|_| {});
+        assert_eq!(player.inner.lock().state_listeners.len(), 1);
+
+        subscription.unsubscribe();
+
+        assert!(player.inner.lock().state_listeners.is_empty());
     }
 
     #[test]
@@ -626,6 +831,33 @@ mod tests {
         assert_eq!(track.duration, Some(Duration::from_secs(1)));
         player.seek(Duration::from_secs(5)).unwrap();
         assert_eq!(player.position(), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn unload_clears_the_track_and_cancels_future_state() {
+        let player = AudioPlayer::new();
+        block_on(player.load(AudioSource::from(silent_wav_1s()))).unwrap();
+
+        player.unload().unwrap();
+
+        assert_eq!(player.current_track(), None);
+        assert_eq!(player.duration(), None);
+        assert_eq!(player.state(), PlaybackState::Idle);
+    }
+
+    #[test]
+    fn externally_supplied_tracks_do_not_reuse_player_ids() {
+        let player = AudioPlayer::new();
+        let track = Track {
+            id: 41,
+            source: AudioSource::from(silent_wav_1s()),
+            duration: Some(Duration::from_secs(1)),
+        };
+
+        player.ensure_track_handle(&track).unwrap();
+        let loaded = block_on(player.load(AudioSource::from(silent_wav_1s()))).unwrap();
+
+        assert_eq!(loaded.id, 42);
     }
 
     fn silent_wav_1s() -> Vec<u8> {
