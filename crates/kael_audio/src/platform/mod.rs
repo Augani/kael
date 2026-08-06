@@ -19,6 +19,8 @@ use windows as imp;
 pub struct PlatformAudioSupport {
     /// The audio playback backend.
     pub playback_backend: &'static str,
+    /// The audio-input capture backend.
+    pub capture_backend: &'static str,
     /// The session-management backend.
     pub session_backend: &'static str,
     /// The spatial-audio backend.
