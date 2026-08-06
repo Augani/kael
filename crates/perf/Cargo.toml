@@ -5,8 +5,10 @@ rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
 publish = true
+autoexamples = false
 description = "A tool for measuring test performance for Kael"
 documentation = "https://docs.rs/kael_perf"
+exclude = ["examples/**"]
 keywords = ["performance", "profiling", "benchmark", "kael"]
 categories = ["development-tools::profiling"]
 authors.workspace = true
@@ -15,6 +17,7 @@ readme = "README.md"
 license.workspace = true
 
 [package.metadata.docs.rs]
+default-target = "x86_64-unknown-linux-gnu"
 targets = []
 
 [lib]

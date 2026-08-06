@@ -6,6 +6,7 @@ use implementation::{FailKind, Importance, Output, TestMdata, Timings, consts};
 use serde::Deserialize;
 
 use std::{
+    collections::BTreeMap,
     fs::{self, OpenOptions},
     io::{Read, Write},
     num::NonZero,
@@ -23,6 +24,16 @@ const ITER_COUNT_MUL: NonZero<usize> = NonZero::new(4).unwrap();
 const MAX_RUN_FILE_BYTES: u64 = 64 * 1024 * 1024;
 /// Largest accepted run identifier.
 const MAX_RUN_IDENTIFIER_LEN: usize = 128;
+/// Largest accepted test-list output from a benchmark binary.
+const MAX_TEST_LIST_BYTES: usize = 16 * 1024 * 1024;
+/// Largest accepted metadata output from one generated test.
+const MAX_METADATA_BYTES: usize = 64 * 1024;
+/// Largest accepted Hyperfine JSON response.
+const MAX_HYPERFINE_OUTPUT_BYTES: usize = 1024 * 1024;
+/// Largest number of paired benchmarks accepted from one test binary.
+const MAX_PERF_TESTS: usize = 16 * 1024;
+/// Largest accepted generated test name.
+const MAX_TEST_NAME_BYTES: usize = 16 * 1024;
 
 /// Do we keep stderr empty while running the tests?
 static QUIET: AtomicBool = AtomicBool::new(false);
@@ -61,9 +72,7 @@ impl OutputKind<'_> {
             }
             OutputKind::Json(ident) => {
                 validate_run_identifier(ident)?;
-                let runs_dir = runs_directory()?;
-                fs::create_dir_all(&runs_dir)
-                    .map_err(|error| format!("failed to create {}: {error}", runs_dir.display()))?;
+                let runs_dir = runs_directory(true)?;
                 // Get the test binary's crate's name; a path like
                 // target/release-fast/deps/kael-061ff76c9b7af5d7
                 // would be reduced to just "kael".
@@ -158,11 +167,75 @@ fn refuse_symlink_target(path: &Path) -> Result<(), String> {
     }
 }
 
-/// Resolves the saved-run directory relative to the invocation directory.
-fn runs_directory() -> Result<PathBuf, String> {
-    std::env::current_dir()
+/// Resolves and validates the saved-run directory relative to the invocation directory.
+fn runs_directory(create: bool) -> Result<PathBuf, String> {
+    let directory = std::env::current_dir()
         .map(|directory| directory.join(consts::RUNS_DIR))
-        .map_err(|error| format!("failed to resolve the current directory: {error}"))
+        .map_err(|error| format!("failed to resolve the current directory: {error}"))?;
+    if create {
+        fs::create_dir_all(&directory)
+            .map_err(|error| format!("failed to create {}: {error}", directory.display()))?;
+    }
+    let metadata = fs::symlink_metadata(&directory)
+        .map_err(|error| format!("failed to inspect {}: {error}", directory.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(format!(
+            "saved-run path is not a real directory: {}",
+            directory.display()
+        ));
+    }
+    #[cfg(unix)]
+    if create {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).map_err(|error| {
+            format!(
+                "failed to secure saved-run directory {}: {error}",
+                directory.display()
+            )
+        })?;
+    }
+    Ok(directory)
+}
+
+/// Runs a child while capturing no more than `limit` bytes from stdout.
+fn bounded_command_stdout(
+    command: &mut Command,
+    limit: usize,
+    label: &str,
+) -> Result<(std::process::ExitStatus, Vec<u8>), String> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("failed to start {label}: {error}"))?;
+    let Some(stdout) = child.stdout.take() else {
+        terminate_child(&mut child);
+        return Err(format!("failed to capture {label} output"));
+    };
+    let mut bytes = Vec::new();
+    let read_result = stdout
+        .take(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
+        .read_to_end(&mut bytes);
+    if let Err(error) = read_result {
+        terminate_child(&mut child);
+        return Err(format!("failed to read {label} output: {error}"));
+    }
+    if bytes.len() > limit {
+        terminate_child(&mut child);
+        return Err(format!("{label} output exceeds the {limit}-byte limit"));
+    }
+    let status = child
+        .wait()
+        .map_err(|error| format!("failed to wait for {label}: {error}"))?;
+    Ok((status, bytes))
+}
+
+/// Best-effort cleanup for a child whose output contract was violated.
+fn terminate_child(child: &mut std::process::Child) {
+    drop(child.kill());
+    drop(child.wait());
 }
 
 /// Runs a given metadata-returning function from a test handler, parsing its
@@ -170,11 +243,12 @@ fn runs_directory() -> Result<PathBuf, String> {
 fn parse_mdata(t_bin: &str, mdata_fn: &str) -> Result<TestMdata, FailKind> {
     let mut cmd = Command::new(t_bin);
     cmd.args([mdata_fn, "--exact", "--nocapture"]);
-    let out = cmd.output().map_err(|_| FailKind::BadMetadata)?;
-    if !out.status.success() {
+    let (status, stdout) = bounded_command_stdout(&mut cmd, MAX_METADATA_BYTES, "metadata test")
+        .map_err(|_| FailKind::BadMetadata)?;
+    if !status.success() {
         return Err(FailKind::BadMetadata);
     }
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stdout = String::from_utf8_lossy(&stdout);
     parse_mdata_stdout(&stdout)
 }
 
@@ -328,7 +402,10 @@ fn read_saved_output(path: &Path) -> Result<Output, String> {
         .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
     let capacity = usize::try_from(metadata.len())
         .map_err(|_| format!("saved run is too large for this target: {}", path.display()))?;
-    let mut bytes = Vec::with_capacity(capacity);
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|error| format!("failed to allocate saved-run buffer: {error}"))?;
     file.take(MAX_RUN_FILE_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
@@ -345,7 +422,7 @@ fn read_saved_output(path: &Path) -> Result<Output, String> {
 /// Compares the perf results of two profiles as per the arguments passed in.
 fn compare_profiles(args: &[String]) -> Result<(), String> {
     let args = parse_compare_args(args)?;
-    let runs_dir = runs_directory()?;
+    let runs_dir = runs_directory(false)?;
 
     // Use the blank outputs initially, so we can merge into these with prefixes.
     let mut outputs_new = Output::blank();
@@ -356,10 +433,10 @@ fn compare_profiles(args: &[String]) -> Result<(), String> {
     let entries = runs_dir
         .read_dir()
         .map_err(|error| format!("failed to read {}: {error}", runs_dir.display()))?;
-    for e in entries {
-        let Ok(entry) = e else {
-            continue;
-        };
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!("failed to read an entry in {}: {error}", runs_dir.display())
+        })?;
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
@@ -399,64 +476,73 @@ fn compare_profiles(args: &[String]) -> Result<(), String> {
 /// Runs a test binary, filtering out tests which aren't marked for perf triage
 /// and giving back the list of tests we care about.
 ///
-/// The output of this is an iterator over `test_fn_name, test_mdata_name`.
-fn get_tests(t_bin: &str) -> impl ExactSizeIterator<Item = (String, String)> {
+/// The output pairs each generated test function with its metadata function.
+fn get_tests(t_bin: &str) -> Result<Vec<(String, String)>, String> {
     let mut cmd = Command::new(t_bin);
     // --format=json is nightly-only :(
     cmd.args(["--list", "--format=terse"]);
-    let out = cmd
-        .output()
-        .expect("FATAL: Could not run test binary {t_bin}");
-    assert!(
-        out.status.success(),
-        "FATAL: Cannot do perf check - test binary {t_bin} returned an error"
-    );
+    let (status, stdout) = bounded_command_stdout(&mut cmd, MAX_TEST_LIST_BYTES, "test discovery")?;
+    if !status.success() {
+        return Err(format!(
+            "cannot profile test binary {t_bin:?}: discovery exited with {status}"
+        ));
+    }
     if !QUIET.load(Ordering::Relaxed) {
         eprintln!("Test binary ran successfully; starting profile...");
     }
-    // Parse the test harness output to look for tests we care about.
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let mut test_list: Vec<_> = stdout
-        .lines()
-        .filter_map(|line| {
-            // This should split only in two; e.g.,
-            // "app::test::test_arena: test" => "app::test::test_arena:", "test"
-            let line: Vec<_> = line.split_whitespace().collect();
-            match line[..] {
-                // Final byte of t_name is ":", which we need to ignore.
-                [t_name, kind] => (kind == "test").then(|| &t_name[..t_name.len() - 1]),
-                _ => None,
-            }
-        })
-        // Exclude tests that aren't marked for perf triage based on suffix.
-        .filter(|t_name| {
-            t_name.ends_with(consts::SUF_NORMAL) || t_name.ends_with(consts::SUF_MDATA)
-        })
-        .collect();
+    parse_test_list(&String::from_utf8_lossy(&stdout))
+}
 
-    // Pulling itertools just for .dedup() would be quite a big dependency that's
-    // not used elsewhere, so do this on a vec instead.
-    test_list.sort_unstable();
-    test_list.dedup();
+/// Parses and pairs generated performance tests from Rust's terse test listing.
+fn parse_test_list(stdout: &str) -> Result<Vec<(String, String)>, String> {
+    let mut tests = BTreeMap::<String, (Option<String>, Option<String>)>::new();
+    for line in stdout.lines() {
+        let Some((name, kind)) = line.rsplit_once(": ") else {
+            continue;
+        };
+        if kind != "test" {
+            continue;
+        }
+        if name.len() > MAX_TEST_NAME_BYTES {
+            return Err(format!(
+                "generated test name exceeds the {MAX_TEST_NAME_BYTES}-byte limit"
+            ));
+        }
+        let (base, is_metadata) = if let Some(base) = name.strip_suffix(consts::SUF_NORMAL) {
+            (base, false)
+        } else if let Some(base) = name.strip_suffix(consts::SUF_MDATA) {
+            (base, true)
+        } else {
+            continue;
+        };
+        if base.is_empty() {
+            return Err("generated performance test has an empty base name".to_owned());
+        }
+        if !tests.contains_key(base) && tests.len() >= MAX_PERF_TESTS {
+            return Err(format!(
+                "test binary exceeds the {MAX_PERF_TESTS}-benchmark limit"
+            ));
+        }
+        let pair = tests.entry(base.to_owned()).or_default();
+        let slot = if is_metadata {
+            &mut pair.1
+        } else {
+            &mut pair.0
+        };
+        if slot.replace(name.to_owned()).is_some() {
+            return Err(format!("duplicate generated performance test {name:?}"));
+        }
+    }
 
-    // Tests should come in pairs with their mdata fn!
-    assert!(
-        test_list.len().is_multiple_of(2),
-        "Malformed tests in test binary {t_bin}"
-    );
-
-    let out = test_list
-        .chunks_exact_mut(2)
-        .map(|pair| {
-            // Be resilient against changes to these constants.
-            if consts::SUF_NORMAL < consts::SUF_MDATA {
-                (pair[0].to_owned(), pair[1].to_owned())
-            } else {
-                (pair[1].to_owned(), pair[0].to_owned())
-            }
+    tests
+        .into_iter()
+        .map(|(base, (test, metadata))| match (test, metadata) {
+            (Some(test), Some(metadata)) => Ok((test, metadata)),
+            _ => Err(format!(
+                "generated performance test {base:?} is missing its test or metadata pair"
+            )),
         })
-        .collect::<Vec<_>>();
-    out.into_iter()
+        .collect()
 }
 
 /// Runs the specified test `count` times, returning the time taken if the test
@@ -483,9 +569,6 @@ fn spawn_and_iterate(t_bin: &str, t_name: &str, count: NonZero<usize>) -> Option
 /// iteration count. Returns `None` if the test errored or `step` returned `None`,
 /// else `Some(iterations)`.
 ///
-/// # Panics
-/// This will panic if `step(usize)` is not monotonically increasing, or if the test
-/// binary is invalid.
 fn triage_test(
     t_bin: &str,
     t_name: &str,
@@ -502,10 +585,9 @@ fn triage_test(
             break Some(iter_count);
         }
         let new = step(iter_count)?;
-        assert!(
-            new > iter_count,
-            "FATAL: step must be monotonically increasing"
-        );
+        if new <= iter_count {
+            return None;
+        }
         iter_count = new;
     }
 }
@@ -587,12 +669,17 @@ fn hyp_profile(t_bin: &str, t_name: &str, iterations: NonZero<usize>) -> Option<
         &command,
     ]);
     perf_cmd.env(consts::ITER_ENV_VAR, format!("{iterations}"));
-    let p_out = perf_cmd.output().ok()?;
-    if !p_out.status.success() {
+    let (status, stdout) = bounded_command_stdout(
+        &mut perf_cmd,
+        MAX_HYPERFINE_OUTPUT_BYTES,
+        "Hyperfine profiler",
+    )
+    .ok()?;
+    if !status.success() {
         return None;
     }
 
-    parse_hyperfine_timings(&p_out.stdout)
+    parse_hyperfine_timings(&stdout)
 }
 
 /// Runs the command-line application and returns user-facing failures.
@@ -640,17 +727,20 @@ fn run() -> Result<(), String> {
     // Spawn and profile an instance of each perf-sensitive test, via hyperfine.
     // Each test is a pair of (test, metadata-returning-fn), so grab both. We also
     // know the list is sorted.
-    let i = get_tests(t_bin);
-    let len = i.len();
-    for (idx, (ref t_name, ref t_mdata)) in i.enumerate() {
+    let tests = get_tests(t_bin)?;
+    let len = tests.len();
+    for (idx, (t_name, t_mdata)) in tests.into_iter().enumerate() {
         if !QUIET.load(Ordering::Relaxed) {
             eprint!("\rProfiling test {}/{}", idx + 1, len);
         }
         // Pretty-printable stripped name for the test.
-        let t_name_pretty = t_name.replace(consts::SUF_NORMAL, "");
+        let t_name_pretty = t_name
+            .strip_suffix(consts::SUF_NORMAL)
+            .unwrap_or(&t_name)
+            .to_owned();
 
         // Get the metadata this test reports for us.
-        let t_mdata = match parse_mdata(t_bin, t_mdata) {
+        let t_mdata = match parse_mdata(t_bin, &t_mdata) {
             Ok(mdata) => mdata,
             Err(err) => fail!(output, t_name_pretty, err),
         };
@@ -663,7 +753,7 @@ fn run() -> Result<(), String> {
         // to account for random noise. This is skipped for tests with fixed
         // iteration counts.
         let final_iter_count = t_mdata.iterations.or_else(|| {
-            triage_test(t_bin, t_name, consts::NOISE_CUTOFF, |c| {
+            triage_test(t_bin, &t_name, consts::NOISE_CUTOFF, |c| {
                 if let Some(c) = c.checked_mul(ITER_COUNT_MUL) {
                     Some(c)
                 } else {
@@ -682,7 +772,7 @@ fn run() -> Result<(), String> {
         };
 
         // Now profile!
-        if let Some(timings) = hyp_profile(t_bin, t_name, final_iter_count) {
+        if let Some(timings) = hyp_profile(t_bin, &t_name, final_iter_count) {
             output.success(t_name_pretty, t_mdata, final_iter_count, timings);
         } else {
             fail!(
@@ -788,6 +878,64 @@ mod tests {
         assert_eq!(run_file_component("main.kael.json", "main"), Some("kael"));
         assert_eq!(run_file_component("main-old.kael.json", "main"), None);
         assert_eq!(run_file_component("main.kael.json.bak", "main"), None);
+    }
+
+    #[test]
+    fn generated_performance_tests_are_paired_by_exact_base_name() {
+        let listing = format!(
+            "ordinary::test: test\n\
+             suite::render{}: test\n\
+             suite::other{}: test\n\
+             suite::render{}: test\n\
+             suite::other{}: test\n",
+            consts::SUF_MDATA,
+            consts::SUF_NORMAL,
+            consts::SUF_NORMAL,
+            consts::SUF_MDATA,
+        );
+
+        assert_eq!(
+            parse_test_list(&listing).unwrap(),
+            [
+                (
+                    format!("suite::other{}", consts::SUF_NORMAL),
+                    format!("suite::other{}", consts::SUF_MDATA),
+                ),
+                (
+                    format!("suite::render{}", consts::SUF_NORMAL),
+                    format!("suite::render{}", consts::SUF_MDATA),
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn malformed_generated_performance_test_pairs_are_rejected() {
+        let unpaired = format!("suite::render{}: test\n", consts::SUF_NORMAL);
+        let duplicate = format!(
+            "suite::render{}: test\nsuite::render{}: test\n",
+            consts::SUF_NORMAL,
+            consts::SUF_NORMAL,
+        );
+        let oversized = format!(
+            "{}{}: test\n",
+            "x".repeat(MAX_TEST_NAME_BYTES + 1),
+            consts::SUF_NORMAL,
+        );
+
+        assert!(parse_test_list(&unpaired).is_err());
+        assert!(parse_test_list(&duplicate).is_err());
+        assert!(parse_test_list(&oversized).is_err());
+    }
+
+    #[test]
+    fn missing_test_binaries_return_an_error_instead_of_panicking() {
+        let missing = std::env::temp_dir().join(format!(
+            "kael-perf-missing-test-binary-{}",
+            std::process::id()
+        ));
+
+        assert!(get_tests(&missing.to_string_lossy()).is_err());
     }
 
     #[test]

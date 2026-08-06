@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{num::NonZero, time::Duration};
 
 pub mod consts {
-    //! Preset idenitifiers and constants so that the profiler and proc macro agree
+    //! Preset identifiers and constants so that the profiler and proc macro agree
     //! on their communication protocol.
 
     /// The suffix on the actual test function.
@@ -246,9 +246,6 @@ impl Output {
     /// as the comparison point, i.e. a positive resulting `PerfReport` means that
     /// `self` performed better.
     ///
-    /// # Panics
-    /// `self` and `baseline` are assumed to have the iterations field on all
-    /// `TestMdata`s set to `Some(_)` if the `TestMdata` is present itself.
     #[must_use]
     pub fn compare_perf(self, baseline: Self) -> PerfReport {
         let self_categories = self.collapse();
@@ -257,8 +254,7 @@ impl Output {
         let deltas = self_categories
             .into_iter()
             .filter_map(|(cat, self_data)| {
-                // Only compare categories where both           meow
-                // runs have data.                              /
+                // Only compare categories where both runs have data.
                 let mut other_data = other_categories.remove(&cat)?;
                 let mut max = f64::MIN;
                 let mut min = f64::MAX;
@@ -266,7 +262,6 @@ impl Output {
                 // Running totals for averaging out tests.
                 let mut r_total_numerator = 0.;
                 let mut r_total_denominator = 0;
-                // Yeah this is O(n^2), but realistically it'll hardly be a bottleneck.
                 for (name, (s_timings, s_iters, weight)) in self_data {
                     // Only use the new weights if they conflict.
                     let Some((o_timings, o_iters, _)) = other_data.remove(&name) else {

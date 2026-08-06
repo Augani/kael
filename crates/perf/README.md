@@ -22,8 +22,10 @@ kael_perf path/to/test-binary --json=current
 The importance flags are `--critical`, `--important`, `--average`, `--iffy`, and
 `--fluff`. `--quiet` suppresses progress output. A JSON run identifier may use
 ASCII letters, digits, `-`, and `_`; saved runs are bounded and written beneath
-the invocation directory's `.perf-runs` folder. Run the command from your
-workspace root so profile and comparison commands share the same data.
+the invocation directory's private `.perf-runs` folder. The profiler rejects
+symlinked run directories, malformed or unpaired generated tests, and oversized
+subprocess output. Run the command from your workspace root so profile and
+comparison commands share the same data.
 
 Compare a new run against a baseline with:
 
