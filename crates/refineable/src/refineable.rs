@@ -193,6 +193,7 @@ mod tests {
     use super::{Cascade, IsEmpty, Refineable};
 
     #[derive(Clone, Default, Refineable)]
+    #[refineable(Debug)]
     struct EmptyStyle {}
 
     mod theme {
@@ -213,6 +214,31 @@ mod tests {
     #[derive(Clone, Default, Refineable)]
     struct QualifiedOptionalStyle {
         value: std::option::Option<u8>,
+    }
+
+    #[derive(Clone, Default, Refineable)]
+    #[refineable(Debug)]
+    struct DebugStyle<T> {
+        value: T,
+    }
+
+    #[derive(Clone, Default, Refineable)]
+    struct GenericContainerStyle<T> {
+        values: Vec<T>,
+    }
+
+    #[derive(Clone, Default, Refineable)]
+    #[refineable(serde::Serialize, serde::Deserialize)]
+    struct SerializableChild {
+        value: u8,
+    }
+
+    #[derive(Clone, Default, Refineable)]
+    #[refineable(serde::Serialize, serde::Deserialize)]
+    struct SerializableParent {
+        #[refineable]
+        child: SerializableChild,
+        enabled: bool,
     }
 
     #[derive(Clone, Default, Refineable)]
@@ -348,6 +374,7 @@ mod tests {
 
         assert!(refinement.is_empty());
         assert!(!refinement.is_some());
+        assert_eq!(format!("{refinement:?}"), "EmptyStyleRefinement");
     }
 
     #[test]
@@ -366,6 +393,39 @@ mod tests {
             .refined(QualifiedOptionalStyleRefinement { value: Some(7) });
 
         assert_eq!(style.value, Some(7));
+    }
+
+    #[test]
+    fn debug_derivation_supports_generic_fields() {
+        let _style = DebugStyle { value: 0_u8 };
+        let refinement = DebugStyleRefinement::<u8> { value: Some(7) };
+
+        assert_eq!(
+            format!("{refinement:?}"),
+            "DebugStyleRefinement { value: Some(7) }"
+        );
+    }
+
+    #[test]
+    fn generic_container_fields_use_their_actual_trait_bounds() {
+        let style =
+            GenericContainerStyle::<u8>::default().refined(GenericContainerStyleRefinement {
+                values: Some(vec![1, 2, 3]),
+            });
+
+        assert_eq!(style.values, [1, 2, 3]);
+    }
+
+    #[test]
+    fn serde_derivation_omits_and_defaults_empty_fields() {
+        let _parent = SerializableParent::default();
+        let empty = SerializableParentRefinement::default();
+        assert_eq!(serde_json::to_string(&empty).unwrap(), "{}");
+
+        let refinement: SerializableParentRefinement =
+            serde_json::from_str(r#"{"child":{"value":7}}"#).unwrap();
+        assert_eq!(refinement.child.value, Some(7));
+        assert_eq!(refinement.enabled, None);
     }
 
     #[test]

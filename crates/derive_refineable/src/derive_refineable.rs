@@ -123,15 +123,43 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
         })
         .collect();
 
-    // Generated refinements clone every wrapped field. Non-nested values are
-    // also compared, and regular values need a default for `From<Refinement>`.
+    // Every source field is cloned while applying or subtracting refinements.
+    // Nested refinements also need to clone their generated wrapper type.
+    // Non-nested values are compared, and regular values need a default for
+    // `From<Refinement>`.
     let mut type_param_bounds = Vec::new();
+    for type_param in generics.type_params() {
+        let type_param_ident = &type_param.ident;
+        push_type_bound(
+            &mut type_param_bounds,
+            parse_quote!(#type_param_ident),
+            parse_quote!(::core::clone::Clone),
+        );
+    }
     for (field, wrapped_type) in fields.iter().zip(&wrapped_types) {
-        type_param_bounds.push(type_bound(wrapped_type.clone(), parse_quote!(Clone)));
-        if !is_refineable_field(field) {
-            type_param_bounds.push(type_bound(field.ty.clone(), parse_quote!(PartialEq)));
+        push_type_bound(
+            &mut type_param_bounds,
+            field.ty.clone(),
+            parse_quote!(::core::clone::Clone),
+        );
+        if is_refineable_field(field) {
+            push_type_bound(
+                &mut type_param_bounds,
+                wrapped_type.clone(),
+                parse_quote!(::core::clone::Clone),
+            );
+        } else {
+            push_type_bound(
+                &mut type_param_bounds,
+                field.ty.clone(),
+                parse_quote!(::core::cmp::PartialEq),
+            );
             if !is_optional_field(field) {
-                type_param_bounds.push(type_bound(field.ty.clone(), parse_quote!(Default)));
+                push_type_bound(
+                    &mut type_param_bounds,
+                    field.ty.clone(),
+                    parse_quote!(::core::default::Default),
+                );
             }
         }
     }
@@ -144,6 +172,21 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
             Some(where_clause)
         }
         (None, false) => Some(parse_quote!(where #(#type_param_bounds),*)),
+    };
+
+    let debug_where_clause = if !impl_debug_on_refinement || wrapped_types.is_empty() {
+        where_clause.clone()
+    } else {
+        let debug_bounds = wrapped_types
+            .iter()
+            .cloned()
+            .map(|ty| type_bound(ty, parse_quote!(::core::fmt::Debug)));
+        let mut debug_where_clause = where_clause.clone().unwrap_or_else(|| syn::WhereClause {
+            where_token: Default::default(),
+            predicates: Default::default(),
+        });
+        debug_where_clause.predicates.extend(debug_bounds);
+        Some(debug_where_clause)
     };
 
     let refineable_refine_assignments: Vec<TokenStream2> = fields
@@ -291,10 +334,10 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
             .collect();
 
         quote! {
-            impl #impl_generics std::fmt::Debug for #refinement_ident #ty_generics
-                #where_clause
+            impl #impl_generics ::core::fmt::Debug for #refinement_ident #ty_generics
+                #debug_where_clause
             {
-                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                     let mut debug_struct = f.debug_struct(stringify!(#refinement_ident));
                     let mut all_some = true;
                     #( #refinement_field_debugs )*
@@ -451,7 +494,7 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
     }
 
     let r#gen = quote! {
-        /// A refinable version of [`#ident`], see that documentation for details.
+        /// A partial-update type for [`#ident`].
         #[derive(Clone)]
         #derive_stream
         pub struct #refinement_ident #impl_generics
@@ -528,7 +571,8 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
             }
         }
 
-        impl #impl_generics From<#refinement_ident #ty_generics> for #ident #ty_generics
+        impl #impl_generics ::core::convert::From<#refinement_ident #ty_generics>
+            for #ident #ty_generics
             #where_clause
         {
             fn from(value: #refinement_ident #ty_generics) -> Self {
@@ -543,7 +587,7 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
         {
             fn default() -> Self {
                 #refinement_ident {
-                    #( #field_names: Default::default() ),*
+                    #( #field_names: ::core::default::Default::default() ),*
                 }
             }
         }
@@ -552,6 +596,7 @@ fn derive_refineable_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
             #where_clause
         {
             /// Returns `true` if at least one field has a refinement value.
+            #[must_use]
             pub fn is_some(&self) -> bool {
                 #(
                     if self.#field_names.is_some() {
@@ -618,7 +663,7 @@ fn get_wrapper_type(field: &Field, ty: &Type) -> syn::Result<syn::Type> {
     } else if is_optional_field(field) {
         Ok(ty.clone())
     } else {
-        Ok(parse_quote!(Option<#ty>))
+        Ok(parse_quote!(::core::option::Option<#ty>))
     }
 }
 
@@ -638,6 +683,13 @@ fn type_bound(ty: Type, bound: syn::Path) -> WherePredicate {
             bounds
         },
     })
+}
+
+fn push_type_bound(bounds: &mut Vec<WherePredicate>, ty: Type, bound: syn::Path) {
+    let predicate = type_bound(ty, bound);
+    if !bounds.contains(&predicate) {
+        bounds.push(predicate);
+    }
 }
 
 fn refineable_crate_path() -> syn::Result<syn::Path> {

@@ -10,8 +10,9 @@ runtime trait and cascade API.
 
 The macro supports named structs, nested `#[refineable]` fields, generic types,
 qualified standard `Option` paths, and additional derives declared with
-`#[refineable(...)]`. Unsupported tuple structs, associated types, and optional
-nested refinements produce compile diagnostics at the field or derive site.
+`#[refineable(...)]`. Unsupported tuple structs, qualified associated types,
+and optional nested refinements produce compile diagnostics at the field or
+derive site.
 
 ## License
 
