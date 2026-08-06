@@ -21,10 +21,11 @@ while let Some(frame) = frames.next_frame()? {
 
 ## Production notes
 
-- Local file sources must resolve to regular files. Remote sources accept only credential-free `http` and `https` URLs, and FFmpeg receives a restricted protocol allowlist.
+- Local file sources must resolve to regular files. Remote sources accept only credential-free `http` and `https` URLs, FFmpeg receives a restricted protocol allowlist, and network I/O has a 30-second timeout. Applications that accept untrusted URLs must enforce their own host and network policy before constructing a source.
 - Reader and byte sources are staged with private permissions when FFmpeg requires a path. Staging is capped at 512 MiB and temporary files are removed with the final source clone.
-- `VideoFrameStream` is the intended path for long video. `MediaDecoder::decode_video_frames` is capped at 256 frames and 128 MiB.
+- `VideoFrameStream` is the intended path for long video. Each decoded BGRA frame is capped at 128 MiB, and `MediaDecoder::decode_video_frames` is capped at 256 frames and 128 MiB in total.
 - Rodio-supported audio formats stream directly. FFmpeg fallback audio is decoded once into a shared buffer capped at 128 MiB.
+- Playback volume is clamped to `0.0..=1.0` and speed to `0.5..=2.0` before values reach the audio backend.
 - Opening media, probing remote sources, fallback decoding, and creating an output device are synchronous. Run potentially slow preparation away from the UI thread.
 - `AudioHandle` is deliberately thread-local. Use the higher-level [`kael_audio`](https://docs.rs/kael_audio) services when you need playlists, mixing, DSP, sessions, or spatial-audio state.
 

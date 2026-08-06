@@ -1,15 +1,17 @@
 //! Bounded audio playback and incremental video decoding primitives for Kael.
 //!
 //! The crate accepts regular local files, in-memory bytes, repeatable reader factories, and
-//! credential-free HTTP(S) URLs through [`MediaSource`]. Byte and reader sources are staged in a
-//! private temporary directory only when FFmpeg needs a path; their staged files are removed when
-//! the last source clone is dropped.
+//! credential-free HTTP(S) URLs through [`MediaSource`]. Remote reads have a 30-second I/O timeout.
+//! Applications that accept untrusted URLs must apply their own host and network policy. Byte and
+//! reader sources are staged in a private temporary directory only when FFmpeg needs a path; their
+//! staged files are removed when the last source clone is dropped.
 //!
 //! [`AudioHandle`] is a UI-thread-local playback controller. Opening an output device, probing
 //! remote media, and fallback FFmpeg decoding are synchronous operations, so applications should
 //! keep potentially slow preparation off their UI thread. Common formats supported directly by
 //! Rodio stream into the output sink; the FFmpeg audio fallback is decoded into a bounded 128 MiB
-//! buffer. Video should normally be consumed incrementally with [`VideoFrameStream`].
+//! buffer. Video should normally be consumed incrementally with [`VideoFrameStream`]; individual
+//! decoded BGRA frames are also capped at 128 MiB.
 //!
 //! # Example
 //!
@@ -71,8 +73,13 @@ enum ResolvedMediaInput {
 static STAGED_MEDIA_COUNTER: AtomicU64 = AtomicU64::new(0);
 const MAX_DECODED_VIDEO_FRAMES: usize = 256;
 const MAX_DECODED_VIDEO_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_VIDEO_FRAME_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_DECODED_AUDIO_BYTES: usize = 128 * 1024 * 1024;
 const MAX_STAGED_MEDIA_BYTES: u64 = 512 * 1024 * 1024;
+const REMOTE_MEDIA_IO_TIMEOUT_MICROS: &str = "30000000";
+const MIN_PLAYBACK_SPEED: f32 = 0.5;
+const MAX_PLAYBACK_SPEED: f32 = 2.0;
+const MAX_PLAYBACK_VOLUME: f32 = 1.0;
 
 /// A source of media content that can be played back.
 #[derive(Clone)]
@@ -883,7 +890,7 @@ impl AudioHandle {
         Ok(())
     }
 
-    /// Set the playback volume where `1.0` is the original amplitude.
+    /// Set the playback volume, clamped to `0.0..=1.0`, where `1.0` is the original amplitude.
     pub fn set_volume(&self, volume: f32) {
         let mut state = self.state.lock();
         let clamped_volume = sanitize_volume(volume);
@@ -893,8 +900,7 @@ impl AudioHandle {
         }
     }
 
-    /// Set playback speed. Values less than or equal to zero are clamped to a
-    /// small positive value so playback can keep advancing.
+    /// Set playback speed, clamped to `0.5..=2.0`.
     pub fn set_speed(&self, speed: f32) {
         let mut state = self.state.lock();
         state.refresh_finished();
@@ -1132,8 +1138,8 @@ fn create_engine(
 }
 
 fn sanitize_playback_speed(speed: f32) -> f32 {
-    if speed.is_finite() && speed > 0.0 {
-        speed
+    if speed.is_finite() {
+        speed.clamp(MIN_PLAYBACK_SPEED, MAX_PLAYBACK_SPEED)
     } else {
         1.0
     }
@@ -1141,7 +1147,7 @@ fn sanitize_playback_speed(speed: f32) -> f32 {
 
 fn sanitize_volume(volume: f32) -> f32 {
     if volume.is_finite() {
-        volume.max(0.0)
+        volume.clamp(0.0, MAX_PLAYBACK_VOLUME)
     } else {
         1.0
     }
@@ -1331,11 +1337,7 @@ fn open_video_stream(source: &MediaSource) -> Result<OpenedVideoStream, MediaDec
         .map_err(ffmpeg_decode_error)?;
     let width = decoder.width();
     let height = decoder.height();
-    if width == 0 || height == 0 {
-        return Err(MediaDecodeError::Decode(format!(
-            "video stream has invalid dimensions {width}x{height}"
-        )));
-    }
+    video_frame_byte_len(width, height)?;
     let scaler = ffmpeg::software::scaling::context::Context::get(
         decoder.format(),
         width,
@@ -1379,6 +1381,27 @@ fn decode_video_frame(
     })
 }
 
+fn video_frame_byte_len(width: u32, height: u32) -> Result<usize, MediaDecodeError> {
+    if width == 0 || height == 0 {
+        return Err(MediaDecodeError::Decode(format!(
+            "video stream has invalid dimensions {width}x{height}"
+        )));
+    }
+
+    let byte_len = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| MediaDecodeError::Decode("video frame size overflowed".into()))?;
+    if byte_len > MAX_VIDEO_FRAME_BYTES {
+        return Err(MediaDecodeError::ResourceLimit(format!(
+            "video frame requires {byte_len} bytes; limit is {MAX_VIDEO_FRAME_BYTES} bytes"
+        )));
+    }
+
+    usize::try_from(byte_len)
+        .map_err(|_| MediaDecodeError::Decode("video frame size is too large".into()))
+}
+
 fn try_create_decoder(
     source: &MediaSource,
 ) -> Result<Option<Decoder<MediaReader>>, AudioPlaybackError> {
@@ -1402,12 +1425,12 @@ impl ReaderMediaSource {
         }
         *staged_path = None;
 
-        let path = next_staged_path(&format!("reader-{:016x}", hash_value(&self.key)))?;
-        write_new_staged_file(&path, |file| {
-            let mut reader = (self.open)()?;
-            copy_reader_bounded(&mut reader, file)?;
-            Ok(())
-        })?;
+        let path =
+            write_new_staged_file(&format!("reader-{:016x}", hash_value(&self.key)), |file| {
+                let mut reader = (self.open)()?;
+                copy_reader_bounded(&mut reader, file)?;
+                Ok(())
+            })?;
         *staged_path = Some(path.clone());
         Ok(path)
     }
@@ -1436,8 +1459,7 @@ impl BytesMediaSource {
         }
         *staged_path = None;
 
-        let path = next_staged_path("bytes")?;
-        write_new_staged_file(&path, |file| file.write_all(self.bytes.as_ref()))?;
+        let path = write_new_staged_file("bytes", |file| file.write_all(self.bytes.as_ref()))?;
         *staged_path = Some(path.clone());
         Ok(path)
     }
@@ -1458,6 +1480,7 @@ impl ResolvedMediaInput {
                 ffmpeg::format::network::init();
                 let mut options = ffmpeg::Dictionary::new();
                 options.set("protocol_whitelist", "http,https,tcp,tls,crypto");
+                options.set("rw_timeout", REMOTE_MEDIA_IO_TIMEOUT_MICROS);
                 ffmpeg::format::input_with_dictionary(url.as_ref(), options)
                     .map_err(ffmpeg_decode_error)
             }
@@ -1508,14 +1531,36 @@ fn staged_media_dir() -> PathBuf {
     std::env::temp_dir().join("kael-media")
 }
 
-fn next_staged_path(prefix: &str) -> io::Result<PathBuf> {
+fn create_new_staged_file(prefix: &str) -> io::Result<(PathBuf, File)> {
+    const MAX_CREATE_ATTEMPTS: usize = 64;
+
     let directory = staged_media_dir();
     prepare_staged_media_dir(&directory)?;
-    Ok(directory.join(format!(
-        "{prefix}-{}-{}",
-        std::process::id(),
-        STAGED_MEDIA_COUNTER.fetch_add(1, Ordering::Relaxed)
-    )))
+
+    for _ in 0..MAX_CREATE_ATTEMPTS {
+        let path = directory.join(format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            STAGED_MEDIA_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&path) {
+            Ok(file) => return Ok((path, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a unique staged media file",
+    ))
 }
 
 fn prepare_staged_media_dir(directory: &Path) -> io::Result<()> {
@@ -1539,23 +1584,16 @@ fn prepare_staged_media_dir(directory: &Path) -> io::Result<()> {
 }
 
 fn write_new_staged_file(
-    path: &Path,
+    prefix: &str,
     populate: impl FnOnce(&mut File) -> io::Result<()>,
-) -> io::Result<()> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
+) -> io::Result<PathBuf> {
+    let (path, mut file) = create_new_staged_file(prefix)?;
     let populate_result = populate(&mut file).and_then(|_| file.flush());
     if let Err(error) = populate_result {
-        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(&path);
         return Err(error);
     }
-    Ok(())
+    Ok(path)
 }
 
 fn copy_reader_bounded(reader: &mut dyn Read, file: &mut File) -> io::Result<()> {
@@ -1638,6 +1676,7 @@ fn duration_from_seconds_saturating(seconds: f64) -> Duration {
 fn copy_bgra_frame(
     frame: &ffmpeg::util::frame::video::Video,
 ) -> Result<Box<[u8]>, MediaDecodeError> {
+    let byte_len = video_frame_byte_len(frame.width(), frame.height())?;
     let width = usize::try_from(frame.width())
         .map_err(|_| MediaDecodeError::Decode("video frame width is too large".into()))?;
     let height = usize::try_from(frame.height())
@@ -1645,9 +1684,6 @@ fn copy_bgra_frame(
     let row_len = width
         .checked_mul(4)
         .ok_or_else(|| MediaDecodeError::Decode("video row size overflowed".into()))?;
-    let byte_len = row_len
-        .checked_mul(height)
-        .ok_or_else(|| MediaDecodeError::Decode("video frame size overflowed".into()))?;
     let stride = frame.stride(0);
     let source = frame.data(0);
     if stride < row_len {
@@ -1686,10 +1722,11 @@ fn copy_bgra_frame(
 mod tests {
     use super::{
         AudioHandle, DecodedAudio, MAX_DECODED_AUDIO_BYTES, MAX_DECODED_VIDEO_BYTES,
-        MAX_DECODED_VIDEO_FRAMES, MediaDecodeError, MediaDecoder, MediaSource, PlaybackState,
-        ResolvedMediaInput, SharedAudioSamples, VideoFrame, copy_reader_with_limit,
-        duration_from_time_base, duration_to_time_base, ensure_audio_sample_capacity,
-        push_decoded_video_frame, scale_duration, validate_remote_media_url,
+        MAX_DECODED_VIDEO_FRAMES, MAX_VIDEO_FRAME_BYTES, MediaDecodeError, MediaDecoder,
+        MediaSource, PlaybackState, ResolvedMediaInput, SharedAudioSamples, VideoFrame,
+        copy_reader_with_limit, duration_from_time_base, duration_to_time_base,
+        ensure_audio_sample_capacity, push_decoded_video_frame, scale_duration,
+        validate_remote_media_url, video_frame_byte_len,
     };
     use ffmpeg_next as ffmpeg;
     use rodio::Source;
@@ -1727,7 +1764,11 @@ mod tests {
 
         handle.set_speed(0.0);
 
-        assert_eq!(handle.speed(), 1.0);
+        assert_eq!(handle.speed(), 0.5);
+
+        handle.set_speed(f32::MAX);
+
+        assert_eq!(handle.speed(), 2.0);
     }
 
     #[test]
@@ -1739,6 +1780,18 @@ mod tests {
 
         assert_eq!(handle.volume(), 1.0);
         assert_eq!(handle.speed(), 1.0);
+
+        handle.set_volume(-1.0);
+        handle.set_speed(-1.0);
+
+        assert_eq!(handle.volume(), 0.0);
+        assert_eq!(handle.speed(), 0.5);
+
+        handle.set_volume(f32::MAX);
+        handle.set_speed(f32::MAX);
+
+        assert_eq!(handle.volume(), 1.0);
+        assert_eq!(handle.speed(), 2.0);
     }
 
     #[test]
@@ -2001,6 +2054,22 @@ mod tests {
         assert!(
             matches!(error, MediaDecodeError::ResourceLimit(message) if message.contains("bytes"))
         );
+    }
+
+    #[test]
+    fn individual_video_frames_are_bounded_before_allocation() {
+        assert_eq!(
+            video_frame_byte_len(8_192, 4_096).unwrap(),
+            MAX_VIDEO_FRAME_BYTES as usize
+        );
+        assert!(matches!(
+            video_frame_byte_len(8_193, 4_096),
+            Err(MediaDecodeError::ResourceLimit(message)) if message.contains("video frame")
+        ));
+        assert!(matches!(
+            video_frame_byte_len(0, 1),
+            Err(MediaDecodeError::Decode(message)) if message.contains("invalid dimensions")
+        ));
     }
 
     fn test_video_frame(timestamp_millis: u64, len: usize) -> VideoFrame {
