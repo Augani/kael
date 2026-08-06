@@ -185,6 +185,8 @@ pub use inspector::*;
 pub use interactive::*;
 pub use ipc_transport::*;
 pub use kael_macros::{AppContext, IntoElement, Render, VisualContext, register_action, test};
+#[cfg(feature = "pdf")]
+pub use kael_pdf as pdf;
 #[cfg(feature = "share")]
 pub use kael_share::{
     PlatformShareSupport, ShareFileType, ShareImage, ShareItem, ShareReceiver, ShareResult,
