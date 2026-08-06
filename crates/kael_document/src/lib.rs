@@ -1,5 +1,4 @@
-//! Document lifecycle services for Kael.
-
+#![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 
 /// Autosave configuration and helpers.
@@ -12,6 +11,7 @@ pub mod file_type;
 pub mod platform;
 /// Recent document storage.
 pub mod recent;
+mod subscription;
 /// Document version storage.
 pub mod versions;
 
@@ -20,4 +20,5 @@ pub use autosave::{AutosaveConfig, AutosaveLocation};
 pub use document::{Document, DocumentController, DocumentHandle};
 pub use file_type::FileType;
 pub use recent::RecentDocument;
+pub use subscription::Subscription;
 pub use versions::DocumentVersion;

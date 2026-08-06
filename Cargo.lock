@@ -3873,13 +3873,13 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "futures",
- "kael_storage",
  "parking_lot",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "smol",
  "tempfile",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

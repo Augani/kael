@@ -1,5 +1,12 @@
 //! Platform metadata for document services.
 
+use std::{
+    ffi::OsStr,
+    path::{Component, Path, PathBuf},
+};
+
+use anyhow::{Context as _, Result};
+
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -28,4 +35,53 @@ pub struct PlatformDocumentSupport {
 /// Returns the platform integration metadata for the active target.
 pub const fn support() -> PlatformDocumentSupport {
     imp::SUPPORT
+}
+
+pub(crate) fn document_storage_root(app_id: &str) -> Result<PathBuf> {
+    let mut components = Path::new(app_id).components();
+    anyhow::ensure!(
+        matches!(components.next(), Some(Component::Normal(component)) if component == OsStr::new(app_id))
+            && components.next().is_none(),
+        "invalid application identifier {app_id:?}"
+    );
+
+    let app_root = imp::base_data_dir()?.join(app_id);
+    let root = app_root.join("documents");
+    std::fs::create_dir_all(&root)
+        .with_context(|| format!("failed to create document storage root {}", root.display()))?;
+    for directory in [&app_root, &root] {
+        let metadata = std::fs::symlink_metadata(directory).with_context(|| {
+            format!(
+                "failed to inspect document storage directory {}",
+                directory.display()
+            )
+        })?;
+        anyhow::ensure!(
+            metadata.file_type().is_dir(),
+            "document storage directory {} is not a real directory",
+            directory.display()
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).with_context(
+            || format!("failed to secure document storage root {}", root.display()),
+        )?;
+    }
+    Ok(root)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::document_storage_root;
+
+    #[test]
+    fn application_identifiers_cannot_escape_the_data_directory() {
+        assert!(document_storage_root("").is_err());
+        assert!(document_storage_root(".").is_err());
+        assert!(document_storage_root("..").is_err());
+        assert!(document_storage_root("../outside").is_err());
+        assert!(document_storage_root("nested/app").is_err());
+    }
 }
