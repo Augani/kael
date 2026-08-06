@@ -1,4 +1,4 @@
-# kael_refineable
+# `kael_refineable`
 
 Typed partial updates and ordered configuration cascades for Kael.
 
@@ -23,6 +23,45 @@ let preferences = Preferences::default().refined(PreferencesRefinement {
 
 assert_eq!(preferences.accent, "violet");
 assert!(preferences.compact);
+```
+
+Regular fields become `Option<T>` in the generated refinement. Existing
+`Option<T>` fields stay `Option<T>`: `Some(value)` replaces the value and `None`
+means "leave it unchanged," so an optional-field refinement does not represent
+clearing a value. Mark a nested refineable value with `#[refineable]` to use its
+companion refinement recursively.
+
+`#[refineable(Debug, Serialize, Deserialize)]` adds traits to the generated
+type. Serialize omits empty fields, while Deserialize defaults missing nested
+refinements. Qualified paths such as `serde::Serialize` are also supported.
+
+## Ordered cascades
+
+`Cascade` combines a base refinement with later, higher-priority slots. Slot
+handles are bound to the cascade that created them, and using a foreign slot
+returns `InvalidCascadeSlot` instead of mutating the wrong cascade.
+
+```rust
+use kael_refineable::{Cascade, Refineable};
+
+#[derive(Clone, Default, Refineable)]
+struct Theme {
+    accent: String,
+}
+
+let mut cascade = Cascade::<Theme>::default();
+cascade.base().accent = Some("violet".to_owned());
+let override_slot = cascade.reserve();
+cascade
+    .set(
+        override_slot,
+        Some(ThemeRefinement {
+            accent: Some("amber".to_owned()),
+        }),
+    )
+    .unwrap();
+
+assert_eq!(Theme::from_cascade(&cascade).accent, "amber");
 ```
 
 See the [Kael guide](https://augani.github.io/kael/) for framework-level usage.

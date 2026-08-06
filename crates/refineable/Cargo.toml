@@ -1,17 +1,23 @@
 [package]
+autoexamples = false
 edition.workspace = true
 name = "kael_refineable"
 rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
 publish = true
-description = "A macro for creating refinement types for Kael"
+description = "Typed partial updates and ordered configuration cascades for Kael"
+documentation = "https://docs.rs/kael_refineable"
 keywords = ["refineable", "style", "patterns", "kael"]
 categories = ["rust-patterns"]
 authors.workspace = true
 repository.workspace = true
 readme = "README.md"
 license.workspace = true
+exclude = ["examples/**"]
+
+[package.metadata.docs.rs]
+targets = []
 
 [lib]
 name = "kael_refineable"
@@ -22,6 +28,13 @@ doctest = true
 path = "../derive_refineable"
 package = "kael_derive_refineable"
 version = "0.3.0"
+
+[dev-dependencies.serde]
+workspace = true
+features = ["derive"]
+
+[dev-dependencies.serde_json]
+workspace = true
 
 
 [lints]
