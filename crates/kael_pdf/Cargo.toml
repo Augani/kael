@@ -1,30 +1,32 @@
 [package]
 edition.workspace = true
 name = "kael_pdf"
+autoexamples = false
 rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
 publish = true
-description = "PDF document services for Kael"
-keywords = ["pdf", "rendering", "document", "kael"]
-categories = ["multimedia", "rendering"]
+description = "Bounded PDF parsing, text search, links, metadata, and sidecar annotations for Kael"
+documentation = "https://docs.rs/kael_pdf"
+keywords = ["pdf", "document", "annotations", "kael"]
+categories = ["multimedia"]
 authors.workspace = true
 repository.workspace = true
 readme = "README.md"
 license.workspace = true
+exclude = ["examples/"]
+
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
 
 [lib]
 name = "kael_pdf"
 path = "src/lib.rs"
-doctest = false
 
 [dependencies.anyhow]
 workspace = true
-
-[dependencies.image]
-version = "0.25.5"
-default-features = false
-features = ["png"]
 
 [dependencies.lopdf]
 version = "0.44"
@@ -45,6 +47,10 @@ version = "0.10"
 
 [dependencies.smol]
 workspace = true
+
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.59"
+features = ["Win32_Storage_FileSystem"]
 
 [dev-dependencies.futures]
 workspace = true

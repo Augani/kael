@@ -19,8 +19,8 @@ use windows as imp;
 pub struct PlatformPdfSupport {
     /// The parsing backend.
     pub parser_backend: &'static str,
-    /// The rendering backend.
-    pub rendering_backend: &'static str,
+    /// The schematic preview backend.
+    pub schematic_preview_backend: &'static str,
     /// The annotation backend.
     pub annotation_backend: &'static str,
 }

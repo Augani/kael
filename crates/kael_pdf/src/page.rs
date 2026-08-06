@@ -5,7 +5,7 @@ use anyhow::Result;
 use crate::{
     annotation::{Annotation, AnnotationId, PageAnnotation, PdfRect},
     document::PdfDocument,
-    renderer::RenderedPage,
+    renderer::PagePreview,
     text::TextMatch,
 };
 
@@ -28,7 +28,7 @@ impl PdfPageSize {
 /// The destination for a PDF link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PdfLinkDestination {
-    /// A URI destination.
+    /// An untrusted URI destination that the application must validate before opening.
     Uri(String),
     /// A named destination.
     Named(String),
@@ -63,11 +63,13 @@ impl PdfPage {
         self.document.page_size(self.page_index)
     }
 
-    /// Renders a schematic text-and-annotation preview at the requested scale.
-    pub async fn render(&self, scale: f32) -> Result<RenderedPage> {
+    /// Generates a schematic text-and-annotation preview at the requested scale.
+    ///
+    /// This is not a rasterization of the PDF page's graphics.
+    pub async fn schematic_preview(&self, scale: f32) -> Result<PagePreview> {
         let document = self.document.clone();
         let page_index = self.page_index;
-        smol::unblock(move || document.render_page(page_index, scale)).await
+        smol::unblock(move || document.schematic_preview(page_index, scale)).await
     }
 
     /// Returns the extracted text for the page.
