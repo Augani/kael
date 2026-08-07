@@ -1,7 +1,8 @@
 //! Icon weight definitions.
 
-/// The supported icon weights in the scaffold catalog.
+/// The supported icon weights in the bundled catalog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum IconWeight {
     /// The thinnest supported icon weight.
     Thin,

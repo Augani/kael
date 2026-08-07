@@ -114,6 +114,7 @@ fn generate_catalog(icons: &[IconAsset]) -> String {
 
     source.push_str("/// A generated icon name.\n");
     source.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]\n");
+    source.push_str("#[non_exhaustive]\n");
     source.push_str("pub enum IconName {\n");
     for icon in icons {
         source.push_str(&format!("    /// The `{}` icon.\n", icon.slug));
@@ -123,6 +124,7 @@ fn generate_catalog(icons: &[IconAsset]) -> String {
 
     source.push_str("/// Metadata describing a generated icon asset.\n");
     source.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
+    source.push_str("#[non_exhaustive]\n");
     source.push_str("pub struct IconMetadata {\n");
     source.push_str("    /// The typed icon name.\n");
     source.push_str("    pub name: IconName,\n");
@@ -185,24 +187,24 @@ fn generate_catalog(icons: &[IconAsset]) -> String {
     source.push_str("    }\n");
     source.push_str("}\n\n");
 
-    source.push_str("impl std::fmt::Display for IconName {\n");
-    source.push_str("    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { formatter.write_str(self.slug()) }\n");
+    source.push_str("impl ::std::fmt::Display for IconName {\n");
+    source.push_str("    fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result { formatter.write_str(self.slug()) }\n");
     source.push_str("}\n\n");
 
     source.push_str(
         "/// Error returned when an icon slug is not present in the generated catalog.\n",
     );
     source.push_str("#[derive(Debug, Clone, PartialEq, Eq)]\n");
-    source.push_str("pub struct UnknownIconName(String);\n\n");
+    source.push_str("pub struct UnknownIconName(::std::string::String);\n\n");
     source.push_str("impl UnknownIconName {\n");
     source.push_str("    /// Returns the unresolved slug.\n");
     source.push_str("    pub fn slug(&self) -> &str { &self.0 }\n");
     source.push_str("}\n\n");
-    source.push_str("impl std::fmt::Display for UnknownIconName {\n");
-    source.push_str("    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(formatter, \"unknown icon slug: {:?}\", self.0) }\n");
+    source.push_str("impl ::std::fmt::Display for UnknownIconName {\n");
+    source.push_str("    fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result { write!(formatter, \"unknown icon slug: {:?}\", self.0) }\n");
     source.push_str("}\n\n");
-    source.push_str("impl std::error::Error for UnknownIconName {}\n\n");
-    source.push_str("impl std::str::FromStr for IconName {\n");
+    source.push_str("impl ::std::error::Error for UnknownIconName {}\n\n");
+    source.push_str("impl ::std::str::FromStr for IconName {\n");
     source.push_str("    type Err = UnknownIconName;\n");
     source.push_str("    fn from_str(slug: &str) -> Result<Self, Self::Err> { Self::from_slug(slug).ok_or_else(|| UnknownIconName(slug.to_string())) }\n");
     source.push_str("}\n\n");
