@@ -23,17 +23,20 @@ impl Parse for StyleableMacroInput {
         let content;
         braced!(content in input);
 
-        let mut method_visibility = None;
-
         let ident: syn::Ident = content.parse()?;
-        if ident == "visibility" {
-            let _colon: Token![:] = content.parse()?;
-            method_visibility = Some(content.parse()?);
+        if ident != "visibility" {
+            return Err(syn::Error::new(
+                ident.span(),
+                "expected `visibility: <visibility>`",
+            ));
+        }
+        let _colon: Token![:] = content.parse()?;
+        let method_visibility = content.parse()?;
+        if !content.is_empty() {
+            return Err(content.error("unexpected tokens after visibility"));
         }
 
-        Ok(Self {
-            method_visibility: method_visibility.unwrap_or(Visibility::Inherited),
-        })
+        Ok(Self { method_visibility })
     }
 }
 
@@ -161,7 +164,7 @@ pub fn cursor_style_methods(input: TokenStream) -> TokenStream {
     let visibility = input.method_visibility;
     let output = quote! {
         /// Set the cursor style when hovering over this element
-        #visibility fn cursor(mut self, cursor: CursorStyle) -> Self {
+        #visibility fn cursor(mut self, cursor: kael::CursorStyle) -> Self {
             self.style().mouse_cursor = Some(cursor);
             self
         }
@@ -329,7 +332,7 @@ pub fn cursor_style_methods(input: TokenStream) -> TokenStream {
 
         /// Sets cursor style when hovering over an element to `none`.
         /// [Docs](https://tailwindcss.com/docs/cursor)
-        #visibility fn cursor_none(mut self, cursor: CursorStyle) -> Self {
+        #visibility fn cursor_none(mut self) -> Self {
             self.style().mouse_cursor = Some(kael::CursorStyle::None);
             self
         }
@@ -404,7 +407,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
         /// Clears the box shadow of the element.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)
         #visibility fn shadow_none(mut self) -> Self {
-            self.style().box_shadow = Some(Default::default());
+            self.style().box_shadow = Some(::std::default::Default::default());
             self
         }
 
@@ -772,7 +775,7 @@ fn generate_custom_value_setter(
 
     let method = quote! {
         #[doc = #doc_string]
-        #visibility fn #method_name(mut self, length: impl std::clone::Clone + Into<kael::#length_type>) -> Self {
+        #visibility fn #method_name(mut self, length: impl ::std::clone::Clone + Into<kael::#length_type>) -> Self {
             let style = self.style();
             #(#field_assignments)*
             self
@@ -780,6 +783,23 @@ fn generate_custom_value_setter(
     };
 
     method
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StyleableMacroInput;
+
+    #[test]
+    fn style_visibility_input_is_strict() {
+        assert!(syn::parse2::<StyleableMacroInput>(quote::quote!({ visibility: pub })).is_ok());
+        for input in [
+            quote::quote!({}),
+            quote::quote!({ visible: pub }),
+            quote::quote!({ visibility: pub, extra }),
+        ] {
+            assert!(syn::parse2::<StyleableMacroInput>(input).is_err());
+        }
+    }
 }
 
 fn margin_box_style_prefixes() -> Vec<BoxStylePrefix> {

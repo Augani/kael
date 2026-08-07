@@ -4,6 +4,7 @@ use quote::{format_ident, quote};
 use std::mem;
 use syn::{
     self, Expr, ExprLit, FnArg, ItemFn, Lit, Meta, MetaList, Token, Type,
+    ext::IdentExt as _,
     parse::{Parse, ParseStream},
     parse_quote,
     punctuated::Punctuated,
@@ -53,7 +54,13 @@ impl Parse for Args {
                 }
                 (Meta::NameValue(meta), "iterations") => {
                     reject_duplicate(&mut iterations_set, meta, "iterations")?;
-                    max_iterations = parse_usize_from_expr(&meta.value)?
+                    max_iterations = parse_usize_from_expr(&meta.value)?;
+                    if max_iterations == 0 {
+                        return Err(syn::Error::new(
+                            meta.value.span(),
+                            "iterations must be greater than zero",
+                        ));
+                    }
                 }
                 (Meta::NameValue(meta), "on_failure") => {
                     reject_duplicate(&mut on_failure_set, meta, "on_failure")?;
@@ -118,7 +125,7 @@ pub fn test(args: TokenStream, function: TokenStream) -> TokenStream {
     };
 
     let inner_fn_attributes = mem::take(&mut inner_fn.attrs);
-    let inner_fn_name = format_ident!("__{}", inner_fn.sig.ident);
+    let inner_fn_name = format_ident!("__{}", inner_fn.sig.ident.unraw());
     let outer_fn_name = mem::replace(&mut inner_fn.sig.ident, inner_fn_name.clone());
     let kael = match crate::kael_crate_path() {
         Ok(path) => path,
@@ -170,7 +177,7 @@ fn generate_test_function(
                         }
                         Some("BackgroundExecutor") => {
                             inner_fn_args.extend(quote!(#kael::BackgroundExecutor::new(
-                                std::sync::Arc::new(dispatcher.clone()),
+                                ::std::sync::Arc::new(dispatcher.clone()),
                             ),));
                             continue;
                         }
@@ -215,7 +222,7 @@ fn generate_test_function(
                     &[#seeds],
                     #max_retries,
                     &mut |dispatcher, _seed| {
-                        let executor = #kael::BackgroundExecutor::new(std::sync::Arc::new(dispatcher.clone()));
+                        let executor = #kael::BackgroundExecutor::new(::std::sync::Arc::new(dispatcher.clone()));
                         #cx_vars
                         executor.block_test(#inner_fn_name(#inner_fn_args));
                         #cx_teardowns
@@ -381,6 +388,11 @@ mod tests {
     fn duplicate_scalar_arguments_are_rejected() {
         assert!(syn::parse2::<Args>(quote::quote!(iterations = 1, iterations = 2)).is_err());
         assert!(syn::parse2::<Args>(quote::quote!(seed = 1, seed = 2)).is_err());
+    }
+
+    #[test]
+    fn zero_iterations_are_rejected() {
+        assert!(syn::parse2::<Args>(quote::quote!(iterations = 0)).is_err());
     }
 
     #[test]

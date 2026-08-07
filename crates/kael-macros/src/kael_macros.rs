@@ -16,9 +16,12 @@ mod derive_inspector_reflection;
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use quote::format_ident;
-use syn::{DeriveInput, Ident, parse_quote};
+use syn::{DeriveInput, Ident, Meta, parse_quote};
 
-/// `Action` derive macro - see the trait documentation for details.
+/// Derives Kael's `Action` protocol implementation for a concrete type.
+///
+/// See [`kael::Action`](https://docs.rs/kael/latest/kael/trait.Action.html) for
+/// supported attributes and runtime behavior.
 #[proc_macro_derive(Action, attributes(action))]
 pub fn derive_action(input: TokenStream) -> TokenStream {
     derive_action::derive_action(input)
@@ -32,8 +35,7 @@ pub fn register_action(ident: TokenStream) -> TokenStream {
     register_action::register_action(ident)
 }
 
-/// #[derive(IntoElement)] is used to create a Component out of anything that implements
-/// the `RenderOnce` trait.
+/// Derives `IntoElement` for a type that implements `RenderOnce`.
 #[proc_macro_derive(IntoElement)]
 pub fn derive_into_element(input: TokenStream) -> TokenStream {
     derive_into_element::derive_into_element(input)
@@ -45,8 +47,9 @@ pub fn derive_render(input: TokenStream) -> TokenStream {
     derive_render::derive_render(input)
 }
 
-/// #[derive(AppContext)] is used to create a context out of anything that holds a `&mut App`
-/// Note that a `#[app]` attribute is required to identify the variable holding the &mut App.
+/// Derives `AppContext` for a type that holds a `&mut App`.
+///
+/// An argument-free `#[app]` attribute is required on exactly one named field.
 ///
 /// Failure to add the attribute causes a compile error:
 ///
@@ -63,10 +66,10 @@ pub fn derive_app_context(input: TokenStream) -> TokenStream {
     derive_app_context::derive_app_context(input)
 }
 
-/// #[derive(VisualContext)] is used to create a visual context out of anything that holds a `&mut Window` and
-/// implements `AppContext`
-/// Note that a `#[app]` and a `#[window]` attribute are required to identify the variables holding the &mut App,
-/// and &mut Window respectively.
+/// Derives `VisualContext` for an `AppContext` that also holds a `&mut Window`.
+///
+/// Argument-free `#[app]` and `#[window]` attributes identify the named fields
+/// holding `&mut App` and `&mut Window`, respectively.
 ///
 /// Failure to add both attributes causes a compile error:
 ///
@@ -165,9 +168,9 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
 /// async fn test_foo(mut cx: &TestAppContext) { }
 /// ```
 ///
-/// In addition to passing a TestAppContext, you can also ask for a `StdRnd` instance.
-/// this will be seeded with the `SEED` environment variable and is used internally by
-/// the ForegroundExecutor and BackgroundExecutor to run tasks deterministically in tests.
+/// In addition to passing a `TestAppContext`, you can also ask for a `StdRng` instance.
+/// It is seeded with the `SEED` environment variable and is used internally by
+/// the foreground and background executors to run tasks deterministically in tests.
 /// Using the same `StdRng` for behavior in your test will allow you to exercise a wide
 /// variety of scenarios and interleavings just by changing the seed.
 ///
@@ -183,8 +186,8 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
 ///
 /// You can combine `iterations = ...` with `seeds(...)`:
 /// - `#[kael::test(iterations = 5, seed = 10)]` is equivalent to `#[kael::test(seeds(0, 1, 2, 3, 4, 10))]`.
-/// - `#[kael::test(iterations = 5, seeds(10, 20, 30)]` is equivalent to `#[kael::test(seeds(0, 1, 2, 3, 4, 10, 20, 30))]`.
-/// - `#[kael::test(seeds(10, 20, 30), iterations = 5]` is equivalent to `#[kael::test(seeds(0, 1, 2, 3, 4, 10, 20, 30))]`.
+/// - `#[kael::test(iterations = 5, seeds(10, 20, 30))]` is equivalent to `#[kael::test(seeds(0, 1, 2, 3, 4, 10, 20, 30))]`.
+/// - `#[kael::test(seeds(10, 20, 30), iterations = 5)]` is equivalent to `#[kael::test(seeds(0, 1, 2, 3, 4, 10, 20, 30))]`.
 ///
 /// # Environment Variables
 ///
@@ -213,8 +216,8 @@ pub fn test(args: TokenStream, function: TokenStream) -> TokenStream {
 /// provides the method's documentation.
 #[cfg(any(feature = "inspector", debug_assertions))]
 #[proc_macro_attribute]
-pub fn derive_inspector_reflection(_args: TokenStream, input: TokenStream) -> TokenStream {
-    derive_inspector_reflection::derive_inspector_reflection(_args, input)
+pub fn derive_inspector_reflection(args: TokenStream, input: TokenStream) -> TokenStream {
+    derive_inspector_reflection::derive_inspector_reflection(args, input)
 }
 
 pub(crate) fn get_simple_attribute_field(
@@ -224,25 +227,34 @@ pub(crate) fn get_simple_attribute_field(
     let syn::Data::Struct(data_struct) = &ast.data else {
         return Ok(None);
     };
-    let mut matching = data_struct
-        .fields
-        .iter()
-        .filter(|field| field.attrs.iter().any(|attr| attr.path().is_ident(name)));
-    let Some(field) = matching.next() else {
-        return Ok(None);
-    };
-    if let Some(duplicate) = matching.next() {
-        return Err(syn::Error::new_spanned(
-            duplicate,
-            format!("only one field may be marked #[{name}]"),
-        ));
+    let mut matching_field = None;
+    for field in &data_struct.fields {
+        for attribute in field
+            .attrs
+            .iter()
+            .filter(|attribute| attribute.path().is_ident(name))
+        {
+            if !matches!(&attribute.meta, Meta::Path(_)) {
+                return Err(syn::Error::new_spanned(
+                    attribute,
+                    format!("#[{name}] does not accept arguments"),
+                ));
+            }
+            if matching_field.is_some() {
+                return Err(syn::Error::new_spanned(
+                    attribute,
+                    format!("only one field may be marked #[{name}]"),
+                ));
+            }
+            matching_field = Some(field.ident.clone().ok_or_else(|| {
+                syn::Error::new_spanned(
+                    field,
+                    format!("#[{name}] must be placed on a named struct field"),
+                )
+            })?);
+        }
     }
-    field.ident.clone().map(Some).ok_or_else(|| {
-        syn::Error::new_spanned(
-            field,
-            format!("#[{name}] must be placed on a named struct field"),
-        )
-    })
+    Ok(matching_field)
 }
 
 pub(crate) fn kael_crate_path() -> syn::Result<syn::Path> {
@@ -260,5 +272,35 @@ pub(crate) fn kael_crate_path() -> syn::Result<syn::Path> {
             let ident = format_ident!("{}", name.replace('-', "_"));
             Ok(parse_quote!(::#ident))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::get_simple_attribute_field;
+
+    #[test]
+    fn simple_field_attributes_reject_arguments() {
+        let input = syn::parse_quote! {
+            struct Context<'a> {
+                #[app(unexpected)]
+                app: &'a mut u8,
+            }
+        };
+        let error = get_simple_attribute_field(&input, "app").unwrap_err();
+        assert_eq!(error.to_string(), "#[app] does not accept arguments");
+    }
+
+    #[test]
+    fn simple_field_attributes_reject_duplicates_on_one_field() {
+        let input = syn::parse_quote! {
+            struct Context<'a> {
+                #[app]
+                #[app]
+                app: &'a mut u8,
+            }
+        };
+        let error = get_simple_attribute_field(&input, "app").unwrap_err();
+        assert_eq!(error.to_string(), "only one field may be marked #[app]");
     }
 }

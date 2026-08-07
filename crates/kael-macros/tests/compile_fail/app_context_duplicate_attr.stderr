@@ -1,6 +1,5 @@
 error: only one field may be marked #[app]
  --> tests/compile_fail/app_context_duplicate_attr.rs:8:5
   |
-8 | /     #[app]
-9 | |     second: &'a mut App,
-  | |_______________________^
+8 |     #[app]
+  |     ^^^^^^

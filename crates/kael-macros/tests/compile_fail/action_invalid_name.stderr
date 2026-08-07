@@ -1,5 +1,5 @@
 error: in #[action] attribute: `name = "scope::Invalid"` must not contain `::`; specify `namespace` instead
- --> tests/compile_fail/action_invalid_name.rs:5:8
+ --> tests/compile_fail/action_invalid_name.rs:4:17
   |
-5 | struct InvalidName;
-  |        ^^^^^^^^^^^
+4 | #[action(name = "scope::Invalid")]
+  |                 ^^^^^^^^^^^^^^^^

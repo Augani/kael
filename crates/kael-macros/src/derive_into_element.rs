@@ -12,6 +12,7 @@ pub fn derive_into_element(input: TokenStream) -> TokenStream {
     };
 
     let r#gen = quote! {
+        #[automatically_derived]
         impl #impl_generics #kael::IntoElement for #type_name #type_generics
         #where_clause
         {

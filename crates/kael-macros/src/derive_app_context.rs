@@ -26,6 +26,7 @@ pub fn derive_app_context(input: TokenStream) -> TokenStream {
     let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
 
     let r#gen = quote! {
+        #[automatically_derived]
         impl #impl_generics #kael::AppContext for #type_name #type_generics
         #where_clause
         {
@@ -100,7 +101,7 @@ pub fn derive_app_context(input: TokenStream) -> TokenStream {
                 self.#app_variable.read_window(window, read)
             }
 
-            fn background_spawn<R>(&self, future: impl std::future::Future<Output = R> + Send + 'static) -> #kael::Task<R>
+            fn background_spawn<R>(&self, future: impl ::std::future::Future<Output = R> + Send + 'static) -> #kael::Task<R>
             where
                 R: Send + 'static,
             {
