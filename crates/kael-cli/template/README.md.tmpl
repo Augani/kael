@@ -2,6 +2,11 @@
 
 A native desktop app built with [Kael](https://github.com/Augani/kael).
 
+The project pins the Rust toolchain used by its matching Kael release.
+On macOS, the starter compiles Metal shaders at launch so development works
+with either Command Line Tools or full Xcode. For release builds with full
+Xcode, remove `runtime_shaders` from the `kael` dependency to precompile them.
+
 ## Run
 
 ```bash
