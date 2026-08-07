@@ -1,10 +1,10 @@
 #![deny(missing_docs)]
 
-//! Optional media/NLE engines for the Kael desktop framework.
+//! Optional media/NLE engines for the Kael native application framework.
 //!
 //! This crate is a **leaf domain stack**: it builds media-application capability
 //! (timelines, compositing, audio mixing, export) *on top of* the general-purpose
-//! framework, and nothing in the core `kael` crate depends on it. This keeps
+//! runtime, and nothing in the core `kael` crate depends on it. This keeps
 //! media-specific engines out of the general framework dependency graph.
 
 pub mod audio_mix;

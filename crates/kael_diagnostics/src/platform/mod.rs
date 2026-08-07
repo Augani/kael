@@ -1,4 +1,4 @@
-//! Platform backends for the diagnostics service scaffold.
+//! Platform backends for native diagnostics and crash capture.
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod linux;

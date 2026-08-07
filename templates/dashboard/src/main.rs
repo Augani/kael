@@ -1,5 +1,5 @@
 //! Analytics dashboard template: sidebar navigation, stat cards, charts, and a
-//! live data table — everything a browser-runtime dashboard does, fully native.
+//! Live data table for a responsive, resource-conscious native dashboard.
 
 use kael_ui::components::icon_source::IconSource;
 use kael_ui::components::input::{Input, InputSize, InputState};

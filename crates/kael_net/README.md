@@ -1,8 +1,11 @@
 # kael_net
 
-Networking and sync primitives for the Kael UI framework
+Transport-agnostic auth, request models, offline queues, presence tracking, and
+retry policies for Kael applications.
 
-Part of the [Kael](https://github.com/Augani/kael) GPU-accelerated Rust UI framework. See the [documentation](https://augani.github.io/kael/) for usage and guides.
+Part of [Kael](https://github.com/Augani/kael), a native application framework
+for responsive, resource-conscious desktop software. See the
+[documentation](https://augani.github.io/kael/) for usage and guides.
 
 ## License
 

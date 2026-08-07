@@ -3160,7 +3160,9 @@ impl Render for AstryxShowcase {
                                 col()
                                     .gap(px(4.0))
                                     .child(body("Augustus Otu".to_string()))
-                                    .child(muted("Building the Kael UI framework".to_string())),
+                                    .child(muted(
+                                        "Building the Kael native app framework".to_string(),
+                                    )),
                             ),
                     )
                     .child(

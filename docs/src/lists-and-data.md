@@ -58,7 +58,7 @@ list()
 
 ## RecyclingList
 
-Virtualized list for items with different heights. Recycles DOM nodes for performance:
+Virtualized list for items with different heights. Recycles rendered rows for performance:
 
 ```rust
 use kael::recycling_list;
