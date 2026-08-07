@@ -33,6 +33,7 @@ pub fn derive_visual_context(input: TokenStream) -> TokenStream {
     let (impl_generics, type_generics, where_clause) = ast.generics.split_for_impl();
 
     let r#gen = quote! {
+        #[automatically_derived]
         impl #impl_generics #kael::VisualContext for #type_name #type_generics
         #where_clause
         {

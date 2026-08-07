@@ -1,0 +1,5 @@
+error: #[derive_inspector_reflection] does not accept arguments
+ --> tests/compile_fail/derive_inspector_args.rs:3:31
+  |
+3 | #[derive_inspector_reflection(unexpected)]
+  |                               ^^^^^^^^^^

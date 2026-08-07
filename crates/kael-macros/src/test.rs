@@ -4,6 +4,7 @@ use quote::{format_ident, quote};
 use std::mem;
 use syn::{
     self, Expr, ExprLit, FnArg, ItemFn, Lit, Meta, MetaList, Token, Type,
+    ext::IdentExt as _,
     parse::{Parse, ParseStream},
     parse_quote,
     punctuated::Punctuated,
@@ -124,7 +125,7 @@ pub fn test(args: TokenStream, function: TokenStream) -> TokenStream {
     };
 
     let inner_fn_attributes = mem::take(&mut inner_fn.attrs);
-    let inner_fn_name = format_ident!("__{}", inner_fn.sig.ident);
+    let inner_fn_name = format_ident!("__{}", inner_fn.sig.ident.unraw());
     let outer_fn_name = mem::replace(&mut inner_fn.sig.ident, inner_fn_name.clone());
     let kael = match crate::kael_crate_path() {
         Ok(path) => path,

@@ -22,6 +22,13 @@ trait Transform: Clone {
         self.double().double()
     }
 
+    #[cfg_attr(all(), cfg(any()))]
+    fn cfg_attr_disabled(self) -> Self;
+
+    fn r#type(self) -> Self {
+        self
+    }
+
     // These methods will be filtered out:
     #[allow(dead_code)]
     fn add(&self, other: &Self) -> Self;
@@ -70,13 +77,14 @@ fn test_derive_inspector_reflection() {
     // Get all methods that match the pattern fn(self) -> Self or fn(mut self) -> Self
     let methods = methods::<Number>();
 
-    assert_eq!(methods.len(), 5);
+    assert_eq!(methods.len(), 6);
     let method_names: Vec<_> = methods.iter().map(|m| m.name).collect();
     assert!(method_names.contains(&"double"));
     assert!(method_names.contains(&"triple"));
     assert!(method_names.contains(&"increment"));
     assert!(method_names.contains(&"quadruple"));
     assert!(method_names.contains(&"add_one"));
+    assert!(method_names.contains(&"type"));
 
     // Invoke methods by name
     let num = Number(5);

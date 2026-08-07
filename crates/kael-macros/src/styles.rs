@@ -407,7 +407,7 @@ pub fn box_shadow_style_methods(input: TokenStream) -> TokenStream {
         /// Clears the box shadow of the element.
         /// [Docs](https://tailwindcss.com/docs/box-shadow)
         #visibility fn shadow_none(mut self) -> Self {
-            self.style().box_shadow = Some(Default::default());
+            self.style().box_shadow = Some(::std::default::Default::default());
             self
         }
 

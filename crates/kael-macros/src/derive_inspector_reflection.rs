@@ -7,11 +7,22 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{
     Attribute, Expr, FnArg, Ident, Item, ItemTrait, Lit, Meta, Path, ReturnType, TraitItem, Type,
+    ext::IdentExt as _,
     parse_macro_input, parse_quote,
     visit_mut::{self, VisitMut},
 };
 
-pub fn derive_inspector_reflection(_args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn derive_inspector_reflection(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args = TokenStream2::from(args);
+    if !args.is_empty() {
+        return syn::Error::new_spanned(
+            args,
+            "#[derive_inspector_reflection] does not accept arguments",
+        )
+        .to_compile_error()
+        .into();
+    }
+
     let mut item = parse_macro_input!(input as Item);
 
     // First, expand any macros in the trait
@@ -75,9 +86,9 @@ fn generate_reflected_trait(trait_item: ItemTrait) -> TokenStream {
             // Include methods of form fn name(self) -> Self or fn name(mut self) -> Self
             // This includes methods with default implementations
             if has_valid_self_receiver && returns_self && param_count == 1 {
-                // Extract documentation and cfg attributes
+                // Extract documentation and conditional-compilation attributes.
                 let doc = extract_doc_comment(&method.attrs);
-                let cfg_attrs = extract_cfg_attributes(&method.attrs);
+                let cfg_attrs = extract_conditional_attributes(&method.attrs);
                 method_infos.push((method_name.clone(), doc, cfg_attrs));
             }
         }
@@ -85,7 +96,10 @@ fn generate_reflected_trait(trait_item: ItemTrait) -> TokenStream {
 
     // Generate the reflection module name
     let reflection_mod_name = Ident::new(
-        &format!("{}_reflection", trait_name.to_string().to_snake_case()),
+        &format!(
+            "{}_reflection",
+            trait_name.unraw().to_string().to_snake_case()
+        ),
         trait_name.span(),
     );
 
@@ -93,7 +107,7 @@ fn generate_reflected_trait(trait_item: ItemTrait) -> TokenStream {
     // These wrappers use type erasure to allow runtime invocation
     let wrapper_functions = method_infos.iter().map(|(method_name, _doc, cfg_attrs)| {
         let wrapper_name = Ident::new(
-            &format!("__wrapper_{}", method_name),
+            &format!("__wrapper_{}", method_name.unraw()),
             method_name.span(),
         );
         quote! {
@@ -110,8 +124,11 @@ fn generate_reflected_trait(trait_item: ItemTrait) -> TokenStream {
 
     // Generate method info entries
     let method_info_entries = method_infos.iter().map(|(method_name, doc, cfg_attrs)| {
-        let method_name_str = method_name.to_string();
-        let wrapper_name = Ident::new(&format!("__wrapper_{}", method_name), method_name.span());
+        let method_name_str = method_name.unraw().to_string();
+        let wrapper_name = Ident::new(
+            &format!("__wrapper_{}", method_name.unraw()),
+            method_name.span(),
+        );
         let doc_expr = match doc {
             Some(doc_str) => quote! { Some(#doc_str) },
             None => quote! { None },
@@ -176,10 +193,10 @@ fn extract_doc_comment(attrs: &[Attribute]) -> Option<String> {
     }
 }
 
-fn extract_cfg_attributes(attrs: &[Attribute]) -> Vec<Attribute> {
+fn extract_conditional_attributes(attrs: &[Attribute]) -> Vec<Attribute> {
     attrs
         .iter()
-        .filter(|attr| attr.path().is_ident("cfg"))
+        .filter(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"))
         .cloned()
         .collect()
 }

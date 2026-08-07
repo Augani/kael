@@ -2,7 +2,7 @@ use crate::register_action::generate_register_action;
 use proc_macro::TokenStream;
 use proc_macro2::Ident;
 use quote::quote;
-use syn::{Data, DeriveInput, LitStr, Token, parse::ParseStream};
+use syn::{Data, DeriveInput, Fields, LitStr, Token, ext::IdentExt as _, parse::ParseStream};
 
 pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as DeriveInput);
@@ -58,7 +58,7 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
                     }
                     meta.input.parse::<Token![=]>()?;
                     let ident: Ident = meta.input.parse()?;
-                    namespace = Some(ident.to_string());
+                    namespace = Some(ident.unraw().to_string());
                 } else if meta.path.is_ident("no_json") {
                     if no_json {
                         return Err(meta.error("'no_json' argument specified multiple times"));
@@ -125,7 +125,7 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
     let name = name_argument
         .as_ref()
         .map(LitStr::value)
-        .unwrap_or_else(|| struct_name.to_string());
+        .unwrap_or_else(|| struct_name.unraw().to_string());
     if let Err(message) = validate_action_name(&name, false) {
         let span = name_argument
             .as_ref()
@@ -169,7 +169,7 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
         }
     }
 
-    let is_unit_struct = matches!(&input.data, Data::Struct(data) if data.fields.is_empty());
+    let is_unit_struct = is_unit_struct(&input.data);
 
     let build_fn_body = if no_json {
         let error_msg = format!("{} cannot be built from JSON", full_name);
@@ -215,6 +215,7 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
     TokenStream::from(quote! {
         #registration
 
+        #[automatically_derived]
         impl #kael::Action for #struct_name {
             fn name(&self) -> &'static str {
                 #full_name
@@ -263,6 +264,10 @@ pub(crate) fn derive_action(input: TokenStream) -> TokenStream {
     })
 }
 
+fn is_unit_struct(data: &Data) -> bool {
+    matches!(data, Data::Struct(data) if matches!(&data.fields, Fields::Unit))
+}
+
 const MAX_ACTION_NAME_BYTES: usize = 256;
 
 fn validate_action_name(name: &str, allow_namespace: bool) -> Result<(), String> {
@@ -290,7 +295,24 @@ fn validate_action_name(name: &str, allow_namespace: bool) -> Result<(), String>
 
 #[cfg(test)]
 mod tests {
-    use super::validate_action_name;
+    use super::{is_unit_struct, validate_action_name};
+
+    #[test]
+    fn only_semicolon_structs_are_unit_structs() {
+        let unit: syn::DeriveInput = syn::parse_quote!(
+            struct Unit;
+        );
+        let empty_named: syn::DeriveInput = syn::parse_quote!(
+            struct EmptyNamed {}
+        );
+        let empty_tuple: syn::DeriveInput = syn::parse_quote!(
+            struct EmptyTuple();
+        );
+
+        assert!(is_unit_struct(&unit.data));
+        assert!(!is_unit_struct(&empty_named.data));
+        assert!(!is_unit_struct(&empty_tuple.data));
+    }
 
     #[test]
     fn action_names_reject_ambiguous_protocol_values() {
