@@ -1,17 +1,23 @@
 [package]
 edition.workspace = true
 name = "kael_collections"
+autoexamples = false
 rust-version.workspace = true
 homepage.workspace = true
 version.workspace = true
 publish = true
-description = "Standard collection type re-exports for Kael"
+description = "Fast deterministic collection aliases and standard collection re-exports for Kael"
+documentation = "https://docs.rs/kael_collections"
 keywords = ["collections", "data-structures", "kael"]
 categories = ["data-structures"]
 authors.workspace = true
 repository.workspace = true
 readme = "README.md"
 license.workspace = true
+exclude = ["examples/"]
+
+[package.metadata.docs.rs]
+targets = []
 
 [features]
 test-support = []

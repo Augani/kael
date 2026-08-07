@@ -1,4 +1,4 @@
-# kael_collections
+# `kael_collections`
 
 Fast, deterministic collection aliases used throughout Kael. The crate provides
 Fx-hashed versions of `HashMap`, `HashSet`, `IndexMap`, and `IndexSet`, alongside
@@ -22,7 +22,9 @@ assert_eq!(lookup["workspace"], 1);
 assert_eq!(ordered.keys().copied().collect::<Vec<_>>(), ["first", "second"]);
 ```
 
-See the [Kael guide](https://augani.github.io/kael/) for framework-level usage.
+See the [API documentation](https://docs.rs/kael_collections) for the complete
+set of aliases and re-exports, and the
+[Kael guide](https://augani.github.io/kael/) for framework-level usage.
 
 ## License
 
