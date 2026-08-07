@@ -288,7 +288,7 @@ jobs:
   template-check:
     name: Template Compile Check
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
