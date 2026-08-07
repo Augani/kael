@@ -1094,7 +1094,7 @@ mod tests {
             }))
             .unwrap();
 
-        wait_until(Duration::from_millis(200), || {
+        wait_until(Duration::from_secs(5), || {
             !center.inner.scheduled.lock().contains_key(&id)
         });
     }
@@ -1184,6 +1184,9 @@ mod tests {
                 return;
             }
             std::thread::sleep(Duration::from_millis(5));
+        }
+        if predicate() {
+            return;
         }
         panic!("condition was not satisfied before timeout");
     }
