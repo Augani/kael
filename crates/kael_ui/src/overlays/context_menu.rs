@@ -346,30 +346,13 @@ impl RenderOnce for ContextMenu {
                                     })
                                     .when(!disabled && handler.is_some(), |this| {
                                         let handler = handler.unwrap();
-                                        let on_key = handler.clone();
                                         let on_close = on_close.clone();
-                                        let on_close_for_key = on_close.clone();
                                         this.on_click(move |_, window, cx| {
                                             handler(window, cx);
                                             if let Some(close_handler) = &on_close {
                                                 close_handler(window, cx);
                                             }
                                         })
-                                        .on_key_down(
-                                            move |event, window, cx| {
-                                                if matches!(
-                                                    event.keystroke.key.as_str(),
-                                                    "enter" | "space"
-                                                ) {
-                                                    on_key(window, cx);
-                                                    if let Some(close_handler) = &on_close_for_key {
-                                                        close_handler(window, cx);
-                                                    }
-                                                    cx.stop_propagation();
-                                                    window.prevent_default();
-                                                }
-                                            },
-                                        )
                                     })
                                     .when_some(item.icon, |this, icon: SharedString| {
                                         this.child(
@@ -471,6 +454,7 @@ impl RenderOnce for ContextMenu {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     struct ContextMenuHost;
 
@@ -480,6 +464,120 @@ mod tests {
                 .item(ContextMenuItem::new("open", "Open").on_click(|_, _| {}))
                 .into_any_element()
         }
+    }
+
+    struct ContextMenuActivationHost {
+        activations: Rc<Cell<usize>>,
+        disabled_activations: Rc<Cell<usize>>,
+        closes: Rc<Cell<usize>>,
+    }
+
+    impl Render for ContextMenuActivationHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let activations = self.activations.clone();
+            let disabled_activations = self.disabled_activations.clone();
+            let closes = self.closes.clone();
+            ContextMenu::new(point(px(12.0), px(16.0)))
+                .id("activation-context-menu")
+                .item(
+                    ContextMenuItem::new("open", "Open")
+                        .on_click(move |_, _| activations.set(activations.get() + 1)),
+                )
+                .item(
+                    ContextMenuItem::new("disabled", "Disabled")
+                        .disabled(true)
+                        .on_click(move |_, _| {
+                            disabled_activations.set(disabled_activations.get() + 1);
+                        }),
+                )
+                .on_close(move |_, _| closes.set(closes.get() + 1))
+                .into_any_element()
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn keyboard_enter_activates_context_menu_item_once() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let activations = Rc::new(Cell::new(0));
+        let disabled_activations = Rc::new(Cell::new(0));
+        let closes = Rc::new(Cell::new(0));
+        let (_host, window) = cx.add_window_view({
+            let activations = activations.clone();
+            let disabled_activations = disabled_activations.clone();
+            let closes = closes.clone();
+            move |_, _| ContextMenuActivationHost {
+                activations,
+                disabled_activations,
+                closes,
+            }
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        window.simulate_keystrokes("tab");
+        window.update(|window, cx| window.draw(cx).clear());
+
+        window.simulate_keystrokes("enter");
+        window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("enter").expect("valid keystroke"),
+        });
+
+        assert_eq!(activations.get(), 1, "Enter must activate exactly once");
+        assert_eq!(closes.get(), 1, "Enter must close exactly once");
+
+        activations.set(0);
+        closes.set(0);
+        window.simulate_keystrokes("space");
+        window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("space").expect("valid keystroke"),
+        });
+        assert_eq!(activations.get(), 1, "Space must activate exactly once");
+        assert_eq!(closes.get(), 1, "Space must close exactly once");
+
+        let (open_center, disabled_center) = window.update(|window, cx| {
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            let center = |label: &str| {
+                let bounds = tree
+                    .nodes
+                    .values()
+                    .find(|node| {
+                        node.role == AccessibilityRole::MenuItem
+                            && node.label.as_deref() == Some(label)
+                    })
+                    .and_then(|node| node.bounds.as_ref())
+                    .expect("menu item should have rendered bounds");
+                point(
+                    px((bounds.x + bounds.width / 2.0) as f32),
+                    px((bounds.y + bounds.height / 2.0) as f32),
+                )
+            };
+            (center("Open"), center("Disabled"))
+        });
+
+        activations.set(0);
+        closes.set(0);
+        window.simulate_mouse_down(open_center, MouseButton::Left, Modifiers::default());
+        window.update(|window, cx| window.draw(cx).clear());
+        window.simulate_mouse_up(open_center, MouseButton::Left, Modifiers::default());
+        assert_eq!(
+            activations.get(),
+            1,
+            "a pointer click across a redraw must activate exactly once"
+        );
+        assert_eq!(closes.get(), 1, "a pointer click must close exactly once");
+
+        activations.set(0);
+        closes.set(0);
+        window.simulate_click(disabled_center, Modifiers::default());
+        assert_eq!(disabled_activations.get(), 0);
+        assert_eq!(activations.get(), 0);
+        assert_eq!(closes.get(), 0, "a disabled item must not close the menu");
+
+        window.simulate_keystrokes("escape");
+        assert_eq!(activations.get(), 0, "Escape must not activate an item");
+        assert_eq!(closes.get(), 1, "Escape must still close the menu");
     }
 
     #[::core::prelude::v1::test]
