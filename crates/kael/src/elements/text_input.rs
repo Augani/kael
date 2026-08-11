@@ -170,9 +170,13 @@ pub struct TextInputSelection {
     pub marked_range: Option<Range<usize>>,
 }
 
-/// Plain navigation keys an embedded editor may consume before caret movement.
+/// Caret or selection navigation keys an embedded editor may consume before native movement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextInputNavigationKey {
+    /// Move toward the previous grapheme.
+    Left,
+    /// Move toward the next grapheme.
+    Right,
     /// Move toward the previous visual line or suggestion.
     Up,
     /// Move toward the next visual line or suggestion.
@@ -183,11 +187,13 @@ pub enum TextInputNavigationKey {
     End,
 }
 
-/// A typed, unmodified text-input navigation request.
+/// A typed text-input caret or selection navigation request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TextInputNavigationEvent {
     /// Semantic navigation key.
     pub key: TextInputNavigationKey,
+    /// Whether the key extends the current selection instead of moving it.
+    pub extend: bool,
 }
 
 impl TextInputSelection {
@@ -797,7 +803,7 @@ impl TextInput {
         self
     }
 
-    /// Offer unmodified list-navigation keys to an embedded editor.
+    /// Offer consumable caret and selection navigation to an embedded editor.
     ///
     /// Returning `true` consumes the key. Returning `false`, or omitting this
     /// callback, preserves the text input's existing caret behavior.
@@ -1928,12 +1934,13 @@ impl TextInputState {
     fn emit_navigation(
         &self,
         key: TextInputNavigationKey,
+        extend: bool,
         window: &mut Window,
         cx: &mut App,
     ) -> bool {
         self.on_navigation
             .clone()
-            .is_some_and(|listener| listener(TextInputNavigationEvent { key }, window, cx))
+            .is_some_and(|listener| listener(TextInputNavigationEvent { key, extend }, window, cx))
     }
 
     fn restore_snapshot(&mut self, snapshot: TextInputSnapshot) {
@@ -1983,7 +1990,10 @@ impl TextInputState {
         }
     }
 
-    fn move_left(&mut self, _: &MoveLeft, _: &mut Window, cx: &mut Context<Self>) {
+    fn move_left(&mut self, _: &MoveLeft, window: &mut Window, cx: &mut Context<Self>) {
+        if self.emit_navigation(TextInputNavigationKey::Left, false, window, cx) {
+            return;
+        }
         self.preferred_x = None;
         if self.selected_range.is_empty() {
             self.move_to(self.previous_boundary(self.cursor_offset()), cx);
@@ -1992,7 +2002,10 @@ impl TextInputState {
         }
     }
 
-    fn move_right(&mut self, _: &MoveRight, _: &mut Window, cx: &mut Context<Self>) {
+    fn move_right(&mut self, _: &MoveRight, window: &mut Window, cx: &mut Context<Self>) {
+        if self.emit_navigation(TextInputNavigationKey::Right, false, window, cx) {
+            return;
+        }
         self.preferred_x = None;
         if self.selected_range.is_empty() {
             self.move_to(self.next_boundary(self.cursor_offset()), cx);
@@ -2022,12 +2035,18 @@ impl TextInputState {
         }
     }
 
-    fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
+    fn select_left(&mut self, _: &SelectLeft, window: &mut Window, cx: &mut Context<Self>) {
+        if self.emit_navigation(TextInputNavigationKey::Left, true, window, cx) {
+            return;
+        }
         self.preferred_x = None;
         self.select_to(self.previous_boundary(self.cursor_offset()), cx);
     }
 
-    fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
+    fn select_right(&mut self, _: &SelectRight, window: &mut Window, cx: &mut Context<Self>) {
+        if self.emit_navigation(TextInputNavigationKey::Right, true, window, cx) {
+            return;
+        }
         self.preferred_x = None;
         self.select_to(self.next_boundary(self.cursor_offset()), cx);
     }
@@ -2056,14 +2075,14 @@ impl TextInputState {
     }
 
     fn home(&mut self, _: &TextInputHome, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.emit_navigation(TextInputNavigationKey::Home, window, cx) {
+        if !self.emit_navigation(TextInputNavigationKey::Home, false, window, cx) {
             self.preferred_x = None;
             self.move_to(0, cx);
         }
     }
 
     fn end(&mut self, _: &TextInputEnd, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.emit_navigation(TextInputNavigationKey::End, window, cx) {
+        if !self.emit_navigation(TextInputNavigationKey::End, false, window, cx) {
             self.preferred_x = None;
             self.move_to(self.content.len(), cx);
         }
@@ -2220,24 +2239,30 @@ impl TextInputState {
     }
 
     fn move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
-        if self.emit_navigation(TextInputNavigationKey::Up, window, cx) {
+        if self.emit_navigation(TextInputNavigationKey::Up, false, window, cx) {
             return;
         }
         self.move_vertical(-1, false, cx);
     }
 
     fn move_down(&mut self, _: &MoveDown, window: &mut Window, cx: &mut Context<Self>) {
-        if self.emit_navigation(TextInputNavigationKey::Down, window, cx) {
+        if self.emit_navigation(TextInputNavigationKey::Down, false, window, cx) {
             return;
         }
         self.move_vertical(1, false, cx);
     }
 
-    fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
+    fn select_up(&mut self, _: &SelectUp, window: &mut Window, cx: &mut Context<Self>) {
+        if self.emit_navigation(TextInputNavigationKey::Up, true, window, cx) {
+            return;
+        }
         self.move_vertical(-1, true, cx);
     }
 
-    fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
+    fn select_down(&mut self, _: &SelectDown, window: &mut Window, cx: &mut Context<Self>) {
+        if self.emit_navigation(TextInputNavigationKey::Down, true, window, cx) {
+            return;
+        }
         self.move_vertical(1, true, cx);
     }
 
@@ -3690,23 +3715,53 @@ mod tests {
         let controller = window.update(|_, cx| view.read(cx).controller.clone());
         window.update(|window, _| controller.select_range(3..3, false, window));
         window.update(|window, cx| window.draw(cx).clear());
-        window.simulate_keystrokes("up down home end");
+        window.simulate_keystrokes(
+            "left right up down shift-left shift-right shift-up shift-down home end",
+        );
         window.update(|window, cx| window.draw(cx).clear());
 
         assert_eq!(
             events.borrow().as_slice(),
             &[
                 TextInputNavigationEvent {
+                    key: TextInputNavigationKey::Left,
+                    extend: false,
+                },
+                TextInputNavigationEvent {
+                    key: TextInputNavigationKey::Right,
+                    extend: false,
+                },
+                TextInputNavigationEvent {
                     key: TextInputNavigationKey::Up,
+                    extend: false,
                 },
                 TextInputNavigationEvent {
                     key: TextInputNavigationKey::Down,
+                    extend: false,
+                },
+                TextInputNavigationEvent {
+                    key: TextInputNavigationKey::Left,
+                    extend: true,
+                },
+                TextInputNavigationEvent {
+                    key: TextInputNavigationKey::Right,
+                    extend: true,
+                },
+                TextInputNavigationEvent {
+                    key: TextInputNavigationKey::Up,
+                    extend: true,
+                },
+                TextInputNavigationEvent {
+                    key: TextInputNavigationKey::Down,
+                    extend: true,
                 },
                 TextInputNavigationEvent {
                     key: TextInputNavigationKey::Home,
+                    extend: false,
                 },
                 TextInputNavigationEvent {
                     key: TextInputNavigationKey::End,
+                    extend: false,
                 },
             ]
         );
@@ -3730,11 +3785,19 @@ mod tests {
         let controller = window.update(|_, cx| view.read(cx).controller.clone());
         window.update(|window, _| controller.select_range(3..3, false, window));
         window.update(|window, cx| window.draw(cx).clear());
-        window.simulate_keystrokes("end shift-left cmd-left cmd-right");
+        window.simulate_keystrokes("end shift-left");
         window.update(|window, cx| window.draw(cx).clear());
 
-        assert_eq!(events.borrow().len(), 1);
+        assert_eq!(events.borrow().len(), 2);
         assert_eq!(events.borrow()[0].key, TextInputNavigationKey::End);
+        assert!(!events.borrow()[0].extend);
+        assert_eq!(events.borrow()[1].key, TextInputNavigationKey::Left);
+        assert!(events.borrow()[1].extend);
+        assert_eq!(selections.borrow().last().unwrap().range, 11..12);
+
+        window.simulate_keystrokes("cmd-left cmd-right");
+        window.update(|window, cx| window.draw(cx).clear());
+        assert_eq!(events.borrow().len(), 2);
         assert_eq!(selections.borrow().last().unwrap().range, 12..12);
     }
 
