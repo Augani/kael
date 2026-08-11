@@ -323,32 +323,9 @@ impl RenderOnce for IconButton {
                 )
             })
             .when_some(handler.filter(|_| clickable), |this, on_click| {
-                let on_key = on_click.clone();
                 this.on_click(move |event, window, cx| {
                     cx.stop_propagation();
                     (on_click)(event, window, cx);
-                })
-                .on_key_down(move |event, window, cx| {
-                    if event.keystroke.modifiers.modified() {
-                        return;
-                    }
-                    let Some(button) = (match event.keystroke.key.as_str() {
-                        "enter" => Some(KeyboardButton::Enter),
-                        "space" => Some(KeyboardButton::Space),
-                        _ => None,
-                    }) else {
-                        return;
-                    };
-                    on_key(
-                        &ClickEvent::Keyboard(KeyboardClickEvent {
-                            button,
-                            ..Default::default()
-                        }),
-                        window,
-                        cx,
-                    );
-                    cx.stop_propagation();
-                    window.prevent_default();
                 })
             })
             .when_some(svg_path, |this, path| {
@@ -376,5 +353,70 @@ impl RenderOnce for IconButton {
                         ),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IconButton;
+    use kael::{
+        Context, InteractiveElement as _, KeyUpEvent, Keystroke, Modifiers, MouseButton, Render,
+        TestAppContext, Window,
+    };
+    use std::{cell::Cell, rc::Rc};
+
+    struct IconButtonActivationHost {
+        activations: Rc<Cell<usize>>,
+    }
+
+    impl Render for IconButtonActivationHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl kael::IntoElement {
+            let activations = self.activations.clone();
+            IconButton::new("x")
+                .id("activation-icon-button")
+                .label("Close")
+                .debug_selector(|| "activation-icon-button".to_owned())
+                .on_click(move |_, _, _| activations.set(activations.get() + 1))
+        }
+    }
+
+    #[kael::test]
+    fn pointer_and_keyboard_each_activate_icon_button_once(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let activations = Rc::new(Cell::new(0));
+        let (_view, window) = cx.add_window_view({
+            let activations = activations.clone();
+            move |_, _| IconButtonActivationHost { activations }
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        let bounds = window
+            .debug_bounds("activation-icon-button")
+            .expect("icon button bounds");
+
+        window.simulate_mouse_down(bounds.center(), MouseButton::Left, Modifiers::default());
+        window.update(|window, cx| window.draw(cx).clear());
+        window.simulate_mouse_up(bounds.center(), MouseButton::Left, Modifiers::default());
+        assert_eq!(
+            activations.get(),
+            1,
+            "one physical click must activate once"
+        );
+
+        activations.set(0);
+        window.update(|window, cx| window.draw(cx).clear());
+        window.simulate_keystrokes("enter");
+        window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("enter").expect("valid keystroke"),
+        });
+        assert_eq!(activations.get(), 1, "Enter must activate once");
+
+        activations.set(0);
+        window.simulate_keystrokes("space");
+        window.simulate_event(KeyUpEvent {
+            keystroke: Keystroke::parse("space").expect("valid keystroke"),
+        });
+        assert_eq!(activations.get(), 1, "Space must activate once");
     }
 }
