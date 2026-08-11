@@ -1,16 +1,17 @@
 use super::local_history::WindowValueHistory;
 use crate::{
-    AccessibilityAction, AccessibilityNode, AccessibilityRole, AccessibilityState,
-    AccessibilityValue, Action, App, AppContext, Bounds, ClipboardItem, ContentMask, Context,
-    CursorStyle, DispatchPhase, Element, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, FocusHandle, Global, GlobalElementId, Hitbox, HitboxBehavior,
-    InspectorElementId, IntoElement, KeyBinding, KeyContext, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Style, TextRun, UTF16Selection,
-    UnderlineStyle, Window, WrappedLine, fill, point, px, relative, rgb, rgba, size,
-    util::wrapped_line_end_indices, white,
+    AccessibilityAction, AccessibilityActionPayload, AccessibilityId, AccessibilityNode,
+    AccessibilityRole, AccessibilityState, AccessibilityValue, Action, App, AppContext, Bounds,
+    ClipboardItem, ContentMask, Context, CursorStyle, DispatchPhase, Edges, Element, ElementId,
+    ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Focusable, Global,
+    GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, KeyBinding,
+    KeyContext, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine, fill, point,
+    px, relative, rgb, rgba, size, util::wrapped_line_end_indices, white,
 };
 use std::{
     any::TypeId,
+    cell::RefCell,
     ops::Range,
     rc::Rc,
     time::{Duration, Instant},
@@ -36,6 +37,10 @@ actions!(
         MoveLeft,
         /// Move the caret one grapheme to the right.
         MoveRight,
+        /// Move the caret to the closest position on the previous visual line.
+        MoveUp,
+        /// Move the caret to the closest position on the next visual line.
+        MoveDown,
         /// Move the caret to the previous word boundary.
         MoveWordLeft,
         /// Move the caret to the next word boundary.
@@ -44,6 +49,10 @@ actions!(
         SelectLeft,
         /// Extend the selection one grapheme to the right.
         SelectRight,
+        /// Extend the selection to the closest position on the previous visual line.
+        SelectUp,
+        /// Extend the selection to the closest position on the next visual line.
+        SelectDown,
         /// Extend the selection to the previous word boundary.
         SelectWordLeft,
         /// Extend the selection to the next word boundary.
@@ -72,13 +81,147 @@ actions!(
         InsertNewline,
         /// Submit the current field value.
         Submit,
+        /// Apply the primary Enter behavior for the configured key policy.
+        PrimaryEnter,
+        /// Apply the Shift+Enter behavior for the configured key policy.
+        ShiftEnter,
+        /// Apply the Alt+Enter behavior for the configured key policy.
+        AltEnter,
+        /// Apply the forward Tab behavior for the configured key policy.
+        TabForward,
+        /// Apply the backward Tab behavior for the configured key policy.
+        TabBackward,
+        /// Cancel the current field interaction.
+        Cancel,
     ]
 );
 
 type ChangeListener = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
 type SubmitListener = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
 type FocusListener = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
+type KeyListener = Rc<dyn Fn(TextInputKeyEvent, &mut Window, &mut App)>;
 type Mask = Rc<dyn InputMask>;
+
+/// Keyboard behavior used by a text input embedded in a canvas editor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextInputKeyPolicy {
+    /// Enter inserts a newline in multiline inputs; Tab remains available to focus traversal.
+    #[default]
+    Multiline,
+    /// Enter and Tab commit while Alt+Enter inserts a newline, matching spreadsheet editors.
+    Spreadsheet,
+}
+
+/// The physical key chord that produced a text-input command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextInputKeyTrigger {
+    /// Enter without a text-policy modifier.
+    Enter,
+    /// Shift+Enter.
+    ShiftEnter,
+    /// Alt+Enter.
+    AltEnter,
+    /// The platform command modifier plus Enter.
+    CommandEnter,
+    /// Tab.
+    Tab,
+    /// Shift+Tab.
+    ShiftTab,
+    /// Escape.
+    Escape,
+}
+
+/// The semantic result of a text-input key command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextInputKeyOutcome {
+    /// Insert a hard line break at the selection.
+    Newline,
+    /// Commit or submit the current value.
+    Submit,
+    /// Cancel the current canvas edit.
+    Cancel,
+}
+
+/// A structured canvas-editor command emitted by a text input.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextInputKeyEvent {
+    /// Current input value after applying the command.
+    pub value: SharedString,
+    /// Physical key chord that produced the command.
+    pub trigger: TextInputKeyTrigger,
+    /// Semantic result selected by the input policy.
+    pub outcome: TextInputKeyOutcome,
+}
+
+#[derive(Clone, Debug)]
+enum TextInputSelectionRequest {
+    Caret(Point<Pixels>),
+    Range { range: Range<usize>, reversed: bool },
+    All,
+}
+
+/// External control handle for a canvas-hosted text input.
+///
+/// Keep one controller per logical input and pass it to [`TextInput::controller`]
+/// from the input's first render.
+#[derive(Clone)]
+pub struct TextInputController {
+    focus_handle: FocusHandle,
+    pending_selection: Rc<RefCell<Option<TextInputSelectionRequest>>>,
+}
+
+impl TextInputController {
+    /// Create a controller with a focus handle allocated by the owning view context.
+    pub fn new(focus_handle: FocusHandle) -> Self {
+        Self {
+            focus_handle,
+            pending_selection: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    /// Return the input's focus handle.
+    pub fn focus_handle(&self) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+
+    /// Focus the controlled input.
+    pub fn focus(&self, window: &mut Window) {
+        window.focus(&self.focus_handle);
+    }
+
+    /// Queue caret placement at an absolute canvas point for the next prepaint.
+    pub fn place_caret(&self, point: Point<Pixels>, window: &mut Window) {
+        self.pending_selection
+            .borrow_mut()
+            .replace(TextInputSelectionRequest::Caret(point));
+        self.focus(window);
+        window.refresh();
+    }
+
+    /// Queue a UTF-8 byte selection for the next prepaint.
+    pub fn select_range(&self, range: Range<usize>, reversed: bool, window: &mut Window) {
+        self.pending_selection
+            .borrow_mut()
+            .replace(TextInputSelectionRequest::Range { range, reversed });
+        self.focus(window);
+        window.refresh();
+    }
+
+    /// Queue selecting the complete value for the next prepaint.
+    pub fn select_all(&self, window: &mut Window) {
+        self.pending_selection
+            .borrow_mut()
+            .replace(TextInputSelectionRequest::All);
+        self.focus(window);
+        window.refresh();
+    }
+}
+
+impl Focusable for TextInputController {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
 
 #[derive(Clone)]
 #[non_exhaustive]
@@ -441,12 +584,19 @@ pub struct TextInput {
     element_id: ElementId,
     text: SharedString,
     placeholder: SharedString,
+    controller: Option<TextInputController>,
     multi_line: bool,
     max_lines: Option<usize>,
+    key_policy: TextInputKeyPolicy,
+    content_insets: Edges<Pixels>,
+    read_only: bool,
     password: bool,
     mask: Option<Mask>,
+    accessibility_label: Option<SharedString>,
+    accessibility_description: Option<SharedString>,
     on_change: Option<ChangeListener>,
     on_submit: Option<SubmitListener>,
+    on_key: Option<KeyListener>,
     on_focus: Option<FocusListener>,
     on_blur: Option<FocusListener>,
     custom_renderer: Option<TextInputCustomRenderer>,
@@ -460,12 +610,19 @@ impl TextInput {
             element_id,
             text,
             placeholder: SharedString::default(),
+            controller: None,
             multi_line: false,
             max_lines: None,
+            key_policy: TextInputKeyPolicy::Multiline,
+            content_insets: uniform_edges(field_padding()),
+            read_only: false,
             password: false,
             mask: None,
+            accessibility_label: None,
+            accessibility_description: None,
             on_change: None,
             on_submit: None,
+            on_key: None,
             on_focus: None,
             on_blur: None,
             custom_renderer: None,
@@ -479,6 +636,12 @@ impl TextInput {
         self
     }
 
+    /// Attach an externally owned controller for focus and canvas selection placement.
+    pub fn controller(mut self, controller: TextInputController) -> Self {
+        self.controller = Some(controller);
+        self
+    }
+
     /// Enable wrapped multiline editing.
     pub fn multi_line(mut self) -> Self {
         self.multi_line = true;
@@ -488,6 +651,42 @@ impl TextInput {
     /// Limit the visible height of a multiline field.
     pub fn max_lines(mut self, max_lines: usize) -> Self {
         self.max_lines = Some(max_lines.max(1));
+        self
+    }
+
+    /// Configure editor-specific Enter, Tab, and Escape behavior.
+    pub fn key_policy(mut self, policy: TextInputKeyPolicy) -> Self {
+        self.key_policy = policy;
+        self
+    }
+
+    /// Set uniform content padding inside the input border.
+    pub fn content_padding(mut self, padding: Pixels) -> Self {
+        self.content_insets = uniform_edges(padding);
+        self
+    }
+
+    /// Set independent content insets inside the input border.
+    pub fn content_insets(mut self, insets: Edges<Pixels>) -> Self {
+        self.content_insets = insets;
+        self
+    }
+
+    /// Prevent user and accessibility edits while preserving focus and selection.
+    pub fn read_only(mut self) -> Self {
+        self.read_only = true;
+        self
+    }
+
+    /// Set the accessible name announced for the input.
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessibility_label = Some(label.into());
+        self
+    }
+
+    /// Set supplementary accessible help text for the input.
+    pub fn accessibility_description(mut self, description: impl Into<SharedString>) -> Self {
+        self.accessibility_description = Some(description.into());
         self
     }
 
@@ -518,6 +717,15 @@ impl TextInput {
         listener: impl Fn(SharedString, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_submit = Some(Rc::new(listener));
+        self
+    }
+
+    /// Register a structured Enter, Tab, or Escape command callback.
+    pub fn on_key(
+        mut self,
+        listener: impl Fn(TextInputKeyEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_key = Some(Rc::new(listener));
         self
     }
 
@@ -570,12 +778,16 @@ impl TextInput {
             KeyBinding::new("ctrl-delete", DeleteWordForward, Some(TEXT_INPUT_CONTEXT)),
             KeyBinding::new("left", MoveLeft, Some(TEXT_INPUT_CONTEXT)),
             KeyBinding::new("right", MoveRight, Some(TEXT_INPUT_CONTEXT)),
+            KeyBinding::new("up", MoveUp, Some(TEXT_INPUT_CONTEXT)),
+            KeyBinding::new("down", MoveDown, Some(TEXT_INPUT_CONTEXT)),
             KeyBinding::new("alt-left", MoveWordLeft, Some(TEXT_INPUT_CONTEXT)),
             KeyBinding::new("ctrl-left", MoveWordLeft, Some(TEXT_INPUT_CONTEXT)),
             KeyBinding::new("alt-right", MoveWordRight, Some(TEXT_INPUT_CONTEXT)),
             KeyBinding::new("ctrl-right", MoveWordRight, Some(TEXT_INPUT_CONTEXT)),
             KeyBinding::new("shift-left", SelectLeft, Some(TEXT_INPUT_CONTEXT)),
             KeyBinding::new("shift-right", SelectRight, Some(TEXT_INPUT_CONTEXT)),
+            KeyBinding::new("shift-up", SelectUp, Some(TEXT_INPUT_CONTEXT)),
+            KeyBinding::new("shift-down", SelectDown, Some(TEXT_INPUT_CONTEXT)),
             KeyBinding::new("shift-alt-left", SelectWordLeft, Some(TEXT_INPUT_CONTEXT)),
             KeyBinding::new("shift-ctrl-left", SelectWordLeft, Some(TEXT_INPUT_CONTEXT)),
             KeyBinding::new("shift-alt-right", SelectWordRight, Some(TEXT_INPUT_CONTEXT)),
@@ -597,8 +809,13 @@ impl TextInput {
             KeyBinding::new("secondary-z", Undo, Some(TEXT_INPUT_CONTEXT)),
             KeyBinding::new("secondary-shift-z", Redo, Some(TEXT_INPUT_CONTEXT)),
             KeyBinding::new("secondary-y", Redo, Some(TEXT_INPUT_CONTEXT)),
-            KeyBinding::new("enter", InsertNewline, Some(TEXT_INPUT_CONTEXT)),
+            KeyBinding::new("enter", PrimaryEnter, Some(TEXT_INPUT_CONTEXT)),
+            KeyBinding::new("shift-enter", ShiftEnter, Some(TEXT_INPUT_CONTEXT)),
+            KeyBinding::new("alt-enter", AltEnter, Some(TEXT_INPUT_CONTEXT)),
             KeyBinding::new("secondary-enter", Submit, Some(TEXT_INPUT_CONTEXT)),
+            KeyBinding::new("tab", TabForward, Some(TEXT_INPUT_CONTEXT)),
+            KeyBinding::new("shift-tab", TabBackward, Some(TEXT_INPUT_CONTEXT)),
+            KeyBinding::new("escape", Cancel, Some(TEXT_INPUT_CONTEXT)),
         ]);
 
         cx.set_global(TextInputBindingsInstalled);
@@ -618,7 +835,11 @@ impl TextInput {
                     ((state.clone(), false), state)
                 } else {
                     let state = cx.new(|cx| {
-                        let focus_handle = cx.focus_handle();
+                        let focus_handle = self
+                            .controller
+                            .as_ref()
+                            .map(TextInputController::focus_handle)
+                            .unwrap_or_else(|| cx.focus_handle());
                         let history = TextInputHistory::new(WindowValueHistory::new(
                             undo_manager.clone(),
                             &focus_handle,
@@ -663,10 +884,15 @@ impl TextInput {
         let placeholder = self.placeholder.clone();
         let multi_line = self.multi_line;
         let max_lines = self.max_lines;
+        let key_policy = self.key_policy;
+        let read_only = self.read_only;
         let password = self.password;
         let mask = self.mask.clone();
+        let accessibility_label = self.accessibility_label.clone();
+        let accessibility_description = self.accessibility_description.clone();
         let on_change = self.on_change.clone();
         let on_submit = self.on_submit.clone();
+        let on_key = self.on_key.clone();
         let on_focus = self.on_focus.clone();
         let on_blur = self.on_blur.clone();
         state.update(cx, |state, _| {
@@ -675,10 +901,15 @@ impl TextInput {
                 placeholder,
                 multi_line,
                 max_lines,
+                key_policy,
+                read_only,
                 password,
                 mask,
+                accessibility_label,
+                accessibility_description,
                 on_change,
                 on_submit,
+                on_key,
                 on_focus,
                 on_blur,
             );
@@ -934,16 +1165,19 @@ impl Element for TextInput {
         Self::ensure_keybindings(cx);
 
         if !self.multi_line {
-            let padding = field_padding();
             let mut style = Style::default();
             style.size.width = relative(1.0).into();
-            style.size.height = (window.line_height() + padding * 2.0 + px(2.0)).into();
+            style.size.height = (window.line_height()
+                + self.content_insets.top
+                + self.content_insets.bottom
+                + px(2.0))
+            .into();
             return (window.request_layout(style, [], cx), ());
         }
 
         let global_id = id.expect("text_input always has an element id");
         let state = self.state(global_id, window, cx);
-        let padding = field_padding();
+        let content_insets = self.content_insets;
         let mut style = Style::default();
         style.size.width = relative(1.0).into();
         let layout_id = window.request_measured_layout(
@@ -955,7 +1189,8 @@ impl Element for TextInput {
                         crate::AvailableSpace::Definite(width) => Some(width),
                         _ => None,
                     });
-                let wrap_width = outer_width.map(content_wrap_width);
+                let wrap_width =
+                    outer_width.map(|width| content_wrap_width(width, &content_insets));
                 let line_height = window.line_height();
                 let input = state.read(cx);
                 let (_, lines) = shape_text_input_lines(&input, wrap_width, false, window);
@@ -968,8 +1203,13 @@ impl Element for TextInput {
                     .map_or(total_lines, |max_lines| total_lines.min(max_lines.max(1)));
 
                 size(
-                    outer_width.unwrap_or(content_width + field_chrome_extent()),
-                    line_height * visible_lines + padding * 2.0 + px(2.0),
+                    outer_width.unwrap_or(
+                        content_width + content_insets.left + content_insets.right + px(2.0),
+                    ),
+                    line_height * visible_lines
+                        + content_insets.top
+                        + content_insets.bottom
+                        + px(2.0),
                 )
             },
         );
@@ -994,9 +1234,8 @@ impl Element for TextInput {
         window.set_focus_handle(&focus_handle, cx);
         window.next_frame.tab_stops.insert(&tab_handle);
 
-        let padding = field_padding();
         let inner_bounds = inset_bounds(bounds, px(1.0));
-        let text_bounds = inset_bounds(inner_bounds, padding);
+        let text_bounds = inset_bounds_by_edges(inner_bounds, &self.content_insets);
         let line_height = window.line_height();
         let desired_vertical_scroll = {
             let input = state.read(cx);
@@ -1006,6 +1245,23 @@ impl Element for TextInput {
         state.update(cx, |input, _| {
             input.vertical_scroll = desired_vertical_scroll;
         });
+        let initial_layout = {
+            let input = state.read(cx);
+            build_text_input_layout(&input, text_bounds, line_height, window)
+        };
+        if let Some(request) = self
+            .controller
+            .as_ref()
+            .and_then(|controller| controller.pending_selection.borrow_mut().take())
+        {
+            state.update(cx, |input, _| {
+                input.apply_selection_request(request, &initial_layout);
+            });
+            let requested_vertical_scroll = state.read(cx).target_vertical_scroll(&initial_layout);
+            state.update(cx, |input, _| {
+                input.vertical_scroll = requested_vertical_scroll;
+            });
+        }
         let input = state.read(cx);
         let layout = build_text_input_layout(&input, text_bounds, line_height, window);
 
@@ -1046,12 +1302,13 @@ impl Element for TextInput {
     ) {
         let global_id = id.expect("text_input always has an element id");
         let state = self.state(global_id, window, cx);
-        let (focus_handle, can_undo, can_redo) = {
+        let (focus_handle, can_undo, can_redo, key_policy) = {
             let input = state.read(cx);
             (
                 input.focus_handle.clone(),
-                input.history.can_undo(),
-                input.history.can_redo(),
+                !input.read_only && input.history.can_undo(),
+                !input.read_only && input.history.can_redo(),
+                input.key_policy,
             )
         };
 
@@ -1094,6 +1351,18 @@ impl Element for TextInput {
             focus_handle.clone(),
             TextInputState::move_right,
         );
+        register_action_handler::<MoveUp>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::move_up,
+        );
+        register_action_handler::<MoveDown>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::move_down,
+        );
         register_action_handler::<MoveWordLeft>(
             window,
             state.clone(),
@@ -1117,6 +1386,18 @@ impl Element for TextInput {
             state.clone(),
             focus_handle.clone(),
             TextInputState::select_right,
+        );
+        register_action_handler::<SelectUp>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::select_up,
+        );
+        register_action_handler::<SelectDown>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::select_down,
         );
         register_action_handler::<SelectWordLeft>(
             window,
@@ -1204,6 +1485,44 @@ impl Element for TextInput {
             focus_handle.clone(),
             TextInputState::submit,
         );
+        register_action_handler::<PrimaryEnter>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::primary_enter,
+        );
+        register_action_handler::<ShiftEnter>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::shift_enter,
+        );
+        register_action_handler::<AltEnter>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::alt_enter,
+        );
+        if key_policy == TextInputKeyPolicy::Spreadsheet {
+            register_action_handler::<TabForward>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::tab_forward,
+            );
+            register_action_handler::<TabBackward>(
+                window,
+                state.clone(),
+                focus_handle.clone(),
+                TextInputState::tab_backward,
+            );
+        }
+        register_action_handler::<Cancel>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::cancel,
+        );
 
         register_mouse_handlers(
             window,
@@ -1223,7 +1542,15 @@ impl Element for TextInput {
         );
 
         let is_focused = focus_handle.is_focused(window);
-        let (render_state, accessibility_value, accessibility_placeholder) = {
+        let (
+            render_state,
+            accessibility_id,
+            accessibility_value,
+            accessibility_placeholder,
+            accessibility_label,
+            accessibility_description,
+            read_only,
+        ) = {
             let input = state.read(cx);
             let showing_placeholder = input.content.is_empty() && !input.placeholder.is_empty();
             (
@@ -1244,8 +1571,15 @@ impl Element for TextInput {
                     selection_bounds: prepaint.selection_bounds.clone(),
                     cursor_bounds: prepaint.cursor_bounds,
                 },
+                input.accessibility_id,
                 input.accessibility_value(),
                 (!input.placeholder.is_empty()).then_some(input.placeholder.to_string()),
+                input.accessibility_label.as_ref().map(ToString::to_string),
+                input
+                    .accessibility_description
+                    .as_ref()
+                    .map(ToString::to_string),
+                input.read_only,
             )
         };
 
@@ -1260,16 +1594,33 @@ impl Element for TextInput {
             if is_focused {
                 accessibility_state |= AccessibilityState::FOCUSED;
             }
+            if read_only {
+                accessibility_state |= AccessibilityState::READ_ONLY;
+            }
+            let mut actions = vec![AccessibilityAction::Focus];
+            if !read_only {
+                actions.push(AccessibilityAction::SetValue);
+            }
             let mut node = AccessibilityNode::new(AccessibilityRole::TextInput)
                 .with_states(accessibility_state)
                 .with_value(AccessibilityValue::Text(accessibility_value))
-                .with_actions(vec![AccessibilityAction::Focus]);
+                .with_actions(actions);
+            node.id = accessibility_id;
+            node.label = accessibility_label;
+            node.description = accessibility_description;
             if let Some(placeholder) = accessibility_placeholder {
                 node.placeholder = Some(placeholder);
             }
-            node.id = window.next_anonymous_accessibility_id();
             node
         };
+        register_text_input_accessibility_handlers(
+            window,
+            cx,
+            &node,
+            state.clone(),
+            focus_handle,
+            read_only,
+        );
         window.register_accessibility_node_at(node, bounds);
 
         state.update(cx, |input, _| {
@@ -1280,21 +1631,29 @@ impl Element for TextInput {
 
 struct TextInputState {
     focus_handle: FocusHandle,
+    accessibility_id: AccessibilityId,
     content: SharedString,
     placeholder: SharedString,
     multi_line: bool,
     max_lines: Option<usize>,
+    key_policy: TextInputKeyPolicy,
+    read_only: bool,
     vertical_scroll: Pixels,
+    preferred_x: Option<Pixels>,
     password: bool,
     mask: Option<Mask>,
+    accessibility_label: Option<SharedString>,
+    accessibility_description: Option<SharedString>,
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
     last_layout: Option<TextInputLayout>,
     is_selecting: bool,
     history: TextInputHistory,
+    composition_start: Option<TextInputSnapshot>,
     on_change: Option<ChangeListener>,
     on_submit: Option<SubmitListener>,
+    on_key: Option<KeyListener>,
     on_focus: Option<FocusListener>,
     on_blur: Option<FocusListener>,
 }
@@ -1303,21 +1662,29 @@ impl TextInputState {
     fn new(focus_handle: FocusHandle, history: TextInputHistory) -> Self {
         Self {
             focus_handle,
+            accessibility_id: AccessibilityId::new(),
             content: SharedString::default(),
             placeholder: SharedString::default(),
             multi_line: false,
             max_lines: None,
+            key_policy: TextInputKeyPolicy::Multiline,
+            read_only: false,
             vertical_scroll: Pixels::ZERO,
+            preferred_x: None,
             password: false,
             mask: None,
+            accessibility_label: None,
+            accessibility_description: None,
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
             last_layout: None,
             is_selecting: false,
             history,
+            composition_start: None,
             on_change: None,
             on_submit: None,
+            on_key: None,
             on_focus: None,
             on_blur: None,
         }
@@ -1329,10 +1696,15 @@ impl TextInputState {
         placeholder: SharedString,
         multi_line: bool,
         max_lines: Option<usize>,
+        key_policy: TextInputKeyPolicy,
+        read_only: bool,
         password: bool,
         mask: Option<Mask>,
+        accessibility_label: Option<SharedString>,
+        accessibility_description: Option<SharedString>,
         on_change: Option<ChangeListener>,
         on_submit: Option<SubmitListener>,
+        on_key: Option<KeyListener>,
         on_focus: Option<FocusListener>,
         on_blur: Option<FocusListener>,
     ) {
@@ -1345,18 +1717,24 @@ impl TextInputState {
                 .map(|range| clamp_range_to_text(&self.content, range))
                 .filter(|range| range.start < range.end);
             self.history.clear();
+            self.composition_start = None;
         }
 
         self.placeholder = placeholder;
         self.multi_line = multi_line;
         self.max_lines = max_lines.map(|value| value.max(1));
+        self.key_policy = key_policy;
+        self.read_only = read_only;
         if !self.multi_line {
             self.vertical_scroll = Pixels::ZERO;
         }
         self.password = password;
         self.mask = mask;
+        self.accessibility_label = accessibility_label;
+        self.accessibility_description = accessibility_description;
         self.on_change = on_change;
         self.on_submit = on_submit;
+        self.on_key = on_key;
         self.on_focus = on_focus;
         self.on_blur = on_blur;
     }
@@ -1377,6 +1755,33 @@ impl TextInputState {
             Bounds::new(origin, size(px(2.0), layout.line_height)),
             layout.max_vertical_scroll(),
         )
+    }
+
+    fn apply_selection_request(
+        &mut self,
+        request: TextInputSelectionRequest,
+        layout: &TextInputLayout,
+    ) {
+        self.preferred_x = None;
+        match request {
+            TextInputSelectionRequest::Caret(point) => {
+                let display_offset = layout.closest_index_for_position(point);
+                let offset = clamp_offset_to_boundary(
+                    &self.content,
+                    self.content_offset_for_display_offset(display_offset),
+                );
+                self.selected_range = offset..offset;
+                self.selection_reversed = false;
+            }
+            TextInputSelectionRequest::Range { range, reversed } => {
+                self.selected_range = clamp_range_to_text(&self.content, range);
+                self.selection_reversed = reversed && !self.selected_range.is_empty();
+            }
+            TextInputSelectionRequest::All => {
+                self.selected_range = 0..self.content.len();
+                self.selection_reversed = false;
+            }
+        }
     }
 
     fn snapshot(&self) -> TextInputSnapshot {
@@ -1436,6 +1841,7 @@ impl TextInputState {
     }
 
     fn move_left(&mut self, _: &MoveLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.preferred_x = None;
         if self.selected_range.is_empty() {
             self.move_to(self.previous_boundary(self.cursor_offset()), cx);
         } else {
@@ -1444,6 +1850,7 @@ impl TextInputState {
     }
 
     fn move_right(&mut self, _: &MoveRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.preferred_x = None;
         if self.selected_range.is_empty() {
             self.move_to(self.next_boundary(self.cursor_offset()), cx);
         } else {
@@ -1452,6 +1859,7 @@ impl TextInputState {
     }
 
     fn move_word_left(&mut self, _: &MoveWordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.preferred_x = None;
         if self.selected_range.is_empty() {
             self.move_to(
                 previous_word_boundary(&self.content, self.cursor_offset()),
@@ -1463,6 +1871,7 @@ impl TextInputState {
     }
 
     fn move_word_right(&mut self, _: &MoveWordRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.preferred_x = None;
         if self.selected_range.is_empty() {
             self.move_to(next_word_boundary(&self.content, self.cursor_offset()), cx);
         } else {
@@ -1471,14 +1880,17 @@ impl TextInputState {
     }
 
     fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.preferred_x = None;
         self.select_to(self.previous_boundary(self.cursor_offset()), cx);
     }
 
     fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.preferred_x = None;
         self.select_to(self.next_boundary(self.cursor_offset()), cx);
     }
 
     fn select_word_left(&mut self, _: &SelectWordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.preferred_x = None;
         self.select_to(
             previous_word_boundary(&self.content, self.cursor_offset()),
             cx,
@@ -1486,32 +1898,41 @@ impl TextInputState {
     }
 
     fn select_word_right(&mut self, _: &SelectWordRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.preferred_x = None;
         self.select_to(next_word_boundary(&self.content, self.cursor_offset()), cx);
     }
 
     fn move_to_start(&mut self, _: &MoveToStart, _: &mut Window, cx: &mut Context<Self>) {
+        self.preferred_x = None;
         self.move_to(0, cx);
     }
 
     fn move_to_end(&mut self, _: &MoveToEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.preferred_x = None;
         self.move_to(self.content.len(), cx);
     }
 
     fn select_to_start(&mut self, _: &SelectToStart, _: &mut Window, cx: &mut Context<Self>) {
+        self.preferred_x = None;
         self.select_to(0, cx);
     }
 
     fn select_to_end(&mut self, _: &SelectToEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.preferred_x = None;
         self.select_to(self.content.len(), cx);
     }
 
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        self.preferred_x = None;
         self.selected_range = 0..self.content.len();
         self.selection_reversed = false;
         cx.notify();
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
         if self.selected_range.is_empty() {
             self.select_to(self.previous_boundary(self.cursor_offset()), cx);
         }
@@ -1519,6 +1940,9 @@ impl TextInputState {
     }
 
     fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
         if self.selected_range.is_empty() {
             self.select_to(self.next_boundary(self.cursor_offset()), cx);
         }
@@ -1531,6 +1955,9 @@ impl TextInputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         if self.selected_range.is_empty() {
             self.select_to(
                 previous_word_boundary(&self.content, self.cursor_offset()),
@@ -1546,6 +1973,9 @@ impl TextInputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         if self.selected_range.is_empty() {
             self.select_to(next_word_boundary(&self.content, self.cursor_offset()), cx);
         }
@@ -1553,6 +1983,9 @@ impl TextInputState {
     }
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
         if let Ok(Some(item)) = cx.read_from_clipboard()
             && let Some(text) = item.text()
         {
@@ -1571,6 +2004,9 @@ impl TextInputState {
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
         if self.selected_range.is_empty() {
             return;
         }
@@ -1582,6 +2018,10 @@ impl TextInputState {
     }
 
     fn undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
+        self.finish_composition_history();
         let Some(snapshot) = self.history.undo() else {
             return;
         };
@@ -1592,6 +2032,9 @@ impl TextInputState {
     }
 
     fn redo(&mut self, _: &Redo, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
         let Some(snapshot) = self.history.redo() else {
             return;
         };
@@ -1602,7 +2045,7 @@ impl TextInputState {
     }
 
     fn insert_newline(&mut self, _: &InsertNewline, window: &mut Window, cx: &mut Context<Self>) {
-        if self.multi_line {
+        if self.multi_line && !self.read_only {
             self.replace_text_in_range(None, "\n", window, cx);
         } else {
             self.emit_submit(window, cx);
@@ -1611,6 +2054,71 @@ impl TextInputState {
 
     fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
         self.emit_submit(window, cx);
+        self.emit_key(
+            TextInputKeyTrigger::CommandEnter,
+            TextInputKeyOutcome::Submit,
+            window,
+            cx,
+        );
+    }
+
+    fn move_up(&mut self, _: &MoveUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_vertical(-1, false, cx);
+    }
+
+    fn move_down(&mut self, _: &MoveDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_vertical(1, false, cx);
+    }
+
+    fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_vertical(-1, true, cx);
+    }
+
+    fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_vertical(1, true, cx);
+    }
+
+    fn primary_enter(&mut self, _: &PrimaryEnter, window: &mut Window, cx: &mut Context<Self>) {
+        self.apply_key_trigger(TextInputKeyTrigger::Enter, window, cx);
+    }
+
+    fn shift_enter(&mut self, _: &ShiftEnter, window: &mut Window, cx: &mut Context<Self>) {
+        self.apply_key_trigger(TextInputKeyTrigger::ShiftEnter, window, cx);
+    }
+
+    fn alt_enter(&mut self, _: &AltEnter, window: &mut Window, cx: &mut Context<Self>) {
+        self.apply_key_trigger(TextInputKeyTrigger::AltEnter, window, cx);
+    }
+
+    fn tab_forward(&mut self, _: &TabForward, window: &mut Window, cx: &mut Context<Self>) {
+        self.apply_key_trigger(TextInputKeyTrigger::Tab, window, cx);
+    }
+
+    fn tab_backward(&mut self, _: &TabBackward, window: &mut Window, cx: &mut Context<Self>) {
+        self.apply_key_trigger(TextInputKeyTrigger::ShiftTab, window, cx);
+    }
+
+    fn cancel(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
+        self.apply_key_trigger(TextInputKeyTrigger::Escape, window, cx);
+    }
+
+    fn apply_key_trigger(
+        &mut self,
+        trigger: TextInputKeyTrigger,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let outcome = text_input_key_outcome(self.multi_line, self.key_policy, trigger);
+        match outcome {
+            TextInputKeyOutcome::Newline => {
+                if !self.read_only {
+                    self.replace_text_in_range(None, "\n", window, cx);
+                }
+            }
+            TextInputKeyOutcome::Submit => self.emit_submit(window, cx),
+            TextInputKeyOutcome::Cancel => {}
+        }
+        self.emit_key(trigger, outcome, window, cx);
     }
 
     fn on_mouse_down(
@@ -1620,6 +2128,7 @@ impl TextInputState {
         cx: &mut Context<Self>,
     ) {
         self.is_selecting = true;
+        self.preferred_x = None;
         window.focus(&self.focus_handle);
 
         if event.click_count >= 3 {
@@ -1644,6 +2153,7 @@ impl TextInputState {
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         if self.is_selecting {
+            self.preferred_x = None;
             self.select_to(self.index_for_mouse_position(event.position), cx);
         }
     }
@@ -1680,6 +2190,32 @@ impl TextInputState {
             self.selected_range.start
         } else {
             self.selected_range.end
+        }
+    }
+
+    fn move_vertical(&mut self, delta: i32, select: bool, cx: &mut Context<Self>) {
+        let Some(layout) = self.last_layout.as_ref() else {
+            return;
+        };
+        let display_cursor = self.display_offset(self.cursor_offset());
+        let Some(origin) = layout.position_for_index(display_cursor) else {
+            return;
+        };
+        let preferred_x = self.preferred_x.unwrap_or(origin.x);
+        self.preferred_x = Some(preferred_x);
+        let target = point(
+            preferred_x,
+            origin.y + layout.line_height * delta as f32 + layout.line_height * 0.5,
+        );
+        let display_offset = layout.closest_index_for_position(target);
+        let offset = clamp_offset_to_boundary(
+            &self.content,
+            self.content_offset_for_display_offset(display_offset),
+        );
+        if select {
+            self.select_to(offset, cx);
+        } else {
+            self.move_to(offset, cx);
         }
     }
 
@@ -1750,6 +2286,7 @@ impl TextInputState {
         text: &str,
         selected_range: Option<Range<usize>>,
         marked_range: Option<Range<usize>>,
+        record_history: bool,
     ) -> bool {
         let replacement = sanitize_text(text, self.multi_line);
         let original_snapshot = self.snapshot();
@@ -1788,8 +2325,9 @@ impl TextInputState {
             .filter(|range| range.start < range.end);
         self.selected_range = clamp_range_to_text(&self.content, next_selected_range);
         self.selection_reversed = false;
+        self.preferred_x = None;
         let changed = original_snapshot.content != self.content;
-        if changed {
+        if changed && record_history {
             let next_snapshot = self.snapshot();
             let merge_kind = if self.mask.is_some() {
                 None
@@ -1802,6 +2340,16 @@ impl TextInputState {
         changed
     }
 
+    fn finish_composition_history(&mut self) {
+        let Some(original_snapshot) = self.composition_start.take() else {
+            return;
+        };
+        let next_snapshot = self.snapshot();
+        if original_snapshot != next_snapshot {
+            self.history.record(original_snapshot, next_snapshot, None);
+        }
+    }
+
     fn emit_change(&self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(listener) = self.on_change.clone() {
             listener(self.content.clone(), window, cx);
@@ -1812,6 +2360,48 @@ impl TextInputState {
         if let Some(listener) = self.on_submit.clone() {
             listener(self.content.clone(), window, cx);
         }
+    }
+
+    fn emit_key(
+        &self,
+        trigger: TextInputKeyTrigger,
+        outcome: TextInputKeyOutcome,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(listener) = self.on_key.clone() {
+            listener(
+                TextInputKeyEvent {
+                    value: self.content.clone(),
+                    trigger,
+                    outcome,
+                },
+                window,
+                cx,
+            );
+        }
+    }
+}
+
+fn text_input_key_outcome(
+    multi_line: bool,
+    policy: TextInputKeyPolicy,
+    trigger: TextInputKeyTrigger,
+) -> TextInputKeyOutcome {
+    match trigger {
+        TextInputKeyTrigger::Escape => TextInputKeyOutcome::Cancel,
+        TextInputKeyTrigger::CommandEnter => TextInputKeyOutcome::Submit,
+        TextInputKeyTrigger::AltEnter if multi_line => TextInputKeyOutcome::Newline,
+        TextInputKeyTrigger::Enter | TextInputKeyTrigger::ShiftEnter
+            if multi_line && policy == TextInputKeyPolicy::Multiline =>
+        {
+            TextInputKeyOutcome::Newline
+        }
+        TextInputKeyTrigger::Tab
+        | TextInputKeyTrigger::ShiftTab
+        | TextInputKeyTrigger::Enter
+        | TextInputKeyTrigger::ShiftEnter
+        | TextInputKeyTrigger::AltEnter => TextInputKeyOutcome::Submit,
     }
 }
 
@@ -1852,6 +2442,7 @@ impl EntityInputHandler for TextInputState {
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if self.marked_range.take().is_some() {
+            self.finish_composition_history();
             cx.notify();
         }
     }
@@ -1863,13 +2454,22 @@ impl EntityInputHandler for TextInputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
+        let completing_composition =
+            self.composition_start.is_some() || self.marked_range.is_some();
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
 
-        let changed = self.apply_replacement(range, text, None, None);
+        let changed = self.apply_replacement(range, text, None, None, !completing_composition);
+        if completing_composition {
+            self.marked_range = None;
+            self.finish_composition_history();
+        }
         if changed {
             self.emit_change(window, cx);
         }
@@ -1884,6 +2484,12 @@ impl EntityInputHandler for TextInputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.read_only {
+            return;
+        }
+        if self.composition_start.is_none() {
+            self.composition_start = Some(self.snapshot());
+        }
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
@@ -1900,7 +2506,8 @@ impl EntityInputHandler for TextInputState {
             Some(0..replacement.len())
         };
 
-        let changed = self.apply_replacement(range, &replacement, selected_range, marked_range);
+        let changed =
+            self.apply_replacement(range, &replacement, selected_range, marked_range, false);
         if changed {
             self.emit_change(window, cx);
         }
@@ -1967,6 +2574,63 @@ fn register_action_handler_when<A: Action + 'static>(
     if enabled {
         register_action_handler(window, state, focus_handle, handler);
     }
+}
+
+fn register_text_input_accessibility_handlers(
+    window: &mut Window,
+    cx: &mut App,
+    node: &AccessibilityNode,
+    state: Entity<TextInputState>,
+    focus_handle: FocusHandle,
+    read_only: bool,
+) {
+    let window_handle = window.window_handle();
+    let async_cx = cx.to_async();
+    let executor = cx.foreground_executor().clone();
+    window.on_accessibility_action(node.id, AccessibilityAction::Focus, move |_| {
+        let focus_handle = focus_handle.clone();
+        let mut async_cx = async_cx.clone();
+        let window_handle = window_handle;
+        executor
+            .spawn(async move {
+                _ = window_handle.update(&mut async_cx, |_, window, _| {
+                    window.focus(&focus_handle);
+                    window.refresh();
+                });
+            })
+            .detach();
+    });
+
+    if read_only {
+        return;
+    }
+
+    let window_handle = window.window_handle();
+    let async_cx = cx.to_async();
+    let executor = cx.foreground_executor().clone();
+    window.on_accessibility_action(node.id, AccessibilityAction::SetValue, move |request| {
+        let Some(AccessibilityActionPayload::Value(value)) = request.payload else {
+            return;
+        };
+        let state = state.clone();
+        let window_handle = window_handle;
+        let mut async_cx = async_cx.clone();
+        executor
+            .spawn(async move {
+                _ = window_handle.update(&mut async_cx, |_, window, cx| {
+                    state.update(cx, |input, cx| {
+                        let full_range = 0..input.content.len();
+                        let changed = input.apply_replacement(full_range, &value, None, None, true);
+                        if changed {
+                            input.emit_change(window, cx);
+                        }
+                        cx.notify();
+                    });
+                    window.refresh();
+                });
+            })
+            .detach();
+    });
 }
 
 fn register_mouse_handlers(
@@ -2056,18 +2720,33 @@ fn field_padding() -> Pixels {
     px(4.0)
 }
 
-fn field_chrome_extent() -> Pixels {
-    field_padding() * 2.0 + px(2.0)
+fn uniform_edges(value: Pixels) -> Edges<Pixels> {
+    Edges {
+        top: value,
+        right: value,
+        bottom: value,
+        left: value,
+    }
 }
 
-fn content_wrap_width(outer_width: Pixels) -> Pixels {
-    (outer_width - field_chrome_extent()).max(px(0.0))
+fn content_wrap_width(outer_width: Pixels, insets: &Edges<Pixels>) -> Pixels {
+    (outer_width - insets.left - insets.right - px(2.0)).max(px(0.0))
 }
 
 fn inset_bounds(bounds: Bounds<Pixels>, inset: Pixels) -> Bounds<Pixels> {
     Bounds::from_corners(
         point(bounds.left() + inset, bounds.top() + inset),
         point(bounds.right() - inset, bounds.bottom() - inset),
+    )
+}
+
+fn inset_bounds_by_edges(bounds: Bounds<Pixels>, insets: &Edges<Pixels>) -> Bounds<Pixels> {
+    Bounds::from_corners(
+        point(bounds.left() + insets.left, bounds.top() + insets.top),
+        point(
+            bounds.right() - insets.right,
+            bounds.bottom() - insets.bottom,
+        ),
     )
 }
 
@@ -2415,6 +3094,17 @@ mod tests {
         captured: Rc<RefCell<Vec<CapturedTextInputRenderState>>>,
     }
 
+    struct ControlledTextInputView {
+        value: SharedString,
+        controller: TextInputController,
+        read_only: bool,
+    }
+
+    struct NarrowTextInputView {
+        value: SharedString,
+        controller: TextInputController,
+    }
+
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct CapturedTextInputRenderState {
         value: SharedString,
@@ -2463,6 +3153,17 @@ mod tests {
             "Text edit",
         );
         TextInputHistory::new(history)
+    }
+
+    fn test_input_state() -> TextInputState {
+        let handles: Arc<FocusMap> = Arc::new(RwLock::new(SlotMap::with_key()));
+        let focus_handle = FocusHandle::new(&handles);
+        let history = WindowValueHistory::new(
+            Rc::new(RefCell::new(crate::UndoRedoManager::default())),
+            &focus_handle,
+            "Text edit",
+        );
+        TextInputState::new(focus_handle, TextInputHistory::new(history))
     }
 
     impl Render for DualTextInputView {
@@ -2533,6 +3234,39 @@ mod tests {
         }
     }
 
+    impl Render for ControlledTextInputView {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let input = text_input("controlled", self.value.clone())
+                .controller(self.controller.clone())
+                .multi_line()
+                .accessibility_label("Canvas text")
+                .accessibility_description("Editable canvas text")
+                .on_change(cx.processor(|this, value, _, cx| {
+                    this.value = value;
+                    cx.notify();
+                }));
+            if self.read_only {
+                input.read_only()
+            } else {
+                input
+            }
+        }
+    }
+
+    impl Render for NarrowTextInputView {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div().w(px(64.0)).child(
+                text_input("narrow", self.value.clone())
+                    .controller(self.controller.clone())
+                    .multi_line()
+                    .on_change(cx.processor(|this, value, _, cx| {
+                        this.value = value;
+                        cx.notify();
+                    })),
+            )
+        }
+    }
+
     fn latest_render_state(
         captured: &Rc<RefCell<Vec<CapturedTextInputRenderState>>>,
     ) -> CapturedTextInputRenderState {
@@ -2563,10 +3297,200 @@ mod tests {
 
     #[test]
     fn multiline_builders_configure_internal_state() {
-        let input = text_input("message", "").multi_line().max_lines(0);
+        let input = text_input("message", "")
+            .multi_line()
+            .max_lines(0)
+            .content_insets(Edges {
+                top: px(1.0),
+                right: px(2.0),
+                bottom: px(3.0),
+                left: px(4.0),
+            });
 
         assert!(input.multi_line);
         assert_eq!(input.max_lines, Some(1));
+        assert_eq!(input.content_insets.left, px(4.0));
+        assert_eq!(input.content_insets.bottom, px(3.0));
+    }
+
+    #[test]
+    fn spreadsheet_and_multiline_key_policies_are_modifier_aware() {
+        assert_eq!(
+            text_input_key_outcome(
+                true,
+                TextInputKeyPolicy::Spreadsheet,
+                TextInputKeyTrigger::AltEnter,
+            ),
+            TextInputKeyOutcome::Newline
+        );
+        for trigger in [
+            TextInputKeyTrigger::Enter,
+            TextInputKeyTrigger::ShiftEnter,
+            TextInputKeyTrigger::Tab,
+            TextInputKeyTrigger::ShiftTab,
+        ] {
+            assert_eq!(
+                text_input_key_outcome(true, TextInputKeyPolicy::Spreadsheet, trigger),
+                TextInputKeyOutcome::Submit
+            );
+        }
+        assert_eq!(
+            text_input_key_outcome(
+                true,
+                TextInputKeyPolicy::Multiline,
+                TextInputKeyTrigger::Enter,
+            ),
+            TextInputKeyOutcome::Newline
+        );
+        assert_eq!(
+            text_input_key_outcome(
+                true,
+                TextInputKeyPolicy::Multiline,
+                TextInputKeyTrigger::Escape,
+            ),
+            TextInputKeyOutcome::Cancel
+        );
+    }
+
+    #[test]
+    fn ime_composition_records_one_undo_transaction() {
+        let mut state = test_input_state();
+        state.content = "start".into();
+        state.selected_range = 5..5;
+        state.composition_start = Some(state.snapshot());
+        assert!(state.apply_replacement(5..5, "k", None, Some(0..1), false));
+        assert!(state.apply_replacement(5..6, "かな", None, Some(0..6), false));
+        state.marked_range = None;
+        state.finish_composition_history();
+
+        assert_eq!(
+            state.history.undo().unwrap().content,
+            SharedString::from("start")
+        );
+        assert!(state.history.undo().is_none());
+        assert_eq!(
+            state.history.redo().unwrap().content,
+            SharedString::from("startかな")
+        );
+    }
+
+    #[crate::test]
+    fn controller_applies_pending_range_before_canvas_input(cx: &mut TestAppContext) {
+        let (view, mut window) = cx.add_window_view(|_, cx| ControlledTextInputView {
+            value: "alpha\nbeta".into(),
+            controller: TextInputController::new(cx.focus_handle()),
+            read_only: false,
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        let controller = window.update(|_, cx| view.read(cx).controller.clone());
+        window.update(|window, _| controller.select_range(0..5, false, window));
+        window.update(|window, cx| window.draw(cx).clear());
+        window.simulate_input("A");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(view.read(cx).value, SharedString::from("A\nbeta"));
+        });
+    }
+
+    #[crate::test]
+    fn vertical_navigation_tracks_preferred_x_across_short_hard_line(cx: &mut TestAppContext) {
+        let (view, mut window) = cx.add_window_view(|_, cx| ControlledTextInputView {
+            value: "abcdef\nx\nabcdef".into(),
+            controller: TextInputController::new(cx.focus_handle()),
+            read_only: false,
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        let controller = window.update(|_, cx| view.read(cx).controller.clone());
+        window.update(|window, _| controller.select_range(5..5, false, window));
+        window.update(|window, cx| window.draw(cx).clear());
+        window.simulate_keystrokes("down down");
+        window.simulate_input("X");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert_eq!(
+                view.read(cx).value,
+                SharedString::from("abcdef\nx\nabcdeXf")
+            );
+        });
+    }
+
+    #[crate::test]
+    fn vertical_navigation_moves_between_wrapped_visual_lines(cx: &mut TestAppContext) {
+        let original = "abcdefghijklmnopqrstuvwxyz";
+        let (view, mut window) = cx.add_window_view(|_, cx| NarrowTextInputView {
+            value: original.into(),
+            controller: TextInputController::new(cx.focus_handle()),
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        let controller = window.update(|_, cx| view.read(cx).controller.clone());
+        window.update(|window, _| controller.select_range(1..1, false, window));
+        window.update(|window, cx| window.draw(cx).clear());
+        window.simulate_keystrokes("down");
+        window.simulate_input("X");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let value = view.read(cx).value.to_string();
+            let inserted_at = value.find('X').expect("inserted text");
+            assert!(inserted_at > 1, "down should leave the first visual line");
+            assert!(
+                inserted_at < original.len(),
+                "down should not jump to the end"
+            );
+        });
+    }
+
+    #[crate::test]
+    fn accessibility_exposes_metadata_read_only_and_set_value(cx: &mut TestAppContext) {
+        let (view, mut window) = cx.add_window_view(|_, cx| ControlledTextInputView {
+            value: "initial".into(),
+            controller: TextInputController::new(cx.focus_handle()),
+            read_only: false,
+        });
+        let node_id = window.update(|window, cx| {
+            window.draw(cx).clear();
+            let node = window
+                .accessibility_tree
+                .nodes
+                .values()
+                .find(|node| node.label.as_deref() == Some("Canvas text"))
+                .expect("text input accessibility node");
+            assert_eq!(node.description.as_deref(), Some("Editable canvas text"));
+            assert!(!node.states.contains(AccessibilityState::READ_ONLY));
+            assert!(node.actions.contains(&AccessibilityAction::Focus));
+            assert!(node.actions.contains(&AccessibilityAction::SetValue));
+            node.id
+        });
+        window.update(|window, _| {
+            window.dispatch_accessibility_action_for_test(
+                crate::AccessibilityActionRequest::with_payload(
+                    node_id,
+                    AccessibilityAction::SetValue,
+                    AccessibilityActionPayload::Value("replacement".into()),
+                ),
+            );
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            assert_eq!(view.read(cx).value, SharedString::from("replacement"));
+        });
+
+        window.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                view.read_only = true;
+                cx.notify();
+            });
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let node = window
+                .accessibility_tree
+                .nodes
+                .values()
+                .find(|node| node.label.as_deref() == Some("Canvas text"))
+                .expect("read-only text input accessibility node");
+            assert!(node.states.contains(AccessibilityState::READ_ONLY));
+            assert!(!node.actions.contains(&AccessibilityAction::SetValue));
+        });
     }
 
     #[test]
