@@ -100,6 +100,7 @@ type ChangeListener = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
 type SubmitListener = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
 type FocusListener = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
 type KeyListener = Rc<dyn Fn(TextInputKeyEvent, &mut Window, &mut App)>;
+type SelectionListener = Rc<dyn Fn(TextInputSelection, &mut Window, &mut App)>;
 type Mask = Rc<dyn InputMask>;
 
 /// Keyboard behavior used by a text input embedded in a canvas editor.
@@ -151,6 +152,35 @@ pub struct TextInputKeyEvent {
     pub trigger: TextInputKeyTrigger,
     /// Semantic result selected by the input policy.
     pub outcome: TextInputKeyOutcome,
+}
+
+/// A bounded UTF-8 selection snapshot emitted by a canvas text input.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextInputSelection {
+    /// Selected UTF-8 byte range in the controlled value.
+    pub range: Range<usize>,
+    /// Whether the active caret is at the start of a non-empty selection.
+    pub reversed: bool,
+    /// UTF-8 byte range currently owned by an input-method composition.
+    pub marked_range: Option<Range<usize>>,
+}
+
+impl TextInputSelection {
+    /// Return the active UTF-8 caret offset.
+    #[must_use]
+    pub fn caret(&self) -> usize {
+        if self.reversed {
+            self.range.start
+        } else {
+            self.range.end
+        }
+    }
+
+    /// Whether an input-method composition is currently active.
+    #[must_use]
+    pub const fn is_composing(&self) -> bool {
+        self.marked_range.is_some()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -597,6 +627,7 @@ pub struct TextInput {
     on_change: Option<ChangeListener>,
     on_submit: Option<SubmitListener>,
     on_key: Option<KeyListener>,
+    on_selection_change: Option<SelectionListener>,
     on_focus: Option<FocusListener>,
     on_blur: Option<FocusListener>,
     custom_renderer: Option<TextInputCustomRenderer>,
@@ -623,6 +654,7 @@ impl TextInput {
             on_change: None,
             on_submit: None,
             on_key: None,
+            on_selection_change: None,
             on_focus: None,
             on_blur: None,
             custom_renderer: None,
@@ -726,6 +758,15 @@ impl TextInput {
         listener: impl Fn(TextInputKeyEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_key = Some(Rc::new(listener));
+        self
+    }
+
+    /// Register a callback for changed UTF-8 selection or composition state.
+    pub fn on_selection_change(
+        mut self,
+        listener: impl Fn(TextInputSelection, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_selection_change = Some(Rc::new(listener));
         self
     }
 
@@ -893,9 +934,10 @@ impl TextInput {
         let on_change = self.on_change.clone();
         let on_submit = self.on_submit.clone();
         let on_key = self.on_key.clone();
+        let on_selection_change = self.on_selection_change.clone();
         let on_focus = self.on_focus.clone();
         let on_blur = self.on_blur.clone();
-        state.update(cx, |state, _| {
+        state.update(cx, |state, cx| {
             state.sync_from_props(
                 text,
                 placeholder,
@@ -910,9 +952,11 @@ impl TextInput {
                 on_change,
                 on_submit,
                 on_key,
+                on_selection_change,
                 on_focus,
                 on_blur,
             );
+            state.emit_selection_change(window, cx);
         });
         state
     }
@@ -1254,8 +1298,9 @@ impl Element for TextInput {
             .as_ref()
             .and_then(|controller| controller.pending_selection.borrow_mut().take())
         {
-            state.update(cx, |input, _| {
+            state.update(cx, |input, cx| {
                 input.apply_selection_request(request, &initial_layout);
+                input.emit_selection_change(window, cx);
             });
             let requested_vertical_scroll = state.read(cx).target_vertical_scroll(&initial_layout);
             state.update(cx, |input, _| {
@@ -1654,6 +1699,8 @@ struct TextInputState {
     on_change: Option<ChangeListener>,
     on_submit: Option<SubmitListener>,
     on_key: Option<KeyListener>,
+    on_selection_change: Option<SelectionListener>,
+    last_emitted_selection: Option<TextInputSelection>,
     on_focus: Option<FocusListener>,
     on_blur: Option<FocusListener>,
 }
@@ -1685,6 +1732,8 @@ impl TextInputState {
             on_change: None,
             on_submit: None,
             on_key: None,
+            on_selection_change: None,
+            last_emitted_selection: None,
             on_focus: None,
             on_blur: None,
         }
@@ -1705,6 +1754,7 @@ impl TextInputState {
         on_change: Option<ChangeListener>,
         on_submit: Option<SubmitListener>,
         on_key: Option<KeyListener>,
+        on_selection_change: Option<SelectionListener>,
         on_focus: Option<FocusListener>,
         on_blur: Option<FocusListener>,
     ) {
@@ -1735,6 +1785,10 @@ impl TextInputState {
         self.on_change = on_change;
         self.on_submit = on_submit;
         self.on_key = on_key;
+        if self.on_selection_change.is_none() && on_selection_change.is_some() {
+            self.last_emitted_selection = None;
+        }
+        self.on_selection_change = on_selection_change;
         self.on_focus = on_focus;
         self.on_blur = on_blur;
     }
@@ -1791,6 +1845,27 @@ impl TextInputState {
             selection_reversed: self.selection_reversed,
             marked_range: self.marked_range.clone(),
         }
+    }
+
+    fn selection_snapshot(&self) -> TextInputSelection {
+        TextInputSelection {
+            range: self.selected_range.clone(),
+            reversed: self.selection_reversed,
+            marked_range: self.marked_range.clone(),
+        }
+    }
+
+    fn emit_selection_change(&mut self, window: &mut Window, cx: &mut App) {
+        let Some(listener) = self.on_selection_change.clone() else {
+            self.last_emitted_selection = None;
+            return;
+        };
+        let selection = self.selection_snapshot();
+        if self.last_emitted_selection.as_ref() == Some(&selection) {
+            return;
+        }
+        self.last_emitted_selection = Some(selection.clone());
+        listener(selection, window, cx);
     }
 
     fn restore_snapshot(&mut self, snapshot: TextInputSnapshot) {
@@ -2440,9 +2515,10 @@ impl EntityInputHandler for TextInputState {
             .map(|range| self.range_to_utf16(range))
     }
 
-    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.marked_range.take().is_some() {
             self.finish_composition_history();
+            self.emit_selection_change(window, cx);
             cx.notify();
         }
     }
@@ -2473,6 +2549,7 @@ impl EntityInputHandler for TextInputState {
         if changed {
             self.emit_change(window, cx);
         }
+        self.emit_selection_change(window, cx);
         cx.notify();
     }
 
@@ -2511,6 +2588,7 @@ impl EntityInputHandler for TextInputState {
         if changed {
             self.emit_change(window, cx);
         }
+        self.emit_selection_change(window, cx);
         cx.notify();
     }
 
@@ -2559,7 +2637,10 @@ fn register_action_handler<A: Action + 'static>(
             return;
         };
 
-        state.update(cx, |input, cx| handler(input, action, window, cx));
+        state.update(cx, |input, cx| {
+            handler(input, action, window, cx);
+            input.emit_selection_change(window, cx);
+        });
         cx.stop_propagation();
     });
 }
@@ -2624,6 +2705,7 @@ fn register_text_input_accessibility_handlers(
                         if changed {
                             input.emit_change(window, cx);
                         }
+                        input.emit_selection_change(window, cx);
                         cx.notify();
                     });
                     window.refresh();
@@ -2651,7 +2733,10 @@ fn register_mouse_handlers(
         }
 
         window.focus(&down_focus);
-        down_state.update(cx, |input, cx| input.on_mouse_down(event, window, cx));
+        down_state.update(cx, |input, cx| {
+            input.on_mouse_down(event, window, cx);
+            input.emit_selection_change(window, cx);
+        });
         cx.stop_propagation();
     });
 
@@ -2661,7 +2746,10 @@ fn register_mouse_handlers(
             return;
         }
 
-        move_state.update(cx, |input, cx| input.on_mouse_move(event, window, cx));
+        move_state.update(cx, |input, cx| {
+            input.on_mouse_move(event, window, cx);
+            input.emit_selection_change(window, cx);
+        });
     });
 
     window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
@@ -2669,7 +2757,10 @@ fn register_mouse_handlers(
             return;
         }
 
-        state.update(cx, |input, cx| input.on_mouse_up(event, window, cx));
+        state.update(cx, |input, cx| {
+            input.on_mouse_up(event, window, cx);
+            input.emit_selection_change(window, cx);
+        });
     });
 }
 
@@ -3105,6 +3196,14 @@ mod tests {
         controller: TextInputController,
     }
 
+    struct SelectionTextInputView {
+        value: SharedString,
+        controller: TextInputController,
+        selections: Rc<RefCell<Vec<TextInputSelection>>>,
+        text_bounds: Rc<RefCell<Option<Bounds<Pixels>>>>,
+        observe: bool,
+    }
+
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct CapturedTextInputRenderState {
         value: SharedString,
@@ -3267,6 +3366,31 @@ mod tests {
         }
     }
 
+    impl Render for SelectionTextInputView {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let selections = self.selections.clone();
+            let text_bounds = self.text_bounds.clone();
+            let input = text_input("selection-observer", self.value.clone())
+                .controller(self.controller.clone())
+                .accessibility_label("Observed text input")
+                .render_with(move |state, window, cx| {
+                    text_bounds.borrow_mut().replace(state.text_bounds);
+                    state.paint_default_contents(window, cx);
+                })
+                .on_change(cx.processor(|this, value, _, cx| {
+                    this.value = value;
+                    cx.notify();
+                }));
+            if self.observe {
+                input.on_selection_change(move |selection, _, _| {
+                    selections.borrow_mut().push(selection);
+                })
+            } else {
+                input
+            }
+        }
+    }
+
     fn latest_render_state(
         captured: &Rc<RefCell<Vec<CapturedTextInputRenderState>>>,
     ) -> CapturedTextInputRenderState {
@@ -3371,6 +3495,202 @@ mod tests {
         assert_eq!(
             state.history.redo().unwrap().content,
             SharedString::from("startかな")
+        );
+    }
+
+    #[test]
+    fn selection_snapshot_uses_utf8_bytes_and_reports_composition() {
+        let mut state = test_input_state();
+        state.content = "a🙂z".into();
+        state.selected_range = 1.."a🙂".len();
+        state.selection_reversed = true;
+        state.marked_range = Some(1.."a🙂".len());
+
+        let selection = state.selection_snapshot();
+        assert_eq!(selection.range, 1..5);
+        assert_eq!(selection.caret(), 1);
+        assert!(selection.is_composing());
+    }
+
+    #[crate::test]
+    fn rendered_selection_observer_tracks_controller_and_keyboard_once(cx: &mut TestAppContext) {
+        let selections = Rc::new(RefCell::new(Vec::new()));
+        let captured = selections.clone();
+        let (view, mut window) = cx.add_window_view(move |_, cx| SelectionTextInputView {
+            value: "a🙂z".into(),
+            controller: TextInputController::new(cx.focus_handle()),
+            selections: captured,
+            text_bounds: Rc::new(RefCell::new(None)),
+            observe: true,
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        let controller = window.update(|_, cx| view.read(cx).controller.clone());
+        window.update(|window, _| controller.select_range(1..5, true, window));
+        window.update(|window, cx| window.draw(cx).clear());
+        window.simulate_keystrokes("left");
+        window.update(|window, cx| window.draw(cx).clear());
+
+        assert_eq!(
+            selections.borrow().as_slice(),
+            &[
+                TextInputSelection {
+                    range: 0..0,
+                    reversed: false,
+                    marked_range: None,
+                },
+                TextInputSelection {
+                    range: 1..5,
+                    reversed: true,
+                    marked_range: None,
+                },
+                TextInputSelection {
+                    range: 1..1,
+                    reversed: false,
+                    marked_range: None,
+                },
+            ]
+        );
+
+        window.update(|window, cx| window.draw(cx).clear());
+        assert_eq!(selections.borrow().len(), 3);
+    }
+
+    #[crate::test]
+    fn observer_attached_to_retained_input_receives_initial_selection(cx: &mut TestAppContext) {
+        let selections = Rc::new(RefCell::new(Vec::new()));
+        let captured = selections.clone();
+        let (view, mut window) = cx.add_window_view(move |_, cx| SelectionTextInputView {
+            value: "retained".into(),
+            controller: TextInputController::new(cx.focus_handle()),
+            selections: captured,
+            text_bounds: Rc::new(RefCell::new(None)),
+            observe: false,
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        assert!(selections.borrow().is_empty());
+
+        window.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                view.observe = true;
+                cx.notify();
+            });
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        assert_eq!(
+            selections.borrow().as_slice(),
+            &[TextInputSelection {
+                range: 0..0,
+                reversed: false,
+                marked_range: None,
+            }]
+        );
+    }
+
+    #[crate::test]
+    fn rendered_pointer_selection_emits_one_changed_snapshot(cx: &mut TestAppContext) {
+        let selections = Rc::new(RefCell::new(Vec::new()));
+        let bounds = Rc::new(RefCell::new(None));
+        let captured_selections = selections.clone();
+        let captured_bounds = bounds.clone();
+        let (_view, mut window) = cx.add_window_view(move |_, cx| SelectionTextInputView {
+            value: "abcdef".into(),
+            controller: TextInputController::new(cx.focus_handle()),
+            selections: captured_selections,
+            text_bounds: captured_bounds,
+            observe: true,
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        let bounds = bounds.borrow().expect("text bounds");
+        let end = point(
+            bounds.origin.x + bounds.size.width - px(2.0),
+            bounds.origin.y + bounds.size.height / 2.0,
+        );
+        window.simulate_mouse_down(end, MouseButton::Left, crate::Modifiers::default());
+        window.simulate_mouse_up(end, MouseButton::Left, crate::Modifiers::default());
+
+        assert_eq!(selections.borrow().len(), 2);
+        assert_eq!(selections.borrow()[1].range, 6..6);
+    }
+
+    #[crate::test]
+    fn rendered_ime_mark_and_commit_emit_bounded_composition_transitions(cx: &mut TestAppContext) {
+        let selections = Rc::new(RefCell::new(Vec::new()));
+        let captured = selections.clone();
+        let (view, mut window) = cx.add_window_view(move |_, cx| SelectionTextInputView {
+            value: "".into(),
+            controller: TextInputController::new(cx.focus_handle()),
+            selections: captured,
+            text_bounds: Rc::new(RefCell::new(None)),
+            observe: true,
+        });
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            view.read(cx).controller.focus(window);
+            window.draw(cx).clear();
+        });
+
+        let mut input_handler = window
+            .update(|window, _| window.platform_window.take_input_handler())
+            .expect("focused text input handler");
+        input_handler.replace_and_mark_text_in_range(None, "かな", Some(2..2));
+        window.update(|window, _| window.platform_window.set_input_handler(input_handler));
+        assert!(selections.borrow().last().unwrap().is_composing());
+        assert_eq!(selections.borrow().last().unwrap().marked_range, Some(0..6));
+
+        window.simulate_input("語");
+        let snapshots = selections.borrow();
+        assert!(!snapshots.last().unwrap().is_composing());
+        assert_eq!(snapshots.last().unwrap().caret(), "語".len());
+        assert_eq!(
+            snapshots
+                .windows(2)
+                .filter(|pair| pair[0] == pair[1])
+                .count(),
+            0,
+            "selection notifications must remain deduplicated"
+        );
+    }
+
+    #[crate::test]
+    fn accessibility_set_value_reports_the_resulting_selection_once(cx: &mut TestAppContext) {
+        let selections = Rc::new(RefCell::new(Vec::new()));
+        let captured = selections.clone();
+        let (_view, mut window) = cx.add_window_view(move |_, cx| SelectionTextInputView {
+            value: "before".into(),
+            controller: TextInputController::new(cx.focus_handle()),
+            selections: captured,
+            text_bounds: Rc::new(RefCell::new(None)),
+            observe: true,
+        });
+        let node_id = window.update(|window, cx| {
+            window.draw(cx).clear();
+            window
+                .accessibility_tree
+                .nodes
+                .values()
+                .find(|node| node.label.as_deref() == Some("Observed text input"))
+                .expect("observed text input node")
+                .id
+        });
+        window.update(|window, _| {
+            window.dispatch_accessibility_action_for_test(
+                crate::AccessibilityActionRequest::with_payload(
+                    node_id,
+                    AccessibilityAction::SetValue,
+                    AccessibilityActionPayload::Value("after".into()),
+                ),
+            );
+        });
+        window.run_until_parked();
+
+        assert_eq!(selections.borrow().last().unwrap().range, 5..5);
+        assert_eq!(
+            selections
+                .borrow()
+                .windows(2)
+                .filter(|pair| pair[0] == pair[1])
+                .count(),
+            0
         );
     }
 
