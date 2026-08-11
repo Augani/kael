@@ -61,6 +61,10 @@ actions!(
         MoveToStart,
         /// Move the caret to the end of the field.
         MoveToEnd,
+        /// Offer a plain Home key to an embedded editor before caret fallback.
+        TextInputHome,
+        /// Offer a plain End key to an embedded editor before caret fallback.
+        TextInputEnd,
         /// Extend the selection to the beginning of the field.
         SelectToStart,
         /// Extend the selection to the end of the field.
@@ -101,6 +105,7 @@ type SubmitListener = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
 type FocusListener = Rc<dyn Fn(SharedString, &mut Window, &mut App)>;
 type KeyListener = Rc<dyn Fn(TextInputKeyEvent, &mut Window, &mut App)>;
 type SelectionListener = Rc<dyn Fn(TextInputSelection, &mut Window, &mut App)>;
+type NavigationListener = Rc<dyn Fn(TextInputNavigationEvent, &mut Window, &mut App) -> bool>;
 type Mask = Rc<dyn InputMask>;
 
 /// Keyboard behavior used by a text input embedded in a canvas editor.
@@ -163,6 +168,26 @@ pub struct TextInputSelection {
     pub reversed: bool,
     /// UTF-8 byte range currently owned by an input-method composition.
     pub marked_range: Option<Range<usize>>,
+}
+
+/// Plain navigation keys an embedded editor may consume before caret movement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextInputNavigationKey {
+    /// Move toward the previous visual line or suggestion.
+    Up,
+    /// Move toward the next visual line or suggestion.
+    Down,
+    /// Move to the first caret or suggestion position.
+    Home,
+    /// Move to the last caret or suggestion position.
+    End,
+}
+
+/// A typed, unmodified text-input navigation request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextInputNavigationEvent {
+    /// Semantic navigation key.
+    pub key: TextInputNavigationKey,
 }
 
 impl TextInputSelection {
@@ -628,6 +653,7 @@ pub struct TextInput {
     on_submit: Option<SubmitListener>,
     on_key: Option<KeyListener>,
     on_selection_change: Option<SelectionListener>,
+    on_navigation: Option<NavigationListener>,
     on_focus: Option<FocusListener>,
     on_blur: Option<FocusListener>,
     custom_renderer: Option<TextInputCustomRenderer>,
@@ -655,6 +681,7 @@ impl TextInput {
             on_submit: None,
             on_key: None,
             on_selection_change: None,
+            on_navigation: None,
             on_focus: None,
             on_blur: None,
             custom_renderer: None,
@@ -770,6 +797,18 @@ impl TextInput {
         self
     }
 
+    /// Offer unmodified list-navigation keys to an embedded editor.
+    ///
+    /// Returning `true` consumes the key. Returning `false`, or omitting this
+    /// callback, preserves the text input's existing caret behavior.
+    pub fn on_navigation(
+        mut self,
+        listener: impl Fn(TextInputNavigationEvent, &mut Window, &mut App) -> bool + 'static,
+    ) -> Self {
+        self.on_navigation = Some(Rc::new(listener));
+        self
+    }
+
     /// Register a callback invoked when the field receives keyboard focus.
     pub fn on_focus(
         mut self,
@@ -841,8 +880,8 @@ impl TextInput {
             KeyBinding::new("cmd-right", MoveToEnd, Some(TEXT_INPUT_CONTEXT)),
             KeyBinding::new("shift-cmd-left", SelectToStart, Some(TEXT_INPUT_CONTEXT)),
             KeyBinding::new("shift-cmd-right", SelectToEnd, Some(TEXT_INPUT_CONTEXT)),
-            KeyBinding::new("home", MoveToStart, Some(TEXT_INPUT_CONTEXT)),
-            KeyBinding::new("end", MoveToEnd, Some(TEXT_INPUT_CONTEXT)),
+            KeyBinding::new("home", TextInputHome, Some(TEXT_INPUT_CONTEXT)),
+            KeyBinding::new("end", TextInputEnd, Some(TEXT_INPUT_CONTEXT)),
             KeyBinding::new("secondary-a", SelectAll, Some(TEXT_INPUT_CONTEXT)),
             KeyBinding::new("secondary-v", Paste, Some(TEXT_INPUT_CONTEXT)),
             KeyBinding::new("secondary-c", Copy, Some(TEXT_INPUT_CONTEXT)),
@@ -935,6 +974,7 @@ impl TextInput {
         let on_submit = self.on_submit.clone();
         let on_key = self.on_key.clone();
         let on_selection_change = self.on_selection_change.clone();
+        let on_navigation = self.on_navigation.clone();
         let on_focus = self.on_focus.clone();
         let on_blur = self.on_blur.clone();
         state.update(cx, |state, cx| {
@@ -953,6 +993,7 @@ impl TextInput {
                 on_submit,
                 on_key,
                 on_selection_change,
+                on_navigation,
                 on_focus,
                 on_blur,
             );
@@ -1468,6 +1509,18 @@ impl Element for TextInput {
             focus_handle.clone(),
             TextInputState::move_to_end,
         );
+        register_action_handler::<TextInputHome>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::home,
+        );
+        register_action_handler::<TextInputEnd>(
+            window,
+            state.clone(),
+            focus_handle.clone(),
+            TextInputState::end,
+        );
         register_action_handler::<SelectToStart>(
             window,
             state.clone(),
@@ -1700,6 +1753,7 @@ struct TextInputState {
     on_submit: Option<SubmitListener>,
     on_key: Option<KeyListener>,
     on_selection_change: Option<SelectionListener>,
+    on_navigation: Option<NavigationListener>,
     last_emitted_selection: Option<TextInputSelection>,
     on_focus: Option<FocusListener>,
     on_blur: Option<FocusListener>,
@@ -1733,6 +1787,7 @@ impl TextInputState {
             on_submit: None,
             on_key: None,
             on_selection_change: None,
+            on_navigation: None,
             last_emitted_selection: None,
             on_focus: None,
             on_blur: None,
@@ -1755,6 +1810,7 @@ impl TextInputState {
         on_submit: Option<SubmitListener>,
         on_key: Option<KeyListener>,
         on_selection_change: Option<SelectionListener>,
+        on_navigation: Option<NavigationListener>,
         on_focus: Option<FocusListener>,
         on_blur: Option<FocusListener>,
     ) {
@@ -1789,6 +1845,7 @@ impl TextInputState {
             self.last_emitted_selection = None;
         }
         self.on_selection_change = on_selection_change;
+        self.on_navigation = on_navigation;
         self.on_focus = on_focus;
         self.on_blur = on_blur;
     }
@@ -1866,6 +1923,17 @@ impl TextInputState {
         }
         self.last_emitted_selection = Some(selection.clone());
         listener(selection, window, cx);
+    }
+
+    fn emit_navigation(
+        &self,
+        key: TextInputNavigationKey,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        self.on_navigation
+            .clone()
+            .is_some_and(|listener| listener(TextInputNavigationEvent { key }, window, cx))
     }
 
     fn restore_snapshot(&mut self, snapshot: TextInputSnapshot) {
@@ -1985,6 +2053,20 @@ impl TextInputState {
     fn move_to_end(&mut self, _: &MoveToEnd, _: &mut Window, cx: &mut Context<Self>) {
         self.preferred_x = None;
         self.move_to(self.content.len(), cx);
+    }
+
+    fn home(&mut self, _: &TextInputHome, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.emit_navigation(TextInputNavigationKey::Home, window, cx) {
+            self.preferred_x = None;
+            self.move_to(0, cx);
+        }
+    }
+
+    fn end(&mut self, _: &TextInputEnd, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.emit_navigation(TextInputNavigationKey::End, window, cx) {
+            self.preferred_x = None;
+            self.move_to(self.content.len(), cx);
+        }
     }
 
     fn select_to_start(&mut self, _: &SelectToStart, _: &mut Window, cx: &mut Context<Self>) {
@@ -2137,11 +2219,17 @@ impl TextInputState {
         );
     }
 
-    fn move_up(&mut self, _: &MoveUp, _: &mut Window, cx: &mut Context<Self>) {
+    fn move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
+        if self.emit_navigation(TextInputNavigationKey::Up, window, cx) {
+            return;
+        }
         self.move_vertical(-1, false, cx);
     }
 
-    fn move_down(&mut self, _: &MoveDown, _: &mut Window, cx: &mut Context<Self>) {
+    fn move_down(&mut self, _: &MoveDown, window: &mut Window, cx: &mut Context<Self>) {
+        if self.emit_navigation(TextInputNavigationKey::Down, window, cx) {
+            return;
+        }
         self.move_vertical(1, false, cx);
     }
 
@@ -3204,6 +3292,14 @@ mod tests {
         observe: bool,
     }
 
+    struct NavigationTextInputView {
+        value: SharedString,
+        controller: TextInputController,
+        handled: bool,
+        events: Rc<RefCell<Vec<TextInputNavigationEvent>>>,
+        selections: Rc<RefCell<Vec<TextInputSelection>>>,
+    }
+
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct CapturedTextInputRenderState {
         value: SharedString,
@@ -3391,6 +3487,28 @@ mod tests {
         }
     }
 
+    impl Render for NavigationTextInputView {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let handled = self.handled;
+            let events = self.events.clone();
+            let selections = self.selections.clone();
+            text_input("navigation-observer", self.value.clone())
+                .controller(self.controller.clone())
+                .multi_line()
+                .on_navigation(move |event, _, _| {
+                    events.borrow_mut().push(event);
+                    handled
+                })
+                .on_selection_change(move |selection, _, _| {
+                    selections.borrow_mut().push(selection);
+                })
+                .on_change(cx.processor(|this, value, _, cx| {
+                    this.value = value;
+                    cx.notify();
+                }))
+        }
+    }
+
     fn latest_render_state(
         captured: &Rc<RefCell<Vec<CapturedTextInputRenderState>>>,
     ) -> CapturedTextInputRenderState {
@@ -3553,6 +3671,71 @@ mod tests {
 
         window.update(|window, cx| window.draw(cx).clear());
         assert_eq!(selections.borrow().len(), 3);
+    }
+
+    #[crate::test]
+    fn handled_navigation_reports_plain_keys_and_preserves_selection(cx: &mut TestAppContext) {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let selections = Rc::new(RefCell::new(Vec::new()));
+        let captured_events = events.clone();
+        let captured_selections = selections.clone();
+        let (view, mut window) = cx.add_window_view(move |_, cx| NavigationTextInputView {
+            value: "first\nsecond".into(),
+            controller: TextInputController::new(cx.focus_handle()),
+            handled: true,
+            events: captured_events,
+            selections: captured_selections,
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        let controller = window.update(|_, cx| view.read(cx).controller.clone());
+        window.update(|window, _| controller.select_range(3..3, false, window));
+        window.update(|window, cx| window.draw(cx).clear());
+        window.simulate_keystrokes("up down home end");
+        window.update(|window, cx| window.draw(cx).clear());
+
+        assert_eq!(
+            events.borrow().as_slice(),
+            &[
+                TextInputNavigationEvent {
+                    key: TextInputNavigationKey::Up,
+                },
+                TextInputNavigationEvent {
+                    key: TextInputNavigationKey::Down,
+                },
+                TextInputNavigationEvent {
+                    key: TextInputNavigationKey::Home,
+                },
+                TextInputNavigationEvent {
+                    key: TextInputNavigationKey::End,
+                },
+            ]
+        );
+        assert_eq!(selections.borrow().last().unwrap().range, 3..3);
+    }
+
+    #[crate::test]
+    fn unhandled_navigation_preserves_native_caret_and_shift_selection(cx: &mut TestAppContext) {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let selections = Rc::new(RefCell::new(Vec::new()));
+        let captured_events = events.clone();
+        let captured_selections = selections.clone();
+        let (view, mut window) = cx.add_window_view(move |_, cx| NavigationTextInputView {
+            value: "first\nsecond".into(),
+            controller: TextInputController::new(cx.focus_handle()),
+            handled: false,
+            events: captured_events,
+            selections: captured_selections,
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+        let controller = window.update(|_, cx| view.read(cx).controller.clone());
+        window.update(|window, _| controller.select_range(3..3, false, window));
+        window.update(|window, cx| window.draw(cx).clear());
+        window.simulate_keystrokes("end shift-left cmd-left cmd-right");
+        window.update(|window, cx| window.draw(cx).clear());
+
+        assert_eq!(events.borrow().len(), 1);
+        assert_eq!(events.borrow()[0].key, TextInputNavigationKey::End);
+        assert_eq!(selections.borrow().last().unwrap().range, 12..12);
     }
 
     #[crate::test]
