@@ -52,6 +52,7 @@ pub struct Textarea {
     controller: Option<TextInputController>,
     html_name: Option<SharedString>,
     on_change: Option<Rc<dyn Fn(SharedString, &mut Window, &mut App)>>,
+    on_selection_change: Option<Rc<dyn Fn(TextInputSelection, &mut Window, &mut App)>>,
     on_blur: Option<Rc<dyn Fn(SharedString, &mut Window, &mut App)>>,
     on_focus: Option<Rc<dyn Fn(SharedString, &mut Window, &mut App)>>,
     style: StyleRefinement,
@@ -86,6 +87,7 @@ impl Textarea {
             controller: None,
             html_name: None,
             on_change: None,
+            on_selection_change: None,
             on_blur: None,
             on_focus: None,
             style: StyleRefinement::default(),
@@ -278,6 +280,15 @@ impl Textarea {
         self
     }
 
+    /// Observe UTF-8 selection and input-method composition state.
+    pub fn on_selection_change<F>(mut self, callback: F) -> Self
+    where
+        F: Fn(TextInputSelection, &mut Window, &mut App) + 'static,
+    {
+        self.on_selection_change = Some(Rc::new(callback));
+        self
+    }
+
     #[allow(non_snake_case)]
     pub fn onChange<F>(self, callback: F) -> Self
     where
@@ -440,6 +451,11 @@ impl RenderOnce for Textarea {
         if let Some(on_change) = self.on_change.clone() {
             editor = editor.on_change(move |value, window, cx| {
                 on_change(value, window, cx);
+            });
+        }
+        if let Some(on_selection_change) = self.on_selection_change.clone() {
+            editor = editor.on_selection_change(move |selection, window, cx| {
+                on_selection_change(selection, window, cx);
             });
         }
         if let Some(on_focus) = self.on_focus.clone() {
@@ -656,12 +672,15 @@ impl RenderOnce for Textarea {
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
     use kael::{AccessibilityRole, Render, TestAppContext, TextInputController, Window};
 
     use super::Textarea;
 
     struct Host {
         controller: TextInputController,
+        selections: Rc<RefCell<Vec<kael::TextInputSelection>>>,
     }
 
     impl Render for Host {
@@ -675,6 +694,10 @@ mod tests {
                 .description("Describe the decision")
                 .value("Approved")
                 .controller(self.controller.clone())
+                .on_selection_change({
+                    let selections = self.selections.clone();
+                    move |selection, _, _| selections.borrow_mut().push(selection)
+                })
         }
     }
 
@@ -684,13 +707,17 @@ mod tests {
             crate::components::input::init(cx);
             crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
         });
-        let (host, window) = cx.add_window_view(|_, cx| Host {
+        let selections = Rc::new(RefCell::new(Vec::new()));
+        let captured_selections = selections.clone();
+        let (host, window) = cx.add_window_view(move |_, cx| Host {
             controller: TextInputController::new(cx.focus_handle()),
+            selections: captured_selections,
         });
         window.update(|window, cx| {
             window.draw(cx).clear();
             host.read(cx).controller.focus(window);
             assert!(host.read(cx).controller.focus_handle().is_focused(window));
+            window.draw(cx).clear();
             let node = window
                 .accessibility_tree()
                 .nodes
@@ -700,5 +727,15 @@ mod tests {
             assert_eq!(node.label.as_deref(), Some("Meeting notes"));
             assert_eq!(node.description.as_deref(), Some("Describe the decision"));
         });
+        window.update(|window, cx| window.draw(cx).clear());
+        window.simulate_marked_input("かな", Some(2..2));
+        assert!(
+            selections
+                .borrow()
+                .iter()
+                .any(|selection| selection.is_composing()),
+            "selection transitions: {:?}",
+            selections.borrow()
+        );
     }
 }

@@ -12,7 +12,13 @@ use anyhow::{anyhow, bail};
 use futures::{Stream, StreamExt, channel::oneshot};
 use rand::{SeedableRng, rngs::StdRng};
 use std::{
-    cell::RefCell, future::Future, ops::Deref, path::PathBuf, rc::Rc, sync::Arc, time::Duration,
+    cell::RefCell,
+    future::Future,
+    ops::{Deref, Range},
+    path::PathBuf,
+    rc::Rc,
+    sync::Arc,
+    time::Duration,
 };
 
 /// A TestAppContext is provided to tests created with `#[kael::test]`, it provides
@@ -578,6 +584,28 @@ impl TestAppContext {
         self.background_executor.run_until_parked()
     }
 
+    /// Simulate an in-progress input-method composition in the focused editor.
+    pub fn simulate_marked_input(
+        &mut self,
+        window: AnyWindowHandle,
+        input: &str,
+        selected_range: Option<Range<usize>>,
+    ) {
+        let mut handler = self
+            .update_window(window, |_, window, _| {
+                window
+                    .platform_window
+                    .take_input_handler()
+                    .expect("focused input handler")
+            })
+            .unwrap();
+        handler.replace_and_mark_text_in_range(None, input, selected_range);
+        self.update_window(window, |_, window, _| {
+            window.platform_window.set_input_handler(handler);
+        })
+        .unwrap();
+    }
+
     /// dispatches a single Keystroke (see also `simulate_keystrokes` and `simulate_input`)
     pub fn dispatch_keystroke(&mut self, window: AnyWindowHandle, keystroke: Keystroke) {
         self.update_window(window, |_, window, cx| {
@@ -858,6 +886,20 @@ impl VisualTestContext {
     /// Automatically runs until parked.
     pub fn simulate_input(&mut self, input: &str) {
         self.cx.simulate_input(self.window, input)
+    }
+
+    /// Simulate an in-progress input-method composition in the focused editor.
+    pub fn simulate_marked_input(&mut self, input: &str, selected_range: Option<Range<usize>>) {
+        let mut handler = self.update(|window, _| {
+            window
+                .platform_window
+                .take_input_handler()
+                .expect("focused input handler")
+        });
+        handler.replace_and_mark_text_in_range(None, input, selected_range);
+        self.update(|window, _| {
+            window.platform_window.set_input_handler(handler);
+        });
     }
 
     /// Simulate a mouse move event to the given point

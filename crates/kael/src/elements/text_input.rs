@@ -2495,16 +2495,20 @@ impl TextInputState {
             });
 
         if let Some(mask) = self.mask.as_ref() {
-            let mut corrected_cursor = next_selected_range.end;
+            let unmasked_content = next_content.clone();
+            let unmasked_cursor = next_selected_range.end;
+            let mut corrected_cursor = unmasked_cursor;
             mask.correct(
                 &prior_content,
                 prior_cursor,
                 &mut next_content,
                 &mut corrected_cursor,
             );
-            let corrected_cursor = clamp_offset_to_boundary(&next_content, corrected_cursor);
-            next_selected_range = corrected_cursor..corrected_cursor;
-            next_marked_range = None;
+            if next_content != unmasked_content || corrected_cursor != unmasked_cursor {
+                let corrected_cursor = clamp_offset_to_boundary(&next_content, corrected_cursor);
+                next_selected_range = corrected_cursor..corrected_cursor;
+                next_marked_range = None;
+            }
         }
 
         self.content = next_content.into();
@@ -3875,11 +3879,7 @@ mod tests {
             window.draw(cx).clear();
         });
 
-        let mut input_handler = window
-            .update(|window, _| window.platform_window.take_input_handler())
-            .expect("focused text input handler");
-        input_handler.replace_and_mark_text_in_range(None, "かな", Some(2..2));
-        window.update(|window, _| window.platform_window.set_input_handler(input_handler));
+        window.simulate_marked_input("かな", Some(2..2));
         assert!(selections.borrow().last().unwrap().is_composing());
         assert_eq!(selections.borrow().last().unwrap().marked_range, Some(0..6));
 
