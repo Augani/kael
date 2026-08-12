@@ -331,6 +331,11 @@ impl<T: Clone + 'static> Select<T> {
             .map(|opt| &opt.label)
     }
 
+    #[must_use]
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
     fn filtered_options(&self) -> Vec<(usize, &SelectOption<T>)> {
         if self.search_query.is_empty() {
             self.options.iter().enumerate().collect()
@@ -345,7 +350,7 @@ impl<T: Clone + 'static> Select<T> {
     }
 
     fn toggle_dropdown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.disabled {
+        if !self.disabled && !self.loading {
             self.open = !self.open;
             if self.open {
                 window.focus(&self.focus_handle);
@@ -402,8 +407,9 @@ impl<T: Clone + 'static> Select<T> {
         }
     }
 
-    fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
+    fn select_up(&mut self, _: &SelectUp, window: &mut Window, cx: &mut Context<Self>) {
         if !self.open {
+            self.toggle_dropdown(window, cx);
             return;
         }
 
@@ -430,8 +436,9 @@ impl<T: Clone + 'static> Select<T> {
         cx.notify();
     }
 
-    fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
+    fn select_down(&mut self, _: &SelectDown, window: &mut Window, cx: &mut Context<Self>) {
         if !self.open {
+            self.toggle_dropdown(window, cx);
             return;
         }
 
@@ -565,10 +572,15 @@ impl<T: Clone + 'static> Render for Select<T> {
             ]);
         }
 
+        let trigger_focus_handle = self
+            .focus_handle
+            .clone()
+            .tab_index(if self.disabled { -1 } else { 0 })
+            .tab_stop(!self.disabled);
         let trigger = div()
             .id(("select-trigger", entity_id))
             .relative()
-            .track_focus(&self.focus_handle.clone().tab_index(0).tab_stop(true))
+            .track_focus(&trigger_focus_handle)
             .accessibility(accessibility)
             .flex()
             .items_center()
@@ -742,12 +754,13 @@ impl<T: Clone + 'static> Render for Select<T> {
             .relative()
             .w_full()
             .key_context("Select")
-            .track_focus(&self.focus_handle)
-            .when(open && !self.disabled, |this: Div| {
+            .when(!self.disabled && !self.loading, |this: Div| {
                 this.on_action(cx.listener(Select::select_up))
                     .on_action(cx.listener(Select::select_down))
                     .on_action(cx.listener(Select::select_confirm))
-                    .on_action(cx.listener(Select::select_cancel))
+            })
+            .when(open && !self.disabled && !self.loading, |this: Div| {
+                this.on_action(cx.listener(Select::select_cancel))
             })
             .when(open && searchable, |this: Div| {
                 this.on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
@@ -1080,3 +1093,143 @@ impl<T: Clone + 'static> Focusable for Select<T> {
 }
 
 impl<T: Clone + 'static> EventEmitter<SelectEvent> for Select<T> {}
+
+#[cfg(test)]
+mod tests {
+    use super::{Select, SelectOption, init_select};
+    use kael::{
+        AppContext as _, Context, Entity, Focusable as _, IntoElement, ParentElement as _, Render,
+        TestAppContext, Window, div,
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    struct SelectHost {
+        first: Entity<Select<&'static str>>,
+        disabled: Entity<Select<&'static str>>,
+        last: Entity<Select<&'static str>>,
+    }
+
+    struct DisabledSelectHost {
+        select: Entity<Select<&'static str>>,
+    }
+
+    impl Render for SelectHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .child(self.first.clone())
+                .child(self.disabled.clone())
+                .child(self.last.clone())
+        }
+    }
+
+    impl Render for DisabledSelectHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.select.clone()
+        }
+    }
+
+    fn select(
+        disabled: bool,
+        changes: Arc<AtomicUsize>,
+        cx: &mut kael::App,
+    ) -> Entity<Select<&'static str>> {
+        cx.new(|cx| {
+            Select::new(cx)
+                .options(vec![
+                    SelectOption::new("one", "One"),
+                    SelectOption::new("two", "Two"),
+                ])
+                .selected_index(Some(0))
+                .disabled(disabled)
+                .on_change(move |_, _, _| {
+                    changes.fetch_add(1, Ordering::Relaxed);
+                })
+        })
+    }
+
+    #[kael::test]
+    fn closed_select_opens_and_commits_once_from_keyboard(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            init_select(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let changes = Arc::new(AtomicUsize::new(0));
+        let first = cx.update(|cx| select(false, changes.clone(), cx));
+        let disabled = cx.update(|cx| select(true, Arc::new(AtomicUsize::new(0)), cx));
+        let last = cx.update(|cx| select(false, Arc::new(AtomicUsize::new(0)), cx));
+        let (_host, window) = cx.add_window_view({
+            let first = first.clone();
+            let disabled = disabled.clone();
+            let last = last.clone();
+            move |_, _| SelectHost {
+                first,
+                disabled,
+                last,
+            }
+        });
+
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.focus(&first.read(cx).focus_handle(cx));
+        });
+        window.simulate_keystrokes("enter");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(first.read(cx).open, "Enter must open a closed Select");
+        });
+        window.simulate_keystrokes("down enter");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(!first.read(cx).open);
+            assert_eq!(first.read(cx).selected_value(), Some(&"two"));
+        });
+        assert_eq!(
+            changes.load(Ordering::Relaxed),
+            1,
+            "keyboard selection must commit once"
+        );
+
+        window.simulate_keystrokes("space");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(first.read(cx).open, "Space must open a closed Select");
+        });
+        window.simulate_keystrokes("escape down");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            assert!(
+                first.read(cx).open,
+                "Escape must close the Select before ArrowDown reopens it"
+            );
+        });
+        assert_eq!(
+            changes.load(Ordering::Relaxed),
+            1,
+            "open and cancel must not emit a change"
+        );
+    }
+
+    #[kael::test]
+    fn disabled_select_is_skipped_by_tab_navigation(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            init_select(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let disabled = cx.update(|cx| select(true, Arc::new(AtomicUsize::new(0)), cx));
+        let (_host, window) = cx.add_window_view({
+            let disabled = disabled.clone();
+            move |_, _| DisabledSelectHost { select: disabled }
+        });
+
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.focus_next();
+            window.draw(cx).clear();
+            assert!(!disabled.read(cx).focus_handle(cx).is_focused(window));
+            assert!(window.focused(cx).is_none());
+        });
+    }
+}
