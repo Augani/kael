@@ -23,7 +23,7 @@ workspace = true
 [dependencies.http_client]
 path = "../http_client"
 package = "kael_http_client"
-version = "0.3.0"
+version = "0.3.1"
 default-features = false
 
 [dependencies.serde]

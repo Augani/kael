@@ -1,4 +1,4 @@
-const DEFAULT_USER_AGENT: &str = "kael_ui/0.3.0";
+const DEFAULT_USER_AGENT: &str = concat!("kael_ui/", env!("CARGO_PKG_VERSION"));
 
 #[cfg(feature = "http")]
 fn install_client(cx: &mut kael::App, user_agent: &str) {

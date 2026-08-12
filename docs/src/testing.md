@@ -71,7 +71,7 @@ the `test-support` feature so `TestAppContext` is in scope during tests.
 ```toml
 # crates/kael_ui/Cargo.toml
 [dev-dependencies]
-kael = { path = "../kael", version = "0.3.0", features = ["test-support"] }
+kael = { path = "../kael", version = "0.3.1", features = ["test-support"] }
 ```
 
 > `test-support` is platform-agnostic: the test platform mocks the windowing

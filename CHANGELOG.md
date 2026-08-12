@@ -9,8 +9,33 @@ stabilised — minor version bumps may include breaking changes.
 
 ## [Unreleased]
 
-The workspace is prepared as the `0.3.0` release candidate. The version will
-be dated only when the crates are approved and published.
+## [0.3.1] - 2026-08-12
+
+### Added
+
+- Added canvas-hosted multiline text input support with controlled focus and
+  selection, UTF-8 selection/composition observers, embedded navigation hooks,
+  editor key policies, accessibility metadata, and bounded IME undo history.
+- Added externally controlled focus and selection observation to `Textarea`.
+- Added font-family previews and retained scrolling to long `Select` menus,
+  plus public expanded-state support for toolbar dropdown buttons.
+
+### Changed
+
+- Buttons, icon buttons, and context-menu items now use the shared interaction
+  path for keyboard and pointer activation, preventing duplicate callbacks.
+- Select triggers keep long labels on one line while menus use a wider,
+  single-scrollable viewport with a draggable scrollbar.
+
+### Fixed
+
+- Fixed tab and Shift+Tab traversal across inputs by preserving focus-handle
+  tab metadata and stopping already-handled key propagation.
+- Fixed dialogs and overlays so their full surfaces occlude pointer input to
+  underlying content.
+- Stabilized interactive hover feedback and select keyboard opening.
+
+## [0.3.0] - 2026-06-11
 
 ### Production readiness
 
@@ -247,6 +272,7 @@ captures everything landed on `main` between `0.1.1` and `0.1.2`.
 - `cargo fmt --all --check`, `cargo clippy -p kael`, and
   `cargo test -p kael --lib platform::mac` (9/9) all clean.
 
+[0.3.1]: https://github.com/Augani/kael/releases/tag/v0.3.1
 [0.3.0]: https://github.com/Augani/kael/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Augani/kael/releases/tag/v0.2.0
 [0.1.2]: https://github.com/Augani/kael/releases/tag/v0.1.2
