@@ -27,6 +27,7 @@ pub struct SelectOption<T: Clone> {
     pub label: SharedString,
     pub group: Option<SharedString>,
     pub icon: Option<IconSource>,
+    pub font_family: Option<SharedString>,
     pub disabled: bool,
 }
 
@@ -37,6 +38,7 @@ impl<T: Clone> SelectOption<T> {
             label: label.into(),
             group: None,
             icon: None,
+            font_family: None,
             disabled: false,
         }
     }
@@ -48,6 +50,14 @@ impl<T: Clone> SelectOption<T> {
 
     pub fn with_icon(mut self, icon: impl Into<IconSource>) -> Self {
         self.icon = Some(icon.into());
+        self
+    }
+
+    /// Renders this option, and the selected value, in the supplied font.
+    /// This is useful for font-family pickers where the visual preview is part
+    /// of the choice rather than decorative content.
+    pub fn with_font_family(mut self, family: impl Into<SharedString>) -> Self {
+        self.font_family = Some(family.into());
         self
     }
 
@@ -510,6 +520,11 @@ impl<T: Clone + 'static> Render for Select<T> {
             .and_then(|i| self.options.get(i))
             .and_then(|opt| opt.icon.clone());
         let leading_icon = self.leading_icon.clone().or(maybe_selected_icon);
+        let display_font_family = self
+            .selected_index
+            .and_then(|index| self.options.get(index))
+            .and_then(|option| option.font_family.clone())
+            .unwrap_or_else(|| theme.tokens.font_family.clone());
         let hover_ring = crate::astryx::input_hover_ring(theme.tokens.input);
         let focus_ring = crate::astryx::focus_ring(theme.tokens.primary);
         let status = self.status.clone();
@@ -604,7 +619,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                 theme.tokens.muted_foreground
             })
             .text_size(text_size)
-            .font_family(theme.tokens.font_family.clone())
+            .font_family(display_font_family)
             .shadow(smallvec::smallvec![crate::astryx::focus_ring(
                 kael::transparent_black()
             )])
@@ -919,6 +934,10 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                             let is_disabled = option.disabled;
                                                                             let index = *index;
                                                                             let option_icon = option.icon.clone();
+                                                                            let option_font_family = option
+                                                                                .font_family
+                                                                                .clone()
+                                                                                .unwrap_or_else(|| theme.tokens.font_family.clone());
                                                                             let option_label = option.label.clone();
                                                                             let mut option_state = AccessibilityState::NONE;
                                                                             if is_selected {
@@ -976,7 +995,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                                     .when(is_selected, |this| {
                                                                                         this.font_weight(FontWeight::MEDIUM)
                                                                                     })
-                                                                                    .font_family(theme.tokens.font_family.clone())
+                                                                                    .font_family(option_font_family)
                                                                                     .when(!is_disabled, |this| {
                                                                                         this.on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
                                                                                             this.select_option(index, window, cx);

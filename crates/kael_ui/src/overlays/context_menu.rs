@@ -30,6 +30,8 @@ fn sanitize_menu_width(width: Pixels) -> Pixels {
     }
 }
 
+const CONTEXT_MENU_MAX_HEIGHT: Pixels = px(360.0);
+
 #[derive(Clone)]
 pub struct ContextMenuItem {
     id: Option<SharedString>,
@@ -244,6 +246,8 @@ impl RenderOnce for ContextMenu {
                     .left(position.x)
                     .top(position.y)
                     .min_w(min_width)
+                    .max_h(CONTEXT_MENU_MAX_HEIGHT)
+                    .overflow_y_scroll()
                     .bg(theme.tokens.popover)
                     .rounded(theme.tokens.radius_lg)
                     .shadow(theme.tokens.shadow_md.to_vec())
