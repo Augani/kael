@@ -151,6 +151,7 @@ impl RenderOnce for Overlay {
         div()
             .absolute()
             .inset_0()
+            .occlude()
             .flex()
             .group("kael-ui-overlay")
             .bg(bg)
@@ -186,5 +187,72 @@ impl RenderOnce for Overlay {
                 div.style().refine(&user_style);
                 div
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct OverlayHitTestHost {
+        underlying_mouse_downs: Rc<Cell<usize>>,
+    }
+
+    impl Render for OverlayHitTestHost {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let underlying_mouse_downs = self.underlying_mouse_downs.clone();
+            div()
+                .relative()
+                .size(px(320.0))
+                .child(div().absolute().inset_0().on_mouse_down(
+                    MouseButton::Left,
+                    move |_, _, _| {
+                        underlying_mouse_downs.set(underlying_mouse_downs.get().saturating_add(1));
+                    },
+                ))
+                .child(
+                    Overlay::new()
+                        .tone(OverlayTone::Transparent)
+                        .align(OverlayAlign::Start)
+                        .center(false)
+                        .content(div().size(px(96.0)).bg(kael::white())),
+                )
+                .into_any_element()
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn overlay_surface_and_backdrop_block_underlying_pointer_events() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let underlying_mouse_downs = Rc::new(Cell::new(0));
+        let (_host, window) = cx.add_window_view({
+            let underlying_mouse_downs = underlying_mouse_downs.clone();
+            move |_, _| OverlayHitTestHost {
+                underlying_mouse_downs,
+            }
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+
+        window.simulate_mouse_down(
+            point(px(40.0), px(40.0)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        window.simulate_mouse_down(
+            point(px(240.0), px(240.0)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+
+        assert_eq!(
+            underlying_mouse_downs.get(),
+            0,
+            "an open overlay must occlude both its surface and backdrop"
+        );
     }
 }

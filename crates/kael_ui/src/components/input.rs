@@ -1101,8 +1101,8 @@ impl RenderOnce for Input {
 mod typing_tests {
     use super::{Input, InputState};
     use kael::{
-        AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, TestAppContext,
-        Window, div,
+        AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
+        Styled, TestAppContext, Window, div,
     };
 
     struct Host {
@@ -1120,6 +1120,59 @@ mod typing_tests {
                     .disabled(self.disabled),
             )
         }
+    }
+
+    struct TabHost {
+        first: Entity<InputState>,
+        second: Entity<InputState>,
+    }
+
+    impl Render for TabHost {
+        fn render(&mut self, _w: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .tab_group()
+                .child(Input::new(&self.first).label("First"))
+                .child(Input::new(&self.second).label("Second"))
+        }
+    }
+
+    #[kael::test]
+    fn tab_moves_to_the_adjacent_input_once(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            super::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let first = cx.new(InputState::new);
+        let second = cx.new(InputState::new);
+        let (_host, window) = cx.add_window_view({
+            let first = first.clone();
+            let second = second.clone();
+            move |_, _| TabHost { first, second }
+        });
+
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.focus(&first.read(cx).focus_handle(cx));
+            window.focus_next();
+            assert!(
+                second.read(cx).focus_handle(cx).is_focused(window),
+                "direct focus_next must reach the second input"
+            );
+            window.focus(&first.read(cx).focus_handle(cx));
+        });
+        window.simulate_keystrokes("tab");
+        window.update(|window, cx| {
+            assert!(
+                second.read(cx).focus_handle(cx).is_focused(window),
+                "first={}, some_focus={}",
+                first.read(cx).focus_handle(cx).is_focused(window),
+                window.focused(cx).is_some()
+            );
+        });
+        window.simulate_keystrokes("shift-tab");
+        window.update(|window, cx| {
+            assert!(first.read(cx).focus_handle(cx).is_focused(window));
+        });
     }
 
     #[kael::test]

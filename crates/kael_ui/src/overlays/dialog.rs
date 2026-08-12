@@ -724,6 +724,7 @@ impl Render for Dialog {
             ))
             .absolute()
             .inset_0()
+            .occlude()
             .flex()
             .when(position.is_none(), |this| {
                 this.items_center().justify_center()

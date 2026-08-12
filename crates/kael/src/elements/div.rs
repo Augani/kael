@@ -1482,7 +1482,11 @@ pub trait InteractiveElement: Sized {
     fn track_focus(mut self, focus_handle: &FocusHandle) -> Self {
         self.interactivity().focusable = true;
         self.interactivity().tracked_focus_handle = Some(focus_handle.clone());
-        self.interactivity().sync_tracked_focus_handle();
+        // Preserve tab metadata configured directly on the supplied handle. Only
+        // override it when this element has an explicit tab-index configuration.
+        if self.interactivity().tab_index.is_some() {
+            self.interactivity().sync_tracked_focus_handle();
+        }
         self
     }
 

@@ -795,11 +795,13 @@ impl InputState {
     pub fn tab(&mut self, _: &Tab, window: &mut Window, cx: &mut Context<Self>) {
         window.focus_next();
         self.emit_input_event(InputEvent::Tab, cx);
+        cx.stop_propagation();
     }
 
     pub fn shift_tab(&mut self, _: &ShiftTab, window: &mut Window, cx: &mut Context<Self>) {
         window.focus_prev();
         self.emit_input_event(InputEvent::ShiftTab, cx);
+        cx.stop_propagation();
     }
 
     fn on_mouse_down(
