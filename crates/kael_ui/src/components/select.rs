@@ -668,7 +668,15 @@ impl<T: Clone + 'static> Render for Select<T> {
                                 ),
                         )
                     })
-                    .child(div().flex_1().min_w(px(0.0)).child(display_text)),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(display_text),
+                    ),
             )
             .child(
                 div()
@@ -1027,6 +1035,9 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                                                 div()
                                                                                                     .flex_1()
                                                                                                     .min_w(px(0.0))
+                                                                                                    .overflow_hidden()
+                                                                                                    .text_ellipsis()
+                                                                                                    .whitespace_nowrap()
                                                                                                     .child(option_label)
                                                                                             )
                                                                                     )
