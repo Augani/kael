@@ -408,6 +408,8 @@ impl RenderOnce for Textarea {
         });
 
         let max_visible_rows = self.max_rows.unwrap_or(self.rows).max(1);
+        let accessibility_label = self.label.clone();
+        let accessibility_description = self.description.clone();
         let mut editor = text_input(
             (ElementId::Name(self.id.clone()), "editor"),
             self.value.clone(),
@@ -415,6 +417,12 @@ impl RenderOnce for Textarea {
         .placeholder(self.placeholder.clone())
         .multi_line()
         .max_lines(max_visible_rows);
+        if let Some(label) = accessibility_label {
+            editor = editor.accessibility_label(label);
+        }
+        if let Some(description) = accessibility_description {
+            editor = editor.accessibility_description(description);
+        }
         if let Some(max_length) = self.max_length {
             editor = editor.mask(MaxLengthMask(max_length));
         }
@@ -632,5 +640,47 @@ impl RenderOnce for Textarea {
             }
             None => control_with_counter.into_any_element(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kael::{AccessibilityRole, Render, TestAppContext, Window};
+
+    use super::Textarea;
+
+    struct Host;
+
+    impl Render for Host {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut kael::Context<Self>,
+        ) -> impl kael::IntoElement {
+            Textarea::new("notes")
+                .label("Meeting notes")
+                .description("Describe the decision")
+                .value("Approved")
+        }
+    }
+
+    #[kael::test]
+    fn label_and_description_are_bound_to_the_text_input(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            crate::components::input::init(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let (_host, window) = cx.add_window_view(|_, _| Host);
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let node = window
+                .accessibility_tree()
+                .nodes
+                .values()
+                .find(|node| node.role == AccessibilityRole::TextInput)
+                .expect("textarea should expose its text input");
+            assert_eq!(node.label.as_deref(), Some("Meeting notes"));
+            assert_eq!(node.description.as_deref(), Some("Describe the decision"));
+        });
     }
 }
