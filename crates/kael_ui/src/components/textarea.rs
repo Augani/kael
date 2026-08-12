@@ -49,6 +49,7 @@ pub struct Textarea {
     max_length: Option<usize>,
     spell_check: bool,
     auto_focus: bool,
+    controller: Option<TextInputController>,
     html_name: Option<SharedString>,
     on_change: Option<Rc<dyn Fn(SharedString, &mut Window, &mut App)>>,
     on_blur: Option<Rc<dyn Fn(SharedString, &mut Window, &mut App)>>,
@@ -82,6 +83,7 @@ impl Textarea {
             max_length: None,
             spell_check: true,
             auto_focus: false,
+            controller: None,
             html_name: None,
             on_change: None,
             on_blur: None,
@@ -252,6 +254,12 @@ impl Textarea {
         self.has_auto_focus(auto_focus)
     }
 
+    /// Attach an externally owned controller for focus and selection placement.
+    pub fn controller(mut self, controller: TextInputController) -> Self {
+        self.controller = Some(controller);
+        self
+    }
+
     pub fn html_name(mut self, name: impl Into<SharedString>) -> Self {
         self.html_name = Some(name.into());
         self
@@ -417,6 +425,9 @@ impl RenderOnce for Textarea {
         .placeholder(self.placeholder.clone())
         .multi_line()
         .max_lines(max_visible_rows);
+        if let Some(controller) = self.controller {
+            editor = editor.controller(controller);
+        }
         if let Some(label) = accessibility_label {
             editor = editor.accessibility_label(label);
         }
@@ -645,11 +656,13 @@ impl RenderOnce for Textarea {
 
 #[cfg(test)]
 mod tests {
-    use kael::{AccessibilityRole, Render, TestAppContext, Window};
+    use kael::{AccessibilityRole, Render, TestAppContext, TextInputController, Window};
 
     use super::Textarea;
 
-    struct Host;
+    struct Host {
+        controller: TextInputController,
+    }
 
     impl Render for Host {
         fn render(
@@ -661,6 +674,7 @@ mod tests {
                 .label("Meeting notes")
                 .description("Describe the decision")
                 .value("Approved")
+                .controller(self.controller.clone())
         }
     }
 
@@ -670,9 +684,13 @@ mod tests {
             crate::components::input::init(cx);
             crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
         });
-        let (_host, window) = cx.add_window_view(|_, _| Host);
+        let (host, window) = cx.add_window_view(|_, cx| Host {
+            controller: TextInputController::new(cx.focus_handle()),
+        });
         window.update(|window, cx| {
             window.draw(cx).clear();
+            host.read(cx).controller.focus(window);
+            assert!(host.read(cx).controller.focus_handle().is_focused(window));
             let node = window
                 .accessibility_tree()
                 .nodes
