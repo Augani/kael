@@ -146,6 +146,7 @@ impl SelectorSection {
 
 pub struct Select<T: Clone + 'static> {
     focus_handle: FocusHandle,
+    scroll_handle: ScrollHandle,
     options: Vec<SelectOption<T>>,
     selected_index: Option<usize>,
     highlighted_index: Option<usize>,
@@ -173,6 +174,7 @@ impl<T: Clone + 'static> Select<T> {
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
+            scroll_handle: ScrollHandle::new(),
             options: Vec::new(),
             selected_index: None,
             highlighted_index: None,
@@ -363,6 +365,7 @@ impl<T: Clone + 'static> Select<T> {
         if !self.disabled && !self.loading {
             self.open = !self.open;
             if self.open {
+                self.scroll_handle.set_offset(point(px(0.0), px(0.0)));
                 window.focus(&self.focus_handle);
                 self.highlighted_index = self
                     .selected_index
@@ -771,6 +774,11 @@ impl<T: Clone + 'static> Render for Select<T> {
 
         let searchable = self.searchable;
         let search_query: SharedString = self.search_query.clone().into();
+        let visible_option_rows =
+            u16::try_from(self.filtered_options().len().min(12)).unwrap_or(12);
+        let option_viewport_height = f32::from(visible_option_rows)
+            .mul_add(28.0, 8.0)
+            .clamp(48.0, 300.0);
 
         let control = div()
             .relative()
@@ -788,10 +796,12 @@ impl<T: Clone + 'static> Render for Select<T> {
                 this.on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                     if event.keystroke.key == "backspace" {
                         this.search_query.pop();
+                        this.scroll_handle.set_offset(point(px(0.0), px(0.0)));
                         cx.notify();
                     }
                     else if event.keystroke.key.len() == 1 && !event.keystroke.modifiers.control && !event.keystroke.modifiers.platform {
                         this.search_query.push_str(&event.keystroke.key);
+                        this.scroll_handle.set_offset(point(px(0.0), px(0.0)));
                         let filtered = this.filtered_options();
                         this.highlighted_index = filtered
                             .into_iter()
@@ -865,7 +875,8 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                     })
                                                     .child(
                                                         div()
-                                                            .max_h(px(300.0))
+                                                            .id("select-options-viewport")
+                                                            .h(px(option_viewport_height))
                                                             .child(
                                                                 scrollable_vertical({
                                                                 let filtered = self.filtered_options();
@@ -1064,6 +1075,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                     )
                                                                 })
                                                             })
+                                                            .with_scroll_handle(self.scroll_handle.clone())
                                                             .id(("select-options", entity_id))
                                                         )
                                                     )
@@ -1127,8 +1139,9 @@ impl<T: Clone + 'static> EventEmitter<SelectEvent> for Select<T> {}
 mod tests {
     use super::{Select, SelectOption, init_select};
     use kael::{
-        AppContext as _, Context, Entity, Focusable as _, IntoElement, ParentElement as _, Render,
-        TestAppContext, Window, div,
+        AppContext as _, Context, Entity, Focusable as _, IntoElement, Modifiers,
+        ParentElement as _, Render, ScrollDelta, ScrollWheelEvent, Styled as _, TestAppContext,
+        Window, div, point, px, size,
     };
     use std::sync::{
         Arc,
@@ -1145,6 +1158,10 @@ mod tests {
         select: Entity<Select<&'static str>>,
     }
 
+    struct ScrollableSelectHost {
+        select: Entity<Select<usize>>,
+    }
+
     impl Render for SelectHost {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             div()
@@ -1157,6 +1174,12 @@ mod tests {
     impl Render for DisabledSelectHost {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             self.select.clone()
+        }
+    }
+
+    impl Render for ScrollableSelectHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().w(px(220.0)).child(self.select.clone())
         }
     }
 
@@ -1259,6 +1282,55 @@ mod tests {
             window.draw(cx).clear();
             assert!(!disabled.read(cx).focus_handle(cx).is_focused(window));
             assert!(window.focused(cx).is_none());
+        });
+    }
+
+    #[kael::test]
+    fn long_select_menu_scrolls_with_the_pointer_wheel(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            init_select(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let select = cx.new(|cx| {
+            Select::new(cx).options(
+                (0..80)
+                    .map(|index| SelectOption::new(index, format!("Font {index:02}")))
+                    .collect(),
+            )
+        });
+        let (_host, window) = cx.add_window_view({
+            let select = select.clone();
+            move |_, _| ScrollableSelectHost { select }
+        });
+        window.simulate_resize(size(px(500.0), px(500.0)));
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.focus(&select.read(cx).focus_handle(cx));
+        });
+        window.simulate_keystrokes("enter");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+        });
+
+        let trigger_bounds = window.update(|_, cx| select.read(cx).bounds);
+        let menu_point = point(
+            trigger_bounds.origin.x + trigger_bounds.size.width / 2.0,
+            trigger_bounds.origin.y + trigger_bounds.size.height + px(120.0),
+        );
+        window.simulate_event(ScrollWheelEvent {
+            position: menu_point,
+            delta: ScrollDelta::Pixels(point(px(0.0), px(-10_000.0))),
+            modifiers: Modifiers::default(),
+            ..Default::default()
+        });
+        window.update(|window, cx| window.draw(cx).clear());
+
+        window.update(|_, cx| {
+            assert!(
+                select.read(cx).scroll_handle.offset().y < px(0.0),
+                "a wheel gesture over a long Select menu must scroll its retained viewport"
+            );
         });
     }
 }
