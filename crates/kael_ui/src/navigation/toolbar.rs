@@ -521,7 +521,6 @@ fn render_toolbar_button(
         .items_center()
         .justify_center()
         .rounded(theme.tokens.radius_md)
-        .transition(theme.tokens.transition_fast)
         .cursor(if enabled {
             CursorStyle::PointingHand
         } else {

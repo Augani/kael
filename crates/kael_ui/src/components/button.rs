@@ -449,7 +449,6 @@ impl RenderOnce for Button {
             .rounded(theme.tokens.radius_md)
             .text_color(fg)
             .bg(bg)
-            .transition(theme.tokens.transition_fast)
             .when(has_shadow, |this| {
                 this.shadow(theme.tokens.shadow_xs.to_vec())
             })

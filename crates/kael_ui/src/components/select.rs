@@ -605,7 +605,6 @@ impl<T: Clone + 'static> Render for Select<T> {
             })
             .text_size(text_size)
             .font_family(theme.tokens.font_family.clone())
-            .transition(theme.tokens.transition_fast)
             .shadow(smallvec::smallvec![crate::astryx::focus_ring(
                 kael::transparent_black()
             )])
