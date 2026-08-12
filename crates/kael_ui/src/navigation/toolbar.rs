@@ -57,6 +57,7 @@ pub struct ToolbarButton {
     pub tooltip: Option<SharedString>,
     pub variant: ToolbarButtonVariant,
     pub pressed: bool,
+    pub expanded: bool,
     pub disabled: bool,
     pub on_click: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
 }
@@ -69,6 +70,7 @@ impl ToolbarButton {
             tooltip: None,
             variant: ToolbarButtonVariant::Default,
             pressed: false,
+            expanded: false,
             disabled: false,
             on_click: None,
         }
@@ -86,6 +88,12 @@ impl ToolbarButton {
 
     pub fn pressed(mut self, pressed: bool) -> Self {
         self.pressed = pressed;
+        self
+    }
+
+    /// Reports whether this dropdown button currently owns an open menu.
+    pub fn expanded(mut self, expanded: bool) -> Self {
+        self.expanded = expanded;
         self
     }
 
@@ -499,7 +507,11 @@ fn render_toolbar_button(
         state |= AccessibilityState::PRESSED;
     }
     if button.variant == ToolbarButtonVariant::Dropdown {
-        state |= AccessibilityState::COLLAPSED;
+        state |= if button.expanded {
+            AccessibilityState::EXPANDED
+        } else {
+            AccessibilityState::COLLAPSED
+        };
     }
     let mut accessibility = AccessibilityAttributes::new(AccessibilityRole::Button)
         .label(label.to_string())
