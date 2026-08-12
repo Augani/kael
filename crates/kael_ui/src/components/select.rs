@@ -3,7 +3,6 @@
 use crate::components::icon::Icon;
 use crate::components::icon_source::IconSource;
 use crate::components::input::InputSize;
-use crate::components::scrollable::scrollable_vertical;
 use crate::components::{
     field::{Field, FieldStatusType},
     field_status::FieldStatusVariant,
@@ -166,6 +165,8 @@ pub struct Select<T: Clone + 'static> {
     search_query: String,
     on_change: Option<Box<dyn Fn(&T, &mut Window, &mut App) + Send + Sync + 'static>>,
     bounds: Bounds<Pixels>,
+    trigger_label_bounds: Bounds<Pixels>,
+    dropdown_bounds: Bounds<Pixels>,
     leading_icon: Option<IconSource>,
     style: StyleRefinement,
 }
@@ -194,6 +195,8 @@ impl<T: Clone + 'static> Select<T> {
             search_query: String::new(),
             on_change: None,
             bounds: Bounds::default(),
+            trigger_label_bounds: Bounds::default(),
+            dropdown_bounds: Bounds::default(),
             leading_icon: None,
             style: StyleRefinement::default(),
         }
@@ -386,6 +389,7 @@ impl<T: Clone + 'static> Select<T> {
 
     fn close_dropdown(&mut self, cx: &mut Context<Self>) {
         self.open = false;
+        self.dropdown_bounds = Bounds::default();
         self.highlighted_index = self.selected_index;
         self.search_query.clear();
         cx.notify();
@@ -511,6 +515,8 @@ impl<T: Clone + 'static> Render for Select<T> {
             .cloned()
             .or_else(|| self.placeholder.clone())
             .unwrap_or_else(|| "Select...".into());
+        let trigger_display_text =
+            SharedString::from(display_text.replace(['\r', '\n'], " ").trim().to_owned());
 
         let open = self.open;
         let highlighted_idx = self.highlighted_index;
@@ -531,6 +537,11 @@ impl<T: Clone + 'static> Render for Select<T> {
         let hover_ring = crate::astryx::input_hover_ring(theme.tokens.input);
         let focus_ring = crate::astryx::focus_ring(theme.tokens.primary);
         let status = self.status.clone();
+        let display_color = if self.selected_index.is_some() {
+            theme.tokens.foreground
+        } else {
+            theme.tokens.muted_foreground
+        };
         let status_color = status.as_ref().map(|(status, _)| match status {
             FieldStatusType::Warning => theme.tokens.warning,
             FieldStatusType::Error => theme.tokens.destructive,
@@ -622,7 +633,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                 theme.tokens.muted_foreground
             })
             .text_size(text_size)
-            .font_family(display_font_family)
+            .font_family(display_font_family.clone())
             .shadow(smallvec::smallvec![crate::astryx::focus_ring(
                 kael::transparent_black()
             )])
@@ -671,93 +682,110 @@ impl<T: Clone + 'static> Render for Select<T> {
                                 ),
                         )
                     })
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .child(display_text),
-                    ),
+                    .child({
+                        let entity = cx.entity().clone();
+                        let display_font_family = display_font_family.clone();
+                        canvas_with_prepaint(
+                            move |bounds, window, cx| {
+                                entity.update(cx, |this, _| {
+                                    this.trigger_label_bounds = bounds;
+                                });
+                                let mut runs = vec![TextRun {
+                                    len: trigger_display_text.len(),
+                                    font: font(display_font_family.clone()),
+                                    color: display_color,
+                                    background_color: None,
+                                    underline: None,
+                                    strikethrough: None,
+                                }];
+                                let mut wrapper = window
+                                    .text_system()
+                                    .line_wrapper(font(display_font_family.clone()), text_size);
+                                let text = wrapper.truncate_line(
+                                    trigger_display_text,
+                                    bounds.size.width.max(px(0.0)),
+                                    "…",
+                                    &mut runs,
+                                );
+                                window
+                                    .text_system()
+                                    .shape_line(text, text_size, &runs, None)
+                            },
+                            move |bounds, line, window, cx| {
+                                let _ = line.paint(bounds.origin, bounds.size.height, window, cx);
+                            },
+                        )
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .h_full()
+                    }),
             )
-            .child(
-                div()
-                    .ml(px(8.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        if self.clearable && self.selected_index.is_some() && !self.disabled {
-                            div()
-                                .size(px(24.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(theme.tokens.radius_sm)
-                                .cursor(CursorStyle::PointingHand)
-                                .hover(|mut style| {
-                                    style.background = Some(theme.tokens.muted.into());
-                                    style
-                                })
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _event: &MouseDownEvent, window, cx| {
-                                        this.clear_selection(window, cx);
-                                        cx.stop_propagation();
-                                    }),
-                                )
-                                .accessibility(
-                                    AccessibilityAttributes::new(AccessibilityRole::Button)
-                                        .label("Clear selection")
-                                        .actions(vec![AccessibilityAction::Click]),
-                                )
-                                .child(
-                                    Icon::new("x")
-                                        .size(icon_size)
-                                        .color(theme.tokens.muted_foreground),
-                                )
-                                .into_any_element()
-                        } else if self.loading {
-                            div()
-                                .size(px(24.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(Spinner::new().size(SpinnerSize::Sm))
-                                .into_any_element()
-                        } else if let Some((status, _)) = status.as_ref() {
-                            let (icon, color) = match status {
-                                FieldStatusType::Warning => {
-                                    ("triangle-alert", theme.tokens.warning)
-                                }
-                                FieldStatusType::Error => {
-                                    ("circle-alert", theme.tokens.destructive)
-                                }
-                                FieldStatusType::Success => ("circle-check", theme.tokens.success),
-                            };
-                            div()
-                                .size(px(24.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(Icon::new(icon).size(icon_size).color(color))
-                                .into_any_element()
-                        } else {
-                            div()
-                                .size(px(24.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(
-                                    Icon::new(if open { "chevron-up" } else { "chevron-down" })
-                                        .size(icon_size)
-                                        .color(theme.tokens.muted_foreground),
-                                )
-                                .into_any_element()
-                        },
-                    ),
-            )
+            .child(div().flex().items_center().justify_center().child(
+                if self.clearable && self.selected_index.is_some() && !self.disabled {
+                    div()
+                        .size(px(24.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(theme.tokens.radius_sm)
+                        .cursor(CursorStyle::PointingHand)
+                        .hover(|mut style| {
+                            style.background = Some(theme.tokens.muted.into());
+                            style
+                        })
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                                this.clear_selection(window, cx);
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .accessibility(
+                            AccessibilityAttributes::new(AccessibilityRole::Button)
+                                .label("Clear selection")
+                                .actions(vec![AccessibilityAction::Click]),
+                        )
+                        .child(
+                            Icon::new("x")
+                                .size(icon_size)
+                                .color(theme.tokens.muted_foreground),
+                        )
+                        .into_any_element()
+                } else if self.loading {
+                    div()
+                        .size(px(24.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(Spinner::new().size(SpinnerSize::Sm))
+                        .into_any_element()
+                } else if let Some((status, _)) = status.as_ref() {
+                    let (icon, color) = match status {
+                        FieldStatusType::Warning => ("triangle-alert", theme.tokens.warning),
+                        FieldStatusType::Error => ("circle-alert", theme.tokens.destructive),
+                        FieldStatusType::Success => ("circle-check", theme.tokens.success),
+                    };
+                    div()
+                        .size(px(24.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(Icon::new(icon).size(icon_size).color(color))
+                        .into_any_element()
+                } else {
+                    div()
+                        .size(px(24.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            Icon::new(if open { "chevron-up" } else { "chevron-down" })
+                                .size(icon_size)
+                                .color(theme.tokens.muted_foreground),
+                        )
+                        .into_any_element()
+                },
+            ))
             .child({
                 let entity = cx.entity().clone();
                 canvas_with_prepaint(
@@ -779,6 +807,19 @@ impl<T: Clone + 'static> Render for Select<T> {
         let option_viewport_height = f32::from(visible_option_rows)
             .mul_add(28.0, 8.0)
             .clamp(48.0, 300.0);
+        let dropdown_width = bounds
+            .size
+            .width
+            .max(px(if searchable { 300.0 } else { 220.0 }));
+        if open {
+            self.dropdown_bounds = Bounds::new(
+                point(bounds.left(), bounds.bottom() + DROPDOWN_MARGIN),
+                size(
+                    dropdown_width,
+                    px(option_viewport_height + if searchable { 45.0 } else { 0.0 }),
+                ),
+            );
+        }
 
         let control = div()
             .relative()
@@ -810,8 +851,8 @@ impl<T: Clone + 'static> Render for Select<T> {
                     }
                 }))
             })
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                if this.open {
+            .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                if this.open && !this.dropdown_bounds.contains(&event.position) {
                     this.close_dropdown(cx);
                 }
             }))
@@ -823,10 +864,26 @@ impl<T: Clone + 'static> Render for Select<T> {
                             .snap_to_window_with_margin(Edges::all(DROPDOWN_MARGIN))
                             .child(
                                 div()
+                                    .relative()
                                     .occlude()
-                                    .w(bounds.size.width)
+                                    .w(dropdown_width)
+                                    .child({
+                                        let entity = cx.entity().clone();
+                                        canvas_with_prepaint(
+                                            move |bounds, _, cx| {
+                                                entity.update(cx, |this, _| {
+                                                    this.dropdown_bounds = bounds;
+                                                })
+                                            },
+                                            |_, _, _, _| {},
+                                        )
+                                        .absolute()
+                                        .size_full()
+                                    })
                                     .child(
                                         div()
+                                            .relative()
+                                            .w_full()
                                             .occlude()
                                             .mt(DROPDOWN_MARGIN)
                                             .bg(theme.tokens.popover)
@@ -878,7 +935,12 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                             .id("select-options-viewport")
                                                             .h(px(option_viewport_height))
                                                             .child(
-                                                                scrollable_vertical({
+                                                                div()
+                                                                    .id(("select-options", entity_id))
+                                                                    .size_full()
+                                                                    .overflow_y_scroll()
+                                                                    .track_scroll(&self.scroll_handle)
+                                                                    .child({
                                                                 let filtered = self.filtered_options();
                                                                 let loading = self.loading;
                                                                 let (item_padding_x, item_padding_y) = match self.size {
@@ -1074,9 +1136,7 @@ impl<T: Clone + 'static> Render for Select<T> {
                                                                         })
                                                                     )
                                                                 })
-                                                            })
-                                                            .with_scroll_handle(self.scroll_handle.clone())
-                                                            .id(("select-options", entity_id))
+                                                                    })
                                                         )
                                                     )
                                             ),
@@ -1139,7 +1199,7 @@ impl<T: Clone + 'static> EventEmitter<SelectEvent> for Select<T> {}
 mod tests {
     use super::{Select, SelectOption, init_select};
     use kael::{
-        AppContext as _, Context, Entity, Focusable as _, IntoElement, Modifiers,
+        AppContext as _, Context, Entity, Focusable as _, IntoElement, Modifiers, MouseButton,
         ParentElement as _, Render, ScrollDelta, ScrollWheelEvent, Styled as _, TestAppContext,
         Window, div, point, px, size,
     };
@@ -1330,6 +1390,94 @@ mod tests {
             assert!(
                 select.read(cx).scroll_handle.offset().y < px(0.0),
                 "a wheel gesture over a long Select menu must scroll its retained viewport"
+            );
+        });
+    }
+
+    #[kael::test]
+    fn long_selected_value_stays_inside_trigger_and_menu_uses_a_wider_viewport(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            init_select(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let label = "An Exceptionally Long Installed Font Family Name";
+        let select = cx.new(|cx| {
+            Select::new(cx)
+                .label("Font family")
+                .is_label_hidden(true)
+                .searchable(true)
+                .options(vec![SelectOption::new(0, label)])
+                .selected_index(Some(0))
+                .w(px(72.0))
+        });
+        let (_host, window) = cx.add_window_view({
+            let select = select.clone();
+            move |_, _| ScrollableSelectHost { select }
+        });
+        window.simulate_resize(size(px(500.0), px(500.0)));
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let trigger = select.read(cx).bounds;
+            let text = select.read(cx).trigger_label_bounds;
+            assert!(text.top() >= trigger.top());
+            assert!(text.bottom() <= trigger.bottom());
+            assert!(text.size.height <= trigger.size.height);
+            window.focus(&select.read(cx).focus_handle(cx));
+        });
+        window.simulate_keystrokes("enter");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+            assert!(select.read(cx).dropdown_bounds.size.width >= px(300.0));
+        });
+    }
+
+    #[kael::test]
+    fn select_scrollbar_thumb_drag_keeps_menu_open_and_scrolls(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            init_select(cx);
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let select = cx.new(|cx| {
+            Select::new(cx).searchable(true).options(
+                (0..100)
+                    .map(|index| SelectOption::new(index, format!("Font {index:03}")))
+                    .collect(),
+            )
+        });
+        let (_host, window) = cx.add_window_view({
+            let select = select.clone();
+            move |_, _| ScrollableSelectHost { select }
+        });
+        window.simulate_resize(size(px(500.0), px(500.0)));
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.focus(&select.read(cx).focus_handle(cx));
+        });
+        window.simulate_keystrokes("enter");
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            window.draw(cx).clear();
+        });
+        let menu = window.update(|_, cx| select.read(cx).dropdown_bounds);
+        let thumb_start = point(menu.right() - px(4.0), menu.top() + px(58.0));
+        let thumb_end = point(menu.right() - px(4.0), menu.top() + px(230.0));
+        window.simulate_mouse_move(thumb_start, None, Modifiers::default());
+        window.simulate_mouse_down(thumb_start, MouseButton::Left, Modifiers::default());
+        window.simulate_mouse_move(thumb_end, Some(MouseButton::Left), Modifiers::default());
+        window.simulate_mouse_up(thumb_end, MouseButton::Left, Modifiers::default());
+        window.update(|window, cx| window.draw(cx).clear());
+        window.update(|_, cx| {
+            let select = select.read(cx);
+            assert!(
+                select.open,
+                "dragging the menu scrollbar must not dismiss it"
+            );
+            assert!(
+                select.scroll_handle.offset().y < px(0.0),
+                "dragging the visible scrollbar thumb must move the menu viewport"
             );
         });
     }
