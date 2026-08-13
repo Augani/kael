@@ -802,9 +802,15 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn on_hit_test_window_control(&self, callback: Box<dyn FnMut() -> Option<WindowControlArea>>);
     fn on_close(&self, callback: Box<dyn FnOnce()>);
     fn on_appearance_changed(&self, callback: Box<dyn FnMut()>);
-    fn sync_webviews(&mut self, _webviews: &[PlatformWebView]) {}
+    fn sync_webviews(&mut self, webviews: &[PlatformWebView]) {
+        if !webviews.is_empty() {
+            warn_unsupported_once!("WebView rendering");
+        }
+    }
     fn dispatch_webview_command(&mut self, _command: PlatformWebViewCommand) -> anyhow::Result<()> {
-        Ok(())
+        Err(anyhow::anyhow!(
+            "WebView support is disabled; enable the `webview` feature for this target"
+        ))
     }
     fn print(&mut self, _job: PlatformPrintJob) -> anyhow::Result<()> {
         Err(anyhow::anyhow!(

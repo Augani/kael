@@ -693,11 +693,15 @@ impl CapabilityReport {
         self.add(
             PlatformFeature::WebView,
             if cfg!(feature = "webview") {
-                SupportLevel::Full
+                SupportLevel::Partial
             } else {
                 SupportLevel::Disabled
             },
-            (!cfg!(feature = "webview")).then_some("Enable the `webview` feature"),
+            Some(if cfg!(feature = "webview") {
+                "Native WKWebView island; non-translation transforms are hidden, Safari owns inspector UI, and named profile isolation requires macOS 14+"
+            } else {
+                "Enable the `webview` feature"
+            }),
         );
         self.add(
             PlatformFeature::DeveloperDiagnostics,
@@ -859,11 +863,15 @@ impl CapabilityReport {
         self.add(
             PlatformFeature::WebView,
             if cfg!(feature = "webview") {
-                SupportLevel::Full
+                SupportLevel::Partial
             } else {
                 SupportLevel::Disabled
             },
-            (!cfg!(feature = "webview")).then_some("Enable the `webview` feature"),
+            Some(if cfg!(feature = "webview") {
+                "Native WebView2 island; non-translation transforms are hidden and the WebView2 Runtime must be installed"
+            } else {
+                "Enable the `webview` feature"
+            }),
         );
         self.add(
             PlatformFeature::DeveloperDiagnostics,
@@ -1061,11 +1069,15 @@ impl CapabilityReport {
         self.add(
             PlatformFeature::WebView,
             if cfg!(feature = "webview") {
-                SupportLevel::Full
+                SupportLevel::Partial
             } else {
                 SupportLevel::Disabled
             },
-            (!cfg!(feature = "webview")).then_some("Enable the `webview` feature"),
+            Some(if cfg!(feature = "webview") {
+                "Native WebKitGTK island; non-translation transforms are hidden and Wayland uses a compositor-managed GTK overlay window"
+            } else {
+                "Enable the `webview` feature"
+            }),
         );
         self.add(
             PlatformFeature::DeveloperDiagnostics,
@@ -20532,8 +20544,8 @@ mod tests {
             .feature_report(PlatformFeature::WebView)
             .expect("WebView should be present in the current report");
 
-        assert_eq!(webview.support, SupportLevel::Full);
-        assert!(webview.is_full());
+        assert_eq!(webview.support, SupportLevel::Partial);
+        assert!(!webview.is_full());
         assert!(report.is_available(PlatformFeature::WebView));
     }
 

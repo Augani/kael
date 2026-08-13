@@ -43,6 +43,11 @@ default-target = "x86_64-unknown-linux-gnu"
 targets = []
 rustdoc-args = ["--cfg", "docsrs"]
 
+[[example]]
+name = "webview_smoke"
+path = "examples/webview_smoke.rs"
+required-features = ["webview"]
+
 [features]
 default = [
     "font-kit",

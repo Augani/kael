@@ -64,7 +64,8 @@ Outbound sharing is feature-gated and platform-dependent. macOS has the
 broadest destination support; Windows and Linux currently provide narrower
 mail/clipboard handoffs. Registering an app as a share receiver is not yet
 implemented. WebView support is reported as disabled when the `webview` feature
-is absent.
+is absent and partial when enabled because it is a native composition island
+with platform/runtime constraints rather than a GPU scene primitive.
 
 ## Optional agent planning metadata
 

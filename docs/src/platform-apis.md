@@ -114,8 +114,28 @@ Treat every WebView as an external-content boundary:
 - choose persistent or ephemeral storage deliberately;
 - keep native app state outside browser storage where possible.
 
+WebViews are native composition islands, not Kael scene primitives. Rectangular
+content-mask bounds, translation, visibility, and inherited opacity are applied
+to the native host. Scale, rotation, or skew hides the host because resizing a
+native WebView would reflow the page instead of reproducing the GPU transform.
+Native surfaces remain above Kael's GPU scene, so applications should place
+modals and popovers outside a visible WebView region or hide the island while
+presenting overlapping chrome.
+
+Omitting `storage_key` creates an incognito/non-persistent profile. Supplying a
+key creates stable isolated profiles on Windows and Linux and on macOS 14 or
+newer; older macOS versions retain persistence but share the default data
+store. Use `native_permission_policy` for the browser engine's actual permission
+boundary. `on_permission_request` remains a page-level JavaScript preflight for
+app-owned browser APIs and is not a native security boundary.
+Native coverage follows the engine: WebView2 exposes its supported permission
+kinds, WebKitGTK exposes its permission-request signals, and WKWebView exposes
+camera and microphone capture decisions through its public delegate API.
+
 When the `webview` feature is disabled, the capability report returns
 `SupportLevel::Disabled` rather than claiming the OS backend is usable.
+Enabled WebViews report `SupportLevel::Partial` so native-island composition and
+runtime requirements remain visible to capability planning.
 
 ## Unsupported is an actionable result
 

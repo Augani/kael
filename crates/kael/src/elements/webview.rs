@@ -1,13 +1,15 @@
 use crate::{
     App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, LayoutId,
-    NavigationPolicy, Pixels, Rgba, SharedString, Style, StyleRefinement, Styled,
-    WebViewDownloadCompleted, WebViewDownloadPolicy, WebViewNewWindowPolicy, Window,
+    NavigationPolicy, Pixels, Point, Rgba, SharedString, Style, StyleRefinement, Styled,
+    TransformationMatrix, WebViewDownloadCompleted, WebViewDownloadPolicy, WebViewNewWindowPolicy,
+    Window,
     webview::{
         PlatformWebView, WebViewCookie, WebViewDocumentTitleChangedHandler,
         WebViewDownloadCompletedHandler, WebViewDownloadStartedHandler, WebViewDragDropEvent,
         WebViewDragDropHandler, WebViewDragDropPolicy, WebViewMessageHandler,
         WebViewNavigationHandler, WebViewNewWindowHandler, WebViewPageLoadEvent,
-        WebViewPageLoadHandler,
+        WebViewPageLoadHandler, WebViewPermissionDecision, WebViewPermissionHandler,
+        WebViewPermissionKind, webview_instance_id,
     },
 };
 use anyhow::Result;
@@ -1713,28 +1715,6 @@ impl WebViewClipboardEvent {
             Self::from_payload(message.payload.clone())
         } else {
             None
-        }
-    }
-}
-
-/// App decision for a WebView browser-permission preflight.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum WebViewPermissionDecision {
-    /// Let the embedded browser continue with its normal permission flow.
-    #[default]
-    Default,
-    /// Allow the page API call to continue to the embedded browser.
-    Allow,
-    /// Deny the page API call before it reaches the embedded browser.
-    Deny,
-}
-
-impl WebViewPermissionDecision {
-    fn as_bridge_str(self) -> &'static str {
-        match self {
-            Self::Default => "default",
-            Self::Allow => "allow",
-            Self::Deny => "deny",
         }
     }
 }
@@ -6580,6 +6560,7 @@ pub struct WebViewOptions {
     on_document_title_changed: Option<WebViewDocumentTitleChangedHandler>,
     on_page_load: Option<WebViewPageLoadHandler>,
     on_drag_drop: Option<WebViewDragDropHandler>,
+    permission_handler: Option<WebViewPermissionHandler>,
     on_permission_request: Option<(SharedString, WebViewPermissionRequestHandler)>,
 }
 
@@ -7133,6 +7114,22 @@ impl WebViewOptions {
         let kind = kind.into();
         self = self.permission_bridge(kind.as_ref());
         self.on_permission_request = Some((kind, Rc::new(handler)));
+        self
+    }
+
+    /// Set the native browser-engine permission policy.
+    ///
+    /// Unlike [`Self::on_permission_request`], this runs at the native WebView
+    /// permission boundary and can grant or deny engine requests that never
+    /// pass through the injected JavaScript preflight. The closure must be
+    /// thread-safe because WebView2 may invoke it outside Kael's render stack.
+    /// WKWebView currently exposes camera and microphone capture here; Windows
+    /// and Linux expose the permission categories supported by their engines.
+    pub fn native_permission_policy(
+        mut self,
+        handler: impl Fn(WebViewPermissionKind) -> WebViewPermissionDecision + Send + Sync + 'static,
+    ) -> Self {
+        self.permission_handler = Some(std::sync::Arc::new(handler));
         self
     }
 
@@ -7939,6 +7936,15 @@ impl WebView {
         self
     }
 
+    /// Sets the native browser-engine permission policy.
+    pub fn native_permission_policy(
+        mut self,
+        handler: impl Fn(WebViewPermissionKind) -> WebViewPermissionDecision + Send + Sync + 'static,
+    ) -> Self {
+        self.options = self.options.native_permission_policy(handler);
+        self
+    }
+
     /// Injects the standard bridge plus Web Storage event forwarding.
     pub fn storage_bridge(mut self, kind: impl AsRef<str>) -> Self {
         self.options = self.options.storage_bridge(kind);
@@ -8206,7 +8212,7 @@ impl Element for WebView {
 
     fn paint(
         &mut self,
-        _global_id: Option<&GlobalElementId>,
+        global_id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
@@ -8243,12 +8249,21 @@ impl Element for WebView {
             self.options.on_message.clone()
         };
 
-        let webview = PlatformWebView {
-            id: self.element_id.to_string().into(),
+        let command_id: SharedString = self.element_id.to_string().into();
+        let bounds = native_webview_bounds(
             bounds,
+            window.content_mask().bounds,
+            window.element_transform(),
+            window.scale_factor(),
+        );
+        let webview = PlatformWebView {
+            instance_id: webview_instance_id(global_id, &command_id),
+            id: command_id,
+            bounds: bounds.unwrap_or_default(),
             url: self.url.clone(),
             html: self.options.html.clone(),
-            visible: true,
+            visible: bounds.is_some() && window.element_opacity() > 0.0,
+            opacity: window.element_opacity().clamp(0.0, 1.0),
             storage_key: self.options.storage_key.clone(),
             user_agent: self.options.user_agent.clone(),
             injected_css: self.options.injected_css.clone(),
@@ -8272,6 +8287,7 @@ impl Element for WebView {
             document_title_changed_handler: self.options.on_document_title_changed.clone(),
             page_load_handler: self.options.on_page_load.clone(),
             drag_drop_handler: self.options.on_drag_drop.clone(),
+            permission_handler: self.options.permission_handler.clone(),
         };
         window.paint_webview(webview);
     }
@@ -8299,6 +8315,60 @@ fn url_scheme_is_allowed(url: &str, allowed: &[String]) -> bool {
     allowed.iter().any(|allowed| allowed == &scheme)
 }
 
+fn native_webview_bounds(
+    bounds: Bounds<Pixels>,
+    clip_bounds: Bounds<Pixels>,
+    transform: TransformationMatrix,
+    scale_factor: f32,
+) -> Option<Bounds<Pixels>> {
+    if !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return None;
+    }
+
+    // Native child views can represent translation, but resizing one for a
+    // scale transform would reflow the page instead of scaling its pixels.
+    // Hide any non-translation transform instead of leaking an incorrectly
+    // transformed browser surface.
+    let matrix = transform.rotation_scale;
+    if (matrix[0][0] - 1.0).abs() > f32::EPSILON
+        || matrix[0][1].abs() > f32::EPSILON
+        || matrix[1][0].abs() > f32::EPSILON
+        || (matrix[1][1] - 1.0).abs() > f32::EPSILON
+    {
+        return None;
+    }
+    if matrix.iter().flatten().any(|value| !value.is_finite())
+        || transform.translation.iter().any(|value| !value.is_finite())
+    {
+        return None;
+    }
+
+    let apply = |point: Point<Pixels>| {
+        let x = point.x.0 * scale_factor;
+        let y = point.y.0 * scale_factor;
+        Point::new(
+            ((transform.translation[0] + matrix[0][0] * x) / scale_factor).into(),
+            ((transform.translation[1] + matrix[1][1] * y) / scale_factor).into(),
+        )
+    };
+    let corners = [
+        apply(bounds.origin),
+        apply(bounds.top_right()),
+        apply(bounds.bottom_right()),
+        apply(bounds.bottom_left()),
+    ];
+    let mut minimum = corners[0];
+    let mut maximum = corners[0];
+    for corner in corners.into_iter().skip(1) {
+        minimum = minimum.min(&corner);
+        maximum = maximum.max(&corner);
+    }
+
+    let transformed = Bounds::from_corners(minimum, maximum);
+    let clipped = transformed.intersect(&clip_bounds);
+    (!clipped.is_empty()).then_some(clipped)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -8312,16 +8382,17 @@ mod tests {
         WebViewMediaElementOptions, WebViewMediaElementState, WebViewMediaEvent,
         WebViewMediaFrameCaptureOptions, WebViewMediaTextTrackOptions, WebViewNetworkEvent,
         WebViewNewWindowPolicy, WebViewOptions, WebViewPageLoadEvent, WebViewPermissionDecision,
-        WebViewPermissionRequest, WebViewPointerEvent, WebViewResourceEvent, WebViewScrollEvent,
-        WebViewSelectionEvent, WebViewStopFindAction, WebViewStorageArea, WebViewStorageEvent,
-        WebViewStorageMutationResult, WebViewStorageSnapshot, parse_webview_bool_result,
-        parse_webview_document_snapshot_result, parse_webview_download_trigger_result,
-        parse_webview_element_snapshot_result, parse_webview_find_result,
-        parse_webview_media_state_result, parse_webview_optional_scroll_event_result,
-        parse_webview_optional_string_result, parse_webview_scroll_event_result,
-        parse_webview_storage_mutation_result, parse_webview_storage_snapshot_result,
-        parse_webview_string_array_result, parse_webview_string_result, url_scheme_is_allowed,
-        webview, webview_add_media_text_track_script, webview_attribute_action_script,
+        WebViewPermissionKind, WebViewPermissionRequest, WebViewPointerEvent, WebViewResourceEvent,
+        WebViewScrollEvent, WebViewSelectionEvent, WebViewStopFindAction, WebViewStorageArea,
+        WebViewStorageEvent, WebViewStorageMutationResult, WebViewStorageSnapshot,
+        native_webview_bounds, parse_webview_bool_result, parse_webview_document_snapshot_result,
+        parse_webview_download_trigger_result, parse_webview_element_snapshot_result,
+        parse_webview_find_result, parse_webview_media_state_result,
+        parse_webview_optional_scroll_event_result, parse_webview_optional_string_result,
+        parse_webview_scroll_event_result, parse_webview_storage_mutation_result,
+        parse_webview_storage_snapshot_result, parse_webview_string_array_result,
+        parse_webview_string_result, url_scheme_is_allowed, webview,
+        webview_add_media_text_track_script, webview_attribute_action_script,
         webview_bridge_script, webview_can_go_back_script, webview_can_go_forward_script,
         webview_capture_dom_image_script, webview_capture_media_frame_script,
         webview_class_action_script, webview_clear_storage_area_script,
@@ -8357,7 +8428,7 @@ mod tests {
         webview_style_property_script, webview_submit_form_script, webview_trigger_download_script,
         webview_viewport_snapshot_script, webview_with_options,
     };
-    use crate::{SharedString, rgb};
+    use crate::{Bounds, Point, SharedString, Size, TransformationMatrix, px, rgb};
     use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD as BASE64;
     use std::cell::RefCell;
@@ -8367,6 +8438,52 @@ mod tests {
     fn webview_controller_preserves_target_id() {
         let controller = WebViewController::new("docs-webview");
         assert_eq!(controller.id().as_ref(), "docs-webview");
+    }
+
+    #[test]
+    fn native_webview_bounds_apply_axis_aligned_transform_and_clip() {
+        let bounds = Bounds::new(
+            Point::new(px(0.0), px(0.0)),
+            Size::new(px(100.0), px(100.0)),
+        );
+        let clip = Bounds::new(
+            Point::new(px(20.0), px(0.0)),
+            Size::new(px(100.0), px(100.0)),
+        );
+        let transform = TransformationMatrix {
+            rotation_scale: [[1.0, 0.0], [0.0, 1.0]],
+            translation: [20.0, 10.0],
+        };
+
+        assert_eq!(
+            native_webview_bounds(bounds, clip, transform, 2.0),
+            Some(Bounds::new(
+                Point::new(px(20.0), px(5.0)),
+                Size::new(px(90.0), px(95.0))
+            ))
+        );
+    }
+
+    #[test]
+    fn native_webview_bounds_hide_non_translation_transforms_and_empty_clip() {
+        let bounds = Bounds::new(Point::new(px(0.0), px(0.0)), Size::new(px(10.0), px(10.0)));
+        let clip = Bounds::new(Point::new(px(20.0), px(20.0)), Size::new(px(5.0), px(5.0)));
+        assert_eq!(
+            native_webview_bounds(bounds, clip, TransformationMatrix::unit(), 1.0),
+            None
+        );
+
+        let rotation = TransformationMatrix {
+            rotation_scale: [[0.0, -1.0], [1.0, 0.0]],
+            translation: [0.0, 0.0],
+        };
+        assert_eq!(native_webview_bounds(bounds, bounds, rotation, 1.0), None);
+
+        let scale = TransformationMatrix {
+            rotation_scale: [[2.0, 0.0], [0.0, 2.0]],
+            translation: [0.0, 0.0],
+        };
+        assert_eq!(native_webview_bounds(bounds, bounds, scale, 1.0), None);
     }
 
     #[test]
@@ -10870,6 +10987,30 @@ mod tests {
                 .iter()
                 .any(|script| script.contains("\"tab:permission\""))
         );
+    }
+
+    #[test]
+    fn webview_options_can_enforce_native_permission_policy() {
+        let options =
+            WebViewOptions::embedded_widget().native_permission_policy(|kind| match kind {
+                WebViewPermissionKind::Microphone => WebViewPermissionDecision::Allow,
+                _ => WebViewPermissionDecision::Deny,
+            });
+        let handler = options
+            .permission_handler
+            .expect("native permission policy");
+        assert_eq!(
+            handler(WebViewPermissionKind::Microphone),
+            WebViewPermissionDecision::Allow
+        );
+        assert_eq!(
+            handler(WebViewPermissionKind::Camera),
+            WebViewPermissionDecision::Deny
+        );
+
+        let element = webview("call", "https://example.com")
+            .native_permission_policy(|_| WebViewPermissionDecision::Default);
+        assert!(element.options.permission_handler.is_some());
     }
 
     #[test]

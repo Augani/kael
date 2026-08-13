@@ -1,6 +1,8 @@
 use crate::{
     Bounds, Pixels, SharedString,
-    webview::{PlatformWebView, PlatformWebViewCommand},
+    webview::{
+        PlatformWebView, PlatformWebViewCommand, WebViewPermissionDecision, WebViewPermissionKind,
+    },
 };
 use anyhow::Result;
 use wry::{
@@ -74,6 +76,37 @@ pub(crate) fn create_web_context(desired: &PlatformWebView) -> Result<Option<Web
         .map(webview_storage_dir)
         .transpose()
         .map(|directory| directory.map(|data_directory| WebContext::new(Some(data_directory))))
+}
+
+pub(crate) fn permission_kind_from_wry(kind: wry::PermissionKind) -> WebViewPermissionKind {
+    match kind {
+        wry::PermissionKind::Microphone => WebViewPermissionKind::Microphone,
+        wry::PermissionKind::Camera => WebViewPermissionKind::Camera,
+        wry::PermissionKind::Geolocation => WebViewPermissionKind::Geolocation,
+        wry::PermissionKind::Notifications => WebViewPermissionKind::Notifications,
+        wry::PermissionKind::ClipboardRead => WebViewPermissionKind::ClipboardRead,
+        wry::PermissionKind::DisplayCapture => WebViewPermissionKind::DisplayCapture,
+        wry::PermissionKind::Midi => WebViewPermissionKind::Midi,
+        wry::PermissionKind::Sensors => WebViewPermissionKind::Sensors,
+        wry::PermissionKind::MediaKeySystemAccess => WebViewPermissionKind::MediaKeySystemAccess,
+        wry::PermissionKind::LocalFonts => WebViewPermissionKind::LocalFonts,
+        wry::PermissionKind::WindowManagement => WebViewPermissionKind::WindowManagement,
+        wry::PermissionKind::PointerLock => WebViewPermissionKind::PointerLock,
+        wry::PermissionKind::AutomaticDownloads => WebViewPermissionKind::AutomaticDownloads,
+        wry::PermissionKind::FileSystemAccess => WebViewPermissionKind::FileSystemAccess,
+        wry::PermissionKind::Autoplay => WebViewPermissionKind::Autoplay,
+        _ => WebViewPermissionKind::Other,
+    }
+}
+
+pub(crate) fn permission_response_to_wry(
+    decision: WebViewPermissionDecision,
+) -> wry::PermissionResponse {
+    match decision {
+        WebViewPermissionDecision::Allow => wry::PermissionResponse::Allow,
+        WebViewPermissionDecision::Deny => wry::PermissionResponse::Deny,
+        WebViewPermissionDecision::Default => wry::PermissionResponse::Default,
+    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]

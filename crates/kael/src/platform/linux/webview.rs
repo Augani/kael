@@ -1,5 +1,6 @@
 use super::super::webview_common::{
-    bridge_script, create_web_context, css_script, to_wry_rect, webview_command_id,
+    bridge_script, create_web_context, css_script, permission_kind_from_wry,
+    permission_response_to_wry, to_wry_rect, webview_command_id,
 };
 #[cfg(feature = "wayland")]
 use super::wayland::WaylandWindowStatePtr;
@@ -12,23 +13,22 @@ use crate::{
         NavigationPolicy, PlatformWebView, PlatformWebViewCommand,
         WebViewDocumentTitleChangedHandler, WebViewDownloadCompletedHandler,
         WebViewDownloadStartedHandler, WebViewDragDropEvent, WebViewDragDropHandler,
-        WebViewDragDropPolicy, WebViewMessageHandler, WebViewNavigationHandler,
-        WebViewNewWindowHandler, WebViewPageLoadEvent, WebViewPageLoadHandler,
-        rgba_to_webview_color,
+        WebViewDragDropPolicy, WebViewNavigationHandler, WebViewNewWindowHandler,
+        WebViewPageLoadEvent, WebViewPageLoadHandler, rgba_to_webview_color,
     },
 };
 use anyhow::{Context as _, Result};
-#[cfg(feature = "wayland")]
 use gtk::prelude::*;
+use parking_lot::RwLock;
 #[cfg(feature = "x11")]
 use raw_window_handle as rwh;
-use std::{collections::HashSet, rc::Rc};
+use std::{cell::RefCell, collections::HashSet, rc::Rc, sync::Arc};
 use util::ResultExt;
 #[cfg(feature = "wayland")]
 use wry::WebViewBuilderExtUnix;
 use wry::{
     DragDropEvent as WryDragDropEvent, NewWindowResponse, PageLoadEvent, WebContext, WebView,
-    WebViewBuilder,
+    WebViewBuilder, WebViewExtUnix,
 };
 
 pub(crate) struct LinuxWebViewHost {
@@ -39,6 +39,9 @@ pub(crate) struct LinuxWebViewHost {
     current_html: Option<SharedString>,
     bounds: Bounds<Pixels>,
     background_color: Option<crate::Rgba>,
+    opacity: f32,
+    live: Rc<RefCell<PlatformWebView>>,
+    live_permission_handler: Arc<RwLock<Option<crate::webview::WebViewPermissionHandler>>>,
     backend: LinuxWebViewBackend,
 }
 
@@ -77,7 +80,7 @@ pub(crate) fn sync_x11_webviews(window: &X11WindowStatePtr, webviews: &[Platform
     let x_window = window.x_window;
 
     for webview in webviews {
-        let webview_id = webview.id.clone();
+        let webview_id = webview.instance_id.clone();
         active_ids.insert(webview_id.clone());
 
         let needs_recreate = state
@@ -128,7 +131,7 @@ pub(crate) fn sync_wayland_webviews(window: &WaylandWindowStatePtr, webviews: &[
     };
 
     for webview in webviews {
-        let webview_id = webview.id.clone();
+        let webview_id = webview.instance_id.clone();
         active_ids.insert(webview_id.clone());
 
         let needs_recreate = {
@@ -191,11 +194,20 @@ pub(crate) fn dispatch_x11_webview_command(
 ) -> Result<()> {
     let webview_id = webview_command_id(&command);
     let mut state = window.state.borrow_mut();
-    let Some(host) = state.webviews.get_mut(&webview_id) else {
+    let mut matches = state
+        .webviews
+        .values_mut()
+        .filter(|host| host.desired.id == webview_id);
+    let Some(host) = matches.next() else {
         anyhow::bail!("unknown webview: {}", webview_id);
     };
-    host.apply_command(command);
-    Ok(())
+    if matches.next().is_some() {
+        anyhow::bail!(
+            "ambiguous webview id `{}`; WebView command ids must be unique within a window",
+            webview_id
+        );
+    }
+    host.apply_command(command)
 }
 
 #[cfg(feature = "wayland")]
@@ -205,11 +217,20 @@ pub(crate) fn dispatch_wayland_webview_command(
 ) -> Result<()> {
     let webview_id = webview_command_id(&command);
     let mut state = window.state.borrow_mut();
-    let Some(host) = state.webviews.get_mut(&webview_id) else {
+    let mut matches = state
+        .webviews
+        .values_mut()
+        .filter(|host| host.desired.id == webview_id);
+    let Some(host) = matches.next() else {
         anyhow::bail!("unknown webview: {}", webview_id);
     };
-    host.apply_command(command);
-    Ok(())
+    if matches.next().is_some() {
+        anyhow::bail!(
+            "ambiguous webview id `{}`; WebView command ids must be unique within a window",
+            webview_id
+        );
+    }
+    host.apply_command(command)
 }
 
 impl LinuxWebViewHost {
@@ -222,6 +243,8 @@ impl LinuxWebViewHost {
         ensure_gtk_webview_runtime()?;
 
         let mut context = create_web_context(&desired)?;
+        let live = Rc::new(RefCell::new(desired.clone()));
+        let live_permission_handler = Arc::new(RwLock::new(desired.permission_handler.clone()));
         let builder = configure_webview_builder(
             if let Some(context) = context.as_mut() {
                 WebViewBuilder::new_with_web_context(context)
@@ -230,6 +253,8 @@ impl LinuxWebViewHost {
             },
             &desired,
             desired.bounds,
+            live.clone(),
+            live_permission_handler.clone(),
         );
 
         let webview = builder
@@ -242,6 +267,9 @@ impl LinuxWebViewHost {
             current_html: desired.html.clone(),
             bounds: desired.bounds,
             background_color: desired.background_color,
+            opacity: -1.0,
+            live,
+            live_permission_handler,
             desired,
             webview,
             _context: context,
@@ -275,6 +303,8 @@ impl LinuxWebViewHost {
 
         let webview_bounds = zero_origin_bounds(desired.bounds);
         let mut context = create_web_context(&desired)?;
+        let live = Rc::new(RefCell::new(desired.clone()));
+        let live_permission_handler = Arc::new(RwLock::new(desired.permission_handler.clone()));
         let builder = configure_webview_builder(
             if let Some(context) = context.as_mut() {
                 WebViewBuilder::new_with_web_context(context)
@@ -283,6 +313,8 @@ impl LinuxWebViewHost {
             },
             &desired,
             webview_bounds,
+            live.clone(),
+            live_permission_handler.clone(),
         );
 
         let webview = builder
@@ -294,6 +326,9 @@ impl LinuxWebViewHost {
             current_html: desired.html.clone(),
             bounds: webview_bounds,
             background_color: desired.background_color,
+            opacity: -1.0,
+            live,
+            live_permission_handler,
             desired,
             webview,
             _context: context,
@@ -315,18 +350,6 @@ impl LinuxWebViewHost {
             || self.desired.media_autoplay != webview.media_autoplay
             || self.desired.focused != webview.focused
             || self.desired.clipboard_access != webview.clipboard_access
-            || !same_optional_message_handler(
-                &self.desired.message_handler,
-                &webview.message_handler,
-            )
-            || !same_optional_navigation_handler(
-                &self.desired.navigation_handler,
-                &webview.navigation_handler,
-            )
-            || !same_optional_drag_drop_handler(
-                &self.desired.drag_drop_handler,
-                &webview.drag_drop_handler,
-            )
     }
 
     fn update_desired(
@@ -335,6 +358,8 @@ impl LinuxWebViewHost {
         scale_factor: f32,
         parent_origin: Option<Point<Pixels>>,
     ) {
+        *self.live.borrow_mut() = desired.clone();
+        *self.live_permission_handler.write() = desired.permission_handler.clone();
         self.desired = desired;
         self.apply(scale_factor, parent_origin);
     }
@@ -408,30 +433,48 @@ impl LinuxWebViewHost {
             self.background_color = self.desired.background_color;
         }
 
+        if self.opacity != self.desired.opacity {
+            let opacity = self.desired.opacity.clamp(0.0, 1.0) as f64;
+            match &self.backend {
+                LinuxWebViewBackend::X11 => self.webview.webview().set_opacity(opacity),
+                #[cfg(feature = "wayland")]
+                LinuxWebViewBackend::Wayland { overlay_window } => {
+                    overlay_window.set_opacity(opacity)
+                }
+            }
+            self.opacity = self.desired.opacity;
+        }
+
         self.webview.set_visible(self.desired.visible).log_err();
     }
 
-    fn apply_command(&mut self, command: PlatformWebViewCommand) {
+    fn apply_command(&mut self, command: PlatformWebViewCommand) -> Result<()> {
         match command {
             PlatformWebViewCommand::Navigate { url, .. } => {
-                self.webview.load_url(url.as_ref()).log_err();
+                self.webview
+                    .load_url(url.as_ref())
+                    .context("navigating Linux WebView")?;
                 self.current_url = url;
                 self.current_html = None;
             }
             PlatformWebViewCommand::NavigateWithHeaders { url, headers, .. } => {
                 self.webview
                     .load_url_with_headers(url.as_ref(), headers)
-                    .log_err();
+                    .context("navigating Linux WebView with headers")?;
                 self.current_url = url;
                 self.current_html = None;
             }
             PlatformWebViewCommand::LoadHtml { html, .. } => {
-                self.webview.load_html(html.as_ref()).log_err();
+                self.webview
+                    .load_html(html.as_ref())
+                    .context("loading HTML into Linux WebView")?;
                 self.current_url = SharedString::default();
                 self.current_html = Some(html);
             }
             PlatformWebViewCommand::EvaluateJavaScript { script, .. } => {
-                self.webview.evaluate_script(script.as_ref()).log_err();
+                self.webview
+                    .evaluate_script(script.as_ref())
+                    .context("evaluating JavaScript in Linux WebView")?;
             }
             PlatformWebViewCommand::EvaluateJavaScriptWithResult {
                 script, callback, ..
@@ -443,36 +486,45 @@ impl LinuxWebViewHost {
                         callback_for_result(Ok(result.into()))
                     })
                 {
-                    callback(Err(error.to_string().into()));
+                    let message: SharedString = error.to_string().into();
+                    callback(Err(message.clone()));
+                    anyhow::bail!(message);
                 }
             }
             PlatformWebViewCommand::PostMessage { message, .. } => {
-                let payload = serde_json::to_string(&message).unwrap_or_else(|_| "null".into());
+                let payload =
+                    serde_json::to_string(&message).context("serializing Linux WebView message")?;
                 let script = format!(
                     "(() => {{ const payload = {payload}; if (window.dispatchEvent) {{ window.dispatchEvent(new MessageEvent('message', {{ data: payload }})); }} if (typeof window.onmessage === 'function') {{ window.onmessage({{ data: payload }}); }} }})();"
                 );
-                self.webview.evaluate_script(&script).log_err();
+                self.webview
+                    .evaluate_script(&script)
+                    .context("posting message into Linux WebView")?;
             }
             PlatformWebViewCommand::Reload { .. } => {
-                self.webview.reload().log_err();
+                self.webview.reload().context("reloading Linux WebView")?;
             }
             PlatformWebViewCommand::GoBack { .. } => {
-                self.webview.evaluate_script("history.back()").log_err();
+                self.webview
+                    .evaluate_script("history.back()")
+                    .context("navigating Linux WebView backward")?;
             }
             PlatformWebViewCommand::GoForward { .. } => {
-                self.webview.evaluate_script("history.forward()").log_err();
+                self.webview
+                    .evaluate_script("history.forward()")
+                    .context("navigating Linux WebView forward")?;
             }
             PlatformWebViewCommand::OpenDevTools { .. } => {
-                #[cfg(debug_assertions)]
+                #[cfg(any(debug_assertions, feature = "devtools"))]
                 self.webview.open_devtools();
-                #[cfg(not(debug_assertions))]
-                log::warn!("WebView devtools require a debug build or backend devtools support");
+                #[cfg(not(any(debug_assertions, feature = "devtools")))]
+                anyhow::bail!("Linux WebView devtools require a debug build or `devtools` feature");
             }
             PlatformWebViewCommand::CloseDevTools { .. } => {
-                #[cfg(debug_assertions)]
+                #[cfg(any(debug_assertions, feature = "devtools"))]
                 self.webview.close_devtools();
-                #[cfg(not(debug_assertions))]
-                log::warn!("WebView devtools require a debug build or backend devtools support");
+                #[cfg(not(any(debug_assertions, feature = "devtools")))]
+                anyhow::bail!("Linux WebView devtools require a debug build or `devtools` feature");
             }
             PlatformWebViewCommand::IsDevToolsOpen { callback, .. } => {
                 #[cfg(any(debug_assertions, feature = "devtools"))]
@@ -484,19 +536,25 @@ impl LinuxWebViewHost {
                 ));
             }
             PlatformWebViewCommand::Print { .. } => {
-                self.webview.print().log_err();
+                self.webview.print().context("printing Linux WebView")?;
             }
             PlatformWebViewCommand::SetZoomFactor { factor, .. } => {
-                self.webview.zoom(factor).log_err();
+                self.webview
+                    .zoom(factor)
+                    .context("setting Linux WebView zoom factor")?;
             }
             PlatformWebViewCommand::Focus { .. } => {
-                self.webview.focus().log_err();
+                self.webview.focus().context("focusing Linux WebView")?;
             }
             PlatformWebViewCommand::FocusParent { .. } => {
-                self.webview.focus_parent().log_err();
+                self.webview
+                    .focus_parent()
+                    .context("focusing Linux WebView parent")?;
             }
             PlatformWebViewCommand::ClearBrowsingData { .. } => {
-                self.webview.clear_all_browsing_data().log_err();
+                self.webview
+                    .clear_all_browsing_data()
+                    .context("clearing Linux WebView browsing data")?;
             }
             PlatformWebViewCommand::ReadUrl { callback, .. } => {
                 callback(
@@ -520,6 +578,7 @@ impl LinuxWebViewHost {
                 callback(delete_webview_cookie(&self.webview, cookie));
             }
         }
+        Ok(())
     }
 }
 
@@ -586,7 +645,27 @@ fn configure_webview_builder<'a>(
     mut builder: WebViewBuilder<'a>,
     desired: &PlatformWebView,
     bounds: Bounds<Pixels>,
+    live: Rc<RefCell<PlatformWebView>>,
+    live_permission_handler: Arc<RwLock<Option<crate::webview::WebViewPermissionHandler>>>,
 ) -> WebViewBuilder<'a> {
+    if desired.storage_key.is_none() {
+        builder = builder.with_incognito(true);
+    }
+
+    builder = builder.with_permission_handler(move |kind| {
+        let handler = live_permission_handler.read().clone();
+        handler
+            .map(|handler| {
+                let decision = super::catch_platform_callback(
+                    "webview native permission policy",
+                    crate::WebViewPermissionDecision::Deny,
+                    || handler(permission_kind_from_wry(kind)),
+                );
+                permission_response_to_wry(decision)
+            })
+            .unwrap_or(wry::PermissionResponse::Default)
+    });
+
     builder = builder.with_bounds(to_wry_rect(bounds));
     if let Some(color) = desired.background_color {
         builder = builder.with_background_color(rgba_to_webview_color(color));
@@ -618,53 +697,65 @@ fn configure_webview_builder<'a>(
     }
     builder = builder.with_clipboard(desired.clipboard_access);
 
-    let message_handler = desired.message_handler.clone();
-    let ipc_async_window = desired.async_window.clone();
+    let ipc_live = live.clone();
     builder = builder.with_ipc_handler(move |request| {
-        let Some(handler) = message_handler.clone() else {
+        let (handler, mut async_window) = {
+            let live = ipc_live.borrow();
+            (live.message_handler.clone(), live.async_window.clone())
+        };
+        let Some(handler) = handler else {
             return;
         };
 
         let body = request.body().to_string();
         let payload =
             serde_json::from_str(&body).unwrap_or_else(|_| serde_json::Value::String(body));
-        let mut async_window = ipc_async_window.clone();
         super::catch_platform_callback("webview message", (), || {
             let _ = async_window.update(|window, cx| handler(payload, window, cx));
         });
     });
 
-    if let Some(navigation_handler) = desired.navigation_handler.clone() {
-        let navigation_async_window = desired.async_window.clone();
-        builder = builder.with_navigation_handler(move |url| {
-            let mut async_window = navigation_async_window.clone();
+    let navigation_live = live.clone();
+    builder = builder.with_navigation_handler(move |url| {
+        let (handler, mut async_window) = {
+            let live = navigation_live.borrow();
+            (live.navigation_handler.clone(), live.async_window.clone())
+        };
+        if let Some(handler) = handler {
             super::catch_platform_callback(
                 "webview navigation policy",
                 NavigationPolicy::Deny,
                 || {
                     async_window
-                        .update(|window, cx| navigation_handler(url.clone().into(), window, cx))
+                        .update(|window, cx| handler(url.clone().into(), window, cx))
                         .unwrap_or(NavigationPolicy::Deny)
                 },
             ) == NavigationPolicy::Allow
-        });
-    }
+        } else {
+            true
+        }
+    });
 
-    let new_window_async_window = desired.async_window.clone();
-    let new_window_id = desired.id.clone();
-    let new_window_navigation_handler = desired.navigation_handler.clone();
-    let new_window_handler = desired.new_window_handler.clone();
+    let new_window_live = live.clone();
     builder = builder.with_new_window_req_handler(move |url, _features| {
+        let (new_window_handler, navigation_handler, async_window, webview_id) = {
+            let live = new_window_live.borrow();
+            (
+                live.new_window_handler.clone(),
+                live.navigation_handler.clone(),
+                live.async_window.clone(),
+                live.id.clone(),
+            )
+        };
         match resolve_new_window_policy(
             &url,
-            new_window_handler.clone(),
-            new_window_navigation_handler.clone(),
-            new_window_async_window.clone(),
+            new_window_handler,
+            navigation_handler,
+            async_window.clone(),
         ) {
             WebViewNewWindowPolicy::Deny => {}
             WebViewNewWindowPolicy::NavigateCurrent => {
-                let mut async_window = new_window_async_window.clone();
-                let webview_id = new_window_id.clone();
+                let mut async_window = async_window;
                 let _ = async_window.update(|window, _| {
                     let _ = window.navigate_webview(webview_id, url.clone());
                 });
@@ -683,66 +774,66 @@ fn configure_webview_builder<'a>(
         builder = builder.with_initialization_script(javascript.as_ref());
     }
 
-    if desired.download_started_handler.is_some() {
-        let download_async_window = desired.async_window.clone();
-        let download_started_handler = desired.download_started_handler.clone();
-        builder = builder.with_download_started_handler(move |url, path| {
-            resolve_download_started(
-                url,
-                path,
-                download_started_handler.clone(),
-                download_async_window.clone(),
+    let download_started_live = live.clone();
+    builder = builder.with_download_started_handler(move |url, path| {
+        let (handler, async_window) = {
+            let live = download_started_live.borrow();
+            (
+                live.download_started_handler.clone(),
+                live.async_window.clone(),
             )
-        });
-    }
+        };
+        resolve_download_started(url, path, handler, async_window)
+    });
 
-    if let Some(download_completed_handler) = desired.download_completed_handler.clone() {
-        let download_async_window = desired.async_window.clone();
-        builder = builder.with_download_completed_handler(move |url, path, success| {
-            dispatch_download_completed(
-                url,
-                path,
-                success,
-                download_completed_handler.clone(),
-                download_async_window.clone(),
-            );
-        });
-    }
-
-    if let Some(title_changed_handler) = desired.document_title_changed_handler.clone() {
-        let title_async_window = desired.async_window.clone();
-        builder = builder.with_document_title_changed_handler(move |title| {
-            dispatch_document_title_changed(
-                title,
-                title_changed_handler.clone(),
-                title_async_window.clone(),
-            );
-        });
-    }
-
-    if let Some(page_load_handler) = desired.page_load_handler.clone() {
-        let page_load_async_window = desired.async_window.clone();
-        builder = builder.with_on_page_load_handler(move |event, url| {
-            dispatch_page_load(
-                event,
-                url,
-                page_load_handler.clone(),
-                page_load_async_window.clone(),
-            );
-        });
-    }
-
-    if let Some(drag_drop_handler) = desired.drag_drop_handler.clone() {
-        let drag_drop_async_window = desired.async_window.clone();
-        builder = builder.with_drag_drop_handler(move |event| {
-            dispatch_drag_drop_event(
-                event,
-                drag_drop_handler.clone(),
-                drag_drop_async_window.clone(),
+    let download_completed_live = live.clone();
+    builder = builder.with_download_completed_handler(move |url, path, success| {
+        let (handler, async_window) = {
+            let live = download_completed_live.borrow();
+            (
+                live.download_completed_handler.clone(),
+                live.async_window.clone(),
             )
-            .blocks_browser_default()
-        });
-    }
+        };
+        if let Some(handler) = handler {
+            dispatch_download_completed(url, path, success, handler, async_window);
+        }
+    });
+
+    let title_live = live.clone();
+    builder = builder.with_document_title_changed_handler(move |title| {
+        let (handler, async_window) = {
+            let live = title_live.borrow();
+            (
+                live.document_title_changed_handler.clone(),
+                live.async_window.clone(),
+            )
+        };
+        if let Some(handler) = handler {
+            dispatch_document_title_changed(title, handler, async_window);
+        }
+    });
+
+    let page_load_live = live.clone();
+    builder = builder.with_on_page_load_handler(move |event, url| {
+        let (handler, async_window) = {
+            let live = page_load_live.borrow();
+            (live.page_load_handler.clone(), live.async_window.clone())
+        };
+        if let Some(handler) = handler {
+            dispatch_page_load(event, url, handler, async_window);
+        }
+    });
+
+    builder = builder.with_drag_drop_handler(move |event| {
+        let (handler, async_window) = {
+            let live = live.borrow();
+            (live.drag_drop_handler.clone(), live.async_window.clone())
+        };
+        handler.is_some_and(|handler| {
+            dispatch_drag_drop_event(event, handler, async_window).blocks_browser_default()
+        })
+    });
 
     builder
 }
@@ -913,39 +1004,6 @@ fn overlay_bounds(parent_origin: Point<Pixels>, child_bounds: Bounds<Pixels>) ->
     origin.x += child_bounds.origin.x;
     origin.y += child_bounds.origin.y;
     Bounds::new(origin, child_bounds.size)
-}
-
-fn same_optional_message_handler(
-    left: &Option<WebViewMessageHandler>,
-    right: &Option<WebViewMessageHandler>,
-) -> bool {
-    match (left, right) {
-        (Some(left), Some(right)) => Rc::ptr_eq(left, right),
-        (None, None) => true,
-        _ => false,
-    }
-}
-
-fn same_optional_navigation_handler(
-    left: &Option<WebViewNavigationHandler>,
-    right: &Option<WebViewNavigationHandler>,
-) -> bool {
-    match (left, right) {
-        (Some(left), Some(right)) => Rc::ptr_eq(left, right),
-        (None, None) => true,
-        _ => false,
-    }
-}
-
-fn same_optional_drag_drop_handler(
-    left: &Option<WebViewDragDropHandler>,
-    right: &Option<WebViewDragDropHandler>,
-) -> bool {
-    match (left, right) {
-        (Some(left), Some(right)) => Rc::ptr_eq(left, right),
-        (None, None) => true,
-        _ => false,
-    }
 }
 
 #[cfg(feature = "x11")]

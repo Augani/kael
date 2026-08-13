@@ -1,4 +1,5 @@
-use crate::{App, AsyncWindowContext, Bounds, Pixels, Rgba, SharedString, Window};
+use crate::{App, AsyncWindowContext, Bounds, GlobalElementId, Pixels, Rgba, SharedString, Window};
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -10,6 +11,68 @@ pub enum NavigationPolicy {
     Allow,
     /// Block the navigation.
     Deny,
+}
+
+/// Permission category requested by the native embedded-browser engine.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum WebViewPermissionKind {
+    /// Microphone capture.
+    Microphone,
+    /// Camera capture.
+    Camera,
+    /// Device location.
+    Geolocation,
+    /// Web notifications.
+    Notifications,
+    /// Reading clipboard contents.
+    ClipboardRead,
+    /// Screen or window capture.
+    DisplayCapture,
+    /// System-exclusive MIDI access.
+    Midi,
+    /// Motion or environmental sensors.
+    Sensors,
+    /// Protected-media key-system access.
+    MediaKeySystemAccess,
+    /// Enumeration or use of locally installed fonts.
+    LocalFonts,
+    /// Browser window-placement or window-management access.
+    WindowManagement,
+    /// Locking the pointer to the WebView.
+    PointerLock,
+    /// Multiple automatic downloads.
+    AutomaticDownloads,
+    /// Browser file-system read or write access.
+    FileSystemAccess,
+    /// Media autoplay.
+    Autoplay,
+    /// A backend permission category not represented above.
+    Other,
+}
+
+/// App decision for both native WebView permission policy and JavaScript
+/// permission preflighting.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum WebViewPermissionDecision {
+    /// Continue with the embedded browser's normal permission behavior. On
+    /// Linux, the underlying WebKitGTK default is to deny the request.
+    #[default]
+    Default,
+    /// Grant the native request, or allow a preflighted page API to continue.
+    Allow,
+    /// Deny the native request, or block a preflighted page API.
+    Deny,
+}
+
+impl WebViewPermissionDecision {
+    pub(crate) fn as_bridge_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+        }
+    }
 }
 
 /// Controls how a WebView should handle `window.open` and target-blank requests.
@@ -174,6 +237,9 @@ pub(crate) type WebViewPageLoadHandler =
 pub(crate) type WebViewDragDropHandler =
     Rc<dyn Fn(WebViewDragDropEvent, &mut Window, &mut App) -> WebViewDragDropPolicy>;
 
+pub(crate) type WebViewPermissionHandler =
+    Arc<dyn Fn(WebViewPermissionKind) -> WebViewPermissionDecision + Send + Sync + 'static>;
+
 pub(crate) type WebViewCookieCallback =
     Rc<dyn Fn(Result<Vec<WebViewCookie>, SharedString>) + 'static>;
 
@@ -189,11 +255,18 @@ pub(crate) type WebViewJavaScriptResultCallback =
 #[derive(Clone)]
 #[cfg_attr(not(feature = "webview"), allow(dead_code))]
 pub(crate) struct PlatformWebView {
+    /// Stable identity of this rendered element instance. Unlike `id`, this is
+    /// qualified by the complete element path and is safe to use as a native
+    /// host-map key when separate subtrees reuse the same local element id.
+    pub(crate) instance_id: SharedString,
+    /// Public command id used by [`crate::WebViewController`]. This must be
+    /// unique among the WebViews rendered into a single window.
     pub(crate) id: SharedString,
     pub(crate) bounds: Bounds<Pixels>,
     pub(crate) url: SharedString,
     pub(crate) html: Option<SharedString>,
     pub(crate) visible: bool,
+    pub(crate) opacity: f32,
     pub(crate) storage_key: Option<SharedString>,
     pub(crate) user_agent: Option<SharedString>,
     pub(crate) injected_css: Vec<SharedString>,
@@ -217,6 +290,25 @@ pub(crate) struct PlatformWebView {
     pub(crate) document_title_changed_handler: Option<WebViewDocumentTitleChangedHandler>,
     pub(crate) page_load_handler: Option<WebViewPageLoadHandler>,
     pub(crate) drag_drop_handler: Option<WebViewDragDropHandler>,
+    pub(crate) permission_handler: Option<WebViewPermissionHandler>,
+}
+
+pub(crate) fn webview_instance_id(
+    global_id: Option<&GlobalElementId>,
+    fallback_id: &SharedString,
+) -> SharedString {
+    let Some(global_id) = global_id else {
+        return fallback_id.clone();
+    };
+
+    // GlobalElementId's Display form is intended for diagnostics. Length-prefix
+    // every component here so ids containing `.` cannot alias a different path.
+    let mut encoded = String::new();
+    for component in global_id.0.iter() {
+        let component = format!("{component:?}");
+        let _ = write!(encoded, "{}:{component};", component.len());
+    }
+    encoded.into()
 }
 
 #[derive(Clone)]
@@ -316,4 +408,61 @@ pub(crate) fn rgba_to_webview_color(color: Rgba) -> (u8, u8, u8, u8) {
         channel(color.b),
         channel(color.a),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ElementId;
+    use smallvec::smallvec;
+
+    #[test]
+    fn webview_instance_ids_are_qualified_by_the_element_path() {
+        let first = GlobalElementId(smallvec![
+            ElementId::from("left"),
+            ElementId::from("browser")
+        ]);
+        let second = GlobalElementId(smallvec![
+            ElementId::from("right"),
+            ElementId::from("browser")
+        ]);
+        let fallback: SharedString = "browser".into();
+
+        assert_ne!(
+            webview_instance_id(Some(&first), &fallback),
+            webview_instance_id(Some(&second), &fallback)
+        );
+    }
+
+    #[test]
+    fn webview_instance_id_encoding_cannot_alias_delimited_components() {
+        let first = GlobalElementId(smallvec![ElementId::from("a.b"), ElementId::from("c")]);
+        let second = GlobalElementId(smallvec![ElementId::from("a"), ElementId::from("b.c")]);
+        let fallback: SharedString = "unused".into();
+
+        assert_eq!(first.to_string(), second.to_string());
+        assert_ne!(
+            webview_instance_id(Some(&first), &fallback),
+            webview_instance_id(Some(&second), &fallback)
+        );
+    }
+
+    #[test]
+    fn webview_instance_id_encoding_preserves_element_id_variants() {
+        let integer = GlobalElementId(smallvec![ElementId::Integer(1)]);
+        let name = GlobalElementId(smallvec![ElementId::from("1")]);
+        let fallback: SharedString = "unused".into();
+
+        assert_eq!(integer.to_string(), name.to_string());
+        assert_ne!(
+            webview_instance_id(Some(&integer), &fallback),
+            webview_instance_id(Some(&name), &fallback)
+        );
+    }
+
+    #[test]
+    fn webview_instance_id_uses_fallback_without_a_global_path() {
+        let fallback: SharedString = "browser".into();
+        assert_eq!(webview_instance_id(None, &fallback), fallback);
+    }
 }

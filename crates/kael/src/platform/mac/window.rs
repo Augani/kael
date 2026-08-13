@@ -18,9 +18,11 @@ use crate::{
         WebViewDownloadCompletedHandler, WebViewDownloadPolicy, WebViewDownloadStartedHandler,
         WebViewDragDropEvent, WebViewDragDropHandler, WebViewDragDropPolicy, WebViewMessageHandler,
         WebViewNavigationHandler, WebViewNewWindowHandler, WebViewNewWindowPolicy,
-        WebViewPageLoadEvent, WebViewPageLoadHandler,
+        WebViewPageLoadEvent, WebViewPageLoadHandler, WebViewPermissionDecision,
+        WebViewPermissionHandler, WebViewPermissionKind,
     },
 };
+use anyhow::Context as _;
 use block2::{Block, RcBlock};
 
 use core_graphics::display::CGDirectDisplayID;
@@ -32,7 +34,7 @@ use objc2::{msg_send, sel};
 use objc2_app_kit::*;
 use objc2_foundation::{
     NSInteger, NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSRect, NSSize, NSString,
-    NSUInteger,
+    NSUInteger, NSUUID,
 };
 use parking_lot::Mutex;
 use raw_window_handle as rwh;
@@ -68,6 +70,7 @@ type Method1<A, R> = extern "C" fn(id, Sel, A) -> R;
 type Method2<A, B, R> = extern "C" fn(id, Sel, A, B) -> R;
 type Method3<A, B, C, R> = extern "C" fn(id, Sel, A, B, C) -> R;
 type Method4<A, B, C, D, R> = extern "C" fn(id, Sel, A, B, C, D) -> R;
+type Method5<A, B, C, D, E, R> = extern "C" fn(id, Sel, A, B, C, D, E) -> R;
 
 fn catch_platform_callback<T>(name: &'static str, fallback: T, callback: impl FnOnce() -> T) -> T {
     crate::platform::catch_platform_callback("macOS", name, fallback, callback)
@@ -517,6 +520,9 @@ unsafe fn build_classes() {
                     webview_navigation_response_did_become_download as Method3<id, id, id, ()>;
                 let webview_create_webview_with_configuration =
                     webview_create_webview_with_configuration as Method4<id, id, id, id, id>;
+                let webview_request_media_capture_permission =
+                    webview_request_media_capture_permission
+                        as Method5<id, id, id, NSInteger, id, ()>;
                 let webview_did_close = webview_did_close as Method1<id, ()>;
                 let webview_download_decide_destination =
                     webview_download_decide_destination as Method4<id, id, id, id, ()>;
@@ -568,6 +574,10 @@ unsafe fn build_classes() {
                 decl.add_method(
                     sel!(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:),
                     webview_create_webview_with_configuration,
+                );
+                decl.add_method(
+                    sel!(webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:),
+                    webview_request_media_capture_permission,
                 );
                 decl.add_method(sel!(webViewDidClose:), webview_did_close);
                 decl.add_method(
@@ -931,7 +941,12 @@ fn apply_webview_background_color(webview: id, background_color: Option<Rgba>) {
         let _: () = msg_send![webview, setOpaque: opaque];
         let _: () = msg_send![webview, setBackgroundColor: color];
 
-        let scroll_view: id = msg_send![webview, scrollView];
+        let has_scroll_view: BOOL = msg_send![webview, respondsToSelector: sel!(scrollView)];
+        let scroll_view: id = if has_scroll_view.as_bool() {
+            msg_send![webview, scrollView]
+        } else {
+            nil
+        };
         if !scroll_view.is_null() {
             if opaque.as_bool() {
                 let _: () = msg_send![scroll_view, setDrawsBackground: YES];
@@ -1639,6 +1654,72 @@ unsafe fn call_navigation_decision_handler(decision_handler: id, policy: NSInteg
     }
 }
 
+unsafe fn call_webview_permission_decision_handler(decision_handler: id, decision: NSInteger) {
+    if decision_handler.is_null() {
+        return;
+    }
+
+    unsafe {
+        let decision_handler = &*(decision_handler as *const Block<dyn Fn(NSInteger)>);
+        decision_handler.call((decision,));
+    }
+}
+
+extern "C" fn webview_request_media_capture_permission(
+    delegate: id,
+    _: Sel,
+    _: id,
+    _: id,
+    _: id,
+    capture_type: NSInteger,
+    decision_handler: id,
+) {
+    const PROMPT: NSInteger = 0;
+    const GRANT: NSInteger = 1;
+    const DENY: NSInteger = 2;
+
+    let Some(state) = (unsafe { get_webview_delegate_state(delegate) }) else {
+        unsafe { call_webview_permission_decision_handler(decision_handler, PROMPT) };
+        return;
+    };
+    let Some(handler) = state.permission_handler.clone() else {
+        unsafe { call_webview_permission_decision_handler(decision_handler, PROMPT) };
+        return;
+    };
+
+    let decide = |kind| {
+        catch_platform_callback(
+            "webview native permission policy",
+            WebViewPermissionDecision::Deny,
+            || handler(kind),
+        )
+    };
+    let decision = match capture_type {
+        0 => decide(WebViewPermissionKind::Camera),
+        1 => decide(WebViewPermissionKind::Microphone),
+        2 => {
+            let camera = decide(WebViewPermissionKind::Camera);
+            let microphone = decide(WebViewPermissionKind::Microphone);
+            match (camera, microphone) {
+                (WebViewPermissionDecision::Allow, WebViewPermissionDecision::Allow) => {
+                    WebViewPermissionDecision::Allow
+                }
+                (WebViewPermissionDecision::Deny, _) | (_, WebViewPermissionDecision::Deny) => {
+                    WebViewPermissionDecision::Deny
+                }
+                _ => WebViewPermissionDecision::Default,
+            }
+        }
+        _ => decide(WebViewPermissionKind::Other),
+    };
+    let decision = match decision {
+        WebViewPermissionDecision::Allow => GRANT,
+        WebViewPermissionDecision::Deny => DENY,
+        WebViewPermissionDecision::Default => PROMPT,
+    };
+    unsafe { call_webview_permission_decision_handler(decision_handler, decision) };
+}
+
 unsafe fn call_download_destination_handler(decision_handler: id, destination: id) {
     if decision_handler.is_null() {
         log::error!("WebKit provided no download destination handler");
@@ -2098,6 +2179,7 @@ struct MacWebViewDelegateState {
     document_title_changed_handler: Option<WebViewDocumentTitleChangedHandler>,
     page_load_handler: Option<WebViewPageLoadHandler>,
     drag_drop_handler: Option<WebViewDragDropHandler>,
+    permission_handler: Option<WebViewPermissionHandler>,
     zoom_hotkeys_enabled: bool,
     clipboard_access: bool,
     downloads: HashMap<usize, MacWebViewDownloadState>,
@@ -2117,6 +2199,7 @@ struct MacPrintViewState {
 }
 
 struct MacWebViewHost {
+    command_id: SharedString,
     webview: id,
     controller: id,
     delegate: id,
@@ -2125,18 +2208,21 @@ struct MacWebViewHost {
     state: Box<MacWebViewDelegateState>,
     declared_url: SharedString,
     declared_html: Option<SharedString>,
+    request_headers: Option<http_client::http::HeaderMap>,
     user_agent: Option<SharedString>,
     storage_key: Option<SharedString>,
     javascript_disabled: bool,
     media_autoplay: Option<bool>,
     background_color: Option<Rgba>,
     devtools: bool,
+    user_scripts_initialized: bool,
     clipboard_access: bool,
     injected_css: Vec<SharedString>,
     injected_javascript: Vec<SharedString>,
     focused: Option<bool>,
     observing_title: bool,
     visible: bool,
+    opacity: f32,
 }
 
 impl MacWindowState {
@@ -2276,9 +2362,13 @@ impl MacWindowState {
 
     fn sync_webviews(&mut self, webviews: &[PlatformWebView]) {
         let mut active_ids: HashSet<SharedString> = HashSet::default();
+        let mut command_id_counts: HashMap<SharedString, usize> = HashMap::default();
+        for webview in webviews {
+            *command_id_counts.entry(webview.id.clone()).or_default() += 1;
+        }
 
         for webview in webviews {
-            let webview_id = webview.id.clone();
+            let webview_id = webview.instance_id.clone();
             active_ids.insert(webview_id.clone());
 
             let needs_rebuild = self.webviews.get(&webview_id).is_some_and(|host| {
@@ -2300,9 +2390,16 @@ impl MacWindowState {
                         self.native_view.as_ptr() as id,
                     )
                 };
-                if let Some(commands) = self.pending_webview_commands.remove(&webview_id) {
+                if command_id_counts.get(&webview.id) == Some(&1)
+                    && let Some(commands) = self.pending_webview_commands.remove(&webview.id)
+                {
                     for command in commands {
-                        host.apply_command(command);
+                        if let Err(error) = host.apply_command(command) {
+                            log::error!(
+                                "failed to apply queued macOS WebView command for {}: {error:#}",
+                                webview.id
+                            );
+                        }
                     }
                 }
                 self.webviews.insert(webview_id, host);
@@ -2317,13 +2414,12 @@ impl MacWindowState {
             .collect::<Vec<_>>();
         for webview_id in stale_ids {
             self.webviews.remove(&webview_id);
-            self.pending_webview_commands.remove(&webview_id);
         }
 
         let content_view = unsafe { self.native_window.contentView() };
         let mut previous_view = self.native_view.as_ptr() as id;
         for webview in webviews {
-            if let Some(host) = self.webviews.get(&webview.id) {
+            if let Some(host) = self.webviews.get(&webview.instance_id) {
                 unsafe {
                     let _: () = msg_send![
                         content_view,
@@ -2337,16 +2433,27 @@ impl MacWindowState {
         }
     }
 
-    fn dispatch_webview_command(&mut self, command: PlatformWebViewCommand) {
+    fn dispatch_webview_command(&mut self, command: PlatformWebViewCommand) -> anyhow::Result<()> {
         let webview_id = webview_command_id(&command);
-        if let Some(host) = self.webviews.get_mut(&webview_id) {
-            host.apply_command(command);
+        let mut matches = self
+            .webviews
+            .values_mut()
+            .filter(|host| host.command_id == webview_id);
+        if let Some(host) = matches.next() {
+            if matches.next().is_some() {
+                anyhow::bail!(
+                    "ambiguous webview id `{}`; WebView command ids must be unique within a window",
+                    webview_id
+                );
+            }
+            host.apply_command(command)?;
         } else {
             self.pending_webview_commands
                 .entry(webview_id)
                 .or_default()
                 .push(command);
         }
+        Ok(())
     }
 
     fn window_bounds(&self) -> WindowBounds {
@@ -2396,13 +2503,7 @@ impl MacWebViewHost {
         }
         let controller: id = unsafe { msg_send![lookup_class(c"WKUserContentController"), alloc] };
         let controller: id = unsafe { msg_send![controller, init] };
-        let data_store: id = unsafe {
-            if webview.storage_key.is_some() {
-                msg_send![lookup_class(c"WKWebsiteDataStore"), defaultDataStore]
-            } else {
-                msg_send![lookup_class(c"WKWebsiteDataStore"), nonPersistentDataStore]
-            }
-        };
+        let data_store: id = unsafe { mac_webview_data_store(webview.storage_key.as_ref()) };
         let _: () = unsafe { msg_send![config, setWebsiteDataStore: data_store] };
         let _: () = unsafe { msg_send![config, setUserContentController: controller] };
 
@@ -2416,6 +2517,7 @@ impl MacWebViewHost {
             document_title_changed_handler: webview.document_title_changed_handler.clone(),
             page_load_handler: webview.page_load_handler.clone(),
             drag_drop_handler: webview.drag_drop_handler.clone(),
+            permission_handler: webview.permission_handler.clone(),
             zoom_hotkeys_enabled: webview.zoom_hotkeys_enabled,
             clipboard_access: webview.clipboard_access,
             downloads: HashMap::default(),
@@ -2469,6 +2571,7 @@ impl MacWebViewHost {
         };
 
         let mut host = Self {
+            command_id: webview.id.clone(),
             webview: unsafe { webview_view.autorelease() },
             controller: unsafe { controller.autorelease() },
             delegate: unsafe { delegate.autorelease() },
@@ -2477,24 +2580,28 @@ impl MacWebViewHost {
             state,
             declared_url: SharedString::default(),
             declared_html: None,
+            request_headers: None,
             user_agent: None,
             storage_key: webview.storage_key.clone(),
             javascript_disabled: webview.javascript_disabled,
             media_autoplay: webview.media_autoplay,
             background_color: webview.background_color,
             devtools: webview.devtools,
+            user_scripts_initialized: false,
             clipboard_access: false,
             injected_css: Vec::new(),
             injected_javascript: Vec::new(),
             focused: None,
             observing_title: false,
             visible: webview.visible,
+            opacity: -1.0,
         };
         host.sync(webview, native_window, native_view);
         host
     }
 
     fn sync(&mut self, webview: &PlatformWebView, native_window: id, native_view: id) {
+        self.command_id = webview.id.clone();
         self.native_window = native_window;
         self.native_view = native_view;
         self.state.async_window = webview.async_window.clone();
@@ -2506,6 +2613,7 @@ impl MacWebViewHost {
         self.state.document_title_changed_handler = webview.document_title_changed_handler.clone();
         self.state.page_load_handler = webview.page_load_handler.clone();
         self.state.drag_drop_handler = webview.drag_drop_handler.clone();
+        self.state.permission_handler = webview.permission_handler.clone();
         self.state.zoom_hotkeys_enabled = webview.zoom_hotkeys_enabled;
         self.state.clipboard_access = webview.clipboard_access;
 
@@ -2520,6 +2628,13 @@ impl MacWebViewHost {
                 let _: () = msg_send![self.webview, setHidden: Bool::new(!webview.visible)];
             }
             self.visible = webview.visible;
+        }
+
+        if self.opacity != webview.opacity {
+            unsafe {
+                let _: () = msg_send![self.webview, setAlphaValue: webview.opacity as f64];
+            }
+            self.opacity = webview.opacity;
         }
 
         if self.background_color != webview.background_color {
@@ -2538,7 +2653,9 @@ impl MacWebViewHost {
 
         if self.focused != webview.focused {
             if webview.focused == Some(true) {
-                self.focus();
+                if let Err(error) = self.focus() {
+                    log::error!("failed to focus macOS WebView {}: {error:#}", webview.id);
+                }
             }
             self.focused = webview.focused;
         }
@@ -2563,24 +2680,57 @@ impl MacWebViewHost {
             false
         };
 
-        if !webview.url.as_ref().is_empty() && self.declared_url != webview.url {
-            self.load_url_with_headers(webview.url.as_ref(), webview.request_headers.as_ref());
-            self.declared_url = webview.url.clone();
-            self.declared_html = None;
+        if !webview.url.as_ref().is_empty()
+            && (self.declared_url != webview.url || self.request_headers != webview.request_headers)
+        {
+            match self.load_url_with_headers(webview.url.as_ref(), webview.request_headers.as_ref())
+            {
+                Ok(()) => {
+                    self.declared_url = webview.url.clone();
+                    self.declared_html = None;
+                    self.request_headers = webview.request_headers.clone();
+                }
+                Err(error) => {
+                    log::error!("failed to navigate macOS WebView {}: {error:#}", webview.id)
+                }
+            }
         } else if webview.url.as_ref().is_empty() && self.declared_html != webview.html {
             if let Some(html) = webview.html.as_ref() {
-                self.load_html(html.as_ref());
+                match self.load_html(html.as_ref()) {
+                    Ok(()) => {
+                        self.declared_url = SharedString::default();
+                        self.declared_html = webview.html.clone();
+                        self.request_headers = None;
+                    }
+                    Err(error) => {
+                        log::error!(
+                            "failed to load macOS WebView {} HTML: {error:#}",
+                            webview.id
+                        )
+                    }
+                }
+            } else {
+                self.declared_url = SharedString::default();
+                self.declared_html = None;
+                self.request_headers = None;
             }
-            self.declared_url = SharedString::default();
-            self.declared_html = webview.html.clone();
-        } else if (scripts_changed || user_agent_changed) && !self.declared_url.as_ref().is_empty()
-        {
-            self.reload();
+        } else if scripts_changed || user_agent_changed {
+            if !self.declared_url.as_ref().is_empty() {
+                self.reload();
+            } else if let Some(html) = self.declared_html.clone()
+                && let Err(error) = self.load_html(html.as_ref())
+            {
+                log::error!(
+                    "failed to reload macOS WebView {} HTML after configuration change: {error:#}",
+                    webview.id
+                );
+            }
         }
     }
 
     fn sync_user_scripts(&mut self, webview: &PlatformWebView) -> bool {
-        if self.storage_key == webview.storage_key
+        if self.user_scripts_initialized
+            && self.storage_key == webview.storage_key
             && self.clipboard_access == webview.clipboard_access
             && self.injected_css == webview.injected_css
             && self.injected_javascript == webview.injected_javascript
@@ -2634,6 +2784,7 @@ impl MacWebViewHost {
         self.clipboard_access = webview.clipboard_access;
         self.injected_css = webview.injected_css.clone();
         self.injected_javascript = webview.injected_javascript.clone();
+        self.user_scripts_initialized = true;
         true
     }
 
@@ -2662,22 +2813,25 @@ impl MacWebViewHost {
         self.observing_title = should_observe;
     }
 
-    fn apply_command(&mut self, command: PlatformWebViewCommand) {
+    fn apply_command(&mut self, command: PlatformWebViewCommand) -> anyhow::Result<()> {
         match command {
             PlatformWebViewCommand::Navigate { url, .. } => {
-                self.load_url(url.as_ref());
+                self.load_url(url.as_ref())?;
                 self.declared_url = url;
                 self.declared_html = None;
+                self.request_headers = None;
             }
             PlatformWebViewCommand::NavigateWithHeaders { url, headers, .. } => {
-                self.load_url_with_headers(url.as_ref(), Some(&headers));
+                self.load_url_with_headers(url.as_ref(), Some(&headers))?;
                 self.declared_url = url;
                 self.declared_html = None;
+                self.request_headers = Some(headers);
             }
             PlatformWebViewCommand::LoadHtml { html, .. } => {
-                self.load_html(html.as_ref());
+                self.load_html(html.as_ref())?;
                 self.declared_url = SharedString::default();
                 self.declared_html = Some(html);
+                self.request_headers = None;
             }
             PlatformWebViewCommand::EvaluateJavaScript { script, .. } => {
                 self.evaluate_javascript(script.as_ref())
@@ -2688,7 +2842,8 @@ impl MacWebViewHost {
                 self.evaluate_javascript_with_result(script.as_ref(), callback);
             }
             PlatformWebViewCommand::PostMessage { message, .. } => {
-                let payload = serde_json::to_string(&message).unwrap_or_else(|_| "null".into());
+                let payload =
+                    serde_json::to_string(&message).context("serializing macOS WebView message")?;
                 let script = format!(
                     "(() => {{ const payload = {payload}; if (window.dispatchEvent) {{ window.dispatchEvent(new MessageEvent('message', {{ data: payload }})); }} if (typeof window.onmessage === 'function') {{ window.onmessage({{ data: payload }}); }} }})();"
                 );
@@ -2708,12 +2863,12 @@ impl MacWebViewHost {
                         "WebView devtools were made inspectable on macOS; open the inspector from Safari/Web Inspector because WKWebView does not expose a public open-inspector API"
                     );
                 } else {
-                    log::warn!("WebView devtools are not supported by this macOS WebView backend");
+                    anyhow::bail!("WebView inspectability is unavailable on this macOS version");
                 }
             }
             PlatformWebViewCommand::CloseDevTools { .. } => {
-                log::warn!(
-                    "Closing WebView devtools is not supported by Kael's macOS WebView backend; WKWebView does not expose a public close-inspector API"
+                anyhow::bail!(
+                    "closing WebView devtools is unavailable because WKWebView has no public close-inspector API"
                 );
             }
             PlatformWebViewCommand::IsDevToolsOpen { callback, .. } => {
@@ -2724,13 +2879,16 @@ impl MacWebViewHost {
                     "WebView devtools open-state is not supported by Kael's macOS WebView backend"
                         .into(),
                 ));
+                anyhow::bail!(
+                    "WebView devtools open-state is unavailable because WKWebView has no public inspector-state API"
+                );
             }
-            PlatformWebViewCommand::Print { .. } => self.print(),
+            PlatformWebViewCommand::Print { .. } => self.print()?,
             PlatformWebViewCommand::SetZoomFactor { factor, .. } => self.set_zoom_factor(factor),
-            PlatformWebViewCommand::Focus { .. } => self.focus(),
-            PlatformWebViewCommand::FocusParent { .. } => self.focus_parent(),
+            PlatformWebViewCommand::Focus { .. } => self.focus()?,
+            PlatformWebViewCommand::FocusParent { .. } => self.focus_parent()?,
             PlatformWebViewCommand::ClearBrowsingData { .. } => {
-                self.clear_browsing_data();
+                self.clear_browsing_data()?;
             }
             PlatformWebViewCommand::ReadUrl { callback, .. } => {
                 callback(Ok(self.current_url()));
@@ -2749,54 +2907,62 @@ impl MacWebViewHost {
                 self.delete_cookie(cookie, callback);
             }
         }
+        Ok(())
     }
 
-    fn load_url(&mut self, url: &str) {
-        self.load_url_with_headers(url, None);
+    fn load_url(&mut self, url: &str) -> anyhow::Result<()> {
+        self.load_url_with_headers(url, None)
     }
 
-    fn load_url_with_headers(&mut self, url: &str, headers: Option<&http_client::http::HeaderMap>) {
-        if url.is_empty() {
-            return;
-        }
+    fn load_url_with_headers(
+        &mut self,
+        url: &str,
+        headers: Option<&http_client::http::HeaderMap>,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(!url.is_empty(), "macOS WebView URL cannot be empty");
 
         unsafe {
             let url: id = msg_send![lookup_class(c"NSURL"), URLWithString: ns_string(url)];
-            if url.is_null() {
-                return;
-            }
+            anyhow::ensure!(!url.is_null(), "invalid macOS WebView URL");
             let request: id = msg_send![lookup_class(c"NSMutableURLRequest"), requestWithURL: url];
+            anyhow::ensure!(
+                !request.is_null(),
+                "could not create macOS WebView URL request"
+            );
             if let Some(headers) = headers {
                 for (name, value) in headers {
-                    match value.to_str() {
-                        Ok(value) => {
-                            let _: () = msg_send![
-                                request,
-                                setValue: ns_string(value),
-                                forHTTPHeaderField: ns_string(name.as_str())
-                            ];
-                        }
-                        Err(error) => {
-                            log::warn!(
-                                "Skipping non-UTF-8 WebView request header {}: {error}",
-                                name.as_str()
-                            );
-                        }
-                    }
+                    let value = value.to_str().with_context(|| {
+                        format!("WebView request header `{}` is not UTF-8", name.as_str())
+                    })?;
+                    let _: () = msg_send![
+                        request,
+                        setValue: ns_string(value),
+                        forHTTPHeaderField: ns_string(name.as_str())
+                    ];
                 }
             }
-            let _: () = msg_send![self.webview, loadRequest: request];
+            let navigation: id = msg_send![self.webview, loadRequest: request];
+            anyhow::ensure!(
+                !navigation.is_null(),
+                "macOS WebView rejected the URL request"
+            );
         }
+        Ok(())
     }
 
-    fn load_html(&mut self, html: &str) {
+    fn load_html(&mut self, html: &str) -> anyhow::Result<()> {
         unsafe {
-            let _: () = msg_send![
+            let navigation: id = msg_send![
                 self.webview,
                 loadHTMLString: ns_string(html),
                 baseURL: nil
             ];
+            anyhow::ensure!(
+                !navigation.is_null(),
+                "macOS WebView rejected the HTML document"
+            );
         }
+        Ok(())
     }
 
     fn current_url(&self) -> SharedString {
@@ -2941,17 +3107,16 @@ impl MacWebViewHost {
         }
     }
 
-    fn clear_browsing_data(&mut self) {
+    fn clear_browsing_data(&mut self) -> anyhow::Result<()> {
         unsafe {
             let config: id = msg_send![self.webview, configuration];
-            if config.is_null() {
-                return;
-            }
+            anyhow::ensure!(
+                !config.is_null(),
+                "macOS WebView configuration is unavailable"
+            );
 
             let store: id = msg_send![config, websiteDataStore];
-            if store.is_null() {
-                return;
-            }
+            anyhow::ensure!(!store.is_null(), "macOS WebView data store is unavailable");
 
             let data_types: id =
                 msg_send![lookup_class(c"WKWebsiteDataStore"), allWebsiteDataTypes];
@@ -2965,21 +3130,26 @@ impl MacWebViewHost {
                 completionHandler: &*block
             ];
         }
+        Ok(())
     }
 
-    fn focus(&mut self) {
+    fn focus(&mut self) -> anyhow::Result<()> {
         unsafe {
-            let _: () = msg_send![self.native_window, makeFirstResponder: self.webview];
+            let focused: BOOL = msg_send![self.native_window, makeFirstResponder: self.webview];
+            anyhow::ensure!(focused == YES, "macOS refused to focus the WebView");
         }
+        Ok(())
     }
 
-    fn focus_parent(&mut self) {
+    fn focus_parent(&mut self) -> anyhow::Result<()> {
         unsafe {
-            let _: () = msg_send![self.native_window, makeFirstResponder: self.native_view];
+            let focused: BOOL = msg_send![self.native_window, makeFirstResponder: self.native_view];
+            anyhow::ensure!(focused == YES, "macOS refused to focus the WebView parent");
         }
+        Ok(())
     }
 
-    fn print(&mut self) {
+    fn print(&mut self) -> anyhow::Result<()> {
         unsafe {
             let print_info: id = {
                 let shared: id = msg_send![lookup_class(c"NSPrintInfo"), sharedPrintInfo];
@@ -2990,10 +3160,10 @@ impl MacWebViewHost {
                 printOperationWithView: self.webview,
                 printInfo: print_info
             ];
-            if operation.is_null() {
-                log::warn!("WebView print operation could not be created");
-                return;
-            }
+            anyhow::ensure!(
+                !operation.is_null(),
+                "WebView print operation could not be created"
+            );
 
             let _: () = msg_send![operation, setShowsPrintPanel: YES];
             let _: () = msg_send![operation, setShowsProgressPanel: YES];
@@ -3005,10 +3175,12 @@ impl MacWebViewHost {
                 didRunSelector: ptr::null::<c_void>(),
                 contextInfo: ptr::null_mut::<c_void>()
             ];
-            if success != YES {
-                log::warn!("WebView print operation failed or was cancelled");
-            }
+            anyhow::ensure!(
+                success == YES,
+                "WebView print operation failed or was cancelled"
+            );
         }
+        Ok(())
     }
 
     fn set_zoom_factor(&mut self, factor: f64) {
@@ -3027,6 +3199,32 @@ impl MacWebViewHost {
             let _: () = msg_send![self.webview, reload];
         }
     }
+}
+
+unsafe fn mac_webview_data_store(storage_key: Option<&SharedString>) -> id {
+    let data_store_class = unsafe { lookup_class(c"WKWebsiteDataStore") };
+    let Some(storage_key) = storage_key else {
+        return unsafe { msg_send![data_store_class, nonPersistentDataStore] };
+    };
+
+    let custom_stores_available = is_macos_version_at_least(NSOperatingSystemVersion {
+        majorVersion: 14,
+        minorVersion: 0,
+        patchVersion: 0,
+    });
+    if custom_stores_available {
+        let identifier = uuid::Uuid::new_v5(
+            &uuid::Uuid::NAMESPACE_URL,
+            format!("kael:webview-profile:{storage_key}").as_bytes(),
+        );
+        let identifier = NSUUID::from_bytes(identifier.into_bytes());
+        return unsafe { msg_send![data_store_class, dataStoreForIdentifier: &*identifier] };
+    }
+
+    // WKWebsiteDataStore did not expose named persistent stores before macOS
+    // 14. Retain persistence on older systems, but callers should not assume
+    // profile-key isolation there.
+    unsafe { msg_send![data_store_class, defaultDataStore] }
 }
 
 impl Drop for MacWebViewHost {
@@ -4041,12 +4239,26 @@ impl PlatformWindow for MacWindow {
     }
 
     fn sync_webviews(&mut self, webviews: &[PlatformWebView]) {
-        self.0.lock().sync_webviews(webviews);
+        if cfg!(feature = "webview") {
+            self.0.lock().sync_webviews(webviews);
+        } else if !webviews.is_empty() {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                log::warn!(
+                    "WebView rendering is disabled; enable the `webview` feature for this target"
+                );
+            });
+        }
     }
 
     fn dispatch_webview_command(&mut self, command: PlatformWebViewCommand) -> anyhow::Result<()> {
-        self.0.lock().dispatch_webview_command(command);
-        Ok(())
+        if cfg!(feature = "webview") {
+            self.0.lock().dispatch_webview_command(command)
+        } else {
+            Err(anyhow::anyhow!(
+                "WebView support is disabled; enable the `webview` feature for this target"
+            ))
+        }
     }
 
     fn print(&mut self, job: PlatformPrintJob) -> anyhow::Result<()> {

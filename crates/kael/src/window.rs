@@ -7141,6 +7141,10 @@ impl Window {
         id: impl Into<SharedString>,
         factor: f64,
     ) -> Result<()> {
+        anyhow::ensure!(
+            factor.is_finite() && (0.25..=5.0).contains(&factor),
+            "WebView zoom factor must be finite and between 0.25 and 5.0"
+        );
         self.platform_window
             .dispatch_webview_command(PlatformWebViewCommand::SetZoomFactor {
                 id: id.into(),
