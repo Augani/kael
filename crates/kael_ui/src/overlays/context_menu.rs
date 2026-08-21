@@ -258,11 +258,15 @@ impl RenderOnce for ContextMenu {
             .clone()
             .tab_index(0)
             .tab_stop(interactive_indices.is_empty());
-        if !item_focus_handles
+        // Hosts may keep focus in their own canvas (e.g. a spreadsheet grid)
+        // and route menu keys through their own handler; only take focus when
+        // the window has no other focus owner, or when a menu item already
+        // owns it from a previous frame.
+        let menu_owns_focus = item_focus_handles
             .iter()
             .chain(std::iter::once(&menu_focus_handle))
-            .any(|handle| handle.is_focused(window))
-        {
+            .any(|handle| handle.is_focused(window));
+        if !menu_owns_focus && window.focused(cx).is_none() {
             if let Some(index) = interactive_indices.first() {
                 window.focus(&item_focus_handles[*index]);
             } else {
