@@ -209,8 +209,8 @@ impl Styled for ContextMenu {
 }
 
 impl RenderOnce for ContextMenu {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = Theme::of(cx);
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Theme::of(cx).clone();
         let position = self.position;
         let min_width = self.min_width;
         let on_close_handler = self.on_close.clone();
@@ -219,6 +219,56 @@ impl RenderOnce for ContextMenu {
         let overlay_hover = crate::astryx::overlay_hover(theme.tokens.background.l < 0.5);
         let context_menu_id = self.id;
         let menu_id = ElementId::NamedChild(Box::new(context_menu_id.clone()), "menu".into());
+
+        let interactive_indices: Rc<Vec<usize>> = Rc::new(
+            self.items
+                .iter()
+                .enumerate()
+                .filter_map(|(index, item)| {
+                    (!item.disabled && item.on_click.is_some()).then_some(index)
+                })
+                .collect(),
+        );
+        let item_focus_handles: Rc<Vec<FocusHandle>> = Rc::new(
+            (0..self.items.len())
+                .map(|index| {
+                    window
+                        .use_keyed_state(
+                            ElementId::NamedChild(
+                                Box::new(menu_id.clone()),
+                                format!("item-{index}").into(),
+                            ),
+                            cx,
+                            |_, cx| cx.focus_handle(),
+                        )
+                        .read(cx)
+                        .clone()
+                })
+                .collect(),
+        );
+        let menu_focus_handle = window
+            .use_keyed_state(
+                ElementId::NamedChild(Box::new(menu_id.clone()), "focus".into()),
+                cx,
+                |_, cx| cx.focus_handle(),
+            )
+            .read(cx)
+            .clone();
+        let tracked_menu_focus = menu_focus_handle
+            .clone()
+            .tab_index(0)
+            .tab_stop(interactive_indices.is_empty());
+        if !item_focus_handles
+            .iter()
+            .chain(std::iter::once(&menu_focus_handle))
+            .any(|handle| handle.is_focused(window))
+        {
+            if let Some(index) = interactive_indices.first() {
+                window.focus(&item_focus_handles[*index]);
+            } else {
+                window.focus(&menu_focus_handle);
+            }
+        }
 
         div()
             .id(context_menu_id)
@@ -235,222 +285,285 @@ impl RenderOnce for ContextMenu {
                 })
             })
             .child(
-                div()
-                    .id(menu_id.clone())
-                    .absolute()
-                    .accessibility(
-                        AccessibilityAttributes::new(AccessibilityRole::Menu).label("Context menu"),
-                    )
-                    .tab_group()
-                    .occlude()
-                    .left(position.x)
-                    .top(position.y)
-                    .min_w(min_width)
-                    .max_h(CONTEXT_MENU_MAX_HEIGHT)
-                    .overflow_y_scroll()
-                    .bg(theme.tokens.popover)
-                    .rounded(theme.tokens.radius_lg)
-                    .shadow(theme.tokens.shadow_md.to_vec())
-                    .p(px(4.0))
-                    .gap(px(2.0))
-                    .map(|this| {
-                        let mut div = this;
-                        div.style().refine(&user_style);
-                        div
-                    })
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                        cx.stop_propagation();
-                    })
-                    .children(
-                        self.items
-                            .into_iter()
-                            .enumerate()
-                            .map(|(item_index, item)| {
-                                if item.label.is_empty() && item.divider {
-                                    return div()
-                                        .id(ElementId::NamedChild(
-                                            Box::new(menu_id.clone()),
-                                            format!("separator-{item_index}").into(),
-                                        ))
-                                        .accessibility(AccessibilityAttributes::new(
-                                            AccessibilityRole::Separator,
-                                        ))
-                                        .h(px(1.0))
-                                        .my(px(4.0))
-                                        .bg(theme.tokens.border)
-                                        .into_any_element();
+                anchored().snap_to_window().position(position).child(
+                    div()
+                        .id(menu_id.clone())
+                        .accessibility(
+                            AccessibilityAttributes::new(AccessibilityRole::Menu)
+                                .label("Context menu"),
+                        )
+                        .tab_group()
+                        .occlude()
+                        .track_focus(&tracked_menu_focus)
+                        .min_w(min_width)
+                        .max_h(CONTEXT_MENU_MAX_HEIGHT)
+                        .overflow_y_scroll()
+                        .bg(theme.tokens.popover)
+                        .rounded(theme.tokens.radius_lg)
+                        .shadow(theme.tokens.shadow_md.to_vec())
+                        .p(px(4.0))
+                        .gap(px(2.0))
+                        .map(|this| {
+                            let mut div = this;
+                            div.style().refine(&user_style);
+                            div
+                        })
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                            cx.stop_propagation();
+                        })
+                        .when(on_close_handler.is_some(), |this| {
+                            let on_close = on_close_handler.clone().unwrap();
+                            this.on_key_down(move |event: &KeyDownEvent, window, cx| {
+                                if event.keystroke.key.as_str() == "escape" {
+                                    on_close(window, cx);
+                                    cx.stop_propagation();
+                                    window.prevent_default();
                                 }
+                            })
+                        })
+                        .children(
+                            self.items
+                                .into_iter()
+                                .enumerate()
+                                .map(|(item_index, item)| {
+                                    if item.label.is_empty() && item.divider {
+                                        return div()
+                                            .id(ElementId::NamedChild(
+                                                Box::new(menu_id.clone()),
+                                                format!("separator-{item_index}").into(),
+                                            ))
+                                            .accessibility(AccessibilityAttributes::new(
+                                                AccessibilityRole::Separator,
+                                            ))
+                                            .h(px(1.0))
+                                            .my(px(4.0))
+                                            .bg(theme.tokens.border)
+                                            .into_any_element();
+                                    }
 
-                                let on_close = self.on_close.clone();
-                                let handler = item.on_click.clone();
-                                let disabled = item.disabled;
-                                let destructive = item.destructive;
-                                let item_id = item.id.unwrap_or_else(|| item.label.clone());
-                                let item_id =
-                                    ElementId::NamedChild(Box::new(menu_id.clone()), item_id);
-                                let mut accessibility_state = AccessibilityState::NONE;
-                                if disabled {
-                                    accessibility_state |= AccessibilityState::DISABLED;
-                                }
-                                let mut accessibility =
-                                    AccessibilityAttributes::new(AccessibilityRole::MenuItem)
-                                        .label(item.label.to_string())
-                                        .states(accessibility_state);
-                                if let Some(description) = item.description.as_ref() {
-                                    accessibility =
-                                        accessibility.description(description.to_string());
-                                }
-                                if !disabled && handler.is_some() {
-                                    accessibility = accessibility.actions(vec![
-                                        AccessibilityAction::Focus,
-                                        AccessibilityAction::Click,
-                                    ]);
-                                }
+                                    let on_close = self.on_close.clone();
+                                    let handler = item.on_click.clone();
+                                    let disabled = item.disabled;
+                                    let destructive = item.destructive;
+                                    let item_id = item.id.unwrap_or_else(|| item.label.clone());
+                                    let item_id =
+                                        ElementId::NamedChild(Box::new(menu_id.clone()), item_id);
+                                    let mut accessibility_state = AccessibilityState::NONE;
+                                    if disabled {
+                                        accessibility_state |= AccessibilityState::DISABLED;
+                                    }
+                                    let mut accessibility =
+                                        AccessibilityAttributes::new(AccessibilityRole::MenuItem)
+                                            .label(item.label.to_string())
+                                            .states(accessibility_state);
+                                    if let Some(description) = item.description.as_ref() {
+                                        accessibility =
+                                            accessibility.description(description.to_string());
+                                    }
+                                    if !disabled && handler.is_some() {
+                                        accessibility = accessibility.actions(vec![
+                                            AccessibilityAction::Focus,
+                                            AccessibilityAction::Click,
+                                        ]);
+                                    }
 
-                                div()
-                                    .id(item_id)
-                                    .accessibility(accessibility)
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(8.0))
-                                    .px(px(8.0))
-                                    .py(px(6.0))
-                                    .rounded(theme.tokens.radius_md)
-                                    .text_size(px(14.0))
-                                    .line_height(px(20.0))
-                                    .cursor(if disabled {
-                                        CursorStyle::Arrow
-                                    } else {
-                                        CursorStyle::PointingHand
-                                    })
-                                    .when(disabled, |this| {
-                                        this.text_color(theme.tokens.muted_foreground).opacity(0.5)
-                                    })
-                                    .when(!disabled && handler.is_some(), |this| {
-                                        this.focusable()
-                                            .tab_index(item_index as isize)
-                                            .tab_stop(true)
-                                            .text_color(if destructive {
-                                                theme.tokens.destructive
-                                            } else {
-                                                theme.tokens.popover_foreground
+                                    div()
+                                        .id(item_id)
+                                        .accessibility(accessibility)
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(8.0))
+                                        .px(px(8.0))
+                                        .py(px(6.0))
+                                        .rounded(theme.tokens.radius_md)
+                                        .text_size(px(14.0))
+                                        .line_height(px(20.0))
+                                        .cursor(if disabled {
+                                            CursorStyle::Arrow
+                                        } else {
+                                            CursorStyle::PointingHand
+                                        })
+                                        .when(disabled, |this| {
+                                            this.text_color(theme.tokens.muted_foreground)
+                                                .opacity(0.5)
+                                        })
+                                        .when(!disabled && handler.is_some(), |this| {
+                                            this.track_focus(&item_focus_handles[item_index])
+                                                .text_color(if destructive {
+                                                    theme.tokens.destructive
+                                                } else {
+                                                    theme.tokens.popover_foreground
+                                                })
+                                                .hover(move |style| style.bg(overlay_hover))
+                                                .focus_visible(move |style| style.bg(overlay_hover))
+                                        })
+                                        .when(!disabled && handler.is_some(), |this| {
+                                            let on_close = on_close.clone();
+                                            let handles_for_key = item_focus_handles.clone();
+                                            let indices_for_key = interactive_indices.clone();
+                                            this.on_key_down(
+                                                move |event: &KeyDownEvent, window, cx| {
+                                                    let key = event.keystroke.key.as_str();
+                                                    let current = indices_for_key
+                                                        .iter()
+                                                        .position(|candidate| {
+                                                            *candidate == item_index
+                                                        })
+                                                        .unwrap_or(0);
+                                                    let target = match key {
+                                                        "down" if !indices_for_key.is_empty() => {
+                                                            Some(
+                                                                (current + 1)
+                                                                    % indices_for_key.len(),
+                                                            )
+                                                        }
+                                                        "up" if !indices_for_key.is_empty() => {
+                                                            Some(
+                                                                (current + indices_for_key.len()
+                                                                    - 1)
+                                                                    % indices_for_key.len(),
+                                                            )
+                                                        }
+                                                        "home" if !indices_for_key.is_empty() => {
+                                                            Some(0)
+                                                        }
+                                                        "end" if !indices_for_key.is_empty() => {
+                                                            Some(indices_for_key.len() - 1)
+                                                        }
+                                                        _ => None,
+                                                    };
+                                                    if let Some(target) = target {
+                                                        window.focus(
+                                                            &handles_for_key
+                                                                [indices_for_key[target]],
+                                                        );
+                                                        cx.stop_propagation();
+                                                    } else if key == "escape" {
+                                                        if let Some(on_close) = &on_close {
+                                                            on_close(window, cx);
+                                                        }
+                                                        cx.stop_propagation();
+                                                        window.prevent_default();
+                                                    }
+                                                },
+                                            )
+                                        })
+                                        .when(!disabled && handler.is_some(), |this| {
+                                            let handler = handler.unwrap();
+                                            let on_close = on_close.clone();
+                                            this.on_click(move |_, window, cx| {
+                                                handler(window, cx);
+                                                if let Some(close_handler) = &on_close {
+                                                    close_handler(window, cx);
+                                                }
                                             })
-                                            .hover(move |style| style.bg(overlay_hover))
-                                            .focus_visible(move |style| style.bg(overlay_hover))
-                                    })
-                                    .when(!disabled && on_close.is_some(), |this| {
-                                        let on_close = on_close.clone().unwrap();
-                                        this.on_key_down(move |event, window, cx| {
-                                            if event.keystroke.key.as_str() == "escape" {
-                                                on_close(window, cx);
-                                                cx.stop_propagation();
-                                                window.prevent_default();
-                                            }
                                         })
-                                    })
-                                    .when(!disabled && handler.is_some(), |this| {
-                                        let handler = handler.unwrap();
-                                        let on_close = on_close.clone();
-                                        this.on_click(move |_, window, cx| {
-                                            handler(window, cx);
-                                            if let Some(close_handler) = &on_close {
-                                                close_handler(window, cx);
-                                            }
+                                        .when_some(item.icon, |this, icon: SharedString| {
+                                            this.child(
+                                                div()
+                                                    .size(px(20.0))
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .flex_shrink_0()
+                                                    .child(
+                                                        Icon::new(icon.to_string())
+                                                            .size(px(16.0))
+                                                            .color(if disabled {
+                                                                theme.tokens.muted_foreground
+                                                            } else if destructive {
+                                                                theme.tokens.destructive
+                                                            } else {
+                                                                theme.tokens.popover_foreground
+                                                            }),
+                                                    ),
+                                            )
                                         })
-                                    })
-                                    .when_some(item.icon, |this, icon: SharedString| {
-                                        this.child(
+                                        .child(
                                             div()
-                                                .size(px(20.0))
+                                                .flex_1()
                                                 .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .flex_shrink_0()
+                                                .flex_col()
+                                                .gap(px(1.0))
+                                                .overflow_hidden()
                                                 .child(
-                                                    Icon::new(icon.to_string())
-                                                        .size(px(16.0))
-                                                        .color(if disabled {
+                                                    div()
+                                                        .line_height(px(20.0))
+                                                        .overflow_hidden()
+                                                        .text_ellipsis()
+                                                        .whitespace_nowrap()
+                                                        .text_color(if disabled {
                                                             theme.tokens.muted_foreground
                                                         } else if destructive {
                                                             theme.tokens.destructive
                                                         } else {
                                                             theme.tokens.popover_foreground
-                                                        }),
-                                                ),
-                                        )
-                                    })
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .flex()
-                                            .flex_col()
-                                            .gap(px(1.0))
-                                            .overflow_hidden()
-                                            .child(
-                                                div()
-                                                    .line_height(px(20.0))
-                                                    .text_color(if disabled {
-                                                        theme.tokens.muted_foreground
-                                                    } else if destructive {
-                                                        theme.tokens.destructive
-                                                    } else {
-                                                        theme.tokens.popover_foreground
-                                                    })
-                                                    .child(
-                                                        StyledText::new(item.label)
-                                                            .accessibility_hidden(true),
-                                                    ),
-                                            )
-                                            .when_some(item.description, |this, description| {
-                                                this.child(
-                                                    div()
-                                                        .text_size(px(12.0))
-                                                        .line_height(px(16.0))
-                                                        .text_color(theme.tokens.muted_foreground)
+                                                        })
                                                         .child(
-                                                            StyledText::new(description)
+                                                            StyledText::new(item.label)
                                                                 .accessibility_hidden(true),
                                                         ),
                                                 )
-                                            }),
-                                    )
-                                    .when_some(item.end_content, |this, content| {
-                                        this.child(
-                                            div()
-                                                .ml_auto()
-                                                .text_size(px(12.0))
-                                                .line_height(px(16.0))
-                                                .text_color(theme.tokens.muted_foreground)
-                                                .child(content),
+                                                .when_some(
+                                                    item.description,
+                                                    |this, description| {
+                                                        this.child(
+                                                            div()
+                                                                .text_size(px(12.0))
+                                                                .line_height(px(16.0))
+                                                                .overflow_hidden()
+                                                                .text_ellipsis()
+                                                                .whitespace_nowrap()
+                                                                .text_color(
+                                                                    theme.tokens.muted_foreground,
+                                                                )
+                                                                .child(
+                                                                    StyledText::new(description)
+                                                                        .accessibility_hidden(true),
+                                                                ),
+                                                        )
+                                                    },
+                                                ),
                                         )
-                                    })
-                                    .into_any_element()
-                            }),
-                    )
-                    .with_animation(
-                        if self.dismissing {
-                            "ctx-menu-exit"
-                        } else {
-                            "ctx-menu-enter"
-                        },
-                        Animation::new(Duration::from_millis(if self.dismissing {
-                            100
-                        } else {
-                            120
-                        }))
-                        .with_easing(if self.dismissing {
-                            easings::ease_in_cubic as fn(f32) -> f32
-                        } else {
-                            easings::ease_out_cubic as fn(f32) -> f32
-                        }),
-                        move |el, delta| {
-                            if dismissing {
-                                el.opacity(1.0 - delta).mt(px(4.0 * delta))
+                                        .when_some(item.end_content, |this, content| {
+                                            this.child(
+                                                div()
+                                                    .ml_auto()
+                                                    .flex_shrink_0()
+                                                    .text_size(px(12.0))
+                                                    .line_height(px(16.0))
+                                                    .text_color(theme.tokens.muted_foreground)
+                                                    .child(content),
+                                            )
+                                        })
+                                        .into_any_element()
+                                }),
+                        )
+                        .with_animation(
+                            if self.dismissing {
+                                "ctx-menu-exit"
                             } else {
-                                el.opacity(delta).mt(px(4.0 * (1.0 - delta)))
-                            }
-                        },
-                    ),
+                                "ctx-menu-enter"
+                            },
+                            Animation::new(Duration::from_millis(if self.dismissing {
+                                100
+                            } else {
+                                120
+                            }))
+                            .with_easing(if self.dismissing {
+                                easings::ease_in_cubic as fn(f32) -> f32
+                            } else {
+                                easings::ease_out_cubic as fn(f32) -> f32
+                            }),
+                            move |el, delta| {
+                                if dismissing {
+                                    el.opacity(1.0 - delta).mt(px(4.0 * delta))
+                                } else {
+                                    el.opacity(delta).mt(px(4.0 * (1.0 - delta)))
+                                }
+                            },
+                        ),
+                ),
             )
     }
 }
@@ -625,5 +738,130 @@ mod tests {
                 .min_width,
             px(120.0)
         );
+    }
+
+    struct ContextMenuKeyboardHost {
+        closes: Rc<Cell<usize>>,
+    }
+
+    impl Render for ContextMenuKeyboardHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let closes = self.closes.clone();
+            ContextMenu::new(point(px(12.0), px(16.0)))
+                .id("keyboard-context-menu")
+                .item(ContextMenuItem::new("first", "First").on_click(|_, _| {}))
+                .item(ContextMenuItem::new("disabled", "Disabled").disabled(true))
+                .item(ContextMenuItem::new("last", "Last").on_click(|_, _| {}))
+                .on_close(move |_, _| closes.set(closes.get() + 1))
+                .into_any_element()
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn keyboard_navigation_opens_focused_skips_disabled_and_wraps() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let closes = Rc::new(Cell::new(0));
+        let (_host, window) = cx.add_window_view({
+            let closes = closes.clone();
+            move |_, _| ContextMenuKeyboardHost { closes }
+        });
+
+        let focused_label = |window: &mut Window, cx: &mut App| {
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            tree.nodes
+                .values()
+                .find(|node| {
+                    node.role == AccessibilityRole::MenuItem
+                        && node.states.contains(AccessibilityState::FOCUSED)
+                })
+                .and_then(|node| node.label.clone())
+        };
+
+        // Opening the menu must focus the first enabled item, not rely on Tab.
+        assert_eq!(
+            window.update(focused_label).as_deref(),
+            Some("First"),
+            "the first enabled item must receive focus when the menu opens"
+        );
+
+        // Down must skip the disabled item.
+        window.simulate_keystrokes("down");
+        assert_eq!(
+            window.update(focused_label).as_deref(),
+            Some("Last"),
+            "arrow navigation must skip disabled items"
+        );
+
+        // Down at the end wraps to the first item.
+        window.simulate_keystrokes("down");
+        assert_eq!(
+            window.update(focused_label).as_deref(),
+            Some("First"),
+            "arrow navigation must wrap"
+        );
+
+        // Up from the first item wraps to the last item.
+        window.simulate_keystrokes("up");
+        assert_eq!(
+            window.update(focused_label).as_deref(),
+            Some("Last"),
+            "up from the first item must wrap to the last item"
+        );
+
+        // Home/End move to the first/last enabled item.
+        window.simulate_keystrokes("home");
+        assert_eq!(window.update(focused_label).as_deref(), Some("First"));
+        window.simulate_keystrokes("end");
+        assert_eq!(window.update(focused_label).as_deref(), Some("Last"));
+
+        closes.set(0);
+        window.simulate_keystrokes("escape");
+        assert_eq!(closes.get(), 1, "Escape must close the menu");
+    }
+
+    #[::core::prelude::v1::test]
+    fn menu_near_the_right_and_bottom_edge_stays_inside_the_viewport() {
+        let mut cx = TestAppContext::single();
+        cx.update(|cx| {
+            crate::theme::install_theme(cx, crate::theme::Theme::astryx_neutral());
+        });
+        let (_host, window) = cx.add_window_view(|_, _| {
+            struct EdgeMenuHost;
+            impl Render for EdgeMenuHost {
+                fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                    ContextMenu::new(point(px(780.0), px(580.0)))
+                        .id("edge-context-menu")
+                        .item(ContextMenuItem::new("open", "Open").on_click(|_, _| {}))
+                        .into_any_element()
+                }
+            }
+            EdgeMenuHost
+        });
+
+        window.update(|window, cx| {
+            window.draw(cx).clear();
+            let tree = window.accessibility_tree();
+            let menu_bounds = tree
+                .nodes
+                .values()
+                .find(|node| node.role == AccessibilityRole::Menu)
+                .and_then(|node| node.bounds.as_ref())
+                .expect("menu should have rendered bounds");
+            let viewport = window.viewport_size();
+            assert!(
+                menu_bounds.x + menu_bounds.width <= (f32::from(viewport.width) + 0.5) as f64,
+                "menu must stay inside the right viewport edge: {:?} vs {viewport:?}",
+                menu_bounds
+            );
+            assert!(
+                menu_bounds.y + menu_bounds.height <= (f32::from(viewport.height) + 0.5) as f64,
+                "menu must stay inside the bottom viewport edge: {:?} vs {viewport:?}",
+                menu_bounds
+            );
+        });
     }
 }
